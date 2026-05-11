@@ -101,11 +101,17 @@ describe("searxng client", () => {
     expect(result.provider).toBe("searxng");
     expect(result.query).toBe("beijing hourly weather");
     expect(result.count).toBe(1);
-    expect(result.results).toHaveLength(1);
-    expect(result.results[0]?.url).toBe("https://example.com/weather");
-    expect(result.results[0]?.siteName).toBe("example.com");
-    expect(result.results[0]?.title).toContain("Beijing hourly weather");
-    expect(result.results[0]?.snippet).toContain("Hourly forecast");
+    const results = result.results as Array<{
+      url?: string;
+      siteName?: string;
+      title?: string;
+      snippet?: string;
+    }>;
+    expect(results).toHaveLength(1);
+    expect(results[0]?.url).toBe("https://example.com/weather");
+    expect(results[0]?.siteName).toBe("example.com");
+    expect(results[0]?.title).toContain("Beijing hourly weather");
+    expect(results[0]?.snippet).toContain("Hourly forecast");
     expect(result.externalContent).toEqual({
       provider: "searxng",
       source: "web_search",
@@ -127,9 +133,18 @@ describe("searxng client", () => {
     });
 
     expect(endpointMockState.calls).toHaveLength(1);
-    expect(result).toMatchObject({
+    const { tookMs, ...stableResult } = result;
+    expect(typeof tookMs).toBe("number");
+    expect(stableResult).toEqual({
+      query: "openclaw",
       provider: "searxng",
       count: 0,
+      externalContent: {
+        provider: "searxng",
+        source: "web_search",
+        untrusted: true,
+        wrapped: true,
+      },
       results: [],
     });
   });

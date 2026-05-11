@@ -627,7 +627,10 @@ describe("applyAuthChoice", () => {
     expect(profile?.mode).toBe(expected.mode);
   }
   function promptMessages(mock: { mock: { calls: unknown[][] } }): string[] {
-    return mock.mock.calls.map((call) => String((call[0] as { message?: unknown })?.message ?? ""));
+    return mock.mock.calls.map((call) => {
+      const message = (call[0] as { message?: unknown }).message;
+      return typeof message === "string" ? message : "";
+    });
   }
   function expectPromptMessageContaining(mock: { mock: { calls: unknown[][] } }, expected: string) {
     expect(promptMessages(mock).some((message) => message.includes(expected))).toBe(true);
@@ -635,10 +638,10 @@ describe("applyAuthChoice", () => {
   function expectPromptMessage(mock: { mock: { calls: unknown[][] } }, expected: string) {
     expect(promptMessages(mock)).toContain(expected);
   }
-  function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }): T {
+  function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
     const call = mock.mock.calls[0];
     expect(call).toBeDefined();
-    return call?.[0] as T;
+    return call?.[0];
   }
 
   let defaultProviderPlugins: ProviderPlugin[] = [];
@@ -1157,9 +1160,10 @@ describe("applyAuthChoice", () => {
       setDefaultModel: false,
     });
 
-    const providerResolveInput = firstCallArg<{ env?: NodeJS.ProcessEnv; mode?: string }>(
-      resolvePluginProviders,
-    );
+    const providerResolveInput = firstCallArg(resolvePluginProviders) as {
+      env?: NodeJS.ProcessEnv;
+      mode?: string;
+    };
     expect(providerResolveInput.env).toBe(env);
     expect(providerResolveInput.mode).toBe("setup");
     expectPromptMessageContaining(confirm, "OPENAI_API_KEY");

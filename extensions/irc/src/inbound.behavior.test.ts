@@ -102,7 +102,9 @@ describe("irc inbound behavior", () => {
   });
 
   it("issues a DM pairing challenge and sends the reply to the sender nick", async () => {
-    const sendReply = vi.fn(async () => {});
+    const sendReply = vi.fn<(target: string, text: string, replyToId?: string) => Promise<void>>(
+      async () => {},
+    );
 
     await handleIrcInbound({
       message: createMessage(),
@@ -129,7 +131,7 @@ describe("irc inbound behavior", () => {
       expect.stringContaining("Your IRC id: alice!ident@example.com"),
       undefined,
     );
-    const replyMessages = sendReply.mock.calls.map((call) => String(call[1]));
+    const replyMessages = sendReply.mock.calls.map((call) => call[1]);
     expect(replyMessages.some((message) => message.includes("CODE"))).toBe(true);
   });
 
@@ -185,7 +187,9 @@ describe("irc inbound behavior", () => {
       sendReply: vi.fn(async () => {}),
     });
 
-    const assembledRequest = coreRuntime.channel.turn.runAssembled.mock.calls[0]?.[0];
+    const assembledRequest = (
+      coreRuntime.channel.turn.runAssembled as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls[0]?.[0] as { replyPipeline?: unknown } | undefined;
     expect(assembledRequest?.replyPipeline).toEqual({});
   });
 });

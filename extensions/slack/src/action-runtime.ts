@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -108,10 +108,14 @@ function resolveThreadTsFromContext(
   explicitThreadTs: string | undefined,
   targetChannel: string,
   context: SlackActionContext | undefined,
+  opts?: { suppressImplicitThread?: boolean },
 ): string | undefined {
   // Agent explicitly provided threadTs - use it
   if (explicitThreadTs) {
     return explicitThreadTs;
+  }
+  if (opts?.suppressImplicitThread) {
+    return undefined;
   }
   // No context or missing required fields
   if (!context?.currentThreadTs || !context?.currentChannelId) {
@@ -253,6 +257,9 @@ export async function handleSlackAction(
           readStringParam(params, "threadTs"),
           to,
           context,
+          {
+            suppressImplicitThread: params.topLevel === true || params.threadTs === null,
+          },
         );
         const sendOpts = {
           ...writeOpts,
@@ -311,6 +318,9 @@ export async function handleSlackAction(
           readStringParam(params, "threadTs"),
           to,
           context,
+          {
+            suppressImplicitThread: params.topLevel === true || params.threadTs === null,
+          },
         );
         const result = await slackActionRuntime.sendSlackMessage(to, initialComment ?? "", {
           ...writeOpts,

@@ -294,18 +294,19 @@ Common Crabbox-only failures:
   report the capacity blocker.
 
 If Crabbox cannot dispatch, sync, attach, or stop but Blacksmith itself works,
-use direct Blacksmith from the repo root:
+first try the same command through the repo wrapper with `--debug` and
+`--timing-json`:
 
 ```sh
-blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90
-blacksmith testbox run --id <tbx_id> "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed"
-blacksmith testbox stop --id <tbx_id>
+pnpm crabbox:run -- --provider blacksmith-testbox --debug --timing-json -- \
+  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed
 ```
 
-Direct full suite:
+Full suite:
 
 ```sh
-blacksmith testbox run --id <tbx_id> "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test"
+pnpm crabbox:run -- --provider blacksmith-testbox --debug --timing-json -- \
+  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test
 ```
 
 Auth fallback, only when `blacksmith` says auth is missing:
@@ -340,16 +341,15 @@ The hydration workflow owns checkout, Node/pnpm setup, dependency install,
 secrets, ready marker, and keepalive. Crabbox owns dispatch, sync, SSH command
 execution, timing, logs/results, and cleanup.
 
-Minimal direct Blacksmith fallback, from repo root:
+Minimal Blacksmith-backed Crabbox run, from repo root:
 
 ```sh
-blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90
-blacksmith testbox run --id <tbx_id> "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test:changed"
-blacksmith testbox stop --id <tbx_id>
+pnpm crabbox:run -- --provider blacksmith-testbox --timing-json -- \
+  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test:changed
 ```
 
-Use direct Blacksmith only when Crabbox is the broken layer and Blacksmith
-itself still works. Prefer direct `blacksmith testbox list` for cleanup
+Use direct Blacksmith only when Crabbox is the broken layer and you are
+isolating a Crabbox bug. Prefer direct `blacksmith testbox list` for cleanup
 diagnostics, not as a reusable work queue.
 
 Important Blacksmith footguns:

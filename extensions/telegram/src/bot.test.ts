@@ -1660,33 +1660,122 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
-    const contexts = requireArray(
+    const [conversationContext] = requireArray(
       payload.UntrustedStructuredContext,
-      "untrusted structured context",
-    ).map((item) => requireRecord(item, "context item"));
-    expect(contexts).toHaveLength(2);
-    const nearbyContext = contexts.find((item) => item.label === "Nearby reply target window");
-    const nearbyPayload = requireRecord(nearbyContext?.payload, "nearby context payload");
-    expect(nearbyPayload.relation).toBe("around_reply_target");
-    const nearbyMessages = requireArray(nearbyPayload.messages, "nearby messages").map((item) =>
-      requireRecord(item, "nearby message"),
+      "structured context",
     );
-    const replyTarget = nearbyMessages.find((item) => item.message_id === "100");
-    expect(replyTarget?.sender).toBe("Assistant");
-    expect(replyTarget?.body).toBe("Earlier deployment answer");
-    expect(replyTarget?.is_reply_target).toBe(true);
-    const currentContext = contexts.find((item) => item.label === "Current local chat window");
-    const currentPayload = requireRecord(currentContext?.payload, "current context payload");
-    expect(currentPayload.relation).toBe("before_current_message");
-    const currentMessages = requireArray(currentPayload.messages, "current messages").map((item) =>
-      requireRecord(item, "current message"),
+    const contextRecord = requireRecord(conversationContext, "conversation context");
+    expect(contextRecord.label).toBe("Conversation context");
+    const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+    expect(contextPayload.relation).toBe("selected_for_current_message");
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
     );
-    const lunchMessage = currentMessages.find((item) => item.message_id === "200");
-    expect(lunchMessage?.sender).toBe("Sam");
-    expect(lunchMessage?.body).toBe("Lunch after standup?");
-    const reviewMessage = currentMessages.find((item) => item.message_id === "201");
-    expect(reviewMessage?.sender).toBe("Riley");
-    expect(reviewMessage?.body).toBe("After the incident review.");
+    const messagesById = new Map(messages.map((message) => [message.message_id, message]));
+    expect(messagesById.get("100")?.sender).toBe("Assistant");
+    expect(messagesById.get("100")?.body).toBe("Earlier deployment answer");
+    expect(messagesById.get("100")?.is_reply_target).toBe(true);
+    expect(messagesById.get("200")?.sender).toBe("Sam");
+    expect(messagesById.get("200")?.body).toBe("Lunch after standup?");
+    expect(messagesById.get("201")?.sender).toBe("Riley");
+    expect(messagesById.get("201")?.body).toBe("After the incident review.");
+  });
+
+  it("updates cached bot messages from Telegram edit updates", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const editedHandler = getOnHandler("edited_message") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+    const chat = { id: 42, type: "group", title: "Ops" };
+    const question = {
+      chat,
+      text: "/ask which bikes can reach 383kmph",
+      date: 1778474813,
+      message_id: 35014,
+      from: { id: 201, is_bot: false, first_name: "Kesava" },
+    };
+    const fullAnswer =
+      "Kawasaki Ninja H2R (claimed 400 km/h) and MTT 420RR turbine (claimed up to 439 km/h) exceed 383 km/h. Dodge Tomahawk reaches higher but is a 4-wheeled concept, not a standard bike.";
+
+    await handler({
+      ...baseCtx,
+      message: question,
+    });
+    await handler({
+      ...baseCtx,
+      message: {
+        chat,
+        text: "K",
+        date: 1778474823,
+        message_id: 35016,
+        from: { id: 777, is_bot: true, first_name: "Super Serious Bot" },
+        reply_to_message: question,
+      },
+    });
+
+    replySpy.mockClear();
+    await editedHandler({
+      ...baseCtx,
+      editedMessage: {
+        chat,
+        text: fullAnswer,
+        date: 1778474823,
+        edit_date: 1778474824,
+        message_id: 35016,
+        from: { id: 777, is_bot: true, first_name: "Super Serious Bot" },
+        reply_to_message: question,
+      },
+    });
+    expect(replySpy).not.toHaveBeenCalled();
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat,
+        text: "wtf",
+        date: 1778474850,
+        message_id: 35018,
+        from: { id: 202, is_bot: false, first_name: "Kesava" },
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    const [conversationContext] = requireArray(
+      payload.UntrustedStructuredContext,
+      "structured context",
+    );
+    const contextRecord = requireRecord(conversationContext, "conversation context");
+    const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+    );
+    const messagesById = new Map(messages.map((message) => [message.message_id, message]));
+    expect(messagesById.get("35016")?.sender).toBe("Super Serious Bot");
+    expect(messagesById.get("35016")?.body).toBe(fullAnswer);
+    expect(messagesById.get("35016")?.body).not.toBe("K");
   });
 
   it("uses quote text when a Telegram partial reply is received", async () => {

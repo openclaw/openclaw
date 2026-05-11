@@ -35,8 +35,22 @@ describe("Slack message tools", () => {
         },
       }),
     ).toMatchObject({
-      actions: expect.arrayContaining(["send", "upload-file", "read"]),
-      capabilities: expect.arrayContaining(["presentation"]),
+      actions: [
+        "send",
+        "react",
+        "reactions",
+        "read",
+        "edit",
+        "delete",
+        "download-file",
+        "upload-file",
+        "pin",
+        "unpin",
+        "list-pins",
+        "member-info",
+        "emoji-list",
+      ],
+      capabilities: ["presentation"],
     });
   });
 
@@ -75,9 +89,21 @@ describe("Slack message tools", () => {
       },
     } as OpenClawConfig;
 
-    expect(listSlackMessageActions(cfg)).toEqual(
-      expect.arrayContaining(["read", "edit", "delete", "download-file", "upload-file"]),
-    );
+    expect(listSlackMessageActions(cfg)).toEqual([
+      "send",
+      "react",
+      "reactions",
+      "read",
+      "edit",
+      "delete",
+      "download-file",
+      "upload-file",
+      "pin",
+      "unpin",
+      "list-pins",
+      "member-info",
+      "emoji-list",
+    ]);
   });
 
   it("honors the selected Slack account during discovery", () => {
@@ -189,6 +215,25 @@ describe("Slack message tools", () => {
     expect(property.description).toContain('action="send"');
     expect(property.description).toContain("threadId");
     expect(property.description).toContain("Not supported for media or upload-file");
+  });
+
+  it("describes Slack top-level sends as a same-channel thread opt-out", () => {
+    const discovery = describeSlackMessageTool({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+          },
+        },
+      },
+    });
+
+    const { schema, property } = requireSchemaProperty(discovery, "topLevel");
+
+    expect(schema.actions).toEqual(["send"]);
+    expect(property.description).toContain('action="send"');
+    expect(property.description).toContain("parent-channel");
+    expect(property.description).toContain("threadId: null");
   });
 
   it("omits Slack file and message id schemas when those actions are disabled", () => {

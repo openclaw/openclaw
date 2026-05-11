@@ -22,14 +22,14 @@ vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelMessageAdapter: resolveOutboundChannelMessageAdapterMock,
 }));
 
-function mockCallArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0): T {
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
   const call = mock.mock.calls[index];
   expect(call).toBeDefined();
-  return call[0] as T;
+  return call[0];
 }
 
 function expectMockMessageContaining(mock: { mock: { calls: unknown[][] } }, expected: string) {
-  const messages = mock.mock.calls.map((call) => String(call[0] ?? ""));
+  const messages = mock.mock.calls.map((call) => (typeof call[0] === "string" ? call[0] : ""));
   expect(messages.some((message) => message.includes(expected))).toBe(true);
 }
 
@@ -200,9 +200,11 @@ describe("delivery-queue recovery", () => {
       cfg: baseCfg,
       allowBootstrap: true,
     });
-    const deliverInput = mockCallArg<{ channel?: string; to?: string; skipQueue?: boolean }>(
-      deliver,
-    );
+    const deliverInput = mockCallArg(deliver) as {
+      channel?: string;
+      to?: string;
+      skipQueue?: boolean;
+    };
     expect(deliverInput.channel).toBe("demo-channel-a");
     expect(deliverInput.to).toBe("+1");
     expect(deliverInput.skipQueue).toBe(true);
@@ -276,7 +278,7 @@ describe("delivery-queue recovery", () => {
         skippedMaxRetries: 0,
         deferredBackoff: 0,
       });
-      const reconcileInput = mockCallArg<{
+      const reconcileInput = mockCallArg(reconcileUnknownSend) as {
         cfg?: unknown;
         queueId?: string;
         channel?: string;
@@ -287,7 +289,7 @@ describe("delivery-queue recovery", () => {
         threadId?: string;
         silent?: boolean;
         retryCount?: number;
-      }>(reconcileUnknownSend);
+      };
       expect(reconcileInput.cfg).toBe(baseCfg);
       expect(reconcileInput.queueId).toBe(id);
       expect(reconcileInput.channel).toBe("demo-channel-a");
@@ -299,7 +301,7 @@ describe("delivery-queue recovery", () => {
       expect(reconcileInput.silent).toBe(true);
       expect(reconcileInput.retryCount).toBe(0);
 
-      const afterCommitInput = mockCallArg<{
+      const afterCommitInput = mockCallArg(afterCommit) as {
         kind?: string;
         to?: string;
         accountId?: string;
@@ -307,7 +309,7 @@ describe("delivery-queue recovery", () => {
         threadId?: string;
         silent?: boolean;
         result?: { messageId?: string };
-      }>(afterCommit);
+      };
       expect(afterCommitInput.kind).toBe("text");
       expect(afterCommitInput.to).toBe("+1");
       expect(afterCommitInput.accountId).toBe("acct-1");
@@ -396,9 +398,11 @@ describe("delivery-queue recovery", () => {
     const { result } = await runRecovery({ deliver });
 
     expect(deliver).toHaveBeenCalledTimes(1);
-    const deliverInput = mockCallArg<{ channel?: string; to?: string; skipQueue?: boolean }>(
-      deliver,
-    );
+    const deliverInput = mockCallArg(deliver) as {
+      channel?: string;
+      to?: string;
+      skipQueue?: boolean;
+    };
     expect(deliverInput.channel).toBe("demo-channel-a");
     expect(deliverInput.to).toBe("+1");
     expect(deliverInput.skipQueue).toBe(true);
@@ -523,11 +527,11 @@ describe("delivery-queue recovery", () => {
     const deliver = vi.fn().mockResolvedValue([]);
     await runRecovery({ deliver });
 
-    const deliverInput = mockCallArg<{
+    const deliverInput = mockCallArg(deliver) as {
       deliveryQueueId?: string;
       deliveryQueueStateDir?: string;
       skipQueue?: boolean;
-    }>(deliver);
+    };
     expect(deliverInput.deliveryQueueId).toBe(id);
     expect(deliverInput.deliveryQueueStateDir).toBe(tmpDir());
     expect(deliverInput.skipQueue).toBe(true);
@@ -624,7 +628,7 @@ describe("delivery-queue recovery", () => {
     const deliver = vi.fn().mockResolvedValue([]);
     await runRecovery({ deliver });
 
-    const deliverInput = mockCallArg<{
+    const deliverInput = mockCallArg(deliver) as {
       bestEffort?: boolean;
       gifPlayback?: boolean;
       silent?: boolean;
@@ -634,7 +638,7 @@ describe("delivery-queue recovery", () => {
       gatewayClientScopes?: string[];
       mirror?: unknown;
       session?: unknown;
-    }>(deliver);
+    };
     expect(deliverInput.bestEffort).toBe(true);
     expect(deliverInput.gifPlayback).toBe(true);
     expect(deliverInput.silent).toBe(true);
@@ -743,9 +747,11 @@ describe("delivery-queue recovery", () => {
       deferredBackoff: 1,
     });
     expect(deliver).toHaveBeenCalledTimes(1);
-    const deliverInput = mockCallArg<{ channel?: string; to?: string; skipQueue?: boolean }>(
-      deliver,
-    );
+    const deliverInput = mockCallArg(deliver) as {
+      channel?: string;
+      to?: string;
+      skipQueue?: boolean;
+    };
     expect(deliverInput.channel).toBe("demo-channel-b");
     expect(deliverInput.to).toBe("2");
     expect(deliverInput.skipQueue).toBe(true);

@@ -239,12 +239,12 @@ function createAdvancedFinalizeArgs(params: AdvancedFinalizeArgs = {}) {
   };
 }
 
-function requireMockArg<T>(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): T {
+function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
   const call = mock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected mock call ${callIndex}`);
   }
-  return call[argIndex] as T;
+  return call[argIndex];
 }
 
 function expectNoteContains(
@@ -253,7 +253,7 @@ function expectNoteContains(
   title: string,
 ): void {
   const calls = vi.mocked(prompter.note).mock.calls;
-  expect(calls.some((call) => String(call[0]).includes(expected) && call[1] === title)).toBe(true);
+  expect(calls.some((call) => call[0].includes(expected) && call[1] === title)).toBe(true);
 }
 
 function expectNoteTitleNotCalled(
@@ -364,7 +364,10 @@ describe("finalizeSetupWizard", () => {
       }
     }
 
-    const probeParams = requireMockArg<{ url?: string; password?: string }>(probeGatewayReachable);
+    const probeParams = requireMockArg(probeGatewayReachable) as {
+      url?: string;
+      password?: string;
+    };
     expect(probeParams.url).toBe("ws://127.0.0.1:18789");
     expect(probeParams.password).toBe("resolved-gateway-password"); // pragma: allowlist secret
     expect(launchTuiCli).toHaveBeenCalledWith({
@@ -668,18 +671,18 @@ describe("finalizeSetupWizard", () => {
       runtime: createRuntime(),
     });
 
-    const healthArgs = requireMockArg<{
+    const healthArgs = requireMockArg(healthCommand) as {
       json?: boolean;
       timeoutMs?: number;
       token?: string;
       config?: OpenClawConfig;
-    }>(healthCommand);
+    };
     expect(healthArgs.json).toBe(false);
     expect(healthArgs.timeoutMs).toBe(10_000);
     expect(healthArgs.token).toBe("session-token");
     expect(healthArgs.config?.gateway?.auth?.mode).toBe("token");
     expect(healthArgs.config?.gateway?.auth?.token).toBe("session-token");
-    expect(requireMockArg<unknown>(healthCommand, 0, 1)).toBeTypeOf("object");
+    expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
   });
 
   it("uses the resolved setup password for health checks", async () => {
@@ -722,27 +725,27 @@ describe("finalizeSetupWizard", () => {
       runtime: createRuntime(),
     });
 
-    const waitArgs = requireMockArg<{
+    const waitArgs = requireMockArg(waitForGatewayReachable) as {
       url?: string;
       token?: string;
       password?: string;
-    }>(waitForGatewayReachable);
+    };
     expect(waitArgs.url).toBe("ws://127.0.0.1:18789");
     expect(waitArgs.token).toBeUndefined();
     expect(waitArgs.password).toBe("session-password");
-    const healthArgs = requireMockArg<{
+    const healthArgs = requireMockArg(healthCommand) as {
       json?: boolean;
       timeoutMs?: number;
       token?: string;
       password?: string;
       config?: OpenClawConfig;
-    }>(healthCommand);
+    };
     expect(healthArgs.json).toBe(false);
     expect(healthArgs.timeoutMs).toBe(10_000);
     expect(healthArgs.token).toBeUndefined();
     expect(healthArgs.password).toBe("session-password");
     expect(healthArgs.config?.gateway?.auth?.mode).toBe("password");
-    expect(requireMockArg<unknown>(healthCommand, 0, 1)).toBeTypeOf("object");
+    expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
   });
 
   it("shows actionable gateway guidance instead of a hard error in no-daemon onboarding", async () => {

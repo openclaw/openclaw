@@ -279,7 +279,9 @@ describe("nextcloud-talk inbound behavior", () => {
       runtime: createRuntimeEnv(),
     });
 
-    const assembledRequest = coreRuntime.channel.turn.runAssembled.mock.calls[0]?.[0];
+    const assembledRequest = (
+      coreRuntime.channel.turn.runAssembled as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls[0]?.[0] as { replyPipeline?: unknown } | undefined;
     expect(assembledRequest?.replyPipeline).toEqual({});
   });
 });

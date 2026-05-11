@@ -7,6 +7,18 @@ import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const sendClickClackTextMock = vi.hoisted(() => vi.fn());
 
+type LlmCompleteMock = ReturnType<
+  typeof vi.fn<
+    (params: {
+      agentId?: string;
+      model?: string;
+      maxTokens?: number;
+      purpose?: string;
+      messages?: unknown[];
+    }) => Promise<unknown>
+  >
+>;
+
 vi.mock("./outbound.js", () => ({
   sendClickClackText: sendClickClackTextMock,
 }));
@@ -115,7 +127,7 @@ describe("handleClickClackInbound", () => {
 
     expect(runtime.channel.turn.runPrepared).not.toHaveBeenCalled();
     expect(runtime.agent.runEmbeddedPiAgent).not.toHaveBeenCalled();
-    const completionRequest = runtime.llm.complete.mock.calls[0]?.[0];
+    const completionRequest = (runtime.llm.complete as LlmCompleteMock).mock.calls[0]?.[0];
     expect(completionRequest?.agentId).toBe("service-bot");
     expect(completionRequest?.model).toBe("openai/gpt-5.4-mini");
     expect(completionRequest?.maxTokens).toBe(96);

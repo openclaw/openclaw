@@ -84,7 +84,7 @@ vi.mock("openclaw/plugin-sdk/routing", () => ({
 
 const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(async () => [] as string[]),
-  upsertPairingRequestMock: vi.fn(async () => ({ code: "CODE", created: true })),
+  upsertPairingRequestMock: vi.fn(async (_args: unknown) => ({ code: "CODE", created: true })),
 }));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
@@ -609,7 +609,7 @@ describe("handleLineWebhookEvents", () => {
     });
 
     expect(processMessage).not.toHaveBeenCalled();
-    const pairingRequest = upsertPairingRequestMock.mock.calls[0]?.[0] as
+    const pairingRequest = (upsertPairingRequestMock.mock.calls as unknown[][])[0]?.[0] as
       | { accountId?: string; channel?: string; id?: string }
       | undefined;
     expect(pairingRequest?.channel).toBe("line");
@@ -656,7 +656,7 @@ describe("handleLineWebhookEvents", () => {
 
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("line", undefined, "work");
     expect(processMessage).not.toHaveBeenCalled();
-    const pairingRequest = upsertPairingRequestMock.mock.calls[0]?.[0] as
+    const pairingRequest = (upsertPairingRequestMock.mock.calls as unknown[][])[0]?.[0] as
       | { accountId?: string; channel?: string; id?: string }
       | undefined;
     expect(pairingRequest?.channel).toBe("line");
@@ -1031,7 +1031,7 @@ describe("handleLineWebhookEvents", () => {
     expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
     expect(processMessage).toHaveBeenCalledTimes(1);
     expect(context.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("line: event handler failed: Error: transient failure"),
+      "line: event handler failed: Error: transient failure",
     );
   });
 

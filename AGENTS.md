@@ -73,12 +73,14 @@ Skills own workflows; root owns hard policy and routing.
 - PR review answer: bug/behavior, URL(s), affected surface, best-fix judgment, evidence from code/tests/CI/current or shipped behavior.
 - Issue/PR final answer: last line is the full GitHub URL.
 - Changelog: PR landings/fixes need one unless pure test/internal. Do not mention missing changelog as a review finding; Codex handles it during fix/landing.
+- PR verification: before merge, post exact local commands, CI/Testbox run IDs, before/after proof when used, and known proof gaps.
 - After landing or requested close/sweep: search duplicates; comment proof + canonical commit/PR/release before closing.
 - `ship` that fixes an issue: after push, comment proof + commit link, then close the issue.
 - GH comments with backticks, `$`, or shell snippets: use heredoc/body file, not inline double-quoted `--body`.
 - PR create: real body required. Include Summary + Verification; mention refs, behavior, and proof.
 - PR artifacts/screenshots: attach to PR/comment/external artifact store. Do not commit `.github/pr-assets`.
 - CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need.
+- Maintainers: ignore `Real behavior proof` failures that only say PR body lacks real after-fix evidence.
 - `/landpr`: use `~/.codex/prompts/landpr.md`; do not idle on `auto-response` or `check-docs`.
 
 ## Code

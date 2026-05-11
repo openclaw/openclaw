@@ -1,4 +1,4 @@
-import { streamSimple } from "@mariozechner/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../context-engine-capabilities.js", () => ({

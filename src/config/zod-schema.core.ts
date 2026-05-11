@@ -225,11 +225,11 @@ const ModelCompatSchema = z
   .optional();
 
 type AssertAssignable<_T extends U, U> = true;
-type _ModelCompatSchemaAssignableToType = AssertAssignable<
+export type _ModelCompatSchemaAssignableToType = AssertAssignable<
   z.infer<typeof ModelCompatSchema>,
   ModelCompatConfig | undefined
 >;
-type _ModelCompatTypeAssignableToSchema = AssertAssignable<
+export type _ModelCompatTypeAssignableToSchema = AssertAssignable<
   ModelCompatConfig | undefined,
   z.infer<typeof ModelCompatSchema>
 >;
@@ -360,6 +360,19 @@ const ModelDefinitionSchema = z
   })
   .strict();
 
+const ModelProviderLocalServiceSchema = z
+  .object({
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+    cwd: z.string().min(1).optional(),
+    env: z.record(z.string(), z.string().register(sensitive)).optional(),
+    healthUrl: z.string().min(1).optional(),
+    readyTimeoutMs: z.number().int().positive().optional(),
+    idleStopMs: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
 const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1),
@@ -375,6 +388,7 @@ const ModelProviderSchema = z
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     agentRuntime: ModelAgentRuntimePolicySchema,
+    localService: ModelProviderLocalServiceSchema,
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
@@ -875,11 +889,11 @@ export const ToolsMediaSchema = z
   .optional();
 
 type ToolsMediaConfigFromSchema = NonNullable<z.infer<typeof ToolsMediaSchema>>;
-type _ToolsMediaAsyncCompletionSchemaAssignableToType = AssertAssignable<
+export type _ToolsMediaAsyncCompletionSchemaAssignableToType = AssertAssignable<
   ToolsMediaConfigFromSchema["asyncCompletion"],
   MediaToolsConfig["asyncCompletion"]
 >;
-type _ToolsMediaAsyncCompletionTypeAssignableToSchema = AssertAssignable<
+export type _ToolsMediaAsyncCompletionTypeAssignableToSchema = AssertAssignable<
   MediaToolsConfig["asyncCompletion"],
   ToolsMediaConfigFromSchema["asyncCompletion"]
 >;
