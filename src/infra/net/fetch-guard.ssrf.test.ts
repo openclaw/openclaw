@@ -629,6 +629,19 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("does not carry exact-origin trust across private-host redirects to another port", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(redirectResponse("http://127.0.0.1:11435/"));
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://127.0.0.1:11434/start",
+        fetchImpl,
+        policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("enforces hostname allowlist policies", async () => {
     const fetchImpl = vi.fn();
     await expect(
@@ -1454,6 +1467,33 @@ describe("fetchWithSsrFGuard hardening", () => {
           mode: "explicit-proxy",
           proxyUrl: "http://localhost:6152",
           allowPrivateProxy: false,
+        },
+      }),
+    ).rejects.toThrow(/blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not use target origin trust to allow a private explicit proxy", async () => {
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const lookupFn: LookupFn = vi.fn(async () => [
+      { address: "10.0.0.5", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://10.0.0.5:11434/v1/models",
+        fetchImpl,
+        lookupFn,
+        policy: { allowedOrigins: ["https://10.0.0.5:11434"] },
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://10.0.0.5:7890",
         },
       }),
     ).rejects.toThrow(/blocked/i);

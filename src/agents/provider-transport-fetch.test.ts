@@ -239,8 +239,105 @@ describe("buildGuardedModelFetch", () => {
     expect(policy).toBeUndefined();
   });
 
-  it("merges explicit private-network opt-in into the provider-host fake-IP policy", async () => {
-    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({ allowPrivateNetwork: true });
+  it("trusts exact configured custom provider hosts without broad private-network opt-in", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "custom" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "lmstudio",
+      api: "openai-completions",
+      baseUrl: "http://10.0.0.5:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://10.0.0.5:1234/v1/chat/completions", { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toEqual({
+      allowedOrigins: ["http://10.0.0.5:1234"],
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["10.0.0.5"],
+    });
+    expect(policy?.allowPrivateNetwork).toBeUndefined();
+    expect(policy?.dangerouslyAllowPrivateNetwork).toBeUndefined();
+  });
+
+  it("trusts exact configured local provider origins", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "local" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "lmstudio",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://127.0.0.1:1234/v1/chat/completions", { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toEqual({
+      allowedOrigins: ["http://127.0.0.1:1234"],
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["127.0.0.1"],
+    });
+  });
+
+  it("does not trust a configured provider host on a different port", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "custom" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "lmstudio",
+      api: "openai-completions",
+      baseUrl: "http://10.0.0.5:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://10.0.0.5:4321/v1/chat/completions", { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toBeUndefined();
+  });
+
+  it("does not add exact-origin trust for non-custom provider endpoints", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "openai-public" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "openai",
+      api: "openai-completions",
+      baseUrl: "http://10.0.0.5:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://10.0.0.5:1234/v1/chat/completions", { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["10.0.0.5"],
+    });
+    expect(policy?.allowedOrigins).toBeUndefined();
+    expect(policy?.allowedHostnames).toBeUndefined();
+  });
+
+  it("merges explicit private-network opt-in into the provider-host policies", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: true,
+      policy: { endpointClass: "custom" },
+    });
     const model = {
       id: "qwen3:32b",
       provider: "ollama",
@@ -253,6 +350,7 @@ describe("buildGuardedModelFetch", () => {
 
     const policy = latestGuardedFetchParams().policy;
     expect(policy).toEqual({
+      allowedOrigins: ["http://10.0.0.5:11434"],
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
       hostnameAllowlist: ["10.0.0.5"],

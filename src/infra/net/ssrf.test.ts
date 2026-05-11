@@ -4,7 +4,9 @@ import {
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
   isSameSsrFPolicy,
+  resolveSsrFPolicyForUrl,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
 } from "./ssrf.js";
 
@@ -101,6 +103,10 @@ const httpBaseUrlPolicyBuilders = [
     build: ssrfPolicyFromHttpBaseUrlAllowedHostname,
   },
   {
+    name: "ssrfPolicyFromHttpBaseUrlAllowedOrigin",
+    build: ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+  },
+  {
     name: "ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist",
     build: ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
   },
@@ -138,6 +144,37 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedHostname", () => {
   it("builds an allowed-hostname policy from HTTP base URLs", () => {
     expect(ssrfPolicyFromHttpBaseUrlAllowedHostname(" https://api.example.com/v1 ")).toEqual({
       allowedHostnames: ["api.example.com"],
+    });
+  });
+});
+
+describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin", () => {
+  it("builds an allowed-origin policy from HTTP base URLs", () => {
+    expect(ssrfPolicyFromHttpBaseUrlAllowedOrigin(" http://10.0.0.5:1234/v1 ")).toEqual({
+      allowedOrigins: ["http://10.0.0.5:1234"],
+    });
+  });
+});
+
+describe("resolveSsrFPolicyForUrl", () => {
+  it("converts matching allowed origins into per-request hostname trust", () => {
+    expect(
+      resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:1234/v1/chat/completions"), {
+        allowedOrigins: ["http://10.0.0.5:1234"],
+      }),
+    ).toEqual({
+      allowedOrigins: ["http://10.0.0.5:1234"],
+      allowedHostnames: ["10.0.0.5"],
+    });
+  });
+
+  it("does not trust the hostname when the port differs", () => {
+    expect(
+      resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:4321/v1/chat/completions"), {
+        allowedOrigins: ["http://10.0.0.5:1234"],
+      }),
+    ).toEqual({
+      allowedOrigins: ["http://10.0.0.5:1234"],
     });
   });
 });
@@ -225,12 +262,14 @@ describe("isSameSsrFPolicy", () => {
         {
           allowPrivateNetwork: true,
           allowRfc2544BenchmarkRange: true,
+          allowedOrigins: ["https://A.example.com/v1", "https://b.example.com"],
           allowedHostnames: ["b.example.com", "A.example.com"],
           hostnameAllowlist: ["*.example.com", "api.example.com"],
         },
         {
           allowPrivateNetwork: true,
           allowRfc2544BenchmarkRange: true,
+          allowedOrigins: ["https://b.example.com", "https://a.example.com/other"],
           allowedHostnames: ["a.example.com", "B.EXAMPLE.COM"],
           hostnameAllowlist: ["api.example.com", "*.example.com"],
         },

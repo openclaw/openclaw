@@ -6,9 +6,11 @@ import {
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import {
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { mergeSsrFPolicies } from "../plugin-sdk/ssrf-policy.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
@@ -392,7 +394,7 @@ export function resolveModelRequestTimeoutMs(
     : undefined;
 }
 
-function resolveHttpHostname(value: unknown): string | undefined {
+function resolveHttpOrigin(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
@@ -401,7 +403,7 @@ function resolveHttpHostname(value: unknown): string | undefined {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return undefined;
     }
-    return parsed.hostname.toLowerCase();
+    return parsed.origin.toLowerCase();
   } catch {
     return undefined;
   }
@@ -411,23 +413,25 @@ function resolveModelTransportSsrFPolicy(params: {
   model: Model<Api>;
   url: string;
   allowPrivateNetwork?: boolean;
+  trustConfiguredBaseUrlOrigin?: boolean;
 }): SsrFPolicy | undefined {
   const baseUrl = (params.model as { baseUrl?: unknown }).baseUrl;
-  const baseHostname = resolveHttpHostname(baseUrl);
-  const requestHostname = resolveHttpHostname(params.url);
-  const fakeIpPolicy =
-    typeof baseUrl === "string" && baseHostname && requestHostname === baseHostname
-      ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
+  const baseOrigin = resolveHttpOrigin(baseUrl);
+  const requestOrigin = resolveHttpOrigin(params.url);
+  const requestMatchesBaseOrigin =
+    typeof baseUrl === "string" && Boolean(baseOrigin) && requestOrigin === baseOrigin;
+  const baseUrlOriginPolicy =
+    requestMatchesBaseOrigin && params.trustConfiguredBaseUrlOrigin
+      ? ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl)
       : undefined;
-
-  if (fakeIpPolicy) {
-    return {
-      ...fakeIpPolicy,
-      ...(params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
-    };
-  }
-
-  return params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
+  const fakeIpPolicy = requestMatchesBaseOrigin
+    ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
+    : undefined;
+  return mergeSsrFPolicies(
+    baseUrlOriginPolicy,
+    fakeIpPolicy,
+    params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+  );
 }
 
 export function buildGuardedModelFetch(
@@ -472,6 +476,11 @@ export function buildGuardedModelFetch(
       model,
       url,
       allowPrivateNetwork: requestConfig.allowPrivateNetwork,
+      // Only operator-configured custom/local endpoints get exact-origin trust;
+      // known public/native providers keep the default rebinding checks.
+      trustConfiguredBaseUrlOrigin:
+        requestConfig.policy?.endpointClass === "custom" ||
+        requestConfig.policy?.endpointClass === "local",
     });
     const requestInit =
       request &&

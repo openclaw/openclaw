@@ -51,6 +51,7 @@ export type SsrFPolicy = {
    */
   allowIpv6UniqueLocalRange?: boolean;
   allowedHostnames?: string[];
+  allowedOrigins?: string[];
   hostnameAllowlist?: string[];
 };
 
@@ -73,6 +74,7 @@ function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
     allowRfc2544BenchmarkRange: policy.allowRfc2544BenchmarkRange === true,
     allowIpv6UniqueLocalRange: policy.allowIpv6UniqueLocalRange === true,
     allowedHostnames: normalizeSsrFPolicyHostnames(policy.allowedHostnames),
+    allowedOrigins: normalizeSsrFPolicyOrigins(policy.allowedOrigins),
     hostnameAllowlist: [...normalizeHostnameAllowlist(policy.hostnameAllowlist)].toSorted(),
   };
 }
@@ -98,6 +100,40 @@ export function ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl: string): SsrFP
   } catch {
     return undefined;
   }
+}
+
+function normalizeSsrFPolicyOrigin(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    return parsed.origin.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeSsrFPolicyOrigins(values?: string[]): string[] {
+  if (!values || values.length === 0) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      values
+        .map((value) => normalizeSsrFPolicyOrigin(value))
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ).toSorted();
+}
+
+export function ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl: string): SsrFPolicy | undefined {
+  const origin = normalizeSsrFPolicyOrigin(baseUrl);
+  return origin ? { allowedOrigins: [origin] } : undefined;
 }
 
 export function ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(
@@ -157,6 +193,19 @@ function shouldSkipPrivateNetworkChecks(hostname: string, policy?: SsrFPolicy): 
     isPrivateNetworkAllowedByPolicy(policy) ||
     normalizeHostnameSet(policy?.allowedHostnames).has(hostname)
   );
+}
+
+export function resolveSsrFPolicyForUrl(url: URL, policy?: SsrFPolicy): SsrFPolicy | undefined {
+  if (!policy?.allowedOrigins?.length) {
+    return policy;
+  }
+  if (!normalizeSsrFPolicyOrigins(policy.allowedOrigins).includes(url.origin.toLowerCase())) {
+    return policy;
+  }
+  return {
+    ...policy,
+    allowedHostnames: Array.from(new Set([...(policy.allowedHostnames ?? []), url.hostname])),
+  };
 }
 
 function resolveIpv4SpecialUseBlockOptions(policy?: SsrFPolicy): Ipv4SpecialUseBlockOptions {

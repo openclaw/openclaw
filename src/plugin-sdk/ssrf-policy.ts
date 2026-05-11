@@ -85,6 +85,11 @@ export function mergeSsrFPolicies(
         new Set([...(merged.allowedHostnames ?? []), ...policy.allowedHostnames]),
       );
     }
+    if (policy.allowedOrigins?.length) {
+      merged.allowedOrigins = Array.from(
+        new Set([...(merged.allowedOrigins ?? []), ...policy.allowedOrigins]),
+      );
+    }
     if (policy.hostnameAllowlist?.length) {
       merged.hostnameAllowlist = Array.from(
         new Set([...(merged.hostnameAllowlist ?? []), ...policy.hostnameAllowlist]),

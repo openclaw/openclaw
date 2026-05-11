@@ -142,6 +142,7 @@ describe("mergeSsrFPolicies", () => {
         {
           allowPrivateNetwork: true,
           allowedHostnames: ["api.example.com"],
+          allowedOrigins: ["http://10.0.0.5:1234"],
           hostnameAllowlist: ["downloads.example.com"],
         },
         {
@@ -149,6 +150,7 @@ describe("mergeSsrFPolicies", () => {
           allowRfc2544BenchmarkRange: true,
           allowIpv6UniqueLocalRange: true,
           allowedHostnames: ["api.example.com", "cdn.example.com"],
+          allowedOrigins: ["http://10.0.0.5:1234", "http://10.0.0.5:4321"],
           hostnameAllowlist: ["downloads.example.com", "assets.example.com"],
         },
       ),
@@ -158,6 +160,7 @@ describe("mergeSsrFPolicies", () => {
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
       allowedHostnames: ["api.example.com", "cdn.example.com"],
+      allowedOrigins: ["http://10.0.0.5:1234", "http://10.0.0.5:4321"],
       hostnameAllowlist: ["downloads.example.com", "assets.example.com"],
     });
   });
