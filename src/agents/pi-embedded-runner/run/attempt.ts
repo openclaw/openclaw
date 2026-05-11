@@ -3427,6 +3427,8 @@ export async function runEmbeddedAttempt(
                   model: params.modelId,
                   systemPrompt: systemPromptForHook,
                   prompt: promptForModel,
+                  userPrompt: params.prompt,
+                  prependedContext: hookResult?.prependContext,
                   historyMessages: cloneHookMessages(
                     normalizeMessagesForLlmBoundary(activeSession.messages),
                   ),

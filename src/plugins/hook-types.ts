@@ -230,6 +230,10 @@ export type PluginHookLlmInputEvent = {
   model: string;
   systemPrompt?: string;
   prompt: string;
+  /** Raw user turn before bootstrap-warning wrapping and hook prepend. */
+  userPrompt?: string;
+  /** Bootstrap warnings + hook-prepended context merged (joined with `\n\n`). */
+  prependedContext?: string;
   historyMessages: unknown[];
   imagesCount: number;
 };

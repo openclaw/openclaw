@@ -195,3 +195,63 @@ describe("llm hook runner methods", () => {
     });
   });
 });
+
+describe("llm_input userPrompt/prependedContext plumbing", () => {
+  it("passes userPrompt and prependedContext through to registered handlers and preserves invariant", async () => {
+    const events: Array<{
+      prompt: string;
+      userPrompt?: string;
+      prependedContext?: string;
+    }> = [];
+    const handler = vi.fn((event: (typeof events)[number]) => {
+      events.push(event);
+    });
+    const { runner } = createHookRunnerWithRegistry([{ hookName: "llm_input", handler }]);
+
+    await runner.runLlmInput(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "anthropic",
+        model: "sonnet-4.6",
+        prompt: "CTX\n\nRAW",
+        userPrompt: "RAW",
+        prependedContext: "CTX",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { runId: "run-1" },
+    );
+
+    expect(events[0]?.userPrompt).toBe("RAW");
+    expect(events[0]?.prependedContext).toBe("CTX");
+    expect([events[0]?.prependedContext, events[0]?.userPrompt].filter(Boolean).join("\n\n")).toBe(
+      events[0]?.prompt,
+    );
+  });
+
+  it("passes undefined prependedContext through when hook did not prepend", async () => {
+    const events: Array<{ userPrompt?: string; prependedContext?: string }> = [];
+    const handler = vi.fn((event: (typeof events)[number]) => {
+      events.push(event);
+    });
+    const { runner } = createHookRunnerWithRegistry([{ hookName: "llm_input", handler }]);
+
+    await runner.runLlmInput(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "anthropic",
+        model: "sonnet-4.6",
+        prompt: "RAW",
+        userPrompt: "RAW",
+        historyMessages: [],
+        imagesCount: 0,
+      },
+      { runId: "run-1" },
+    );
+
+    expect(events[0]?.userPrompt).toBe("RAW");
+    expect(events[0]?.prependedContext).toBeUndefined();
+  });
+});
