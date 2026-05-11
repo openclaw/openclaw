@@ -408,8 +408,21 @@ function fallbackFailureToCompactionResult(err: unknown): EmbeddedPiCompactResul
 export async function compactEmbeddedPiSessionDirect(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult> {
+  const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
+    config: params.config,
+    provider: params.provider,
+    modelId: params.model,
+    authProfileId: params.authProfileId,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
   if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
-    return await compactEmbeddedPiSessionDirectOnce(params);
+    return await compactEmbeddedPiSessionDirectOnce({
+      ...params,
+      provider: resolvedCompactionTarget.provider ?? params.provider ?? DEFAULT_PROVIDER,
+      model: resolvedCompactionTarget.model ?? params.model ?? DEFAULT_MODEL,
+      authProfileId: resolvedCompactionTarget.authProfileId,
+    });
   }
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
