@@ -126,7 +126,7 @@ export type MessageActionRunResult =
       channel: ChannelId;
       action: "send";
       to: string;
-      handledBy: "plugin" | "core";
+      handledBy: "plugin" | "core" | "dry-run";
       payload: unknown;
       toolResult?: AgentToolResult<unknown>;
       sendResult?: MessageSendResult;

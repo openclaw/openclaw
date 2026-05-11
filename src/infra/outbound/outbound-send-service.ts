@@ -244,7 +244,7 @@ export async function executeSendAction(params: {
   replyToId?: string;
   threadId?: string | number;
 }): Promise<{
-  handledBy: "plugin" | "core";
+  handledBy: "plugin" | "core" | "dry-run";
   payload: unknown;
   toolResult?: AgentToolResult<unknown>;
   sendResult?: MessageSendResult;
@@ -273,7 +273,7 @@ export async function executeSendAction(params: {
     });
 
     return {
-      handledBy: "core",
+      handledBy: result.dryRun ? "dry-run" : "core",
       payload: result,
       sendResult: result,
     };
@@ -312,7 +312,7 @@ export async function executeSendAction(params: {
   });
 
   return {
-    handledBy: "core",
+    handledBy: result.dryRun ? "dry-run" : "core",
     payload: result,
     sendResult: result,
   };

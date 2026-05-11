@@ -572,15 +572,16 @@ describe("executeSendAction", () => {
     });
   });
 
-  it("skips plugin dispatch during dry-run sends and forwards gateway + silent to sendMessage", async () => {
+  it("skips plugin dispatch during dry-run sends and returns dry-run handledBy", async () => {
     mocks.sendMessage.mockResolvedValue({
       channel: "demo-outbound",
       to: "channel:123",
       via: "gateway",
       mediaUrl: null,
+      dryRun: true,
     });
 
-    await executeSendAction({
+    const result = await executeSendAction({
       ctx: {
         cfg: {},
         channel: "demo-outbound",
@@ -611,6 +612,7 @@ describe("executeSendAction", () => {
       token: "tok",
       timeoutMs: 5000,
     });
+    expect(result.handledBy).toBe("dry-run");
   });
 
   it("routes prepared plugin send payloads through core best-effort delivery by default", async () => {
