@@ -200,10 +200,27 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
-  it("suppresses exec tool errors when verbose mode is off", () => {
-    expectNoPayloads({
+  it("surfaces concise exec tool errors when verbose mode is off", () => {
+    const payloads = buildPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },
       verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Exec",
+      absentDetail: "command failed",
+    });
+  });
+
+  it("surfaces concise bash tool errors when verbose mode is off", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "bash", error: "command failed" },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Bash",
+      absentDetail: "command failed",
     });
   });
 
