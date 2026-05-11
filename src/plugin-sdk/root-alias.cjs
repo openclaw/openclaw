@@ -8,7 +8,6 @@ let diagnosticEventsModule = null;
 const moduleLoaders = new Map();
 const pluginSdkSubpathsCache = new Map();
 const pluginSdkPackageNames = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"];
-const nonQaPrivateLocalOnlyPluginSdkSubpaths = new Set(["codex-native-task-runtime"]);
 const pluginSdkSourceExtensions = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"];
 const isDistRootAlias = __filename.includes(
   `${path.sep}dist${path.sep}plugin-sdk${path.sep}root-alias.cjs`,
@@ -130,6 +129,9 @@ function listPluginSdkExportedSubpaths() {
 }
 
 function listPrivateLocalOnlyPluginSdkSubpaths() {
+  if (process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI !== "1") {
+    return [];
+  }
   try {
     const raw = fs.readFileSync(
       path.join(getPackageRoot(), "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
@@ -140,11 +142,7 @@ function listPrivateLocalOnlyPluginSdkSubpaths() {
       return [];
     }
     return parsed.filter(
-      (subpath) =>
-        typeof subpath === "string" &&
-        /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath) &&
-        (process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1" ||
-          nonQaPrivateLocalOnlyPluginSdkSubpaths.has(subpath)),
+      (subpath) => typeof subpath === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath),
     );
   } catch {
     return [];

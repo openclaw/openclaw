@@ -265,7 +265,7 @@ const cachedPluginSdkScopedAliasMaps = new PluginLruCache<Record<string, string>
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
-const NON_QA_PRIVATE_LOCAL_ONLY_PLUGIN_SDK_SUBPATHS = new Set(["codex-native-task-runtime"]);
+const CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH = "codex-native-task-runtime";
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".ts",
   ".mts",
@@ -454,10 +454,31 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpaths() {
   return process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1";
 }
 
-function shouldIncludePrivateLocalOnlyPluginSdkSubpath(subpath: string) {
+function isBundledCodexPluginModulePath(params: { packageRoot: string; modulePath: string }) {
+  const normalizedModulePath = path.resolve(params.modulePath);
+  const roots = [
+    path.join(params.packageRoot, "extensions", "codex"),
+    path.join(params.packageRoot, "dist", "extensions", "codex"),
+    path.join(params.packageRoot, "dist-runtime", "extensions", "codex"),
+  ];
+  return roots.some(
+    (root) =>
+      normalizedModulePath === root || normalizedModulePath.startsWith(`${root}${path.sep}`),
+  );
+}
+
+function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
+  packageRoot: string;
+  modulePath: string;
+  subpath: string;
+}) {
   return (
     shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ||
-    NON_QA_PRIVATE_LOCAL_ONLY_PLUGIN_SDK_SUBPATHS.has(subpath)
+    (params.subpath === CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH &&
+      isBundledCodexPluginModulePath({
+        packageRoot: params.packageRoot,
+        modulePath: params.modulePath,
+      }))
   );
 }
 
@@ -486,11 +507,14 @@ function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
   }
 }
 
-function listPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
-  return readPrivateLocalOnlyPluginSdkSubpaths(packageRoot).filter(
+function listPrivateLocalOnlyPluginSdkSubpaths(params: {
+  packageRoot: string;
+  modulePath: string;
+}): string[] {
+  return readPrivateLocalOnlyPluginSdkSubpaths(params.packageRoot).filter(
     (subpath) =>
-      shouldIncludePrivateLocalOnlyPluginSdkSubpath(subpath) &&
-      hasPluginSdkSubpathArtifact(packageRoot, subpath),
+      shouldIncludePrivateLocalOnlyPluginSdkSubpath({ ...params, subpath }) &&
+      hasPluginSdkSubpathArtifact(params.packageRoot, subpath),
   );
 }
 
@@ -511,7 +535,8 @@ export function listPluginSdkExportedSubpaths(
   if (!packageRoot) {
     return [];
   }
-  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}`;
+  const includeCodexPrivateRuntime = isBundledCodexPluginModulePath({ packageRoot, modulePath });
+  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::codexPrivate=${includeCodexPrivateRuntime ? "1" : "0"}`;
   const cached = cachedPluginSdkExportedSubpaths.get(cacheKey);
   if (cached) {
     return cached;
@@ -519,7 +544,7 @@ export function listPluginSdkExportedSubpaths(
   const subpaths = [
     ...new Set([
       ...(readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? []),
-      ...listPrivateLocalOnlyPluginSdkSubpaths(packageRoot),
+      ...listPrivateLocalOnlyPluginSdkSubpaths({ packageRoot, modulePath }),
     ]),
   ].toSorted();
   cachedPluginSdkExportedSubpaths.set(cacheKey, subpaths);
@@ -548,7 +573,8 @@ export function resolvePluginSdkScopedAliasMap(
     isProduction: process.env.NODE_ENV === "production",
     pluginSdkResolution: params.pluginSdkResolution,
   });
-  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}`;
+  const includeCodexPrivateRuntime = isBundledCodexPluginModulePath({ packageRoot, modulePath });
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::codexPrivate=${includeCodexPrivateRuntime ? "1" : "0"}`;
   const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
   if (cached) {
     return cached;

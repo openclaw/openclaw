@@ -443,7 +443,7 @@ describe("plugin-sdk root alias", () => {
     expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/nested/path");
   });
 
-  it("loads non-QA private local-only plugin-sdk subpaths in the CJS root alias", () => {
+  it("keeps non-QA private local-only plugin-sdk subpaths out of the CJS root alias", () => {
     const packageRoot = path.dirname(path.dirname(path.dirname(rootAliasPath)));
     const sourceCodexNativeTaskRuntimePath = path.join(
       packageRoot,
@@ -462,12 +462,8 @@ describe("plugin-sdk root alias", () => {
 
     expect((lazyModule.moduleExports.slowHelper as () => string)()).toBe("loaded");
     const aliasMap = (lazyModule.createJitiOptions.at(-1)?.alias ?? {}) as Record<string, string>;
-    expect(aliasMap["openclaw/plugin-sdk/codex-native-task-runtime"]).toBe(
-      sourceCodexNativeTaskRuntimePath,
-    );
-    expect(aliasMap["@openclaw/plugin-sdk/codex-native-task-runtime"]).toBe(
-      sourceCodexNativeTaskRuntimePath,
-    );
+    expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/codex-native-task-runtime");
+    expect(aliasMap).not.toHaveProperty("@openclaw/plugin-sdk/codex-native-task-runtime");
     expect(aliasMap).not.toHaveProperty("openclaw/plugin-sdk/qa-runtime");
   });
 
