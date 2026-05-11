@@ -1331,6 +1331,9 @@ jobs:
           - check_name: check-strict-smoke
             task: strict-smoke
             runner: ubuntu-24.04
+          - check_name: check-bundled-channel-config-metadata
+            task: bundled-channel-config-metadata
+            runner: ubuntu-24.04
     steps:
       - name: Checkout
         shell: bash
@@ -1426,6 +1429,9 @@ jobs:
             strict-smoke)
               # build-artifacts already runs the tsdown/runtime build for the same Node-relevant changes.
               pnpm build:plugin-sdk:strict-smoke
+              ;;
+            bundled-channel-config-metadata)
+              pnpm check:bundled-channel-config-metadata
               ;;
             *)
               echo "Unsupported check task: $TASK" >&2
