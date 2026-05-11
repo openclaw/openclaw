@@ -7,7 +7,7 @@
  * - Tags:
  *   - upstream tag: v<ver> (fetched from upstream remote)
  *   - polytropos tag: v<ver>+poly.<N>  (N is a global build number)
- * - Determine <ver> from package.json version (expected to match upstream tag version).
+ * - Determine v<ver> from the most recent reachable upstream tag (v*).
  * - Release always switches `previous` then `current` (mandatory).
  */
 
@@ -32,17 +32,20 @@ function getRepoRoot() {
   return sh('git', ['rev-parse', '--show-toplevel']);
 }
 
-function getUpstreamVersionFromPackageJson(repoRoot) {
-  const pkgPath = path.join(repoRoot, 'package.json');
-  let pkg;
+function getMostRecentReachableUpstreamVTag() {
+  // Use nearest reachable tag that looks like an upstream release tag (v2026.5.10 etc).
+  // We intentionally ignore poly tags here.
+  let tag = '';
   try {
-    pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-  } catch (err) {
-    fail(`failed to read/parse package.json at ${pkgPath}: ${String(err)}`);
+    tag = sh('git', ['describe', '--tags', '--match', 'v*', '--abbrev=0']);
+  } catch {
+    fail('no reachable upstream v* tag found from HEAD; fetch upstream tags and ensure history includes a v<ver> tag');
   }
-  const ver = pkg?.version;
-  if (!ver || typeof ver !== 'string') fail('package.json missing version; cannot derive upstream version');
-  return ver;
+  if (tag.includes('+poly.')) {
+    // If git picked a poly tag, explicitly fail; the base version must come from an upstream v* tag.
+    fail(`nearest reachable v* tag was a poly tag (${tag}); expected an upstream tag like v2026.5.10`);
+  }
+  return tag;
 }
 
 function getMaxPolyBuildNumber() {
@@ -110,7 +113,7 @@ Usage:
 
 Behavior:
   - Requires clean git working tree
-  - Uses package.json version to determine upstream version (expects it matches upstream v<ver>)
+  - Uses the most recent reachable upstream tag (v<ver>) as the base
   - Computes next global poly build number N = max(existing poly) + 1
   - Creates tag v<ver>+poly.<N> at HEAD
   - Builds using: pnpm install; pnpm ui:build; pnpm build
@@ -133,13 +136,13 @@ if (cmd !== 'release') {
 
 ensureCleanWorkingTree();
 const repoRoot = getRepoRoot();
-const ver = getUpstreamVersionFromPackageJson(repoRoot);
+const upstreamVTag = getMostRecentReachableUpstreamVTag();
 
 const maxPoly = getMaxPolyBuildNumber();
 const nextPoly = maxPoly + 1;
-const polyTag = `v${ver}+poly.${nextPoly}`;
+const polyTag = `${upstreamVTag}+poly.${nextPoly}`;
 
-console.log(`Upstream version (from package.json): v${ver}`);
+console.log(`Upstream base tag (nearest reachable): ${upstreamVTag}`);
 console.log(`Next release tag: ${polyTag}`);
 
 // Create annotated tag
@@ -155,7 +158,7 @@ const distDir = ensureDistExists(repoRoot);
 
 // Publish into releases
 const relRoot = releasesRoot();
-const dest = path.join(relRoot, `v${ver}+poly.${nextPoly}`);
+const dest = path.join(relRoot, `${upstreamVTag}+poly.${nextPoly}`);
 console.log(`Publishing release: ${dest}`);
 fs.mkdirSync(relRoot, { recursive: true });
 fs.rmSync(dest, { force: true, recursive: true });
