@@ -466,9 +466,9 @@ Completed consolidation/deletion highlights:
   `session_entries.entry_json`; a missing typed conversation row is a doctor
   migration/repair problem, not a runtime fallback.
 - Stored-session reset decisions now prefer typed `sessions.session_scope`,
-  `sessions.chat_type`, and `sessions.channel` metadata before falling back to
-  `sessionKey` shape. `sessionKey` parsing remains only for explicit thread
-  suffixes and old compatibility fallback behavior.
+  `sessions.chat_type`, and `sessions.channel` metadata. `sessionKey` parsing
+  remains only for explicit thread/topic suffixes on command targets; group vs
+  direct reset classification no longer comes from key shape.
 - Gateway `chat.send` external-route inheritance now reads typed SQLite session
   routing metadata instead of inferring channel/direct/group scope from
   `sessionKey` pieces. Channel-scoped sessions inherit only when the typed

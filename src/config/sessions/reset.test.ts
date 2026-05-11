@@ -8,11 +8,11 @@ describe("session reset thread detection", () => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
   });
 
-  it("does not treat feishu conversation ids with embedded :topic: as thread suffixes", () => {
+  it("uses explicit group metadata for conversation ids with embedded :topic:", () => {
     const sessionKey =
       "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user";
     expect(isThreadSessionKey(sessionKey)).toBe(false);
-    expect(resolveSessionResetType({ sessionKey })).toBe("group");
+    expect(resolveSessionResetType({ sessionKey, isGroup: true })).toBe("group");
   });
 
   it("still treats telegram :topic: suffixes as thread sessions", () => {
