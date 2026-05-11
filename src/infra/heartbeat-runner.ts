@@ -734,6 +734,20 @@ function stripLeadingHeartbeatResponsePrefix(
   return text.replace(prefixPattern, "");
 }
 
+const TRAILING_HEARTBEAT_NOTIFY_FALSE_PATTERN =
+  /(?:^|\r?\n)[^\S\r\n]*notify[^\S\r\n]*=[^\S\r\n]*false[^\S\r\n]*$/i;
+
+function stripTrailingHeartbeatNotifyFalse(text: string): { text: string; notifyFalse: boolean } {
+  const match = TRAILING_HEARTBEAT_NOTIFY_FALSE_PATTERN.exec(text);
+  if (!match || match.index === undefined) {
+    return { text, notifyFalse: false };
+  }
+  return {
+    text: text.slice(0, match.index).trimEnd(),
+    notifyFalse: true,
+  };
+}
+
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
@@ -741,23 +755,25 @@ function normalizeHeartbeatReply(
 ) {
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
-  const stripped = stripHeartbeatToken(textForStrip, {
+  const notifyMarker = stripTrailingHeartbeatNotifyFalse(textForStrip);
+  const stripped = stripHeartbeatToken(notifyMarker.text, {
     mode: "heartbeat",
     maxAckChars: ackMaxChars,
   });
   const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-  if (stripped.shouldSkip && !hasMedia) {
+  if ((stripped.shouldSkip || (notifyMarker.notifyFalse && !stripped.text.trim())) && !hasMedia) {
     return {
       shouldSkip: true,
       text: "",
       hasMedia,
+      silent: notifyMarker.notifyFalse,
     };
   }
   let finalText = stripped.text;
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
     finalText = `${responsePrefix} ${finalText}`;
   }
-  return { shouldSkip: false, text: finalText, hasMedia };
+  return { shouldSkip: false, text: finalText, hasMedia, silent: notifyMarker.notifyFalse };
 }
 
 function normalizeHeartbeatToolNotification(
@@ -768,7 +784,7 @@ function normalizeHeartbeatToolNotification(
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
     finalText = `${responsePrefix} ${finalText}`;
   }
-  return { shouldSkip: false, text: finalText, hasMedia: false };
+  return { shouldSkip: false, text: finalText, hasMedia: false, silent: false };
 }
 
 type HeartbeatWakePayloadFlags = {
@@ -1742,7 +1758,7 @@ export async function runHeartbeatOnce(opts: {
       ? normalizeHeartbeatToolNotification(heartbeatToolResponse, responsePrefix)
       : replyPayload
         ? normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars)
-        : { shouldSkip: true, text: "", hasMedia: false };
+        : { shouldSkip: true, text: "", hasMedia: false, silent: false };
     // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
     // The model should be responding with exec results, not ack tokens.
     // Also, if normalized.text is empty due to token stripping but we have exec completion,
@@ -1750,6 +1766,7 @@ export async function runHeartbeatOnce(opts: {
     const execFallbackText =
       !heartbeatToolResponse &&
       hasRelayableExecCompletion &&
+      normalized.silent !== true &&
       !normalized.text.trim() &&
       replyPayload?.text?.trim()
         ? replyPayload.text.trim()
@@ -1759,7 +1776,9 @@ export async function runHeartbeatOnce(opts: {
       normalized.shouldSkip = false;
     }
     const shouldSkipMain =
-      normalized.shouldSkip && !normalized.hasMedia && !hasRelayableExecCompletion;
+      normalized.shouldSkip &&
+      !normalized.hasMedia &&
+      (!hasRelayableExecCompletion || normalized.silent === true);
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,
@@ -1921,6 +1940,7 @@ export async function runHeartbeatOnce(opts: {
               },
             ]),
       ],
+      ...(normalized.silent === true ? { silent: true } : {}),
       deps: opts.deps,
     });
     if (send.status === "failed" || send.status === "partial_failed") {
@@ -1956,6 +1976,7 @@ export async function runHeartbeatOnce(opts: {
       hasMedia: mediaUrls.length > 0,
       channel: delivery.channel,
       accountId: delivery.accountId,
+      ...(normalized.silent === true ? { silent: true } : {}),
       indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
     await updateTaskTimestamps();

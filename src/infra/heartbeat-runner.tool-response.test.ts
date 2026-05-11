@@ -65,7 +65,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
   function expectTelegramSend(
     sendTelegram: ReturnType<typeof vi.fn>,
-    params: { text: string; cfg: OpenClawConfig },
+    params: { text: string; cfg: OpenClawConfig; silent?: boolean },
   ) {
     expect(sendTelegram).toHaveBeenCalledTimes(1);
     expect(sendTelegram.mock.calls).toEqual([
@@ -76,6 +76,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
           verbose: false,
           cfg: params.cfg,
           accountId: undefined,
+          ...(params.silent === true ? { silent: true } : {}),
         },
       ],
     ]);
@@ -90,6 +91,26 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         lastTo: TELEGRAM_GROUP,
       });
       replySpy.mockResolvedValue(createHeartbeatToolResponsePayload(response));
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      return { result, sendTelegram, replySpy, cfg };
+    });
+  }
+
+  async function runWithPlainReply(text: string) {
+    return await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue({ text });
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
 
       const result = await runHeartbeatOnce({
@@ -169,6 +190,37 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("strips a trailing notify=false marker and delivers heartbeat text silently", async () => {
+    const { result, sendTelegram, cfg } = await runWithPlainReply(
+      "No interruption needed.\n\nnotify=false",
+    );
+
+    expect(result.status).toBe("ran");
+    expectTelegramSend(sendTelegram, {
+      text: "No interruption needed.",
+      cfg,
+      silent: true,
+    });
+  });
+
+  it("treats a plain trailing notify=false marker as a quiet heartbeat ack", async () => {
+    const { result, sendTelegram } = await runWithPlainReply("notify=false");
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("does not strip inline notify=false text from heartbeat replies", async () => {
+    const { sendTelegram, cfg } = await runWithPlainReply(
+      "Please check whether notify=false is documented.",
+    );
+
+    expectTelegramSend(sendTelegram, {
+      text: "Please check whether notify=false is documented.",
+      cfg,
+    });
   });
 
   it("delivers notificationText when notify=true", async () => {

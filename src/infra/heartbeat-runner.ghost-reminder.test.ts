@@ -136,6 +136,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       to: string;
       text: string;
       messageThreadId?: number;
+      silent?: boolean;
     },
   ) => {
     expect(sendTelegram).toHaveBeenCalledTimes(1);
@@ -145,6 +146,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect((options as { messageThreadId?: number } | undefined)?.messageThreadId).toBe(
       params.messageThreadId,
     );
+    expect((options as { silent?: boolean } | undefined)?.silent).toBe(params.silent);
   };
 
   const runCronReminderCase = async (
@@ -411,6 +413,24 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("exec finished: deploy succeeded");
     expect(sendTelegram).toHaveBeenCalled();
+  });
+
+  it("strips trailing notify=false from relayable exec completion replies", async () => {
+    const { result, sendTelegram } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-exec-notify-false-",
+      replyText: "Deploy succeeded\n\nnotify=false",
+      reason: "exec-event",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey, trusted: false });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expectTelegramSend(sendTelegram, {
+      to: "-100155462274",
+      text: "Deploy succeeded",
+      silent: true,
+    });
   });
 
   it("consumes exec completion entries without dropping later generic events", async () => {
