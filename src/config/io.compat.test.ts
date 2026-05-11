@@ -6,6 +6,7 @@ import { normalizeCompatibilityConfigValues } from "../commands/doctor/legacy-co
 import { VERSION } from "../version.js";
 import { createConfigIO } from "./io.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));
@@ -192,5 +193,31 @@ describe("config io paths", () => {
       },
     });
     expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
+  });
+
+  it("moves WhatsApp shared access defaults into accounts.default during runtime compat", () => {
+    const migrated = normalizeCompatibilityConfigValues({
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          groupPolicy: "open",
+          groupAllowFrom: [],
+          accounts: {
+            work: {
+              enabled: true,
+              authDir: "/tmp/wa-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+    expect(migrated.config.channels?.whatsapp?.accounts?.default).toEqual({
+      dmPolicy: "allowlist",
+      allowFrom: ["+15550001111"],
+      groupPolicy: "open",
+      groupAllowFrom: [],
+    });
   });
 });
