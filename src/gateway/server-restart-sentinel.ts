@@ -11,7 +11,6 @@ import {
   readSqliteSessionDeliveryContext,
   readSqliteSessionRoutingInfo,
 } from "../config/sessions/session-entries.sqlite.js";
-import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
@@ -502,8 +501,6 @@ async function loadRestartSentinelStartupTask(params: {
       return { status: "ran" as const };
     }
 
-    const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
-
     const { cfg, agentId, entry, canonicalKey } = loadSessionEntry(sessionKey);
 
     const sentinelContext = payload.deliveryContext;
@@ -516,29 +513,6 @@ async function loadRestartSentinelStartupTask(params: {
       sessionKey: canonicalKey,
     });
     let chatType = normalizeChatType(routingInfo?.chatType ?? entry?.chatType) ?? "direct";
-    if (
-      !hasRoutableDeliveryContext(sessionDeliveryContext) &&
-      baseSessionKey &&
-      baseSessionKey !== sessionKey
-    ) {
-      const { agentId: baseAgentId, canonicalKey: canonicalBaseKey } =
-        loadSessionEntry(baseSessionKey);
-      const baseRoutingInfo = readSqliteSessionRoutingInfo({
-        agentId: baseAgentId,
-        sessionKey: canonicalBaseKey,
-      });
-      chatType =
-        normalizeChatType(routingInfo?.chatType ?? baseRoutingInfo?.chatType ?? entry?.chatType) ??
-        "direct";
-      sessionDeliveryContext = mergeDeliveryContext(
-        sessionDeliveryContext,
-        readSqliteSessionDeliveryContext({
-          agentId: baseAgentId,
-          sessionKey: canonicalBaseKey,
-        }),
-      );
-    }
-
     const origin = mergeDeliveryContext(sentinelContext, sessionDeliveryContext);
 
     const channelRaw = origin?.channel;
@@ -546,8 +520,7 @@ async function loadRestartSentinelStartupTask(params: {
     const to = origin?.to;
     const threadId =
       payload.threadId ??
-      (origin?.threadId != null ? stringifyRouteThreadId(origin.threadId) : undefined) ??
-      sessionThreadId;
+      (origin?.threadId != null ? stringifyRouteThreadId(origin.threadId) : undefined);
     let resolvedTo: string | undefined;
     let replyToId: string | undefined;
     let resolvedThreadId = threadId;

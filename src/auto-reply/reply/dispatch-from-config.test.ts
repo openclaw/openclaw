@@ -167,6 +167,9 @@ const sessionStoreMocks = vi.hoisted(() => ({
     }
     return sessionStoreMocks.currentEntry;
   }),
+  readSqliteSessionRoutingInfo: vi.fn(
+    () => undefined as { conversationThreadId?: string } | undefined,
+  ),
 }));
 const acpManagerRuntimeMocks = vi.hoisted(() => ({
   getAcpSessionManager: vi.fn(),
@@ -409,6 +412,9 @@ vi.mock("../../config/sessions/thread-info.js", () => ({
     threadInfoMocks.parseSessionThreadInfo(sessionKey),
   parseSessionThreadInfoFast: (sessionKey: string | undefined) =>
     threadInfoMocks.parseSessionThreadInfo(sessionKey),
+}));
+vi.mock("../../config/sessions/session-entries.sqlite.js", () => ({
+  readSqliteSessionRoutingInfo: sessionStoreMocks.readSqliteSessionRoutingInfo,
 }));
 vi.mock("./dispatch-from-config.runtime.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
@@ -912,6 +918,8 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.mergeSessionEntry.mockClear();
     sessionStoreMocks.upsertSessionEntry.mockClear();
     sessionStoreMocks.resolveSessionRowEntry.mockClear();
+    sessionStoreMocks.readSqliteSessionRoutingInfo.mockReset();
+    sessionStoreMocks.readSqliteSessionRoutingInfo.mockReturnValue(undefined);
     threadInfoMocks.parseSessionThreadInfo.mockReset();
     threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
     ttsMocks.state.synthesizeFinalAudio = false;
@@ -1159,9 +1167,12 @@ describe("dispatchReplyFromConfig", () => {
     expect(typeof replyDispatchCall?.[1]).toBe("object");
   });
 
-  it("falls back to thread-scoped session key when current ctx has no MessageThreadId", async () => {
+  it("uses typed SQLite thread metadata when current ctx has no MessageThreadId", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
+    sessionStoreMocks.readSqliteSessionRoutingInfo.mockReturnValueOnce({
+      conversationThreadId: "post-root",
+    });
     sessionStoreMocks.currentEntry = {
       deliveryContext: {
         channel: "discord",

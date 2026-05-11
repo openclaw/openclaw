@@ -33,12 +33,6 @@ const mocks = vi.hoisted(() => {
     formatRestartSentinelMessage: vi.fn(() => "restart message"),
     summarizeRestartSentinel: vi.fn(() => "restart summary"),
     resolveMainSessionKeyFromConfig: vi.fn(() => "agent:main:main"),
-    parseSessionThreadInfo: vi.fn(
-      (): { baseSessionKey: string | null | undefined; threadId: string | undefined } => ({
-        baseSessionKey: null,
-        threadId: undefined,
-      }),
-    ),
     loadSessionEntry: vi.fn(
       (): LoadedSessionEntry => ({
         cfg: {},
@@ -184,11 +178,6 @@ vi.mock("../infra/session-delivery-queue.js", () => ({
 
 vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: mocks.resolveMainSessionKeyFromConfig,
-}));
-
-vi.mock("../config/sessions/thread-info.js", () => ({
-  parseSessionThreadInfoFast: mocks.parseSessionThreadInfo,
-  parseSessionThreadInfo: mocks.parseSessionThreadInfo,
 }));
 
 vi.mock("../config/sessions/session-entries.sqlite.js", () => ({
@@ -378,8 +367,6 @@ describe("scheduleRestartSentinelWake", () => {
         },
       },
     });
-    mocks.parseSessionThreadInfo.mockReset();
-    mocks.parseSessionThreadInfo.mockReturnValue({ baseSessionKey: null, threadId: undefined });
     mocks.loadSessionEntry.mockReset();
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
@@ -680,10 +667,6 @@ describe("scheduleRestartSentinelWake", () => {
         },
       },
     } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
-    mocks.parseSessionThreadInfo.mockReturnValue({
-      baseSessionKey: "agent:main:telegram:group:-1003826723328",
-      threadId: "stale-topic-suffix",
-    });
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
       agentId: "main",
@@ -1235,10 +1218,6 @@ describe("scheduleRestartSentinelWake", () => {
         sessionKey: "agent:main:matrix:channel:!lowercased:example.org",
       },
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
-    mocks.parseSessionThreadInfo.mockReturnValue({
-      baseSessionKey: "agent:main:matrix:channel:!lowercased:example.org",
-      threadId: undefined,
-    });
     await scheduleRestartSentinelWake({ deps: {} as never });
 
     expect(mockCallArg(mocks.enqueueSystemEvent)).toBe("restart message");
@@ -1256,10 +1235,6 @@ describe("scheduleRestartSentinelWake", () => {
         sessionKey: "agent:main:qa-channel:channel:qa-room",
       },
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
-    mocks.parseSessionThreadInfo.mockReturnValue({
-      baseSessionKey: "agent:main:qa-channel:channel:qa-room",
-      threadId: undefined,
-    });
     mocks.readSqliteSessionDeliveryContext.mockReturnValue({
       channel: "qa-channel",
       to: "channel:qa-room",
@@ -1288,46 +1263,27 @@ describe("scheduleRestartSentinelWake", () => {
     });
   });
 
-  it("merges base session routing into partial thread metadata", async () => {
+  it("does not merge base session routing into partial thread metadata", async () => {
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {
         sessionKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
       },
     } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
-    mocks.parseSessionThreadInfo.mockReturnValue({
-      baseSessionKey: "agent:main:matrix:channel:!lowercased:example.org",
+    mocks.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      entry: {
+        sessionId: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
+        updatedAt: 0,
+      },
+      store: {},
+      agentId: "main",
+      canonicalKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
+    });
+    mocks.readSqliteSessionDeliveryContext.mockReturnValueOnce({
+      channel: "matrix",
+      accountId: "acct-thread",
       threadId: "$thread-event",
     });
-    mocks.loadSessionEntry
-      .mockReturnValueOnce({
-        cfg: {},
-        entry: {
-          sessionId: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
-          updatedAt: 0,
-        },
-        store: {},
-        agentId: "main",
-        canonicalKey: "agent:main:matrix:channel:!lowercased:example.org:thread:$thread-event",
-      })
-      .mockReturnValueOnce({
-        cfg: {},
-        entry: {
-          sessionId: "agent:main:matrix:channel:!lowercased:example.org",
-          updatedAt: 0,
-          lastChannel: "matrix",
-          lastTo: "room:!MixedCase:example.org",
-        },
-        store: {},
-        agentId: "main",
-        canonicalKey: "agent:main:matrix:channel:!lowercased:example.org",
-      });
-    mocks.readSqliteSessionDeliveryContext
-      .mockReturnValueOnce({
-        channel: "matrix",
-        accountId: "acct-thread",
-        threadId: "$thread-event",
-      })
-      .mockReturnValueOnce({ channel: "matrix", to: "room:!MixedCase:example.org" });
     mocks.resolveOutboundTarget.mockReturnValue({
       ok: true as const,
       to: "room:!MixedCase:example.org",
@@ -1335,16 +1291,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expectMockCallFields(mocks.resolveOutboundTarget, {
-      channel: "matrix",
-      to: "room:!MixedCase:example.org",
-      accountId: "acct-thread",
-    });
-    expectMockCallFields(mocks.deliverOutboundPayloads, {
-      channel: "matrix",
-      to: "room:!MixedCase:example.org",
-      accountId: "acct-thread",
-      threadId: "$thread-event",
-    });
+    expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 });

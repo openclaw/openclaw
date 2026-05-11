@@ -25,10 +25,6 @@ import {
   sweepExpiredPluginStateEntries,
 } from "../plugin-state/plugin-state-store.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import {
-  deriveSessionChatTypeFromKey,
-  type SessionKeyChatType,
-} from "../sessions/session-chat-type-shared.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   getDetachedTaskLifecycleRuntime,
@@ -83,7 +79,6 @@ type TaskRegistryMaintenanceRuntime = {
   listSessionBindingsBySession?: ReturnType<typeof getSessionBindingService>["listBySession"];
   unbindSessionBindings?: ReturnType<typeof getSessionBindingService>["unbind"];
   getSessionEntry: typeof getSessionEntry;
-  deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
   isCronJobActive: typeof isCronJobActive;
   getAgentRunContext: typeof getAgentRunContext;
   parseAgentSessionKey: typeof parseAgentSessionKey;
@@ -121,7 +116,6 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
     getSessionBindingService().listBySession(sessionKey),
   unbindSessionBindings: (input) => getSessionBindingService().unbind(input),
   getSessionEntry,
-  deriveSessionChatTypeFromKey,
   isCronJobActive,
   getAgentRunContext,
   parseAgentSessionKey,
@@ -172,7 +166,6 @@ type CronRecoveryContext = {
 
 type BackingSessionLookupContext = {
   sessionEntriesByKey: Map<string, SessionEntry | undefined>;
-  sessionChatTypesByKey: Map<string, SessionKeyChatType>;
 };
 
 function createCronRecoveryContext(): CronRecoveryContext {
@@ -185,31 +178,17 @@ function createCronRecoveryContext(): CronRecoveryContext {
 function createBackingSessionLookupContext(): BackingSessionLookupContext {
   return {
     sessionEntriesByKey: new Map<string, SessionEntry | undefined>(),
-    sessionChatTypesByKey: new Map<string, SessionKeyChatType>(),
   };
 }
 
-function resolveSessionChatType(
-  sessionKey: string,
+function resolveTypedSessionChatType(
   entry?: SessionEntry,
-  context?: BackingSessionLookupContext,
-): SessionKeyChatType {
+): "direct" | "group" | "channel" | undefined {
   const storedChatType = normalizeChatType(entry?.chatType);
   if (storedChatType) {
     return storedChatType;
   }
-  const derive =
-    taskRegistryMaintenanceRuntime.deriveSessionChatTypeFromKey ?? deriveSessionChatTypeFromKey;
-  if (!context) {
-    return derive(sessionKey);
-  }
-  const cached = context.sessionChatTypesByKey.get(sessionKey);
-  if (cached) {
-    return cached;
-  }
-  const chatType = derive(sessionKey);
-  context.sessionChatTypesByKey.set(sessionKey, chatType);
-  return chatType;
+  return undefined;
 }
 
 function findTaskSessionEntry(
@@ -427,7 +406,7 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
   if (task.runtime === "subagent" || task.runtime === "cli") {
     const entry = findTaskSessionEntry(task, context);
     if (task.runtime === "cli") {
-      const chatType = resolveSessionChatType(childSessionKey, entry, context);
+      const chatType = resolveTypedSessionChatType(entry);
       if (chatType === "channel" || chatType === "group" || chatType === "direct") {
         return false;
       }

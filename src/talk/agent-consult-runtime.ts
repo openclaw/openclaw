@@ -5,7 +5,6 @@ import {
   resolveParentForkDecision,
 } from "../auto-reply/reply/session-fork.js";
 import { readSqliteSessionDeliveryContext } from "../config/sessions/session-entries.sqlite.js";
-import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
@@ -88,10 +87,7 @@ function resolveRealtimeVoiceAgentDeliveryContext(params: {
   try {
     const candidates: string[] = [];
     if (requesterSessionKey) {
-      const { baseSessionKey } = parseSessionThreadInfoFast(requesterSessionKey);
-      candidates.push(
-        ...[requesterSessionKey, baseSessionKey].filter((key): key is string => Boolean(key)),
-      );
+      candidates.push(requesterSessionKey);
     }
     candidates.push(params.sessionKey);
     for (const key of candidates) {

@@ -8,25 +8,30 @@ import {
 describe("completion delivery policy", () => {
   it.each([
     {
-      name: "canonical group key",
+      name: "typed group origin",
       requesterSessionKey: "agent:main:telegram:group:-100123",
+      requesterSessionOrigin: { channel: "telegram", to: "-100123", chatType: "group" },
       expected: "group",
     },
     {
-      name: "canonical channel key",
+      name: "typed channel origin",
       requesterSessionKey: "agent:main:slack:channel:C123",
+      requesterSessionOrigin: { channel: "slack", to: "channel:C123", chatType: "channel" },
       expected: "channel",
     },
     {
-      name: "canonical direct key",
+      name: "typed direct origin",
       requesterSessionKey: "agent:main:discord:dm:U123",
+      requesterSessionOrigin: { channel: "discord", to: "user:U123", chatType: "direct" },
       expected: "direct",
     },
-  ])("infers $name", ({ requesterSessionKey, expected }) => {
-    expect(resolveCompletionChatType({ requesterSessionKey })).toBe(expected);
+  ])("infers $name", ({ requesterSessionKey, requesterSessionOrigin, expected }) => {
+    expect(resolveCompletionChatType({ requesterSessionKey, requesterSessionOrigin })).toBe(
+      expected,
+    );
   });
 
-  it("prefers explicit session chat type over key inference", () => {
+  it("prefers explicit session chat type over typed origin", () => {
     expect(
       resolveCompletionChatType({
         requesterSessionKey: "agent:main:slack:channel:C123",
@@ -35,7 +40,7 @@ describe("completion delivery policy", () => {
     ).toBe("direct");
   });
 
-  it("prefers typed delivery-context chat type over key inference", () => {
+  it("prefers typed delivery-context chat type over target prefix", () => {
     expect(
       resolveCompletionChatType({
         requesterSessionKey: "agent:main:opaque:legacy-key",
@@ -65,12 +70,14 @@ describe("completion delivery policy", () => {
       completionRequiresMessageToolDelivery({
         cfg: {},
         requesterSessionKey: "agent:main:whatsapp:group:123@g.us",
+        requesterSessionOrigin: { channel: "whatsapp", to: "123@g.us", chatType: "group" },
       }),
     ).toBe(true);
     expect(
       completionRequiresMessageToolDelivery({
         cfg: {},
         requesterSessionKey: "agent:main:discord:guild:123:channel:456",
+        requesterSessionOrigin: { channel: "discord", to: "channel:456", chatType: "channel" },
       }),
     ).toBe(true);
   });
@@ -80,6 +87,7 @@ describe("completion delivery policy", () => {
       completionRequiresMessageToolDelivery({
         cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
         requesterSessionKey: "agent:main:slack:channel:C123",
+        requesterSessionOrigin: { channel: "slack", to: "channel:C123", chatType: "channel" },
       }),
     ).toBe(false);
   });
@@ -89,12 +97,14 @@ describe("completion delivery policy", () => {
       completionRequiresMessageToolDelivery({
         cfg: {},
         requesterSessionKey: "agent:main:discord:dm:U123",
+        requesterSessionOrigin: { channel: "discord", to: "user:U123", chatType: "direct" },
       }),
     ).toBe(false);
     expect(
       completionRequiresMessageToolDelivery({
         cfg: { messages: { visibleReplies: "message_tool" } },
         requesterSessionKey: "agent:main:discord:dm:U123",
+        requesterSessionOrigin: { channel: "discord", to: "user:U123", chatType: "direct" },
       }),
     ).toBe(true);
   });
@@ -103,16 +113,19 @@ describe("completion delivery policy", () => {
     expect(
       shouldRouteCompletionThroughRequesterSession({
         requesterSessionKey: "agent:main:whatsapp:group:123@g.us",
+        requesterSessionOrigin: { channel: "whatsapp", to: "123@g.us", chatType: "group" },
       }),
     ).toBe(true);
     expect(
       shouldRouteCompletionThroughRequesterSession({
         requesterSessionKey: "agent:main:discord:guild:123:channel:456",
+        requesterSessionOrigin: { channel: "discord", to: "channel:456", chatType: "channel" },
       }),
     ).toBe(true);
     expect(
       shouldRouteCompletionThroughRequesterSession({
         requesterSessionKey: "agent:main:discord:dm:U123",
+        requesterSessionOrigin: { channel: "discord", to: "user:U123", chatType: "direct" },
       }),
     ).toBe(false);
     expect(

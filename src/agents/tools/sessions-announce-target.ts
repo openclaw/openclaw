@@ -1,10 +1,8 @@
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import { normalizeOptionalStringifiedId } from "../../shared/string-coerce.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { SessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
-import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
 
 async function callGatewayLazy<T = unknown>(opts: CallGatewayOptions): Promise<T> {
   const { callGateway } = await import("../../gateway/call.js");
@@ -31,18 +29,12 @@ export async function resolveAnnounceTarget(params: {
 
     const context = normalizeDeliveryContext(match?.deliveryContext);
     if (context?.channel && context.to) {
-      const fallbackThreadId =
-        parseThreadSessionSuffix(params.sessionKey).threadId ??
-        parseThreadSessionSuffix(params.displayKey).threadId;
-      const threadId = normalizeOptionalStringifiedId(context.threadId ?? fallbackThreadId);
+      const threadId = normalizeOptionalStringifiedId(context.threadId);
       return { channel: context.channel, to: context.to, accountId: context.accountId, threadId };
     }
   } catch {
     // ignore
   }
 
-  const parsed = resolveAnnounceTargetFromKey(params.sessionKey);
-  const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
-  const fallback = parsed ?? parsedDisplay ?? null;
-  return fallback;
+  return null;
 }

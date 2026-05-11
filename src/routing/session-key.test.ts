@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
   getSubagentDepth,
   isCronSessionKey,
@@ -70,21 +69,6 @@ describe("isCronSessionKey", () => {
     { key: undefined, expected: false },
   ] as const)("matches cron key %j => $expected", ({ key, expected }) => {
     expect(isCronSessionKey(key)).toBe(expected);
-  });
-});
-
-describe("deriveSessionChatTypeFromKey", () => {
-  it.each([
-    { key: "agent:main:discord:direct:user1", expected: "direct" },
-    { key: "agent:main:telegram:group:g1", expected: "group" },
-    { key: "agent:main:discord:channel:c1", expected: "channel" },
-    { key: "agent:main:telegram:dm:123456", expected: "direct" },
-    { key: "telegram:dm:123456", expected: "direct" },
-    { key: "agent:main:main", expected: "unknown" },
-    { key: "agent:main", expected: "unknown" },
-    { key: "", expected: "unknown" },
-  ] as const)("derives chat type for %j => $expected", ({ key, expected }) => {
-    expect(deriveSessionChatTypeFromKey(key)).toBe(expected);
   });
 });
 

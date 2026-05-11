@@ -1,6 +1,5 @@
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { deriveSessionChatType } from "../../sessions/session-chat-type.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
@@ -31,13 +30,6 @@ export function resolveCompletionChatType(params: {
     return requesterOriginChatType;
   }
 
-  for (const key of [params.targetRequesterSessionKey, params.requesterSessionKey]) {
-    const derived = deriveSessionChatType(key);
-    if (derived !== "unknown") {
-      return derived;
-    }
-  }
-
   return inferCompletionChatTypeFromTarget(
     params.directOrigin?.to ?? params.requesterSessionOrigin?.to,
   );
@@ -63,23 +55,14 @@ export function completionRequiresMessageToolDelivery(params: {
   );
 }
 
-export function shouldRouteCompletionThroughRequesterSession(
-  params:
-    | string
-    | null
-    | undefined
-    | {
-        requesterSessionKey?: string | null;
-        targetRequesterSessionKey?: string | null;
-        requesterEntry?: CompletionDeliverySessionEntry;
-        directOrigin?: DeliveryContext;
-        requesterSessionOrigin?: DeliveryContext;
-      },
-): boolean {
-  const chatType =
-    typeof params === "string" || params == null
-      ? deriveSessionChatType(params)
-      : resolveCompletionChatType(params);
+export function shouldRouteCompletionThroughRequesterSession(params: {
+  requesterSessionKey?: string | null;
+  targetRequesterSessionKey?: string | null;
+  requesterEntry?: CompletionDeliverySessionEntry;
+  directOrigin?: DeliveryContext;
+  requesterSessionOrigin?: DeliveryContext;
+}): boolean {
+  const chatType = resolveCompletionChatType(params);
   return chatType === "group" || chatType === "channel";
 }
 

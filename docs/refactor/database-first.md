@@ -504,8 +504,15 @@ Completed consolidation/deletion highlights:
 - Session display model resolution now receives the agent id from the SQLite
   session database target instead of splitting it out of `session_key`.
 - Agent-to-agent announce target hydration now uses typed `sessions.list`
-  `deliveryContext` only. It no longer recovers account/thread routing from
-  legacy `origin` or mirrored `last*` fields in list rows.
+  `deliveryContext` only. It no longer recovers channel/account/thread routing
+  from legacy `origin`, mirrored `last*` fields, or `session_key` shape.
+- `sessions_send` thread-target rejection now reads typed SQLite routing
+  metadata. It no longer rejects or accepts targets by parsing thread suffixes
+  out of the target key.
+- Completion delivery, send policy, and task maintenance no longer derive chat
+  type from `session_key` shape. The old chat-type key parser has been deleted;
+  these paths require typed session metadata, typed delivery context, or
+  explicit delivery target vocabulary.
 - Session list/status, diagnostics, approval account binding, TUI heartbeat
   filtering, and usage summaries no longer mine `SessionEntry.origin` for
   provider/account/thread/display routing. The only remaining runtime
@@ -556,6 +563,13 @@ Completed consolidation/deletion highlights:
   markers, or thread shape from `sessionKey`; internal webchat routes only
   inherit an external target when SQLite already has typed/persisted delivery
   identity for the session.
+- Generic session delivery extraction now reads only the exact typed SQLite
+  session delivery row. It no longer parses thread/topic suffixes or falls back
+  from a thread-shaped key to a base session key.
+- Reply dispatch, restart sentinel recovery, and realtime voice consult routing
+  now use exact typed SQLite session/conversation rows for thread routing. They
+  no longer recover thread ids or base-session delivery context by parsing
+  thread-shaped session keys.
 - Embedded PI history limiting now uses the typed SQLite session routing
   projection (`sessions` + primary `conversations`) for provider, chat type,
   and peer identity. It no longer parses provider, DM, group, or thread shape
