@@ -75,7 +75,9 @@ describe("inbound dedupe", () => {
     try {
       const firstClaim = inboundA.claimInboundDedupe(sharedInboundContext);
       expect(firstClaim).toEqual({ status: "claimed", key: expectedKey });
-      if (firstClaim.status !== "claimed") throw new Error("expected claimed status");
+      if (firstClaim.status !== "claimed") {
+        throw new Error("expected claimed status");
+      }
       expect(inboundB.claimInboundDedupe(sharedInboundContext)).toEqual({
         status: "inflight",
         key: expectedKey,
@@ -111,7 +113,9 @@ describe("inbound dedupe", () => {
     try {
       const firstClaim = inboundA.claimInboundDedupe(sharedInboundContext);
       expect(firstClaim).toEqual({ status: "claimed", key: expectedKey });
-      if (firstClaim.status !== "claimed") throw new Error("expected claimed status");
+      if (firstClaim.status !== "claimed") {
+        throw new Error("expected claimed status");
+      }
       inboundA.commitInboundDedupe(firstClaim.key);
       expect(inboundB.claimInboundDedupe(sharedInboundContext)).toEqual({
         status: "duplicate",
