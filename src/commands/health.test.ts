@@ -57,11 +57,27 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 function requireFirstRuntimeLog(): string {
-  const [message] = runtime.log.mock.calls[0] ?? [];
+  const [call] = runtime.log.mock.calls;
+  if (!call) {
+    throw new Error("expected health command log output");
+  }
+  const [message] = call;
   if (message === undefined) {
     throw new Error("expected health command log output");
   }
   return String(message);
+}
+
+function requireFirstGatewayRequest(): Record<string, unknown> {
+  const [call] = callGatewayMock.mock.calls;
+  if (!call) {
+    throw new Error("expected gateway call");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected gateway request");
+  }
+  return request as Record<string, unknown>;
 }
 
 describe("healthCommand", () => {
@@ -124,10 +140,10 @@ describe("healthCommand", () => {
     );
 
     expect(callGatewayMock).toHaveBeenCalledOnce();
-    const [gatewayRequest] = callGatewayMock.mock.calls[0] ?? [];
-    expect(gatewayRequest?.method).toBe("health");
-    expect(gatewayRequest?.token).toBe("setup-token");
-    expect(gatewayRequest?.password).toBe("setup-password");
+    const gatewayRequest = requireFirstGatewayRequest();
+    expect(gatewayRequest.method).toBe("health");
+    expect(gatewayRequest.token).toBe("setup-token");
+    expect(gatewayRequest.password).toBe("setup-password");
   });
 
   it("prints degraded model-pricing health without failing the command", async () => {

@@ -546,6 +546,7 @@ describe("buildOpenAIProvider", () => {
       sanitizeToolCallIds: false,
       validateGeminiTurns: false,
       validateAnthropicTurns: false,
+      allowSyntheticToolResults: true,
     });
   });
 

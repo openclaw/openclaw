@@ -71,6 +71,33 @@ function defaultCreateOptions() {
   };
 }
 
+function firstCopilotApiTokenRequest() {
+  const [call] = resolveCopilotApiTokenMock.mock.calls;
+  if (!call) {
+    throw new Error("expected resolveCopilotApiToken call");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object") {
+    throw new Error("expected resolveCopilotApiToken request");
+  }
+  return request as { env?: typeof process.env; githubToken?: string };
+}
+
+function firstDiscoveryRequest() {
+  const [call] = fetchWithSsrFGuardMock.mock.calls;
+  if (!call) {
+    throw new Error("expected GitHub Copilot discovery request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object") {
+    throw new Error("expected GitHub Copilot discovery request options");
+  }
+  return request as {
+    init: { headers: Record<string, string> };
+    url: string;
+  };
+}
+
 describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
   beforeEach(() => {
     resolveConfiguredSecretInputStringMock.mockResolvedValue({});
@@ -114,7 +141,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
 
     expect(result.provider?.model).toBe("text-embedding-3-small");
-    expect(resolveCopilotApiTokenMock.mock.calls[0]?.[0]?.githubToken).toBe("gh_test_token_123");
+    expect(firstCopilotApiTokenRequest().githubToken).toBe("gh_test_token_123");
   });
 
   it("matches embedding-capable models when supported_endpoints is missing or malformed", async () => {
@@ -212,13 +239,10 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     } as never);
 
     expect(resolveFirstGithubTokenMock).toHaveBeenCalled();
-    expect(resolveCopilotApiTokenMock.mock.calls[0]?.[0]?.env).toBe(process.env);
-    expect(resolveCopilotApiTokenMock.mock.calls[0]?.[0]?.githubToken).toBe("gh_remote_token");
+    expect(firstCopilotApiTokenRequest().env).toBe(process.env);
+    expect(firstCopilotApiTokenRequest().githubToken).toBe("gh_remote_token");
 
-    const discoveryCall = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as {
-      init: { headers: Record<string, string> };
-      url: string;
-    };
+    const discoveryCall = firstDiscoveryRequest();
     expect(discoveryCall.url).toBe("https://proxy.example/v1/models");
     expect(discoveryCall.init.headers["X-Proxy-Token"]).toBe("proxy");
   });

@@ -2391,7 +2391,6 @@ describe("prepareSlackMessage sender prefix", () => {
 
     const result = await prepareSenderPrefixMessage(ctx, "<@BOT> /new", "1700000000.0002");
 
-    expect(result).not.toBeNull();
     if (!result) {
       throw new Error("expected sender prefix message result");
     }

@@ -4,6 +4,21 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error(`expected ${label} input to be an object`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 describe("runMessageAction core send routing", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
@@ -57,8 +72,9 @@ describe("runMessageAction core send routing", () => {
 
     expect(result.kind).toBe("send");
     expect(sendMedia).toHaveBeenCalledOnce();
-    expect(sendMedia.mock.calls[0]?.[0]?.text).toBe("caption-only text");
-    expect(sendMedia.mock.calls[0]?.[0]?.mediaUrl).toBe("https://example.com/cat.png");
+    const mediaInput = firstMockArg(sendMedia, "send media");
+    expect(mediaInput.text).toBe("caption-only text");
+    expect(mediaInput.mediaUrl).toBe("https://example.com/cat.png");
   });
 
   it("does not misclassify send as poll when zero-valued poll params are present", async () => {
@@ -114,8 +130,9 @@ describe("runMessageAction core send routing", () => {
 
     expect(result.kind).toBe("send");
     expect(sendMedia).toHaveBeenCalledOnce();
-    expect(sendMedia.mock.calls[0]?.[0]?.text).toBe("hello");
-    expect(sendMedia.mock.calls[0]?.[0]?.mediaUrl).toBe("https://example.com/file.txt");
+    const mediaInput = firstMockArg(sendMedia, "send media");
+    expect(mediaInput.text).toBe("hello");
+    expect(mediaInput.mediaUrl).toBe("https://example.com/file.txt");
   });
 
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {

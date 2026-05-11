@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { fireAndForgetBoundedHook, fireAndForgetHook } from "./fire-and-forget.js";
 
 function requireFirstLog(logger: ReturnType<typeof vi.fn>): string {
-  const message = logger.mock.calls[0]?.[0];
+  const [call] = logger.mock.calls;
+  if (!call) {
+    throw new Error("expected log call");
+  }
+  const [message] = call;
   if (typeof message !== "string") {
     throw new Error("expected string log message");
   }

@@ -116,8 +116,9 @@ describe("models cli", () => {
     for (const [key, value] of Object.entries(expected)) {
       expect(options?.[key]).toEqual(value);
     }
-    expect(typeof context).toBe("object");
-    expect(context).not.toBeNull();
+    if (!context || typeof context !== "object") {
+      throw new Error("expected command context");
+    }
   }
 
   it("registers github-copilot login command", async () => {

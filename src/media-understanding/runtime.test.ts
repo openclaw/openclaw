@@ -46,6 +46,14 @@ vi.mock("./image-runtime.js", () => ({
   describeImageWithModel: mocks.describeImageWithModel,
 }));
 
+function requireRunCapabilityRequest(): unknown {
+  const [call] = mocks.runCapability.mock.calls;
+  if (!call) {
+    throw new Error("expected runCapability call");
+  }
+  return call[0];
+}
+
 describe("media-understanding runtime", () => {
   afterEach(() => {
     mocks.buildProviderRegistry.mockReset();
@@ -200,7 +208,7 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.runCapability).toHaveBeenCalledOnce();
-    expect(mocks.runCapability.mock.calls[0]?.[0]).toEqual({
+    expect(requireRunCapabilityRequest()).toEqual({
       capability: "image",
       cfg: {
         tools: {

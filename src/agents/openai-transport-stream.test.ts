@@ -992,7 +992,7 @@ describe("openai transport stream", () => {
 
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
-    expect(output.content).toContainEqual({ type: "text", text: "ok" });
+    expect(output.content).toStrictEqual([{ type: "text", text: "ok" }]);
     expect(output.stopReason).toBe("stop");
   });
 

@@ -36,8 +36,7 @@ vi.mock("../runtime.js", () => ({
 
 describe("tryRouteCli", () => {
   let tryRouteCli: typeof import("./route.js").tryRouteCli;
-  // After vi.resetModules(), reimported modules get fresh loggingState.
-  // Capture the same reference that route.js uses.
+  // Capture the same loggingState reference that route.js uses.
   let loggingState: typeof import("../logging/state.js").loggingState;
   let originalDisableRouteFirst: string | undefined;
   let originalHideBanner: string | undefined;
@@ -106,7 +105,7 @@ describe("tryRouteCli", () => {
     });
 
     // Capture the value inside the mock callback using the same loggingState
-    // reference that route.js sees (both imported after vi.resetModules()).
+    // reference that route.js sees.
     const captured: boolean[] = [];
     ensurePluginRegistryLoadedMock.mockImplementation(() => {
       captured.push(loggingState.forceConsoleToStderr);

@@ -49,7 +49,12 @@ describe("createMusicGenerateTool status actions", () => {
     const result = createMusicGenerateDuplicateGuardResult("agent:main:discord:direct:123");
 
     const [content] = result?.content ?? [];
-    expect(result?.content).toStrictEqual([expect.objectContaining({ type: "text" })]);
+    expect(result?.content).toStrictEqual([
+      {
+        type: "text",
+        text: "Music generation task task-active is already running with google.\nProgress: Generating music.\nDo not call music_generate again for this request. Wait for the completion event; I will post the finished music here.",
+      },
+    ]);
     const text = content?.text ?? "";
     expect(text).toContain("Music generation task task-active is already running with google.");
     expect(text).toContain("Do not call music_generate again for this request.");

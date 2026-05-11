@@ -40,12 +40,42 @@ describe("buildWorkspaceSkillStatus", () => {
 
     const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
     expect(report.skills).toStrictEqual([
-      expect.objectContaining({
+      {
         name: "os-scoped",
+        description: "test",
+        source: "test",
+        bundled: false,
         filePath: "/tmp/os-scoped",
         baseDir: "/tmp",
+        skillKey: "os-scoped",
+        primaryEnv: undefined,
+        emoji: undefined,
+        homepage: undefined,
+        always: false,
+        disabled: false,
+        blockedByAllowlist: false,
+        blockedByAgentFilter: false,
+        eligible: false,
+        modelVisible: false,
+        userInvocable: true,
+        commandVisible: false,
+        requirements: {
+          anyBins: [],
+          bins: ["fakebin"],
+          config: [],
+          env: [],
+          os: [mismatchedOs],
+        },
+        missing: {
+          anyBins: [],
+          bins: ["fakebin"],
+          config: [],
+          env: [],
+          os: [mismatchedOs],
+        },
+        configChecks: [],
         install: [],
-      }),
+      },
     ]);
   });
 

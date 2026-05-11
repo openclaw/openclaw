@@ -48,11 +48,15 @@ afterEach(() => {
 });
 
 function getFirstGuardedFetchCall() {
-  const [call] = fetchWithSsrFGuardMock.mock.calls[0] ?? [];
-  if (!call) {
+  const [mockCall] = fetchWithSsrFGuardMock.mock.calls;
+  if (!mockCall) {
     throw new Error("Expected fetchWithSsrFGuard to be called");
   }
-  return call;
+  const [request] = mockCall;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("Expected fetchWithSsrFGuard request");
+  }
+  return request as Record<string, unknown>;
 }
 
 describe("provider operation deadlines", () => {

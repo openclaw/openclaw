@@ -1,7 +1,8 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetProviderAuthAliasMapCacheForTest } from "../provider-auth-aliases.js";
 import { saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -26,30 +27,16 @@ vi.mock("./external-auth.js", () => ({
   shouldPersistExternalAuthProfile: () => true,
 }));
 
-async function importAuthProfileModulesWithAliasRegistry() {
-  vi.resetModules();
-  vi.doMock("../../plugins/manifest-registry.js", () => ({
-    loadPluginManifestRegistry,
-  }));
-  const [{ resolveAuthProfileOrder }, { markAuthProfileSuccess }] = await Promise.all([
-    import("./order.js"),
-    import("./profiles.js"),
-  ]);
-  return { markAuthProfileSuccess, resolveAuthProfileOrder };
-}
+import { resolveAuthProfileOrder } from "./order.js";
+import { markAuthProfileSuccess } from "./profiles.js";
 
 describe("resolveAuthProfileOrder", () => {
   beforeEach(() => {
+    resetProviderAuthAliasMapCacheForTest();
     loadPluginManifestRegistry.mockClear();
   });
 
-  afterEach(() => {
-    vi.doUnmock("../../plugins/manifest-registry.js");
-    vi.resetModules();
-  });
-
   it("accepts aliased provider credentials from manifest metadata", async () => {
-    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -70,7 +57,6 @@ describe("resolveAuthProfileOrder", () => {
   });
 
   it("uses canonical provider auth order for alias providers", async () => {
-    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -99,7 +85,6 @@ describe("resolveAuthProfileOrder", () => {
   });
 
   it("falls back to legacy stored auth order when alias order is empty", async () => {
-    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -129,7 +114,6 @@ describe("resolveAuthProfileOrder", () => {
   });
 
   it("falls back to legacy configured auth order when alias order is empty", async () => {
-    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -163,7 +147,6 @@ describe("resolveAuthProfileOrder", () => {
   });
 
   it("keeps explicit empty configured auth order as a provider disable", async () => {
-    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -191,7 +174,6 @@ describe("resolveAuthProfileOrder", () => {
   });
 
   it("keeps explicit empty stored auth order as a provider disable", async () => {
-    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -222,7 +204,6 @@ describe("resolveAuthProfileOrder", () => {
   });
 
   it("lets Codex auth use friendly OpenAI auth order entries", async () => {
-    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -262,7 +243,6 @@ describe("resolveAuthProfileOrder", () => {
   });
 
   it("lets Codex auth discover normal OpenAI API-key profiles as backups", async () => {
-    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -297,7 +277,6 @@ describe("resolveAuthProfileOrder", () => {
   });
 
   it("preserves native Codex profiles before OpenAI alias API-key order", async () => {
-    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -332,7 +311,6 @@ describe("resolveAuthProfileOrder", () => {
   });
 
   it("keeps direct OpenAI Codex auth order ahead of the friendly OpenAI alias", async () => {
-    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -370,7 +348,6 @@ describe("resolveAuthProfileOrder", () => {
   });
 
   it("keeps configured Codex auth order ahead of stored OpenAI fallback order", async () => {
-    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -408,7 +385,6 @@ describe("resolveAuthProfileOrder", () => {
   });
 
   it("marks profile success with one canonical last-good and usage update", async () => {
-    const { markAuthProfileSuccess } = await importAuthProfileModulesWithAliasRegistry();
     const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-auth-profile-success-"));
     try {
       const store: AuthProfileStore = {

@@ -703,8 +703,10 @@ describe("googlechat directory", () => {
       limit: undefined,
       runtime: runtimeEnv,
     });
-    expect(peers).toContainEqual({ kind: "user", id: "users/alice" });
-    expect(peers).toContainEqual({ kind: "user", id: "bob" });
+    expect(peers).toStrictEqual([
+      { kind: "user", id: "users/alice" },
+      { kind: "user", id: "bob" },
+    ]);
 
     const groups = await directory.listGroups({
       cfg,
@@ -713,8 +715,10 @@ describe("googlechat directory", () => {
       limit: undefined,
       runtime: runtimeEnv,
     });
-    expect(groups).toContainEqual({ kind: "group", id: "spaces/AAA" });
-    expect(groups).toContainEqual({ kind: "group", id: "spaces/BBB" });
+    expect(groups).toStrictEqual([
+      { kind: "group", id: "spaces/AAA" },
+      { kind: "group", id: "spaces/BBB" },
+    ]);
   });
 
   it("normalizes spaced provider-prefixed dm allowlist entries", async () => {
@@ -736,8 +740,10 @@ describe("googlechat directory", () => {
       limit: undefined,
       runtime: runtimeEnv,
     });
-    expect(peers).toContainEqual({ kind: "user", id: "users/alice" });
-    expect(peers).toContainEqual({ kind: "user", id: "users/bob@example.com" });
+    expect(peers).toStrictEqual([
+      { kind: "user", id: "users/alice" },
+      { kind: "user", id: "users/bob@example.com" },
+    ]);
   });
 });
 

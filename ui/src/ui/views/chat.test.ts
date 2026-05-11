@@ -19,7 +19,7 @@ import { renderWelcomeState } from "../chat/chat-welcome.ts";
 import { renderChatSessionSelect } from "../chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ModelCatalogEntry } from "../types.ts";
-import type { ChatQueueItem } from "../ui-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { renderChat, resetChatViewState } from "./chat.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
@@ -43,6 +43,20 @@ const loadSessionsMock = vi.hoisted(() =>
     }
   }),
 );
+
+function requireFirstAttachmentsChange(
+  onAttachmentsChange: ReturnType<typeof vi.fn>,
+): ChatAttachment[] {
+  const [call] = onAttachmentsChange.mock.calls;
+  if (!call) {
+    throw new Error("expected attachments change call");
+  }
+  const [attachments] = call;
+  if (!Array.isArray(attachments)) {
+    throw new Error("expected attachments array");
+  }
+  return attachments as ChatAttachment[];
+}
 
 vi.mock("../icons.ts", () => ({
   icons: {},
@@ -345,6 +359,14 @@ function getChatModelSelect(container: Element): HTMLSelectElement {
   return select;
 }
 
+function requireElement(container: Element, selector: string, label: string): Element {
+  const element = container.querySelector(selector);
+  if (element === null) {
+    throw new Error(`expected ${label}`);
+  }
+  return element;
+}
+
 function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {}) {
   const container = document.createElement("div");
   render(
@@ -511,8 +533,8 @@ describe("chat voice controls", () => {
   it("keeps Talk visible without the stale browser dictation button", () => {
     const container = renderChatView();
 
-    expect(container.querySelector('[aria-label="Start Talk"]')).not.toBeNull();
-    expect(container.querySelector('[aria-label="Talk options"]')).not.toBeNull();
+    requireElement(container, '[aria-label="Start Talk"]', "Start Talk button");
+    requireElement(container, '[aria-label="Talk options"]', "Talk options button");
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
   });
 
@@ -550,7 +572,9 @@ describe("chat voice controls", () => {
       ),
     ).map((option) => option.value);
 
-    expect(voice).not.toBeNull();
+    if (voice === null) {
+      throw new Error("expected Talk voice select");
+    }
     expect(voiceOptions).toEqual([
       "",
       "alloy",
@@ -568,9 +592,11 @@ describe("chat voice controls", () => {
     expect(voiceOptions).not.toContain("onyx");
     expect(voiceOptions).not.toContain("fable");
     expect(reasoningOptions).toEqual(["", "minimal", "low", "medium", "high"]);
-    expect(model).not.toBeNull();
-    model!.value = "gpt-realtime-mini";
-    model!.dispatchEvent(new Event("input", { bubbles: true }));
+    if (model === null) {
+      throw new Error("expected Talk model input");
+    }
+    model.value = "gpt-realtime-mini";
+    model.dispatchEvent(new Event("input", { bubbles: true }));
 
     expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ model: "gpt-realtime-mini" });
   });
@@ -579,12 +605,16 @@ describe("chat voice controls", () => {
     await i18n.setLocale("zh-CN");
     const container = renderChatView();
 
-    expect(
-      container.querySelector(`[aria-label="${t("chat.composer.startTalk")}"]`),
-    ).not.toBeNull();
-    expect(
-      container.querySelector(`[aria-label="${t("chat.composer.attachFile")}"]`),
-    ).not.toBeNull();
+    requireElement(
+      container,
+      `[aria-label="${t("chat.composer.startTalk")}"]`,
+      "localized Start Talk button",
+    );
+    requireElement(
+      container,
+      `[aria-label="${t("chat.composer.attachFile")}"]`,
+      "localized attach file button",
+    );
     expect(container.querySelector("textarea")?.getAttribute("placeholder")).toBe(
       t("chat.composer.placeholder", { name: "Val" }),
     );
@@ -761,16 +791,14 @@ describe("chat attachment picker", () => {
     input!.dispatchEvent(new Event("change", { bubbles: true }));
 
     await vi.waitFor(() => {
-      const attachments = onAttachmentsChange.mock.calls[0]?.[0] as
-        | Array<{ fileName?: string; mimeType?: string; sizeBytes?: number }>
-        | undefined;
+      const attachments = requireFirstAttachmentsChange(onAttachmentsChange);
       expect(attachments).toHaveLength(1);
-      expect(attachments?.[0]?.fileName).toBe("brief.pdf");
-      expect(attachments?.[0]?.mimeType).toBe("application/pdf");
-      expect(attachments?.[0]?.sizeBytes).toBe(file.size);
+      expect(attachments[0]?.fileName).toBe("brief.pdf");
+      expect(attachments[0]?.mimeType).toBe("application/pdf");
+      expect(attachments[0]?.sizeBytes).toBe(file.size);
     });
 
-    const nextAttachments = onAttachmentsChange.mock.calls[0]?.[0] ?? [];
+    const nextAttachments = requireFirstAttachmentsChange(onAttachmentsChange);
     expect(getChatAttachmentDataUrl(nextAttachments[0])).toMatch(/^data:application\/pdf;base64,/);
     const preview = renderChatView({ attachments: nextAttachments });
     expect(preview.querySelectorAll(".chat-attachment-thumb--file")).toHaveLength(1);
@@ -961,11 +989,21 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    expect(container.querySelector(`[aria-label="${t("chat.selectors.session")}"]`)).not.toBeNull();
-    expect(container.querySelector(`[aria-label="${t("chat.selectors.model")}"]`)).not.toBeNull();
-    expect(
-      container.querySelector(`[aria-label="${t("chat.selectors.thinkingLevel")}"]`),
-    ).not.toBeNull();
+    requireElement(
+      container,
+      `[aria-label="${t("chat.selectors.session")}"]`,
+      "localized session selector",
+    );
+    requireElement(
+      container,
+      `[aria-label="${t("chat.selectors.model")}"]`,
+      "localized model selector",
+    );
+    requireElement(
+      container,
+      `[aria-label="${t("chat.selectors.thinkingLevel")}"]`,
+      "localized thinking level selector",
+    );
     expect(container.innerHTML).not.toContain("Chat session");
   });
 

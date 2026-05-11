@@ -47,7 +47,11 @@ function requireRecord(value: unknown): Record<string, unknown> {
 }
 
 function firstMockArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  return requireRecord(mock.mock.calls[0]?.[0]);
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("Expected mock to be called");
+  }
+  return requireRecord(call[0]);
 }
 
 describe("Crestodian assistant", () => {
@@ -132,7 +136,6 @@ describe("Crestodian assistant", () => {
         removeTempDir: async () => {},
       },
     });
-    expect(result).not.toBeNull();
     if (result === null) {
       throw new Error("Expected planner result");
     }
@@ -214,7 +217,6 @@ describe("Crestodian assistant", () => {
         removeTempDir: async () => {},
       },
     });
-    expect(result).not.toBeNull();
     if (result === null) {
       throw new Error("Expected planner result");
     }
@@ -266,7 +268,6 @@ describe("Crestodian assistant", () => {
         removeTempDir: async () => {},
       },
     });
-    expect(result).not.toBeNull();
     if (result === null) {
       throw new Error("Expected planner result");
     }

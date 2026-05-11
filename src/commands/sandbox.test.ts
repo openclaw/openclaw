@@ -155,19 +155,10 @@ describe("sandboxListCommand", () => {
       const loggedJson = runtime.log.mock.calls[0][0];
       const parsed = JSON.parse(loggedJson);
 
-      expect(parsed.containers).toStrictEqual([
-        expect.objectContaining({
-          backendId: "docker",
-          configLabelKind: "Image",
-          containerName: container.containerName,
-          image: "openclaw/sandbox:latest",
-          imageMatch: true,
-          running: true,
-          runtimeLabel: container.containerName,
-          sessionKey: "test-session",
-        }),
-      ]);
-      expect(parsed.browsers).toStrictEqual([]);
+      expect(parsed).toStrictEqual({
+        containers: [container],
+        browsers: [],
+      });
     });
   });
 

@@ -34,13 +34,27 @@ afterEach(() => {
   setRegistry(emptyRegistry);
 });
 
-const gatewayCall = () =>
-  callGatewayMock.mock.calls[0]?.[0] as {
+function gatewayCall(): {
+  url?: string;
+  token?: string;
+  timeoutMs?: number;
+  params?: Record<string, unknown>;
+} {
+  const [call] = callGatewayMock.mock.calls;
+  if (!call) {
+    throw new Error("expected gateway call");
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error("expected gateway call input to be an object");
+  }
+  return arg as {
     url?: string;
     token?: string;
     timeoutMs?: number;
     params?: Record<string, unknown>;
   };
+}
 
 describe("sendMessage channel normalization", () => {
   it("threads resolved cfg through alias + target normalization in outbound dispatch", async () => {

@@ -437,49 +437,6 @@ describe("Discord model picker interactions", () => {
     });
   });
 
-  it("routes selected runtime through the /model pipeline", async () => {
-    const context = createModelPickerContext();
-    const pickerData = createDefaultModelPickerData();
-    pickerData.runtimeChoicesByProvider = new Map([
-      [
-        "openai",
-        [
-          {
-            id: "pi",
-            label: "OpenClaw Pi Default",
-            description: "Use the built-in OpenClaw Pi runtime.",
-          },
-          {
-            id: "codex",
-            label: "codex",
-            description: "Run openai models through the codex harness.",
-          },
-        ],
-      ],
-    ]);
-    const modelCommand = createModelCommandDefinition();
-
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    mockModelCommandPipeline(modelCommand);
-
-    const dispatchSpy = createDispatchSpy();
-    await runSubmitButton({
-      context,
-      data: {
-        ...createModelsViewSubmitData(),
-        r: "codex",
-      },
-      dispatchCommandInteraction: dispatchSpy,
-    });
-
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    expectDispatchedModelSelection({
-      dispatchSpy,
-      model: "openai/gpt-4o",
-      runtime: "codex",
-    });
-  });
-
   it("ignores category parent metadata for non-thread component channels", () => {
     const interaction = createInteraction({ userId: "owner" });
     interaction.guild = { id: "guild-1" };

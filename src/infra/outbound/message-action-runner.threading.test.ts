@@ -9,6 +9,18 @@ import {
 const ensureOutboundSessionEntry = vi.fn(async () => undefined);
 const resolveOutboundSessionRoute = vi.fn();
 
+function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected mock call");
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error("expected mock call arg to be an object");
+  }
+  return arg as Record<string, unknown>;
+}
+
 const workspaceConfig = {
   channels: {
     workspace: {
@@ -181,7 +193,7 @@ describe("message action threading helpers", () => {
     });
 
     expect(resolveAutoThreadId).toHaveBeenCalledOnce();
-    expect(resolveAutoThreadId.mock.calls[0]?.[0]?.replyToId).toBe("777");
+    expect(firstMockArg(resolveAutoThreadId).replyToId).toBe("777");
     expect(resolved).toBe("thread-777");
     expect(actionParams.threadId).toBe("thread-777");
   });

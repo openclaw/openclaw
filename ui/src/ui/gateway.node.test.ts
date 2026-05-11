@@ -116,6 +116,36 @@ type RequestTimingPayload = {
   errorCode?: string;
 };
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireFirstMockArg(
+  mock: ReturnType<typeof vi.fn>,
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return requireRecord(call[0], `${label} payload`);
+}
+
+function requireFirstSignCall(): [privateKey: string, payload: string] {
+  const [call] = signDevicePayloadMock.mock.calls;
+  if (!call) {
+    throw new Error("expected device payload signing call");
+  }
+  const [privateKey, payload] = call;
+  if (typeof privateKey !== "string" || typeof payload !== "string") {
+    throw new Error("expected device payload signing args");
+  }
+  return [privateKey, payload];
+}
+
 function expectLatestRequestTiming(
   onRequestTiming: ReturnType<typeof vi.fn>,
   expected: Partial<RequestTimingPayload>,
@@ -330,23 +360,15 @@ describe("GatewayBrowserClient", () => {
     });
 
     expect(() => client.start()).not.toThrow();
-    const close = onClose.mock.calls[0]?.[0] as
-      | {
-          code?: number;
-          reason?: string;
-          error?: {
-            code?: string;
-            message?: string;
-            details?: { code?: string; browserErrorName?: string };
-          };
-        }
-      | undefined;
-    expect(close?.code).toBe(1006);
-    expect(close?.reason).toBe("security error");
-    expect(close?.error?.code).toBe("BROWSER_WEBSOCKET_SECURITY_ERROR");
-    expect(close?.error?.message).toContain("Use wss://");
-    expect(close?.error?.details?.code).toBe("BROWSER_WEBSOCKET_SECURITY_ERROR");
-    expect(close?.error?.details?.browserErrorName).toBe("SecurityError");
+    const close = requireFirstMockArg(onClose, "close");
+    expect(close.code).toBe(1006);
+    expect(close.reason).toBe("security error");
+    const closeError = requireRecord(close.error, "close error");
+    const closeErrorDetails = requireRecord(closeError.details, "close error details");
+    expect(closeError.code).toBe("BROWSER_WEBSOCKET_SECURITY_ERROR");
+    expect(String(closeError.message)).toContain("Use wss://");
+    expect(closeErrorDetails.code).toBe("BROWSER_WEBSOCKET_SECURITY_ERROR");
+    expect(closeErrorDetails.browserErrorName).toBe("SecurityError");
     expect(wsInstances).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(30_000);
@@ -374,24 +396,16 @@ describe("GatewayBrowserClient", () => {
     });
 
     expect(() => client.start()).not.toThrow();
-    const close = onClose.mock.calls[0]?.[0] as
-      | {
-          code?: number;
-          reason?: string;
-          error?: {
-            code?: string;
-            message?: string;
-            details?: { code?: string; browserErrorName?: string; browserMessage?: string };
-          };
-        }
-      | undefined;
-    expect(close?.code).toBe(1006);
-    expect(close?.reason).toBe("websocket error");
-    expect(close?.error?.code).toBe("BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR");
-    expect(close?.error?.message).toContain("Could not create the Gateway WebSocket");
-    expect(close?.error?.details?.code).toBe("BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR");
-    expect(close?.error?.details?.browserErrorName).toBe("TypeError");
-    expect(close?.error?.details?.browserMessage).toBe("constructor failed");
+    const close = requireFirstMockArg(onClose, "close");
+    expect(close.code).toBe(1006);
+    expect(close.reason).toBe("websocket error");
+    const closeError = requireRecord(close.error, "close error");
+    const closeErrorDetails = requireRecord(closeError.details, "close error details");
+    expect(closeError.code).toBe("BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR");
+    expect(String(closeError.message)).toContain("Could not create the Gateway WebSocket");
+    expect(closeErrorDetails.code).toBe("BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR");
+    expect(closeErrorDetails.browserErrorName).toBe("TypeError");
+    expect(closeErrorDetails.browserMessage).toBe("constructor failed");
     expect(wsInstances).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(30_000);
@@ -479,7 +493,7 @@ describe("GatewayBrowserClient", () => {
       expect((error as { gatewayCode?: string }).gatewayCode).toBe("CONFIG_ERROR");
     }
     expect(onRequestTiming).toHaveBeenCalledTimes(1);
-    expect(onRequestTiming.mock.calls[0]?.[0]).not.toHaveProperty("params");
+    expect(requireFirstMockArg(onRequestTiming, "request timing")).not.toHaveProperty("params");
     expectLatestRequestTiming(onRequestTiming, {
       id: frame.id,
       method: "config.get",
@@ -499,10 +513,8 @@ describe("GatewayBrowserClient", () => {
     expect(typeof connectFrame.id).toBe("string");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth?.token).toBe("shared-auth-token");
-    const signCall = signDevicePayloadMock.mock.calls[0];
-    expect(signCall?.[0]).toBe("private-key");
-    expect(signCall?.[1]).toBeTypeOf("string");
-    const signedPayload = signCall?.[1];
+    const [privateKey, signedPayload] = requireFirstSignCall();
+    expect(privateKey).toBe("private-key");
     expect(signedPayload).toContain("|shared-auth-token|nonce-1");
     expect(signedPayload).not.toContain("stored-device-token");
   });
@@ -557,10 +569,8 @@ describe("GatewayBrowserClient", () => {
     expect(typeof connectFrame.id).toBe("string");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth?.token).toBe("stored-device-token");
-    const signCall = signDevicePayloadMock.mock.calls[0];
-    expect(signCall?.[0]).toBe("private-key");
-    expect(signCall?.[1]).toBeTypeOf("string");
-    const signedPayload = signCall?.[1];
+    const [privateKey, signedPayload] = requireFirstSignCall();
+    expect(privateKey).toBe("private-key");
     expect(signedPayload).toContain("|stored-device-token|nonce-1");
   });
 
@@ -581,7 +591,7 @@ describe("GatewayBrowserClient", () => {
 
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth?.token).toBeUndefined();
-    const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
+    const [, signedPayload] = requireFirstSignCall();
     expect(signedPayload).not.toContain("under-scoped-device-token");
   });
 

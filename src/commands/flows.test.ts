@@ -72,7 +72,7 @@ describe("flows commands", () => {
         updatedAt: 100,
       });
 
-      createRunningTaskRun({
+      const childTask = createRunningTaskRun({
         runtime: "acp",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -88,33 +88,39 @@ describe("flows commands", () => {
       const runtime = createRuntime();
       await flowsListCommand({ json: true, status: "blocked" }, runtime);
 
-      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
-        count: number;
-        status: string | null;
-        flows: Array<{
-          flowId: string;
-          tasks: Array<{ runId?: string; label?: string }>;
-          taskSummary: { total: number; active: number };
-        }>;
-      };
+      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]));
 
-      expect(payload.count).toBe(1);
-      expect(payload.status).toBe("blocked");
-      expect(payload.flows).toStrictEqual([
-        expect.objectContaining({
-          flowId: flow.flowId,
-          taskSummary: expect.objectContaining({
-            total: 1,
-            active: 1,
-          }),
-          tasks: [
-            expect.objectContaining({
-              runId: "run-child-1",
-              label: "Inspect PR 123",
-            }),
-          ],
-        }),
-      ]);
+      expect(payload).toStrictEqual({
+        count: 1,
+        status: "blocked",
+        flows: [
+          {
+            ...JSON.parse(JSON.stringify(flow)),
+            tasks: [JSON.parse(JSON.stringify(childTask))],
+            taskSummary: {
+              total: 1,
+              active: 1,
+              terminal: 0,
+              failures: 0,
+              byStatus: {
+                queued: 0,
+                running: 1,
+                succeeded: 0,
+                failed: 0,
+                timed_out: 0,
+                cancelled: 0,
+                lost: 0,
+              },
+              byRuntime: {
+                subagent: 0,
+                acp: 1,
+                cli: 0,
+                cron: 0,
+              },
+            },
+          },
+        ],
+      });
     });
   });
 

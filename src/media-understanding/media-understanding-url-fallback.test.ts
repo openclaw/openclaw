@@ -15,6 +15,23 @@ vi.mock("../media/fetch.js", async () => {
   };
 });
 
+function requireFetchRemoteMediaInput(): {
+  url?: unknown;
+  fetchImpl?: unknown;
+  maxBytes?: unknown;
+  ssrfPolicy?: unknown;
+} {
+  const [call] = fetchRemoteMediaMock.mock.calls;
+  if (!call) {
+    throw new Error("expected fetchRemoteMedia call");
+  }
+  const [input] = call;
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new Error("expected fetchRemoteMedia input to be an object");
+  }
+  return input;
+}
+
 async function withBlockedLocalAttachmentFallback(
   prefix: string,
   run: (params: { cache: MediaAttachmentCache; fallbackUrl: string }) => Promise<void>,
@@ -65,10 +82,8 @@ describe("media understanding attachment URL fallback", () => {
         expect(path.basename(result.path).startsWith("openclaw-media-")).toBe(true);
         expect(path.extname(result.path)).toBe(".jpg");
         expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
-        const fetchInput = fetchRemoteMediaMock.mock.calls[0]?.[0] as
-          | { url?: unknown; fetchImpl?: unknown; maxBytes?: unknown; ssrfPolicy?: unknown }
-          | undefined;
-        const fetchImpl = fetchInput?.fetchImpl;
+        const fetchInput = requireFetchRemoteMediaInput();
+        const fetchImpl = fetchInput.fetchImpl;
         expect(fetchInput).toStrictEqual({
           url: fallbackUrl,
           fetchImpl,
@@ -95,10 +110,8 @@ describe("media understanding attachment URL fallback", () => {
         });
         expect(result.buffer.toString()).toBe("fallback-buffer");
         expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
-        const fetchInput = fetchRemoteMediaMock.mock.calls[0]?.[0] as
-          | { url?: unknown; fetchImpl?: unknown; maxBytes?: unknown; ssrfPolicy?: unknown }
-          | undefined;
-        const fetchImpl = fetchInput?.fetchImpl;
+        const fetchInput = requireFetchRemoteMediaInput();
+        const fetchImpl = fetchInput.fetchImpl;
         expect(fetchInput).toStrictEqual({
           url: fallbackUrl,
           fetchImpl,

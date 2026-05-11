@@ -496,19 +496,46 @@ describe("sessions tools", () => {
         includeDerivedTitles: true,
         includeLastMessage: true,
       });
-      const details = result.details as {
-        sessions?: Array<{
-          key?: string;
-          derivedTitle?: string;
-          lastMessagePreview?: string;
-        }>;
-      };
+      const details = result.details as { sessions?: Array<Record<string, unknown>> };
       expect(details.sessions).toStrictEqual([
-        expect.objectContaining({
-          derivedTitle: "Visible project kickoff",
+        {
           key: "agent:main:main",
+          agentId: "main",
+          kind: "other",
+          channel: "unknown",
+          origin: undefined,
+          spawnedBy: undefined,
+          label: undefined,
+          displayName: undefined,
+          derivedTitle: "Visible project kickoff",
           lastMessagePreview: "Visible latest reply",
-        }),
+          parentSessionKey: undefined,
+          deliveryContext: undefined,
+          updatedAt: 20,
+          sessionId: "visible",
+          model: undefined,
+          contextTokens: undefined,
+          totalTokens: undefined,
+          estimatedCostUsd: undefined,
+          status: undefined,
+          startedAt: undefined,
+          endedAt: undefined,
+          runtimeMs: undefined,
+          childSessions: undefined,
+          thinkingLevel: undefined,
+          fastMode: undefined,
+          verboseLevel: undefined,
+          reasoningLevel: undefined,
+          elevatedLevel: undefined,
+          responseUsage: undefined,
+          systemSent: undefined,
+          abortedLastRun: undefined,
+          sendPolicy: undefined,
+          lastChannel: undefined,
+          lastTo: undefined,
+          lastAccountId: undefined,
+          transcriptPath: path.join(fs.realpathSync(tmpDir), "visible.jsonl"),
+        },
       ]);
       expect(JSON.stringify(details.sessions)).not.toContain("Hidden");
     } finally {

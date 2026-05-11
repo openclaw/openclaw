@@ -20,6 +20,21 @@ vi.mock("../tool-display.ts", () => ({
   }),
 }));
 
+function requireFirstMockArg(
+  mock: ReturnType<typeof vi.fn>,
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (!arg || typeof arg !== "object" || Array.isArray(arg)) {
+    throw new Error(`expected ${label} payload`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 describe("tool-cards", () => {
   it("renders expanded cards with inline input and output sections", () => {
     const container = document.createElement("div");
@@ -178,11 +193,9 @@ describe("tool-cards", () => {
     expect(sidebarButton?.classList.contains("chat-tool-card__action-btn")).toBe(true);
     sidebarButton!.click();
 
-    const sidebar = onOpenSidebar.mock.calls[0]?.[0] as
-      | { kind?: string; docId?: string; entryUrl?: string }
-      | undefined;
-    expect(sidebar?.kind).toBe("canvas");
-    expect(sidebar?.docId).toBe("cv_sidebar");
-    expect(sidebar?.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
+    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
+    expect(sidebar.kind).toBe("canvas");
+    expect(sidebar.docId).toBe("cv_sidebar");
+    expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
 });

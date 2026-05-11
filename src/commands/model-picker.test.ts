@@ -142,9 +142,10 @@ const OPENROUTER_CATALOG = [
 ] as const;
 
 function expectRouterModelFiltering(options: Array<{ value: string }>) {
-  const values = options.map((option) => option.value);
-  expect(values).not.toContain("openrouter/auto");
-  expect(values).toContain("openrouter/meta-llama/llama-3.3-70b:free");
+  const routerValues = options
+    .map((option) => option.value)
+    .filter((value) => value.startsWith("openrouter/"));
+  expect(routerValues).toEqual(["openrouter/meta-llama/llama-3.3-70b:free"]);
 }
 
 function createSelectAllMultiselect() {

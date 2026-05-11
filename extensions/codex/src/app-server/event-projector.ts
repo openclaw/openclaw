@@ -111,6 +111,7 @@ export class CodexAppServerEventProjector {
   private readonly activeItemIds = new Set<string>();
   private readonly completedItemIds = new Set<string>();
   private readonly activeCompactionItemIds = new Set<string>();
+  private readonly toolProgressTexts = new Set<string>();
   private readonly toolResultSummaryItemIds = new Set<string>();
   private readonly toolResultOutputItemIds = new Set<string>();
   private readonly toolResultOutputStreamedItemIds = new Set<string>();
@@ -962,11 +963,16 @@ export class CodexAppServerEventProjector {
     text: string;
     finalOutput?: boolean;
   }): void {
+    const text = params.text.trim();
+    if (!text) {
+      return;
+    }
+    this.toolProgressTexts.add(text);
     if (params.finalOutput) {
       this.toolResultOutputItemIds.add(params.itemId);
     }
     try {
-      void Promise.resolve(this.params.onToolResult?.({ text: params.text })).catch(() => {
+      void Promise.resolve(this.params.onToolResult?.({ text })).catch(() => {
         // Tool progress delivery is best-effort and should not affect the turn.
       });
     } catch {
@@ -1109,7 +1115,7 @@ export class CodexAppServerEventProjector {
         continue;
       }
       const text = this.assistantTextByItem.get(itemId)?.trim();
-      if (text) {
+      if (text && !this.toolProgressTexts.has(text)) {
         return text;
       }
     }

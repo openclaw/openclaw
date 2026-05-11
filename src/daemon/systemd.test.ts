@@ -62,7 +62,11 @@ const createWritableStreamMock = () => {
 };
 
 function requireFirstWrite(write: ReturnType<typeof vi.fn>): string {
-  const value = write.mock.calls[0]?.[0];
+  const [call] = write.mock.calls;
+  if (!call) {
+    throw new Error("expected systemd status write");
+  }
+  const [value] = call;
   if (value === undefined) {
     throw new Error("expected systemd status write");
   }
