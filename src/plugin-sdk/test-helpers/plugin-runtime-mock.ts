@@ -682,6 +682,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     events: {
       onAgentEvent: vi.fn(() => () => {}) as unknown as PluginRuntime["events"]["onAgentEvent"],
+      emitSessionTranscriptUpdate:
+        vi.fn() as unknown as PluginRuntime["events"]["emitSessionTranscriptUpdate"],
       onSessionTranscriptUpdate: vi.fn(
         () => () => {},
       ) as unknown as PluginRuntime["events"]["onSessionTranscriptUpdate"],

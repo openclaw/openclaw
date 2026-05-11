@@ -12,10 +12,7 @@ import {
   setHeartbeatWakeHandler,
 } from "../../infra/heartbeat-wake.js";
 import * as execModule from "../../process/exec.js";
-import {
-  emitSessionTranscriptUpdate,
-  onSessionTranscriptUpdate,
-} from "../../sessions/transcript-events.js";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { VERSION } from "../../version.js";
 
 const runtimeModelAuthMocks = vi.hoisted(() => ({
@@ -168,12 +165,6 @@ describe("plugin runtime command execution", () => {
       expected: onSessionTranscriptUpdate,
     },
     {
-      name: "exposes runtime.events.emitSessionTranscriptUpdate",
-      readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
-        runtime.events.emitSessionTranscriptUpdate,
-      expected: emitSessionTranscriptUpdate,
-    },
-    {
       name: "exposes runtime.system.requestHeartbeat",
       readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
         runtime.system.requestHeartbeat,
@@ -192,6 +183,19 @@ describe("plugin runtime command execution", () => {
     },
   ] as const)("$name", ({ readValue, expected }) => {
     expectRuntimeValue(readValue, expected);
+  });
+
+  it("exposes a path-only runtime.events.emitSessionTranscriptUpdate wrapper", () => {
+    const updates: unknown[] = [];
+    const cleanup = onSessionTranscriptUpdate((update) => updates.push(update));
+    try {
+      const runtime = createPluginRuntime();
+      expect(typeof runtime.events.emitSessionTranscriptUpdate).toBe("function");
+      expect(runtime.events.emitSessionTranscriptUpdate("/tmp/session.jsonl")).toBeUndefined();
+      expect(updates).toEqual([{ sessionFile: "/tmp/session.jsonl" }]);
+    } finally {
+      cleanup();
+    }
   });
 
   it("maps deprecated runtime.system.requestHeartbeatNow to an immediate compatibility wake", async () => {

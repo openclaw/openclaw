@@ -431,7 +431,7 @@ Provider and channel execution paths must use the active runtime config snapshot
 
   </Accordion>
   <Accordion title="api.runtime.events">
-    Event subscriptions.
+    Event subscriptions and transcript update notifications.
 
     ```typescript
     api.runtime.events.onAgentEvent((event) => {
@@ -440,7 +440,13 @@ Provider and channel execution paths must use the active runtime config snapshot
     api.runtime.events.onSessionTranscriptUpdate((update) => {
       /* ... */
     });
+    api.runtime.events.emitSessionTranscriptUpdate(sessionFile);
     ```
+
+    `emitSessionTranscriptUpdate(sessionFile)` should be called only after the
+    plugin has durably written to the transcript file. It accepts the transcript
+    file path and broadcasts a reload notification; it does not accept or publish
+    synthetic message payloads.
 
   </Accordion>
   <Accordion title="api.runtime.logging">
