@@ -101,6 +101,9 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
+    env:
+      CI: "true"
+      OPENCLAW_QA_SUITE_PROGRESS: "1"
     steps:
       - name: Checkout target
         uses: actions/checkout@v6
@@ -128,7 +131,7 @@ jobs:
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
 
-      - name: Run required mock proof lanes
+      - name: Run tool-defaults direct lane
         shell: bash
         run: |
           set -euo pipefail
@@ -142,6 +145,12 @@ jobs:
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --runtime-pair pi,codex \
             --output-dir "${root}/tool-defaults-direct"
+
+      - name: Run OpenClaw dynamic tools direct lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".artifacts/qa-e2e"
           pnpm openclaw qa suite \
             --provider-mode mock-openai \
             --runtime-suite openclaw-dynamic-tools \
@@ -151,6 +160,12 @@ jobs:
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --runtime-pair pi,codex \
             --output-dir "${root}/openclaw-dynamic-tools-direct"
+
+      - name: Run tool-defaults searchable lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".artifacts/qa-e2e"
           pnpm openclaw qa suite \
             --provider-mode mock-openai \
             --runtime-suite tool-defaults \
@@ -161,6 +176,12 @@ jobs:
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --runtime-pair pi,codex \
             --output-dir "${root}/tool-defaults-searchable"
+
+      - name: Run first-hour-20 direct lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".artifacts/qa-e2e"
           pnpm openclaw qa suite \
             --provider-mode mock-openai \
             --runtime-suite first-hour-20 \
@@ -170,12 +191,24 @@ jobs:
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --runtime-pair pi,codex \
             --output-dir "${root}/first-hour-20-direct"
+
+      - name: Build first-hour-20 token report
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".artifacts/qa-e2e"
           pnpm openclaw qa parity-report \
             --repo-root . \
             --runtime-axis \
             --token-efficiency \
             --summary "${root}/first-hour-20-direct/qa-suite-summary.json" \
             --output-dir "${root}/first-hour-20-direct-report"
+
+      - name: Run fault-injection mock lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".artifacts/qa-e2e"
           pnpm openclaw qa suite \
             --provider-mode mock-openai \
             --runtime-suite fault-injection-mock \
@@ -185,10 +218,22 @@ jobs:
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --runtime-pair pi,codex \
             --output-dir "${root}/fault-injection-mock"
+
+      - name: Run expanded JSONL replay lane
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".artifacts/qa-e2e"
           pnpm openclaw qa jsonl-replay \
             --provider-mode mock-openai \
             --runtime-pair pi,codex \
             --output-dir "${root}/jsonl-expanded"
+
+      - name: Run confidence negative controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".artifacts/qa-e2e"
           pnpm openclaw qa confidence-self-test \
             --output-dir "${root}/confidence-self-test"
 
@@ -234,6 +279,8 @@ jobs:
     permissions:
       contents: read
     env:
+      CI: "true"
+      OPENCLAW_QA_SUITE_PROGRESS: "1"
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - name: Checkout target
