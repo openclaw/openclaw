@@ -289,6 +289,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: build reply-aware inbound turns through the shared channel context path so agents see the current reply target inline with the current message.
 - Memory: skip managed dreaming cron reconciliation warnings for ordinary cron and heartbeat hook contexts that cannot manage Gateway cron. (#77027) Thanks @rubencu.
 - Cron: treat Codex app-server turn acceptance, CLI process spawn, and tool starts as execution milestones, preventing isolated runs from tripping the early startup watchdog after work has begun.
+- Codex app-server: treat current-turn `<turn_aborted>` raw markers as terminal so interrupted native-tool turns release Discord agent sessions instead of waiting for the outer timeout.
 - Yuanbao: bump `openclaw-plugin-yuanbao` to 2.13.1 to support `sourceReplyDeliveryMode: "automatic"` for group chat. (#79814) Thanks @loongfay.
 - Memory: keep `memory_search` result `corpus` labels aligned with the hit source, so session transcript hits surface as `sessions` and memory-file hits stay `memory`. Fixes #72885. (#71898, #72886) Thanks @rubencu.
 - Codex app-server: default native plugin app tool approvals to automatic so non-destructive read tools run when destructive actions are disabled.
