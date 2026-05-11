@@ -280,6 +280,7 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
   }
   if (
     /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
+    /<!--\s*openclaw:dreaming:[^>]*:(?:start|end)\s*-->/i.test(snippet) ||
     DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet)
   ) {
     return true;
@@ -292,7 +293,7 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
   );
   const hasStatus = /\bstatus:\s*staged\b/i.test(snippet);
   const hasRecalls = /\brecalls:\s*\d+\b/i.test(snippet);
-  return hasNarrativeLead && hasConfidence && hasEvidence && hasStatus && hasRecalls;
+  return hasNarrativeLead && hasStatus && (hasConfidence || hasEvidence || hasRecalls);
 }
 
 function normalizeMemoryPath(rawPath: string): string {
