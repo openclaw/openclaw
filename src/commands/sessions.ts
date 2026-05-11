@@ -255,7 +255,7 @@ export async function sessionsCommand(
       .map(({ sessionKey: key, entry }) => {
         const row = toSessionDisplayRow(key, entry);
         const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
-        const modelRef = resolveSessionDisplayModelRef(cfg, row);
+        const modelRef = resolveSessionDisplayModelRef(cfg, { ...row, agentId });
         const agentRuntime = resolveModelAgentRuntimeMetadata({
           cfg,
           agentId,

@@ -475,6 +475,8 @@ Completed consolidation/deletion highlights:
 - Silent-reply policy selection now uses explicit conversation type or surface
   metadata only. It no longer guesses direct/group policy from
   `session_key` substrings.
+- Session display model resolution now receives the agent id from the SQLite
+  session database target instead of splitting it out of `session_key`.
 - Gateway `chat.send` external-route inheritance now reads typed SQLite session
   routing metadata instead of inferring channel/direct/group scope from
   `sessionKey` pieces. Channel-scoped sessions inherit only when the typed
