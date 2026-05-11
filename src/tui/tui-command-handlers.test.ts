@@ -420,11 +420,7 @@ describe("tui command handlers", () => {
     expect(newSessionKey.startsWith("tui-")).toBe(true);
     const uuidParts = newSessionKey.slice("tui-".length).split("-");
     expect(uuidParts.map((part) => part.length)).toEqual([8, 4, 4, 4, 12]);
-    expect(
-      uuidParts.every((part) =>
-        [...part].every((char) => (char >= "0" && char <= "9") || (char >= "a" && char <= "f")),
-      ),
-    ).toBe(true);
+    expect(uuidParts.every((part) => /^[0-9a-f]+$/.test(part))).toBe(true);
     // /reset still resets the shared session
     expect(resetSession).toHaveBeenCalledTimes(1);
     expect(resetSession).toHaveBeenCalledWith("agent:main:main", "reset");
