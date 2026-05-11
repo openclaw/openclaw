@@ -596,7 +596,7 @@ function createReloaderHarness(
       _context: GatewayConfigReloadContext,
     ) => {},
   );
-  const onRestart = vi.fn();
+  const onRestart = vi.fn(async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {});
   let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
   const subscribeToWrites = vi.fn((listener: (event: ConfigWriteNotification) => void) => {
     writeListener = listener;
