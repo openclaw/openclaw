@@ -315,6 +315,147 @@ describe("TelnyxProvider answer control", () => {
   });
 });
 
+describe("TelnyxProvider Media Streaming (PCMU)", () => {
+  it("embeds streaming fields in the dial payload when streamUrl is provided", async () => {
+    const release = vi.fn(async () => {});
+    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(JSON.stringify({ data: { call_control_id: "call-control-1" } }), {
+        status: 200,
+      }),
+      release,
+    });
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+
+    await provider.initiateCall({
+      callId: "call-1",
+      from: "+15550000001",
+      to: "+15550000002",
+      webhookUrl: "https://example.test/voice/webhook",
+      streamUrl: "wss://example.test/voice/stream/realtime/token-xyz",
+      streamAuthToken: "token-xyz",
+    });
+
+    const request = requireFetchRequest();
+    const body = JSON.parse(request.init?.body as string) as Record<string, unknown>;
+    expect(body.stream_url).toBe("wss://example.test/voice/stream/realtime/token-xyz");
+    expect(body.stream_track).toBe("inbound_track");
+    expect(body.stream_codec).toBe("PCMU");
+    expect(body.stream_bidirectional_mode).toBe("rtp");
+    expect(body.stream_bidirectional_codec).toBe("PCMU");
+    expect(body.stream_bidirectional_sampling_rate).toBe(8000);
+    expect(body.stream_bidirectional_target_legs).toBe("self");
+    expect(body.stream_auth_token).toBe("token-xyz");
+  });
+
+  it("omits streaming fields from the dial payload when streamUrl is absent", async () => {
+    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(JSON.stringify({ data: { call_control_id: "call-control-1" } }), {
+        status: 200,
+      }),
+      release: vi.fn(async () => {}),
+    });
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+
+    await provider.initiateCall({
+      callId: "call-1",
+      from: "+15550000001",
+      to: "+15550000002",
+      webhookUrl: "https://example.test/voice/webhook",
+    });
+
+    const body = JSON.parse(requireFetchRequest().init?.body as string) as Record<string, unknown>;
+    expect(body.stream_url).toBeUndefined();
+    expect(body.stream_codec).toBeUndefined();
+    expect(body.stream_bidirectional_codec).toBeUndefined();
+    expect(body.stream_auth_token).toBeUndefined();
+  });
+
+  it("embeds streaming fields in the answer action when streamUrl is provided", async () => {
+    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
+      release: vi.fn(async () => {}),
+    });
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+
+    await provider.answerCall({
+      callId: "call-1",
+      providerCallId: "call-control-1",
+      streamUrl: "wss://example.test/voice/stream/realtime/token-xyz",
+      streamAuthToken: "token-xyz",
+    });
+
+    const body = JSON.parse(requireFetchRequest().init?.body as string) as Record<string, unknown>;
+    expect(body.command_id).toBe("openclaw-answer-call-1");
+    expect(body.stream_url).toBe("wss://example.test/voice/stream/realtime/token-xyz");
+    expect(body.stream_codec).toBe("PCMU");
+    expect(body.stream_bidirectional_target_legs).toBe("self");
+    expect(body.stream_auth_token).toBe("token-xyz");
+  });
+
+  it("normalizes call.streaming.failed into a non-retryable call.error event", () => {
+    const provider = new TelnyxProvider(
+      { apiKey: "KEY123", connectionId: "CONN456", publicKey: undefined },
+      { skipVerification: true },
+    );
+    const rawBody = JSON.stringify({
+      data: {
+        event_type: "call.streaming.failed",
+        id: "evt-1",
+        payload: {
+          call_control_id: "call-control-1",
+          client_state: Buffer.from("call-1").toString("base64"),
+          reason: "destination_unreachable",
+        },
+      },
+    });
+    const result = provider.parseWebhookEvent(createCtx({ rawBody }), {
+      verifiedRequestKey: "key-1",
+    });
+    expect(result.events).toHaveLength(1);
+    const event = result.events[0];
+    if (event?.type !== "call.error") {
+      throw new Error(`expected call.error, got ${event?.type}`);
+    }
+    expect(event.error).toBe("Telnyx streaming failed: destination_unreachable");
+    expect(event.retryable).toBe(false);
+    expect(event.callId).toBe("call-1");
+    expect(event.providerCallId).toBe("call-control-1");
+  });
+
+  it("silently acknowledges call.streaming.started and call.streaming.stopped", () => {
+    const provider = new TelnyxProvider(
+      { apiKey: "KEY123", connectionId: "CONN456", publicKey: undefined },
+      { skipVerification: true },
+    );
+    for (const eventType of ["call.streaming.started", "call.streaming.stopped"]) {
+      const rawBody = JSON.stringify({
+        data: {
+          event_type: eventType,
+          id: `evt-${eventType}`,
+          payload: { call_control_id: "call-control-1" },
+        },
+      });
+      const result = provider.parseWebhookEvent(createCtx({ rawBody }), {
+        verifiedRequestKey: "key-1",
+      });
+      expect(result.events).toHaveLength(0);
+      expect(result.statusCode).toBe(200);
+    }
+  });
+});
+
 describe("TelnyxProvider speak control", () => {
   it("passes custom Telnyx voice ids to the speak action", async () => {
     const release = vi.fn(async () => {});
