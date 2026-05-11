@@ -720,7 +720,89 @@ describe("cron tool", () => {
     expect(call.params?.agentId).toBeNull();
   });
 
-  it("infers delivery from current delivery context", async () => {
+  it("infers delivery from threaded session keys", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-thread",
+        agentSessionKey: "agent:main:slack:channel:general:thread:1699999999.0001",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "slack",
+      to: "general",
+    });
+  });
+
+  it("preserves telegram forum topics when inferring delivery", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-topic",
+        agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890:topic:99",
+    });
+  });
+
+  it("preserves telegram direct-chat thread ids when inferring delivery", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-direct-thread",
+        agentSessionKey: "agent:main:telegram:direct:123456789:thread:123456789:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+      threadId: "99",
+    });
+  });
+
+  it("preserves telegram account ids with direct-chat thread inference", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-account-direct-thread",
+        agentSessionKey: "agent:main:telegram:bot-a:direct:123456789:thread:123456789:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+      accountId: "bot-a",
+      threadId: "99",
+    });
+  });
+
+  it("preserves telegram dm thread ids when inferring delivery", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-dm-thread",
+        agentSessionKey: "agent:main:telegram:dm:123456789:thread:123456789:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+      threadId: "99",
+    });
+  });
+
+  it("drops mismatched telegram direct-chat thread ids when inferring delivery", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-telegram-mismatched-direct-thread",
+        agentSessionKey: "agent:main:telegram:direct:123456789:thread:987654321:99",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "123456789",
+    });
+  });
+
+  it("prefers current delivery context over lowercased session-key targets", async () => {
     expect(
       await executeAddAndReadDelivery({
         callId: "call-current-context",
@@ -844,7 +926,7 @@ describe("cron tool", () => {
     });
   });
 
-  it("does not infer delivery from session key when current context has no target", async () => {
+  it("falls back to session-key inference when current context has no target", async () => {
     expect(
       await executeAddAndReadDelivery({
         callId: "call-empty-current-context",
@@ -854,7 +936,11 @@ describe("cron tool", () => {
           to: "   ",
         },
       }),
-    ).toEqual({ mode: "announce" });
+    ).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890:topic:99",
+    });
   });
 
   it("does not infer current delivery context when delivery mode is none", async () => {
@@ -871,14 +957,17 @@ describe("cron tool", () => {
     ).toEqual({ mode: "none" });
   });
 
-  it("does not infer delivery from session key when delivery is null", async () => {
+  it("infers delivery when delivery is null", async () => {
     expect(
       await executeAddAndReadDelivery({
         callId: "call-null-delivery",
         agentSessionKey: "agent:main:dm:alice",
         delivery: null,
       }),
-    ).toBeNull();
+    ).toEqual({
+      mode: "announce",
+      to: "alice",
+    });
   });
 
   // ── Flat-params recovery (issue #11310) ──────────────────────────────
