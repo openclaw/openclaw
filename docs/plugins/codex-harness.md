@@ -810,6 +810,31 @@ For direct TryCua driver access outside the Codex marketplace flow, register
 See [Codex Computer Use](/plugins/codex-computer-use) for the distinction
 between Codex-owned Computer Use and direct MCP registration.
 
+### Choosing a desktop-control path
+
+OpenClaw has three desktop-control paths. They differ in user experience and
+how each one is reached:
+
+| Criterion | Codex Computer Use | cua-driver MCP | PeekabooBridge |
+|---|---|---|---|
+| Background (no focus steal, user keeps working) | ✅ | ✅ | ❌ |
+| License | Proprietary | MIT | MIT |
+| Harness access | Via Codex plugin marketplace | Direct MCP, any harness | Via Peekaboo CLI / bridge |
+| Distribution | OpenAI marketplace | Direct binary | Homebrew / npm |
+| Menu / dialog / Dock coverage | Limited | Limited | Full |
+
+Peekaboo runs in the foreground: the agent takes control of the cursor and
+raises windows, so the desktop is the agent's while it works. Codex Computer
+Use and direct `cua-driver` MCP both run in the background through
+Accessibility APIs — the user can keep working in their browser while the
+agent drives Numbers, Safari, or any other app.
+
+Between Codex Computer Use and `cua-driver` MCP, the difference is licensing
+and how non-Codex harnesses reach it: Codex Computer Use is a proprietary
+plugin distributed through OpenAI's marketplace, available to other harnesses
+only via the plugin layer; `cua-driver` is an MIT MCP server that any harness
+can call directly.
+
 Minimal config:
 
 ```json5

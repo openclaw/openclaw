@@ -51,6 +51,13 @@ OpenClaw-managed runtimes to call TryCua's driver directly, use the upstream
 `cua-driver mcp` server through OpenClaw's MCP registry instead of the
 Codex-specific marketplace flow.
 
+`cua-driver` is an MIT-licensed stdio MCP server that any agent framework can
+call without going through a plugin layer — Codex, Claude, Gemini, or
+OpenClaw-native. Point your agent at `cua-driver mcp` and the full tool surface
+is available. Like Codex Computer Use, it dispatches through Accessibility APIs
+in the background: actions don't move your cursor or raise windows, so the user
+can keep working while the agent drives other apps.
+
 After installing `cua-driver`, either ask it for the OpenClaw command:
 
 ```bash
