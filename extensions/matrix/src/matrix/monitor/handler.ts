@@ -12,11 +12,11 @@ import {
   isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLines,
 } from "openclaw/plugin-sdk/channel-streaming";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-gating";
 import {
   evaluateSupplementalContextVisibility,
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
@@ -32,7 +32,10 @@ import type {
   MatrixStreamingMode,
   ReplyToMode,
 } from "../../types.js";
-import { resolveMatrixAccountAllowlistConfig } from "../account-config.js";
+import {
+  resolveMatrixAccountAllowlistConfig,
+  resolveMatrixAccountConfig,
+} from "../account-config.js";
 import { formatMatrixErrorMessage } from "../errors.js";
 import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import {
@@ -52,7 +55,10 @@ import {
 import type { LocationMessageEventContent, MatrixClient } from "../sdk.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
-import { resolveMatrixMonitorAccessState } from "./access-state.js";
+import {
+  resolveMatrixMonitorAccessState,
+  resolveMatrixMonitorCommandAccess,
+} from "./access-state.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
 import { normalizeMatrixUserId, resolveMatrixAllowListMatch } from "./allowlist.js";
 import {
@@ -72,7 +78,6 @@ import { resolveMatrixInboundRoute } from "./route.js";
 import {
   createReplyPrefixOptions,
   createTypingCallbacks,
-  formatAllowlistMatchMeta,
   getAgentScopedMediaLocalRoots,
   logInboundDrop,
   logTypingFailure,
@@ -436,11 +441,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   const resolveCachedLiveAllowlist = async (params: {
     cfg: CoreConfig;
     entries?: ReadonlyArray<string | number>;
+    failClosedOnUnresolved?: boolean;
     startupResolvedEntries?: readonly MatrixResolvedAllowlistEntry[];
     cache: LiveAllowlistCacheEntry | null;
     updateCache: (next: LiveAllowlistCacheEntry) => void;
   }): Promise<string[]> => {
-    const signature = JSON.stringify((params.entries ?? []).map((entry) => String(entry).trim()));
+    const accountConfig = resolveMatrixAccountConfig({ cfg: params.cfg, accountId });
+    const signature = JSON.stringify({
+      entries: (params.entries ?? []).map((entry) => String(entry).trim()),
+      failClosedOnUnresolved: params.failClosedOnUnresolved === true,
+      dangerouslyAllowNameMatching: isDangerousNameMatchingEnabled(accountConfig),
+    });
     if (params.cache?.signature === signature) {
       return params.cache.entries;
     }
@@ -448,6 +459,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       cfg: params.cfg,
       accountId,
       entries: params.entries,
+      failClosedOnUnresolved: params.failClosedOnUnresolved,
       startupResolvedEntries: params.startupResolvedEntries,
       runtime,
     });
@@ -724,40 +736,36 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const liveGroupAllowFrom = await resolveCachedLiveAllowlist({
           cfg: liveCfg,
           entries: liveAccountAllowlists.groupAllowFrom,
+          failClosedOnUnresolved: true,
           startupResolvedEntries: groupAllowFromResolvedEntries,
           cache: liveGroupAllowlistCache,
           updateCache: (next) => {
             liveGroupAllowlistCache = next;
           },
         });
-        const accessState = resolveMatrixMonitorAccessState({
+        const accessState = await resolveMatrixMonitorAccessState({
           allowFrom: liveDmAllowFrom,
           storeAllowFrom,
           dmPolicy,
+          groupPolicy,
           groupAllowFrom: liveGroupAllowFrom,
           roomUsers,
           senderId,
           isRoom,
+          accountId,
+          eventKind: isReactionEvent ? "reaction" : "message",
         });
-        const {
-          effectiveAllowFrom,
-          effectiveGroupAllowFrom,
-          effectiveRoomUsers,
-          groupAllowConfigured,
-          directAllowMatch,
-          roomUserMatch,
-          groupAllowMatch,
-          commandAuthorizers,
-        } = accessState;
+        const { effectiveGroupAllowFrom, effectiveRoomUsers, messageIngress } = accessState;
+        const ingressDecision = messageIngress.ingress;
 
         if (isDirectMessage) {
           if (!dmEnabled || dmPolicy === "disabled") {
             await commitInboundEventIfClaimed();
             return undefined;
           }
-          const allowMatchMeta = formatAllowlistMatchMeta(directAllowMatch);
-          if (!directAllowMatch.allowed) {
-            if (!isReactionEvent && dmPolicy === "pairing") {
+          const senderReason = messageIngress.senderAccess.reasonCode;
+          if (ingressDecision.decision !== "allow") {
+            if (ingressDecision.admission === "pairing-required") {
               const senderName = await getSenderName();
               const { code, created } = await core.channel.pairing.upsertPairingRequest({
                 channel: "matrix",
@@ -773,8 +781,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 });
                 logVerboseMessage(
                   created
-                    ? `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`
-                    : `matrix pairing reminder sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`,
+                    ? `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (reason=${senderReason})`
+                    : `matrix pairing reminder sender=${senderId} name=${senderName ?? "unknown"} (reason=${senderReason})`,
                 );
                 try {
                   const { sendMessageMatrix } = await loadMatrixSendModule();
@@ -803,7 +811,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             }
             if (isReactionEvent || dmPolicy !== "pairing") {
               logVerboseMessage(
-                `matrix: blocked ${isReactionEvent ? "reaction" : "dm"} sender ${senderId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+                `matrix: blocked ${isReactionEvent ? "reaction" : "dm"} sender ${senderId} (dmPolicy=${dmPolicy}, reason=${senderReason})`,
               );
               await commitInboundEventIfClaimed();
             }
@@ -811,27 +819,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           }
         }
 
-        if (isRoom && roomUserMatch && !roomUserMatch.allowed) {
+        if (isRoom && ingressDecision.decision !== "allow") {
           logVerboseMessage(
-            `matrix: blocked sender ${senderId} (room users allowlist, ${roomMatchMeta}, ${formatAllowlistMatchMeta(
-              roomUserMatch,
-            )})`,
-          );
-          await commitInboundEventIfClaimed();
-          return undefined;
-        }
-        if (
-          isRoom &&
-          groupPolicy === "allowlist" &&
-          effectiveRoomUsers.length === 0 &&
-          groupAllowConfigured &&
-          groupAllowMatch &&
-          !groupAllowMatch.allowed
-        ) {
-          logVerboseMessage(
-            `matrix: blocked sender ${senderId} (groupAllowFrom, ${roomMatchMeta}, ${formatAllowlistMatchMeta(
-              groupAllowMatch,
-            )})`,
+            `matrix: blocked sender ${senderId} (ingress=${ingressDecision.reasonCode}, ${roomMatchMeta})`,
           );
           await commitInboundEventIfClaimed();
           return undefined;
@@ -965,14 +955,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           commandCheckText,
           cfg,
         );
-        const commandGate = resolveControlCommandGate({
+        const commandAccess = await resolveMatrixMonitorCommandAccess(accessState, {
           useAccessGroups,
-          authorizers: commandAuthorizers,
           allowTextCommands,
           hasControlCommand: hasControlCommandInMessage,
         });
-        const commandAuthorized = commandGate.commandAuthorized;
-        if (isRoom && commandGate.shouldBlock) {
+        const commandAuthorized = commandAccess.authorized;
+        if (isRoom && commandAccess.shouldBlockControlCommand) {
           logInboundDrop({
             log: logVerboseMessage,
             channel: "matrix",
@@ -1149,7 +1138,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           triggerSnapshot,
           threadRootId,
           thread,
-          effectiveAllowFrom,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
         };

@@ -631,7 +631,9 @@ describe("gateway broadcaster", () => {
           reason: "ws_send_buffer_drop",
         }),
       );
-      expect(events.filter((event) => event.type === "payload.large")).toHaveLength(1);
+      expect(
+        events.reduce((count, event) => count + (event.type === "payload.large" ? 1 : 0), 0),
+      ).toBe(1);
     } finally {
       stop();
       resetDiagnosticEventsForTest();
@@ -734,7 +736,7 @@ describe("node subscription manager", () => {
     manager.sendToSession("main", "tick", {}, sendEvent);
     manager.sendToSession("secondary", "tick", {}, sendEvent);
 
-    expect(sent).toEqual([]);
+    expect(sent).toStrictEqual([]);
   });
 });
 
@@ -808,8 +810,8 @@ describe("resolveNodeCommandAllowlist", () => {
       },
     );
 
-    expect(allow.has("canvas.present")).toBe(true);
-    expect(allow.has("canvas.a2ui.pushJSONL")).toBe(true);
+    expect(allow.has("canvas.present")).toBe(false);
+    expect(allow.has("canvas.a2ui.pushJSONL")).toBe(false);
     expect(allow.has("camera.list")).toBe(true);
     expect(allow.has("location.get")).toBe(true);
     expect(allow.has("device.info")).toBe(true);

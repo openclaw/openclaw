@@ -12,6 +12,24 @@ import {
   withTempDir,
 } from "./fs-bridge.test-helpers.js";
 
+function expectNoScriptsContaining(scripts: string[], needle: string) {
+  expect(scripts.some((script) => script.includes(needle))).toBe(false);
+}
+
+function expectSomeScriptContaining(scripts: string[], needle: string) {
+  expect(scripts.some((script) => script.includes(needle))).toBe(true);
+}
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 describe("sandbox fs bridge shell compatibility", () => {
   installFsBridgeTestHarness();
 
@@ -43,7 +61,7 @@ describe("sandbox fs bridge shell compatibility", () => {
 
       expect(executables.every((shell) => shell === "sh")).toBe(true);
       expect(scripts.every((script) => /set -eu[;\n]/.test(script))).toBe(true);
-      expect(scripts.some((script) => script.includes("pipefail"))).toBe(false);
+      expectNoScriptsContaining(scripts, "pipefail");
     });
   });
 
@@ -54,7 +72,7 @@ describe("sandbox fs bridge shell compatibility", () => {
 
     const scripts = getScriptsFromCalls();
     const canonicalScript = scripts.find((script) => script.includes("allow_final"));
-    expect(canonicalScript).toBeDefined();
+    expect(canonicalScript).toContain("allow_final");
     expect(canonicalScript).not.toMatch(/\bdo;/);
     expect(canonicalScript).toMatch(/\bdo\n\s*parent=/);
   });
@@ -131,13 +149,11 @@ describe("sandbox fs bridge shell compatibility", () => {
     await bridge.writeFile({ filePath: "b.txt", data: "hello" });
 
     const scripts = getScriptsFromCalls();
-    expect(scripts.some((script) => script.includes("python3 - \"$@\" <<'PY'"))).toBe(false);
-    expect(
-      scripts.some((script) => script.includes('exec "$python_cmd" -c "$python_script" "$@"')),
-    ).toBe(true);
-    expect(scripts.some((script) => script.includes('cat >"$1"'))).toBe(false);
-    expect(scripts.some((script) => script.includes('cat >"$tmp"'))).toBe(false);
-    expect(scripts.some((script) => script.includes("os.replace("))).toBe(true);
+    expectNoScriptsContaining(scripts, "python3 - \"$@\" <<'PY'");
+    expectSomeScriptContaining(scripts, 'exec "$python_cmd" -c "$python_script" "$@"');
+    expectNoScriptsContaining(scripts, 'cat >"$1"');
+    expectNoScriptsContaining(scripts, 'cat >"$tmp"');
+    expectSomeScriptContaining(scripts, "os.replace(");
   });
 
   it("routes mkdirp, remove, and rename through the pinned mutation helper", async () => {
@@ -151,10 +167,12 @@ describe("sandbox fs bridge shell compatibility", () => {
       await bridge.rename({ from: "a.txt", to: "nested/b.txt" });
 
       const scripts = getScriptsFromCalls();
-      expect(scripts.filter((script) => script.includes("operation = sys.argv[1]")).length).toBe(3);
-      expect(scripts.some((script) => script.includes('mkdir -p -- "$2"'))).toBe(false);
-      expect(scripts.some((script) => script.includes('rm -f -- "$2"'))).toBe(false);
-      expect(scripts.some((script) => script.includes('mv -- "$3" "$2/$4"'))).toBe(false);
+      expect(countMatching(scripts, (script) => script.includes("operation = sys.argv[1]"))).toBe(
+        3,
+      );
+      expectNoScriptsContaining(scripts, 'mkdir -p -- "$2"');
+      expectNoScriptsContaining(scripts, 'rm -f -- "$2"');
+      expectNoScriptsContaining(scripts, 'mv -- "$3" "$2/$4"');
     });
   });
 
@@ -173,6 +191,6 @@ describe("sandbox fs bridge shell compatibility", () => {
     );
 
     const scripts = getScriptsFromCalls();
-    expect(scripts.some((script) => script.includes("os.replace("))).toBe(false);
+    expectNoScriptsContaining(scripts, "os.replace(");
   });
 });

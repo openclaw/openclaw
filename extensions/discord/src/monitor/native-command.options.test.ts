@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { logVerboseMock } = vi.hoisted(() => ({
@@ -196,11 +196,12 @@ describe("createDiscordNativeCommand option wiring", () => {
     const choices = readChoices(action);
 
     expect(readAutocomplete(action)).toBeUndefined();
-    expect(choices).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ name: expect.any(String), value: expect.any(String) }),
-      ]),
-    );
+    expect(choices).toEqual([
+      { name: "show", value: "show" },
+      { name: "get", value: "get" },
+      { name: "set", value: "set" },
+      { name: "unset", value: "unset" },
+    ]);
   });
 
   it("returns no autocomplete choices for unauthorized users", async () => {

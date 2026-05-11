@@ -71,13 +71,14 @@ describe("tui slash commands", () => {
 
   it("includes gateway text commands", () => {
     const commands = getSlashCommands({});
-    expect(commands.some((command) => command.name === "context")).toBe(true);
-    expect(commands.some((command) => command.name === "commands")).toBe(true);
+    const names = commands.map((command) => command.name);
+    expect(names).toContain("context");
+    expect(names).toContain("commands");
   });
 
   it("includes /auth in local embedded mode", () => {
     const commands = getSlashCommands({ local: true });
-    expect(commands.some((command) => command.name === "auth")).toBe(true);
+    expect(commands.map((command) => command.name)).toContain("auth");
   });
 });
 
@@ -327,11 +328,11 @@ describe("TUI shutdown safety", () => {
   });
 
   it("swallows only ignorable stop errors", () => {
-    expect(() => {
+    expect(
       stopTuiSafely(() => {
         throw new Error("setRawMode EBADF");
-      });
-    }).not.toThrow();
+      }),
+    ).toBeUndefined();
   });
 
   it("rethrows non-ignorable stop errors", () => {
@@ -393,10 +394,12 @@ describe("resolveCodexCliBin", () => {
   });
 
   it("returns null or a valid path (never throws)", () => {
-    // The function should never throw regardless of environment
-    expect(() => resolveCodexCliBin()).not.toThrow();
     const result = resolveCodexCliBin();
-    expect(result === null || typeof result === "string").toBe(true);
+    if (result === null) {
+      expect(result).toBeNull();
+    } else {
+      expect(typeof result).toBe("string");
+    }
   });
 });
 
@@ -457,13 +460,13 @@ describe("resolveLocalAuthSpawnOptions", () => {
         command: "/usr/local/bin/codex",
         platform: "linux",
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
       resolveLocalAuthSpawnOptions({
         command: "C:\\tools\\codex.exe",
         platform: "win32",
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 });
 

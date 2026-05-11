@@ -1,23 +1,21 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  createFormattedPromptSnapshotFiles,
+  deleteStalePromptSnapshotFiles,
+} from "../../scripts/generate-prompt-snapshots.js";
 import {
   defaultCatalogPathCandidates,
   findDefaultCatalogPath,
   renderCodexModelInstructions,
   runCodexModelPromptFixtureSync,
 } from "../../scripts/sync-codex-model-prompt-fixture.js";
-
-const promptSnapshotsEnabled = process.env.OPENCLAW_RUN_PROMPT_SNAPSHOTS !== "false";
-const promptSnapshotIt = promptSnapshotsEnabled ? it : it.skip;
-const CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR =
-  "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path";
-const CODEX_MODEL_PROMPT_FIXTURE_DIR = "test/fixtures/agents/prompt-snapshots/codex-model-catalog";
-
-async function loadPromptSnapshotGenerator() {
-  return await import("../../scripts/generate-prompt-snapshots.js");
-}
+import {
+  CODEX_MODEL_PROMPT_FIXTURE_DIR,
+  CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+} from "../helpers/agents/happy-path-prompt-snapshots.js";
 
 function requireGeneratedSnapshot(
   generated: Array<{ path: string; content: string }>,
@@ -40,11 +38,15 @@ function renderedPromptSection(content: string, heading: string, nextHeading: st
 }
 
 describe("happy path prompt snapshots", () => {
-  promptSnapshotIt("matches the committed Codex prompt snapshot artifacts", async () => {
-    const { createFormattedPromptSnapshotFiles } = await loadPromptSnapshotGenerator();
-    const generated = await createFormattedPromptSnapshotFiles();
-    const expectedPaths = new Set(generated.map((file) => file.path));
-    for (const file of generated) {
+  let generatedSnapshots: Awaited<ReturnType<typeof createFormattedPromptSnapshotFiles>>;
+
+  beforeAll(async () => {
+    generatedSnapshots = await createFormattedPromptSnapshotFiles();
+  });
+
+  it("matches the committed Codex prompt snapshot artifacts", async () => {
+    const expectedPaths = new Set(generatedSnapshots.map((file) => file.path));
+    for (const file of generatedSnapshots) {
       expect(fs.readFileSync(file.path, "utf8"), file.path).toBe(file.content);
     }
     const committed = fs
@@ -54,8 +56,7 @@ describe("happy path prompt snapshots", () => {
     expect(committed.toSorted()).toEqual([...expectedPaths].toSorted());
   });
 
-  promptSnapshotIt("deletes stale generated snapshot artifacts", async () => {
-    const { deleteStalePromptSnapshotFiles } = await loadPromptSnapshotGenerator();
+  it("deletes stale generated snapshot artifacts", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prompt-snapshot-stale-"));
     try {
       const snapshotDir = path.join(root, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR);
@@ -77,10 +78,11 @@ describe("happy path prompt snapshots", () => {
     }
   });
 
-  promptSnapshotIt("renders the Codex model-bound prompt layers", async () => {
-    const { createFormattedPromptSnapshotFiles } = await loadPromptSnapshotGenerator();
-    const generated = await createFormattedPromptSnapshotFiles();
-    const telegram = requireGeneratedSnapshot(generated, "telegram-direct-codex-message-tool.md");
+  it("renders the Codex model-bound prompt layers", async () => {
+    const telegram = requireGeneratedSnapshot(
+      generatedSnapshots,
+      "telegram-direct-codex-message-tool.md",
+    );
 
     expect(telegram).toContain("## Reconstructed Model-Bound Prompt Layers");
     expect(telegram).toContain("### System: Codex Model Instructions (gpt-5.5, pragmatic)");
@@ -99,13 +101,20 @@ describe("happy path prompt snapshots", () => {
     expect(telegram).toContain("### Tools: Dynamic Tool Catalog");
   });
 
-  promptSnapshotIt("keeps heartbeat guidance in heartbeat collaboration mode only", async () => {
-    const { createFormattedPromptSnapshotFiles } = await loadPromptSnapshotGenerator();
-    const generated = await createFormattedPromptSnapshotFiles();
-    const direct = requireGeneratedSnapshot(generated, "telegram-direct-codex-message-tool.md");
-    const group = requireGeneratedSnapshot(generated, "discord-group-codex-message-tool.md");
-    const heartbeat = requireGeneratedSnapshot(generated, "telegram-heartbeat-codex-tool.md");
-    const heartbeatPhrase = "The purpose of heartbeats is to make you feel magical and proactive.";
+  it("keeps heartbeat guidance in heartbeat collaboration mode only", async () => {
+    const direct = requireGeneratedSnapshot(
+      generatedSnapshots,
+      "telegram-direct-codex-message-tool.md",
+    );
+    const group = requireGeneratedSnapshot(
+      generatedSnapshots,
+      "discord-group-codex-message-tool.md",
+    );
+    const heartbeat = requireGeneratedSnapshot(
+      generatedSnapshots,
+      "telegram-heartbeat-codex-tool.md",
+    );
+    const heartbeatPhrase = "Use heartbeats to create useful proactive progress";
 
     expect(direct).toContain('"collaborationMode": {');
     expect(direct).toContain('"developer_instructions": null');
@@ -183,8 +192,12 @@ describe("happy path prompt snapshots", () => {
       fs.mkdirSync(path.dirname(cachePath), { recursive: true });
       fs.writeFileSync(cachePath, JSON.stringify({ models: [] }));
 
-      await expect(findDefaultCatalogPath({ env: {}, homeDir: root })).resolves.toMatchObject({
+      await expect(findDefaultCatalogPath({ env: {}, homeDir: root })).resolves.toEqual({
         catalogPath: cachePath,
+        candidates: [
+          cachePath,
+          path.join(root, "code", "codex", "codex-rs", "models-manager", "models.json"),
+        ],
       });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

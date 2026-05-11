@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
@@ -240,6 +240,7 @@ export function installContextEngineLoopHook(params: {
   tokenBudget?: number;
   modelId: string;
   getPrePromptMessageCount?: () => number;
+  onAfterTurnCheckpoint?: (messageCount: number) => void;
   getRuntimeContext?: (params: {
     messages: AgentMessage[];
     prePromptMessageCount: number;
@@ -250,24 +251,26 @@ export function installContextEngineLoopHook(params: {
   const originalTransformContext = mutableAgent.transformContext;
   let lastSeenLength: number | null = null;
   let lastAssembledView: AgentMessage[] | null = null;
-  let lastAssembledFromSourceLength: number | null = null;
-
-  const clearAssembledCache = () => {
-    lastAssembledView = null;
-    lastAssembledFromSourceLength = null;
-  };
+  let lastSourceMessages: AgentMessage[] | null = null;
 
   mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
     const transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    if (
-      lastAssembledFromSourceLength !== null &&
-      sourceMessages.length < lastAssembledFromSourceLength
-    ) {
-      clearAssembledCache();
+    const checkedPrefixLength =
+      lastSeenLength == null ? 0 : Math.min(lastSeenLength, sourceMessages.length);
+    const sourceHistoryChanged =
+      lastSeenLength != null &&
+      lastSourceMessages != null &&
+      (sourceMessages.length < lastSeenLength ||
+        (sourceMessages.length === lastSeenLength &&
+          sourceMessages
+            .slice(0, checkedPrefixLength)
+            .some((message, index) => message !== lastSourceMessages?.[index])));
+    if (sourceHistoryChanged) {
       lastSeenLength = null;
+      lastAssembledView = null;
     }
 
     // Seed the loop fence from the attempt's pre-prompt message count when available.
@@ -280,10 +283,11 @@ export function installContextEngineLoopHook(params: {
         lastSeenLength ?? params.getPrePromptMessageCount?.() ?? sourceMessages.length,
       ),
     );
-    lastSeenLength = prePromptMessageCount;
 
     const hasNewMessages = sourceMessages.length > prePromptMessageCount;
     if (!hasNewMessages) {
+      lastSeenLength = prePromptMessageCount;
+      lastSourceMessages = sourceMessages;
       return lastAssembledView ?? sourceMessages;
     }
     try {
@@ -321,6 +325,8 @@ export function installContextEngineLoopHook(params: {
         }
       }
       lastSeenLength = sourceMessages.length;
+      params.onAfterTurnCheckpoint?.(lastSeenLength);
+      lastSourceMessages = sourceMessages;
       const assembled = await contextEngine.assemble({
         sessionId,
         sessionKey,
@@ -330,14 +336,15 @@ export function installContextEngineLoopHook(params: {
       });
       if (assembled && Array.isArray(assembled.messages) && assembled.messages !== sourceMessages) {
         lastAssembledView = assembled.messages;
-        lastAssembledFromSourceLength = sourceMessages.length;
         return assembled.messages;
       }
-      clearAssembledCache();
+      lastAssembledView = null;
     } catch {
       // Best-effort: any engine failure falls through to the raw source
       // messages so the tool loop still makes forward progress.
-      clearAssembledCache();
+      lastSeenLength = prePromptMessageCount;
+      lastAssembledView = null;
+      lastSourceMessages = sourceMessages;
     }
 
     return sourceMessages;

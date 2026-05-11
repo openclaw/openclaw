@@ -4,7 +4,8 @@ import { isAbsolute, resolve } from "node:path";
 import { basename } from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
@@ -120,7 +121,6 @@ function cleanBlocksForInsert(blocks: FeishuDocxBlock[]): {
 // ============ Core Functions ============
 
 /** Max blocks per documentBlockChildren.create request */
-const MAX_BLOCKS_PER_INSERT = 50;
 const MAX_CONVERT_RETRY_DEPTH = 8;
 
 async function convertMarkdown(client: Lark.Client, markdown: string) {
@@ -415,26 +415,6 @@ async function chunkedConvertMarkdown(client: Lark.Client, markdown: string) {
   return { blocks: allBlocks, firstLevelBlockIds: allRootIds };
 }
 
-/** Insert blocks in batches of MAX_BLOCKS_PER_INSERT to avoid API 400 errors */
-async function _chunkedInsertBlocks(
-  client: Lark.Client,
-  docToken: string,
-  blocks: FeishuDocxBlock[],
-  parentBlockId?: string,
-): Promise<{ children: FeishuDocxBlockChild[]; skipped: string[] }> {
-  const allChildren: FeishuDocxBlockChild[] = [];
-  const allSkipped: string[] = [];
-
-  for (let i = 0; i < blocks.length; i += MAX_BLOCKS_PER_INSERT) {
-    const batch = blocks.slice(i, i + MAX_BLOCKS_PER_INSERT);
-    const { children, skipped } = await insertBlocks(client, docToken, batch, parentBlockId);
-    allChildren.push(...children);
-    allSkipped.push(...skipped);
-  }
-
-  return { children: allChildren, skipped: allSkipped };
-}
-
 type Logger = { info?: (msg: string) => void };
 
 /**
@@ -577,7 +557,7 @@ async function resolveUploadInput(
       );
     }
     const mimeMatch = header.match(/data:([^;]+)/);
-    const ext = mimeMatch?.[1]?.split("/")[1] ?? "png";
+    const ext = extensionForMime(mimeMatch?.[1])?.slice(1) ?? "png";
     // Estimate decoded byte count from base64 length BEFORE allocating the
     // full buffer to avoid spiking memory on oversized payloads.
     const estimatedBytes = Math.ceil((trimmedData.length * 3) / 4);

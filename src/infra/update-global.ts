@@ -6,6 +6,11 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { pathExists } from "../utils.js";
 import {
+  applyPosixNpmScriptShellEnv,
+  hasNpmScriptShellSetting,
+  resolvePosixNpmScriptShell,
+} from "./npm-install-env.js";
+import {
   collectPackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   readPackageDistInventoryIfPresent,
@@ -41,7 +46,6 @@ const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
   ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
 ] as const;
-const NPM_CONFIG_SCRIPT_SHELL_KEYS = ["NPM_CONFIG_SCRIPT_SHELL", "npm_config_script_shell"];
 const FIRST_PACKAGED_DIST_INVENTORY_VERSION = { major: 2026, minor: 4, patch: 15 };
 const OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS = new Set([
   "dist/extensions/qa-channel",
@@ -57,6 +61,14 @@ export type NpmGlobalPrefixLayout = {
 
 function normalizePackageTarget(value: string): string {
   return value.trim();
+}
+
+function normalizePackageVersionForComparison(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.replace(/^[vV](?=\d)/, "");
 }
 
 export function isMainPackageTarget(value: string): boolean {
@@ -94,7 +106,7 @@ export function resolveExpectedInstalledVersionFromSpec(
   ) {
     return null;
   }
-  return rawVersion;
+  return normalizePackageVersionForComparison(rawVersion);
 }
 
 export async function collectInstalledGlobalPackageErrors(params: {
@@ -104,9 +116,11 @@ export async function collectInstalledGlobalPackageErrors(params: {
   const errors: string[] = [];
   errors.push(...(await collectSourceCheckoutInstallErrors(params.packageRoot)));
   const installedVersion = await readPackageVersion(params.packageRoot);
-  if (params.expectedVersion && installedVersion !== params.expectedVersion) {
+  const expectedComparable = normalizePackageVersionForComparison(params.expectedVersion);
+  const installedComparable = normalizePackageVersionForComparison(installedVersion);
+  if (expectedComparable && installedComparable !== expectedComparable) {
     errors.push(
-      `expected installed version ${params.expectedVersion}, found ${installedVersion ?? "<missing>"}`,
+      `expected installed version ${expectedComparable}, found ${installedComparable ?? "<missing>"}`,
     );
   }
   errors.push(
@@ -313,31 +327,6 @@ function applyCorepackDownloadPromptEnv(env: Record<string, string>) {
   const current = env.COREPACK_ENABLE_DOWNLOAD_PROMPT?.trim();
   if (!current) {
     env.COREPACK_ENABLE_DOWNLOAD_PROMPT = COREPACK_ENABLE_DOWNLOAD_PROMPT_DEFAULT;
-  }
-}
-
-function hasNpmScriptShellSetting(env: NodeJS.ProcessEnv): boolean {
-  return NPM_CONFIG_SCRIPT_SHELL_KEYS.some((key) => Boolean(env[key]?.trim()));
-}
-
-function resolvePosixNpmScriptShell(env: NodeJS.ProcessEnv): string | null {
-  if (process.platform === "win32") {
-    return null;
-  }
-  if (fsSync.existsSync("/bin/sh")) {
-    return "/bin/sh";
-  }
-  const shell = env.SHELL?.trim();
-  return shell && path.isAbsolute(shell) && fsSync.existsSync(shell) ? shell : null;
-}
-
-function applyPosixNpmScriptShellEnv(env: Record<string, string>) {
-  if (hasNpmScriptShellSetting(env)) {
-    return;
-  }
-  const scriptShell = resolvePosixNpmScriptShell(env);
-  if (scriptShell) {
-    env.NPM_CONFIG_SCRIPT_SHELL = scriptShell;
   }
 }
 

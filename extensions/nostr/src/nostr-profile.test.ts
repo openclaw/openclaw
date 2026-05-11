@@ -133,7 +133,7 @@ describe("createProfileEvent", () => {
 
     expect(event.kind).toBe(0);
     expect(event.pubkey).toBe(TEST_PUBKEY);
-    expect(event.tags).toEqual([]);
+    expect(event.tags).toStrictEqual([]);
     expect(event.id).toMatch(/^[0-9a-f]{64}$/);
     expect(event.sig).toMatch(/^[0-9a-f]{128}$/);
   });
@@ -203,9 +203,15 @@ describe("validateProfile", () => {
 
     const result = validateProfile(profile);
 
-    expect(result.valid).toBe(true);
-    expect(result.profile).toBeDefined();
-    expect(result.errors).toBeUndefined();
+    expect(result).toMatchObject({
+      valid: true,
+      profile: {
+        name: "validuser",
+        about: "A valid user",
+        picture: "https://example.com/pic.png",
+      },
+    });
+    expect(result).not.toHaveProperty("errors");
   });
 
   it("rejects profile with invalid URL", () => {
@@ -217,8 +223,7 @@ describe("validateProfile", () => {
     const result = validateProfile(profile);
 
     expect(result.valid).toBe(false);
-    expect(result.errors).toBeDefined();
-    expect(result.errors!.some((e) => e.includes("https://"))).toBe(true);
+    expect(result.errors).toEqual(["picture: URL must use https:// protocol"]);
   });
 
   it("rejects profile with javascript: URL", () => {
@@ -251,7 +256,7 @@ describe("validateProfile", () => {
     const result = validateProfile(profile);
 
     expect(result.valid).toBe(false);
-    expect(result.errors!.some((e) => e.includes("256"))).toBe(true);
+    expect(result.errors).toEqual(["name: Too big: expected string to have <=256 characters"]);
   });
 
   it("rejects about exceeding 2000 characters", () => {
@@ -262,7 +267,7 @@ describe("validateProfile", () => {
     const result = validateProfile(profile);
 
     expect(result.valid).toBe(false);
-    expect(result.errors!.some((e) => e.includes("2000"))).toBe(true);
+    expect(result.errors).toEqual(["about: Too big: expected string to have <=2000 characters"]);
   });
 
   it("accepts empty profile", () => {

@@ -6,7 +6,7 @@ import {
   readCodexComputerUseStatus,
   type CodexComputerUseSetupParams,
 } from "./app-server/computer-use.js";
-import type { CodexComputerUseConfig } from "./app-server/config.js";
+import { isCodexFastServiceTier, type CodexComputerUseConfig } from "./app-server/config.js";
 import { listAllCodexAppServerModels } from "./app-server/models.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
@@ -447,7 +447,7 @@ async function describeConversationBinding(
     `- Thread: ${formatCodexDisplayText(threadBinding?.threadId ?? "unknown")}`,
     `- Workspace: ${formatCodexDisplayText(data.workspaceDir)}`,
     `- Model: ${formatCodexDisplayText(threadBinding?.model ?? "default")}`,
-    `- Fast: ${threadBinding?.serviceTier === "fast" ? "on" : "off"}`,
+    `- Fast: ${isCodexFastServiceTier(threadBinding?.serviceTier) ? "on" : "off"}`,
     `- Permissions: ${threadBinding ? formatPermissionsMode(threadBinding) : "default"}`,
     `- Active run: ${formatCodexDisplayText(active ? active.turnId : "none")}`,
     `- Session: ${formatCodexDisplayText(data.sessionFile)}`,
@@ -647,19 +647,12 @@ async function handleCodexDiagnosticsFeedback(
       text: await previewCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note),
     };
   }
-  return await requestCodexDiagnosticsFeedbackApproval(
-    deps,
-    ctx,
-    pluginConfig,
-    parsed.note,
-    commandPrefix,
-  );
+  return await requestCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note, commandPrefix);
 }
 
 async function requestCodexDiagnosticsFeedbackApproval(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
   note: string,
   commandPrefix: string,
 ): Promise<PluginCommandResult> {

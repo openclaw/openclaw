@@ -112,6 +112,8 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
+const POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS = 10;
+const POST_REFRESH_ALREADY_HEALTHY_DELAY_MS = 500;
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
 const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
@@ -647,7 +649,7 @@ async function resolvePackageRuntimePreflightError(params: {
   return [
     `Node ${process.versions.node ?? "unknown"} is too old for openclaw@${targetLabel}.`,
     `The requested package requires ${status.nodeEngine}.`,
-    "Upgrade Node to 22.14+ or Node 24, then rerun `openclaw update`.",
+    "Upgrade Node to 22.16+ or Node 24, then rerun `openclaw update`.",
     "Bare `npm i -g openclaw` can silently install an older compatible release.",
     "After upgrading Node, use `npm i -g openclaw@latest`.",
   ].join("\n");
@@ -1516,6 +1518,7 @@ async function maybeRestartService(params: {
       const isPackageUpdate = isPackageManagerUpdateMode(params.result.mode);
       let restarted = false;
       let restartInitiated = false;
+      let refreshedGatewayAlreadyHealthy = false;
       if (params.refreshServiceEnv) {
         try {
           await refreshGatewayServiceEnv({
@@ -1538,25 +1541,51 @@ async function maybeRestartService(params: {
             return false;
           }
         }
+        if (isPackageUpdate && expectedGatewayVersion) {
+          const health = await waitForGatewayHealthyRestart({
+            service: resolveGatewayService(),
+            port: params.gatewayPort,
+            expectedVersion: expectedGatewayVersion,
+            env: params.serviceEnv,
+            attempts: POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS,
+            delayMs: POST_REFRESH_ALREADY_HEALTHY_DELAY_MS,
+          });
+          refreshedGatewayAlreadyHealthy = health.healthy;
+          if (refreshedGatewayAlreadyHealthy && !params.opts.json) {
+            defaultRuntime.log(
+              theme.muted(
+                "Gateway already reports the updated version after service refresh; skipped redundant restart.",
+              ),
+            );
+          }
+        }
       }
-      if (params.restartScriptPath) {
+      // Service refresh can bootstrap a RunAtLoad LaunchAgent directly. When
+      // that already produced the expected gateway version, a second kickstart
+      // would only race the healthy supervisor-owned process.
+      if (!refreshedGatewayAlreadyHealthy && params.restartScriptPath) {
         await runRestartScript(params.restartScriptPath);
         restartInitiated = true;
-      } else if (params.refreshServiceEnv && isPackageUpdate) {
+      } else if (!refreshedGatewayAlreadyHealthy && params.refreshServiceEnv && isPackageUpdate) {
         restarted = await runUpdatedInstallGatewayRestart({
           result: params.result,
           jsonMode: Boolean(params.opts.json),
           invocationCwd: params.invocationCwd,
           env: params.serviceEnv,
         });
-      } else if (shouldUseLegacyProcessRestartAfterUpdate({ updateMode: params.result.mode })) {
+      } else if (
+        !refreshedGatewayAlreadyHealthy &&
+        shouldUseLegacyProcessRestartAfterUpdate({ updateMode: params.result.mode })
+      ) {
         restarted = await runDaemonRestart();
-      } else if (!params.opts.json) {
+      } else if (!refreshedGatewayAlreadyHealthy && !params.opts.json) {
         defaultRuntime.log(theme.muted("No installed gateway service found; skipped restart."));
       }
 
       const shouldVerifyRestart =
-        restartInitiated || (restarted && expectedGatewayVersion !== undefined);
+        refreshedGatewayAlreadyHealthy ||
+        restartInitiated ||
+        (restarted && expectedGatewayVersion !== undefined);
       if (shouldVerifyRestart) {
         const restartHealthy = await verifyRestartedGateway(expectedGatewayVersion);
         if (!restartHealthy) {
@@ -1801,6 +1830,22 @@ function stopPostCoreUpdateChild(child: ChildProcess): void {
   child.kill();
 }
 
+/**
+ * Returns the stdio mode for the post-core-update child process.
+ *
+ * Windows shells (PowerShell/CMD) wait for all processes that hold inherited console handles to
+ * exit before returning the prompt, even after the immediate child has exited.  Using "pipe" on
+ * Windows prevents the child (and any grandchildren it spawns) from ever receiving a reference to
+ * the parent's console handles, eliminating the terminal hang seen in #78445.
+ *
+ * @internal exported for testing
+ */
+export function resolvePostCoreUpdateChildStdio(
+  platform: NodeJS.Platform = process.platform,
+): "inherit" | "pipe" {
+  return platform === "win32" ? "pipe" : "inherit";
+}
+
 async function continuePostCoreUpdateInFreshProcess(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
@@ -1832,8 +1877,9 @@ async function continuePostCoreUpdateInFreshProcess(params: {
 
   try {
     await writePostCorePluginInstallRecordsFile(installRecordsPath, params.pluginInstallRecords);
+    const childStdio = resolvePostCoreUpdateChildStdio();
     const child = spawn(resolveNodeRunner(), argv, {
-      stdio: "inherit",
+      stdio: childStdio,
       env: {
         ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
         [POST_CORE_UPDATE_ENV]: "1",
@@ -1845,6 +1891,11 @@ async function continuePostCoreUpdateInFreshProcess(params: {
         [POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV]: installRecordsPath,
       },
     });
+    // When piped, relay child output to the parent process so terminal output is preserved.
+    if (childStdio === "pipe") {
+      child.stdout?.pipe(process.stdout);
+      child.stderr?.pipe(process.stderr);
+    }
 
     const childResult = await new Promise<
       | { kind: "exit"; exitCode: number }

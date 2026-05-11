@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getMatrixExecApprovalApprovers,
@@ -152,7 +152,7 @@ describe("matrix exec approvals", () => {
   it("ignores wildcard allowlist entries when inferring exec approvers", () => {
     const cfg = buildConfig({ enabled: true }, { dm: { allowFrom: ["*"] } });
 
-    expect(getMatrixExecApprovalApprovers({ cfg })).toEqual([]);
+    expect(getMatrixExecApprovalApprovers({ cfg })).toStrictEqual([]);
     expect(isMatrixExecApprovalClientEnabled({ cfg })).toBe(false);
   });
 

@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context, Model } from "@earendil-works/pi-ai";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -334,9 +334,11 @@ describe("minimax provider hooks", () => {
     const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
     const oauthMethod = portalProvider.auth.find((method) => method.id === "oauth");
 
-    expect(oauthMethod).toBeDefined();
+    if (!oauthMethod) {
+      throw new Error("expected minimax portal oauth auth method");
+    }
 
-    const result = await oauthMethod?.run({
+    const result = await oauthMethod.run({
       prompter: {
         progress() {
           return { stop() {} };

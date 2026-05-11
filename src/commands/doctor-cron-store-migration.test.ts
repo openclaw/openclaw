@@ -47,34 +47,29 @@ describe("normalizeStoredCronJobs", () => {
     const result = normalizeStoredCronJobs(jobs);
 
     expect(result.mutated).toBe(true);
-    expect(result.issues).toMatchObject({
-      jobId: 1,
-      legacyScheduleCron: 1,
-      legacyTopLevelPayloadFields: 1,
-      legacyTopLevelDeliveryFields: 1,
-    });
+    expect(result.issues.jobId).toBe(1);
+    expect(result.issues.legacyScheduleCron).toBe(1);
+    expect(result.issues.legacyTopLevelPayloadFields).toBe(1);
+    expect(result.issues.legacyTopLevelDeliveryFields).toBe(1);
 
     const [job] = jobs;
     expect(job?.jobId).toBeUndefined();
     expect(job?.id).toBe("legacy-job");
-    expect(job?.schedule).toMatchObject({
-      kind: "cron",
-      expr: "*/5 * * * *",
-      tz: "UTC",
-    });
+    const schedule = job?.schedule as Record<string, unknown> | undefined;
+    expect(schedule?.kind).toBe("cron");
+    expect(schedule?.expr).toBe("*/5 * * * *");
+    expect(schedule?.tz).toBe("UTC");
     expect(job?.message).toBeUndefined();
     expect(job?.provider).toBeUndefined();
-    expect(job?.delivery).toMatchObject({
-      mode: "announce",
-      channel: "telegram",
-      to: "12345",
-      threadId: "77",
-    });
-    expect(job?.payload).toMatchObject({
-      kind: "agentTurn",
-      message: "say hi",
-      model: "openai/gpt-5.5",
-    });
+    const delivery = job?.delivery as Record<string, unknown> | undefined;
+    expect(delivery?.mode).toBe("announce");
+    expect(delivery?.channel).toBe("telegram");
+    expect(delivery?.to).toBe("12345");
+    expect(delivery?.threadId).toBe("77");
+    const payload = job?.payload as Record<string, unknown> | undefined;
+    expect(payload?.kind).toBe("agentTurn");
+    expect(payload?.message).toBe("say hi");
+    expect(payload?.model).toBe("openai/gpt-5.5");
   });
 
   it("normalizes payload provider alias into channel", () => {
@@ -94,59 +89,36 @@ describe("normalizeStoredCronJobs", () => {
 
     expect(result.mutated).toBe(true);
     expect(result.issues.legacyPayloadProvider).toBe(1);
-    expect(jobs[0]?.payload).toMatchObject({
-      kind: "agentTurn",
-      message: "ping",
-    });
     const payload = jobs[0]?.payload as Record<string, unknown> | undefined;
+    expect(payload?.kind).toBe("agentTurn");
+    expect(payload?.message).toBe("ping");
     expect(payload?.provider).toBeUndefined();
-    expect(jobs[0]?.delivery).toMatchObject({
-      mode: "announce",
-      channel: "slack",
-    });
+    const delivery = jobs[0]?.delivery as Record<string, unknown> | undefined;
+    expect(delivery?.mode).toBe("announce");
+    expect(delivery?.channel).toBe("slack");
   });
 
-  it("removes invalid persisted cron model inheritance sentinels", () => {
-    const sentinelValues: unknown[] = ["default", " null ", "", null];
-    const jobs = sentinelValues.map((model, index) =>
-      makeLegacyJob({
-        id: `bad-model-${index}`,
-        sessionTarget: "isolated",
-        payload: {
-          kind: "agentTurn",
-          message: "ping",
-          model,
-        },
-        delivery: { mode: "announce" },
-      }),
-    );
-
-    const result = normalizeStoredCronJobs(jobs);
-
-    expect(result.mutated).toBe(true);
-    expect(result.issues.invalidCronPayloadModel).toBe(4);
-    for (const job of jobs) {
-      const payload = job.payload as Record<string, unknown>;
-      expect(payload.model).toBeUndefined();
-    }
-  });
-
-  it("preserves real persisted cron model refs", () => {
+  it("rewrites legacy OpenAI Codex model refs in cron payloads", () => {
     const { job, result } = normalizeOneJob(
       makeLegacyJob({
-        id: "real-model",
-        sessionTarget: "isolated",
+        id: "legacy-codex-cron-model",
+        schedule: { kind: "every", everyMs: 60_000 },
         payload: {
           kind: "agentTurn",
           message: "ping",
-          model: "minimax-portal/MiniMax-M2.7",
+          model: " openai-codex/gpt-5.5 ",
+          fallbacks: ["anthropic/claude-opus-4.6", "openai-codex/gpt-5.4-mini"],
         },
-        delivery: { mode: "announce" },
       }),
     );
 
-    expect(result.issues.invalidCronPayloadModel).toBeUndefined();
-    expect((job.payload as Record<string, unknown>).model).toBe("minimax-portal/MiniMax-M2.7");
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyPayloadCodexModel).toBe(1);
+    const payload = job.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.message).toBe("ping");
+    expect(payload.model).toBe("openai/gpt-5.5");
+    expect(payload.fallbacks).toEqual(["anthropic/claude-opus-4.6", "openai/gpt-5.4-mini"]);
   });
 
   it("does not report legacyPayloadKind for already-normalized payload kinds", () => {
@@ -200,8 +172,12 @@ describe("normalizeStoredCronJobs", () => {
 
     expect(result.mutated).toBe(true);
     expect(result.issues.legacyPayloadKind).toBe(2);
-    expect(jobs[0]?.payload).toMatchObject({ kind: "agentTurn", message: "ping" });
-    expect(jobs[1]?.payload).toMatchObject({ kind: "systemEvent", text: "pong" });
+    const firstPayload = jobs[0]?.payload as Record<string, unknown> | undefined;
+    expect(firstPayload?.kind).toBe("agentTurn");
+    expect(firstPayload?.message).toBe("ping");
+    const secondPayload = jobs[1]?.payload as Record<string, unknown> | undefined;
+    expect(secondPayload?.kind).toBe("systemEvent");
+    expect(secondPayload?.text).toBe("pong");
   });
 
   it("normalizes isolated legacy jobs without mutating runtime code paths", () => {
@@ -341,12 +317,9 @@ describe("normalizeStoredCronJobs", () => {
     });
 
     expect(result.mutated).toBe(true);
-    expect(job.schedule).toEqual(
-      expect.objectContaining({
-        kind: "cron",
-        expr: "0 */2 * * *",
-      }),
-    );
+    const schedule = job.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("cron");
+    expect(schedule.expr).toBe("0 */2 * * *");
     expect(job.sessionTarget).toBe("main");
     expect(job.wakeMode).toBe("now");
     expect(job.payload).toEqual({

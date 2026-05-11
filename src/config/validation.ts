@@ -1,7 +1,6 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
-import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
@@ -1042,16 +1041,6 @@ function validateConfigObjectWithPluginsBase(
     ].toSorted((left, right) => left.localeCompare(right));
   };
 
-  const findInstallableChannelCatalogEntry = (channelId: string) => {
-    const normalizedChannelId = normalizeLowercaseStringOrEmpty(channelId);
-    if (!normalizedChannelId) {
-      return undefined;
-    }
-    return listChannelPluginCatalogEntries({ env: opts.env, excludeWorkspace: true }).find(
-      (entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedChannelId,
-    );
-  };
-
   const collectKnownWebSearchProviderIds = (): string[] => {
     return [
       ...new Set([
@@ -1113,7 +1102,7 @@ function validateConfigObjectWithPluginsBase(
       (entry) => entry.provider.id === trimmed,
     );
     if (installCatalogEntry) {
-      warnings.push({
+      issues.push({
         path,
         message: `web_search provider is not available: ${trimmed} (install or enable plugin "${installCatalogEntry.pluginId}", then run openclaw doctor --fix)`,
         allowedValues: collectKnownWebSearchProviderIds(),
@@ -1260,14 +1249,7 @@ function validateConfigObjectWithPluginsBase(
           path: `channels.${trimmed}`,
           message: `unknown channel id: ${trimmed}`,
         };
-        const installCatalogEntry = findInstallableChannelCatalogEntry(trimmed);
-        if (installCatalogEntry) {
-          const pluginId = installCatalogEntry.pluginId ?? installCatalogEntry.id;
-          warnings.push({
-            path: issue.path,
-            message: `channel plugin is not available: ${trimmed} (install or enable plugin "${pluginId}", then run openclaw doctor --fix)`,
-          });
-        } else if (hasStalePluginEvidenceForUnknownChannel(trimmed)) {
+        if (hasStalePluginEvidenceForUnknownChannel(trimmed)) {
           warnings.push({
             ...issue,
             message: `${issue.message} (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
@@ -1460,7 +1442,7 @@ function validateConfigObjectWithPluginsBase(
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
-    opts?: { warnOnly?: boolean },
+    opts?: { warnOnly?: boolean; officialInstallHint?: boolean },
   ) => {
     if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
       warnings.push({
@@ -1480,7 +1462,7 @@ function validateConfigObjectWithPluginsBase(
       }
       return;
     }
-    if (opts?.warnOnly) {
+    if (opts?.warnOnly && opts.officialInstallHint !== false) {
       const externalInstallWarning = formatMissingOfficialExternalPluginWarning(pluginId);
       if (externalInstallWarning) {
         warnings.push({
@@ -1544,7 +1526,10 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      pushMissingPluginIssue("plugins.deny", pluginId);
+      pushMissingPluginIssue("plugins.deny", pluginId, {
+        warnOnly: true,
+        officialInstallHint: false,
+      });
     }
   }
 

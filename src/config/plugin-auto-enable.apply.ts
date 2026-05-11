@@ -1,9 +1,8 @@
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
 import {
   materializePluginAutoEnableCandidatesInternal,
-  resolveConfiguredPluginAutoEnableCandidates,
   resolvePluginAutoEnableManifestRegistry,
-  resolvePluginAutoEnableReadiness,
 } from "./plugin-auto-enable.shared.js";
 import type {
   PluginAutoEnableCandidate,
@@ -46,27 +45,11 @@ export function applyPluginAutoEnable(params: {
   env?: NodeJS.ProcessEnv;
   manifestRegistry?: PluginManifestRegistry;
 }): PluginAutoEnableResult {
-  const env = params.env ?? process.env;
-  const config = params.config ?? {};
-  const readiness = resolvePluginAutoEnableReadiness(config, env);
-  if (!readiness.mayNeedAutoEnable) {
-    return { config, changes: [], autoEnabledReasons: {} };
-  }
-  const manifestRegistry = resolvePluginAutoEnableManifestRegistry({
-    config,
-    env,
-    manifestRegistry: params.manifestRegistry,
-  });
-  const candidates = resolveConfiguredPluginAutoEnableCandidates({
-    config,
-    env,
-    registry: manifestRegistry,
-    configuredChannelIds: readiness.configuredChannelIds,
-  });
+  const candidates = detectPluginAutoEnableCandidates(params);
   return materializePluginAutoEnableCandidates({
-    config,
+    config: params.config,
     candidates,
-    env,
-    manifestRegistry,
+    env: params.env,
+    manifestRegistry: params.manifestRegistry,
   });
 }

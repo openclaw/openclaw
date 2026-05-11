@@ -95,7 +95,7 @@ Connect (first message):
   "method": "connect",
   "params": {
     "minProtocol": 3,
-    "maxProtocol": 3,
+    "maxProtocol": 4,
     "client": {
       "id": "openclaw-macos",
       "displayName": "macos",
@@ -117,7 +117,7 @@ Hello-ok response:
   "ok": true,
   "payload": {
     "type": "hello-ok",
-    "protocol": 3,
+    "protocol": 4,
     "server": { "version": "dev", "connId": "ws-1" },
     "features": { "methods": ["health"], "events": ["tick"] },
     "snapshot": {
@@ -163,8 +163,8 @@ ws.on("open", () => {
       id: "c1",
       method: "connect",
       params: {
-        minProtocol: 3,
-        maxProtocol: 3,
+        minProtocol: 4,
+        maxProtocol: 4,
         client: {
           id: "cli",
           displayName: "example",
@@ -266,14 +266,15 @@ The Swift generator emits:
 
 - `GatewayFrame` enum with `req`, `res`, `event`, and `unknown` cases
 - Strongly typed payload structs/enums
-- `ErrorCode` values and `GATEWAY_PROTOCOL_VERSION`
+- `ErrorCode` values, `GATEWAY_PROTOCOL_VERSION`, and `GATEWAY_MIN_PROTOCOL_VERSION`
 
 Unknown frame types are preserved as raw payloads for forward compatibility.
 
 ## Versioning + compatibility
 
-- `PROTOCOL_VERSION` lives in `src/gateway/protocol/schema.ts`.
-- Clients send `minProtocol` + `maxProtocol`; the server rejects mismatches.
+- `PROTOCOL_VERSION` lives in `src/gateway/protocol/version.ts`.
+- Clients send `minProtocol` + `maxProtocol`; the server rejects ranges that
+  do not include its current protocol.
 - The Swift models keep unknown frame types to avoid breaking older clients.
 
 ## Schema patterns and conventions

@@ -19,8 +19,8 @@ Each ACP session spawn is tracked as a [background task](/automation/tasks).
 
 <Note>
 **ACP is the external-harness path, not the default Codex path.** The
-native Codex app-server plugin owns `/codex ...` controls and the
-`agentRuntime.id: "codex"` embedded runtime; ACP owns
+native Codex app-server plugin owns `/codex ...` controls and the default
+`openai/gpt-*` embedded runtime for agent turns; ACP owns
 `/acp ...` controls and `sessions_spawn({ runtime: "acp" })` sessions.
 
 If you want Codex or Claude Code to connect as an external MCP client
@@ -180,12 +180,12 @@ Quick `/acp` flow from chat:
     arguments or rewrite Codex thread records. Use explicit ACP only
     when you want the ACP runtime/session model. The embedded Codex
     support boundary is documented in the
-    [Codex harness v1 support contract](/plugins/codex-harness#v1-support-contract).
+    [Codex harness v1 support contract](/plugins/codex-harness-runtime#v1-support-contract).
 
   </Accordion>
   <Accordion title="Model / provider / runtime selection cheat sheet">
-    - `openai-codex/*` - PI Codex OAuth/subscription route.
-    - `openai/*` plus `agentRuntime.id: "codex"` - native Codex app-server embedded runtime.
+    - `openai-codex/*` - legacy Codex OAuth/subscription model route repaired by doctor.
+    - `openai/*` - native Codex app-server embedded runtime for OpenAI agent turns.
     - `/codex ...` - native Codex conversation control.
     - `/acp ...` or `runtime: "acp"` - explicit ACP/acpx control.
 
@@ -335,8 +335,8 @@ top-level `bindings[]` entries.
   Identifies the target conversation. Per-channel shapes:
 
 - **Discord channel/thread:** `match.channel="discord"` + `match.peer.id="<channelOrThreadId>"`
+- **Slack channel/DM:** `match.channel="slack"` + `match.peer.id="<channelId|channel:<channelId>|#<channelId>|userId|user:<userId>|slack:<userId>|<@userId>>"`. Prefer stable Slack ids; channel bindings also match replies inside that channel's threads.
 - **Telegram forum topic:** `match.channel="telegram"` + `match.peer.id="<chatId>:topic:<topicId>"`
-- **BlueBubbles DM/group:** `match.channel="bluebubbles"` + `match.peer.id="<handle|chat_id:*|chat_guid:*|chat_identifier:*>"`. Prefer `chat_id:*` or `chat_identifier:*` for stable group bindings.
 - **iMessage DM/group:** `match.channel="imessage"` + `match.peer.id="<handle|chat_id:*|chat_guid:*|chat_identifier:*>"`. Prefer `chat_id:*` for stable group bindings.
 
 </ParamField>
@@ -791,15 +791,15 @@ roots.
 `/acp` has convenience commands and a generic setter. Equivalent
 operations:
 
-| Command                      | Maps to                              | Notes                                                                                                                                                                          |
-| ---------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/acp model <id>`            | runtime config key `model`           | For Codex ACP, OpenClaw normalizes `openai-codex/<model>` to the adapter model id and maps slash reasoning suffixes such as `openai-codex/gpt-5.4/high` to `reasoning_effort`. |
-| `/acp set thinking <level>`  | runtime config key `thinking`        | For Codex ACP, OpenClaw sends the corresponding `reasoning_effort` where the adapter supports one.                                                                             |
-| `/acp permissions <profile>` | runtime config key `approval_policy` | -                                                                                                                                                                              |
-| `/acp timeout <seconds>`     | runtime config key `timeout`         | -                                                                                                                                                                              |
-| `/acp cwd <path>`            | runtime cwd override                 | Direct update.                                                                                                                                                                 |
-| `/acp set <key> <value>`     | generic                              | `key=cwd` uses the cwd override path.                                                                                                                                          |
-| `/acp reset-options`         | clears all runtime overrides         | -                                                                                                                                                                              |
+| Command                      | Maps to                              | Notes                                                                                                                                                                                                      |
+| ---------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/acp model <id>`            | runtime config key `model`           | For Codex ACP, OpenClaw normalizes `openai-codex/<model>` to the adapter model id and maps slash reasoning suffixes such as `openai-codex/gpt-5.4/high` to `reasoning_effort`.                             |
+| `/acp set thinking <level>`  | canonical option `thinking`          | OpenClaw sends the backend-advertised equivalent when present, preferring `thinking`, then `effort`, `reasoning_effort`, or `thought_level`. For Codex ACP, the adapter maps values to `reasoning_effort`. |
+| `/acp permissions <profile>` | canonical option `permissionProfile` | OpenClaw sends the backend-advertised equivalent when present, such as `approval_policy`, `permission_profile`, `permissions`, or `permission_mode`.                                                       |
+| `/acp timeout <seconds>`     | canonical option `timeoutSeconds`    | OpenClaw sends the backend-advertised equivalent when present, such as `timeout` or `timeout_seconds`.                                                                                                     |
+| `/acp cwd <path>`            | runtime cwd override                 | Direct update.                                                                                                                                                                                             |
+| `/acp set <key> <value>`     | generic                              | `key=cwd` uses the cwd override path.                                                                                                                                                                      |
+| `/acp reset-options`         | clears all runtime overrides         | -                                                                                                                                                                                                          |
 
 ## acpx harness, plugin setup, and permissions
 
@@ -841,6 +841,7 @@ permission modes, see
 - [Agent send](/tools/agent-send)
 - [CLI Backends](/gateway/cli-backends)
 - [Codex harness](/plugins/codex-harness)
+- [Codex harness runtime](/plugins/codex-harness-runtime)
 - [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
 - [`openclaw acp` (bridge mode)](/cli/acp)
 - [Sub-agents](/tools/subagents)

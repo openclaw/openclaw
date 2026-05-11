@@ -88,6 +88,7 @@ describe("createSessionAndRefresh", () => {
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(state.sessionsResult?.sessions[0]?.key).toBe("agent:main:dashboard:abc");
     expect(state.sessionsLoading).toBe(false);
@@ -150,6 +151,7 @@ describe("deleteSessionsAndRefresh", () => {
     expect(request).toHaveBeenNthCalledWith(3, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(state.sessionsLoading).toBe(false);
   });
@@ -161,7 +163,7 @@ describe("deleteSessionsAndRefresh", () => {
 
     const deleted = await deleteSessionsAndRefresh(state, ["key-a"]);
 
-    expect(deleted).toEqual([]);
+    expect(deleted).toStrictEqual([]);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -195,7 +197,7 @@ describe("deleteSessionsAndRefresh", () => {
 
     const deleted = await deleteSessionsAndRefresh(state, ["key-a"]);
 
-    expect(deleted).toEqual([]);
+    expect(deleted).toStrictEqual([]);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -244,6 +246,7 @@ describe("deleteSessionsAndRefresh", () => {
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(state.sessionsLoading).toBe(false);
   });
@@ -372,6 +375,7 @@ describe("loadSessions", () => {
       limit: 50,
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
   });
 
@@ -401,6 +405,38 @@ describe("loadSessions", () => {
       limit: 50,
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
+
+  it("forwards scoped agent refreshes to sessions.list", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state, {
+      activeMinutes: 0,
+      limit: 0,
+      includeGlobal: true,
+      includeUnknown: true,
+      agentId: "ops",
+    });
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      agentId: "ops",
     });
   });
 
@@ -449,10 +485,12 @@ describe("loadSessions", () => {
       limit: 10,
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(state.sessionsResult?.ts).toBe(2);
     expect(state.sessionsLoading).toBe(false);
@@ -535,6 +573,7 @@ describe("loadSessions", () => {
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
+      configuredAgentsOnly: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.compaction.list", {
       key: "agent:main:main",
@@ -591,7 +630,7 @@ describe("applySessionsChangedEvent", () => {
     });
 
     expect(applied).toEqual({ applied: false });
-    expect(state.sessionsResult?.sessions).toEqual([]);
+    expect(state.sessionsResult?.sessions).toStrictEqual([]);
   });
 
   it("applies partial events only to existing source-of-truth rows", () => {
@@ -637,7 +676,7 @@ describe("applySessionsChangedEvent", () => {
     });
 
     expect(applied).toEqual({ applied: true, change: "deleted" });
-    expect(state.sessionsResult?.sessions).toEqual([]);
+    expect(state.sessionsResult?.sessions).toStrictEqual([]);
   });
 
   it("keeps terminal status updates visible while archived sessions are hidden", () => {

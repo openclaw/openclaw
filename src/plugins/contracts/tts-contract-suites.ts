@@ -1,5 +1,5 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,
   pluginRegistrationContractRegistry,
@@ -23,7 +23,7 @@ let ttsRuntime: TtsRuntimeModule;
 let ttsRuntimePromise: Promise<TtsRuntimeModule> | null = null;
 let ttsRuntimeInitialized = false;
 let ttsCorePromise: Promise<TtsCoreModule> | null = null;
-let completeSimple: typeof import("@mariozechner/pi-ai").completeSimple;
+let completeSimple: typeof import("@earendil-works/pi-ai").completeSimple;
 let getApiKeyForModelMock: SummarizeTextDeps["getApiKeyForModel"];
 let requireApiKeyMock: SummarizeTextDeps["requireApiKey"];
 let resolveModelAsyncMock: SummarizeTextDeps["resolveModelAsync"];
@@ -70,7 +70,7 @@ async function withIsolatedSpeechProviderEnvAsync<T>(
   return await withEnvAsync(isolatedSpeechProviderEnv(overrides), fn);
 }
 
-vi.mock("@mariozechner/pi-ai", () => {
+vi.mock("@earendil-works/pi-ai", () => {
   const getApiProvider = vi.fn(() => undefined);
   return {
     completeSimple: vi.fn(),
@@ -84,7 +84,7 @@ vi.mock("@mariozechner/pi-ai", () => {
   };
 });
 
-vi.mock("@mariozechner/pi-ai/oauth", () => {
+vi.mock("@earendil-works/pi-ai/oauth", () => {
   return {
     getOAuthProviders: () => [],
     getOAuthApiKey: vi.fn(async () => null),
@@ -496,7 +496,7 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
 
 async function setupSummarizationMocks() {
   ({ summarizeText: summarizeTextCore } = await loadTtsCore());
-  ({ completeSimple } = await import("@mariozechner/pi-ai"));
+  ({ completeSimple } = await import("@earendil-works/pi-ai"));
   getApiKeyForModelMock = vi.fn() as SummarizeTextDeps["getApiKeyForModel"];
   requireApiKeyMock = vi.fn() as SummarizeTextDeps["requireApiKey"];
   resolveModelAsyncMock = vi.fn() as SummarizeTextDeps["resolveModelAsync"];
@@ -944,7 +944,10 @@ export function describeTtsSummarizationContract() {
           `Invalid targetLength: ${testCase.targetLength}`,
         );
       } else {
-        await expect(call, String(testCase.targetLength)).resolves.toBeDefined();
+        await expect(call, String(testCase.targetLength)).resolves.toMatchObject({
+          summary: expect.any(String),
+          inputLength: 4,
+        });
       }
     });
 
@@ -1159,8 +1162,10 @@ export function describeTtsProviderRuntimeContract() {
         if (result.success) {
           throw new Error("expected synthesis failure");
         }
-        expect(result.error).toBeDefined();
-        const errorMessage = result.error ?? "";
+        const errorMessage = result.error;
+        if (typeof errorMessage !== "string") {
+          throw new Error("expected synthesis failure error message");
+        }
         expect(errorMessage).toBe("TTS conversion failed: openai: provider failed");
         expect(errorMessage).not.toContain("TTS conversion failed: TTS conversion failed:");
         expect(errorMessage.match(/TTS conversion failed:/g)).toHaveLength(1);
@@ -1259,7 +1264,9 @@ export function describeTtsAutoApplyContract() {
         if (params.expectSamePayload) {
           expect(result).toBe(params.payload);
         } else {
-          expect(result.mediaUrl).toBeDefined();
+          if (typeof result.mediaUrl !== "string" || result.mediaUrl.length === 0) {
+            throw new Error("expected auto TTS to attach mediaUrl");
+          }
         }
       });
     }

@@ -5,13 +5,13 @@ import type {
   GroupMetadata,
   WAMessage,
   WASocket,
-} from "@whiskeysockets/baileys";
+} from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
@@ -111,6 +111,14 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
 
 function isGroupJid(jid: string): boolean {
   return (typeof isJidGroup === "function" ? isJidGroup(jid) : jid.endsWith("@g.us")) === true;
+}
+
+function recordAcceptedInboundActivity(accountId: string): void {
+  recordChannelActivity({
+    channel: "whatsapp",
+    accountId,
+    direction: "inbound",
+  });
 }
 
 function isRetryableSendDisconnectError(err: unknown): boolean {
@@ -799,11 +807,6 @@ export async function attachWebInboxToSocket(
       return;
     }
     for (const msg of upsert.messages ?? []) {
-      recordChannelActivity({
-        channel: "whatsapp",
-        accountId: options.accountId,
-        direction: "inbound",
-      });
       const inbound = await normalizeInboundMessage(msg);
       if (!inbound) {
         continue;
@@ -832,12 +835,11 @@ export async function attachWebInboxToSocket(
         continue;
       }
 
+      recordAcceptedInboundActivity(options.accountId);
       await enqueueInboundMessage(msg, inbound, enriched);
     }
   };
-  const handleConnectionUpdate = (
-    update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
-  ) => {
+  const handleConnectionUpdate = (update: Partial<import("baileys").ConnectionState>) => {
     try {
       if (update.connection === "close") {
         if (options.socketRef?.current === sock) {

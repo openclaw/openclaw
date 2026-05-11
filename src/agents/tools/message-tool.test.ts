@@ -152,9 +152,6 @@ vi.mock("../../channels/plugins/message-tool-api.js", () => ({
 vi.mock("./agents-list-tool.js", () => ({
   createAgentsListTool: () => openClawToolsFactoryMocks.tool("agents"),
 }));
-vi.mock("./canvas-tool.js", () => ({
-  createCanvasTool: () => openClawToolsFactoryMocks.tool("canvas"),
-}));
 vi.mock("./cron-tool.js", () => ({
   createCronTool: () => openClawToolsFactoryMocks.tool("cron"),
 }));
@@ -238,6 +235,23 @@ function getToolProperties(tool: ReturnType<CreateMessageTool>) {
 
 function getActionEnum(properties: Record<string, unknown>) {
   return (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
+}
+
+function expectStringSchema(
+  schema: unknown,
+  expected?: {
+    description?: string;
+  },
+) {
+  expect(schema).toBeTruthy();
+  if (!schema || typeof schema !== "object") {
+    throw new Error("Expected string schema");
+  }
+  const record = schema as Record<string, unknown>;
+  expect(record.type).toBe("string");
+  if (expected?.description) {
+    expect(record.description).toBe(expected.description);
+  }
 }
 
 beforeAll(async () => {
@@ -328,6 +342,41 @@ async function executeSend(params: {
 }
 
 describe("message tool secret scoping", () => {
+  it("marks message-tool-only source replies in the tool description", () => {
+    const scopedTool = createMessageTool({
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    const explicitTargetTool = createMessageTool({
+      requireExplicitTarget: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    const defaultTool = createMessageTool();
+
+    expect(scopedTool.description).toContain(
+      'visible replies to the current source conversation must use action="send"',
+    );
+    expect(scopedTool.description).toContain("target defaults to the current source conversation");
+    expect(scopedTool.description).toContain("Normal final answers are private");
+    expect(explicitTargetTool.description).toContain("Include target when sending");
+    expect(explicitTargetTool.description).not.toContain(
+      "target defaults to the current source conversation",
+    );
+    expect(defaultTool.description).not.toContain(
+      "visible replies to the current source conversation",
+    );
+  });
+
+  it("forwards source reply delivery mode through createOpenClawTools", () => {
+    const tool = createOpenClawTools({
+      config: {} as never,
+      sourceReplyDeliveryMode: "message_tool_only",
+    }).find((candidate) => candidate.name === "message");
+
+    expect(tool?.description).toContain(
+      'visible replies to the current source conversation must use action="send"',
+    );
+  });
+
   it("scopes command-time secret resolution to the selected channel/account", async () => {
     mockSendResult({ channel: "discord", to: "discord:123" });
     mocks.getRuntimeConfig.mockReturnValue({
@@ -609,14 +658,10 @@ describe("message tool Telegram topic targets", () => {
       },
     });
 
-    expect(call?.params).toEqual(
-      expect.objectContaining({
-        channel: "telegram",
-        target: "-1001234567890:topic:42",
-        threadId: "42",
-        message: "topic hello",
-      }),
-    );
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.target).toBe("-1001234567890:topic:42");
+    expect(call?.params?.threadId).toBe("42");
+    expect(call?.params?.message).toBe("topic hello");
   });
 });
 
@@ -692,7 +737,7 @@ describe("message tool schema scoping", () => {
       const properties = getToolProperties(tool);
       const actionEnum = getActionEnum(properties);
 
-      expect(properties.presentation).toBeDefined();
+      expect(properties).toHaveProperty("presentation");
       expect(properties.components).toBeUndefined();
       expect(properties.blocks).toBeUndefined();
       expect(properties.buttons).toBeUndefined();
@@ -700,17 +745,17 @@ describe("message tool schema scoping", () => {
         expect(actionEnum).toContain(action);
       }
       if (expectTelegramPollExtras) {
-        expect(properties.pollDurationSeconds).toBeDefined();
-        expect(properties.pollAnonymous).toBeDefined();
-        expect(properties.pollPublic).toBeDefined();
+        expect(properties).toHaveProperty("pollDurationSeconds");
+        expect(properties).toHaveProperty("pollAnonymous");
+        expect(properties).toHaveProperty("pollPublic");
       } else {
         expect(properties.pollDurationSeconds).toBeUndefined();
         expect(properties.pollAnonymous).toBeUndefined();
         expect(properties.pollPublic).toBeUndefined();
       }
-      expect(properties.pollId).toBeDefined();
-      expect(properties.pollOptionIndex).toBeDefined();
-      expect(properties.pollOptionId).toBeDefined();
+      expect(properties).toHaveProperty("pollId");
+      expect(properties).toHaveProperty("pollOptionIndex");
+      expect(properties).toHaveProperty("pollOptionId");
     },
   );
 
@@ -809,8 +854,79 @@ describe("message tool schema scoping", () => {
       currentChannelProvider: "telegram",
     });
 
-    expect(getToolProperties(scopedTool).presentation).toBeDefined();
+    expect(getToolProperties(scopedTool)).toHaveProperty("presentation");
     expect(getToolProperties(unscopedTool).presentation).toBeUndefined();
+  });
+
+  it("keeps send-only scoped schemas small", () => {
+    const sendOnlyPlugin = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram send plugin.",
+      actions: ["send"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: sendOnlyPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const properties = getToolProperties(tool);
+
+    expect(getActionEnum(properties)).toEqual(["send"]);
+    expect(properties).toHaveProperty("message");
+    expect(properties).toHaveProperty("target");
+    expect(properties).toHaveProperty("media");
+    expect(properties).not.toHaveProperty("pollId");
+    expect(properties).not.toHaveProperty("messageId");
+    expect(properties).not.toHaveProperty("channelId");
+    expect(properties).not.toHaveProperty("activityName");
+    expect(properties).not.toHaveProperty("eventName");
+  });
+
+  it("filters scoped schemas through the per-agent message action allowlist", () => {
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+      actions: ["send", "read", "react", "delete"],
+    });
+
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const tool = createMessageTool({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "sandbox",
+              tools: {
+                message: {
+                  actions: {
+                    allow: ["send"],
+                  },
+                },
+              },
+            },
+          ],
+        },
+      } as never,
+      currentChannelProvider: "discord",
+      agentId: "sandbox",
+    });
+    const properties = getToolProperties(tool);
+
+    expect(getActionEnum(properties)).toEqual(["send"]);
+    expect(properties).toHaveProperty("message");
+    expect(properties).toHaveProperty("target");
+    expect(properties).not.toHaveProperty("messageId");
+    expect(tool.description).toContain("Supports actions: send.");
+    expect(tool.description).not.toContain("react");
   });
 
   it("uses discovery account scope for other configured channel actions", () => {
@@ -888,19 +1004,17 @@ describe("message tool schema scoping", () => {
       requesterSenderId: "user-42",
     });
 
-    expect(seenContexts).toContainEqual(
-      expect.objectContaining({
-        currentChannelProvider: "discord",
-        currentChannelId: "channel:123",
-        currentThreadTs: "thread-456",
-        currentMessageId: "msg-789",
-        accountId: "ops",
-        sessionKey: "agent:alpha:main",
-        sessionId: "session-123",
-        agentId: "alpha",
-        requesterSenderId: "user-42",
-      }),
-    );
+    const context = seenContexts.find((item) => item.phase === "describeMessageTool");
+    expect(context).toBeDefined();
+    expect(context?.currentChannelProvider).toBe("discord");
+    expect(context?.currentChannelId).toBe("channel:123");
+    expect(context?.currentThreadTs).toBe("thread-456");
+    expect(context?.currentMessageId).toBe("msg-789");
+    expect(context?.accountId).toBe("ops");
+    expect(context?.sessionKey).toBe("agent:alpha:main");
+    expect(context?.sessionId).toBe("session-123");
+    expect(context?.agentId).toBe("alpha");
+    expect(context?.requesterSenderId).toBe("user-42");
   });
 
   it("forwards senderIsOwner into plugin action discovery", () => {
@@ -935,8 +1049,8 @@ describe("message tool schema scoping", () => {
 
     expect(getActionEnum(getToolProperties(ownerTool))).toContain("set-profile");
     expect(getActionEnum(getToolProperties(nonOwnerTool))).not.toContain("set-profile");
-    expect(seenContexts).toContainEqual(expect.objectContaining({ senderIsOwner: true }));
-    expect(seenContexts).toContainEqual(expect.objectContaining({ senderIsOwner: false }));
+    expect(seenContexts.some((context) => context.senderIsOwner === true)).toBe(true);
+    expect(seenContexts.some((context) => context.senderIsOwner === false)).toBe(true);
   });
 
   it("keeps core send and broadcast actions in unscoped schemas", () => {
@@ -944,9 +1058,9 @@ describe("message tool schema scoping", () => {
       config: {} as never,
     });
 
-    expect(getActionEnum(getToolProperties(tool))).toEqual(
-      expect.arrayContaining(["send", "broadcast"]),
-    );
+    const actionEnum = getActionEnum(getToolProperties(tool));
+    expect(actionEnum).toContain("send");
+    expect(actionEnum).toContain("broadcast");
   });
 
   it("advertises Slack download-file fileId in scoped schemas", () => {
@@ -969,7 +1083,7 @@ describe("message tool schema scoping", () => {
     const properties = getToolProperties(tool);
 
     expect(getActionEnum(properties)).toContain("download-file");
-    expect(properties.fileId).toMatchObject({ type: "string" });
+    expectStringSchema(properties.fileId);
   });
 
   it("advertises messageId for read actions", () => {
@@ -992,9 +1106,9 @@ describe("message tool schema scoping", () => {
     const properties = getToolProperties(tool);
 
     expect(getActionEnum(properties)).toContain("read");
-    expect(properties.messageId).toMatchObject({
-      type: "string",
-      description: expect.stringContaining("read"),
+    expectStringSchema(properties.messageId, {
+      description:
+        "Target message id for read, reaction, edit, delete, pin, or unpin. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
     });
   });
 });
@@ -1004,11 +1118,11 @@ describe("message tool description", () => {
     setActivePluginRegistry(createTestRegistry([]));
   });
 
-  const bluebubblesPlugin = createChannelPlugin({
-    id: "bluebubbles",
-    label: "BlueBubbles",
-    docsPath: "/channels/bluebubbles",
-    blurb: "BlueBubbles test plugin.",
+  const imessagePlugin = createChannelPlugin({
+    id: "imessage",
+    label: "iMessage",
+    docsPath: "/channels/imessage",
+    blurb: "iMessage test plugin.",
     describeMessageTool: ({ currentChannelId }) => {
       const all: ChannelMessageActionName[] = [
         "react",
@@ -1034,7 +1148,7 @@ describe("message tool description", () => {
     },
     messaging: {
       normalizeTarget: (raw) => {
-        const trimmed = raw.trim().replace(/^bluebubbles:/i, "");
+        const trimmed = raw.trim().replace(/^imessage:/i, "");
         const lower = trimmed.toLowerCase();
         if (lower.startsWith("chat_guid:")) {
           const guid = trimmed.slice("chat_guid:".length);
@@ -1062,15 +1176,15 @@ describe("message tool description", () => {
     expect(target?.description).toContain("Telegram chat id/@username");
   });
 
-  it("hides BlueBubbles group actions for DM targets", () => {
+  it("hides iMessage group actions for DM targets", () => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
+      createTestRegistry([{ pluginId: "imessage", source: "test", plugin: imessagePlugin }]),
     );
 
     const tool = createMessageTool({
       config: {} as never,
-      currentChannelProvider: "bluebubbles",
-      currentChannelId: "bluebubbles:chat_guid:iMessage;-;+15551234567",
+      currentChannelProvider: "imessage",
+      currentChannelId: "imessage:chat_guid:iMessage;-;+15551234567",
     });
 
     expect(tool.description).not.toContain("renameGroup");
@@ -1163,8 +1277,8 @@ describe("message tool description", () => {
     const currentChannelProperties = getToolProperties(currentChannelTool);
 
     expect(getActionEnum(currentChannelProperties)).toContain("set-profile");
-    expect(currentChannelProperties.displayName).toBeDefined();
-    expect(currentChannelProperties.avatarUrl).toBeDefined();
+    expect(currentChannelProperties).toHaveProperty("displayName");
+    expect(currentChannelProperties).toHaveProperty("avatarUrl");
   });
 
   it("normalizes channel aliases before building the current channel description", () => {
@@ -1192,12 +1306,12 @@ describe("message tool description", () => {
 
   it("keeps the current-channel description stable when only one channel is configured", () => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
+      createTestRegistry([{ pluginId: "imessage", source: "test", plugin: imessagePlugin }]),
     );
 
     const tool = createMessageTool({
       config: {} as never,
-      currentChannelProvider: "bluebubbles",
+      currentChannelProvider: "imessage",
     });
 
     expect(tool.description).toContain("Supports actions:");

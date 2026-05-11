@@ -48,11 +48,12 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 - On Gateway startup, overdue isolated agent-turn jobs are rescheduled out of the channel-connect window instead of replaying immediately, so Discord/Telegram startup and native-command setup stay responsive after restarts.
 - One-shot jobs (`--at`) auto-delete after success by default.
 - Isolated cron runs best-effort close tracked browser tabs/processes for their `cron:<jobId>` session when the run completes, so detached browser automation does not leave orphaned processes behind.
-- Isolated cron runs that receive the narrow cron self-cleanup grant can still read scheduler status and a self-filtered list of their current job, so status/heartbeat checks can inspect their own schedule without gaining broader cron mutation access.
+- Isolated cron runs that receive the narrow cron self-cleanup grant can still read scheduler status, a self-filtered list of their current job, and that job's run history, so status/heartbeat checks can inspect their own schedule without gaining broader cron mutation access.
 - Isolated cron runs also guard against stale acknowledgement replies. If the first result is just an interim status update (`on it`, `pulling everything together`, and similar hints) and no descendant subagent run is still responsible for the final answer, OpenClaw re-prompts once for the actual result before delivery.
 - Isolated cron runs prefer structured execution-denial metadata from the embedded run, then fall back to known final summary/output markers such as `SYSTEM_RUN_DENIED` and `INVALID_REQUEST`, so a blocked command is not reported as a green run.
 - Isolated cron runs also treat run-level agent failures as job errors even when no reply payload is produced, so model/provider failures increment error counters and trigger failure notifications instead of clearing the job as successful.
 - When an isolated agent-turn job reaches `timeoutSeconds`, cron aborts the underlying agent run and gives it a short cleanup window. If the run does not drain, Gateway-owned cleanup force-clears that run's session ownership before cron records the timeout, so queued chat work is not left behind a stale processing session.
+- If an isolated agent-turn stalls before the runner starts or before the first model call, cron records a phase-specific timeout such as `setup timed out before runner start` or `stalled before first model call (last phase: context-engine)`. These watchdogs cover embedded providers and CLI-backed providers before their external CLI process is actually started, and are capped independently from long `timeoutSeconds` values so cold-start/auth/context failures surface quickly instead of waiting for the full job budget.
 
 <a id="maintenance"></a>
 
@@ -133,8 +134,6 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 </ParamField>
 
 `--model` uses the selected allowed model as that job's primary model. It is not the same as a chat-session `/model` override: configured fallback chains still apply when the job primary fails. If the requested model is not allowed or cannot be resolved, cron fails the run with an explicit validation error instead of silently falling back to the job's agent/default model selection.
-
-If older or hand-edited `jobs.json` entries store `payload.model` as `"default"`, `"null"`, a blank string, or JSON `null`, run `openclaw doctor --fix`. Doctor removes those invalid persisted override sentinels; runtime does not support them as fallback aliases. Omit the model field to use the normal agent/default model selection.
 
 Cron jobs can also carry payload-level `fallbacks`. When present, that list replaces the configured fallback chain for the job. Use `fallbacks: []` in the job payload/API when you want a strict cron run that tries only the selected model. If a job has `--model` but neither payload nor configured fallbacks, OpenClaw passes an explicit empty fallback override so the agent primary is not appended as a hidden extra retry target.
 

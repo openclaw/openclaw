@@ -1,5 +1,9 @@
 import type { Chat, Message } from "@grammyjs/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  resolveCommandAuthorization,
+  type CommandAuthorization,
+} from "openclaw/plugin-sdk/command-auth-native";
 import type {
   OpenClawConfig,
   TelegramAccountConfig,
@@ -7,16 +11,12 @@ import type {
   TelegramGroupConfig,
   TelegramDmThreadReplies,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import {
-  expandTelegramAllowFromWithAccessGroups,
-  firstDefined,
-  normalizeAllowFrom,
-  type NormalizedAllowFrom,
-} from "../bot-access.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
+import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
 import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
 import {
@@ -220,14 +220,14 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     threadIdForConfig,
   );
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-  // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
-  // DM pairing store entries are not a group authorization source.
   const expandedGroupAllowFrom = await expandTelegramAllowFromWithAccessGroups({
     cfg: params.cfg,
     allowFrom: groupAllowOverride ?? params.groupAllowFrom,
     accountId,
     senderId: params.senderId,
   });
+  // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
+  // DM pairing store entries are not a group authorization source.
   const effectiveGroupAllow = normalizeAllowFrom(expandedGroupAllowFrom);
   const hasGroupAllowOverride = groupAllowOverride !== undefined;
   return {
@@ -382,6 +382,42 @@ export function resolveTelegramDirectPeerId(params: {
 
 export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?: number) {
   return `telegram:group:${buildTelegramGroupPeerId(chatId, messageThreadId)}`;
+}
+
+export function isTelegramCommandsAllowFromConfigured(cfg: OpenClawConfig): boolean {
+  const commandsAllowFrom = cfg.commands?.allowFrom;
+  return (
+    commandsAllowFrom != null &&
+    typeof commandsAllowFrom === "object" &&
+    (Array.isArray(commandsAllowFrom.telegram) || Array.isArray(commandsAllowFrom["*"]))
+  );
+}
+
+export function resolveTelegramCommandAuthorization(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  chatId: number;
+  isGroup: boolean;
+  resolvedThreadId?: number;
+  senderId?: string;
+  senderUsername?: string;
+}): CommandAuthorization {
+  return resolveCommandAuthorization({
+    ctx: {
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      AccountId: params.accountId,
+      ChatType: params.isGroup ? "group" : "direct",
+      From: params.isGroup
+        ? buildTelegramGroupFrom(params.chatId, params.resolvedThreadId)
+        : `telegram:${params.chatId}`,
+      SenderId: params.senderId || undefined,
+      SenderUsername: params.senderUsername || undefined,
+    },
+    cfg: params.cfg,
+    commandAuthorized: false,
+  });
 }
 
 /**

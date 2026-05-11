@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
@@ -623,7 +623,10 @@ export async function performGatewaySessionReset(params: {
       lastTo: currentEntry?.lastTo,
       lastAccountId: currentEntry?.lastAccountId,
       lastThreadId: currentEntry?.lastThreadId,
-      skillsSnapshot: currentEntry?.skillsSnapshot,
+      // Do not carry the cached skills catalog across /new. Long-lived channel
+      // sessions (Signal DMs/groups in particular) otherwise keep advertising a
+      // stale <available_skills> block even after reset/restart, because the
+      // skills snapshot version is runtime-local and may reset to 0.
       acp: currentEntry?.acp,
       inputTokens: 0,
       outputTokens: 0,

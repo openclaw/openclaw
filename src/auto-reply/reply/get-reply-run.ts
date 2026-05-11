@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import type { CurrentTurnPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
@@ -58,7 +60,11 @@ import {
   resolveGroupSilentReplyBehavior,
 } from "./groups.js";
 import { hasInboundMedia } from "./inbound-media.js";
-import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
+import {
+  buildInboundMetaSystemPrompt,
+  buildInboundUserContextPrefix,
+  resolveInboundUserContextPromptJoiner,
+} from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptBodies } from "./prompt-prelude.js";
@@ -346,24 +352,6 @@ type RunPreparedReplyParams = {
   abortedLastRun: boolean;
 };
 
-function resolveCurrentTurnPromptContext(
-  ctx: TemplateContext,
-): CurrentTurnPromptContext | undefined {
-  const replyBody = normalizeOptionalString(ctx.ReplyToBody);
-  if (!replyBody) {
-    return undefined;
-  }
-  return {
-    reply: {
-      body: replyBody,
-      ...(normalizeOptionalString(ctx.ReplyToSender)
-        ? { senderLabel: normalizeOptionalString(ctx.ReplyToSender) }
-        : {}),
-      ...(ctx.ReplyToIsQuote === true ? { isQuote: true } : {}),
-    },
-  };
-}
-
 export async function runPreparedReply(
   params: RunPreparedReplyParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
@@ -635,6 +623,7 @@ export async function runPreparedReply(
   );
   const baseBodyForPrompt = isBareSessionReset
     ? [
+        inboundUserContext,
         startupContextPrelude,
         baseBodyFinal,
         softResetTail
@@ -643,7 +632,7 @@ export async function runPreparedReply(
       ]
         .filter(Boolean)
         .join("\n\n")
-    : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
+    : baseBodyFinal;
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||
     softResetTail.length > 0 ||
@@ -664,9 +653,7 @@ export async function runPreparedReply(
   }
   // When the user sends media without text, provide a minimal body so the agent
   // run proceeds and the image/document is injected by the embedded runner.
-  const effectiveBaseBody = hasUserBody
-    ? baseBodyForPrompt
-    : [inboundUserContext, "[User sent media without caption]"].filter(Boolean).join("\n\n");
+  const effectiveBaseBody = hasUserBody ? baseBodyForPrompt : "[User sent media without caption]";
   const transcriptBodyBase = isHeartbeat
     ? HEARTBEAT_TRANSCRIPT_PROMPT
     : isBareSessionReset
@@ -767,7 +754,13 @@ export async function runPreparedReply(
     "reply.build_prompt_bodies",
     () => rebuildPromptBodies(),
   );
-  const currentTurnContext = resolveCurrentTurnPromptContext(sessionCtx);
+  const currentTurnContext: CurrentTurnPromptContext | undefined =
+    !isBareSessionReset && inboundUserContext.trim()
+      ? {
+          text: inboundUserContext,
+          promptJoiner: resolveInboundUserContextPromptJoiner(sessionCtx),
+        }
+      : undefined;
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
@@ -874,12 +867,29 @@ export async function runPreparedReply(
     );
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
+  const agentHarnessPolicy = useFastReplyRuntime
+    ? undefined
+    : resolveAgentHarnessPolicy({
+        provider,
+        modelId: model,
+        config: cfg,
+        agentId,
+        sessionKey: runtimePolicySessionKey,
+      });
+  const resolveAcceptedAuthProfileProviders = () =>
+    agentHarnessPolicy
+      ? listOpenAIAuthProfileProvidersForAgentRuntime({
+          provider,
+          harnessRuntime: agentHarnessPolicy.runtime,
+        })
+      : [provider];
   let authProfileId = useFastReplyRuntime
     ? preparedSessionState.sessionEntry?.authProfileOverride
     : await traceRunPhase("reply.resolve_auth_profile", () =>
         resolveSessionAuthProfileOverride({
           cfg,
           provider,
+          acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
           agentDir,
           sessionEntry: preparedSessionState.sessionEntry,
           sessionStore,
@@ -938,6 +948,7 @@ export async function runPreparedReply(
           : await resolveSessionAuthProfileOverride({
               cfg,
               provider,
+              acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
               agentDir,
               sessionEntry: preparedSessionState.sessionEntry,
               sessionStore,

@@ -84,7 +84,9 @@ describe("ensureAuthProfileStore", () => {
     clearRuntimeAuthProfileStoreSnapshots();
     const store = ensureAuthProfileStore(agentDir);
     const profile = store.profiles[profileId];
-    expect(profile).toBeDefined();
+    if (!profile) {
+      throw new Error(`expected auth profile ${profileId}`);
+    }
     return profile;
   }
 
@@ -150,6 +152,17 @@ describe("ensureAuthProfileStore", () => {
     return profile;
   }
 
+  function expectRecordFields(
+    value: unknown,
+    expected: Record<string, unknown>,
+    message?: string,
+  ): void {
+    const record = value as Record<string, unknown> | undefined;
+    for (const [key, expectedValue] of Object.entries(expected)) {
+      expect(record?.[key], message ? `${message}:${key}` : key).toEqual(expectedValue);
+    }
+  }
+
   it("migrates legacy auth.json and deletes it (PR #368)", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-profiles-"));
     try {
@@ -173,7 +186,7 @@ describe("ensureAuthProfileStore", () => {
       );
 
       const store = ensureAuthProfileStore(agentDir);
-      expect(store.profiles["anthropic:default"]).toMatchObject({
+      expectRecordFields(store.profiles["anthropic:default"], {
         type: "oauth",
         provider: "anthropic",
       });
@@ -184,7 +197,7 @@ describe("ensureAuthProfileStore", () => {
 
       // idempotent
       const store2 = ensureAuthProfileStore(agentDir);
-      expect(store2.profiles["anthropic:default"]).toBeDefined();
+      expect(store2.profiles).toHaveProperty("anthropic:default");
       expect(fs.existsSync(legacyPath)).toBe(false);
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
@@ -234,12 +247,12 @@ describe("ensureAuthProfileStore", () => {
       );
 
       const store = ensureAuthProfileStore(agentDir);
-      expect(store.profiles["anthropic:default"]).toMatchObject({
+      expectRecordFields(store.profiles["anthropic:default"], {
         type: "api_key",
         provider: "anthropic",
         key: "main-anthropic-key",
       });
-      expect(store.profiles["openai:default"]).toMatchObject({
+      expectRecordFields(store.profiles["openai:default"], {
         type: "api_key",
         provider: "openai",
         key: "agent-key",
@@ -319,7 +332,7 @@ describe("ensureAuthProfileStore", () => {
 
       const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
-      expect(store.profiles[freshProfileId]).toMatchObject({
+      expectRecordFields(store.profiles[freshProfileId], {
         type: "oauth",
         provider: "openai-codex",
         access: "main-access",
@@ -333,7 +346,7 @@ describe("ensureAuthProfileStore", () => {
       const persistedAgentStore = JSON.parse(
         fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8"),
       ) as { profiles: Record<string, unknown> };
-      expect(persistedAgentStore.profiles[staleProfileId]).toBeDefined();
+      expect(persistedAgentStore.profiles).toHaveProperty(staleProfileId);
     } finally {
       restoreAgentDirEnv({ previousStateDir, previousAgentDir, previousPiAgentDir });
       fs.rmSync(root, { recursive: true, force: true });
@@ -400,7 +413,7 @@ describe("ensureAuthProfileStore", () => {
 
       const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
-      expect(store.profiles[freshProfileId]).toMatchObject({
+      expectRecordFields(store.profiles[freshProfileId], {
         type: "oauth",
         provider: "openai-codex",
         access: "newer-agent-access",
@@ -482,12 +495,12 @@ describe("ensureAuthProfileStore", () => {
       const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
       expect(store.order?.["openai-codex"]).toEqual([freshProfileId, defaultProfileId]);
-      expect(store.profiles[defaultProfileId]).toMatchObject({
+      expectRecordFields(store.profiles[defaultProfileId], {
         type: "oauth",
         provider: "openai-codex",
         access: "main-default-access",
       });
-      expect(store.usageStats?.[defaultProfileId]).toMatchObject({
+      expectRecordFields(store.usageStats?.[defaultProfileId], {
         lastUsed: 123,
       });
     } finally {
@@ -545,8 +558,8 @@ describe("ensureAuthProfileStore", () => {
 
       const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
-      expect(store.profiles[freshProfileId]).toBeDefined();
-      expect(store.profiles[staleProfileId]).toMatchObject({
+      expect(store.profiles).toHaveProperty(freshProfileId);
+      expectRecordFields(store.profiles[staleProfileId], {
         type: "oauth",
         provider: "openai-codex",
         access: "other-access",
@@ -624,7 +637,7 @@ describe("ensureAuthProfileStore", () => {
 
       const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
-      expect(store.profiles[healthyProfileId]).toMatchObject({
+      expectRecordFields(store.profiles[healthyProfileId], {
         type: "oauth",
         provider: "openai-codex",
         access: "healthy-access",
@@ -707,7 +720,7 @@ describe("ensureAuthProfileStore", () => {
         );
 
         const store = ensureAuthProfileStore(agentDir);
-        expect(store.profiles["anthropic:work"], name).toMatchObject(expected);
+        expectRecordFields(store.profiles["anthropic:work"], expected, name);
       });
     },
   );
@@ -731,7 +744,7 @@ describe("ensureAuthProfileStore", () => {
       );
 
       const store = ensureAuthProfileStore(agentDir);
-      expect(store.profiles["anthropic:default"]).toMatchObject({
+      expectRecordFields(store.profiles["anthropic:default"], {
         type: "api_key",
         provider: "anthropic",
         key: "sk-ant-legacy",
@@ -793,7 +806,7 @@ describe("ensureAuthProfileStore", () => {
       clearRuntimeAuthProfileStoreSnapshots();
 
       const store = ensureAuthProfileStore(agentDir);
-      expect(store.profiles["openai-codex:default"]).toMatchObject({
+      expectRecordFields(store.profiles["openai-codex:default"], {
         type: "oauth",
         provider: "openai-codex",
         access: "access-token",
@@ -805,7 +818,7 @@ describe("ensureAuthProfileStore", () => {
       ) as {
         profiles: Record<string, unknown>;
       };
-      expect(persisted.profiles["openai-codex:default"]).toMatchObject({
+      expectRecordFields(persisted.profiles["openai-codex:default"], {
         type: "oauth",
         provider: "openai-codex",
         access: "access-token",
@@ -846,7 +859,7 @@ describe("ensureAuthProfileStore", () => {
       clearRuntimeAuthProfileStoreSnapshots();
 
       const store = ensureAuthProfileStore(agentDir);
-      expect(store.profiles["demo-provider:external"]).toMatchObject({
+      expectRecordFields(store.profiles["demo-provider:external"], {
         type: "oauth",
         provider: "demo-provider",
         access: "external-access-token",
@@ -893,7 +906,7 @@ describe("ensureAuthProfileStore", () => {
 
       const store = loadAuthProfileStoreForRuntime(workerAgentDir, { readOnly: true });
 
-      expect(store.profiles["openai:default"]).toMatchObject({
+      expectRecordFields(store.profiles["openai:default"], {
         type: "api_key",
         provider: "openai",
       });
@@ -939,7 +952,7 @@ describe("ensureAuthProfileStore", () => {
 
       const store = ensureAuthProfileStore(workerAgentDir);
 
-      expect(store.profiles["openai-codex:default"]).toMatchObject({
+      expectRecordFields(store.profiles["openai-codex:default"], {
         type: "oauth",
         provider: "openai-codex",
         access: "main-access",
@@ -975,7 +988,7 @@ describe("ensureAuthProfileStore", () => {
           "utf8",
         );
         const store = ensureAuthProfileStore(agentDir);
-        expect(store.profiles).toEqual({});
+        expect(store.profiles).toStrictEqual({});
         expect(warnSpy).toHaveBeenCalledTimes(1);
         expect(warnSpy).toHaveBeenCalledWith(
           "ignored invalid auth profile entries during store load",
@@ -994,25 +1007,6 @@ describe("ensureAuthProfileStore", () => {
     } finally {
       warnSpy.mockRestore();
     }
-  });
-
-  it("accepts aws-sdk auth profiles without static credential material (#69708)", () => {
-    withTempAgentDir("openclaw-auth-aws-sdk-", (agentDir) => {
-      writeAuthProfileStore(agentDir, {
-        "amazon-bedrock:default": {
-          type: "aws-sdk",
-          provider: "amazon-bedrock",
-          createdAt: "2026-03-15T10:00:00.000Z",
-        },
-      });
-
-      const profile = loadAuthProfile(agentDir, "amazon-bedrock:default");
-
-      expect(profile).toMatchObject({
-        type: "aws-sdk",
-        provider: "amazon-bedrock",
-      });
-    });
   });
 
   it.each([

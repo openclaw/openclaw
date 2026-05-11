@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -467,8 +467,13 @@ export async function detectAndLoadPromptImages(params: {
   const allRefs = detectImageReferences(params.prompt);
 
   if (allRefs.length === 0) {
+    const sanitizedExistingImages = await sanitizeImagesWithLog(
+      params.existingImages ?? [],
+      "prompt:images",
+      { maxDimensionPx: params.maxDimensionPx },
+    );
     return {
-      images: params.existingImages ?? [],
+      images: sanitizedExistingImages,
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,

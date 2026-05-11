@@ -11,7 +11,6 @@ import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
-  resolveRotatedGeneratedSessionFilePath,
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
@@ -51,57 +50,6 @@ describe("session path safety", () => {
       { sessionsDir },
     );
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
-  });
-
-  it("rotates generated transcript paths when session id changes", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-    const previousSessionFile = path.join(sessionsDir, "sess-1.jsonl");
-
-    const resolved = resolveRotatedGeneratedSessionFilePath({
-      previousSessionId: "sess-1",
-      nextSessionId: "sess-2",
-      previousSessionFile,
-      sessionsDir,
-    });
-
-    expect(resolved).toBe(path.resolve(sessionsDir, "sess-2.jsonl"));
-  });
-
-  it("rotates already-stale generated UUID transcript paths", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-    const staleSessionFile = path.join(sessionsDir, "685a51f7-7adf-48b1-89ca-d3ab86dd6e0f.jsonl");
-
-    const resolved = resolveRotatedGeneratedSessionFilePath({
-      previousSessionId: "63b16647-ea0c-4a22-808b-ce616326b445",
-      nextSessionId: "a8ea43fe-8729-4742-8db0-d4ab4522d5d1",
-      previousSessionFile: staleSessionFile,
-      sessionsDir,
-    });
-
-    expect(resolved).toBe(path.resolve(sessionsDir, "a8ea43fe-8729-4742-8db0-d4ab4522d5d1.jsonl"));
-  });
-
-  it("does not rotate custom transcript paths when session id changes", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-    const customPath = path.join(sessionsDir, "custom-owned-child-transcript.jsonl");
-
-    const resolved = resolveRotatedGeneratedSessionFilePath({
-      previousSessionId: "sess-1",
-      nextSessionId: "sess-2",
-      previousSessionFile: customPath,
-      sessionsDir,
-    });
-
-    expect(resolved).toBeUndefined();
-  });
-
-  it("keeps topic transcript paths when the persisted sessionFile matches the session id", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
-    const topicPath = path.join(sessionsDir, "sess-1-topic-456.jsonl");
-
-    const resolved = resolveSessionFilePath("sess-1", { sessionFile: topicPath }, { sessionsDir });
-
-    expect(resolved).toBe(path.resolve(topicPath));
   });
 
   it("ignores multi-store sentinel paths when deriving session file options", () => {
@@ -178,10 +126,8 @@ describe("resolveSessionResetPolicy", () => {
       resetType: "direct",
     });
 
-    expect(policy).toMatchObject({
-      mode: "daily",
-      atHour: 4,
-    });
+    expect(policy.mode).toBe("daily");
+    expect(policy.atHour).toBe(4);
   });
 
   it("treats idleMinutes=0 as never expiring by inactivity", () => {
@@ -230,10 +176,8 @@ describe("resolveSessionResetPolicy", () => {
       },
     });
 
-    expect(freshness).toMatchObject({
-      fresh: false,
-      idleExpiresAt: 5 * 60_000,
-    });
+    expect(freshness.fresh).toBe(false);
+    expect(freshness.idleExpiresAt).toBe(5 * 60_000);
   });
 
   it("falls back to sessionStartedAt, not updatedAt, for legacy idle freshness", () => {
@@ -249,10 +193,8 @@ describe("resolveSessionResetPolicy", () => {
       },
     });
 
-    expect(freshness).toMatchObject({
-      fresh: false,
-      idleExpiresAt: 5 * 60_000,
-    });
+    expect(freshness.fresh).toBe(false);
+    expect(freshness.idleExpiresAt).toBe(5 * 60_000);
   });
 
   it("does not let future legacy updatedAt values keep daily sessions fresh", () => {
@@ -281,10 +223,8 @@ describe("resolveSessionResetPolicy", () => {
       },
     });
 
-    expect(freshness).toMatchObject({
-      fresh: false,
-      idleExpiresAt: 5 * 60_000,
-    });
+    expect(freshness.fresh).toBe(false);
+    expect(freshness.idleExpiresAt).toBe(5 * 60_000);
   });
 });
 
@@ -389,6 +329,31 @@ describe("session store writer queue", () => {
     writeSpy.mockRestore();
   });
 
+  it("keeps session store writes atomic while skipping durable fsync inside the writer lock", async () => {
+    const key = "agent:main:no-fsync";
+    const { storePath } = await makeTmpStore({
+      [key]: { sessionId: "s-no-fsync", updatedAt: Date.now(), counter: 0 },
+    });
+
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    await updateSessionStore(
+      storePath,
+      async (store) => {
+        const entry = store[key] as Record<string, unknown>;
+        entry.counter = 1;
+      },
+      { skipMaintenance: true },
+    );
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const [writtenPath, writtenText, writeOptions] = writeSpy.mock.calls[0] ?? [];
+    expect(writtenPath).toBe(storePath);
+    expect(writtenText).toBeTypeOf("string");
+    expect(writeOptions?.durable).toBe(false);
+    expect(writeOptions?.mode).toBe(0o600);
+    writeSpy.mockRestore();
+  });
+
   it("multiple consecutive errors do not permanently poison the queue", async () => {
     const key = "agent:main:multi-err";
     const { storePath } = await makeTmpStore({
@@ -405,8 +370,8 @@ describe("session store writer queue", () => {
       store[key] = { ...store[key], modelOverride: "recovered" } as unknown as SessionEntry;
     });
 
-    for (const p of errors) {
-      await expect(p).rejects.toThrow();
+    for (const [index, p] of errors.entries()) {
+      await expect(p).rejects.toThrow(`fail-${index}`);
     }
     await success;
 

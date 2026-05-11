@@ -1,5 +1,5 @@
 import path from "node:path";
-import { type Api, type Model } from "@mariozechner/pi-ai";
+import { type Api, type Model } from "@earendil-works/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
@@ -24,7 +24,7 @@ import {
   type AuthProfileStore,
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  isConfiguredAwsSdkAuthProfileForProvider,
   listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
@@ -38,13 +38,8 @@ import {
   isNonSecretApiKeyMarker,
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
-import {
-  requireApiKey,
-  resolveAwsSdkEnvVarName,
-  type ResolvedProviderAuth,
-} from "./model-auth-runtime-shared.js";
+import { type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 export {
   ensureAuthProfileStore,
@@ -237,49 +232,16 @@ function resolveProviderAuthOverride(
 }
 
 function profileTypeToAuthMode(type: AuthProfileCredential["type"]): ResolvedProviderAuth["mode"] {
-  return type === "oauth"
-    ? "oauth"
-    : type === "token"
-      ? "token"
-      : type === "aws-sdk"
-        ? "aws-sdk"
-        : "api-key";
+  return type === "oauth" ? "oauth" : type === "token" ? "token" : "api-key";
 }
 
-function isProfileForProvider(params: {
-  cfg?: OpenClawConfig;
-  credential: AuthProfileCredential;
-  provider: string;
-}): boolean {
-  return (
-    resolveProviderIdForAuth(params.credential.provider, { config: params.cfg }) ===
-    resolveProviderIdForAuth(params.provider, { config: params.cfg })
-  );
-}
-
-function resolveAwsSdkProfileAuth(params: {
+function resolveConfiguredAwsSdkProfileAuth(params: {
   cfg?: OpenClawConfig;
   provider: string;
   profileId: string;
-  credential: AuthProfileCredential | undefined;
 }): ResolvedProviderAuth | null {
-  if (params.credential?.type !== "aws-sdk") {
+  if (!isConfiguredAwsSdkAuthProfileForProvider(params)) {
     return null;
-  }
-  if (
-    !isProfileForProvider({
-      cfg: params.cfg,
-      credential: params.credential,
-      provider: params.provider,
-    })
-  ) {
-    return null;
-  }
-  const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
-  if (profileConfig) {
-    if (profileConfig.provider !== params.credential.provider || profileConfig.mode !== "aws-sdk") {
-      return null;
-    }
   }
   return {
     ...resolveAwsSdkAuthInfo(),
@@ -582,8 +544,13 @@ export async function resolveApiKeyForProvider(params: {
   credentialPrecedence?: ProviderCredentialPrecedence;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
+  let scopedStore: AuthProfileStore | undefined = params.store;
 
   if (profileId) {
+    const awsSdkProfileAuth = resolveConfiguredAwsSdkProfileAuth({ cfg, provider, profileId });
+    if (awsSdkProfileAuth) {
+      return awsSdkProfileAuth;
+    }
     const store =
       params.store ??
       resolveScopedAuthProfileStore({
@@ -593,15 +560,6 @@ export async function resolveApiKeyForProvider(params: {
         profileId,
         preferredProfile,
       });
-    const awsSdkProfileAuth = resolveAwsSdkProfileAuth({
-      cfg,
-      provider,
-      profileId,
-      credential: store.profiles[profileId],
-    });
-    if (awsSdkProfileAuth) {
-      return awsSdkProfileAuth;
-    }
     const resolved = await resolveApiKeyForProfile({
       cfg,
       store,
@@ -635,6 +593,31 @@ export async function resolveApiKeyForProvider(params: {
         .catch(() => result);
     }
     return result;
+  }
+
+  if (cfg?.auth?.profiles || cfg?.auth?.order) {
+    scopedStore ??= resolveScopedAuthProfileStore({
+      agentDir: params.agentDir,
+      cfg,
+      provider,
+      preferredProfile,
+    });
+    const configuredProfileOrder = resolveAuthProfileOrder({
+      cfg,
+      store: scopedStore,
+      provider,
+      preferredProfile,
+    });
+    for (const candidate of configuredProfileOrder) {
+      const awsSdkProfileAuth = resolveConfiguredAwsSdkProfileAuth({
+        cfg,
+        provider,
+        profileId: candidate,
+      });
+      if (awsSdkProfileAuth) {
+        return awsSdkProfileAuth;
+      }
+    }
   }
 
   const authOverride = resolveProviderAuthOverride(cfg, provider);
@@ -688,7 +671,7 @@ export async function resolveApiKeyForProvider(params: {
     };
   }
   const store =
-    params.store ??
+    scopedStore ??
     resolveScopedAuthProfileStore({
       agentDir: params.agentDir,
       cfg,
@@ -704,11 +687,10 @@ export async function resolveApiKeyForProvider(params: {
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   for (const candidate of order) {
     try {
-      const awsSdkProfileAuth = resolveAwsSdkProfileAuth({
+      const awsSdkProfileAuth = resolveConfiguredAwsSdkProfileAuth({
         cfg,
         provider,
         profileId: candidate,
-        credential: store.profiles[candidate],
       });
       if (awsSdkProfileAuth) {
         return awsSdkProfileAuth;
@@ -843,10 +825,10 @@ export function resolveModelAuthMode(
     const modes = new Set(
       profiles
         .map((id) => authStore.profiles[id]?.type)
-        .filter((mode): mode is "api_key" | "aws-sdk" | "oauth" | "token" => Boolean(mode)),
+        .filter((mode): mode is "api_key" | "oauth" | "token" => Boolean(mode)),
     );
-    const distinct = ["oauth", "token", "api_key", "aws-sdk"].filter((k) =>
-      modes.has(k as "oauth" | "token" | "api_key" | "aws-sdk"),
+    const distinct = ["oauth", "token", "api_key"].filter((k) =>
+      modes.has(k as "oauth" | "token" | "api_key"),
     );
     if (distinct.length >= 2) {
       return "mixed";
@@ -859,9 +841,6 @@ export function resolveModelAuthMode(
     }
     if (modes.has("api_key")) {
       return "api-key";
-    }
-    if (modes.has("aws-sdk")) {
-      return "aws-sdk";
     }
   }
 
@@ -931,14 +910,7 @@ export async function hasAvailableAuthForProvider(params: {
   });
   for (const candidate of order) {
     try {
-      if (
-        resolveAwsSdkProfileAuth({
-          cfg,
-          provider,
-          profileId: candidate,
-          credential: store.profiles[candidate],
-        })
-      ) {
+      if (resolveConfiguredAwsSdkProfileAuth({ cfg, provider, profileId: candidate })) {
         return true;
       }
       const resolved = await resolveApiKeyForProfile({

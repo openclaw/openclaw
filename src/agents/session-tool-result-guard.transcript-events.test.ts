@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   onSessionTranscriptUpdate,
@@ -41,12 +41,8 @@ describe("guardSessionManager transcript updates", () => {
     } as AgentMessage);
 
     expect(updates).toHaveLength(1);
-    expect(updates[0]).toMatchObject({
-      sessionFile,
-      sessionKey: "agent:main:worker",
-      message: {
-        role: "assistant",
-      },
-    });
+    expect(updates[0]?.sessionFile).toBe(sessionFile);
+    expect(updates[0]?.sessionKey).toBe("agent:main:worker");
+    expect((updates[0]?.message as { role?: string } | undefined)?.role).toBe("assistant");
   });
 });

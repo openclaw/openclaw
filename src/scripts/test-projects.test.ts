@@ -563,11 +563,11 @@ describe("test-projects args", () => {
       },
     );
 
-    expect(specs[0]?.env).toMatchObject({
-      KEEP_ME: "1",
-      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
-        "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
-    });
+    const firstEnv = specs[0]?.env;
+    expect(firstEnv?.KEEP_ME).toBe("1");
+    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+      "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
+    );
     expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
       "/repo/node_modules/.experimental-vitest-cache/1-test-vitest-vitest.gateway-server.config.ts",
     );
@@ -718,17 +718,6 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.extension-matrix.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/matrix/src/channel.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("routes bluebubbles extension tests to the bluebubbles config", () => {
-    expect(buildVitestRunPlans(["extensions/bluebubbles/src/monitor.test.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.extension-bluebubbles.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["extensions/bluebubbles/src/monitor.test.ts"],
         watchMode: false,
       },
     ]);
@@ -899,10 +888,10 @@ describe("test-projects args", () => {
     });
     expect(
       resolveChangedTargetArgs(["--changed=origin/main"], process.cwd(), () => changedPaths),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps core test-only changes on their owning test lane", () => {

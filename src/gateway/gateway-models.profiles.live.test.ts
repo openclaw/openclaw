@@ -12,7 +12,7 @@ import {
   type KnownProvider,
   type Model,
   type ModelThinkingLevel,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import {
@@ -94,7 +94,6 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
 );
 const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "google/gemini-3-flash-preview",
-  "google/gemini-3-pro-preview",
   "google/gemini-3.1-flash-lite-preview",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-pro-preview-customtools",
@@ -119,10 +118,13 @@ function parseFilter(raw?: string): Set<string> | null {
   if (!trimmed || trimmed === "all") {
     return null;
   }
-  const ids = trimmed
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const ids: string[] = [];
+  for (const rawId of trimmed.split(",")) {
+    const id = rawId.trim();
+    if (id.length > 0) {
+      ids.push(id);
+    }
+  }
   return ids.length ? new Set(ids) : null;
 }
 
@@ -130,6 +132,44 @@ function providerFilterList(): string[] | undefined {
   return PROVIDERS
     ? [...PROVIDERS].toSorted((left, right) => left.localeCompare(right))
     : undefined;
+}
+
+function providerListFromExplicitModelFilter(params: {
+  modelFilter: Set<string> | null;
+  providerFilter: Set<string> | null;
+}): string[] | undefined {
+  if (!params.modelFilter || params.modelFilter.size === 0) {
+    return undefined;
+  }
+  const providers = new Set<string>();
+  for (const raw of params.modelFilter) {
+    const ref = parseExplicitLiveModelRef(raw, params.providerFilter);
+    if (!ref) {
+      return undefined;
+    }
+    providers.add(ref.provider);
+  }
+  return providers.size > 0
+    ? [...providers].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
+}
+
+function providerScopedModelRegistryProviders(params: {
+  providerList: string[] | undefined;
+  useExplicit: boolean;
+  modelFilter: Set<string> | null;
+  providerFilter: Set<string> | null;
+}): string[] | undefined {
+  if (params.providerList) {
+    return params.providerList;
+  }
+  if (!params.useExplicit) {
+    return undefined;
+  }
+  return providerListFromExplicitModelFilter({
+    modelFilter: params.modelFilter,
+    providerFilter: params.providerFilter,
+  });
 }
 
 function shouldSuppressGatewayLiveOllamaWarnings(): boolean {
@@ -357,7 +397,7 @@ function isMeaningful(text: string): boolean {
   if (trimmed.length < 60) {
     return false;
   }
-  const words = trimmed.split(/\s+/g).filter(Boolean);
+  const words = trimmed.split(/\s+/g);
   if (words.length < 12) {
     return false;
   }
@@ -665,6 +705,32 @@ describe("resolveExplicitLiveModelCandidates", () => {
     expect(candidates).toEqual([model]);
   });
 
+  it("normalizes retired Google Gemini refs before targeted lookup", () => {
+    const model = createGatewayLiveTestModel("google", "gemini-3.1-pro-preview");
+    const matcher = createLiveTargetMatcher({
+      providerFilter: new Set(["google"]),
+      modelFilter: new Set(["google/gemini-3-pro-preview"]),
+      env: {},
+    });
+    const candidates = resolveExplicitLiveModelCandidates({
+      modelRegistry: {
+        find(provider, modelId) {
+          expect(provider).toBe("google");
+          expect(modelId).toBe("gemini-3.1-pro-preview");
+          return model;
+        },
+        getAll() {
+          throw new Error("explicit model lookup should not enumerate registry");
+        },
+      },
+      modelFilter: new Set(["google/gemini-3-pro-preview"]),
+      providerFilter: new Set(["google"]),
+      targetMatcher: matcher,
+    });
+
+    expect(candidates).toEqual([model]);
+  });
+
   it("falls back to enumeration for ambiguous model-only filters", () => {
     const matcher = createLiveTargetMatcher({
       providerFilter: null,
@@ -690,13 +756,48 @@ describe("resolveExplicitLiveModelCandidates", () => {
   });
 });
 
+describe("providerScopedModelRegistryProviders", () => {
+  it("uses explicit provider-qualified model refs without enumerating the full registry", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: true,
+        modelFilter: new Set(["openai/gpt-5.2", "anthropic/claude-sonnet-4-6"]),
+        providerFilter: null,
+      }),
+    ).toEqual(["anthropic", "openai"]);
+  });
+
+  it("uses a single provider filter for explicit model-only refs", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: true,
+        modelFilter: new Set(["gpt-5.2"]),
+        providerFilter: new Set(["openai"]),
+      }),
+    ).toEqual(["openai"]);
+  });
+
+  it("falls back to the full registry for ambiguous explicit model-only refs", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: true,
+        modelFilter: new Set(["gpt-5.2"]),
+        providerFilter: null,
+      }),
+    ).toBeUndefined();
+  });
+});
+
 describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("clamps requested thinking to levels supported by model metadata", () => {
     expect(
       resolveGatewayLiveModelThinkingLevel({
         cfg: {},
         model: {
-          ...createGatewayLiveTestModel("xai", "grok-4.3"),
+          ...createGatewayLiveTestModel("example", "reasoning-model"),
           reasoning: true,
           thinkingLevelMap: {
             off: null,
@@ -1257,7 +1358,10 @@ describe("sanitizeAuthProfileStoreForLiveGateway", () => {
     try {
       const sanitized = sanitizeAuthProfileStoreForLiveGateway(store);
       expect(sanitized.profiles.openaiProfile).toBeUndefined();
-      expect(sanitized.profiles.codexProfile).toBeDefined();
+      expect(sanitized.profiles.codexProfile).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+      });
       expect(sanitized.order).toEqual({ "openai-codex": ["codexProfile"] });
       expect(sanitized.lastGood).toEqual({ "openai-codex": "codexProfile" });
       expect(sanitized.usageStats).toEqual({ codexProfile: { lastUsed: 2 } });
@@ -1287,17 +1391,17 @@ function extractTranscriptMessageText(message: unknown): string {
   if (!Array.isArray(record.content)) {
     return "";
   }
-  return record.content
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return "";
-      }
+  const textParts: string[] = [];
+  for (const entry of record.content) {
+    if (entry && typeof entry === "object") {
       const text = (entry as { text?: unknown }).text;
-      return typeof text === "string" && text.trim() ? text.trim() : "";
-    })
-    .filter(Boolean)
-    .join("\n")
-    .trim();
+      const trimmed = typeof text === "string" ? text.trim() : "";
+      if (trimmed.length > 0) {
+        textParts.push(trimmed);
+      }
+    }
+  }
+  return textParts.join("\n").trim();
 }
 
 async function readSessionAssistantTexts(sessionKey: string, modelKey?: string): Promise<string[]> {
@@ -1556,7 +1660,11 @@ function parseExplicitLiveModelRef(
   const slash = trimmed.indexOf("/");
   if (slash !== -1) {
     const provider = normalizeProviderId(trimmed.slice(0, slash));
-    const modelId = trimmed.slice(slash + 1).trim();
+    const rawModelId = trimmed.slice(slash + 1).trim();
+    const modelId =
+      provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex"
+        ? normalizeGoogleModelId(rawModelId)
+        : rawModelId;
     return provider && modelId ? { provider, modelId } : null;
   }
   if (!providerFilter || providerFilter.size !== 1) {
@@ -2551,14 +2659,19 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
         const useExplicit = Boolean(rawModels) && !useModern;
         const filter = useExplicit ? parseFilter(rawModels) : null;
-        const useProviderScopedBuiltIns = Array.isArray(providerList) && !useExplicit;
+        const providerScopedModelProviders = providerScopedModelRegistryProviders({
+          providerList,
+          useExplicit,
+          modelFilter: filter,
+          providerFilter: PROVIDERS,
+        });
         let authProfileStore: AuthProfileStore | undefined;
         let modelRegistry: LiveModelRegistry;
         let all: Array<Model<Api>>;
-        if (useProviderScopedBuiltIns) {
+        if (providerScopedModelProviders) {
           logProgress("[all-models] loading provider-scoped model refs");
           all = await withGatewayLiveSetupTimeout(
-            loadProviderScopedModels({ agentDir, providerList }),
+            loadProviderScopedModels({ agentDir, providerList: providerScopedModelProviders }),
             "[all-models] load provider-scoped model refs",
           );
           modelRegistry = createStaticLiveModelRegistry(all);
@@ -2687,6 +2800,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,
           );
         }
+        expect(selectedCandidates.length).toBeGreaterThan(0);
         const imageCandidates = selectedCandidates.filter((m) => m.input?.includes("image"));
         if (imageCandidates.length === 0) {
           logProgress("[all-models] no image-capable models selected; image probe will be skipped");

@@ -357,7 +357,7 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "automation":
       case "infrastructure":
       case "aiAgents":
-        await loadConfigSchema(app);
+        void loadConfigSchema(app).finally(() => host.requestUpdate?.());
         await loadConfig(app);
         break;
       case "overview":
@@ -618,7 +618,7 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   updateBrowserHistory(url, replace);
 }
 
-export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
+export function syncUrlWithSessionKey(_host: SettingsHost, sessionKey: string, replace: boolean) {
   const href = typeof window === "undefined" ? undefined : window.location?.href;
   if (!href) {
     return;
@@ -837,11 +837,9 @@ function buildAttentionItems(host: SettingsAppHost) {
 
 export async function loadChannelsTab(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
-  await Promise.all([
-    loadChannels(app, true, { softTimeoutMs: 750 }),
-    loadConfigSchema(app),
-    loadConfig(app),
-  ]);
+  void loadConfigSchema(app).finally(() => host.requestUpdate?.());
+  await Promise.all([loadChannels(app, false), loadConfig(app)]);
+  void loadChannels(app, true).finally(() => host.requestUpdate?.());
 }
 
 export async function loadCron(host: SettingsHost) {

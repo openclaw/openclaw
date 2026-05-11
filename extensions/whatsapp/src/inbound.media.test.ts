@@ -93,9 +93,8 @@ const HOME = path.join(os.tmpdir(), `openclaw-inbound-media-${crypto.randomUUID(
 const ORIGINAL_HOME = process.env.HOME;
 process.env.HOME = HOME;
 
-vi.mock("@whiskeysockets/baileys", async () => {
-  const actual =
-    await vi.importActual<typeof import("@whiskeysockets/baileys")>("@whiskeysockets/baileys");
+vi.mock("baileys", async () => {
+  const actual = await vi.importActual<typeof import("baileys")>("baileys");
   const jpegBuffer = Buffer.from([
     0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x03, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03, 0x02, 0x02,
     0x02, 0x03, 0x03, 0x03, 0x03, 0x04, 0x06, 0x04, 0x04, 0x04, 0x04, 0x04, 0x08, 0x06, 0x06, 0x05,
@@ -157,6 +156,13 @@ async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
   return onMessage.mock.calls[0][0];
 }
 
+function requireMediaPath(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("expected inbound media path");
+  }
+  return value;
+}
+
 describe("web inbound media saves with extension", () => {
   async function getMockSocket() {
     return (await createWaSocket(false, false)) as unknown as {
@@ -212,10 +218,9 @@ describe("web inbound media saves with extension", () => {
     });
 
     const first = await waitForMessage(onMessage);
-    const mediaPath = first.mediaPath;
-    expect(mediaPath).toBeDefined();
-    expect(path.extname(mediaPath as string)).toBe(".jpg");
-    const stat = await fs.stat(mediaPath as string);
+    const mediaPath = requireMediaPath(first.mediaPath);
+    expect(path.extname(mediaPath)).toBe(".jpg");
+    const stat = await fs.stat(mediaPath);
     expect(stat.size).toBeGreaterThan(0);
 
     onMessage.mockClear();
@@ -279,8 +284,8 @@ describe("web inbound media saves with extension", () => {
 
     const inbound = await waitForMessage(onMessage);
     expect(inbound.replyToBody).toBe("<media:image>");
-    expect(inbound.mediaPath).toBeDefined();
-    expect(path.extname(inbound.mediaPath as string)).toBe(".jpg");
+    const mediaPath = requireMediaPath(inbound.mediaPath);
+    expect(path.extname(mediaPath)).toBe(".jpg");
     expect(saveMediaBufferSpy).toHaveBeenCalled();
     const lastCall = saveMediaBufferSpy.mock.calls.at(-1);
     expect(lastCall?.[1]).toBe("image/jpeg");

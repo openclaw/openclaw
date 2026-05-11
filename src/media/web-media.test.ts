@@ -2,15 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 
+let LocalMediaAccessError: typeof import("./web-media.js").LocalMediaAccessError;
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
 let optimizeImageToJpeg: typeof import("./web-media.js").optimizeImageToJpeg;
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 
 let fixtureRoot = "";
 let tinyPngFile = "";
@@ -19,8 +22,23 @@ let canvasPngFile = "";
 let workspaceDir = "";
 let workspacePngFile = "";
 
+function installCanvasMediaResolver() {
+  const registry = createEmptyPluginRegistry();
+  registry.hostedMediaResolvers = [
+    {
+      pluginId: "canvas",
+      resolver: (mediaUrl) =>
+        mediaUrl === `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`
+          ? canvasPngFile
+          : null,
+      source: "test",
+    },
+  ];
+  setActivePluginRegistry(registry);
+}
+
 beforeAll(async () => {
-  ({ loadWebMedia, optimizeImageToJpeg } = await import("./web-media.js"));
+  ({ LocalMediaAccessError, loadWebMedia, optimizeImageToJpeg } = await import("./web-media.js"));
   fixtureRoot = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "web-media-core-"));
   tinyPngFile = path.join(fixtureRoot, "tiny.png");
   await fs.writeFile(tinyPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
@@ -39,9 +57,11 @@ beforeAll(async () => {
   );
   await fs.mkdir(path.dirname(canvasPngFile), { recursive: true });
   await fs.writeFile(canvasPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
+  installCanvasMediaResolver();
 });
 
 afterAll(async () => {
+  resetPluginRuntimeStateForTest();
   if (fixtureRoot) {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   }
@@ -74,13 +94,37 @@ describe("loadWebMedia", () => {
         );
         return;
       }
-      await expect(loadWebMedia(url, createLocalWebMediaOptions())).rejects.toMatchObject(
+      await expectLoadWebMediaErrorFields(
+        loadWebMedia(url, createLocalWebMediaOptions()),
         expectedError,
       );
     } finally {
       restoreHandle?.mockRestore?.();
       restoreHandle?.restore?.();
     }
+  }
+
+  async function expectLoadWebMediaErrorFields(
+    promise: Promise<unknown>,
+    expectedFields: Record<string, unknown>,
+  ) {
+    let mediaError: unknown;
+    try {
+      await promise;
+    } catch (error) {
+      mediaError = error;
+    }
+    expect(mediaError).toBeInstanceOf(LocalMediaAccessError);
+    if (!(mediaError instanceof LocalMediaAccessError)) {
+      throw new Error("expected LocalMediaAccessError");
+    }
+    for (const [key, value] of Object.entries(expectedFields)) {
+      expect(Reflect.get(mediaError, key)).toStrictEqual(value);
+    }
+  }
+
+  async function expectLoadWebMediaErrorCode(promise: Promise<unknown>, code: string) {
+    await expectLoadWebMediaErrorFields(promise, { code });
   }
 
   async function expectRejectedWebMediaWithoutFilesystemAccess(params: {
@@ -149,10 +193,41 @@ describe("loadWebMedia", () => {
   });
 
   it("loads browser-style canvas media paths as managed local files", async () => {
+    installCanvasMediaResolver();
     const result = await loadWebMedia(
       `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`,
       { maxBytes: 1024 * 1024 },
     );
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("keeps trying hosted media resolvers after one throws", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.hostedMediaResolvers = [
+      {
+        pluginId: "broken",
+        resolver: () => {
+          throw new Error("resolver failed");
+        },
+        source: "test",
+      },
+      {
+        pluginId: "canvas",
+        resolver: (mediaUrl) =>
+          mediaUrl === `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`
+            ? canvasPngFile
+            : null,
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    const result = await loadWebMedia(
+      `${CANVAS_HOST_PATH}/documents/cv_test/collection.media/tiny.png`,
+      { maxBytes: 1024 * 1024 },
+    );
+
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
   });
@@ -250,31 +325,29 @@ describe("loadWebMedia", () => {
   it("rejects host-read text files outside local roots", async () => {
     const secretFile = path.join(fixtureRoot, "secret.txt");
     await fs.writeFile(secretFile, "secret", "utf8");
-    await expect(
+    await expectLoadWebMediaErrorCode(
       loadWebMedia(secretFile, {
         maxBytes: 1024 * 1024,
         localRoots: "any",
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-    ).rejects.toMatchObject({
-      code: "path-not-allowed",
-    });
+      "path-not-allowed",
+    );
   });
 
   it("rejects renamed host-read text files even when the extension looks allowed", async () => {
     const disguisedPdf = path.join(fixtureRoot, "secret.pdf");
     await fs.writeFile(disguisedPdf, "secret", "utf8");
-    await expect(
+    await expectLoadWebMediaErrorCode(
       loadWebMedia(disguisedPdf, {
         maxBytes: 1024 * 1024,
         localRoots: "any",
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-    ).rejects.toMatchObject({
-      code: "path-not-allowed",
-    });
+      "path-not-allowed",
+    );
   });
 
   it("allows host-read CSV files", async () => {
@@ -303,21 +376,62 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/markdown");
   });
 
+  it.each([
+    {
+      label: "ZIP",
+      fileName: "archive.zip",
+      contentType: "application/zip",
+      buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+    },
+    {
+      label: "gzip",
+      fileName: "archive.gz",
+      contentType: "application/gzip",
+      buffer: Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0, 0x03]),
+    },
+    {
+      label: "tar",
+      fileName: "archive.tar",
+      contentType: "application/x-tar",
+      buffer: (() => {
+        const buffer = Buffer.alloc(512);
+        buffer.write("ustar", 257, "ascii");
+        return buffer;
+      })(),
+    },
+    {
+      label: "7z",
+      fileName: "archive.7z",
+      contentType: "application/x-7z-compressed",
+      buffer: Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0, 4]),
+    },
+  ])("allows host-read $label files", async ({ fileName, contentType, buffer }) => {
+    const archiveFile = path.join(fixtureRoot, fileName);
+    await fs.writeFile(archiveFile, buffer);
+    const result = await loadWebMedia(archiveFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe(contentType);
+  });
+
   it("rejects binary data disguised as a CSV file", async () => {
     const fakeCsv = path.join(fixtureRoot, "evil.csv");
-    // Write ZIP magic bytes — file-type detects application/zip (not image, not CSV),
-    // so it is rejected by the host-read policy rather than allowed as an image.
+    // Declared plain-text aliases must use the text validator path even when the
+    // buffer sniffs as an otherwise allowed archive type.
     await fs.writeFile(fakeCsv, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
-    await expect(
+    await expectLoadWebMediaErrorCode(
       loadWebMedia(fakeCsv, {
         maxBytes: 1024 * 1024,
         localRoots: "any",
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-    ).rejects.toMatchObject({
-      code: "path-not-allowed",
-    });
+      "path-not-allowed",
+    );
   });
 
   it.each([
@@ -330,16 +444,15 @@ describe("loadWebMedia", () => {
       opaqueBinary[i] = (i % 255) + 1;
     }
     await fs.writeFile(fakeTextFile, opaqueBinary);
-    await expect(
+    await expectLoadWebMediaErrorCode(
       loadWebMedia(fakeTextFile, {
         maxBytes: 1024 * 1024,
         localRoots: "any",
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-    ).rejects.toMatchObject({
-      code: "path-not-allowed",
-    });
+      "path-not-allowed",
+    );
   });
 
   it.each([
@@ -353,16 +466,15 @@ describe("loadWebMedia", () => {
       expect(textPrefix.length).toBeGreaterThan(8192);
       const binaryTail = Buffer.from([0x00, 0xff, 0x10, 0x80]);
       await fs.writeFile(fakeTextFile, Buffer.concat([textPrefix, binaryTail]));
-      await expect(
+      await expectLoadWebMediaErrorCode(
         loadWebMedia(fakeTextFile, {
           maxBytes: 1024 * 1024,
           localRoots: "any",
           readFile: async (filePath) => await fs.readFile(filePath),
           hostReadCapability: true,
         }),
-      ).rejects.toMatchObject({
-        code: "path-not-allowed",
-      });
+        "path-not-allowed",
+      );
     },
   );
 
@@ -422,16 +534,15 @@ describe("loadWebMedia", () => {
       nulPadded[i] = i % 2 === 0 ? 0x00 : 0xff;
     }
     await fs.writeFile(fakeTextFile, nulPadded);
-    await expect(
+    await expectLoadWebMediaErrorCode(
       loadWebMedia(fakeTextFile, {
         maxBytes: 1024 * 1024,
         localRoots: "any",
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-    ).rejects.toMatchObject({
-      code: "path-not-allowed",
-    });
+      "path-not-allowed",
+    );
   });
 
   it.each([
@@ -446,16 +557,15 @@ describe("loadWebMedia", () => {
     const bom = Buffer.from([0xff, 0xfe]);
     const garbage = Buffer.alloc(9000, 0xff);
     await fs.writeFile(fakeTextFile, Buffer.concat([bom, garbage]));
-    await expect(
+    await expectLoadWebMediaErrorCode(
       loadWebMedia(fakeTextFile, {
         maxBytes: 1024 * 1024,
         localRoots: "any",
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-    ).rejects.toMatchObject({
-      code: "path-not-allowed",
-    });
+      "path-not-allowed",
+    );
   });
 
   it.each([
@@ -471,16 +581,15 @@ describe("loadWebMedia", () => {
       mixed[i] = i % 2 === 0 ? 0x41 : 0xff;
     }
     await fs.writeFile(fakeTextFile, mixed);
-    await expect(
+    await expectLoadWebMediaErrorCode(
       loadWebMedia(fakeTextFile, {
         maxBytes: 1024 * 1024,
         localRoots: "any",
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-    ).rejects.toMatchObject({
-      code: "path-not-allowed",
-    });
+      "path-not-allowed",
+    );
   });
 
   it.each([
@@ -493,24 +602,22 @@ describe("loadWebMedia", () => {
       opaqueBinary[i] = 0xa0 + (i % 96);
     }
     await fs.writeFile(fakeTextFile, opaqueBinary);
-    await expect(
+    await expectLoadWebMediaErrorCode(
       loadWebMedia(fakeTextFile, {
         maxBytes: 1024 * 1024,
         localRoots: "any",
         readFile: async (filePath) => await fs.readFile(filePath),
         hostReadCapability: true,
       }),
-    ).rejects.toMatchObject({
-      code: "path-not-allowed",
-    });
+      "path-not-allowed",
+    );
   });
 
   it("rejects traversal-style canvas media paths before filesystem access", async () => {
-    await expect(
+    await expectLoadWebMediaErrorCode(
       loadWebMedia(`${CANVAS_HOST_PATH}/documents/../collection.media/tiny.png`),
-    ).rejects.toMatchObject({
-      code: "path-not-allowed",
-    });
+      "path-not-allowed",
+    );
   });
 
   it("hydrates inbound media store URIs before allowed-root checks", async () => {
@@ -553,20 +660,20 @@ describe("loadWebMedia", () => {
   });
 
   it("rejects unsupported media store URI locations", async () => {
-    await expect(loadWebMedia("media://outbound/tiny.png")).rejects.toMatchObject({
-      code: "path-not-allowed",
-    });
+    await expectLoadWebMediaErrorCode(
+      loadWebMedia("media://outbound/tiny.png"),
+      "path-not-allowed",
+    );
   });
 
   it("rejects media store URI ids with encoded path separators", async () => {
-    await expect(loadWebMedia("media://inbound/nested%2Ftiny.png")).rejects.toMatchObject({
-      code: "invalid-path",
-    });
+    await expectLoadWebMediaErrorCode(
+      loadWebMedia("media://inbound/nested%2Ftiny.png"),
+      "invalid-path",
+    );
   });
 
   it("rejects media store URIs without an id", async () => {
-    await expect(loadWebMedia("media://inbound/")).rejects.toMatchObject({
-      code: "invalid-path",
-    });
+    await expectLoadWebMediaErrorCode(loadWebMedia("media://inbound/"), "invalid-path");
   });
 });
