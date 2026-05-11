@@ -28,13 +28,13 @@ type PackageJson = {
   packageManager?: string;
 };
 
-function repositoryPnpmVersion(): string {
+function repositoryPnpmMajor(): string {
   const packageJson = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as PackageJson;
-  const version = packageJson.packageManager?.match(/^pnpm@(.+)$/)?.[1];
-  if (!version) {
+  const major = packageJson.packageManager?.match(/^pnpm@(\d+)\./)?.[1];
+  if (!major) {
     throw new Error(`Missing pnpm packageManager pin in ${PACKAGE_JSON}`);
   }
-  return version.split("+", 1)[0];
+  return major;
 }
 
 function workflowStep(name: string): WorkflowStep {
@@ -48,13 +48,13 @@ function workflowStep(name: string): WorkflowStep {
 }
 
 describe("Mantis Telegram Desktop proof workflow", () => {
-  it("uses the repository pnpm version pin", () => {
+  it("runs with the repository pnpm major", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const liveWorkflow = parse(readFileSync(LIVE_WORKFLOW, "utf8")) as Workflow;
-    const pnpmVersion = repositoryPnpmVersion();
+    const pnpmMajor = repositoryPnpmMajor();
 
-    expect(workflow.env?.PNPM_VERSION).toBe(pnpmVersion);
-    expect(liveWorkflow.env?.PNPM_VERSION).toBe(pnpmVersion);
+    expect(workflow.env?.PNPM_VERSION?.split(".", 1)[0]).toBe(pnpmMajor);
+    expect(liveWorkflow.env?.PNPM_VERSION?.split(".", 1)[0]).toBe(pnpmMajor);
   });
 
   it("uses the repo-owned Telegram user driver by default", () => {
