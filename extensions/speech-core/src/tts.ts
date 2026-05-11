@@ -1317,6 +1317,7 @@ export async function synthesizeSpeech(params: {
         voiceCompatible: synthesis.voiceCompatible,
         fileExtension: synthesis.fileExtension,
         target,
+        wordTimestamps: synthesis.wordTimestamps,
       };
     } catch (err) {
       const errorMsg = formatTtsProviderError(provider, err);
