@@ -6,6 +6,7 @@ import {
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 type TestPayload = {
+  cache_control?: { type: "ephemeral"; ttl?: "1h" };
   messages: Array<{ role: string; content: unknown }>;
   service_tier?: string;
   system?: unknown;
@@ -40,10 +41,9 @@ function simpleTextPayload(): TestPayload {
 
 function expectShortEphemeralTextPayload(payload: TestPayload) {
   expect(payload.system).toEqual([textBlock("Follow policy.", { type: "ephemeral" })]);
-  expect(payload.messages[0]).toEqual({
-    role: "user",
-    content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral" } }],
-  });
+  expect(payload.cache_control).toEqual({ type: "ephemeral" });
+  // Automatic caching mode: messages are no longer mutated with per-turn breakpoints.
+  expect(payload.messages[0]).toEqual({ role: "user", content: "Hello" });
 }
 
 describe("anthropic payload policy", () => {
@@ -83,6 +83,8 @@ describe("anthropic payload policy", () => {
       textBlock("Follow policy.", { type: "ephemeral", ttl: "1h" }),
       textBlock("Use tools carefully.", { type: "ephemeral", ttl: "1h" }),
     ]);
+    // Automatic caching: top-level cache_control set, messages left untouched.
+    expect(payload.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
     expect(payload.messages[0]).toEqual({
       role: "assistant",
       content: [{ type: "text", text: "Working." }],
@@ -95,7 +97,6 @@ describe("anthropic payload policy", () => {
           type: "tool_result",
           tool_use_id: "tool_1",
           content: "done",
-          cache_control: { type: "ephemeral", ttl: "1h" },
         },
       ],
     });
@@ -116,10 +117,8 @@ describe("anthropic payload policy", () => {
 
     expect(payload).not.toHaveProperty("service_tier");
     expect(payload.system).toEqual([textBlock("Follow policy.", { type: "ephemeral", ttl: "1h" })]);
-    expect(payload.messages[0]).toEqual({
-      role: "user",
-      content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } }],
-    });
+    expect(payload.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect(payload.messages[0]).toEqual({ role: "user", content: "Hello" });
   });
 
   it("keeps implicit env-driven long retention conservative for custom hosts", () => {
@@ -201,10 +200,8 @@ describe("anthropic payload policy", () => {
       textBlock("Follow policy.", { type: "ephemeral", ttl: "1h" }),
       textBlock("Use tools carefully.", { type: "ephemeral", ttl: "1h" }),
     ]);
-    expect(payload.messages[0]).toEqual({
-      role: "user",
-      content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral", ttl: "1h" } }],
-    });
+    expect(payload.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect(payload.messages[0]).toEqual({ role: "user", content: "Hello" });
   });
 
   it("applies 5m ephemeral cache for Vertex AI endpoints with short cache retention", () => {
@@ -220,6 +217,55 @@ describe("anthropic payload policy", () => {
     applyAnthropicPayloadPolicyToParams(payload, policy);
 
     expect(payload.system).toEqual([textBlock("Follow policy.", { type: "ephemeral" })]);
+  });
+
+  it("enables automatic prompt caching for multi-turn conversations without per-turn breakpoint churn", () => {
+    // Regression test: previously this policy placed an explicit cache_control
+    // on the trailing user block of every turn, which empirically failed to
+    // extend the cache across turns (~26k cache-write tokens per turn for
+    // ~120 chars of new conversation). Anthropic's automatic caching mode
+    // (top-level cache_control) is the documented multi-turn shape.
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1",
+      cacheRetention: "long",
+      enableCacheControl: true,
+    });
+    const payload: TestPayload = {
+      system: [{ type: "text", text: "Follow policy." }],
+      messages: [
+        { role: "user", content: "Turn 1 user." },
+        { role: "assistant", content: [{ type: "text", text: "Turn 1 assistant." }] },
+        { role: "user", content: "Turn 2 user." },
+        { role: "assistant", content: [{ type: "text", text: "Turn 2 assistant." }] },
+        { role: "user", content: "Turn 3 user." },
+      ],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy);
+
+    expect(payload.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect(payload.system).toEqual([
+      textBlock("Follow policy.", { type: "ephemeral", ttl: "1h" }),
+    ]);
+    // None of the message blocks should carry a per-turn cache_control: the
+    // top-level field is the single cache anchor and Anthropic auto-advances
+    // it as the conversation grows.
+    for (const msg of payload.messages) {
+      if (typeof msg.content === "string") continue;
+      if (Array.isArray(msg.content)) {
+        for (const block of msg.content as Array<Record<string, unknown>>) {
+          expect(block).not.toHaveProperty("cache_control");
+        }
+      }
+    }
+    // The last user message specifically must not have been rewritten into a
+    // block array with a cache_control tag (that was the old behaviour).
+    expect(payload.messages[payload.messages.length - 1]).toEqual({
+      role: "user",
+      content: "Turn 3 user.",
+    });
   });
 
   it("strips the boundary even when cache retention is disabled", () => {

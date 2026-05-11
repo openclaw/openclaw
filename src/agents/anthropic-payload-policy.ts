@@ -4,8 +4,10 @@ import {
   stripSystemPromptCacheBoundary,
 } from "./system-prompt-cache-boundary.js";
 
+/** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export type AnthropicServiceTier = "auto" | "standard_only";
 
+/** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export type AnthropicEphemeralCacheControl = {
   type: "ephemeral";
   ttl?: "1h";
@@ -20,6 +22,7 @@ type AnthropicPayloadPolicyInput = {
   serviceTier?: AnthropicServiceTier;
 };
 
+/** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export type AnthropicPayloadPolicy = {
   allowsServiceTier: boolean;
   cacheControl: AnthropicEphemeralCacheControl | undefined;
@@ -130,52 +133,7 @@ function stripAnthropicSystemPromptBoundary(system: unknown): void {
   }
 }
 
-function applyAnthropicCacheControlToMessages(
-  messages: unknown,
-  cacheControl: AnthropicEphemeralCacheControl,
-): void {
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return;
-  }
-
-  const lastMessage = messages[messages.length - 1];
-  if (!lastMessage || typeof lastMessage !== "object") {
-    return;
-  }
-
-  const record = lastMessage as Record<string, unknown>;
-  if (record.role !== "user") {
-    return;
-  }
-
-  const content = record.content;
-  if (Array.isArray(content)) {
-    const lastBlock = content[content.length - 1];
-    if (!lastBlock || typeof lastBlock !== "object") {
-      return;
-    }
-    const lastBlockRecord = lastBlock as Record<string, unknown>;
-    if (
-      lastBlockRecord.type === "text" ||
-      lastBlockRecord.type === "image" ||
-      lastBlockRecord.type === "tool_result"
-    ) {
-      lastBlockRecord.cache_control = cacheControl;
-    }
-    return;
-  }
-
-  if (typeof content === "string") {
-    record.content = [
-      {
-        type: "text",
-        text: content,
-        cache_control: cacheControl,
-      },
-    ];
-  }
-}
-
+/** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export function resolveAnthropicPayloadPolicy(
   input: AnthropicPayloadPolicyInput,
 ): AnthropicPayloadPolicy {
@@ -197,6 +155,7 @@ export function resolveAnthropicPayloadPolicy(
   };
 }
 
+/** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export function applyAnthropicPayloadPolicyToParams(
   payloadObj: Record<string, unknown>,
   policy: AnthropicPayloadPolicy,
@@ -219,10 +178,23 @@ export function applyAnthropicPayloadPolicyToParams(
     return;
   }
 
-  // Preserve Anthropic cache-write scope by only tagging the trailing user turn.
-  applyAnthropicCacheControlToMessages(payloadObj.messages, policy.cacheControl);
+  // Enable Anthropic's automatic prompt-caching mode by setting the top-level
+  // `cache_control` field. Per the Anthropic docs, this causes the cache
+  // breakpoint to be placed on the last cacheable block and advanced forward
+  // automatically as the conversation grows -- the right shape for multi-turn
+  // sessions. We keep the explicit breakpoint on the stable system prefix so
+  // the dynamic system suffix (everything after the OPENCLAW_CACHE_BOUNDARY
+  // marker) stays out of the cached zone; without that anchor, automatic mode
+  // would extend the cache through dynamic content and invalidate it on every
+  // turn. Replaces the previous per-turn breakpoint on the last user message,
+  // which empirically failed to extend the cache across turns and caused
+  // ~26k cache-write tokens per turn for ~120 chars of new conversation.
+  if (payloadObj.cache_control === undefined) {
+    payloadObj.cache_control = policy.cacheControl;
+  }
 }
 
+/** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export function applyAnthropicEphemeralCacheControlMarkers(
   payloadObj: Record<string, unknown>,
 ): void {
