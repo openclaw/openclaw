@@ -70,6 +70,8 @@ export function parseIMessageNotification(raw: unknown): IMessagePayload | null 
     !isOptionalString(message.reply_to_sender) ||
     !isOptionalString(message.created_at) ||
     !isOptionalBoolean(message.is_reaction) ||
+    !isOptionalBoolean(message.is_tapback) ||
+    !isOptionalNumber(message.associated_message_type) ||
     !isOptionalString(message.reaction_type) ||
     !isOptionalString(message.reaction_emoji) ||
     !isOptionalBoolean(message.is_reaction_add) ||

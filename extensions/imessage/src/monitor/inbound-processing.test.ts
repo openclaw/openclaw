@@ -8,6 +8,7 @@ import { _resetIMessageShortIdState } from "../monitor-reply-cache.js";
 import {
   buildIMessageInboundContext,
   describeIMessageEchoDropLog,
+  resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
@@ -397,6 +398,111 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(logVerbose).toHaveBeenCalledWith(
       `imessage: dropping self-chat reflected duplicate: "${sanitizeTerminalText(bodyText)}"`,
     );
+  });
+
+  it("returns a reaction decision for tapbacks on bot-authored messages by default", async () => {
+    const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
+      return lookup.messageId === "target-guid";
+    });
+
+    const decision = await resolveDecision({
+      message: {
+        guid: "reaction-guid",
+        is_reaction: true,
+        reaction_emoji: "👍",
+        is_reaction_add: true,
+        reacted_to_guid: "target-guid",
+        text: "",
+      },
+      messageText: "",
+      bodyText: "",
+      echoCache: { has: echoHas },
+    });
+
+    expect(decision.kind).toBe("reaction");
+    if (decision.kind !== "reaction") {
+      throw new Error("expected reaction decision");
+    }
+    expect(decision.text).toBe("iMessage reaction added: 👍 by +15555550123 on msg target-guid");
+    expect(decision.route.sessionKey).toBe("agent:main:main");
+    expect(decision.contextKey).toContain("imessage:reaction:added");
+  });
+
+  it("drops tapbacks on non-bot messages in own notification mode", async () => {
+    const decision = await resolveDecision({
+      message: {
+        is_reaction: true,
+        reaction_emoji: "❤️",
+        reacted_to_guid: "someone-else",
+        text: "",
+      },
+      messageText: "",
+      bodyText: "",
+      echoCache: { has: () => false },
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "reaction target not sent by agent" });
+  });
+
+  it("returns a reaction decision for all reaction notification mode", async () => {
+    const decision = await resolveDecision({
+      reactionNotifications: "all",
+      message: {
+        is_reaction: true,
+        reaction_emoji: "😂",
+        reacted_to_guid: "someone-else",
+        text: "",
+      },
+      messageText: "",
+      bodyText: "",
+    });
+
+    expect(decision.kind).toBe("reaction");
+    if (decision.kind !== "reaction") {
+      throw new Error("expected reaction decision");
+    }
+    expect(decision.text).toBe("iMessage reaction added: 😂 by +15555550123 on msg someone-else");
+  });
+
+  it("drops tapbacks when reaction notifications are off", async () => {
+    const decision = await resolveDecision({
+      reactionNotifications: "off",
+      message: {
+        is_reaction: true,
+        reaction_emoji: "👍",
+        reacted_to_guid: "target-guid",
+        text: "",
+      },
+      messageText: "",
+      bodyText: "",
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "reaction notifications disabled" });
+  });
+});
+
+describe("resolveIMessageReactionContext", () => {
+  it("detects legacy tapback text without treating normal prose as a reaction", () => {
+    expect(resolveIMessageReactionContext({}, "Loved “Hello”")).toMatchObject({
+      action: "added",
+      emoji: "❤️",
+      targetText: "Hello",
+    });
+    expect(resolveIMessageReactionContext({}, "Loved the movie")).toBeNull();
+  });
+
+  it("detects imsg tapback flags and associated message types", () => {
+    expect(
+      resolveIMessageReactionContext(
+        { is_tapback: true, reaction_emoji: "👍", reacted_to_guid: "target" },
+        "",
+      ),
+    ).toMatchObject({ action: "added", emoji: "👍", targetGuid: "target" });
+    expect(resolveIMessageReactionContext({ associated_message_type: 2001 }, "")).toMatchObject({
+      action: "added",
+      emoji: "reaction",
+    });
+    expect(resolveIMessageReactionContext({ associated_message_type: 1 }, "ok")).toBeNull();
   });
 });
 
