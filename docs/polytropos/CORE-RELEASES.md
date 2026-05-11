@@ -58,56 +58,27 @@ systemctl --user restart openclaw-gateway
 
 Rollback is the same operation, pointing `current` back to the prior release.
 
-## Release procedure (build + publish + switch)
+## Release procedure (scripted)
 
-Policy: a new release directory should only be created from a **versioned tag** in the core repo.
+Core releases are performed by the release script:
 
-### 1) Build (produce dist/)
+- [`scripts/polytropos-release.mjs`](../../scripts/polytropos-release.mjs)
 
-Canonical build sequence (deterministic):
-
-```bash
-pnpm install
-pnpm ui:build
-pnpm build
-```
-
-Output: `<repo>/dist/`.
-
-### 2) Publish (create the release directory)
+Usage:
 
 ```bash
-mkdir -p ~/polytropos/releases/<tag>
-cp -a <repo>/dist/. ~/polytropos/releases/<tag>/
-test -f ~/polytropos/releases/<tag>/index.js
+node scripts/polytropos-release.mjs release
 ```
 
-### 3) Initialize and/or update symlinks
+What it does (high level):
 
-- `dev` points at the core repo build output:
-
-```bash
-ln -sfn ~/polytropos/openclaw-polytropos/dist ~/polytropos/releases/dev
-```
-
-- `previous` should always be the prior `current` target (mandatory):
-
-```bash
-# capture current target if it exists
-if [ -L ~/polytropos/releases/current ]; then
-  ln -sfn "$(readlink -f ~/polytropos/releases/current)" ~/polytropos/releases/previous
-fi
-```
-
-- switch `current` to the new release:
-
-```bash
-ln -sfn ~/polytropos/releases/<tag> ~/polytropos/releases/current
-```
-
-### 4) Restart + verify
-
-Restart the gateway and verify health.
+- finds nearest reachable `upstream/<ver>` tag to determine `<ver>`
+- computes next global build number `poly.N` (always increments)
+- creates tag `polytropos/<ver>+poly.<N>`
+- builds `dist/` (`pnpm install`, `pnpm ui:build`, `pnpm build`)
+- copies `dist/` → `~/polytropos/releases/<ver>+poly.<N>/`
+- updates symlinks (mandatory): `previous` then `current`
+- restarts the gateway
 
 
 ## Dev mode (without a second gateway)
