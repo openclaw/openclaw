@@ -304,7 +304,7 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
     override description = "Show or set voice chat mode";
     override defer = true;
     override ephemeral = params.ephemeralDefault;
-    options: CommandOptions = [
+    override options: CommandOptions = [
       {
         name: "mode",
         description: "Voice chat mode (agent-proxy, stt-tts, bidi)",
