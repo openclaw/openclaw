@@ -12,7 +12,9 @@ const {
 } = vi.hoisted(() => ({
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   postJsonRequestMock: vi.fn(),
-  resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "openrouter-key" })),
+  resolveApiKeyForProviderMock: vi.fn<
+    (params: Record<string, unknown>) => Promise<{ apiKey: string }>
+  >(async () => ({ apiKey: "openrouter-key" })),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
     allowPrivateNetwork: false,
