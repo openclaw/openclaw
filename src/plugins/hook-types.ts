@@ -478,6 +478,7 @@ export type PluginHookBeforeToolCallResult = {
     title: string;
     description: string;
     severity?: "info" | "warning" | "critical";
+    metadata?: PluginJsonValue;
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;

@@ -29,7 +29,7 @@ export type PolicyChannelEvidence = {
 
 export type PolicyToolEvidence = {
   readonly id: string;
-  readonly ocPath: string;
+  readonly source: string;
   readonly line: number;
   readonly risk?: string;
   readonly sensitivity?: string;
@@ -147,14 +147,14 @@ function scanPolicyToolHeaders(ast: MdAst): readonly PolicyToolEvidence[] {
     const meta = match[2] ?? "";
     const entry: {
       id: string;
-      ocPath: string;
+      source: string;
       line: number;
       risk?: string;
       sensitivity?: string;
       capabilities?: readonly string[];
     } = {
       id,
-      ocPath: `oc://TOOLS.md/tools/${id}`,
+      source: `oc://TOOLS.md/tools/${id}`,
       line: tools.line + index + 1,
     };
     const risk = riskFromMeta(meta);
@@ -174,7 +174,7 @@ function scanPolicyToolHeaders(ast: MdAst): readonly PolicyToolEvidence[] {
 }
 
 function riskFromMeta(meta: string): string | undefined {
-  const namedRisk = /\brisk\s*:\s*(low|medium|high|critical)\b/i.exec(meta)?.[1];
+  const namedRisk = /\brisk\s*:\s*([a-z0-9_-]+)\b/i.exec(meta)?.[1];
   if (namedRisk !== undefined) {
     return namedRisk.toLowerCase();
   }

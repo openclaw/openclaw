@@ -119,6 +119,7 @@ Policy config lives under `plugins.entries.policy.config`.
           "path": "policy.jsonc",
           "requireRisk": true,
           "requireSensitivity": true,
+          "runtimeToolPolicy": false,
           "workspaceRepairs": false,
           "expectedHash": "sha256:...",
           "expectedAttestationHash": "sha256:...",
@@ -134,6 +135,7 @@ Policy config lives under `plugins.entries.policy.config`.
 | `enabled`                 | Enable policy checks even before `policy.jsonc` exists.             |
 | `requireRisk`             | Require governed tool declarations to include risk metadata.        |
 | `requireSensitivity`      | Require governed tool declarations to include sensitivity metadata. |
+| `runtimeToolPolicy`       | Apply enabled tool requirements through the trusted tool hook.      |
 | `workspaceRepairs`        | Allow `doctor --fix` to edit policy-managed workspace settings.     |
 | `expectedHash`            | Optional hash-lock for the approved policy artifact.                |
 | `expectedAttestationHash` | Optional hash-lock for the last accepted clean policy check.        |
@@ -177,7 +179,7 @@ Example JSON output:
     "tools": [
       {
         "id": "deploy",
-        "ocPath": "oc://TOOLS.md/tools/deploy",
+        "source": "oc://TOOLS.md/tools/deploy",
         "line": 12,
         "risk": "critical",
         "sensitivity": "restricted",
@@ -214,6 +216,11 @@ Use this lifecycle when accepting policy state:
 4. Record `attestation.attestationHash` as `expectedAttestationHash`.
 5. Re-run `openclaw doctor --lint` in CI or release gates.
 
+The tool runtime gate also includes structured approval metadata on approval
+requests: policy path/hash, configured expected hash when present, the policy
+evidence hash, and the target tool reference. That keeps audit values separate
+from the human-readable approval message.
+
 If policy rules change intentionally, update both accepted hashes from a clean
 check. If workspace settings change intentionally but policy stays the same,
 only `expectedAttestationHash` usually changes.
@@ -234,6 +241,12 @@ Policy currently verifies:
 | `policy/tools-unknown-sensitivity-token` | A governed tool declaration uses an unknown sensitivity value.      |
 
 Example JSON finding:
+
+Policy findings can include both `target` and `requirement`. `target` is the
+observed workspace thing that does not conform. `requirement` is the authored
+policy rule that made it a finding. Both values are addresses today, usually
+`oc://` paths, but the field names describe their policy role rather than the
+address format.
 
 ```json
 {
@@ -292,7 +305,54 @@ configured channel:
 }
 ```
 
+## Runtime Tool Policy
+
+OpenClaw config can also opt into a small runtime tool gate:
+
+```jsonc
+{
+  "plugins": {
+    "entries": {
+      "policy": {
+        "enabled": true,
+        "config": {
+          "enabled": true,
+          "runtimeToolPolicy": true,
+        },
+      },
+    },
+  },
+}
+```
+
+When `runtimeToolPolicy` is enabled, the bundled Policy plugin registers an
+OpenClaw trusted tool policy. It uses the same `policy.jsonc` requirements and
+`TOOLS.md` evidence as `policy check`.
+
+The runtime gate is enabled from OpenClaw config, not from `policy.jsonc`, so a
+missing policy artifact still fails closed instead of disabling the gate.
+
+The runtime gate:
+
+- blocks tool calls if the enabled policy artifact is missing or does not match
+  `expectedHash`;
+- blocks governed tool calls whose required metadata is missing or invalid;
+- asks for approval for governed tools marked `risk:critical` or
+  `IRREVERSIBLE_EXTERNAL`;
+- otherwise lets the normal tool call path continue.
+
+This is not a separate plugin loader path for doctor. The plugin registers
+the trusted tool policy when the Policy plugin is enabled, and the existing
+tool runtime invokes the registered policy before regular `before_tool_call`
+hooks.
+
 ## Exit codes
 
-`policy check` exits `0` when there are no findings at the threshold, `1` when
-findings are present, and `2` for argument or runtime failures.
+| Command               | `0`                                                                           | `1`                                                        | `2`                          |
+| --------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------- |
+| `policy check`        | No findings at the threshold.                                                 | One or more findings met the threshold.                    | Argument or runtime failure. |
+
+## Related
+
+- [Doctor lint mode](/cli/doctor#lint-mode)
+- [Path CLI](/cli/path)
