@@ -5,6 +5,7 @@ import { getConfiguredChannelsCommandSecretTargetIds } from "../../cli/command-s
 import { withProgress } from "../../cli/progress.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { BUSY_ACTIVITY_STALE_THRESHOLD_MS } from "../../gateway/channel-health-policy.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
@@ -108,6 +109,24 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       }
       if (outboundAt) {
         bits.push(`out:${formatTimeAgo(Date.now() - outboundAt)}`);
+      }
+      const activeRuns =
+        typeof account.activeRuns === "number" && Number.isFinite(account.activeRuns)
+          ? Math.max(0, Math.trunc(account.activeRuns))
+          : 0;
+      const busy = account.busy === true || activeRuns > 0;
+      const lastRunActivityAt =
+        typeof account.lastRunActivityAt === "number" && Number.isFinite(account.lastRunActivityAt)
+          ? account.lastRunActivityAt
+          : null;
+      if (busy) {
+        bits.push(activeRuns > 0 ? `busy:runs=${activeRuns}` : "busy");
+        if (lastRunActivityAt != null) {
+          const runActivityAgeMs = Math.max(0, Date.now() - lastRunActivityAt);
+          bits.push(
+            `${runActivityAgeMs >= BUSY_ACTIVITY_STALE_THRESHOLD_MS ? "busy-stale" : "run"}:${formatTimeAgo(runActivityAgeMs)}`,
+          );
+        }
       }
       appendModeBit(bits, account);
       const botUsername = (() => {

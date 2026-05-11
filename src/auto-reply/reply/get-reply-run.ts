@@ -898,11 +898,11 @@ export async function runPreparedReply(
   const resolveQueueBusyState = () => {
     const activeSessionId = resolveActiveQueueSessionId();
     if (!activeSessionId || !piRuntime) {
-      return { activeSessionId: undefined, isActive: false, isStreaming: false };
+      return { activeSessionId: undefined, isActive: laneSize > 0, isStreaming: false };
     }
     return {
       activeSessionId,
-      isActive: piRuntime.isEmbeddedPiRunActive(activeSessionId),
+      isActive: piRuntime.isEmbeddedPiRunActive(activeSessionId) || laneSize > 0,
       isStreaming: piRuntime.isEmbeddedPiRunStreaming(activeSessionId),
     };
   };

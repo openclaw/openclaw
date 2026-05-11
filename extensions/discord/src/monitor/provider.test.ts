@@ -1118,6 +1118,21 @@ describe("monitorDiscordProvider", () => {
     expect(statuses.some((status) => status.connected === false)).toBe(true);
   });
 
+  it("does not report raw gateway message events as inbound human activity", async () => {
+    const setStatus = vi.fn();
+
+    providerTesting.recordDiscordTransportEventStatus(setStatus);
+
+    expect(setStatus).toHaveBeenCalledWith({
+      lastEventAt: expect.any(Number),
+    });
+    expect(
+      setStatus.mock.calls.some(
+        ([status]) => typeof (status as { lastInboundAt?: unknown }).lastInboundAt === "number",
+      ),
+    ).toBe(false);
+  });
+
   it("logs Discord startup phases and early gateway debug events", async () => {
     const runtime = baseRuntime();
     const emitter = new EventEmitter();
