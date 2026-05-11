@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -39,6 +39,22 @@ let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let requestExecApprovalDecision: typeof import("./bash-tools.exec-approval-request.js").requestExecApprovalDecision;
 let registerExecApprovalRequestForHost: typeof import("./bash-tools.exec-approval-request.js").registerExecApprovalRequestForHost;
 
+const initialProcessPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+
+function setProcessPlatformForTest(platform: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    enumerable: true,
+    value: platform,
+  });
+}
+
+function restoreProcessPlatformForTest(): void {
+  if (initialProcessPlatform) {
+    Object.defineProperty(process, "platform", initialProcessPlatform);
+  }
+}
+
 type ApprovalRequestPayload = {
   commandSpans?: Array<{ startIndex: number; endIndex: number }>;
 };
@@ -54,6 +70,11 @@ describe("requestExecApprovalDecision", () => {
     vi.mocked(callGatewayTool).mockClear();
     commandExplainerMock.explainShellCommand.mockClear();
     commandExplainerMock.formatCommandSpans.mockClear();
+    restoreProcessPlatformForTest();
+  });
+
+  afterEach(() => {
+    restoreProcessPlatformForTest();
   });
 
   it("does not load the command explainer when importing approval requests", () => {
@@ -287,6 +308,29 @@ describe("requestExecApprovalDecision", () => {
     );
     expect(callGatewayTool).toHaveBeenNthCalledWith(
       2,
+      "exec.approval.request",
+      expect.anything(),
+      expect.not.objectContaining({ commandSpans: expect.anything() }),
+      expect.anything(),
+    );
+  });
+
+  it("omits generated command spans for Windows gateway PowerShell commands", async () => {
+    setProcessPlatformForTest("win32");
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id-powershell",
+      command:
+        'Set-Content -Path "windows-agent-proof.txt" -Value "WINDOWS_AGENT_EXEC_OK" -NoNewline',
+      workdir: "C:\\project",
+      host: "gateway",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
+    expect(callGatewayTool).toHaveBeenCalledWith(
       "exec.approval.request",
       expect.anything(),
       expect.not.objectContaining({ commandSpans: expect.anything() }),
