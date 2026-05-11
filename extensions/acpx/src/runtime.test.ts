@@ -11,6 +11,8 @@ type TestSessionStore = {
 const DOCUMENTED_OPENCLAW_BRIDGE_COMMAND =
   "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 openclaw acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main";
 const CODEX_ACP_COMMAND = "npx @zed-industries/codex-acp@0.13.0";
+const CLAUDE_ACP_COMMAND = "npx @agentclientprotocol/claude-agent-acp@0.33.1";
+const CLAUDE_ACP_WRAPPER_COMMAND = `node "/tmp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`;
 const CODEX_ACP_WRAPPER_COMMAND = `node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"`;
 const CODEX_ACP_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-close ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
 
@@ -471,21 +473,21 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(setConfigOption).not.toHaveBeenCalled();
   });
 
-  it("forwards timeout config controls for non-Codex ACP agents", async () => {
+  it("forwards timeout config controls for generic non-Codex ACP agents", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
-        acpxRecordId: "agent:claude:acp:test",
-        agentCommand: "npx @agentclientprotocol/claude-agent-acp",
+        acpxRecordId: "agent:gemini:acp:test",
+        agentCommand: "gemini-acp",
       })),
       save: vi.fn(async () => {}),
     };
     const { runtime, delegate } = makeRuntime(baseStore);
     const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
     const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
-      sessionKey: "agent:claude:acp:test",
+      sessionKey: "agent:gemini:acp:test",
       backend: "acpx",
-      runtimeSessionName: "agent:claude:acp:test",
-      acpxRecordId: "agent:claude:acp:test",
+      runtimeSessionName: "agent:gemini:acp:test",
+      acpxRecordId: "agent:gemini:acp:test",
     };
 
     await runtime.setConfigOption({
@@ -500,6 +502,140 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       key: "timeout",
       value: "60",
     });
+  });
+
+  it("recognizes Claude ACP package and wrapper commands", () => {
+    expect(__testing.isClaudeAcpCommand(CLAUDE_ACP_COMMAND)).toBe(true);
+    expect(__testing.isClaudeAcpCommand(CLAUDE_ACP_WRAPPER_COMMAND)).toBe(true);
+    expect(__testing.isClaudeAcpCommand(CODEX_ACP_COMMAND)).toBe(false);
+  });
+
+  it("skips Codex-flavored model controls for Claude ACP", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:claude:acp:test",
+        agentCommand: CLAUDE_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:claude:acp:test",
+      acpxRecordId: "agent:claude:acp:test",
+    };
+
+    await runtime.setConfigOption({
+      handle,
+      key: "model",
+      value: "openai-codex/gpt-5.5",
+    });
+
+    expect(setConfigOption).not.toHaveBeenCalled();
+  });
+
+  it("forwards plain Claude model controls for Claude ACP", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:claude:acp:test",
+        agentCommand: CLAUDE_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:claude:acp:test",
+      acpxRecordId: "agent:claude:acp:test",
+    };
+
+    await runtime.setConfigOption({
+      handle,
+      key: "model",
+      value: "sonnet",
+    });
+
+    expect(setConfigOption).toHaveBeenCalledOnce();
+    expect(setConfigOption).toHaveBeenCalledWith({
+      handle,
+      key: "model",
+      value: "sonnet",
+    });
+  });
+
+  it("maps Claude ACP thinking controls to effort", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:claude:acp:test",
+        agentCommand: CLAUDE_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:claude:acp:test",
+      acpxRecordId: "agent:claude:acp:test",
+    };
+
+    await runtime.setConfigOption({
+      handle,
+      key: "thinking",
+      value: "high",
+    });
+    await runtime.setConfigOption({
+      handle,
+      key: "reasoning_effort",
+      value: "x-high",
+    });
+
+    expect(setConfigOption).toHaveBeenNthCalledWith(1, {
+      handle,
+      key: "effort",
+      value: "high",
+    });
+    expect(setConfigOption).toHaveBeenNthCalledWith(2, {
+      handle,
+      key: "effort",
+      value: "max",
+    });
+  });
+
+  it("skips disabled Claude ACP thinking and timeout controls", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:claude:acp:test",
+        agentCommand: CLAUDE_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:claude:acp:test",
+      acpxRecordId: "agent:claude:acp:test",
+    };
+
+    await runtime.setConfigOption({
+      handle,
+      key: "thinking",
+      value: "off",
+    });
+    await runtime.setConfigOption({
+      handle,
+      key: "timeout_seconds",
+      value: "60",
+    });
+
+    expect(setConfigOption).not.toHaveBeenCalled();
   });
 
   it("keeps stale persistent loads hidden until a fresh record is saved", async () => {
