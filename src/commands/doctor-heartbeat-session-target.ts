@@ -4,6 +4,8 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
+import { resolveHeartbeatDeliveryTarget } from "../infra/outbound/targets.js";
 import {
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
@@ -65,6 +67,9 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
     if (!heartbeatConfig) {
       continue;
     }
+    if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeatConfig)) {
+      continue;
+    }
     const configuredSession = normalizeOptionalString(heartbeatConfig.session);
     if (!configuredSession) {
       continue;
@@ -84,6 +89,13 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
     }
     const target = normalizeOptionalString(heartbeatConfig.target);
     if (!target || target === "none") {
+      continue;
+    }
+    const deliveryWithoutSession = resolveHeartbeatDeliveryTarget({
+      cfg,
+      heartbeat: heartbeatConfig,
+    });
+    if (deliveryWithoutSession.channel !== "none" && deliveryWithoutSession.to) {
       continue;
     }
     const candidateSession = toAgentStoreSessionKey({

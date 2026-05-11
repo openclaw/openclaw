@@ -87,6 +87,31 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     expect(warnings[0]).toContain('reason="no-target"');
   });
 
+  it("does not warn when an explicit heartbeat recipient does not need session history", () => {
+    const cfg = cfgWithSession("slack:channel:c123");
+    const agent = cfg.agents?.list?.[0];
+    if (!agent?.heartbeat) {
+      throw new Error("expected test config to include heartbeat config");
+    }
+    agent.heartbeat.target = "telegram";
+    agent.heartbeat.to = "-100123";
+    writeStore(cfg, {});
+
+    expect(describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
+  });
+
+  it("does not warn when the heartbeat cadence is disabled", () => {
+    const cfg = cfgWithSession("slack:channel:c123");
+    const agent = cfg.agents?.list?.[0];
+    if (!agent?.heartbeat) {
+      throw new Error("expected test config to include heartbeat config");
+    }
+    agent.heartbeat.every = "0m";
+    writeStore(cfg, {});
+
+    expect(describeHeartbeatSessionTargetIssues(cfg)).toEqual([]);
+  });
+
   it("warns when a default-only heartbeat session is missing", () => {
     const cfg = cfgWithDefaultHeartbeat("slack:channel:c123");
     writeStore(cfg, {});
