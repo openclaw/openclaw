@@ -719,6 +719,61 @@ describe("anthropic transport stream", () => {
   });
 
   it.each([
+    {
+      name: "empty history",
+      context: { messages: [] } as AnthropicStreamContext,
+    },
+    {
+      name: "blank user content",
+      context: {
+        messages: [
+          {
+            role: "user",
+            content: " \n\t ",
+            timestamp: 0,
+          },
+        ],
+      } as AnthropicStreamContext,
+    },
+  ])(
+    "sends a minimal user fallback when Anthropic message conversion has no content: $name",
+    async ({ context }) => {
+      await runTransportStream(
+        makeAnthropicTransportModel({
+          id: "MiniMax-M2.7",
+          name: "MiniMax M2.7",
+          provider: "minimax",
+          baseUrl: "https://api.minimax.io/anthropic",
+        }),
+        context,
+        {
+          apiKey: "sk-minimax-test",
+        } as AnthropicStreamOptions,
+      );
+
+      expect(latestAnthropicRequest().payload).toMatchObject({
+        model: "MiniMax-M2.7",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: ".",
+                cache_control: { type: "ephemeral" },
+              },
+            ],
+          },
+        ],
+      });
+      expect(guardedFetchMock).toHaveBeenCalledWith(
+        "https://api.minimax.io/anthropic/v1/messages",
+        expect.objectContaining({ method: "POST" }),
+      );
+    },
+  );
+
+  it.each([
     ["empty", ""],
     ["whitespace-only", " \n\t "],
     ["invalid-surrogate-only", String.fromCharCode(0xd83d)],
