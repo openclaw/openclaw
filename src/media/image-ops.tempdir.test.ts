@@ -34,7 +34,7 @@ describe("image-ops temp dir", () => {
     expect(prefix?.endsWith("-")).toBe(true);
     const uuid = prefix?.slice(uuidPrefix.length, -1) ?? "";
     expect(uuid).toHaveLength(36);
-    expect([...uuid].every((char) => /[0-9a-f-]/u.test(char))).toBe(true);
+    expect(Array.from(uuid).every((char) => /[0-9a-f-]/u.test(char))).toBe(true);
     expect([8, 13, 18, 23].map((index) => uuid[index])).toEqual(["-", "-", "-", "-"]);
     expect(path.dirname(prefix ?? "")).toBe(secureRoot);
     expect(createdTempDir.startsWith(prefix ?? "")).toBe(true);
