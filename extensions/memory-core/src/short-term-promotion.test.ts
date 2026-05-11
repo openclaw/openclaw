@@ -87,6 +87,10 @@ describe("short-term promotion", () => {
     return candidate.promotedAt;
   }
 
+  async function expectEnoent(promise: Promise<unknown>): Promise<void> {
+    await expect(promise).rejects.toHaveProperty("code", "ENOENT");
+  }
+
   it("detects short-term daily memory paths", () => {
     expect(isShortTermMemoryPath("memory/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("2026-04-03.md")).toBe(true);
@@ -190,11 +194,7 @@ describe("short-term promotion", () => {
         ],
       });
 
-      await expect(
-        fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"));
     });
   });
 
@@ -215,11 +215,7 @@ describe("short-term promotion", () => {
         ],
       });
 
-      await expect(
-        fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"));
     });
   });
 
@@ -241,12 +237,11 @@ describe("short-term promotion", () => {
         ],
       });
 
-      expect(
-        JSON.parse(await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8")),
-      ).toMatchObject({
-        version: 1,
-        entries: {},
-      });
+      const store = JSON.parse(
+        await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
+      ) as { version?: number; entries?: unknown };
+      expect(store.version).toBe(1);
+      expect(store.entries).toEqual({});
     });
   });
 
@@ -273,12 +268,11 @@ describe("short-term promotion", () => {
         ],
       });
 
-      expect(
-        JSON.parse(await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8")),
-      ).toMatchObject({
-        version: 1,
-        entries: {},
-      });
+      const store = JSON.parse(
+        await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
+      ) as { version?: number; entries?: unknown };
+      expect(store.version).toBe(1);
+      expect(store.entries).toEqual({});
     });
   });
 
@@ -490,11 +484,9 @@ describe("short-term promotion", () => {
       });
 
       expect(ranked).toHaveLength(1);
-      expect(ranked[0]).toMatchObject({
-        recallCount: 0,
-        dailyCount: 3,
-        uniqueQueries: 3,
-      });
+      expect(ranked[0]?.recallCount).toBe(0);
+      expect(ranked[0]?.dailyCount).toBe(3);
+      expect(ranked[0]?.uniqueQueries).toBe(3);
       expect(ranked[0]?.recallDays).toEqual(queryDays);
       expect(ranked[0]?.score).toBeGreaterThanOrEqual(0.75);
     });
@@ -803,10 +795,8 @@ describe("short-term promotion", () => {
       const phaseStore = JSON.parse(await fs.readFile(phaseStorePath, "utf-8")) as {
         entries: Record<string, { lightHits: number; remHits: number }>;
       };
-      expect(phaseStore.entries[boostedKey]).toMatchObject({
-        lightHits: 1,
-        remHits: 1,
-      });
+      expect(phaseStore.entries[boostedKey]?.lightHits).toBe(1);
+      expect(phaseStore.entries[boostedKey]?.remHits).toBe(1);
     });
   });
 
@@ -1167,11 +1157,7 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
-      await expect(
-        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
     });
   });
 
@@ -1214,11 +1200,7 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
-      await expect(
-        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
     });
   });
 
@@ -1526,9 +1508,7 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
-      await expect(fs.access(path.join(workspaceDir, "MEMORY.md"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.access(path.join(workspaceDir, "MEMORY.md")));
     });
   });
 
@@ -1651,10 +1631,12 @@ describe("short-term promotion", () => {
 
       expect(repair.changed).toBe(true);
       expect(repair.rewroteStore).toBe(true);
-      expect(JSON.parse(await fs.readFile(storePath, "utf-8"))).toMatchObject({
-        version: 1,
-        entries: {},
-      });
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+        version?: number;
+        entries?: unknown;
+      };
+      expect(store.version).toBe(1);
+      expect(store.entries).toEqual({});
     });
   });
 

@@ -28,10 +28,10 @@ type MatrixCredentials = NonNullable<ReturnType<typeof loadMatrixCredentials>>;
 function expectMatrixCredentials(
   credentials: ReturnType<typeof loadMatrixCredentials>,
 ): MatrixCredentials {
-  expect(credentials).toEqual(expect.objectContaining({ createdAt: expect.any(String) }));
   if (credentials === null) {
     throw new Error("Expected Matrix credentials");
   }
+  expect(typeof credentials.createdAt).toBe("string");
   return credentials;
 }
 

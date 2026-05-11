@@ -136,17 +136,24 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
 
     for (const badMode of ["run", "session", "", undefined, null, 0]) {
-      await expect(
-        runtime.ensureSession({
+      let error: unknown;
+      try {
+        await runtime.ensureSession({
           sessionKey: "agent:claude:acp:test",
           agent: "claude",
           mode: badMode as never,
-        }),
-      ).rejects.toMatchObject({
-        name: "AcpRuntimeError",
-        code: "ACP_INVALID_RUNTIME_OPTION",
-        message: expect.stringContaining("Unsupported ACP runtime session mode"),
-      });
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(AcpRuntimeError);
+      const acpError = error as AcpRuntimeError;
+      expect(acpError.name).toBe("AcpRuntimeError");
+      expect(acpError.code).toBe("ACP_INVALID_RUNTIME_OPTION");
+      expect(acpError.message).toBe(
+        `Unsupported ACP runtime session mode ${JSON.stringify(badMode)}. Expected one of: persistent, oneshot.`,
+      );
     }
 
     expect(ensureSpy).not.toHaveBeenCalled();

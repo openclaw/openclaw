@@ -544,9 +544,7 @@ describe("createAcpxRuntimeService", () => {
     await service.start(ctx);
 
     expect(ctx.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "embedded acpx runtime ignores legacy compatibility config: queueOwnerTtlSeconds, strictWindowsCmdWrapper=false",
-      ),
+      "embedded acpx runtime ignores legacy compatibility config: queueOwnerTtlSeconds, strictWindowsCmdWrapper=false",
     );
 
     await service.stop?.(ctx);
