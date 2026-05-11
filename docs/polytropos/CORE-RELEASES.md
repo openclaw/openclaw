@@ -11,7 +11,6 @@ This document defines the **release** mechanism for Polytropos core (openclaw-po
 
 - One gateway process (the real one).
 - Switch core versions by updating a symlink (fast rollback).
-- Keep systemd unit stable (no repeated service file edits).
 
 ## Assumption (critical)
 
@@ -48,13 +47,11 @@ A release directory **is the `dist/` tree**. At minimum it must include:
 
 Practically: copy the entire `dist/` directory from the installed package or from a fork build.
 
-## systemd integration (one-time change)
+## Cutover note
 
-The gateway unit should always execute the entrypoint under `current`:
+The one-time systemd `ExecStart` cutover is documented separately in:
 
-- `ExecStart=/usr/bin/node /home/ec2-user/polytropos/releases/current/index.js gateway --port 18789`
-
-After this one-time change, switching versions does **not** require editing systemd again.
+- [`docs/polytropos/planning/CUTOVER-EXECSTART.md`](./planning/CUTOVER-EXECSTART.md)
 
 ## Switching versions
 
