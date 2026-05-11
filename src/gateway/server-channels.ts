@@ -190,6 +190,7 @@ type StartChannelOptions = {
 
 type StopChannelOptions = {
   manual?: boolean;
+  failOnTimeout?: boolean;
 };
 
 export type ChannelManager = {
@@ -707,17 +708,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           CHANNEL_STOP_ABORT_TIMEOUT_MS,
         );
         if (!stoppedCleanly) {
+          const timeoutMessage = `channel stop timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`;
           log.warn?.(
             `[${id}] channel stop exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms after abort; continuing shutdown`,
           );
           setRuntime(channelId, id, {
             accountId: id,
-            running: manual,
+            running: false,
             restartPending: !manual,
-            lastError: `channel stop timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
+            lastError: timeoutMessage,
           });
           if (!manual) {
             recoveryStopTimedOut.add(rKey);
+          }
+          if (opts.failOnTimeout) {
+            throw new Error(`[${channelId}:${id}] ${timeoutMessage}`);
           }
           return;
         }

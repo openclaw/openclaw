@@ -243,7 +243,7 @@ describe("gateway plugin hot reload handlers", () => {
         changedPaths: ["plugins.enabled"],
       }),
     );
-    expect(stopChannel).toHaveBeenCalledWith("discord");
+    expect(stopChannel).toHaveBeenCalledWith("discord", { failOnTimeout: true });
     expect(startChannel).not.toHaveBeenCalled();
     expect(events).toEqual(["reload:start", "stop", "registry:replace"]);
     expect(setState).toHaveBeenCalledTimes(1);
