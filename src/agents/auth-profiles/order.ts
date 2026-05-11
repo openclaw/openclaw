@@ -27,94 +27,6 @@ export type AuthProfileEligibility = {
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 
-function isOpenAIApiKeyCompatibleWithCodexAuth(params: {
-  cfg?: OpenClawConfig;
-  providerAuthKey: string;
-  credential?: AuthProfileCredential;
-  profileProvider?: string;
-  profileMode?: string;
-}): boolean {
-  if (params.providerAuthKey !== OPENAI_CODEX_PROVIDER_ID) {
-    return false;
-  }
-  const providerKey = resolveProviderIdForAuth(params.profileProvider ?? "", {
-    config: params.cfg,
-  });
-  const mode = params.credential?.type ?? params.profileMode;
-  return providerKey === OPENAI_PROVIDER_ID && mode === "api_key";
-}
-
-function isCredentialProviderCompatibleWithAuthProvider(params: {
-  cfg?: OpenClawConfig;
-  providerAuthKey: string;
-  credential: AuthProfileCredential;
-}): boolean {
-  const credentialProviderKey = resolveProviderIdForAuth(params.credential.provider, {
-    config: params.cfg,
-  });
-  return (
-    credentialProviderKey === params.providerAuthKey ||
-    isOpenAIApiKeyCompatibleWithCodexAuth({
-      cfg: params.cfg,
-      providerAuthKey: params.providerAuthKey,
-      credential: params.credential,
-      profileProvider: params.credential.provider,
-    })
-  );
-}
-
-export function isStoredCredentialCompatibleWithAuthProvider(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  credential: AuthProfileCredential;
-}): boolean {
-  return isCredentialProviderCompatibleWithAuthProvider({
-    cfg: params.cfg,
-    providerAuthKey: resolveProviderIdForAuth(params.provider, { config: params.cfg }),
-    credential: params.credential,
-  });
-}
-
-function isConfiguredProfileCompatibleWithAuthProvider(params: {
-  cfg?: OpenClawConfig;
-  providerAuthKey: string;
-  provider: string;
-  mode?: string;
-  credential?: AuthProfileCredential;
-}): boolean {
-  const configProviderKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
-  return (
-    configProviderKey === params.providerAuthKey ||
-    isOpenAIApiKeyCompatibleWithCodexAuth({
-      cfg: params.cfg,
-      providerAuthKey: params.providerAuthKey,
-      credential: params.credential,
-      profileProvider: params.provider,
-      profileMode: params.mode,
-    })
-  );
-}
-
-function listProfilesCompatibleWithAuthProvider(params: {
-  cfg?: OpenClawConfig;
-  store: AuthProfileStore;
-  provider: string;
-  providerAuthKey: string;
-}): string[] {
-  if (params.providerAuthKey !== OPENAI_CODEX_PROVIDER_ID) {
-    return listProfilesForProvider(params.store, params.provider);
-  }
-  return Object.entries(params.store.profiles)
-    .filter(([, credential]) =>
-      isCredentialProviderCompatibleWithAuthProvider({
-        cfg: params.cfg,
-        providerAuthKey: params.providerAuthKey,
-        credential,
-      }),
-    )
-    .map(([profileId]) => profileId);
-}
-
 function resolveProviderAuthMode(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -233,19 +145,19 @@ export function resolveAuthProfileOrder(params: {
     providerAuthKey === OPENAI_CODEX_PROVIDER_ID || providerKey === OPENAI_CODEX_PROVIDER_ID
       ? OPENAI_PROVIDER_ID
       : undefined;
-  const directStoredOrder =
-    resolveAuthOrder(store.order, providerAuthKey) ?? resolveAuthOrder(store.order, providerKey);
-  const aliasStoredOrder = openAIOrderAliasProvider
-    ? resolveAuthOrder(store.order, openAIOrderAliasProvider)
-    : undefined;
-  const directConfiguredOrder =
+  const storedOrder =
+    resolveAuthOrder(store.order, providerAuthKey) ??
+    resolveAuthOrder(store.order, providerKey) ??
+    (openAIOrderAliasProvider
+      ? resolveAuthOrder(store.order, openAIOrderAliasProvider)
+      : undefined);
+  const configuredOrder =
     resolveAuthOrder(cfg?.auth?.order, providerAuthKey) ??
-    resolveAuthOrder(cfg?.auth?.order, providerKey);
-  const aliasConfiguredOrder = openAIOrderAliasProvider
-    ? resolveAuthOrder(cfg?.auth?.order, openAIOrderAliasProvider)
-    : undefined;
-  const directExplicitOrder = directStoredOrder ?? directConfiguredOrder;
-  const aliasExplicitOrder = aliasStoredOrder ?? aliasConfiguredOrder;
+    resolveAuthOrder(cfg?.auth?.order, providerKey) ??
+    (openAIOrderAliasProvider
+      ? resolveAuthOrder(cfg?.auth?.order, openAIOrderAliasProvider)
+      : undefined);
+  const explicitOrder = storedOrder ?? configuredOrder;
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
         .filter(([profileId, profile]) =>

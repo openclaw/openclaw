@@ -810,7 +810,26 @@ export async function runEmbeddedPiAgent(
       const preferredProfileId = pluginHarnessOwnsTransport
         ? resolvePluginHarnessPreferredProfileId()
         : requestedProfileId;
-      let lockedProfileId = requestedProfileIsUserLocked ? preferredProfileId : undefined;
+      let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
+      const canForwardPluginHarnessAuthProfile = (
+        profileId: string | undefined,
+      ): profileId is string => {
+        if (!pluginHarnessOwnsTransport || !profileId) {
+          return false;
+        }
+        const profileCredentialProvider = attemptAuthProfileStore.profiles?.[profileId]?.provider;
+        const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
+          provider,
+          authProfileProvider: profileCredentialProvider ?? profileId.split(":", 1)[0],
+          sessionAuthProfileId: profileId,
+          config: params.config,
+          workspaceDir: resolvedWorkspace,
+          harnessId: agentHarness.id,
+          harnessRuntime: agentHarness.id,
+          allowHarnessAuthProfileForwarding: true,
+        });
+        return runtimeAuthPlan.forwardedAuthProfileId === profileId;
+      };
       if (lockedProfileId) {
         if (pluginHarnessOwnsTransport) {
           if (!isForwardablePluginHarnessAuthProfile(lockedProfileId)) {
