@@ -802,7 +802,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const webFetchProviders = normalizeTrimmedStringList(value.webFetchProviders);
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
   const migrationProviders = normalizeTrimmedStringList(value.migrationProviders);
-  const tools = normalizeTrimmedStringList(value.tools);
+  const tools = value.tools === true ? ["*"] : normalizeTrimmedStringList(value.tools);
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
     ...(agentToolResultMiddleware.length > 0 ? { agentToolResultMiddleware } : {}),

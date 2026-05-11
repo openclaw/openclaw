@@ -3,7 +3,11 @@ import type { PluginManifestContracts } from "./manifest.js";
 export function normalizePluginToolContractNames(
   contracts: Pick<PluginManifestContracts, "tools"> | undefined,
 ): string[] {
-  return normalizePluginToolNames(contracts?.tools);
+  const names = normalizePluginToolNames(contracts?.tools);
+  if (names.includes("*")) {
+    return ["*"];
+  }
+  return names;
 }
 
 export function normalizePluginToolNames(names: readonly string[] | undefined): string[] {
@@ -22,5 +26,8 @@ export function findUndeclaredPluginToolNames(params: {
   toolNames: readonly string[];
 }): string[] {
   const declared = new Set(normalizePluginToolNames(params.declaredNames));
+  if (declared.has("*")) {
+    return [];
+  }
   return normalizePluginToolNames(params.toolNames).filter((name) => !declared.has(name));
 }
