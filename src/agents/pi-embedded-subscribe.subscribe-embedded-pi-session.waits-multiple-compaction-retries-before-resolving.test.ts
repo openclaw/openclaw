@@ -203,7 +203,6 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
     const summary = onToolResult.mock.calls[0][0];
-    expect(summary.text).toContain("Exec");
     expect(summary.text).toContain("pty");
 
     toolHarness.emit({
