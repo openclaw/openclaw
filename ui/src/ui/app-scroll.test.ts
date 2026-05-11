@@ -429,8 +429,8 @@ describe("programmatic scroll guard", () => {
     const event = createScrollEvent(1000, 600, 400);
     handleChatScroll(host, event);
 
-    // chatLastScrollTop must NOT have changed — confirms the event was short-circuited.
-    expect(host.chatLastScrollTop).toBe(0);
+    // Scroll bookkeeping still advances so the next user scroll has the right direction.
+    expect(host.chatLastScrollTop).toBe(600);
   });
 
   it("suppressed programmatic scroll event does not mutate chatNewMessagesBelow", () => {
@@ -446,6 +446,24 @@ describe("programmatic scroll guard", () => {
 
     // Event was suppressed — chatNewMessagesBelow must stay unchanged.
     expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
+  it("suppressed programmatic scroll preserves direction bookkeeping for the next user scroll-up", () => {
+    const { host } = createScrollHost({});
+    host.chatUserNearBottom = true;
+    host.chatHeaderControlsHidden = true;
+    host.chatIsProgrammaticScroll = true;
+    host.chatProgrammaticScrollTarget = 3000;
+    host.chatLastScrollTop = 0;
+
+    handleChatScroll(host, createScrollEvent(3000, 2600, 400));
+    expect(host.chatLastScrollTop).toBe(2600);
+
+    host.chatIsProgrammaticScroll = false;
+    handleChatScroll(host, createScrollEvent(3000, 2000, 400));
+
+    expect(host.chatHeaderControlsHidden).toBe(false);
+    expect(host.chatUserNearBottom).toBe(false);
   });
 
   it("retry timeout sets and clears chatIsProgrammaticScroll", async () => {

@@ -145,6 +145,9 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   if (!container) {
     return;
   }
+  const scrollTop = Math.max(0, container.scrollTop);
+  const delta = scrollTop - host.chatLastScrollTop;
+  host.chatLastScrollTop = scrollTop;
   // Ignore scroll events that we ourselves triggered — they must not flip
   // chatUserNearBottom to false while streaming content grows the page.
   // Only suppress if scrollTop is still at or above the position we scrolled to;
@@ -156,9 +159,6 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   ) {
     return;
   }
-  const scrollTop = Math.max(0, container.scrollTop);
-  const delta = scrollTop - host.chatLastScrollTop;
-  host.chatLastScrollTop = scrollTop;
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   host.chatUserNearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
   const hasUsefulScroll = container.scrollHeight - container.clientHeight > NEAR_BOTTOM_THRESHOLD;
