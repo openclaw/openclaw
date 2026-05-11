@@ -852,7 +852,8 @@ function buildAttentionItems(host: SettingsAppHost) {
 
 export async function loadChannelsTab(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
-  await Promise.all([loadChannels(app, false), loadConfigSchema(app), loadConfig(app)]);
+  void loadConfigSchema(app).finally(() => host.requestUpdate?.());
+  await Promise.all([loadChannels(app, false), loadConfig(app)]);
 }
 
 export async function loadCron(host: SettingsHost) {

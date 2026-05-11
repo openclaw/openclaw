@@ -353,31 +353,24 @@ describe("refreshActiveTab", () => {
     });
   });
 
-  it("renders channels from the cheap snapshot before starting slow probes", async () => {
+  it("renders channels from the cheap snapshot without waiting for config schema", async () => {
     const host = createHost();
     host.tab = "channels";
     const schema = createDeferred();
-    const channelProbe = createDeferred();
     mocks.loadConfigSchemaMock.mockReturnValueOnce(schema.promise);
-    mocks.loadChannelsMock.mockImplementation(async (_host, probe) => {
-      if (probe) {
-        await channelProbe.promise;
-      }
-    });
 
     const refresh = refreshActiveTab(host as never);
     const outcome = await raceWithNextMacrotask(refresh);
 
     expect(outcome).toBe("resolved");
-    expect(mocks.loadChannelsMock.mock.calls.map(([, probe]) => probe)).toEqual([false, true]);
+    expect(mocks.loadChannelsMock.mock.calls.map(([, probe]) => probe)).toEqual([false]);
     expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
     expect(host.requestUpdate).not.toHaveBeenCalled();
 
     schema.resolve();
-    channelProbe.resolve();
 
     await vi.waitFor(() => {
-      expect(host.requestUpdate).toHaveBeenCalledTimes(2);
+      expect(host.requestUpdate).toHaveBeenCalledOnce();
     });
   });
 

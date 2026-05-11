@@ -219,12 +219,12 @@ describe("connectGateway chat load startup work", () => {
     expect(refreshChatAvatarMock).toHaveBeenCalledWith(host);
   });
 
-  it("lets the active tab refresh own node and device loading after hello", () => {
+  it("lets the active tab refresh own node and device loading after hello", async () => {
     const { host, client } = connectHost("overview");
 
     client.emitHello();
 
-    expect(refreshActiveTabMock).toHaveBeenCalledWith(host);
+    await vi.waitFor(() => expect(refreshActiveTabMock).toHaveBeenCalledWith(host));
     expect(loadNodesMock).not.toHaveBeenCalled();
     expect(loadDevicesMock).not.toHaveBeenCalled();
   });
