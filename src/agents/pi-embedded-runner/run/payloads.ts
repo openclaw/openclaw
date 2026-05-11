@@ -443,18 +443,37 @@ export function buildEmbeddedRunPayloads(params: {
     fallbackAnswerSourceText.length > 0 &&
     normalizedFallbackAnswerSourceText.length > 0;
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
+  // When the model returns phase-tagged content (e.g. openai-codex/gpt-5.5), the raw
+  // assistantTexts stream may include both "commentary" and "final_answer" blocks.
+  // Use the already-phase-filtered fallbackAnswerText so that channel delivery only
+  // ships the final_answer portion.  Non-phase-tagged providers are unaffected.
+  const lastAssistantHasPhaseMetadata = (() => {
+    const c = params.lastAssistant && params.lastAssistant.content;
+    if (!Array.isArray(c)) return false;
+    for (const b of c) {
+      if (!b || b.type !== "text" || !b.textSignature) continue;
+      try {
+        const sig =
+          typeof b.textSignature === "string" ? JSON.parse(b.textSignature) : b.textSignature;
+        if (sig && sig.phase) return true;
+      } catch {}
+    }
+    return false;
+  })();
   const answerTexts =
     suppressAssistantArtifacts || runAborted
       ? []
-      : (shouldUseCanonicalFinalAnswer
-          ? [fallbackAnswerSourceText]
-          : shouldPreferRawAnswerText && fallbackRawAnswerText
-            ? [fallbackRawAnswerText]
-            : hasAssistantTextPayload
-              ? nonEmptyAssistantTexts
-              : fallbackAnswerText
-                ? [fallbackAnswerText]
-                : []
+      : (lastAssistantHasPhaseMetadata && fallbackAnswerText
+          ? [fallbackAnswerText]
+          : shouldUseCanonicalFinalAnswer
+            ? [fallbackAnswerSourceText]
+            : shouldPreferRawAnswerText && fallbackRawAnswerText
+              ? [fallbackRawAnswerText]
+              : hasAssistantTextPayload
+                ? nonEmptyAssistantTexts
+                : fallbackAnswerText
+                  ? [fallbackAnswerText]
+                  : []
         ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = hasSourceReplyPayload;
