@@ -2883,6 +2883,45 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.timedOut).toBe(false);
   });
 
+  it("releases completion when Codex raw-events an interrupted turn marker", async () => {
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      { turnTerminalIdleTimeoutMs: 60_000 },
+    );
+    let resolved = false;
+    void run.then(() => {
+      resolved = true;
+    });
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "abort-marker-1",
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>",
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await run;
+    expect(resolved).toBe(true);
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+  });
+
   it("releases completion when a projector callback throws during turn/completed", async () => {
     // Regression for openclaw/openclaw#67996: a throw inside the projector's
     // turn/completed handler must not strand resolveCompletion, otherwise the

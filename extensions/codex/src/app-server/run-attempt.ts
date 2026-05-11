@@ -1147,6 +1147,9 @@ export async function runCodexAppServerAttempt(
     // inside projector.handleNotification still releases the session lane.
     // See openclaw/openclaw#67996.
     const isTurnCompletion = notification.method === "turn/completed" && isCurrentTurnNotification;
+    const isTurnAbortMarker =
+      isCurrentTurnNotification && isCodexTurnAbortMarkerNotification(notification);
+    const isTurnTerminal = isTurnCompletion || isTurnAbortMarker;
     try {
       await projector.handleNotification(notification);
     } catch (error) {
@@ -1155,7 +1158,10 @@ export async function runCodexAppServerAttempt(
         error,
       });
     } finally {
-      if (isTurnCompletion) {
+      if (isTurnTerminal) {
+        if (isTurnAbortMarker) {
+          projector.markAborted();
+        }
         if (!timedOut && !runAbortController.signal.aborted) {
           await steeringQueue?.flushPending();
         }
@@ -2342,6 +2348,37 @@ function readNotificationTurnId(record: JsonObject): string | undefined {
 function readNestedTurnId(record: JsonObject): string | undefined {
   const turn = record.turn;
   return isJsonObject(turn) ? readString(turn, "id") : undefined;
+}
+
+function isCodexTurnAbortMarkerNotification(notification: CodexServerNotification): boolean {
+  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
+    return false;
+  }
+  const item = notification.params.item;
+  if (!isJsonObject(item) || readString(item, "role") !== "user") {
+    return false;
+  }
+  return extractRawResponseItemText(item).includes("<turn_aborted>");
+}
+
+function extractRawResponseItemText(item: JsonObject): string {
+  const content = item.content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .flatMap((entry) => {
+      if (!isJsonObject(entry)) {
+        return [];
+      }
+      const type = readString(entry, "type");
+      if (type !== "input_text" && type !== "text") {
+        return [];
+      }
+      const text = readString(entry, "text");
+      return text ? [text] : [];
+    })
+    .join("");
 }
 
 function readString(record: JsonObject, key: string): string | undefined {

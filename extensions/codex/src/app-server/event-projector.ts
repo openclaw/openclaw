@@ -347,6 +347,10 @@ export class CodexAppServerEventProjector {
     this.promptErrorSource = "prompt";
   }
 
+  markAborted(): void {
+    this.aborted = true;
+  }
+
   isCompacting(): boolean {
     return this.activeCompactionItemIds.size > 0;
   }
