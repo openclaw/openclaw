@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
+import type { CronServiceContract } from "../cron/service-contract.js";
+import type { CronJob, CronJobCreate } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -20,9 +21,6 @@ const log = createSubsystemLogger("plugins/host-scheduled-turns");
 const PLUGIN_CRON_NAME_PREFIX = "plugin:";
 const PLUGIN_CRON_TAG_MARKER = ":tag:";
 
-type CallGatewayTool = typeof import("../agents/tools/gateway.js").callGatewayTool;
-let callGatewayToolPromise: Promise<CallGatewayTool> | undefined;
-
 type ResolvedSessionTurnSchedule =
   | {
       kind: "cron";
@@ -33,16 +31,6 @@ type ResolvedSessionTurnSchedule =
       kind: "at";
       at: string;
     };
-
-async function callGatewayToolLazy(
-  ...args: Parameters<CallGatewayTool>
-): Promise<Awaited<ReturnType<CallGatewayTool>>> {
-  callGatewayToolPromise ??= import("../agents/tools/gateway.js").then(
-    (module) => module.callGatewayTool,
-  );
-  const callGatewayTool = await callGatewayToolPromise;
-  return callGatewayTool(...args);
-}
 
 function resolveSchedule(
   params: PluginSessionTurnScheduleParams,
@@ -108,18 +96,14 @@ function formatScheduleLogContext(params: {
 }
 
 async function removeScheduledSessionTurn(params: {
+  cron: CronServiceContract;
   jobId: string;
   pluginId: string;
   sessionKey?: string;
   name?: string;
 }): Promise<boolean> {
   try {
-    const result = await callGatewayToolLazy(
-      "cron.remove",
-      {},
-      { id: params.jobId },
-      { scopes: [ADMIN_SCOPE] },
-    );
+    const result = await params.cron.remove(params.jobId);
     return didCronCleanupJob(result);
   } catch (error) {
     log.warn(
@@ -129,48 +113,12 @@ async function removeScheduledSessionTurn(params: {
   }
 }
 
-function unwrapGatewayPayload(value: unknown): unknown {
-  if (!isCronJobRecord(value)) {
-    return value;
-  }
-  const payload = value.payload;
-  return isCronJobRecord(payload) ? payload : value;
-}
-
 function didCronRemoveJob(value: unknown): boolean {
-  const result = unwrapGatewayPayload(value);
-  if (!isCronJobRecord(result)) {
-    return false;
-  }
-  return result.ok !== false && result.removed === true;
+  return isCronRemoveResult(value) && value.ok && value.removed;
 }
 
 function didCronCleanupJob(value: unknown): boolean {
-  const result = unwrapGatewayPayload(value);
-  if (!isCronJobRecord(result) || result.ok === false) {
-    return false;
-  }
-  return result.removed === true || result.removed === false;
-}
-
-function normalizeCronJobId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function extractCronJobId(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const topLevelId = normalizeCronJobId(record.jobId ?? record.id);
-  if (topLevelId) {
-    return topLevelId;
-  }
-  const payload =
-    record.payload && typeof record.payload === "object"
-      ? (record.payload as Record<string, unknown>)
-      : record;
-  return normalizeCronJobId(payload.jobId ?? payload.id);
+  return isCronRemoveResult(value) && value.ok;
 }
 
 const PLUGIN_CRON_RESERVED_DELIMITER = ":";
@@ -210,65 +158,41 @@ function buildPluginSchedulerTagPrefix(params: {
   return `${PLUGIN_CRON_NAME_PREFIX}${params.pluginId}${PLUGIN_CRON_TAG_MARKER}${params.tag}:${params.sessionKey}:`;
 }
 
-function isCronJobRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function readCronListJobs(value: unknown): Record<string, unknown>[] {
-  if (Array.isArray(value)) {
-    return value.filter(isCronJobRecord);
-  }
-  if (isCronJobRecord(value)) {
-    const jobs = (value as { jobs?: unknown }).jobs;
-    if (Array.isArray(jobs)) {
-      return jobs.filter(isCronJobRecord);
-    }
-  }
-  return [];
-}
-
-function readCronListNextOffset(value: unknown): number | undefined {
-  if (!isCronJobRecord(value)) {
-    return undefined;
-  }
-  const nextOffset = value.nextOffset;
-  return typeof nextOffset === "number" && Number.isInteger(nextOffset) && nextOffset >= 0
-    ? nextOffset
-    : undefined;
-}
-
-function readCronListHasMore(value: unknown): boolean {
-  return isCronJobRecord(value) && value.hasMore === true;
+function isCronRemoveResult(
+  value: unknown,
+): value is Awaited<ReturnType<CronServiceContract["remove"]>> {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof (value as { ok?: unknown }).ok === "boolean" &&
+    typeof (value as { removed?: unknown }).removed === "boolean"
+  );
 }
 
 async function listAllCronJobsForPluginTagCleanup(
+  cron: CronServiceContract,
   query: string,
-): Promise<Record<string, unknown>[]> {
-  const jobs: Record<string, unknown>[] = [];
+): Promise<CronJob[]> {
+  const jobs: CronJob[] = [];
   let offset = 0;
   for (;;) {
-    const listResult = await callGatewayToolLazy(
-      "cron.list",
-      {},
-      {
-        includeDisabled: true,
-        limit: 200,
-        query,
-        sortBy: "name",
-        sortDir: "asc",
-        ...(offset > 0 ? { offset } : {}),
-      },
-      { scopes: [ADMIN_SCOPE] },
-    );
-    jobs.push(...readCronListJobs(listResult));
-    if (!readCronListHasMore(listResult)) {
+    const listResult = await cron.listPage({
+      includeDisabled: true,
+      limit: 200,
+      query,
+      sortBy: "name",
+      sortDir: "asc",
+      ...(offset > 0 ? { offset } : {}),
+    });
+    jobs.push(...listResult.jobs);
+    if (!listResult.hasMore) {
       return jobs;
     }
-    const nextOffset = readCronListNextOffset(listResult);
-    if (nextOffset === undefined || nextOffset <= offset) {
+    if (listResult.nextOffset === null || listResult.nextOffset <= offset) {
       return jobs;
     }
-    offset = nextOffset;
+    offset = listResult.nextOffset;
   }
 }
 
@@ -278,6 +202,7 @@ export async function schedulePluginSessionTurn(params: {
   origin?: PluginOrigin;
   schedule: PluginSessionTurnScheduleParams;
   shouldCommit?: () => boolean;
+  cron?: CronServiceContract;
   ownerRegistry?: PluginRegistry;
 }): Promise<PluginSessionSchedulerJobHandle | undefined> {
   if (params.origin !== "bundled") {
@@ -330,36 +255,43 @@ export async function schedulePluginSessionTurn(params: {
   if (params.shouldCommit && !params.shouldCommit()) {
     return undefined;
   }
+  if (!params.cron) {
+    log.warn(
+      `plugin session turn scheduling failed (${formatScheduleLogContext({
+        pluginId: params.pluginId,
+        sessionKey,
+        ...(scheduleName ? { name: scheduleName } : {}),
+      })}): cron service unavailable`,
+    );
+    return undefined;
+  }
+  const cron = params.cron;
   const cronJobName = buildPluginSchedulerCronName({
     pluginId: params.pluginId,
     sessionKey,
     ...(tag !== undefined ? { tag } : {}),
     ...(scheduleName ? { uniqueId: scheduleName } : {}),
   });
-  const cronPayload: Record<string, unknown> = {
+  const cronPayload: CronJobCreate["payload"] = {
     kind: "agentTurn",
     message,
   };
-  let result: unknown;
+  let result: Awaited<ReturnType<CronServiceContract["add"]>>;
   try {
-    result = await callGatewayToolLazy(
-      "cron.add",
-      {},
-      {
-        name: cronJobName,
-        schedule: cronSchedule,
-        sessionTarget: `session:${sessionKey}`,
-        payload: cronPayload,
-        ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
-        deleteAfterRun: params.schedule.deleteAfterRun ?? cronSchedule.kind === "at",
-        wakeMode: "now",
-        delivery: {
-          mode: cronDeliveryMode,
-          ...(cronDeliveryMode === "announce" ? { channel: "last" } : {}),
-        },
+    result = await cron.add({
+      name: cronJobName,
+      enabled: true,
+      schedule: cronSchedule,
+      sessionTarget: `session:${sessionKey}`,
+      payload: cronPayload,
+      ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
+      deleteAfterRun: params.schedule.deleteAfterRun ?? cronSchedule.kind === "at",
+      wakeMode: "now",
+      delivery: {
+        mode: cronDeliveryMode,
+        ...(cronDeliveryMode === "announce" ? { channel: "last" } : {}),
       },
-      { scopes: [ADMIN_SCOPE] },
-    );
+    });
   } catch (error) {
     log.warn(
       `plugin session turn scheduling failed (${formatScheduleLogContext({
@@ -370,12 +302,13 @@ export async function schedulePluginSessionTurn(params: {
     );
     return undefined;
   }
-  const jobId = extractCronJobId(result);
+  const jobId = result.id;
   if (!jobId) {
     return undefined;
   }
   if (params.shouldCommit && !params.shouldCommit()) {
     const removed = await removeScheduledSessionTurn({
+      cron,
       jobId,
       pluginId: params.pluginId,
       sessionKey,
@@ -403,6 +336,7 @@ export async function schedulePluginSessionTurn(params: {
       kind: "session-turn",
       cleanup: async () => {
         const removed = await removeScheduledSessionTurn({
+          cron,
           jobId,
           pluginId: params.pluginId,
           sessionKey,
@@ -420,6 +354,7 @@ export async function schedulePluginSessionTurn(params: {
 export async function unschedulePluginSessionTurnsByTag(params: {
   pluginId: string;
   origin?: PluginOrigin;
+  cron?: CronServiceContract;
   request: PluginSessionTurnUnscheduleByTagParams;
 }): Promise<PluginSessionTurnUnscheduleByTagResult> {
   if (params.origin !== "bundled") {
@@ -430,37 +365,35 @@ export async function unschedulePluginSessionTurnsByTag(params: {
   if (!sessionKey || !tag || invalidTag) {
     return { removed: 0, failed: 0 };
   }
+  if (!params.cron) {
+    log.warn("plugin session turn untag-list failed: cron service unavailable");
+    return { removed: 0, failed: 1 };
+  }
+  const cron = params.cron;
   const namePrefix = buildPluginSchedulerTagPrefix({
     pluginId: params.pluginId,
     tag,
     sessionKey,
   });
-  let jobs: Record<string, unknown>[];
+  let jobs: CronJob[];
   try {
-    jobs = await listAllCronJobsForPluginTagCleanup(namePrefix);
+    jobs = await listAllCronJobsForPluginTagCleanup(cron, namePrefix);
   } catch (error) {
     log.warn(`plugin session turn untag-list failed: ${formatErrorMessage(error)}`);
     return { removed: 0, failed: 1 };
   }
   const candidates = jobs.filter((job) => {
-    const name = typeof job.name === "string" ? job.name : "";
-    const target = typeof job.sessionTarget === "string" ? job.sessionTarget : "";
-    return name.startsWith(namePrefix) && target === `session:${sessionKey}`;
+    return job.name.startsWith(namePrefix) && job.sessionTarget === `session:${sessionKey}`;
   });
   let removed = 0;
   let failed = 0;
   for (const job of candidates) {
-    const id = typeof job.id === "string" ? job.id.trim() : "";
+    const id = job.id.trim();
     if (!id) {
       continue;
     }
     try {
-      const result = await callGatewayToolLazy(
-        "cron.remove",
-        {},
-        { id },
-        { scopes: [ADMIN_SCOPE] },
-      );
+      const result = await cron.remove(id);
       if (didCronRemoveJob(result)) {
         removed += 1;
         deletePluginSessionSchedulerJob({

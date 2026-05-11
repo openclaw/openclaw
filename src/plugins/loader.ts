@@ -122,6 +122,7 @@ import {
 } from "./plugin-scope.js";
 import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistryParams } from "./registry-types.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
@@ -169,6 +170,7 @@ export type PluginLoadOptions = {
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];
+  hostServices?: PluginRegistryParams["hostServices"];
   runtimeOptions?: CreatePluginRuntimeOptions;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cache?: boolean;
@@ -1646,6 +1648,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
       ...(options.coreGatewayMethodNames !== undefined && {
         coreGatewayMethodNames: options.coreGatewayMethodNames,
+      }),
+      ...(options.hostServices !== undefined && {
+        hostServices: options.hostServices,
       }),
       activateGlobalSideEffects: shouldActivate,
     });

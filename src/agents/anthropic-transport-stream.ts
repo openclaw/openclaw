@@ -201,6 +201,10 @@ function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" 
   return endpointClass === "default" || endpointClass === "anthropic-public";
 }
 
+function isKimiAnthropicProvider(provider: string | undefined): boolean {
+  return /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(provider ?? ""));
+}
+
 function buildAnthropicBetaHeader(
   model: AnthropicTransportModel,
   betaFeatures: readonly string[],
@@ -648,7 +652,12 @@ function createAnthropicTransportClient(params: {
   const { model, context, apiKey, options } = params;
   const needsInterleavedBeta =
     (options?.interleavedThinking ?? true) && !supportsAdaptiveThinking(model.id);
-  const fetch = buildGuardedModelFetch(model);
+  // Kimi's Anthropic thinking SSE is already well-formed for this parser, but
+  // the OpenAI SDK compatibility sanitizer can stall before the text block.
+  const fetch =
+    isKimiAnthropicProvider(model.provider) && options?.thinkingEnabled === true
+      ? buildGuardedModelFetch(model, undefined, { sanitizeSse: false })
+      : buildGuardedModelFetch(model);
   if (model.provider === "github-copilot") {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {

@@ -335,6 +335,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/mantis/build-telegram-evidence.mjs",
     ["test/scripts/mantis-build-telegram-evidence.test.ts"],
   ],
+  [
+    "scripts/mantis/build-telegram-desktop-proof-evidence.mjs",
+    ["test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts"],
+  ],
   ["scripts/mantis/publish-pr-evidence.mjs", ["test/scripts/mantis-publish-pr-evidence.test.ts"]],
   [
     "scripts/run-vitest.mjs",
@@ -392,6 +396,10 @@ const TOOLING_TEST_TARGETS = new Map([
   [
     "test/scripts/mantis-build-telegram-evidence.test.ts",
     ["test/scripts/mantis-build-telegram-evidence.test.ts"],
+  ],
+  [
+    "test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts",
+    ["test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts"],
   ],
   [
     "test/scripts/plugin-prerelease-test-plan.test.ts",
@@ -1535,7 +1543,8 @@ function hasConservativeVitestWorkerBudget(env) {
   return workerBudget !== null && workerBudget <= 1;
 }
 
-export function resolveParallelFullSuiteConcurrency(specCount, env = process.env, hostInfo) {
+export function resolveParallelFullSuiteConcurrency(specCount, env, hostInfo) {
+  env ??= process.env;
   const override = parsePositiveInt(env.OPENCLAW_TEST_PROJECTS_PARALLEL);
   if (override !== null) {
     return Math.min(override, specCount);
