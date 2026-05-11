@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
@@ -55,10 +55,24 @@ const mocks = vi.hoisted(() => ({
   loadSessionsMock: vi.fn(async () => {}),
   loadSkillsMock: vi.fn(async () => {}),
   loadUsageMock: vi.fn(async () => {}),
+  startDebugPollingMock: vi.fn(),
+  startLogsPollingMock: vi.fn(),
+  startNodesPollingMock: vi.fn(),
+  stopDebugPollingMock: vi.fn(),
+  stopLogsPollingMock: vi.fn(),
+  stopNodesPollingMock: vi.fn(),
 }));
 
 vi.mock("./app-chat.ts", () => ({
   refreshChat: mocks.refreshChatMock,
+}));
+vi.mock("./app-polling.ts", () => ({
+  startDebugPolling: mocks.startDebugPollingMock,
+  startLogsPolling: mocks.startLogsPollingMock,
+  startNodesPolling: mocks.startNodesPollingMock,
+  stopDebugPolling: mocks.stopDebugPollingMock,
+  stopLogsPolling: mocks.stopLogsPollingMock,
+  stopNodesPolling: mocks.stopNodesPollingMock,
 }));
 vi.mock("./app-scroll.ts", () => ({
   scheduleChatScroll: mocks.scheduleChatScrollMock,
@@ -141,6 +155,7 @@ function createHost() {
     updateComplete: Promise.resolve(),
     cronRunsScope: "all",
     cronRunsJobId: null as string | null,
+    sessionsChangedReloadTimer: null as number | ReturnType<typeof globalThis.setTimeout> | null,
     sessionKey: "main",
     settings: {},
     basePath: "",
@@ -182,6 +197,10 @@ describe("refreshActiveTab", () => {
     for (const fn of Object.values(mocks)) {
       fn.mockReset();
     }
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   const expectCommonAgentsTabRefresh = (host: ReturnType<typeof createHost>) => {
@@ -277,6 +296,26 @@ describe("refreshActiveTab", () => {
     });
 
     sessions.resolve();
+  });
+
+  it("starts node polling on Nodes tab entry and clears pending session reloads on tab changes", () => {
+    vi.useFakeTimers();
+    const host = createHost();
+    host.tab = "overview";
+    const pendingReload = vi.fn();
+    host.sessionsChangedReloadTimer = globalThis.setTimeout(pendingReload, 1_000);
+
+    setTab(host as never, "nodes");
+
+    expect(host.sessionsChangedReloadTimer).toBeNull();
+    expect(mocks.startNodesPollingMock).toHaveBeenCalledWith(host);
+    expect(mocks.stopLogsPollingMock).toHaveBeenCalledWith(host);
+    expect(mocks.stopDebugPollingMock).toHaveBeenCalledWith(host);
+    vi.advanceTimersByTime(1_000);
+    expect(pendingReload).not.toHaveBeenCalled();
+
+    setTab(host as never, "sessions");
+    expect(mocks.stopNodesPollingMock).toHaveBeenCalledWith(host);
   });
 
   it("does not wait for secondary overview refreshes before resolving", async () => {

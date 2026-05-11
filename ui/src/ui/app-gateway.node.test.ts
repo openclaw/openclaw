@@ -450,6 +450,23 @@ describe("connectGateway", () => {
     ]);
   });
 
+  it("clears pending session reload timers when the active client closes", () => {
+    vi.useFakeTimers();
+    try {
+      const { host, client } = connectHostGateway();
+      const pendingReload = vi.fn();
+      host.sessionsChangedReloadTimer = globalThis.setTimeout(pendingReload, 1_000);
+
+      client.emitClose({ code: 1005 });
+
+      expect(host.sessionsChangedReloadTimer).toBeNull();
+      vi.advanceTimersByTime(1_000);
+      expect(pendingReload).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves pending approval requests across reconnect", () => {
     const host = createHost();
     host.execApprovalQueue = [

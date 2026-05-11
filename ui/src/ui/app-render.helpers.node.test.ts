@@ -17,6 +17,8 @@ const {
 }));
 
 vi.mock("./app-chat.ts", () => ({
+  CHAT_SESSIONS_ACTIVE_MINUTES: 120,
+  CHAT_SESSIONS_REFRESH_LIMIT: 100,
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
 }));
@@ -734,8 +736,8 @@ describe("createChatSession", () => {
         emitCommandHooks: true,
       },
       {
-        activeMinutes: 0,
-        limit: 0,
+        activeMinutes: 120,
+        limit: 100,
         includeGlobal: true,
         includeUnknown: true,
         showArchived: false,
@@ -936,8 +938,8 @@ describe("switchChatSession", () => {
     });
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
     expect(loadSessionsMock).toHaveBeenCalledWith(state, {
-      activeMinutes: 0,
-      limit: 0,
+      activeMinutes: 120,
+      limit: 100,
       includeGlobal: true,
       includeUnknown: true,
       showArchived: false,

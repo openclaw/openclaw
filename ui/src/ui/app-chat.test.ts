@@ -576,9 +576,11 @@ describe("refreshChat", () => {
         "sessions.list",
         "sessions list payload",
       );
+      expect(sessionsListPayload.activeMinutes).toBe(120);
       expect(sessionsListPayload.agentId).toBe("main");
       expect(sessionsListPayload.includeGlobal).toBe(true);
       expect(sessionsListPayload.includeUnknown).toBe(true);
+      expect(sessionsListPayload.limit).toBe(100);
       expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
       const commandsListPayload = findRequestPayload(
         request as unknown as MockCallSource,
