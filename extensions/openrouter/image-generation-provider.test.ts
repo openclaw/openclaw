@@ -36,7 +36,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
 function requireOpenRouterPostBody(): {
   messages?: Array<{ content?: unknown }>;
 } {
-  const request = postJsonRequestMock.mock.calls[0]?.[0];
+  const request = (postJsonRequestMock.mock.calls as Record<string, unknown>[][])[0]?.[0];
   if (!request) {
     throw new Error("expected OpenRouter image generation request");
   }

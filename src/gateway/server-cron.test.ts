@@ -3,6 +3,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RunCronAgentTurnResult } from "../cron/isolated-agent.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
 const {
@@ -23,7 +24,9 @@ const {
   >(async () => ({ status: "ran", durationMs: 1 })),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
-  runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+  runCronIsolatedAgentTurnMock: vi.fn(
+    async (): Promise<RunCronAgentTurnResult> => ({ status: "ok", summary: "ok" }),
+  ),
   cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
   runCronChangedMock: vi.fn(async () => {}),
   getGlobalHookRunnerMock: vi.fn(() => ({
@@ -489,6 +492,7 @@ describe("buildGatewayCronService", () => {
         "fetch request",
       );
       expect(request.url).toBe("http://127.0.0.1:8080/cron-finished");
+      expect(request.policy).toBeUndefined();
       const init = requireRecord(request.init, "fetch init");
       expect(init.method).toBe("POST");
       expect(init.headers).toEqual({ "Content-Type": "application/json" });
@@ -498,6 +502,114 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
     }
   });
+
+  it("passes allowPrivateNetwork policy when webhookAllowPrivateNetwork is true", async () => {
+    const cfg = createCronConfig("server-cron-ssrf-allowed");
+    const cfgWithAllowPrivate = {
+      ...cfg,
+      cron: {
+        ...cfg.cron,
+        webhookAllowPrivateNetwork: true,
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfgWithAllowPrivate);
+    fetchWithSsrFGuardMock.mockResolvedValue({ release: async () => {} });
+
+    const state = buildGatewayCronService({
+      cfg: cfgWithAllowPrivate,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "ssrf-webhook-allowed",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "hello" },
+        delivery: {
+          mode: "webhook",
+          to: "http://127.0.0.1:8080/cron-finished",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+      const allowedRequest = requireRecord(
+        callArg(fetchWithSsrFGuardMock, 0, 0, "fetch request"),
+        "fetch request",
+      );
+      expect(allowedRequest.url).toBe("http://127.0.0.1:8080/cron-finished");
+      expect(allowedRequest.policy).toEqual({ allowPrivateNetwork: true });
+      const allowedInit = requireRecord(allowedRequest.init, "fetch init");
+      expect(allowedInit.method).toBe("POST");
+      expect(allowedInit.headers).toEqual({ "Content-Type": "application/json" });
+      expect(String(allowedInit.body)).toContain('"action":"finished"');
+      expect(allowedInit.signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("passes allowPrivateNetwork policy for failure destination webhook when webhookAllowPrivateNetwork is true", async () => {
+    const cfg = createCronConfig("server-cron-failure-dest-allowed");
+    const cfgWithAllowPrivate = {
+      ...cfg,
+      cron: {
+        ...cfg.cron,
+        webhookAllowPrivateNetwork: true,
+        // Global failure destination configured as webhook to a loopback URL
+        failureDestination: {
+          mode: "webhook" as const,
+          to: "http://127.0.0.1:8080/failure-dest",
+        },
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfgWithAllowPrivate);
+    fetchWithSsrFGuardMock.mockResolvedValue({ release: async () => {} });
+    // Make the job fail so the failure destination fires
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "error" as const,
+      summary: undefined,
+      error: "test error",
+    });
+
+    const state = buildGatewayCronService({
+      cfg: cfgWithAllowPrivate,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "failure-dest-webhook-allowed",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "session:failure-test",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      // The failure destination webhook is fired via void async; fetchWithSsrFGuard
+      // is called synchronously before the first await in postCronWebhook.
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "http://127.0.0.1:8080/failure-dest",
+          policy: { allowPrivateNetwork: true },
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  // Note: the failure alert webhook path (sendCronFailureAlert) uses the same
+  // resolveCronWebhookPolicy helper as delivery and failure destination, so policy
+  // consistency is guaranteed by the shared helper rather than a redundant third test.
 
   it("passes custom session targets through to isolated cron runs", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-custom-session-${Date.now()}`);
