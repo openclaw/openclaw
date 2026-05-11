@@ -90,6 +90,16 @@ describe("formatCommandSpans", () => {
     expect(formatCommandSpans(cmd)).toEqual([]);
   });
 
+  it("omits command spans for unsupported shell wrappers through transparent carriers", async () => {
+    const timeoutPowershell = await explainShellCommand('timeout 5 pwsh -Command "Get-ChildItem"');
+    const timeCmd = await explainShellCommand('time cmd.exe /d /s /c "dir"');
+    const splitEnvPowershell = await explainShellCommand("env -S 'pwsh -Command Get-ChildItem'");
+
+    expect(formatCommandSpans(timeoutPowershell)).toEqual([]);
+    expect(formatCommandSpans(timeCmd)).toEqual([]);
+    expect(formatCommandSpans(splitEnvPowershell)).toEqual([]);
+  });
+
   it("ignores invalid executable spans", () => {
     const explanation: CommandExplanation = {
       ok: true,

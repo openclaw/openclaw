@@ -8,6 +8,7 @@ import { normalizeExecutableToken } from "../infra/exec-wrapper-tokens.js";
 import {
   isShellWrapperExecutable,
   POSIX_SHELL_WRAPPERS,
+  resolveShellWrapperTransportArgv,
 } from "../infra/shell-wrapper-resolution.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -241,7 +242,11 @@ async function resolveCommandSpans(
 }
 
 function hasUnsupportedShellArgv(argv: readonly string[] | undefined): boolean {
-  const executable = argv?.[0];
+  if (!argv?.length) {
+    return false;
+  }
+  const shellWrapperArgv = resolveShellWrapperTransportArgv([...argv]) ?? argv;
+  const executable = shellWrapperArgv[0];
   if (!executable) {
     return false;
   }

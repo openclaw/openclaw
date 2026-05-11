@@ -338,6 +338,33 @@ describe("requestExecApprovalDecision", () => {
     );
   });
 
+  it("omits generated command spans for unsupported shell wrappers through system run carriers", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id-carrier",
+      systemRunPlan: {
+        argv: ["timeout", "5", "pwsh", "-Command", "Get-ChildItem"],
+        cwd: "/tmp/project",
+        commandText: 'timeout 5 pwsh -Command "Get-ChildItem"',
+        agentId: null,
+        sessionKey: null,
+      },
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "exec.approval.request",
+      expect.anything(),
+      expect.not.objectContaining({ commandSpans: expect.anything() }),
+      expect.anything(),
+    );
+  });
+
   it("keeps explicit command spans", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
