@@ -16,7 +16,7 @@ vi.mock("openclaw/plugin-sdk/acp-runtime-backend", () => ({
   tryDispatchAcpReplyHook: tryDispatchAcpReplyHookMock,
 }));
 
-import plugin from "./index.js";
+import plugin, { tryDispatchAcpReplyHookWithControlBypass } from "./index.js";
 
 type AcpxAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
 
@@ -35,6 +35,22 @@ function registerAcpxAutoEnableProbe(): AcpxAutoEnableProbe {
   }
   return probe;
 }
+
+function buildEvent(body: string, extra?: Record<string, unknown>) {
+  return {
+    ctx: {
+      Body: body,
+      BodyForCommands: body,
+      ...extra,
+    },
+    inboundAudio: false,
+    shouldRouteToOriginating: false,
+    shouldSendToolSummaries: false,
+    sendPolicy: "allow" as const,
+  };
+}
+
+const fakeHookCtx = {} as Parameters<typeof tryDispatchAcpReplyHookWithControlBypass>[1];
 
 describe("acpx plugin", () => {
   beforeEach(() => {
@@ -57,7 +73,7 @@ describe("acpx plugin", () => {
       pluginConfig: api.pluginConfig,
     });
     expect(api.registerService).toHaveBeenCalledWith(service);
-    expect(api.on).toHaveBeenCalledWith("reply_dispatch", tryDispatchAcpReplyHookMock);
+    expect(api.on).toHaveBeenCalledWith("reply_dispatch", tryDispatchAcpReplyHookWithControlBypass);
   });
 
   it("preserves the ACP reply_dispatch runtime path through the registered hook", async () => {
@@ -115,5 +131,64 @@ describe("acpx plugin", () => {
     expect(probe({ config: { acp: { enabled: true, backend: "custom-runtime" } }, env: {} })).toBe(
       null,
     );
+  });
+});
+
+describe("tryDispatchAcpReplyHookWithControlBypass", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    tryDispatchAcpReplyHookMock.mockResolvedValue(undefined);
+  });
+
+  it.each([
+    ["/acp"],
+    ["/acp close"],
+    ["/acp cancel"],
+    ["/acp status"],
+    ["/acp sessions"],
+    ["/unfocus"],
+    ["/focus some-session"],
+    ["  /acp close  "],
+    ["/ACP CLOSE"],
+  ])("skips ACP dispatch for control command %s", async (body) => {
+    const result = await tryDispatchAcpReplyHookWithControlBypass(buildEvent(body), fakeHookCtx);
+    expect(result).toBeUndefined();
+    expect(tryDispatchAcpReplyHookMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers CommandBody over Body when classifying", async () => {
+    const event = buildEvent("not a command", { CommandBody: "/acp close" });
+    const result = await tryDispatchAcpReplyHookWithControlBypass(event, fakeHookCtx);
+    expect(result).toBeUndefined();
+    expect(tryDispatchAcpReplyHookMock).not.toHaveBeenCalled();
+  });
+
+  it("still runs ACP dispatch for normal prompts", async () => {
+    tryDispatchAcpReplyHookMock.mockResolvedValue({ handled: true, queuedFinal: true });
+    const event = buildEvent("write a test for me");
+    const result = await tryDispatchAcpReplyHookWithControlBypass(event, fakeHookCtx);
+    expect(tryDispatchAcpReplyHookMock).toHaveBeenCalledWith(event, fakeHookCtx);
+    expect(result).toEqual({ handled: true, queuedFinal: true });
+  });
+
+  it("does not match words that merely start with acp- or focus-", async () => {
+    for (const body of ["/acpfoo", "/focuser", "/unfocused"]) {
+      tryDispatchAcpReplyHookMock.mockClear();
+      await tryDispatchAcpReplyHookWithControlBypass(buildEvent(body), fakeHookCtx);
+      expect(tryDispatchAcpReplyHookMock).toHaveBeenCalled();
+    }
+  });
+
+  it("does not match plain text that mentions /acp", async () => {
+    const event = buildEvent("please explain /acp spawn to me");
+    await tryDispatchAcpReplyHookWithControlBypass(event, fakeHookCtx);
+    // candidate starts with "please", not "/acp" — must delegate to ACP
+    expect(tryDispatchAcpReplyHookMock).toHaveBeenCalled();
+  });
+
+  it("does not match empty bodies", async () => {
+    const event = buildEvent("");
+    await tryDispatchAcpReplyHookWithControlBypass(event, fakeHookCtx);
+    expect(tryDispatchAcpReplyHookMock).toHaveBeenCalled();
   });
 });

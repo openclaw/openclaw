@@ -209,6 +209,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Pi: wait for embedded abort cleanup to settle before releasing the session write lock, preventing follow-up turns from racing previous prompt teardown. (#80239) Thanks @samzong.
 - WhatsApp: downgrade OpenClaw watchdog-triggered Web reconnects from runtime errors to recovery warnings and clear the recovered reconnect status after the next healthy connection. (#77026) Thanks @rubencu.
 - ACPX/Windows: hide the MCP proxy target child process window on Windows so ACP-backed agents do not flash or fail because of terminal window handling. Fixes #60672. (#60678) Thanks @KChow-ctrl.
+- ACPX: let `/acp`, `/focus`, and `/unfocus` chat commands run against the OpenClaw command router while an ACP session is active, so users can inspect or close ACP from any chat surface instead of having the ACP runtime swallow those commands as plain prompts.
 
 ## 2026.5.9
 
