@@ -1787,7 +1787,7 @@ export async function runConfigUnset(opts: {
     const unsetResult = unsetAtPath(next, parsedPath);
     if (!unsetResult.removed) {
       if (cliOptions.json) {
-        writeRuntimeJson(runtime, { valid: false, path: opts.path, error: "Config path not found" });
+        writeRuntimeJson(runtime, { ok: false, error: "Config path not found", path: opts.path });
       } else {
         runtime.error(
           danger(
@@ -1798,35 +1798,62 @@ export async function runConfigUnset(opts: {
       runtime.exit(1);
       return;
     }
+
     if (cliOptions.dryRun) {
-      // Validate the post-change config before reporting success
-      const validated = validateConfigObjectRaw(next as OpenClawConfig, {
+      const nextConfig = normalizeConfigMutationModelRefs(next as OpenClawConfig);
+      // Schema validation
+      const validated = validateConfigObjectRaw(nextConfig, {
         touchedPaths: [parsedPath],
         validateBundledChannels: true,
       });
+      const errors: ConfigSetDryRunError[] = [];
       if (!validated.ok) {
-        const errors = formatConfigIssueLines(validated.issues, "-", { normalizeRoot: true });
+        errors.push(
+          ...formatConfigIssueLines(validated.issues, "-", { normalizeRoot: true }).map((message) => ({
+            kind: "schema" as const,
+            message,
+          })),
+        );
+      }
+      // SecretRef fallout check: collect refs that might be affected by provider removal
+      const isProviderPath = pathStartsWith(parsedPath, parsePath("secrets.providers"));
+      if (isProviderPath) {
+        const providerAlias = parsedPath[2]?.toString();
+        if (providerAlias) {
+          const refs = collectAffectedRefsForProviderRemoval(nextConfig, providerAlias);
+          const resolvabilityErrors = await collectDryRunResolvabilityErrors({
+            refs,
+            config: nextConfig,
+          });
+          errors.push(...resolvabilityErrors);
+        }
+      }
+      const dedupedErrors = dedupeDryRunErrors(errors);
+      if (dedupedErrors.length > 0) {
         if (cliOptions.json) {
           writeRuntimeJson(runtime, {
-            valid: false,
-            path: opts.path,
-            errors: errors.map((message) => ({ kind: "schema", message })),
+            ok: false,
+            operations: 1,
+            errors: dedupedErrors,
           });
         } else {
-          for (const line of errors) {
-            runtime.error(danger(line));
-          }
+          runtime.error(danger(formatDryRunFailureMessage({ errors: dedupedErrors, skippedExecRefs: 0 })));
         }
         runtime.exit(1);
         return;
       }
       if (cliOptions.json) {
-        writeRuntimeJson(runtime, { valid: true, path: opts.path, removed: true });
+        writeRuntimeJson(runtime, {
+          ok: true,
+          operations: 1,
+          checks: { schema: true, resolvability: isProviderPath },
+        });
       } else {
-        runtime.log(success(`Would remove ${opts.path} (dry-run).`));
+        runtime.log(success(`Dry run successful: 1 update(s) validated against ${shortenHomePath(snapshot.path)}.`));
       }
       return;
     }
+
     await replaceConfigFile({
       nextConfig: next,
       ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
@@ -1839,6 +1866,21 @@ export async function runConfigUnset(opts: {
     runtime.error(danger(String(err)));
     runtime.exit(1);
   }
+}
+
+function collectAffectedRefsForProviderRemoval(config: OpenClawConfig, providerAlias: string): SecretRef[] {
+  const refs: SecretRef[] = [];
+  for (const target of discoverConfigSecretTargets(config)) {
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults: config.secrets?.defaults,
+    });
+    if (ref && ref.provider === providerAlias) {
+      refs.push(ref);
+    }
+  }
+  return refs;
 }
 
 export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {

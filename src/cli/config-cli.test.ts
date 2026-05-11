@@ -2346,7 +2346,7 @@ describe("config cli", () => {
       await runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run"]);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining("Would remove tools.alsoAllow"));
+      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining("Dry run successful"));
     });
 
     it("dry-run --json outputs structured result", async () => {
@@ -2360,7 +2360,8 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       const output = JSON.parse(String(mockLog.mock.calls.at(0)?.[0]));
-      expect(output).toEqual({ valid: true, path: "tools.alsoAllow", removed: true });
+      expect(output.ok).toBe(true);
+      expect(output.operations).toBe(1);
     });
 
     it("dry-run --json reports path not found", async () => {
@@ -2372,7 +2373,8 @@ describe("config cli", () => {
       ).rejects.toThrow("__exit__:1");
 
       const output = JSON.parse(String(mockLog.mock.calls.at(0)?.[0]));
-      expect(output).toEqual({ valid: false, path: "tools.nonexistent", error: "Config path not found" });
+      expect(output.ok).toBe(false);
+      expect(output.error).toBe("Config path not found");
     });
 
     it("rejects --json without --dry-run", async () => {
