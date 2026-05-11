@@ -58,6 +58,7 @@ Docs: https://docs.openclaw.ai
 
 - Feishu: make manual App ID/App Secret setup the default channel-binding path while keeping QR scan-to-create as an optional best-effort flow, and document the manual fallback for domestic Feishu mobile clients that do not react to the QR code. Fixes #80591. Thanks @wei-wei-zhao.
 - Telegram: show resolved thinking defaults in native `/status` and `/think` menus while preserving explicit session overrides. (#80341) Thanks @VACInc.
+- Channels: cache selected channel registry lookups against the active fallback snapshot so pinned-empty registries refresh native command and alias routing after active registry swaps. (#80333) Thanks @samzong.
 - Gateway: scope `sessions.resolve` sessionId and label store loads to the requested agent so large unrelated agent stores are not parsed for scoped lookups. Fixes #51264. (#79474) Thanks @samzong.
 - Gateway: share serialized streaming event envelopes across eligible WebSocket and node subscribers while preserving per-client sequence numbers. (#80299) Thanks @samzong.
 - Browser: report Chrome MCP existing-session page readiness in browser status without letting status probes exceed the client timeout. Fixes #80268. (#80280) Thanks @ai-hpc.
