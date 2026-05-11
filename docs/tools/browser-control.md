@@ -294,6 +294,7 @@ You can wait on more than just time/text:
   - `openclaw browser wait --url "**/dash"`
 - Wait for load state:
   - `openclaw browser wait --load networkidle`
+  - Not supported on `existing-session` profiles; use `--url`, `--fn`, or a selector wait instead. See [browser.md](./browser.md) — _Existing-session feature limitations_.
 - Wait for a JS predicate:
   - `openclaw browser wait --fn "window.ready===true"`
 - Wait for a selector to become visible:
