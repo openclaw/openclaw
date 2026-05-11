@@ -4,7 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { _resetIMessageShortIdState } from "../monitor-reply-cache.js";
+import { _resetIMessageShortIdState, rememberIMessageReplyCache } from "../monitor-reply-cache.js";
 import {
   buildIMessageInboundContext,
   describeIMessageEchoDropLog,
@@ -445,7 +445,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       messageText: "",
       bodyText: "",
       echoCache: { has: () => false },
-      isKnownFromMeMessageId: ({ messageId, accountId, chatId, chatGuid, chatIdentifier }) => {
+      isKnownFromMeMessageId: (messageId, { accountId, chatId, chatGuid, chatIdentifier }) => {
         expect({ messageId, accountId, chatId, chatGuid, chatIdentifier }).toEqual({
           messageId: "tool-sent-guid",
           accountId: "default",
@@ -482,7 +482,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       messageText: "Disliked “tapback target”",
       bodyText: "Disliked “tapback target”",
       echoCache: { has: () => false },
-      isKnownFromMeMessageId: ({ messageId, accountId, chatId, chatGuid, chatIdentifier }) => {
+      isKnownFromMeMessageId: (messageId, { accountId, chatId, chatGuid, chatIdentifier }) => {
         expect({ messageId, accountId, chatId, chatGuid, chatIdentifier }).toEqual({
           messageId: "lobster-reply-guid",
           accountId: "default",
@@ -525,8 +525,8 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       messageText: "Disliked “tapback target”",
       bodyText: "Disliked “tapback target”",
       echoCache: { has: () => false },
-      isKnownFromMeMessageId: ({ messageId }) => {
-        checkedMessageIds.push(messageId ?? "");
+      isKnownFromMeMessageId: (messageId) => {
+        checkedMessageIds.push(messageId);
         return messageId === "p:0/imsg-1";
       },
     });
@@ -537,6 +537,59 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       throw new Error("expected reaction decision");
     }
     expect(decision.text).toBe("iMessage reaction added: 👎 by +15555550123 on msg imsg-1");
+  });
+
+  it("uses the production reply-cache lookup for bot-authored reaction targets", async () => {
+    const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-reaction-cache-"));
+    const priorStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    try {
+      _resetIMessageShortIdState();
+      rememberIMessageReplyCache({
+        accountId: "default",
+        messageId: "p:0/imsg-production",
+        chatGuid: "any;-;+15555550123",
+        chatIdentifier: "+15555550123",
+        chatId: 3,
+        timestamp: Date.now(),
+        isFromMe: true,
+      });
+
+      const decision = await resolveDecision({
+        message: {
+          guid: "reaction-guid",
+          is_reaction: true,
+          reaction_emoji: "❤️",
+          is_reaction_add: true,
+          associated_message_guid: "p:0/imsg-production",
+          associated_message_type: 2000,
+          text: "Loved “tapback target”",
+          chat_id: 3,
+          chat_guid: "any;-;+15555550123",
+          chat_identifier: "+15555550123",
+        },
+        messageText: "Loved “tapback target”",
+        bodyText: "Loved “tapback target”",
+        echoCache: { has: () => false },
+        isKnownFromMeMessageId: undefined,
+      });
+
+      expect(decision).toMatchObject({ kind: "reaction" });
+      if (decision.kind !== "reaction") {
+        throw new Error("expected reaction decision");
+      }
+      expect(decision.text).toBe(
+        "iMessage reaction added: ❤️ by +15555550123 on msg imsg-production",
+      );
+    } finally {
+      _resetIMessageShortIdState();
+      if (priorStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = priorStateDir;
+      }
+      fs.rmSync(tempStateDir, { recursive: true, force: true });
+    }
   });
 
   it("matches prefixed tapback targets against prefixed echo-cache ids in own mode", async () => {

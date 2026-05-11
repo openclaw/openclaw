@@ -295,6 +295,27 @@ function hasIMessageEchoMatch(params: {
   return false;
 }
 
+function isKnownFromMeIMessageReactionTarget(params: {
+  messageId: string;
+  accountId: string;
+  chatId?: number;
+  chatGuid?: string;
+  chatIdentifier?: string;
+  isKnownFromMeMessageId?: typeof isKnownFromMeIMessageMessageId;
+}): boolean {
+  const { messageId, accountId, chatId, chatGuid, chatIdentifier } = params;
+  const ctx = {
+    accountId,
+    chatId,
+    chatGuid,
+    chatIdentifier,
+  };
+  if (params.isKnownFromMeMessageId) {
+    return params.isKnownFromMeMessageId(messageId, ctx);
+  }
+  return isKnownFromMeIMessageMessageId(messageId, ctx);
+}
+
 /**
  * Per-group `systemPrompt` resolution. Mirrors `resolveWhatsAppGroupSystemPrompt`
  * in `extensions/whatsapp/src/system-prompt.ts`:
@@ -385,13 +406,7 @@ export async function resolveIMessageInboundDecision(params: {
   };
   selfChatCache?: SelfChatCache;
   reactionNotifications?: IMessageReactionNotificationMode;
-  isKnownFromMeMessageId?: (params: {
-    messageId: string;
-    accountId: string;
-    chatId?: number;
-    chatGuid?: string;
-    chatIdentifier?: string;
-  }) => boolean;
+  isKnownFromMeMessageId?: typeof isKnownFromMeIMessageMessageId;
   logVerbose?: (msg: string) => void;
 }): Promise<IMessageInboundDecision> {
   const senderRaw = params.message.sender ?? "";
@@ -601,12 +616,13 @@ export async function resolveIMessageInboundDecision(params: {
           messageIds: targetGuids,
         })) ||
         targetGuids.some((messageId) =>
-          (params.isKnownFromMeMessageId ?? isKnownFromMeIMessageMessageId)({
+          isKnownFromMeIMessageReactionTarget({
             messageId,
             accountId: params.accountId,
             chatId,
             chatGuid,
             chatIdentifier,
+            isKnownFromMeMessageId: params.isKnownFromMeMessageId,
           }),
         )),
     );
