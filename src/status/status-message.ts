@@ -428,7 +428,7 @@ function resolveChannelModelNote(params: {
   entry?: SessionEntry;
   selectedProvider: string;
   selectedModel: string;
-  parentSessionKey?: string;
+  parentConversationId?: string;
 }): string | undefined {
   if (!params.config || !params.entry) {
     return undefined;
@@ -446,7 +446,7 @@ function resolveChannelModelNote(params: {
     groupChatType: params.entry.chatType,
     groupChannel: params.entry.groupChannel,
     groupSubject: params.entry.subject,
-    parentSessionKey: params.parentSessionKey,
+    parentConversationId: params.parentConversationId,
   });
   if (!channelOverride) {
     return undefined;
@@ -643,7 +643,6 @@ export function buildStatusMessage(args: StatusArgs): string {
     entry,
     selectedProvider,
     selectedModel,
-    parentSessionKey: args.parentSessionKey,
   });
   const persistedContextTokens =
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0

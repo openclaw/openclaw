@@ -514,6 +514,9 @@ Completed consolidation/deletion highlights:
   routing for the current or spawned session. It no longer trusts group/channel
   identity by decoding `sessionKey`; caller-provided group ids are dropped when
   no typed session row vouches for them.
+- Channel model override matching now uses explicit group and parent
+  conversation metadata. It no longer decodes parent conversation ids from
+  `parentSessionKey`.
 - Completion delivery, send policy, and task maintenance no longer derive chat
   type from `session_key` shape. The old chat-type key parser has been deleted;
   these paths require typed session metadata, typed delivery context, or
