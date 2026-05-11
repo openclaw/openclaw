@@ -128,6 +128,64 @@ openclaw agent --message "Ship checklist" --thinking high
 Upgrading? [Updating guide](https://docs.openclaw.ai/install/updating) (and run `openclaw doctor`).
 
 Models config + CLI: [Models](https://docs.openclaw.ai/concepts/models). Auth profile rotation + fallbacks: [Model failover](https://docs.openclaw.ai/concepts/model-failover).
+## Windows Troubleshooting
+
+### WSL2 Recommended
+
+OpenClaw works best on Windows using WSL2.
+
+Install WSL2:
+
+```bash
+wsl --install
+```
+
+Restart your system after installation.
+
+### Verify Node.js Installation
+
+```bash
+node -v
+npm -v
+```
+
+Recommended:
+
+- Node.js 24
+- npm latest version
+
+### Common Build Issues
+
+#### pnpm command not found
+
+Install pnpm globally:
+
+```bash
+npm install -g pnpm
+```
+
+#### Permission errors
+
+Run terminal as Administrator or use WSL2.
+## Install (recommended)
+### Verify Installation
+
+After installation, confirm OpenClaw is installed correctly:
+
+```bash
+openclaw --version
+```
+
+You should see the installed OpenClaw version printed in the terminal.
+## Useful CLI Commands
+
+```bash
+openclaw doctor
+openclaw gateway --verbose
+openclaw update
+```
+
+These commands help debug configuration and update OpenClaw.
 
 ## Security defaults (DM access)
 
