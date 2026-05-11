@@ -14,7 +14,9 @@ describe("zca-client runtime loading", () => {
     const zcaClient = await import("./zca-client.js");
     expect(runtimeFactory).not.toHaveBeenCalled();
 
-    const client = await zcaClient.createZalo({ logging: false, selfListen: true });
+    const client = (await zcaClient.createZalo({ logging: false, selfListen: true })) as {
+      options?: { logging?: boolean; selfListen?: boolean };
+    };
 
     expect(runtimeFactory).toHaveBeenCalledTimes(1);
     expect((client as { options?: { logging?: boolean; selfListen?: boolean } }).options).toEqual({
