@@ -348,23 +348,28 @@ function formatProfileLabel(
   profileId: string,
   credential: AuthProfileCredential | undefined,
 ): string {
+  const tail = profileId.includes(":") ? profileId.slice(profileId.indexOf(":") + 1) : profileId;
   const displayName = credential?.displayName?.trim();
   if (displayName) {
-    return credential?.type === "api_key" ? simplifyApiKeyDisplayName(displayName) : displayName;
+    return credential?.type === "api_key"
+      ? simplifyApiKeyDisplayName(displayName, tail)
+      : displayName;
   }
   const email = credential?.email?.trim() ?? extractEmailFromProfileId(profileId);
   if (email) {
     return email;
   }
-  const tail = profileId.includes(":") ? profileId.slice(profileId.indexOf(":") + 1) : profileId;
   if (credential?.type === "api_key") {
-    return humanizeApiKeyProfileTail(tail);
+    return tail || "API key";
   }
   return humanizeProfileTail(tail);
 }
 
-function simplifyApiKeyDisplayName(value: string): string {
+function simplifyApiKeyDisplayName(value: string, tail: string): string {
   const stripped = value.replace(/^OpenAI\s+/iu, "").trim();
+  if (tail && stripped.toLowerCase() === humanizeApiKeyProfileTail(tail).toLowerCase()) {
+    return tail;
+  }
   return stripped || value;
 }
 
