@@ -2162,6 +2162,7 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const authProfileId = "openai-codex:work";
     const harnessRef: { current?: ReturnType<typeof createStartedThreadHarness> } = {};
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "turn/start") {
@@ -2177,7 +2178,22 @@ describe("runCodexAppServerAttempt", () => {
     });
     harnessRef.current = harness;
 
-    const result = await runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const params = createParams(sessionFile, workspaceDir);
+    params.authProfileId = authProfileId;
+    params.authProfileStore = {
+      version: 1,
+      profiles: {
+        [authProfileId]: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    const result = await runCodexAppServerAttempt(params);
     expect(result.promptErrorSource).toBe("prompt");
     expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
     expect(result.promptError).toContain("Next reset in");
@@ -2187,6 +2203,7 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const authProfileId = "openai-codex:work";
     rememberCodexRateLimits({
       rateLimits: {
         limitId: "codex",
@@ -2208,13 +2225,29 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const params = createParams(sessionFile, workspaceDir);
+    params.authProfileId = authProfileId;
+    params.authProfileStore = {
+      version: 1,
+      profiles: {
+        [authProfileId]: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
 
     const result = await run;
     expect(result.promptErrorSource).toBe("prompt");
     expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
     expect(result.promptError).toContain("Next reset in");
+    expect(params.authProfileStore.usageStats?.[authProfileId]?.blockedUntil).toBeUndefined();
   });
 
   it("refreshes Codex account rate limits when turn/start omits reset details", async () => {

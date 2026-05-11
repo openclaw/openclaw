@@ -2957,7 +2957,11 @@ export async function runEmbeddedPiAgent(
           if (lastProfileId) {
             await markAuthProfileSuccess({
               store: profileFailureStore,
-              provider,
+              provider: resolveAuthProfileStateProvider(
+                profileFailureStore,
+                lastProfileId,
+                provider,
+              ),
               profileId: lastProfileId,
               agentDir: params.agentDir,
             });
@@ -3103,4 +3107,17 @@ export async function runEmbeddedPiAgent(
       }
     });
   });
+}
+
+function resolveAuthProfileStateProvider(
+  store: AuthProfileStore,
+  profileId: string,
+  fallbackProvider: string,
+): string {
+  const profileProvider = store.profiles?.[profileId]?.provider?.trim();
+  if (profileProvider) {
+    return profileProvider;
+  }
+  const idProvider = profileId.split(":", 1)[0]?.trim();
+  return idProvider || fallbackProvider;
 }

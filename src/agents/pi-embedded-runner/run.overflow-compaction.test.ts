@@ -22,6 +22,7 @@ import {
   mockedEnsureAuthProfileStoreWithoutExternalProfiles,
   mockedGlobalHookRunner,
   mockedGetApiKeyForModel,
+  mockedMarkAuthProfileSuccess,
   mockedPickFallbackThinkingLevel,
   mockedResolveAuthProfileOrder,
   mockedResolveContextWindowInfo,
@@ -462,6 +463,12 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     });
     const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
     expect(harnessParams?.runtimePlan).toBe(runtimePlan);
+    expect(mockedMarkAuthProfileSuccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        profileId: "openai-codex:work",
+      }),
+    );
   });
 
   it("keeps auto-selected OpenAI Codex auth profiles for forced codex harness runs", async () => {
