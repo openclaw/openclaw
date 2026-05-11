@@ -176,12 +176,22 @@ describe("drainActiveSessionsForShutdown", () => {
     expect(result.emittedSessionIds).toEqual(["sess-A"]);
   });
 
-  it("returns timedOut=true and surfaces the elapsed budget when a plugin handler hangs", async () => {
-    runSessionEndMock.mockImplementationOnce(() => new Promise<void>(() => undefined));
+  it("returns timedOut=true while still starting later emissions when one handler hangs", async () => {
+    runSessionEndMock.mockImplementation(async (event) => {
+      if ((event as { sessionId?: string }).sessionId === "sess-A") {
+        await new Promise<void>(() => undefined);
+      }
+    });
     emitGatewaySessionStartPluginHook({
       cfg,
       sessionKey: "agent:main:main",
       sessionId: "sess-A",
+      storePath: "/tmp/store.json",
+    });
+    emitGatewaySessionStartPluginHook({
+      cfg,
+      sessionKey: "agent:main:other",
+      sessionId: "sess-B",
       storePath: "/tmp/store.json",
     });
 
@@ -191,7 +201,11 @@ describe("drainActiveSessionsForShutdown", () => {
     });
 
     expect(result.timedOut).toBe(true);
-    expect(runSessionEndMock).toHaveBeenCalledTimes(1);
+    expect(result.emittedSessionIds.sort()).toEqual(["sess-A", "sess-B"]);
+    expect(runSessionEndMock).toHaveBeenCalledTimes(2);
+    expect(
+      runSessionEndMock.mock.calls.map(([event]) => (event as { sessionId?: string }).sessionId),
+    ).toEqual(["sess-A", "sess-B"]);
   });
 
   it("still records the session as forgotten when no `session_end` plugins are registered", async () => {

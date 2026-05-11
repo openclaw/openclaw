@@ -228,41 +228,42 @@ export async function drainActiveSessionsForShutdown(params: {
   );
   const emittedSessionIds: string[] = [];
   const hookRunner = getGlobalHookRunner();
+  let settledEmissions = 0;
   // Inline the session_end emission instead of calling
   // `emitGatewaySessionEndPluginHook`, because that helper uses fire-and-forget
-  // (`void hookRunner.runSessionEnd(...)`). The shutdown drain must actually
-  // await each plugin handler so the bounded total-timeout races real plugin
-  // work, not just a synchronous for-loop -- otherwise the close handler can
-  // proceed to subsystem teardown while a database-writing `session_end`
-  // plugin is still in flight, which is the original ghost-session failure.
-  const drain = (async () => {
-    for (const entry of tracked) {
-      forgetActiveSessionForShutdown(entry.sessionId);
-      emittedSessionIds.push(entry.sessionId);
-      if (!hookRunner?.hasHooks("session_end")) {
-        continue;
-      }
-      const transcript = resolveStableSessionEndTranscript({
-        sessionId: entry.sessionId,
-        storePath: entry.storePath,
-        sessionFile: entry.sessionFile,
-        agentId: entry.agentId,
-      });
-      const payload = buildSessionEndHookPayload({
-        sessionId: entry.sessionId,
-        sessionKey: entry.sessionKey,
-        cfg: entry.cfg,
-        reason: params.reason,
-        sessionFile: transcript.sessionFile,
-        transcriptArchived: transcript.transcriptArchived,
-      });
+  // (`void hookRunner.runSessionEnd(...)`). Start every tracked session's
+  // emission before awaiting the bounded aggregate so one slow plugin write
+  // cannot prevent later active sessions from receiving `session_end`.
+  const drain = Promise.allSettled(
+    tracked.map(async (entry) => {
       try {
+        forgetActiveSessionForShutdown(entry.sessionId);
+        emittedSessionIds.push(entry.sessionId);
+        if (!hookRunner?.hasHooks("session_end")) {
+          return;
+        }
+        const transcript = resolveStableSessionEndTranscript({
+          sessionId: entry.sessionId,
+          storePath: entry.storePath,
+          sessionFile: entry.sessionFile,
+          agentId: entry.agentId,
+        });
+        const payload = buildSessionEndHookPayload({
+          sessionId: entry.sessionId,
+          sessionKey: entry.sessionKey,
+          cfg: entry.cfg,
+          reason: params.reason,
+          sessionFile: transcript.sessionFile,
+          transcriptArchived: transcript.transcriptArchived,
+        });
         await hookRunner.runSessionEnd(payload.event, payload.context);
       } catch (err) {
         logVerbose(`session_end hook failed during shutdown drain: ${String(err)}`);
+      } finally {
+        settledEmissions++;
       }
-    }
-  })();
+    }),
+  );
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<"timeout">((resolve) => {
     timer = setTimeout(() => resolve("timeout"), totalTimeoutMs);
@@ -272,7 +273,7 @@ export async function drainActiveSessionsForShutdown(params: {
     const result = await Promise.race([drain.then(() => "ok" as const), timeout]);
     if (result === "timeout") {
       logVerbose(
-        `shutdown session-end drain timed out after ${totalTimeoutMs}ms with ${tracked.length - emittedSessionIds.length} sessions remaining`,
+        `shutdown session-end drain timed out after ${totalTimeoutMs}ms with ${tracked.length - settledEmissions} session_end handler(s) still pending`,
       );
       return { emittedSessionIds, timedOut: true };
     }
