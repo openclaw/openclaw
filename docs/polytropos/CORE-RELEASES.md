@@ -5,7 +5,7 @@ This document defines the **release** mechanism for Polytropos core (openclaw-po
 ## Terms
 
 - **Release**: creating a versioned runnable directory under `~/polytropos/releases/<tag>/` and (optionally) switching `current`.
-- **Update**: merging a newer upstream OpenClaw tag into our fork, then performing the standard **release** procedure.
+- **Update**: merging a newer upstream OpenClaw tag into our fork, then performing the standard **release** procedure (see [`docs/polytropos/UPDATE-PROCEDURE.md`](./UPDATE-PROCEDURE.md)).
 
 ## Goal
 
