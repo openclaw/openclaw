@@ -341,6 +341,13 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare Codex user
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo useradd --create-home --shell /bin/bash codex
+          sudo chown -R codex:codex "$GITHUB_WORKSPACE"
+
       - name: Run Codex Mantis Telegram agent
         uses: openai/codex-action@5c3f4ccdb2b8790f73d6b21751ac00e602aa0c02
         env:
@@ -368,7 +375,8 @@ jobs:
           model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
           effort: high
           sandbox: danger-full-access
-          safety-strategy: drop-sudo
+          safety-strategy: unprivileged-user
+          codex-user: codex
           codex-args: '["--full-auto"]'
 
       - name: Inspect Mantis evidence manifest
