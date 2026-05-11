@@ -4,6 +4,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { PreparedSecretsRuntimeSnapshot, SecretResolverWarning } from "../secrets/runtime.js";
 import { KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS } from "./known-weak-gateway-secrets.js";
 import {
+  assertValidGatewayStartupConfigSnapshot,
   createRuntimeSecretsActivator,
   prepareGatewayStartupConfig,
 } from "./server-startup-config.js";
@@ -391,5 +392,50 @@ describe("gateway startup config secret preflight", () => {
     expect(result.auth.mode).toBe("token");
     expect(result.auth.token).toBe("resolved-gateway-token");
     expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("assertValidGatewayStartupConfigSnapshot", () => {
+  it("suppresses doctor --fix hint when all issues are plugin packaging errors", () => {
+    const snapshot = buildTestConfigSnapshot({
+      path: "/tmp/test.json",
+      exists: true,
+      raw: "{}",
+      parsed: {} as OpenClawConfig,
+      valid: false,
+      config: {} as OpenClawConfig,
+      issues: [
+        {
+          path: "plugins",
+          message:
+            "telegram requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem; update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then.",
+        },
+      ],
+      legacyIssues: [],
+    });
+
+    expect(() =>
+      assertValidGatewayStartupConfigSnapshot(snapshot, { includeDoctorHint: true }),
+    ).toThrow(/plugin packaging issue/u);
+    expect(() =>
+      assertValidGatewayStartupConfigSnapshot(snapshot, { includeDoctorHint: true }),
+    ).not.toThrow(/openclaw doctor --fix/u);
+  });
+
+  it("includes doctor --fix hint for non-packaging validation failures", () => {
+    const snapshot = buildTestConfigSnapshot({
+      path: "/tmp/test.json",
+      exists: true,
+      raw: "{}",
+      parsed: {} as OpenClawConfig,
+      valid: false,
+      config: {} as OpenClawConfig,
+      issues: [{ path: "gateway.auth.token", message: "token is required" }],
+      legacyIssues: [],
+    });
+
+    expect(() =>
+      assertValidGatewayStartupConfigSnapshot(snapshot, { includeDoctorHint: true }),
+    ).toThrow(/openclaw doctor --fix/u);
   });
 });

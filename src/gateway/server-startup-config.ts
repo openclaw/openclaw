@@ -224,9 +224,13 @@ export function assertValidGatewayStartupConfigSnapshot(
     snapshot.issues.length > 0
       ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
       : "Unknown validation issue.";
-  const doctorHint = options.includeDoctorHint
-    ? `\nRun "${formatCliCommand("openclaw doctor --fix")}" to repair, then retry.`
-    : "";
+  const hasPackagingIssue = snapshot.issues.some((issue) =>
+    issue.message.includes("plugin packaging issue, not a local config problem"),
+  );
+  const doctorHint =
+    options.includeDoctorHint && !hasPackagingIssue
+      ? `\nRun "${formatCliCommand("openclaw doctor --fix")}" to repair, then retry.`
+      : "";
   throw new Error(`Invalid config at ${snapshot.path}.\n${issues}${doctorHint}`);
 }
 
