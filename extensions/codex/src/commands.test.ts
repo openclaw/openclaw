@@ -754,6 +754,67 @@ describe("codex command", () => {
     expect(result.text).not.toContain("secondary");
   });
 
+  it("shows Codex auth order before OpenAI fallback order", async () => {
+    const config = {};
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:api-key": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test",
+          },
+          "openai-codex:personal-email@gmail.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: now + 60 * 60 * 1000,
+            email: "personal-email@gmail.com",
+          },
+        },
+        order: {
+          openai: ["openai:api-key"],
+          "openai-codex": ["openai-codex:personal-email@gmail.com"],
+        },
+        lastGood: {
+          "openai-codex": "openai-codex:personal-email@gmail.com",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          account: { type: "chatgpt", email: "personal-email@gmail.com", planType: "plus" },
+          requiresOpenaiAuth: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: codexRateLimitPayload({
+          primaryUsedPercent: 10,
+          secondaryUsedPercent: 20,
+          primaryResetSeconds: Math.ceil(now / 1000) + 120,
+          secondaryResetSeconds: Math.ceil(now / 1000) + 3600,
+        }),
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain(
+      "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
+    );
+    expect(result.text).not.toContain("api-key");
+  });
+
   it("explains when an API-key backup is active because the subscription is paused", async () => {
     const config = {};
     const now = Date.now();

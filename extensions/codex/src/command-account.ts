@@ -138,10 +138,10 @@ function resolveDisplayAuthOrder(params: {
   store: AuthProfileStore;
 }): string[] {
   const configured =
-    resolveOrder(params.store.order, OPENAI_PROVIDER_ID) ??
     resolveOrder(params.store.order, OPENAI_CODEX_PROVIDER_ID) ??
-    resolveOrder(params.config?.auth?.order, OPENAI_PROVIDER_ID) ??
-    resolveOrder(params.config?.auth?.order, OPENAI_CODEX_PROVIDER_ID);
+    resolveOrder(params.config?.auth?.order, OPENAI_CODEX_PROVIDER_ID) ??
+    resolveOrder(params.store.order, OPENAI_PROVIDER_ID) ??
+    resolveOrder(params.config?.auth?.order, OPENAI_PROVIDER_ID);
   if (configured && configured.length > 0) {
     return dedupe(configured);
   }

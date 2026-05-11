@@ -221,19 +221,19 @@ export function resolveAuthProfileOrder(params: {
     providerAuthKey === OPENAI_CODEX_PROVIDER_ID || providerKey === OPENAI_CODEX_PROVIDER_ID
       ? OPENAI_PROVIDER_ID
       : undefined;
-  const storedOrder =
-    resolveAuthOrder(store.order, providerAuthKey) ??
-    resolveAuthOrder(store.order, providerKey) ??
-    (openAIOrderAliasProvider
-      ? resolveAuthOrder(store.order, openAIOrderAliasProvider)
-      : undefined);
-  const configuredOrder =
+  const directStoredOrder =
+    resolveAuthOrder(store.order, providerAuthKey) ?? resolveAuthOrder(store.order, providerKey);
+  const aliasStoredOrder = openAIOrderAliasProvider
+    ? resolveAuthOrder(store.order, openAIOrderAliasProvider)
+    : undefined;
+  const directConfiguredOrder =
     resolveAuthOrder(cfg?.auth?.order, providerAuthKey) ??
-    resolveAuthOrder(cfg?.auth?.order, providerKey) ??
-    (openAIOrderAliasProvider
-      ? resolveAuthOrder(cfg?.auth?.order, openAIOrderAliasProvider)
-      : undefined);
-  const explicitOrder = storedOrder ?? configuredOrder;
+    resolveAuthOrder(cfg?.auth?.order, providerKey);
+  const aliasConfiguredOrder = openAIOrderAliasProvider
+    ? resolveAuthOrder(cfg?.auth?.order, openAIOrderAliasProvider)
+    : undefined;
+  const explicitOrder =
+    directStoredOrder ?? directConfiguredOrder ?? aliasStoredOrder ?? aliasConfiguredOrder;
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
         .filter(([profileId, profile]) =>

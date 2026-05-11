@@ -334,6 +334,44 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toEqual(["openai-codex:legacy"]);
   });
 
+  it("keeps configured Codex auth order ahead of stored OpenAI fallback order", async () => {
+    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:platform": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-platform",
+        },
+        "openai-codex:work": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "work-access",
+          refresh: "work-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: {
+        openai: ["openai:platform"],
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            "openai-codex": ["openai-codex:work"],
+          },
+        },
+      },
+      store,
+      provider: "openai-codex",
+    });
+
+    expect(order).toEqual(["openai-codex:work"]);
+  });
+
   it("marks profile success with one canonical last-good and usage update", async () => {
     const { markAuthProfileSuccess } = await importAuthProfileModulesWithAliasRegistry();
     const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-auth-profile-success-"));
