@@ -482,6 +482,13 @@ Completed consolidation/deletion highlights:
   delivery/routing rows for provider, account, target, thread, and reply-mode
   inputs. It no longer recovers those hot routing fields from stale
   `session_entries.entry_json` origin shadows.
+- Realtime voice consult routing now resolves parent/call delivery from typed
+  per-agent SQLite session rows. It no longer falls back to compatibility
+  `SessionEntry.deliveryContext` shadows when choosing the embedded agent
+  message route.
+- ACP spawn heartbeat relay and parent-stream routing now read parent delivery
+  from typed SQLite session rows. They no longer reconstruct parent delivery
+  context from compatibility session-entry shadows.
 - Session delivery route preservation now follows typed chat metadata and
   persisted delivery columns. It no longer extracts channel hints, direct/main
   markers, or thread shape from `sessionKey`; internal webchat routes only

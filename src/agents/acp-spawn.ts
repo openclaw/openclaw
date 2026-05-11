@@ -33,6 +33,7 @@ import {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { readSqliteSessionDeliveryContext } from "../config/sessions/session-entries.sqlite.js";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -62,7 +63,6 @@ import {
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import {
-  deliveryContextFromSession,
   formatConversationTarget,
   normalizeDeliveryContext,
   resolveConversationDeliveryTarget,
@@ -395,11 +395,10 @@ function hasSessionLocalHeartbeatRelayRoute(params: {
     return false;
   }
 
-  const parentEntry = getSessionEntry({
+  const parentDeliveryContext = readSqliteSessionDeliveryContext({
     agentId: params.requesterAgentId,
     sessionKey: params.parentSessionKey,
   });
-  const parentDeliveryContext = deliveryContextFromSession(parentEntry);
   return Boolean(parentDeliveryContext?.channel && parentDeliveryContext.to);
 }
 
@@ -1370,12 +1369,10 @@ export async function spawnAcpDirect(
   // correct thread/topic instead of falling back to the main DM.
   const parentDeliveryCtx =
     effectiveStreamToParent && parentSessionKey
-      ? deliveryContextFromSession(
-          getSessionEntry({
-            agentId: resolveAgentIdFromSessionKey(parentSessionKey),
-            sessionKey: parentSessionKey,
-          }),
-        )
+      ? readSqliteSessionDeliveryContext({
+          agentId: resolveAgentIdFromSessionKey(parentSessionKey),
+          sessionKey: parentSessionKey,
+        })
       : undefined;
 
   let parentRelay: AcpSpawnParentRelayHandle | undefined;

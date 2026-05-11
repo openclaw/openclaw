@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __setRealtimeVoiceAgentConsultDepsForTest,
   consultRealtimeVoiceAgent,
@@ -6,6 +6,18 @@ import {
   resolveRealtimeVoiceAgentConsultToolsAllow,
 } from "./agent-consult-runtime.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "./agent-consult-tool.js";
+
+const sqliteMocks = vi.hoisted(() => ({
+  readSqliteSessionDeliveryContext: vi.fn(
+    ():
+      | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
+      | undefined => undefined,
+  ),
+}));
+
+vi.mock("../config/sessions/session-entries.sqlite.js", () => ({
+  readSqliteSessionDeliveryContext: sqliteMocks.readSqliteSessionDeliveryContext,
+}));
 
 function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
   const sessionStore: Record<
@@ -87,6 +99,11 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
 }
 
 describe("realtime voice agent consult runtime", () => {
+  beforeEach(() => {
+    sqliteMocks.readSqliteSessionDeliveryContext.mockReset();
+    sqliteMocks.readSqliteSessionDeliveryContext.mockReturnValue(undefined);
+  });
+
   afterEach(() => {
     __setRealtimeVoiceAgentConsultDepsForTest(null);
   });
@@ -269,13 +286,17 @@ describe("realtime voice agent consult runtime", () => {
     const { runtime, runEmbeddedPiAgent, sessionStore } = createAgentRuntime();
     sessionStore["agent:main:discord:channel:123"] = {
       sessionId: "parent-session",
-      deliveryContext: {
-        channel: "discord",
-        to: "channel:123",
-        accountId: "default",
-      },
       updatedAt: 1,
     };
+    sqliteMocks.readSqliteSessionDeliveryContext.mockImplementation(({ sessionKey }) =>
+      sessionKey === "agent:main:discord:channel:123"
+        ? {
+            channel: "discord",
+            to: "channel:123",
+            accountId: "default",
+          }
+        : undefined,
+    );
 
     await consultRealtimeVoiceAgent({
       cfg: {} as never,
@@ -320,14 +341,18 @@ describe("realtime voice agent consult runtime", () => {
     const { runtime, runEmbeddedPiAgent, sessionStore } = createAgentRuntime();
     sessionStore["voice:google-meet:meet-1"] = {
       sessionId: "call-session",
-      deliveryContext: {
-        channel: "discord",
-        to: "channel:123",
-        accountId: "default",
-        threadId: "thread-456",
-      },
       updatedAt: 1,
     };
+    sqliteMocks.readSqliteSessionDeliveryContext.mockImplementation(({ sessionKey }) =>
+      sessionKey === "voice:google-meet:meet-1"
+        ? {
+            channel: "discord",
+            to: "channel:123",
+            accountId: "default",
+            threadId: "thread-456",
+          }
+        : undefined,
+    );
 
     await consultRealtimeVoiceAgent({
       cfg: {} as never,
@@ -354,6 +379,45 @@ describe("realtime voice agent consult runtime", () => {
         messageThreadId: "thread-456",
         currentChannelId: "channel:123",
         currentThreadTs: "thread-456",
+      }),
+    );
+  });
+
+  it("does not route consults from stale session-entry delivery shadows", async () => {
+    const { runtime, runEmbeddedPiAgent, sessionStore } = createAgentRuntime();
+    sessionStore["voice:google-meet:meet-1"] = {
+      sessionId: "call-session",
+      deliveryContext: {
+        channel: "discord",
+        to: "stale-channel",
+        accountId: "stale",
+      },
+      updatedAt: 1,
+    };
+
+    await consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn: vi.fn() },
+      agentId: "main",
+      sessionKey: "voice:google-meet:meet-1",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice-realtime-consult:call-1",
+      args: { question: "Send this to the original chat." },
+      transcript: [],
+      surface: "a live phone call",
+      userLabel: "Caller",
+    });
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "call-session",
+        sessionKey: "voice:google-meet:meet-1",
+        messageProvider: "voice",
+        agentAccountId: undefined,
+        messageTo: undefined,
+        currentChannelId: undefined,
       }),
     );
   });

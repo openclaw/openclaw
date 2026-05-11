@@ -4,13 +4,13 @@ import {
   forkSessionFromParent,
   resolveParentForkDecision,
 } from "../auto-reply/reply/session-fork.js";
+import { readSqliteSessionDeliveryContext } from "../config/sessions/session-entries.sqlite.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
-  deliveryContextFromSession,
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
@@ -95,12 +95,11 @@ function resolveRealtimeVoiceAgentDeliveryContext(params: {
     }
     candidates.push(params.sessionKey);
     for (const key of candidates) {
-      const context = deliveryContextFromSession(
-        params.agentRuntime.session.getSessionEntry({
-          agentId: parseAgentSessionKey(key)?.agentId ?? params.agentId,
-          sessionKey: key,
-        }),
-      );
+      const parsed = parseAgentSessionKey(key);
+      const context = readSqliteSessionDeliveryContext({
+        agentId: parsed?.agentId ?? params.agentId,
+        sessionKey: key,
+      });
       if (hasRoutableDeliveryContext(context)) {
         return context;
       }
@@ -241,8 +240,7 @@ export async function consultRealtimeVoiceAgent(params: {
     agentRuntime: params.agentRuntime,
     logger: params.logger,
   });
-  const consultDeliveryContext =
-    resolvedDeliveryContext ?? deliveryContextFromSession(sessionEntry);
+  const consultDeliveryContext = resolvedDeliveryContext;
   const sessionId = sessionEntry.sessionId;
 
   const result = await params.agentRuntime.runEmbeddedPiAgent({
