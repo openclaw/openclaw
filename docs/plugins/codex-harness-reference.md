@@ -261,6 +261,9 @@ protect genuinely stuck turns. Timeout diagnostics include the last app-server
 notification method and, for raw assistant response items, the item type, role,
 id, and a bounded assistant text preview.
 
+For a field-tested long-task diagnosis path and checkpointing pattern, see
+[Codex long-task reliability](/plugins/codex-harness-long-tasks).
+
 ## Model discovery
 
 By default, the Codex plugin asks the app-server for available models. Model
