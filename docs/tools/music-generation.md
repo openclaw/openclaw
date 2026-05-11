@@ -10,7 +10,7 @@ sidebarTitle: "Music generation"
 
 The `music_generate` tool lets the agent create music or audio through the
 shared music-generation capability with configured providers — Google,
-MiniMax, and workflow-configured ComfyUI today.
+MiniMax, OpenRouter, and workflow-configured ComfyUI today.
 
 For session-backed agent runs, OpenClaw starts music generation as a
 background task, tracks it in the task ledger, then wakes the agent again

@@ -28,7 +28,9 @@ const SUPPORTED_MODELS = [DEFAULT_MODEL, "google/lyria-3-pro-preview"] as const;
 const SUPPORTED_FORMATS: readonly MusicGenerationOutputFormat[] = ["mp3"];
 
 type OpenRouterMusicSSEDelta = {
+  error?: string | null;
   choices?: Array<{
+    finish_reason?: string | null;
     delta?: {
       audio?: {
         data?: string;
@@ -145,7 +147,16 @@ async function streamOpenRouterMusic(params: {
 
     try {
       for await (const event of parseSSEStream(reader)) {
-        const delta = event.choices?.[0]?.delta?.audio;
+        // OpenRouter can send a post-200 SSE error event with a top-level error
+        // or choices[0].finish_reason set to "error" before the stream ends.
+        if (event.error) {
+          throw new Error(`OpenRouter music generation stream error: ${event.error}`);
+        }
+        const choice = event.choices?.[0];
+        if (choice?.finish_reason === "error") {
+          throw new Error(`OpenRouter music generation stream error: finish_reason=error`);
+        }
+        const delta = choice?.delta?.audio;
         if (delta?.data) {
           audioDataStrings.push(delta.data);
         }
