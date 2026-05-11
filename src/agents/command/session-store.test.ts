@@ -737,6 +737,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       expect(sessionStore[sessionKey]?.totalTokens).toBe(50_006);
       expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(loadSessionStore(storePath)[sessionKey]?.totalTokens).toBe(50_006);
+      expect(loadSessionStore(storePath)[sessionKey]?.totalTokensFresh).toBe(true);
     });
   });
 
