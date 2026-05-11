@@ -21,6 +21,7 @@ export type IMessagePayload = {
   created_at?: string | null;
   is_reaction?: boolean | null;
   is_tapback?: boolean | null;
+  associated_message_guid?: string | null;
   associated_message_type?: number | null;
   reaction_type?: string | null;
   reaction_emoji?: string | null;

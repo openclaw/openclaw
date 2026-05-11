@@ -534,6 +534,20 @@ describe("resolveIMessageReactionContext", () => {
         "",
       ),
     ).toMatchObject({ action: "added", emoji: "👍", targetGuid: "target" });
+    expect(
+      resolveIMessageReactionContext(
+        {
+          associated_message_guid: "p:0/321D6826-1013-4DF0-B53C-6F6241EF2EF6",
+          associated_message_type: 2000,
+          reaction_emoji: "❤️",
+        },
+        "Loved “tapback proof”",
+      ),
+    ).toMatchObject({
+      action: "added",
+      emoji: "❤️",
+      targetGuid: "321D6826-1013-4DF0-B53C-6F6241EF2EF6",
+    });
     expect(resolveIMessageReactionContext({ associated_message_type: 2001 }, "")).toMatchObject({
       action: "added",
       emoji: "reaction",

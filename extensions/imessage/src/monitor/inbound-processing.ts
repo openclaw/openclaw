@@ -79,7 +79,9 @@ const TAPBACK_TEXT_PATTERNS: Array<{
 ];
 
 function normalizeReactionValue(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim() || undefined : undefined;
+  return typeof value === "string"
+    ? value.trim().replace(/^p:\d+\//iu, "") || undefined
+    : undefined;
 }
 
 function resolveTapbackTextContext(bodyText: string): IMessageReactionContext | null {
@@ -122,7 +124,9 @@ export function resolveIMessageReactionContext(
         normalizeReactionValue(message.reaction_emoji) ??
         normalizeReactionValue(message.reaction_type) ??
         "reaction",
-      targetGuid: normalizeReactionValue(message.reacted_to_guid),
+      targetGuid:
+        normalizeReactionValue(message.reacted_to_guid) ??
+        normalizeReactionValue(message.associated_message_guid),
     };
   }
   return resolveTapbackTextContext(bodyText);
