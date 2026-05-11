@@ -244,7 +244,7 @@ export function isLoopbackIpAddress(raw: string | undefined): boolean {
 }
 
 export function isLinkLocalIpAddress(raw: string | undefined): boolean {
-  const parsed = parseCanonicalIpAddress(raw);
+  const parsed = parseLooseIpAddress(raw);
   if (!parsed) {
     return false;
   }

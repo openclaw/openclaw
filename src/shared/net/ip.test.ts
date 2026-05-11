@@ -79,6 +79,9 @@ describe("shared ip helpers", () => {
   it("detects link-local addresses without treating normal private ranges as link-local", () => {
     expect(isLinkLocalIpAddress("169.254.169.254")).toBe(true);
     expect(isLinkLocalIpAddress("::ffff:169.254.169.254")).toBe(true);
+    expect(isLinkLocalIpAddress("2852039166")).toBe(true);
+    expect(isLinkLocalIpAddress("0xa9fea9fe")).toBe(true);
+    expect(isLinkLocalIpAddress("0xa9.0xfe.0xa9.0xfe")).toBe(true);
     expect(isLinkLocalIpAddress("fe80::1%lo0")).toBe(true);
     expect(isLinkLocalIpAddress("10.0.0.5")).toBe(false);
     expect(isLinkLocalIpAddress("127.0.0.1")).toBe(false);

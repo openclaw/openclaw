@@ -392,10 +392,28 @@ describe("buildGuardedModelFetch", () => {
       hostnameAllowlist: ["169.254.169.254"],
     },
     {
+      label: "legacy link-local metadata IP",
+      baseUrl: "http://2852039166/v1",
+      requestUrl: "http://2852039166/v1/chat/completions",
+      hostnameAllowlist: ["169.254.169.254"],
+    },
+    {
       label: "metadata hostname",
       baseUrl: "http://metadata.google.internal/v1",
       requestUrl: "http://metadata.google.internal/v1/chat/completions",
       hostnameAllowlist: ["metadata.google.internal"],
+    },
+    {
+      label: "metadata short hostname",
+      baseUrl: "http://metadata/v1",
+      requestUrl: "http://metadata/v1/chat/completions",
+      hostnameAllowlist: ["metadata"],
+    },
+    {
+      label: "cloud instance-data hostname",
+      baseUrl: "http://instance-data.ec2.internal/v1",
+      requestUrl: "http://instance-data.ec2.internal/v1/chat/completions",
+      hostnameAllowlist: ["instance-data.ec2.internal"],
     },
   ])("does not add implicit exact-origin trust for $label", async (entry) => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({

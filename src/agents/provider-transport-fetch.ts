@@ -28,7 +28,7 @@ import {
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
 const log = createSubsystemLogger("provider-transport-fetch");
-const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAMES = new Set(["metadata.google.internal"]);
+const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["metadata", "instance-data"]);
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -432,7 +432,11 @@ function canImplicitlyTrustConfiguredBaseUrlOrigin(value: unknown): value is str
   if (!hostname) {
     return false;
   }
-  return !BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAMES.has(hostname) && !isLinkLocalIpAddress(hostname);
+  const labels = hostname.split(".").filter(Boolean);
+  return (
+    !labels.some((label) => BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label)) &&
+    !isLinkLocalIpAddress(hostname)
+  );
 }
 
 function resolveModelTransportSsrFPolicy(params: {

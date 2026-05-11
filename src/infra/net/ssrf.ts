@@ -6,6 +6,7 @@ import {
   isBlockedSpecialUseIpv4Address,
   isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
+  isLinkLocalIpAddress,
   type Ipv4SpecialUseBlockOptions,
   type Ipv6SpecialUseBlockOptions,
   isIpv4Address,
@@ -409,6 +410,16 @@ function assertAllowedResolvedAddressesOrThrow(
   }
 }
 
+function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
+  results: readonly LookupAddress[],
+): void {
+  for (const entry of results) {
+    if (isLinkLocalIpAddress(entry.address)) {
+      throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
+    }
+  }
+}
+
 function normalizeLookupResults(results: LookupResult): readonly LookupAddress[] {
   if (Array.isArray(results)) {
     return results;
@@ -547,6 +558,10 @@ export async function resolvePinnedHostnameWithPolicy(
   if (!skipPrivateNetworkChecks) {
     // Phase 2: re-check DNS answers so public hostnames cannot pivot to private targets.
     assertAllowedResolvedAddressesOrThrow(results, params.policy);
+  } else if (!isPrivateNetworkAllowedByPolicy(params.policy)) {
+    // Exact-host trust may allow RFC1918/tailnet/private-DNS provider targets, but
+    // it must not turn metadata/link-local DNS rebinding into an implicit allow.
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(results);
   }
 
   // Prefer addresses returned as IPv4 by DNS family metadata before other
@@ -601,6 +616,8 @@ function resolvePinnedDispatcherLookup(
   }));
   if (!shouldSkipPrivateNetworkChecks(pinned.hostname, policy)) {
     assertAllowedResolvedAddressesOrThrow(records, policy);
+  } else if (!isPrivateNetworkAllowedByPolicy(policy)) {
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(records);
   }
   return createPinnedLookup({
     hostname: pinned.hostname,
