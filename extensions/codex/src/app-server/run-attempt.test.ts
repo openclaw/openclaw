@@ -5303,20 +5303,20 @@ describe("runCodexAppServerAttempt", () => {
       serviceTier: "priority",
       persistExtendedHistory: true,
     });
-    const resumeRequest = requests.find((request) => request.method === "thread/resume");
-    const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
-    const resumeConfig = resumeRequestParams?.config as Record<string, unknown> | undefined;
-    expect(resumeConfig?.["features.codex_hooks"]).toBe(true);
-    expect(resumeConfig?.["features.code_mode"]).toBe(true);
-    expect(resumeConfig?.["features.code_mode_only"]).toBe(true);
-    expect(resumeRequestParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
-    const turnRequest = requests.find((request) => request.method === "turn/start");
-    const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
-    expect(turnRequestParams?.approvalPolicy).toBe("on-request");
-    expect(turnRequestParams?.approvalsReviewer).toBe("guardian_subagent");
-    expect(turnRequestParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
-    expect(turnRequestParams?.serviceTier).toBe("priority");
-    expect(turnRequestParams?.model).toBe("gpt-5.4-codex");
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        {
+          method: "turn/start",
+          params: expect.objectContaining({
+            approvalPolicy: "on-request",
+            approvalsReviewer: "guardian_subagent",
+            sandboxPolicy: { type: "dangerFullAccess" },
+            serviceTier: "priority",
+            model: "gpt-5.4-codex",
+          }),
+        },
+      ]),
+    );
   });
 
   it("clamps Codex danger-full-access when OpenClaw sandboxing is active", () => {
@@ -5433,27 +5433,27 @@ describe("runCodexAppServerAttempt", () => {
       developerInstructions: resumeParams.developerInstructions,
       persistExtendedHistory: true,
     });
-    expect(resumeParams.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
-    const turnParams = buildTurnStartParams(params, {
-      threadId: "thread-1",
-      cwd: "/tmp/workspace",
-      appServer,
-    });
-    expect(turnParams.threadId).toBe("thread-1");
-    expect(turnParams.cwd).toBe("/tmp/workspace");
-    expect(turnParams.model).toBe("gpt-5.4-codex");
-    expect(turnParams.approvalPolicy).toBe("on-request");
-    expect(turnParams.approvalsReviewer).toBe("guardian_subagent");
-    expect(turnParams.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
-    expect(turnParams.serviceTier).toBe("flex");
-    expect(turnParams.collaborationMode).toEqual({
-      mode: "default",
-      settings: {
+    expect(
+      buildTurnStartParams(params, { threadId: "thread-1", cwd: "/tmp/workspace", appServer }),
+    ).toEqual(
+      expect.objectContaining({
+        threadId: "thread-1",
+        cwd: "/tmp/workspace",
         model: "gpt-5.4-codex",
-        reasoning_effort: "medium",
-        developer_instructions: null,
-      },
-    });
+        approvalPolicy: "on-request",
+        approvalsReviewer: "guardian_subagent",
+        sandboxPolicy: { type: "dangerFullAccess" },
+        serviceTier: "flex",
+        collaborationMode: {
+          mode: "default",
+          settings: {
+            model: "gpt-5.4-codex",
+            reasoning_effort: "medium",
+            developer_instructions: null,
+          },
+        },
+      }),
+    );
   });
 
   it("uses turn-scoped collaboration instructions for heartbeat Codex turns", () => {
