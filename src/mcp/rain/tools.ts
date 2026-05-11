@@ -173,6 +173,54 @@ export const RAIN_TOOLS: ToolDef[] = [
       }),
   },
   {
+    name: "rain_build_sell",
+    description:
+      "Build a sell-option (limit-order) transaction preview. Returns rawTx + walletRequest for the user-approved wallet sign-tx call. No ERC-20 approval prerequisite needed for sells.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        marketContractAddress: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description: "Market contract address (from rain_get_market details.contractAddress).",
+        },
+        selectedOption: {
+          type: "integer",
+          minimum: 0,
+          description: "Zero-based option index of the shares being sold.",
+        },
+        sharesAmountWei: {
+          type: "string",
+          pattern: "^[1-9][0-9]*$",
+          description:
+            "Number of shares to sell in the token's smallest unit, as a string-encoded integer > 0. Use details.baseTokenDecimals from rain_get_market to compute.",
+        },
+        pricePerShare: {
+          type: "string",
+          description:
+            "Limit price per share as a string-encoded decimal between 0 and 1 (e.g. '0.55'). Must be within the range of current market prices.",
+        },
+        tokenDecimals: {
+          type: "integer",
+          minimum: 0,
+          maximum: 18,
+          description:
+            "Optional. Base-token decimals. Defaults to market's baseTokenDecimals when omitted.",
+        },
+      },
+      required: ["marketContractAddress", "selectedOption", "sharesAmountWei", "pricePerShare"],
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      client.buildSell({
+        marketContractAddress: asString(args.marketContractAddress),
+        selectedOption: asNumber(args.selectedOption),
+        sharesAmountWei: asString(args.sharesAmountWei),
+        pricePerShare: asString(args.pricePerShare),
+        tokenDecimals: args.tokenDecimals != null ? asNumber(args.tokenDecimals) : undefined,
+      }),
+  },
+  {
     name: "rain_build_claim",
     description:
       "Build a claim transaction preview. Returns rawTx + walletRequest for the user-approved wallet sign-tx call. No approval prerequisite needed for claims.",

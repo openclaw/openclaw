@@ -8,7 +8,7 @@ metadata:
       env: [AGENTGLOB_RUNTIME_URL, AGENTGLOB_RUNTIME_TOKEN]
 ---
 
-# Rain skill (V1.5)
+# Rain skill (V2 Phase A)
 
 This skill is **optional prompt-level guidance** for agents that have the
 `rain` MCP server added (from the dashboard's Tools tab quick-setup). It
@@ -20,11 +20,12 @@ nothing to do — tell the user to add it from the dashboard's Tools tab.
 
 ## What the Rain MCP gives you
 
-Four typed tools, available when the `rain` MCP is active:
+Core trading tools:
 
 - `rain_list_markets` — browse public Rain prediction markets on Arbitrum
 - `rain_get_market` — full detail for one market (options, prices, liquidity, base token)
-- `rain_build_buy` — build a buy-option transaction preview (returns `walletRequest`)
+- `rain_build_buy` — build a buy-option transaction preview (returns `walletRequest` + `prerequisiteTxs[]`)
+- `rain_build_sell` — build a sell-option (limit-order) transaction preview (returns `walletRequest`)
 - `rain_build_claim` — build a claim transaction preview (returns `walletRequest`)
 
 The MCP returns typed responses — call the tools directly. Do not construct
@@ -82,6 +83,23 @@ directly. The MCP is the only path.
 5. On confirmation: execute `prerequisiteTxs` in order via wallet `sign-tx`,
    then execute the main `walletRequest`. Report all transaction hashes.
 
+## Sell flow (`rain_build_sell` → wallet sign-tx)
+
+1. **Confirm the four inputs with the user** before calling the tool:
+   - market contract address (from `rain_get_market` → `details.contractAddress`)
+   - option index of the shares being sold
+   - number of shares to sell — compute `sharesAmountWei` using `details.baseTokenDecimals`
+   - limit price per share as a decimal 0–1 (e.g. `"0.55"`)
+2. Call `rain_build_sell`. The response includes a `walletRequest`. No prerequisite approval is
+   needed — the agent is receiving tokens, not spending them.
+3. **Show the user the full preview** before signing:
+   - market title, option label, shares in human terms, limit price
+4. Ask explicit confirmation. On confirmation, execute the `walletRequest` via wallet `sign-tx`.
+   Report the transaction hash.
+
+**Note:** `rain_build_sell` places a limit order. The order fills when a counterparty matches at
+or above your price. The transaction submits the order — it does not guarantee an immediate fill.
+
 ## Claim flow (`rain_build_claim` → wallet sign-tx)
 
 1. Confirm the market is in a claimable state — `details.poolFinalized` is
@@ -89,6 +107,22 @@ directly. The MCP is the only path.
 2. Confirm the wallet address (the address that holds the winning shares).
 3. Call `rain_build_claim`. The response includes a `walletRequest`.
 4. Show the preview to the user; on confirmation, pass to wallet `sign-tx`.
+
+## Composite flow: claim and reinvest
+
+When a user wants to claim winnings and immediately reinvest into a new market:
+
+1. Run the standard claim flow (steps above). Wait for the claim tx hash.
+2. After claim confirmation, check the wallet balance for the received base token
+   (`rain_get_market` on the target market will give `baseToken` + `baseTokenDecimals`).
+3. Run the standard buy flow for the new market using the claimed amount as `buyAmountInWei`.
+   Pass `ownerAddress` so the server checks if a fresh approval is needed (the claim likely
+   didn't create an allowance for the new market contract).
+4. Show a single combined preview before any signing: "You claimed X [token] and will
+   reinvest Y [token] into [market title] → [option]."
+5. On user confirmation, execute any `prerequisiteTxs` then the buy `walletRequest`.
+
+Never skip the combined preview — the user is approving two economic actions.
 
 ## Market state — refuse unsafe actions
 
@@ -105,15 +139,11 @@ Refuse trading after `details.endTime` has passed (current time > endTime).
 ## Capabilities NOT in this version
 
 Do not invent endpoints, do not claim these are "almost shipped" or
-"close to deployed". If the user asks, say plainly: "This isn't a Rain
-skill capability in V1.5. The V2 plan covers some of these but it has not
-shipped."
+"close to deployed". If the user asks, say plainly: "That isn't a Rain
+skill capability yet."
 
-- Selling positions (limit-order) — V2 Phase A
 - Creating markets — V2 Phase C (deferred)
 - Adding/removing liquidity — V2 Phase B (add only; remove via claim)
-- Reading positions / portfolio / PnL — V2 Phase A
-- Trade history — V2 Phase A
 - Price quotes / slippage estimates — V2 Phase B (advisory only)
 - Price history (candles) — V2 Phase B
 - Real-time market events — V2 Phase B (polling)
@@ -124,11 +154,11 @@ shipped."
 ```
 Rain action preview
 Chain:    arbitrum
-Action:   buy_option | claim
+Action:   buy_option | sell_option | claim
 Market:   <title or contract address>
 Option:   <index and label>
 Amount:   <human amount> <base token symbol>  (resolved from details.baseToken)
-Approval: may be required before this transaction executes
+[Approval: <erc20_approve tx needed before buy> | none required]
 ---
 Approve and sign? Reply yes to proceed.
 ```
@@ -154,6 +184,4 @@ The MCP returns structured errors; surface them faithfully:
   documented in `openclaw-dashboard/docs/api/rain-runtime.md` for
   reference. You should not call those endpoints directly; the MCP is the
   agent-facing surface.
-- V2 Phase A will add more MCP tools (sell, positions, PnL, trade history,
-  add-liquidity). When those land, this skill will get a matching
-  refresh — until then, stay within the four tools above.
+- V2 Phase B will add add-liquidity, price-history, and real-time events.

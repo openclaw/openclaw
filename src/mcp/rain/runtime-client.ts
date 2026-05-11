@@ -99,6 +99,16 @@ export class RainRuntimeClient {
     return this.post("/api/runtime/rain/build-buy", body);
   }
 
+  async buildSell(body: {
+    marketContractAddress: string;
+    selectedOption: number;
+    sharesAmountWei: string;
+    pricePerShare: string;
+    tokenDecimals?: number;
+  }): Promise<unknown> {
+    return this.post("/api/runtime/rain/build-sell", body);
+  }
+
   async buildClaim(body: { marketId: string; walletAddress: string }): Promise<unknown> {
     return this.post("/api/runtime/rain/build-claim", body);
   }
