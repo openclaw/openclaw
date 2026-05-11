@@ -259,40 +259,6 @@ function normalizeDuplicateVisibleText(value: string): string {
     .trim();
 }
 
-function tokenizeDuplicateVisibleText(value: string): string[] {
-  return (
-    normalizeDuplicateVisibleText(value)
-      .toLocaleLowerCase()
-      .match(/[\p{L}\p{N}]+/gu) ?? []
-  );
-}
-
-function duplicateVisibleTextSimilarity(left: string, right: string): number {
-  const leftTokens = tokenizeDuplicateVisibleText(left);
-  const rightTokens = tokenizeDuplicateVisibleText(right);
-  if (leftTokens.length === 0 || rightTokens.length === 0) {
-    return 0;
-  }
-  const counts = new Map<string, number>();
-  for (const token of leftTokens) {
-    counts.set(token, (counts.get(token) ?? 0) + 1);
-  }
-  let overlap = 0;
-  for (const token of rightTokens) {
-    const count = counts.get(token) ?? 0;
-    if (count <= 0) {
-      continue;
-    }
-    overlap += 1;
-    if (count === 1) {
-      counts.delete(token);
-    } else {
-      counts.set(token, count - 1);
-    }
-  }
-  return (2 * overlap) / (leftTokens.length + rightTokens.length);
-}
-
 function isDuplicateVisibleText(
   candidate: string | undefined,
   sentText: string | undefined,
@@ -302,22 +268,7 @@ function isDuplicateVisibleText(
   }
   const left = normalizeDuplicateVisibleText(candidate);
   const right = normalizeDuplicateVisibleText(sentText);
-  if (!left || !right) {
-    return false;
-  }
-  if (left === right) {
-    return true;
-  }
-  const shorter = left.length <= right.length ? left : right;
-  const longer = left.length <= right.length ? right : left;
-  if (shorter.length >= 160 && longer.includes(shorter) && shorter.length / longer.length >= 0.9) {
-    return true;
-  }
-  const minTokenCount = Math.min(
-    tokenizeDuplicateVisibleText(left).length,
-    tokenizeDuplicateVisibleText(right).length,
-  );
-  return minTokenCount >= 40 && duplicateVisibleTextSimilarity(left, right) >= 0.94;
+  return Boolean(left && right && left === right);
 }
 
 function routeMatchesExplicitMessageSend(params: {

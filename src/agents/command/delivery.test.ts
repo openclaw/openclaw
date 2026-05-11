@@ -825,6 +825,56 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps Discord final delivery when it adds a warning to a prior message.send", async () => {
+    setActivePluginRegistry(discordRegistry);
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "discord", messageId: "normal" }]);
+    const priorText = [
+      "Finished the maintenance pass with these findings:",
+      "- checked the open pull requests and refreshed each status",
+      "- found one branch needing a focused duplicate-delivery fix",
+      "- validated the exact duplicate path in an isolated checkout",
+      "- left unrelated upstream failures out of this branch",
+      "- prepared a concise follow-up note for reviewer handoff",
+    ].join("\n");
+    const finalText = `${priorText}\n\nWarning: the shared upstream CI queue is still pending, so broad rebase work should wait.`;
+    const explicitMessageSends = {
+      entries: [
+        {
+          channel: "discord",
+          to: "channel-main",
+          text: priorText,
+        },
+      ],
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        replyChannel: "discord",
+        replyTo: "channel-main",
+        runContext: { explicitMessageSends },
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: finalText }],
+      result: createResult(),
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expectDeliveryStatusFields(delivered, {
+      requested: true,
+      attempted: true,
+      status: "sent",
+      succeeded: true,
+      resultCount: 1,
+    });
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps Discord final delivery when duplicate message.send targeted a different channel", async () => {
     setActivePluginRegistry(discordRegistry);
     deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "discord", messageId: "normal" }]);
