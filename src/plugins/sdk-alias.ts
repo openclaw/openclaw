@@ -265,6 +265,7 @@ const cachedPluginSdkScopedAliasMaps = new PluginLruCache<Record<string, string>
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
+const NON_QA_PRIVATE_LOCAL_ONLY_PLUGIN_SDK_SUBPATHS = new Set(["codex-native-task-runtime"]);
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".ts",
   ".mts",
@@ -453,6 +454,13 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpaths() {
   return process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1";
 }
 
+function shouldIncludePrivateLocalOnlyPluginSdkSubpath(subpath: string) {
+  return (
+    shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ||
+    NON_QA_PRIVATE_LOCAL_ONLY_PLUGIN_SDK_SUBPATHS.has(subpath)
+  );
+}
+
 function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
   const distPath = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
   if (isUsableDistPluginSdkArtifact(distPath)) {
@@ -479,11 +487,10 @@ function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
 }
 
 function listPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
-  if (!shouldIncludePrivateLocalOnlyPluginSdkSubpaths()) {
-    return [];
-  }
-  return readPrivateLocalOnlyPluginSdkSubpaths(packageRoot).filter((subpath) =>
-    hasPluginSdkSubpathArtifact(packageRoot, subpath),
+  return readPrivateLocalOnlyPluginSdkSubpaths(packageRoot).filter(
+    (subpath) =>
+      shouldIncludePrivateLocalOnlyPluginSdkSubpath(subpath) &&
+      hasPluginSdkSubpathArtifact(packageRoot, subpath),
   );
 }
 
