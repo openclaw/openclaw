@@ -1,0 +1,1 @@
+- Codex app-server: instruct gpt-5 family models to invoke OpenClaw dynamic tools (notably `message`) as structured tool calls rather than wrapping them inside `exec` shell snippets, so chat replies actually leave the harness instead of being silently shelled away.

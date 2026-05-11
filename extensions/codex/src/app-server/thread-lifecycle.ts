@@ -478,6 +478,7 @@ export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): st
   const sections = [
     "Running inside OpenClaw. Use dynamic tools for messaging, cron, sessions, media, gateway, and nodes when available.",
     "Preserve channel/session context. Visible channel replies: use `message`, do not describe would-reply.",
+    "Invoke `message` (and every OpenClaw dynamic tool) as a structured tool call with its JSON arguments. Never wrap it in `exec`, `apply_patch`, or any shell/JavaScript snippet — strings like `tools.message(...)`, `await tools.message(...)`, or `message({...})` inside `exec` will execute as a shell command and deliver nothing. If you intended to reply, emit the `message` tool call directly with `{ action: \"send\", message: \"...\" }`.",
     promptOverlay,
     params.extraSystemPrompt,
     params.skillsSnapshot?.prompt,
