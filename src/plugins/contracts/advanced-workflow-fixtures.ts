@@ -1,4 +1,4 @@
-import { APPROVALS_SCOPE } from "../../gateway/operator-scopes.js";
+import { APPROVALS_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import { getPluginSessionExtensionSync } from "../host-hook-state.js";
 import type {
   OpenClawPluginApi,
@@ -10,19 +10,16 @@ const SESSION_KEY = "agent:main:main";
 const APPROVAL_PLUGIN_ID = "approval-workflow-fixture";
 
 export function registerApprovalWorkflowFixture(api: OpenClawPluginApi) {
-  api.registerSessionExtension({
+  api.session.state.registerSessionExtension({
     namespace: "approval",
     description: "Generic approval workflow state",
   });
-  api.registerControlUiDescriptor({
+  api.session.controls.registerControlUiDescriptor({
     id: "approval-card",
     surface: "session",
     label: "Approval request",
     description: "Renders a generic approval request for an operator decision.",
     placement: "session-main",
-    renderer: "approval-card",
-    stateNamespace: "approval",
-    actionIds: ["resolve-approval"],
     requiredScopes: [APPROVALS_SCOPE],
     schema: {
       type: "object",
@@ -32,25 +29,36 @@ export function registerApprovalWorkflowFixture(api: OpenClawPluginApi) {
       },
     },
   });
-  api.registerControlUiDescriptor({
+  api.session.controls.registerControlUiDescriptor({
     id: "approval-input-guard",
     surface: "session",
     label: "Input guard",
     description: "Hints that inbound input should wait while an approval is pending.",
     placement: "composer",
-    renderer: "input-guard",
-    stateNamespace: "approval",
+    requiredScopes: [APPROVALS_SCOPE],
+    schema: {
+      type: "object",
+      properties: {
+        status: { enum: ["pending", "approved", "denied"] },
+      },
+    },
   });
-  api.registerControlUiDescriptor({
+  api.session.controls.registerControlUiDescriptor({
     id: "workflow-sidebar",
     surface: "session",
     label: "Workflow status",
     description: "Shows generic workflow progress in a side panel.",
     placement: "right-sidebar",
-    renderer: "sidebar-panel",
-    stateNamespace: "approval",
+    requiredScopes: [APPROVALS_SCOPE],
+    schema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        status: { enum: ["pending", "approved", "denied"] },
+      },
+    },
   });
-  api.registerSessionAction({
+  api.session.controls.registerSessionAction({
     id: "resolve-approval",
     description: "Resolve a generic approval workflow and resume the agent.",
     requiredScopes: [APPROVALS_SCOPE],
@@ -69,7 +77,7 @@ export function registerApprovalWorkflowFixture(api: OpenClawPluginApi) {
           decision = payloadDecision;
         }
       }
-      api.emitAgentEvent({
+      api.agent.events.emitAgentEvent({
         runId: "approval-workflow-run",
         stream: "plugin.approval",
         ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
@@ -78,25 +86,22 @@ export function registerApprovalWorkflowFixture(api: OpenClawPluginApi) {
           decision,
         },
       });
-      await api.enqueueNextTurnInjection({
+      await api.session.workflow.enqueueNextTurnInjection({
         sessionKey: ctx.sessionKey ?? SESSION_KEY,
         placement: "prepend_context",
         idempotencyKey: `approval:${decision}`,
         text: `Operator decision received: ${decision}. Continue the workflow.`,
       });
       return {
-        data: { decision },
+        result: { decision },
         reply: { text: `Approval ${decision}` },
         continueAgent: true,
       };
     },
   });
   api.on("inbound_claim", (event, ctx) => {
-    if (!ctx.config) {
-      return undefined;
-    }
     const approval = getPluginSessionExtensionSync<{ status?: string }>({
-      cfg: ctx.config,
+      cfg: api.config,
       pluginId: APPROVAL_PLUGIN_ID,
       sessionKey: ctx.sessionKey ?? event.sessionKey,
       namespace: "approval",
@@ -112,7 +117,7 @@ export function registerApprovalWorkflowFixture(api: OpenClawPluginApi) {
 }
 
 export function registerPolicyGateFixture(api: OpenClawPluginApi, calls: string[] = []) {
-  api.registerSessionExtension({
+  api.session.state.registerSessionExtension({
     namespace: "policy",
     description: "Generic workspace policy state",
   });
@@ -120,11 +125,16 @@ export function registerPolicyGateFixture(api: OpenClawPluginApi, calls: string[
     id: "workspace-policy",
     description: "Blocks mutating tools while the workspace policy is locked.",
     evaluate(event, ctx) {
-      const state = ctx.getSessionExtension?.<{ locked?: boolean; reason?: string }>("policy");
-      if (state?.locked && event.toolName === "mutating_tool") {
+      const rawState = ctx.getSessionExtension?.("policy");
+      const state =
+        rawState && typeof rawState === "object" && !Array.isArray(rawState)
+          ? (rawState as { locked?: unknown; reason?: unknown })
+          : undefined;
+      if (state?.locked === true && event.toolName === "mutating_tool") {
         return {
           block: true,
-          blockReason: state.reason ?? "blocked by workspace policy",
+          blockReason:
+            typeof state.reason === "string" ? state.reason : "blocked by workspace policy",
         };
       }
       return undefined;
@@ -140,44 +150,58 @@ export function registerBackgroundMonitorFixture(
   api: OpenClawPluginApi,
   scheduled: Promise<PluginSessionSchedulerJobHandle | undefined>[] = [],
 ) {
-  api.registerSessionExtension({
+  api.session.state.registerSessionExtension({
     namespace: "monitor",
     description: "Generic background monitor state",
   });
-  api.registerAgentEventSubscription({
+  api.agent.events.registerAgentEventSubscription({
     id: "monitor-events",
     description: "Records status events for background workflows.",
     streams: ["tool", "error"],
-    handle(event, ctx) {
-      ctx.setRunContext("last-status", {
-        stream: event.stream,
+    handle(event) {
+      api.runContext.setRunContext({
         runId: event.runId,
+        namespace: "last-status",
+        value: {
+          stream: event.stream,
+          runId: event.runId,
+        },
       });
     },
   });
-  api.registerRuntimeLifecycle({
+  api.lifecycle.registerRuntimeLifecycle({
     id: "monitor-cleanup",
     description: "Cleans plugin-owned monitor state.",
   });
-  scheduled.push(
-    api.scheduleSessionTurn({
-      sessionKey: SESSION_KEY,
-      delayMs: 60_000,
-      message: "Background monitor wake-up",
-      name: "background-monitor-status-check",
-    }),
-  );
+  api.session.controls.registerSessionAction({
+    id: "schedule-monitor-check",
+    description: "Schedule a plugin-owned background monitor wake-up.",
+    requiredScopes: [WRITE_SCOPE],
+    async handler(ctx) {
+      const scheduledTurn = api.session.workflow.scheduleSessionTurn({
+        sessionKey: ctx.sessionKey ?? SESSION_KEY,
+        delayMs: 60_000,
+        message: "Background monitor wake-up",
+        name: "background-monitor-status-check",
+        tag: "monitor",
+      });
+      scheduled.push(scheduledTurn);
+      const handle = await scheduledTurn;
+      return { result: handle ?? null };
+    },
+  });
   api.on("heartbeat_prompt_contribution", () => ({
     appendContext: "Background monitor status: waiting for the next check.",
   }));
 }
 
 export function registerArtifactReplyFixture(api: OpenClawPluginApi, artifactPath: string) {
-  api.registerSessionAction({
+  api.session.controls.registerSessionAction({
     id: "send-artifact",
     description: "Send a generated artifact to the active session channel.",
+    requiredScopes: [WRITE_SCOPE],
     async handler(ctx) {
-      const result = await api.sendSessionAttachment({
+      const result = await api.session.workflow.sendSessionAttachment({
         sessionKey: ctx.sessionKey ?? SESSION_KEY,
         files: [{ path: artifactPath }],
         text: "Generated workflow artifact",
@@ -186,7 +210,7 @@ export function registerArtifactReplyFixture(api: OpenClawPluginApi, artifactPat
         return { ok: false, error: result.error };
       }
       return {
-        data: {
+        result: {
           deliveredTo: result.deliveredTo,
           count: result.count,
         },

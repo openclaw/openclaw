@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  createPluginRegistryFixture,
-  registerTestPlugin,
-} from "openclaw/plugin-sdk/plugin-test-contracts";
+import { registerTestPlugin } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../agents/harness/lifecycle-hook-helpers.js";
 import { updateSessionStore } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CronServiceContract } from "../../cron/service-contract.js";
+import type { CronJob, CronJobCreate } from "../../cron/types.js";
 import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
 import type { GatewayClient, RespondFn } from "../../gateway/server-methods/types.js";
@@ -21,12 +21,14 @@ import {
   getPluginRunContext,
   listPluginSessionSchedulerJobs,
 } from "../host-hook-runtime.js";
-import { drainPluginNextTurnInjections } from "../host-hook-state.js";
+import { drainPluginNextTurnInjections, patchPluginSessionExtension } from "../host-hook-state.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
+import { createPluginRegistry } from "../registry.js";
 import { setActivePluginRegistry } from "../runtime.js";
+import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
-import type { OpenClawPluginApi } from "../types.js";
+import type { PluginSessionSchedulerJobHandle } from "../types.js";
 import {
   registerApprovalWorkflowFixture,
   registerArtifactReplyFixture,
@@ -36,33 +38,43 @@ import {
 } from "./advanced-workflow-fixtures.js";
 
 const workflowMocks = vi.hoisted(() => ({
-  callGatewayTool: vi.fn(async (...args: unknown[]) => {
-    const method = typeof args[0] === "string" ? args[0] : "";
-    if (method === "cron.add") {
-      return { payload: { jobId: "workflow-cron-job" } };
-    }
-    if (method === "cron.remove") {
-      return { ok: true, removed: true };
-    }
-    return { ok: true };
-  }),
-  sendMessage: vi.fn(async (params: { channel?: string; to: string; mediaUrls?: string[] }) => ({
-    channel: params.channel ?? "telegram",
-    to: params.to,
-    via: "gateway" as const,
-    mediaUrl: params.mediaUrls?.[0] ?? null,
-    mediaUrls: params.mediaUrls,
-    result: { channel: params.channel ?? "telegram", messageId: "workflow-artifact-1" },
-  })),
+  getChannelPlugin: vi.fn(),
+  cronAdd: vi.fn(),
+  cronListPage: vi.fn(),
+  cronRemove: vi.fn(),
+  sendMessage: vi.fn(),
 }));
 
-vi.mock("../../agents/tools/gateway.js", () => ({
-  callGatewayTool: workflowMocks.callGatewayTool,
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: workflowMocks.getChannelPlugin,
 }));
 
 vi.mock("../../infra/outbound/message.js", () => ({
   sendMessage: workflowMocks.sendMessage,
 }));
+
+function createPluginRegistryFixture(
+  config = {} as OpenClawConfig,
+  params: { hostServices?: Parameters<typeof createPluginRegistry>[0]["hostServices"] } = {},
+) {
+  return {
+    config,
+    registry: createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      runtime: {
+        config: {
+          current: () => config,
+        },
+      } as unknown as PluginRuntime,
+      ...(params.hostServices ? { hostServices: params.hostServices } : {}),
+    }),
+  };
+}
 
 type GatewayCallResult = {
   ok: boolean;
@@ -125,10 +137,78 @@ async function withSessionStore(
   }
 }
 
+function createMockCronService(): CronServiceContract {
+  return {
+    start: vi.fn(async () => undefined),
+    stop: vi.fn(),
+    status: vi.fn(async () => ({
+      enabled: true,
+      storePath: "/tmp/openclaw-test-cron.json",
+      jobs: 0,
+      nextWakeAtMs: null,
+    })),
+    list: vi.fn(async () => []),
+    listPage: workflowMocks.cronListPage,
+    add: workflowMocks.cronAdd,
+    update: vi.fn(async (id, patch) => makeCronJob({ id, ...patch })),
+    remove: workflowMocks.cronRemove,
+    run: vi.fn(async () => ({ ok: true, ran: false, reason: "not-due" })),
+    enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "not-due" })),
+    getJob: vi.fn(() => undefined),
+    getDefaultAgentId: vi.fn(() => undefined),
+    wake: vi.fn(() => ({ ok: true })),
+  } as CronServiceContract;
+}
+
+function makeCronJob(input: Partial<CronJob> & { id: string }): CronJob {
+  return {
+    name: input.name ?? input.id,
+    enabled: true,
+    schedule: { kind: "at", at: "2026-05-01T00:00:00.000Z" },
+    sessionTarget: input.sessionTarget ?? "session:agent:main:main",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "wake" },
+    delivery: { mode: "announce", channel: "last" },
+    state: {},
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    ...input,
+  };
+}
+
+function getCronAddBody() {
+  const addCall = workflowMocks.cronAdd.mock.calls[0];
+  expect(addCall).toBeDefined();
+  return addCall?.[0] as CronJobCreate;
+}
+
 describe("advanced workflow plugin contract fixtures", () => {
   beforeEach(() => {
-    workflowMocks.callGatewayTool.mockClear();
-    workflowMocks.sendMessage.mockClear();
+    workflowMocks.getChannelPlugin.mockReset();
+    workflowMocks.cronAdd.mockReset();
+    workflowMocks.cronListPage.mockReset();
+    workflowMocks.cronRemove.mockReset();
+    workflowMocks.sendMessage.mockReset();
+    workflowMocks.cronAdd.mockResolvedValue(makeCronJob({ id: "workflow-cron-job" }));
+    workflowMocks.cronListPage.mockResolvedValue({
+      jobs: [],
+      total: 0,
+      offset: 0,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    });
+    workflowMocks.cronRemove.mockResolvedValue({ ok: true, removed: true });
+    workflowMocks.sendMessage.mockImplementation(
+      async (params: { channel?: string; to: string; mediaUrls?: string[] }) => ({
+        channel: params.channel ?? "telegram",
+        to: params.to,
+        via: "direct" as const,
+        mediaUrl: null,
+        mediaUrls: params.mediaUrls,
+        result: { channel: params.channel ?? "telegram", messageId: "workflow-artifact-1" },
+      }),
+    );
   });
 
   afterEach(() => {
@@ -148,7 +228,7 @@ describe("advanced workflow plugin contract fixtures", () => {
         record: createPluginRecord({
           id: "approval-workflow-fixture",
           name: "Approval Workflow Fixture",
-          origin: "workspace",
+          origin: "bundled",
         }),
         register: registerApprovalWorkflowFixture,
       });
@@ -158,10 +238,10 @@ describe("advanced workflow plugin contract fixtures", () => {
         record: createPluginRecord({
           id: "approval-observer-fixture",
           name: "Approval Observer Fixture",
-          origin: "workspace",
+          origin: "bundled",
         }),
         register(api) {
-          api.registerAgentEventSubscription({
+          api.agent.events.registerAgentEventSubscription({
             id: "approval-observer",
             streams: ["plugin.approval"],
             handle(event) {
@@ -176,11 +256,6 @@ describe("advanced workflow plugin contract fixtures", () => {
         store["agent:main:main"] = {
           sessionId: "session-1",
           updatedAt: Date.now(),
-          pluginExtensions: {
-            "approval-workflow-fixture": {
-              approval: { status: "pending", title: "Deploy production" },
-            },
-          },
           pluginNextTurnInjections: {
             "approval-workflow-fixture": [
               {
@@ -195,6 +270,15 @@ describe("advanced workflow plugin contract fixtures", () => {
         };
         return undefined;
       });
+      await expect(
+        patchPluginSessionExtension({
+          cfg: config,
+          pluginId: "approval-workflow-fixture",
+          sessionKey: "agent:main:main",
+          namespace: "approval",
+          value: { status: "pending", title: "Deploy production" },
+        }),
+      ).resolves.toMatchObject({ ok: true });
 
       const descriptors = await callPluginGatewayMethod({
         method: "plugins.uiDescriptors",
@@ -207,21 +291,28 @@ describe("advanced workflow plugin contract fixtures", () => {
             expect.objectContaining({
               id: "approval-card",
               pluginId: "approval-workflow-fixture",
-              renderer: "approval-card",
-              actionIds: ["resolve-approval"],
-              stateNamespace: "approval",
+              requiredScopes: [APPROVALS_SCOPE],
             }),
             expect.objectContaining({
               id: "approval-input-guard",
-              renderer: "input-guard",
+              requiredScopes: [APPROVALS_SCOPE],
             }),
             expect.objectContaining({
               id: "workflow-sidebar",
-              renderer: "sidebar-panel",
+              requiredScopes: [APPROVALS_SCOPE],
             }),
           ]),
         },
       });
+      const descriptorList = (
+        descriptors.payload as { descriptors: Array<Record<string, unknown>> }
+      ).descriptors.filter((descriptor) => descriptor.pluginId === "approval-workflow-fixture");
+      expect(descriptorList).toHaveLength(3);
+      for (const descriptor of descriptorList) {
+        expect(descriptor).not.toHaveProperty("renderer");
+        expect(descriptor).not.toHaveProperty("stateNamespace");
+        expect(descriptor).not.toHaveProperty("actionIds");
+      }
 
       const missingScope = await callPluginGatewayMethod({
         method: "plugins.sessionAction",
@@ -249,7 +340,7 @@ describe("advanced workflow plugin contract fixtures", () => {
             sessionKey: "agent:main:main",
             isGroup: false,
           },
-          { channelId: "telegram", config },
+          { channelId: "telegram" },
         ),
       ).resolves.toEqual({
         handled: true,
@@ -303,13 +394,15 @@ describe("advanced workflow plugin contract fixtures", () => {
         ]),
       );
 
-      await updateSessionStore(storePath, (store) => {
-        const extension = store["agent:main:main"]?.pluginExtensions?.["approval-workflow-fixture"];
-        if (extension) {
-          extension.approval = { status: "approved", title: "Deploy production" };
-        }
-        return undefined;
-      });
+      await expect(
+        patchPluginSessionExtension({
+          cfg: config,
+          pluginId: "approval-workflow-fixture",
+          sessionKey: "agent:main:main",
+          namespace: "approval",
+          value: { status: "approved", title: "Deploy production" },
+        }),
+      ).resolves.toMatchObject({ ok: true });
       await expect(
         createHookRunner(registry.registry).runInboundClaim(
           {
@@ -318,7 +411,7 @@ describe("advanced workflow plugin contract fixtures", () => {
             sessionKey: "agent:main:main",
             isGroup: false,
           },
-          { channelId: "telegram", config },
+          { channelId: "telegram" },
         ),
       ).resolves.toBeUndefined();
 
@@ -362,18 +455,23 @@ describe("advanced workflow plugin contract fixtures", () => {
         store["agent:main:main"] = {
           sessionId: "session-1",
           updatedAt: Date.now(),
-          pluginExtensions: {
-            "policy-gate-fixture": {
-              policy: { locked: true, reason: "budget exhausted" },
-            },
-          },
         };
         return undefined;
       });
+      await expect(
+        patchPluginSessionExtension({
+          cfg: config,
+          pluginId: "policy-gate-fixture",
+          sessionKey: "agent:main:main",
+          namespace: "policy",
+          value: { locked: true, reason: "budget exhausted" },
+        }),
+      ).resolves.toMatchObject({ ok: true });
 
       const policy = await runTrustedToolPolicies(
         { toolName: "mutating_tool", params: {} },
-        { config, toolName: "mutating_tool", sessionKey: "agent:main:main" },
+        { toolName: "mutating_tool", sessionKey: "agent:main:main" },
+        { config },
       );
       expect(policy).toEqual({
         block: true,
@@ -383,7 +481,7 @@ describe("advanced workflow plugin contract fixtures", () => {
       if (!policy?.block) {
         await createHookRunner(registry.registry).runBeforeToolCall(
           { toolName: "mutating_tool", params: {} },
-          { config, toolName: "mutating_tool", sessionKey: "agent:main:main" },
+          { toolName: "mutating_tool", sessionKey: "agent:main:main" },
         );
       }
       expect(normalHookCalls).toEqual([]);
@@ -415,23 +513,27 @@ describe("advanced workflow plugin contract fixtures", () => {
         store["agent:main:policy-config-regression"] = {
           sessionId: "session-policy-config",
           updatedAt: Date.now(),
-          pluginExtensions: {
-            "policy-gate-fixture": {
-              policy: { locked: true, reason: "custom store policy" },
-            },
-          },
         };
         return undefined;
       });
+      await expect(
+        patchPluginSessionExtension({
+          cfg: config,
+          pluginId: "policy-gate-fixture",
+          sessionKey: "agent:main:policy-config-regression",
+          namespace: "policy",
+          value: { locked: true, reason: "custom store policy" },
+        }),
+      ).resolves.toMatchObject({ ok: true });
 
       await expect(
         runTrustedToolPolicies(
           { toolName: "mutating_tool", params: {} },
           {
-            config,
             toolName: "mutating_tool",
             sessionKey: "agent:main:policy-config-regression",
           },
+          { config },
         ),
       ).resolves.toEqual({
         block: true,
@@ -443,10 +545,14 @@ describe("advanced workflow plugin contract fixtures", () => {
   });
 
   it("schedules and cleans a background monitor wake-up while preserving heartbeat context", async () => {
-    const scheduled: ReturnType<OpenClawPluginApi["scheduleSessionTurn"]>[] = [];
+    const scheduled: Promise<PluginSessionSchedulerJobHandle | undefined>[] = [];
 
     await withSessionStore(async ({ storePath }) => {
-      const { config, registry } = createPluginRegistryFixture();
+      const cron = createMockCronService();
+      const { config, registry } = createPluginRegistryFixture(
+        { session: { store: storePath } },
+        { hostServices: { cron } },
+      );
       registerTestPlugin({
         registry,
         config,
@@ -465,38 +571,59 @@ describe("advanced workflow plugin contract fixtures", () => {
         store["agent:main:main"] = {
           sessionId: "session-1",
           updatedAt: Date.now(),
-          pluginExtensions: {
-            "background-monitor-fixture": {
-              monitor: { status: "waiting" },
-            },
-          },
         };
         return undefined;
       });
+      await expect(
+        patchPluginSessionExtension({
+          cfg: config,
+          pluginId: "background-monitor-fixture",
+          sessionKey: "agent:main:main",
+          namespace: "monitor",
+          value: { status: "waiting" },
+        }),
+      ).resolves.toMatchObject({ ok: true });
 
+      await expect(
+        callPluginGatewayMethod({
+          method: "plugins.sessionAction",
+          body: {
+            pluginId: "background-monitor-fixture",
+            actionId: "schedule-monitor-check",
+            sessionKey: "agent:main:main",
+          },
+          scopes: [WRITE_SCOPE],
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        payload: {
+          ok: true,
+          result: {
+            id: "workflow-cron-job",
+            pluginId: "background-monitor-fixture",
+            sessionKey: "agent:main:main",
+            kind: "session-turn",
+          },
+        },
+      });
       await expect(scheduled[0]).resolves.toEqual({
         id: "workflow-cron-job",
         pluginId: "background-monitor-fixture",
         sessionKey: "agent:main:main",
         kind: "session-turn",
       });
-      expect(workflowMocks.callGatewayTool).toHaveBeenCalledWith(
-        "cron.add",
-        {},
-        expect.objectContaining({
-          name: "background-monitor-status-check",
-          sessionTarget: "session:agent:main:main",
-          payload: {
-            kind: "agentTurn",
-            message: "Background monitor wake-up",
-          },
-        }),
-        expect.objectContaining({ scopes: expect.arrayContaining(["operator.admin"]) }),
-      );
-      const cronAddParams = workflowMocks.callGatewayTool.mock.calls.find(
-        ([method]) => method === "cron.add",
-      )?.[2] as Record<string, unknown> | undefined;
-      expect(cronAddParams).not.toHaveProperty("delivery");
+      expect(workflowMocks.cronAdd).toHaveBeenCalledTimes(1);
+      expect(getCronAddBody()).toMatchObject({
+        name: "plugin:background-monitor-fixture:tag:monitor:agent:main:main:background-monitor-status-check",
+        sessionTarget: "session:agent:main:main",
+        payload: {
+          kind: "agentTurn",
+          message: "Background monitor wake-up",
+        },
+        deleteAfterRun: true,
+        wakeMode: "now",
+        delivery: { mode: "announce", channel: "last" },
+      });
 
       await expect(
         createHookRunner(registry.registry).runHeartbeatPromptContribution(
@@ -525,6 +652,7 @@ describe("advanced workflow plugin contract fixtures", () => {
 
       await expect(
         runPluginHostCleanup({
+          cfg: config,
           registry: registry.registry,
           pluginId: "background-monitor-fixture",
           reason: "disable",
@@ -537,12 +665,7 @@ describe("advanced workflow plugin contract fixtures", () => {
         }),
       ).resolves.toEqual([]);
       expect(listPluginSessionSchedulerJobs("background-monitor-fixture")).toEqual([]);
-      expect(workflowMocks.callGatewayTool).toHaveBeenCalledWith(
-        "cron.remove",
-        {},
-        { id: "workflow-cron-job" },
-        expect.objectContaining({ scopes: expect.arrayContaining(["operator.admin"]) }),
-      );
+      expect(workflowMocks.cronRemove).toHaveBeenCalledWith("workflow-cron-job");
     });
   });
 
@@ -580,6 +703,23 @@ describe("advanced workflow plugin contract fixtures", () => {
         return undefined;
       });
 
+      await expect(
+        callPluginGatewayMethod({
+          method: "plugins.sessionAction",
+          body: {
+            pluginId: "artifact-reply-fixture",
+            actionId: "send-artifact",
+            sessionKey: "agent:main:main",
+          },
+          scopes: [READ_SCOPE],
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining(WRITE_SCOPE),
+        },
+      });
       await expect(
         callPluginGatewayMethod({
           method: "plugins.sessionAction",
