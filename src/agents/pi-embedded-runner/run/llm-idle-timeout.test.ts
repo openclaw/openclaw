@@ -313,6 +313,27 @@ describe("streamWithIdleTimeout", () => {
     expect(onIdleTimeout).not.toHaveBeenCalled();
   });
 
+  it("clears the connection timer when baseFn throws synchronously", async () => {
+    vi.useFakeTimers();
+    const setupError = new Error("sync provider setup failed");
+    const baseFn = vi.fn(() => {
+      throw setupError;
+    }) as unknown as Parameters<typeof streamWithIdleTimeout>[0];
+    const onIdleTimeout = vi.fn();
+    const wrapped = streamWithIdleTimeout(baseFn, 50, onIdleTimeout);
+
+    const model = {} as Parameters<typeof baseFn>[0];
+    const context = {} as Parameters<typeof baseFn>[1];
+    const options = {} as Parameters<typeof baseFn>[2];
+
+    expect(() => wrapped(model, context, options)).toThrow("sync provider setup failed");
+    // Advance well past the connect timeout window. If the timer were not
+    // cleared, onIdleTimeout would fire here with a stale error.
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(onIdleTimeout).not.toHaveBeenCalled();
+  });
+
   it("resets timer on each chunk", async () => {
     const chunks = [{ text: "a" }, { text: "b" }, { text: "c" }];
     const mockStream = createMockAsyncIterable(chunks);

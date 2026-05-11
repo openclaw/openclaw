@@ -231,7 +231,17 @@ export function streamWithIdleTimeout(
       }
     };
 
-    const maybeStream = baseFn(model, context, options);
+    let maybeStream: ReturnType<StreamFn>;
+    try {
+      maybeStream = baseFn(model, context, options);
+    } catch (error) {
+      // Synchronous setup failure: clear the connect timer so it cannot
+      // fire later with a stale `onIdleTimeout` after the real error has
+      // already propagated. Without this the watchdog stays armed and
+      // can keep the process open past the actual failure.
+      clearConnectTimer();
+      throw error;
+    }
 
     const wrapStream = (stream: ReturnType<typeof streamSimple>) => {
       clearConnectTimer();
