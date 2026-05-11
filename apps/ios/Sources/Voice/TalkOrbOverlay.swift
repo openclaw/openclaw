@@ -7,7 +7,7 @@ struct TalkOrbOverlay: View {
     var body: some View {
         let seam = self.appModel.seamColor
         let status = self.appModel.talkMode.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let mic = min(max(self.appModel.talkMode.micLevel, 0), 1)
+        let mic = min(max(appModel.talkMode.micLevel, 0), 1)
 
         VStack(spacing: 14) {
             ZStack {

@@ -30,7 +30,7 @@ enum TalkModeGatewayConfigParser {
             allowLegacyFallback: false)
         let activeProvider = selection?.provider ?? defaultProvider
         let activeConfig = selection?.config
-        let defaultVoiceId = activeConfig?["voiceId"]?.stringValue?
+        let defaultVoiceId = (activeConfig?["voiceId"]?.stringValue ?? activeConfig?["voice"]?.stringValue)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let voiceAliases: [String: String]
         if let aliases = activeConfig?["voiceAliases"]?.dictionaryValue {
@@ -46,9 +46,12 @@ enum TalkModeGatewayConfigParser {
         } else {
             voiceAliases = [:]
         }
-        let model = activeConfig?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = (activeConfig?["modelId"]?.stringValue ?? activeConfig?["model"]?.stringValue)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let defaultModelId = (model?.isEmpty == false) ? model! : defaultModelIdFallback
-        let defaultOutputFormat = activeConfig?["outputFormat"]?.stringValue?
+        let defaultOutputFormat = (activeConfig?["outputFormat"]?.stringValue
+            ?? activeConfig?["responseFormat"]?.stringValue
+            ?? activeConfig?["response_format"]?.stringValue)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let rawConfigApiKey = activeConfig?["apiKey"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
         let interruptOnSpeech = talk?["interruptOnSpeech"]?.boolValue
@@ -58,12 +61,11 @@ enum TalkModeGatewayConfigParser {
         let speechLocaleID = TalkConfigParsing.resolvedSpeechLocaleID(talk)
         let rawConversationEngine = talk?["conversationEngine"]?.stringValue?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let conversationEngine: String
-        switch rawConversationEngine {
+        let conversationEngine: String = switch rawConversationEngine {
         case "auto", "deluxe-thomas", "local-thomas":
-            conversationEngine = rawConversationEngine!
+            rawConversationEngine!
         default:
-            conversationEngine = "deluxe-thomas"
+            "deluxe-thomas"
         }
 
         return TalkModeGatewayConfigState(

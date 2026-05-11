@@ -34,12 +34,12 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
 
     override init() {
         if WCSession.isSupported() {
-            self.session = WCSession.default
+            session = WCSession.default
         } else {
-            self.session = nil
+            session = nil
         }
         super.init()
-        if let session = self.session {
+        if let session {
             session.delegate = self
             session.activate()
         }
@@ -67,7 +67,7 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
     }
 
     func currentStatusSnapshot() -> WatchMessagingStatus {
-        guard let session = self.session else {
+        guard let session else {
             return WatchMessagingStatus(
                 supported: false,
                 paired: false,
@@ -98,7 +98,7 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
 
     func sendPayload(_ payload: [String: Any]) async throws -> WatchNotificationSendResult {
         await self.ensureActivated()
-        let session = try self.requireReadySession()
+        let session = try requireReadySession()
         if session.isReachable {
             do {
                 try await sendReachableWatchMessage(payload, with: session)
@@ -120,7 +120,7 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
 
     func sendSnapshotPayload(_ payload: [String: Any]) async throws -> WatchNotificationSendResult {
         await self.ensureActivated()
-        let session = try self.requireReadySession()
+        let session = try requireReadySession()
         if session.isReachable {
             do {
                 try await sendReachableWatchMessage(payload, with: session)
@@ -164,7 +164,7 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
     }
 
     private func requireReadySession() throws -> WCSession {
-        guard let session = self.session else {
+        guard let session else {
             throw WatchMessagingError.unsupported
         }
         let snapshot = Self.status(for: session)
@@ -178,7 +178,7 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
     }
 
     private func ensureActivated() async {
-        guard let session = self.session else { return }
+        guard let session else { return }
         if session.activationState == .activated {
             return
         }
@@ -192,7 +192,7 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
     }
 
     private func emitStatusUpdate(_ snapshot: WatchMessagingStatus) {
-        guard let handler = self.callbacksSnapshot().statusUpdateHandler else {
+        guard let handler = callbacksSnapshot().statusUpdateHandler else {
             return
         }
         Task { @MainActor in
@@ -201,7 +201,7 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
     }
 
     private func emitReply(_ event: WatchQuickReplyEvent) {
-        guard let handler = self.callbacksSnapshot().replyHandler else {
+        guard let handler = callbacksSnapshot().replyHandler else {
             return
         }
         Task { @MainActor in
@@ -210,7 +210,7 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
     }
 
     private func emitExecApprovalResolve(_ event: WatchExecApprovalResolveEvent) {
-        guard let handler = self.callbacksSnapshot().execApprovalResolveHandler else {
+        guard let handler = callbacksSnapshot().execApprovalResolveHandler else {
             return
         }
         Task { @MainActor in
@@ -219,7 +219,7 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
     }
 
     private func emitExecApprovalSnapshotRequest(_ event: WatchExecApprovalSnapshotRequestEvent) {
-        guard let handler = self.callbacksSnapshot().execApprovalSnapshotRequestHandler else {
+        guard let handler = callbacksSnapshot().execApprovalSnapshotRequestHandler else {
             return
         }
         Task { @MainActor in

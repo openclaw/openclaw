@@ -53,7 +53,7 @@ enum TalkSpeechLocale {
         localeID: String?)
     {
         let supportedIDs = Set(supportedLocales.map(\.identifier))
-        guard let localeID = self.resolvedLocaleID(
+        guard let localeID = resolvedLocaleID(
             localSelection: localSelection,
             gatewaySelection: gatewaySelection,
             supportedLocaleIDs: supportedIDs)

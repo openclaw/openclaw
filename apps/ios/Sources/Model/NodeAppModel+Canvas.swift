@@ -10,7 +10,7 @@ enum A2UIReadyState {
 
 extension NodeAppModel {
     func resolveCanvasHostURL() async -> String? {
-        guard let raw = await self.gatewaySession.currentCanvasHostUrl() else { return nil }
+        guard let raw = await gatewaySession.currentCanvasHostUrl() else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let base = URL(string: trimmed) else { return nil }
         if let host = base.host, LoopbackHost.isLoopback(host) {
@@ -24,7 +24,7 @@ extension NodeAppModel {
     }
 
     func resolveA2UIHostURL() async -> String? {
-        guard let raw = await self.gatewaySession.currentCanvasHostUrl() else { return nil }
+        guard let raw = await gatewaySession.currentCanvasHostUrl() else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let base = URL(string: trimmed) else { return nil }
         if let host = base.host, LoopbackHost.isLoopback(host) {
@@ -56,11 +56,11 @@ extension NodeAppModel {
     }
 
     func ensureA2UIReadyWithCapabilityRefresh(timeoutMs: Int = 5000) async -> A2UIReadyState {
-        guard let initialUrl = await self.resolveA2UIHostURLWithCapabilityRefresh() else {
+        guard let initialUrl = await resolveA2UIHostURLWithCapabilityRefresh() else {
             return .hostNotConfigured
         }
-        self.screen.navigate(to: initialUrl, trustA2UIActions: true)
-        if await self.screen.waitForA2UIReady(timeoutMs: timeoutMs) {
+        screen.navigate(to: initialUrl, trustA2UIActions: true)
+        if await screen.waitForA2UIReady(timeoutMs: timeoutMs) {
             return .ready(initialUrl)
         }
         guard let refreshedUrl = await self.resolveA2UIHostURLWithCapabilityRefresh(forceRefresh: true) else {
@@ -74,8 +74,8 @@ extension NodeAppModel {
     }
 
     func showLocalCanvasOnDisconnect() {
-        self.lastAutoA2uiURL = nil
-        self.screen.showDefaultCanvas()
+        lastAutoA2uiURL = nil
+        screen.showDefaultCanvas()
     }
 
     private func resolveA2UIHostURLWithCapabilityRefresh(forceRefresh: Bool = false) async -> String? {

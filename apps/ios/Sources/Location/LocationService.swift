@@ -28,7 +28,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
 
     override init() {
         super.init()
-        self.configureLocationManager()
+        configureLocationManager()
     }
 
     func ensureAuthorization(mode: OpenClawLocationMode) async -> CLAuthorizationStatus {
@@ -37,7 +37,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
         let status = self.manager.authorizationStatus
         if status == .notDetermined {
             self.manager.requestWhenInUseAuthorization()
-            let updated = await self.awaitAuthorizationChange()
+            let updated = await awaitAuthorizationChange()
             if mode != .always { return updated }
         }
 
@@ -144,7 +144,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
         }
     }
 
-    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    nonisolated func locationManager(_: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         let locs = locations
         Task { @MainActor in
             // Resolve the one-shot continuation first (if any).
@@ -167,7 +167,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, LocationServic
         }
     }
 
-    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
+    nonisolated func locationManager(_: CLLocationManager, didFailWithError error: Swift.Error) {
         let err = error
         Task { @MainActor in
             guard let cont = self.locationContinuation else { return }

@@ -6,7 +6,7 @@ extension View {
         onDisconnect: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void) -> some View
     {
-        self.confirmationDialog(
+        confirmationDialog(
             "Gateway",
             isPresented: isPresented,
             titleVisibility: .visible)

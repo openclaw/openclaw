@@ -24,8 +24,9 @@ actor TalkModeRuntime {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.runtime")
     private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
-    private static let defaultModelIdFallback = "eleven_v3"
-    private static let defaultTalkProvider = "elevenlabs"
+    private static let defaultModelIdFallback = "gpt-4o-mini-tts"
+    private static let defaultTalkProvider = "openai"
+    private static let elevenLabsTalkProvider = "elevenlabs"
     private static let mlxTalkProvider = "mlx"
     private static let systemTalkProvider = "system"
     private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
@@ -789,7 +790,7 @@ actor TalkModeRuntime {
 
     static func playbackPlan(provider: String, apiKey: String?, voiceId: String?) -> PlaybackPlan {
         switch provider {
-        case self.defaultTalkProvider:
+        case self.elevenLabsTalkProvider:
             guard let apiKey, !apiKey.isEmpty, let voiceId else {
                 return .systemVoiceOnly
             }
@@ -864,7 +865,7 @@ actor TalkModeRuntime {
 
         let language = ElevenLabsTTSClient.validatedLanguage(directive?.language)
 
-        let voiceId: String? = if provider == Self.defaultTalkProvider, let apiKey, !apiKey.isEmpty {
+        let voiceId: String? = if provider == Self.elevenLabsTalkProvider, let apiKey, !apiKey.isEmpty {
             await self.resolveVoiceId(preferred: preferredVoice, apiKey: apiKey)
         } else if provider == Self.mlxTalkProvider || provider == Self.systemTalkProvider {
             nil
@@ -872,9 +873,9 @@ actor TalkModeRuntime {
             preferredVoice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? preferredVoice : nil
         }
 
-        if provider == Self.defaultTalkProvider, apiKey?.isEmpty != false {
+        if provider == Self.elevenLabsTalkProvider, apiKey?.isEmpty != false {
             self.ttsLogger.warning("talk missing ELEVENLABS_API_KEY; falling back to system voice")
-        } else if provider == Self.defaultTalkProvider, voiceId == nil {
+        } else if provider == Self.elevenLabsTalkProvider, voiceId == nil {
             self.ttsLogger.warning("talk missing voiceId; falling back to system voice")
         } else if let voiceId {
             self.ttsLogger
@@ -1356,6 +1357,7 @@ extension TalkModeRuntime {
             return parsed
         } catch {
             return TalkModeGatewayConfigParser.fallback(
+                defaultProvider: Self.defaultTalkProvider,
                 defaultModelIdFallback: Self.defaultModelIdFallback,
                 defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs,
                 envVoice: envVoice,

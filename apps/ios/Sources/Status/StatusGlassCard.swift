@@ -27,7 +27,7 @@ private struct StatusGlassCardModifier: ViewModifier {
 
 extension View {
     func statusGlassCard(brighten: Bool, verticalPadding: CGFloat, horizontalPadding: CGFloat = 12) -> some View {
-        self.modifier(
+        modifier(
             StatusGlassCardModifier(
                 brighten: brighten,
                 verticalPadding: verticalPadding,

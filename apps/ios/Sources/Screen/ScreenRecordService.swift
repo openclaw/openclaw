@@ -48,7 +48,7 @@ final class ScreenRecordService: @unchecked Sendable {
         includeAudio: Bool?,
         outPath: String?) async throws -> String
     {
-        let config = try self.makeRecordConfig(
+        let config = try makeRecordConfig(
             screenIndex: screenIndex,
             durationMs: durationMs,
             fps: fps,
@@ -58,7 +58,7 @@ final class ScreenRecordService: @unchecked Sendable {
         let state = CaptureState()
         let recordQueue = DispatchQueue(label: "ai.openclaw.screenrecord")
 
-        try await self.startCapture(state: state, config: config, recordQueue: recordQueue)
+        try await startCapture(state: state, config: config, recordQueue: recordQueue)
         try await Task.sleep(nanoseconds: UInt64(config.durationMs) * 1_000_000)
         try await self.stopCapture()
         try self.finalizeCapture(state: state)

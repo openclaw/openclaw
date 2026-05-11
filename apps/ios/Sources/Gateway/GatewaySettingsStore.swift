@@ -35,7 +35,7 @@ enum GatewaySettingsStore {
     }
 
     static func loadStableInstanceID() -> String? {
-        if let value = KeychainStore.loadString(service: self.nodeService, account: self.instanceIdAccount)?
+        if let value = KeychainStore.loadString(service: nodeService, account: instanceIdAccount)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !value.isEmpty
         {
@@ -51,8 +51,8 @@ enum GatewaySettingsStore {
 
     static func loadPreferredGatewayStableID() -> String? {
         if let value = KeychainStore.loadString(
-            service: self.gatewayService,
-            account: self.preferredGatewayStableIDAccount)?.trimmingCharacters(in: .whitespacesAndNewlines),
+            service: gatewayService,
+            account: preferredGatewayStableIDAccount)?.trimmingCharacters(in: .whitespacesAndNewlines),
             !value.isEmpty
         {
             return value
@@ -77,8 +77,8 @@ enum GatewaySettingsStore {
 
     static func loadLastDiscoveredGatewayStableID() -> String? {
         if let value = KeychainStore.loadString(
-            service: self.gatewayService,
-            account: self.lastDiscoveredGatewayStableIDAccount)?.trimmingCharacters(in: .whitespacesAndNewlines),
+            service: gatewayService,
+            account: lastDiscoveredGatewayStableIDAccount)?.trimmingCharacters(in: .whitespacesAndNewlines),
             !value.isEmpty
         {
             return value
@@ -189,7 +189,7 @@ enum GatewaySettingsStore {
     }
 
     static func loadTalkProviderApiKey(provider: String) -> String? {
-        guard let providerId = self.normalizedTalkProviderID(provider) else { return nil }
+        guard let providerId = normalizedTalkProviderID(provider) else { return nil }
         let account = self.talkProviderApiKeyAccount(providerId: providerId)
         let value = KeychainStore.loadString(
             service: self.talkService,
@@ -200,7 +200,7 @@ enum GatewaySettingsStore {
     }
 
     static func saveTalkProviderApiKey(_ apiKey: String?, provider: String) {
-        guard let providerId = self.normalizedTalkProviderID(provider) else { return }
+        guard let providerId = normalizedTalkProviderID(provider) else { return }
         let account = self.talkProviderApiKeyAccount(providerId: providerId)
         let trimmed = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {
@@ -227,7 +227,7 @@ enum GatewaySettingsStore {
         self.migrateLastGatewayFromUserDefaultsIfNeeded()
 
         guard let json = KeychainStore.loadString(
-            service: self.gatewayService, account: self.lastGatewayConnectionAccount),
+            service: gatewayService, account: lastGatewayConnectionAccount),
             let data = json.data(using: .utf8),
             let stored = try? JSONDecoder().decode(LastGatewayConnectionData.self, from: data)
         else { return nil }
@@ -389,7 +389,7 @@ enum GatewaySettingsStore {
     private static func ensureStableInstanceID() {
         let defaults = UserDefaults.standard
 
-        if let existing = defaults.string(forKey: self.instanceIdDefaultsKey)?
+        if let existing = defaults.string(forKey: instanceIdDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !existing.isEmpty
         {
@@ -399,7 +399,7 @@ enum GatewaySettingsStore {
             return
         }
 
-        if let stored = self.loadStableInstanceID(), !stored.isEmpty {
+        if let stored = loadStableInstanceID(), !stored.isEmpty {
             defaults.set(stored, forKey: self.instanceIdDefaultsKey)
             return
         }
@@ -412,7 +412,7 @@ enum GatewaySettingsStore {
     private static func ensurePreferredGatewayStableID() {
         let defaults = UserDefaults.standard
 
-        if let existing = defaults.string(forKey: self.preferredGatewayStableIDDefaultsKey)?
+        if let existing = defaults.string(forKey: preferredGatewayStableIDDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !existing.isEmpty
         {
@@ -422,7 +422,7 @@ enum GatewaySettingsStore {
             return
         }
 
-        if let stored = self.loadPreferredGatewayStableID(), !stored.isEmpty {
+        if let stored = loadPreferredGatewayStableID(), !stored.isEmpty {
             defaults.set(stored, forKey: self.preferredGatewayStableIDDefaultsKey)
         }
     }
@@ -430,7 +430,7 @@ enum GatewaySettingsStore {
     private static func ensureLastDiscoveredGatewayStableID() {
         let defaults = UserDefaults.standard
 
-        if let existing = defaults.string(forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)?
+        if let existing = defaults.string(forKey: lastDiscoveredGatewayStableIDDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !existing.isEmpty
         {
@@ -440,7 +440,7 @@ enum GatewaySettingsStore {
             return
         }
 
-        if let stored = self.loadLastDiscoveredGatewayStableID(), !stored.isEmpty {
+        if let stored = loadLastDiscoveredGatewayStableID(), !stored.isEmpty {
             defaults.set(stored, forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
         }
     }

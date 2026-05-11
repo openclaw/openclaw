@@ -65,7 +65,8 @@ struct PushBuildConfig {
         bundle: Bundle,
         key: String,
         fallback: T)
-    -> T where T.RawValue == String {
+        -> T where T.RawValue == String
+    {
         guard let raw = bundle.object(forInfoDictionaryKey: key) as? String else { return fallback }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return T(rawValue: trimmed) ?? fallback

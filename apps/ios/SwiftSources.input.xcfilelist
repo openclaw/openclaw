@@ -72,6 +72,7 @@ Sources/Status/VoiceWakeToast.swift
 Sources/Voice/TalkDefaults.swift
 Sources/Voice/TalkModeGatewayConfig.swift
 Sources/Voice/TalkModeManager.swift
+Sources/Voice/OpenAITTSClient.swift
 Sources/Voice/TalkOrbOverlay.swift
 Sources/Voice/TalkSpeechLocale.swift
 Sources/Voice/VoiceTab.swift
@@ -79,6 +80,7 @@ Sources/Voice/VoiceWakeManager.swift
 Sources/Voice/VoiceWakePreferences.swift
 ShareExtension/ShareViewController.swift
 ActivityWidget/OpenClawActivityWidgetBundle.swift
+ActivityWidget/OpenClawControlRoomWidget.swift
 ActivityWidget/OpenClawLiveActivity.swift
 WatchExtension/Sources/OpenClawWatchApp.swift
 WatchExtension/Sources/WatchConnectivityReceiver.swift

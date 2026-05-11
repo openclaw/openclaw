@@ -47,7 +47,7 @@ extension AVAudioPCMBuffer {
         }
         copy.frameLength = frameLength
 
-        if let src = self.floatChannelData, let dst = copy.floatChannelData {
+        if let src = floatChannelData, let dst = copy.floatChannelData {
             let channels = Int(format.channelCount)
             let frames = Int(frameLength)
             for ch in 0..<channels {
@@ -56,7 +56,7 @@ extension AVAudioPCMBuffer {
             return copy
         }
 
-        if let src = self.int16ChannelData, let dst = copy.int16ChannelData {
+        if let src = int16ChannelData, let dst = copy.int16ChannelData {
             let channels = Int(format.channelCount)
             let frames = Int(frameLength)
             for ch in 0..<channels {
@@ -65,7 +65,7 @@ extension AVAudioPCMBuffer {
             return copy
         }
 
-        if let src = self.int32ChannelData, let dst = copy.int32ChannelData {
+        if let src = int32ChannelData, let dst = copy.int32ChannelData {
             let channels = Int(format.channelCount)
             let frames = Int(frameLength)
             for ch in 0..<channels {
@@ -328,7 +328,7 @@ final class VoiceWakeManager: NSObject {
         }
 
         guard let transcript else { return }
-        guard let cmd = self.extractCommand(from: transcript, segments: segments) else { return }
+        guard let cmd = extractCommand(from: transcript, segments: segments) else { return }
 
         if cmd == self.lastDispatched { return }
         self.lastDispatched = cmd

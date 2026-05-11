@@ -32,8 +32,8 @@ enum PushRelayRegistrationStore {
 
     static func loadRegistrationState() -> RegistrationState? {
         guard let raw = KeychainStore.loadString(
-            service: self.service,
-            account: self.registrationStateAccount),
+            service: service,
+            account: registrationStateAccount),
             let data = raw.data(using: .utf8),
             let decoded = try? JSONDecoder().decode(StoredPushRelayRegistrationState.self, from: data)
         else {
