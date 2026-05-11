@@ -80,7 +80,7 @@ export async function runCodexAppServerSideQuestion(
   options: { pluginConfig?: unknown } = {},
 ): Promise<AgentHarnessSideQuestionResult> {
   const binding = await readCodexAppServerBinding(
-    { sessionId: params.sessionId, sessionKey: params.sessionKey },
+    { sessionKey: params.sessionKey, sessionId: params.sessionId },
     {
       agentDir: params.agentDir,
       config: params.cfg,
@@ -295,7 +295,6 @@ function buildSideRunAttemptParams(
     modelId: params.model,
     model: params.runtimeModel ?? ({ id: params.model, provider: params.provider } as never),
     sessionId: params.sessionId,
-    sessionFile: params.sessionFile,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     workspaceDir: options.cwd,
