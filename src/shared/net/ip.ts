@@ -266,6 +266,12 @@ export function isCloudMetadataIpAddress(raw: string | undefined): boolean {
     return false;
   }
   const normalized = normalizeIpv4MappedAddress(parsed);
+  if (isIpv6Address(normalized)) {
+    const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(normalized);
+    if (embeddedIpv4 && CLOUD_METADATA_IP_ADDRESSES.has(embeddedIpv4.toString())) {
+      return true;
+    }
+  }
   return CLOUD_METADATA_IP_ADDRESSES.has(normalized.toString());
 }
 

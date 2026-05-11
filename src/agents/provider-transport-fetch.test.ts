@@ -384,6 +384,11 @@ describe("buildGuardedModelFetch", () => {
       requestUrl: "http://[fd00:ec2::254]/v1/chat/completions",
     },
     {
+      label: "embedded IPv6 cloud metadata IP",
+      baseUrl: "http://[64:ff9b::6464:64c8]/v1",
+      requestUrl: "http://[64:ff9b::6464:64c8]/v1/chat/completions",
+    },
+    {
       label: "metadata hostname",
       baseUrl: "http://metadata.google.internal/v1",
       requestUrl: "http://metadata.google.internal/v1/chat/completions",

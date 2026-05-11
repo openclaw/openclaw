@@ -245,13 +245,17 @@ export function resolveSsrFPolicyForUrl(url: URL, policy?: SsrFPolicy): SsrFPoli
   if (!policy?.allowedOrigins?.length) {
     return policy;
   }
-  if (!normalizeSsrFPolicyOrigins(policy.allowedOrigins).includes(url.origin.toLowerCase())) {
+  const requestOrigin = normalizeSsrFPolicyOrigin(url.toString());
+  if (
+    !requestOrigin ||
+    !normalizeSsrFPolicyOrigins(policy.allowedOrigins).includes(requestOrigin)
+  ) {
     return policy;
   }
   return {
     ...policy,
     allowedHostnames: Array.from(
-      new Set([...(policy.allowedHostnames ?? []), url.hostname.toLowerCase()]),
+      new Set([...(policy.allowedHostnames ?? []), normalizeHostname(url.hostname)]),
     ),
   };
 }

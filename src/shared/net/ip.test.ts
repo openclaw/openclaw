@@ -93,6 +93,9 @@ describe("shared ip helpers", () => {
   it("detects known non-link-local cloud metadata IPs", () => {
     expect(isCloudMetadataIpAddress("100.100.100.200")).toBe(true);
     expect(isCloudMetadataIpAddress("::ffff:100.100.100.200")).toBe(true);
+    expect(isCloudMetadataIpAddress("64:ff9b::100.100.100.200")).toBe(true);
+    expect(isCloudMetadataIpAddress("64:ff9b:1::6464:64c8")).toBe(true);
+    expect(isCloudMetadataIpAddress("2002:6464:64c8::")).toBe(true);
     expect(isCloudMetadataIpAddress("1684301000")).toBe(true);
     expect(isCloudMetadataIpAddress("fd00:ec2::254")).toBe(true);
     expect(isCloudMetadataIpAddress("[fd00:ec2::254]")).toBe(true);

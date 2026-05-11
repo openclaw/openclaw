@@ -201,6 +201,15 @@ describe("resolveSsrFPolicyForUrl", () => {
       allowedOrigins: ["http://example.com.:11434/v1"],
       allowedHostnames: ["example.com"],
     });
+
+    expect(
+      resolveSsrFPolicyForUrl(new URL("http://example.com.:11434/v1/chat/completions"), {
+        allowedOrigins: ["http://example.com:11434/v1"],
+      }),
+    ).toEqual({
+      allowedOrigins: ["http://example.com:11434/v1"],
+      allowedHostnames: ["example.com"],
+    });
   });
 
   it("does not trust the hostname when the port differs", () => {
@@ -220,7 +229,7 @@ describe("resolveSsrFPolicyForUrl", () => {
       }),
     ).toEqual({
       allowedOrigins: ["http://[fd00::1]:11434"],
-      allowedHostnames: ["[fd00::1]"],
+      allowedHostnames: ["fd00::1"],
     });
   });
 
