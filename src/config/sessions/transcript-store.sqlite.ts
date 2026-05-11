@@ -113,7 +113,10 @@ function parseTranscriptEventJson(value: unknown, seq: number): unknown {
 }
 
 function parseCreatedAt(value: unknown): number {
-  return typeof value === "bigint" ? Number(value) : Number(value);
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  return typeof value === "number" ? value : 0;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -404,11 +407,11 @@ export function listSqliteSessionTranscripts(
         const updatedAt =
           typeof record.updated_at === "bigint"
             ? Number(record.updated_at)
-            : Number(record.updated_at ?? 0);
+            : (record.updated_at ?? 0);
         const eventCount =
           typeof record.event_count === "bigint"
             ? Number(record.event_count)
-            : Number(record.event_count ?? 0);
+            : (record.event_count ?? 0);
         return [
           {
             agentId: agentDatabase.agentId,
@@ -444,12 +447,12 @@ export function getSqliteSessionTranscriptStats(
       .where("session_id", "=", sessionId),
   );
   const eventCount =
-    typeof row?.event_count === "bigint" ? Number(row.event_count) : Number(row?.event_count ?? 0);
+    typeof row?.event_count === "bigint" ? Number(row.event_count) : (row?.event_count ?? 0);
   if (!Number.isFinite(eventCount) || eventCount <= 0) {
     return null;
   }
   const updatedAt =
-    typeof row?.updated_at === "bigint" ? Number(row.updated_at) : Number(row?.updated_at ?? 0);
+    typeof row?.updated_at === "bigint" ? Number(row.updated_at) : (row?.updated_at ?? 0);
   return {
     sessionId,
     updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
