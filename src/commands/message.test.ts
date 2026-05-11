@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { CliDeps } from "../cli/deps.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
+import { formatMessageCliText } from "./message-format.js";
 
 type RunMessageActionParams = {
   cfg?: unknown;
@@ -303,5 +304,54 @@ describe("messageCommand", () => {
   it("rejects unknown message actions before dispatch", async () => {
     await expect(runMessageCommand({ action: "nope" })).rejects.toThrow("Unknown message action");
     expect(runMessageActionMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("formatMessageCliText dry-run output", () => {
+  it("shows dry-run message when sendResult.dryRun is true", () => {
+    const result = {
+      kind: "send" as const,
+      channel: "slack" as const,
+      action: "send" as const,
+      to: "test-user",
+      handledBy: "core" as const, // handledBy is "core", not "dry-run"
+      payload: {},
+      sendResult: {
+        channel: "slack",
+        to: "test-user",
+        via: "direct" as const,
+        mediaUrl: null,
+        dryRun: true, // This is what triggers dry-run output
+      },
+      dryRun: true,
+    };
+
+    const output = formatMessageCliText(result);
+    expect(output[0]).toContain("[dry-run]");
+    expect(output[0]).toContain("would run");
+    expect(output[0]).not.toContain("Sent via");
+  });
+
+  it("shows success message when dryRun is false", () => {
+    const result = {
+      kind: "send" as const,
+      channel: "slack" as const,
+      action: "send" as const,
+      to: "test-user",
+      handledBy: "core" as const,
+      payload: {},
+      sendResult: {
+        channel: "slack",
+        to: "test-user",
+        via: "direct" as const,
+        mediaUrl: null,
+        dryRun: false,
+      },
+      dryRun: false,
+    };
+
+    const output = formatMessageCliText(result);
+    expect(output[0]).toContain("Sent via");
+    expect(output[0]).not.toContain("[dry-run]");
   });
 });
