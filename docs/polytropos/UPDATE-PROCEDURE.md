@@ -21,39 +21,15 @@ See also:
 
 Always integrate upstream via a **recursive merge** (no rebases).
 
-Output of this step: `openclaw-polytropos` `main` (or a release branch) contains upstream `<upstreamTag>` plus fork commits.
+**Requirement:** the merge must complete successfully and leave the repo in a clean state (no conflicts, no half-merged index).
 
-### 3) Tag the fork release
+Output of this step: `openclaw-polytropos` `main` contains upstream `<upstreamTag>` plus fork commits.
 
-Create a fork tag that is explicitly tied to the upstream tag (naming convention TBD, but must include the upstream version).
+### 3) Release
 
-Examples:
+After the merge is successfully completed, run the standard release script/procedure (this step includes tagging, building, publishing, switching `previous/current`, restarting, and verification):
 
-- `2026.4.1-poly.0`
-- `2026.4.1-poly.1`
-
-### 4) Build (produce dist/)
-
-Build is the act of producing a `dist/` directory from the core repo at a specific ref/tag.
-
-Canonical build sequence (deterministic):
-
-- `pnpm install`
-- `pnpm ui:build`
-- `pnpm build`
-
-Output: `<repo>/dist/`.
-
-### 5) Release (create/switch runnable release directory)
-
-Release is the act of taking a built `dist/` and creating a runnable versioned directory under `~/polytropos/releases/<forkTag>/` (and optionally switching `current`).
-
-Follow [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md) to:
-
-- copy `<repo>/dist/` into `~/polytropos/releases/<forkTag>/`
-- update `previous` then `current`
-- restart gateway
-- verify
+- [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md)
 
 ## Notes
 
