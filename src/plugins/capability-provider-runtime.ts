@@ -71,10 +71,18 @@ function shouldResolveWhenPluginsAreGloballyDisabled(key: CapabilityProviderRegi
 }
 
 function shouldMergeManifestProvidersWhenActive(key: CapabilityProviderRegistryKey): boolean {
+  // For these capability kinds, the configured/requested provider may not be the
+  // same as what happens to be in the active runtime registry, and the resolver
+  // needs to see all manifest-declared providers (not just the ones that loaded
+  // first). Without this, `resolveConfiguredRealtimeVoiceProvider` throws
+  // "Realtime voice provider \"X\" is not registered" when X's bundled plugin
+  // hasn't been eagerly loaded but another provider (e.g. google) has. (#80483)
   return (
     key === "imageGenerationProviders" ||
     key === "videoGenerationProviders" ||
-    key === "musicGenerationProviders"
+    key === "musicGenerationProviders" ||
+    key === "realtimeVoiceProviders" ||
+    key === "realtimeTranscriptionProviders"
   );
 }
 

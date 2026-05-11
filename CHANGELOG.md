@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Voice-call: resolve manifest-declared realtime voice and realtime transcription providers when the active runtime registry only contains a subset (e.g. `google` loaded but `openai` not yet), so `voice-call` no longer fails at startup with `Realtime voice provider "openai" is not registered` when another provider's plugin happened to load first. Fixes #80483.
 - Google/Gemini: normalize retired nested Gemini 3 Pro Preview ids while converting manifest catalog rows into emitted provider config, so `google/gemini-3.1-pro-preview` is used for testing instead of `google/gemini-3-pro-preview`.
 - Native apps: advertise the Gateway protocol compatibility range so chat and node sessions can connect to v3 gateways after additive v4 client updates.
 - Gateway: avoid synchronous restart-sentinel state probes during post-attach startup, preventing slow Windows or redirected state directories from blocking channel turns. Fixes #79264. Thanks @liyi58.

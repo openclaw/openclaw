@@ -533,6 +533,56 @@ describe("resolvePluginCapabilityProviders", () => {
     expectActiveRegistryLookup(["fal", "xai"]);
   });
 
+  // Regression for #80483: when the active runtime registry has *some*
+  // realtimeVoiceProviders (e.g. google because the google plugin happened to
+  // load eagerly) but not the one voice-call has configured (e.g. openai),
+  // resolvePluginCapabilityProviders used to early-return with only the active
+  // providers, and voice-call's startup would throw "Realtime voice provider
+  // 'openai' is not registered". The merge-when-active list now includes
+  // realtime voice (and transcription) so the manifest-declared providers are
+  // still resolved.
+  it("merges manifest-declared realtime voice providers missing from the active registry", () => {
+    const active = createEmptyPluginRegistry();
+    active.realtimeVoiceProviders.push({
+      pluginId: "google",
+      pluginName: "google",
+      source: "test",
+      provider: { id: "google" },
+    } as never);
+    const loaded = createEmptyPluginRegistry();
+    loaded.realtimeVoiceProviders.push({
+      pluginId: "openai",
+      pluginName: "openai",
+      source: "test",
+      provider: { id: "openai" },
+    } as never);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          origin: "bundled",
+          contracts: { realtimeVoiceProviders: ["openai"] },
+        },
+        {
+          id: "google",
+          origin: "bundled",
+          contracts: { realtimeVoiceProviders: ["google"] },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : loaded,
+    );
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "realtimeVoiceProviders",
+      cfg: { plugins: { allow: ["openai", "google"] } } as OpenClawConfig,
+    });
+
+    expectResolvedCapabilityProviderIds(providers, ["google", "openai"]);
+  });
+
   it("cold-loads enabled external manifest-contract providers missing from startup registry", () => {
     const loaded = createEmptyPluginRegistry();
     loaded.speechProviders.push({
