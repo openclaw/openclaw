@@ -33,6 +33,7 @@ import {
   recordShortTermRecalls,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
+import { tokenize } from "./memory/mmr.js";
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 type DreamingHostConfig = unknown;
@@ -258,7 +259,11 @@ function buildDailySnippetChunks(lines: string[], limit: number): DailySnippetCh
     }
 
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("<!--")) {
+    if (
+      !trimmed ||
+      trimmed.startsWith("<!--") ||
+      MANAGED_DAILY_DREAMING_BLOCKS.some((b) => line.includes(b.startMarker))
+    ) {
       flushChunk();
       continue;
     }
@@ -1345,13 +1350,7 @@ function entryAverageScore(entry: ShortTermRecallEntry): number {
 }
 
 function tokenizeSnippet(snippet: string): Set<string> {
-  return new Set(
-    snippet
-      .toLowerCase()
-      .split(/[^a-z0-9]+/i)
-      .map((token) => token.trim())
-      .filter(Boolean),
-  );
+  return tokenize(snippet);
 }
 
 function jaccardSimilarity(left: string, right: string): number {
