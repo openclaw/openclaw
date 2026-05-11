@@ -293,4 +293,88 @@ describe("executePreparedCliRun supervisor output capture", () => {
       stop();
     }
   });
+
+  it("succeeds when a rate_limit_event with allowed_warning precedes the result line", async () => {
+    const rateLimitEvent = `${JSON.stringify({
+      type: "rate_limit_event",
+      rate_limit_info: {
+        rateLimitType: "seven_day",
+        utilization: 0.87,
+        status: "allowed_warning",
+        surpassedThreshold: 0.75,
+        isUsingOverage: false,
+        resetsAt: 1778835600,
+      },
+    })}\n`;
+    const resultEvent = `${JSON.stringify({
+      type: "result",
+      session_id: "session-rl-warn",
+      result: "Hello!",
+      is_error: false,
+    })}\n`;
+
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(rateLimitEvent);
+      input.onStdout?.(resultEvent);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : `${rateLimitEvent}${resultEvent}`,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+    );
+
+    expect(result.text).toBe("Hello!");
+    expect(result.sessionId).toBe("session-rl-warn");
+  });
+
+  it("classifies rate_limit_event denied as rate_limit (not billing)", async () => {
+    const rateLimitDeniedEvent = `${JSON.stringify({
+      type: "rate_limit_event",
+      rate_limit_info: {
+        rateLimitType: "seven_day",
+        utilization: 1.0,
+        status: "denied",
+        surpassedThreshold: 1.0,
+        isUsingOverage: false,
+        resetsAt: 1778835600,
+      },
+    })}\n`;
+
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(rateLimitDeniedEvent);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : rateLimitDeniedEvent,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+      );
+    } catch (error) {
+      const classified = error as { reason?: unknown; status?: unknown };
+      expect(classified.reason).toBe("rate_limit");
+      expect(classified.reason).not.toBe("billing");
+      return;
+    }
+    throw new Error("Expected CLI run to reject with a rate_limit error");
+  });
 });

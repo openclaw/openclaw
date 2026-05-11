@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createCliJsonlStreamingParser,
+  extractClaudeCliRateLimitStatus,
   extractCliErrorMessage,
   parseCliJson,
   parseCliJsonl,
@@ -446,5 +447,108 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas).toEqual([
       { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
     ]);
+  });
+});
+
+const RATE_LIMIT_EVENT_BACKEND = {
+  command: "claude",
+  output: "jsonl" as const,
+  sessionIdFields: ["session_id"],
+};
+
+function buildRateLimitEventJsonl(status: string, rateLimitType = "seven_day"): string {
+  return JSON.stringify({
+    type: "rate_limit_event",
+    rate_limit_info: {
+      rateLimitType,
+      utilization: 0.87,
+      status,
+      surpassedThreshold: 0.75,
+      isUsingOverage: false,
+      resetsAt: 1778835600,
+    },
+  });
+}
+
+describe("rate_limit_event — Claude CLI JSONL", () => {
+  describe("extractClaudeCliRateLimitStatus", () => {
+    it("returns status from a rate_limit_event record", () => {
+      const parsed = JSON.parse(buildRateLimitEventJsonl("allowed_warning")) as Record<
+        string,
+        unknown
+      >;
+      expect(extractClaudeCliRateLimitStatus(parsed)).toBe("allowed_warning");
+    });
+
+    it("returns null for non-rate_limit_event records", () => {
+      expect(extractClaudeCliRateLimitStatus({ type: "result", result: "hello" })).toBeNull();
+    });
+
+    it("returns null when rate_limit_info is missing", () => {
+      expect(extractClaudeCliRateLimitStatus({ type: "rate_limit_event" })).toBeNull();
+    });
+  });
+
+  describe("extractCliErrorMessage — rate_limit_event pass-through", () => {
+    it("returns null for allowed_warning (request was served)", () => {
+      const jsonl = [
+        buildRateLimitEventJsonl("allowed_warning"),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-rl",
+          result: "Hello!",
+          is_error: false,
+        }),
+      ].join("\n");
+
+      expect(extractCliErrorMessage(jsonl)).toBeNull();
+    });
+
+    it("returns null for allowed (request was served)", () => {
+      const jsonl = [
+        buildRateLimitEventJsonl("allowed"),
+        JSON.stringify({ type: "result", session_id: "session-rl", result: "Hi", is_error: false }),
+      ].join("\n");
+
+      expect(extractCliErrorMessage(jsonl)).toBeNull();
+    });
+
+    it("surfaces denied as a rate_limit error string (not billing)", () => {
+      const jsonl = buildRateLimitEventJsonl("denied", "seven_day");
+
+      const msg = extractCliErrorMessage(jsonl);
+      expect(msg).toMatch(/rate limit exceeded/i);
+      expect(msg).toMatch(/seven_day/i);
+      // Must not contain billing keywords that would trigger the billing classifier
+      expect(msg?.toLowerCase()).not.toMatch(/billing|payment|credit|subscription/);
+    });
+  });
+
+  describe("parseCliJsonl — rate_limit_event pass-through", () => {
+    it("parses the result line normally when allowed_warning precedes it", () => {
+      const jsonl = [
+        buildRateLimitEventJsonl("allowed_warning"),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-rl-ok",
+          result: "Hello!",
+          usage: { input_tokens: 10, output_tokens: 3 },
+        }),
+      ].join("\n");
+
+      const result = parseCliJsonl(jsonl, RATE_LIMIT_EVENT_BACKEND, "claude-cli");
+
+      expect(result).toEqual({
+        text: "Hello!",
+        sessionId: "session-rl-ok",
+        usage: {
+          input: 10,
+          output: 3,
+          cacheRead: undefined,
+          cacheWrite: undefined,
+          total: undefined,
+        },
+      });
+    });
   });
 });

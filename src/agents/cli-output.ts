@@ -561,6 +561,22 @@ export function parseCliOutput(params: {
   );
 }
 
+// Reads a `rate_limit_event` JSONL record emitted by the Claude CLI.
+// Returns the `rate_limit_info.status` string when present, otherwise null.
+// Claude Pro Max plan sessions emit this with status "allowed_warning" at ~75%
+// utilization — the request was served normally. Only "denied" means the cap
+// was enforced and the request was rejected.
+export function extractClaudeCliRateLimitStatus(parsed: Record<string, unknown>): string | null {
+  if (parsed.type !== "rate_limit_event") {
+    return null;
+  }
+  if (!isRecord(parsed.rate_limit_info)) {
+    return null;
+  }
+  const status = parsed.rate_limit_info.status;
+  return typeof status === "string" ? status.trim() : null;
+}
+
 export function extractCliErrorMessage(raw: string): string | null {
   const parsedRecords = parseJsonRecordCandidates(raw);
   if (parsedRecords.length === 0) {
@@ -569,6 +585,21 @@ export function extractCliErrorMessage(raw: string): string | null {
 
   let errorText = "";
   for (const parsed of parsedRecords) {
+    // A rate_limit_event with status "denied" means the 7-day (or other
+    // periodic) cap was enforced. Surface it as a rate-limit string so the
+    // downstream classifier maps it to "rate_limit", not "billing".
+    // Statuses "allowed" and "allowed_warning" are soft notices — the request
+    // was served; don't record them as failures.
+    const rlStatus = extractClaudeCliRateLimitStatus(parsed);
+    if (rlStatus !== null) {
+      if (rlStatus === "denied") {
+        const info = isRecord(parsed.rate_limit_info) ? parsed.rate_limit_info : {};
+        const limitType = typeof info.rateLimitType === "string" ? info.rateLimitType : "periodic";
+        errorText = `Rate limit exceeded (${limitType} cap denied)`;
+      }
+      // "allowed" / "allowed_warning" — continue silently
+      continue;
+    }
     const next = collectExplicitCliErrorText(parsed);
     if (next) {
       errorText = next;
