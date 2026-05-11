@@ -358,7 +358,7 @@ describe("matrix message actions", () => {
       ),
       expect.objectContaining({ limit: 5 }),
     );
-    expect(String(doRequest.mock.calls[0]?.[1])).not.toContain("/m.room.message");
+    expect(String(mockCallArg(doRequest, 0, 1))).not.toContain("/m.room.message");
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$thread-root");
     expect(hydrateEvents).toHaveBeenCalledWith(
       "!room:example.org",
@@ -427,10 +427,10 @@ describe("matrix message actions", () => {
       limit: 5,
     });
 
-    expect(String(doRequest.mock.calls[0]?.[1])).toContain(
+    expect(String(mockCallArg(doRequest, 0, 1))).toContain(
       "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24thread-root/m.thread",
     );
-    expect(String(doRequest.mock.calls[0]?.[1])).not.toContain("/m.room.message");
+    expect(String(mockCallArg(doRequest, 0, 1))).not.toContain("/m.room.message");
     expect(hydrateEvents).toHaveBeenCalledWith(
       "!room:example.org",
       expect.arrayContaining([
@@ -500,7 +500,7 @@ describe("matrix message actions", () => {
       limit: 5,
     });
 
-    expect(String(doRequest.mock.calls[0]?.[1])).not.toContain("/m.room.message");
+    expect(String(mockCallArg(doRequest, 0, 1))).not.toContain("/m.room.message");
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$thread-root");
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$poll");
     expect(getRelations).toHaveBeenCalledWith(
