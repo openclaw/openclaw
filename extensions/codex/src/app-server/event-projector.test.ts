@@ -151,6 +151,18 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
+  if (!Array.isArray(calls)) {
+    throw new Error(`Expected ${label} mock calls`);
+  }
+  const call = calls[callIndex];
+  if (!Array.isArray(call) || !(argIndex in call)) {
+    throw new Error(`Expected ${label} mock argument`);
+  }
+  return call[argIndex];
+}
+
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {
     throw new Error(`Expected ${label}`);
