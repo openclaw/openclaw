@@ -159,6 +159,12 @@ export type SpawnSubagentContext = {
   workspaceDir?: string;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  /**
+   * Parent agent's runId. Plumbed into the subagent gateway spawn so the
+   * child's agent_start hook emits parentRunId, letting cross-process Opik
+   * traces join the parent's thread.
+   */
+  parentRunId?: string;
 };
 
 export type SpawnSubagentResult = {
@@ -1165,6 +1171,7 @@ export async function spawnSubagentDirect(
               bootstrapContextRunKind: "default" as const,
             }
           : {}),
+        ...(ctx.parentRunId ? { spawnedByRunId: ctx.parentRunId } : {}),
         ...publicSpawnedMetadata,
       },
       timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
@@ -1242,6 +1249,7 @@ export async function spawnSubagentDirect(
       childSessionKey,
       controllerSessionKey: requesterInternalKey,
       requesterSessionKey: requesterInternalKey,
+      requesterRunId: ctx.parentRunId,
       requesterOrigin,
       requesterDisplayKey,
       task,

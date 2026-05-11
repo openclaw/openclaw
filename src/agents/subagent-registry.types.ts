@@ -26,6 +26,12 @@ export type SubagentRunRecord = {
   childSessionKey: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
+  /**
+   * Parent agent's runId at spawn time. Plumbed into the completion
+   * delivery-back agent call as `spawnedByRunId` so the parent bot's
+   * re-invocation run rejoins the parent's Opik thread.
+   */
+  requesterRunId?: string;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;

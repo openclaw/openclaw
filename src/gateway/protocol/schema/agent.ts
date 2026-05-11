@@ -158,6 +158,12 @@ export const AgentParamsSchema = Type.Object(
     groupId: Type.Optional(Type.String()),
     groupChannel: Type.Optional(Type.String()),
     groupSpace: Type.Optional(Type.String()),
+    /**
+     * Parent agent's runId when this agent call is a cross-process subagent
+     * spawn. Threaded into the runner so the child's agent_start hook emits
+     * parentRunId, letting Opik traces join the parent's thread.
+     */
+    spawnedByRunId: Type.Optional(NonEmptyString),
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),

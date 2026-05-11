@@ -719,6 +719,7 @@ export function createSubagentRegistryLifecycleController(params: {
         childSessionKey: pendingPayload.childSessionKey,
         childRunId: pendingPayload.childRunId,
         requesterSessionKey: pendingPayload.requesterSessionKey,
+        requesterRunId: entry.requesterRunId,
         requesterOrigin,
         requesterDisplayKey: pendingPayload.requesterDisplayKey,
         task: pendingPayload.task,

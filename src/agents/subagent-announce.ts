@@ -224,6 +224,7 @@ export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
   childRunId: string;
   requesterSessionKey: string;
+  requesterRunId?: string;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
@@ -563,6 +564,7 @@ export async function runSubagentAnnounceFlow(params: {
       expectsCompletionMessage: expectsCompletionMessage,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,
+      requesterRunId: params.requesterRunId,
       signal: params.signal,
     });
     params.onDeliveryResult?.(delivery);

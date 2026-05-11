@@ -416,6 +416,7 @@ export function createOpenClawTools(
             workspaceDir: spawnWorkspaceDir,
             inheritedToolAllowlist: options?.inheritedToolAllowlist,
             inheritedToolDenylist: options?.inheritedToolDenylist,
+            parentRunId: options?.parentRunId,
           }),
         ]),
     createSessionsYieldTool({

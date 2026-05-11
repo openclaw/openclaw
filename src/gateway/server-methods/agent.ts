@@ -1477,6 +1477,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             groupChannel: resolvedGroupChannel,
             groupSpace: resolvedGroupSpace,
             spawnedBy: spawnedByValue,
+            spawnedByRunId: request.spawnedByRunId,
             timeout: request.timeout?.toString(),
             bestEffortDeliver,
             messageChannel: originMessageChannel,

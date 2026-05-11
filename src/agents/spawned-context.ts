@@ -19,6 +19,7 @@ export type SpawnedToolContext = {
   workspaceDir?: string;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
+  parentRunId?: string;
 };
 
 type NormalizedSpawnedRunMetadata = {

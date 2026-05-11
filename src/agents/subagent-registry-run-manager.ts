@@ -85,6 +85,7 @@ export type RegisterSubagentRunParams = {
   childSessionKey: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
+  requesterRunId?: string;
   requesterOrigin?: DeliveryContext;
   requesterDisplayKey: string;
   task: string;
@@ -397,6 +398,7 @@ export function createSubagentRunManager(params: {
       childSessionKey,
       controllerSessionKey,
       requesterSessionKey,
+      requesterRunId: registerParams.requesterRunId,
       requesterOrigin,
       requesterDisplayKey: registerParams.requesterDisplayKey,
       task: registerParams.task,

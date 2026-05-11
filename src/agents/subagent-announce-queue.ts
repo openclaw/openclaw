@@ -30,6 +30,12 @@ export type AnnounceQueueItem = {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  /**
+   * Parent agent's runId captured at subagent spawn time. When set, the
+   * delivery-back agent call carries `spawnedByRunId` so the parent bot's
+   * re-invocation run joins the parent's Opik thread.
+   */
+  requesterRunId?: string;
 };
 
 type AnnounceQueueSettings = {

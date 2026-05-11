@@ -93,6 +93,8 @@ export type AgentCommandOpts = {
   groupChannel?: SpawnedRunMetadata["groupChannel"];
   groupSpace?: SpawnedRunMetadata["groupSpace"];
   spawnedBy?: SpawnedRunMetadata["spawnedBy"];
+  /** Top-level parent's runId when this run is a subagent; flows into agent_start event. */
+  spawnedByRunId?: string;
   deliveryTargetMode?: ChannelOutboundTargetMode;
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;

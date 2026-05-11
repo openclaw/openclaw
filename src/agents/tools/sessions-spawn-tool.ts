@@ -259,6 +259,8 @@ export function createSessionsSpawnTool(
     config?: OpenClawConfig;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
+    /** Parent agent's runId. Threaded into the child gateway spawn so cross-process subagent Opik traces join the parent's thread. */
+    parentRunId?: string;
   } & SpawnedToolContext,
 ): AnyAgentTool {
   const acpAvailable = isAcpRuntimeSpawnAvailable({
@@ -509,6 +511,7 @@ export function createSessionsSpawnTool(
           workspaceDir: opts?.workspaceDir,
           inheritedToolAllowlist: opts?.inheritedToolAllowlist,
           inheritedToolDenylist: opts?.inheritedToolDenylist,
+          parentRunId: opts?.parentRunId,
         },
       );
 

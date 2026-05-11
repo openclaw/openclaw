@@ -19,6 +19,7 @@ import type {
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
   PluginHookAgentEndEvent,
+  PluginHookAgentStartEvent,
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforeAgentReplyEvent,
@@ -822,6 +823,13 @@ export function createHookRunner(
    * Allows plugins to intercept messages and return a synthetic reply,
    * short-circuiting the LLM agent. First handler to return { handled: true } wins.
    */
+  async function runAgentStart(
+    event: PluginHookAgentStartEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("agent_start", event, ctx);
+  }
+
   async function runBeforeAgentReply(
     event: PluginHookBeforeAgentReplyEvent,
     ctx: PluginHookAgentContext,
@@ -1479,6 +1487,7 @@ export function createHookRunner(
     runAgentTurnPrepare,
     runBeforePromptBuild,
     runBeforeAgentStart,
+    runAgentStart,
     runBeforeAgentReply,
     runModelCallStarted,
     runModelCallEnded,

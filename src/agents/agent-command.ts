@@ -1079,6 +1079,7 @@ async function agentCommandInternal(
               opts,
               runContext,
               spawnedBy,
+              spawnedByRunId: opts.spawnedByRunId,
               messageChannel,
               skillsSnapshot,
               resolvedVerboseLevel,
