@@ -1141,7 +1141,7 @@ ${completionInstruction}`;
     }
     if (commitmentPrompt) {
       return {
-        prompt: commitmentPrompt,
+        prompt: appendHeartbeatFileDirectives(commitmentPrompt, params.heartbeatFileContent),
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
