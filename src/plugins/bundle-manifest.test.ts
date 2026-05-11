@@ -15,7 +15,7 @@ import {
   mkdirSafeDir,
 } from "./test-helpers/fs-fixtures.js";
 
-type ExpectedBundlePluginManifest = Omit<
+type ReadonlyBundleManifestExpectation = Omit<
   BundlePluginManifest,
   "capabilities" | "hooks" | "settingsFiles" | "skills"
 > & {
@@ -134,7 +134,7 @@ type ExpectedBundlePluginManifest = Omit<
 function expectBundleManifest(params: {
   rootDir: string;
   bundleFormat: "codex" | "claude" | "cursor";
-  expected: ExpectedBundlePluginManifest;
+  expected: ReadonlyBundleManifestExpectation;
 }) {
   expect(detectBundleManifestFormat(params.rootDir)).toBe(params.bundleFormat);
   expect(expectLoadedManifest(params.rootDir, params.bundleFormat)).toEqual(params.expected);
