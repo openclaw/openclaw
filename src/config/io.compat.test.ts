@@ -6,7 +6,6 @@ import { normalizeCompatibilityConfigValues } from "../commands/doctor/legacy-co
 import { VERSION } from "../version.js";
 import { createConfigIO } from "./io.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
-import type { OpenClawConfig } from "./types.openclaw.js";
 
 async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));

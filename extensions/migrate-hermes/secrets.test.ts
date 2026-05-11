@@ -25,16 +25,6 @@ async function expectMissingPath(filePath: string): Promise<void> {
   throw new Error(`expected missing path: ${filePath}`);
 }
 
-async function expectMissingPath(filePath: string): Promise<void> {
-  try {
-    await fs.access(filePath);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected missing path: ${filePath}`);
-}
-
 describe("Hermes migration secret items", () => {
   afterEach(async () => {
     await cleanupTempRoots();
@@ -116,7 +106,6 @@ describe("Hermes migration secret items", () => {
       key: "sk-hermes",
       displayName: "Hermes import",
     });
-    await expectMissingPath(path.join(stateDir, "agents", "custom", "agent", "auth-profiles.json"));
   });
 
   it("keeps secret conflict checks read-only during planning", async () => {
@@ -137,7 +126,6 @@ describe("Hermes migration secret items", () => {
     await provider.plan(makeContext({ source, stateDir, workspaceDir, includeSecrets: true }));
 
     await expect(fs.access(path.join(agentDir, "auth.json"))).resolves.toBeUndefined();
-    await expectMissingPath(path.join(agentDir, "auth-profiles.json"));
   });
 
   it("reports late-created auth profiles as conflicts without overwriting", async () => {

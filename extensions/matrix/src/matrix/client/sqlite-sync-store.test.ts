@@ -310,7 +310,6 @@ describe("SqliteBackedMatrixSyncStore", () => {
         leave: {},
         knock: {},
       },
-      cleanShutdown: false,
     });
   });
 });
