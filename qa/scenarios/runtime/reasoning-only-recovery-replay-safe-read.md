@@ -4,6 +4,7 @@
 id: reasoning-only-recovery-replay-safe-read
 title: Reasoning-only recovery after replay-safe read
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.reasoning-only-recovery

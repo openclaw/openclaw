@@ -4,6 +4,7 @@
 id: empty-response-retry-budget-exhausted
 title: Empty-response retry budget exhausted
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.empty-response-recovery

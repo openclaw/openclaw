@@ -4,6 +4,7 @@
 id: thread-follow-up
 title: Threaded follow-up
 surface: thread
+runtimeParityTier: live-only
 coverage:
   primary:
     - channels.threads

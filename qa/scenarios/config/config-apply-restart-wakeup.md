@@ -4,6 +4,7 @@
 id: config-apply-restart-wakeup
 title: Config apply restart wake-up
 surface: config
+runtimeParityTier: live-only
 coverage:
   primary:
     - config.restart-apply

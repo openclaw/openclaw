@@ -4,6 +4,7 @@
 id: empty-response-recovery-replay-safe-read
 title: Empty-response recovery after replay-safe read
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.empty-response-recovery

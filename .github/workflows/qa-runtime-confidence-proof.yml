@@ -1,0 +1,310 @@
+name: QA Runtime Confidence Proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch, tag, or full SHA to validate
+        required: true
+        type: string
+      expected_sha:
+        description: Optional full SHA that target_ref must resolve to
+        required: false
+        default: ""
+        type: string
+      run_soak:
+        description: Run the optional mock soak-100 lane
+        required: false
+        default: false
+        type: boolean
+      run_live:
+        description: Run live-frontier OAuth/API-key lanes when secrets are available
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: qa-runtime-confidence-proof-${{ inputs.expected_sha || inputs.target_ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.15.0"
+  PNPM_VERSION: "11.0.8"
+  OPENCLAW_BUILD_PRIVATE_QA: "1"
+  OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+  OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.5' }}
+
+jobs:
+  static_unit:
+    name: Static and targeted QA unit proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout target
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 1
+
+      - name: Validate expected SHA
+        if: inputs.expected_sha != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          expected="${{ inputs.expected_sha }}"
+          if [[ "${actual,,}" != "${expected,,}" ]]; then
+            echo "target_ref resolved to ${actual}; expected ${expected}" >&2
+            exit 1
+          fi
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+
+      - name: Typecheck test surfaces
+        run: pnpm check:test-types
+
+      - name: Lint
+        run: pnpm lint --threads=8
+
+      - name: Targeted QA-lab tests
+        env:
+          OPENCLAW_VITEST_MAX_WORKERS: "1"
+        run: |
+          pnpm test \
+            extensions/qa-lab/src/providers/mock-openai/server.test.ts \
+            extensions/qa-lab/src/runtime-tool-fixture.test.ts \
+            extensions/qa-lab/src/runtime-parity.test.ts \
+            extensions/qa-lab/src/runtime-suite.test.ts \
+            extensions/qa-lab/src/suite.test.ts \
+            extensions/qa-lab/src/cli.runtime.test.ts \
+            extensions/qa-lab/src/tool-coverage-report.test.ts \
+            extensions/qa-lab/src/token-efficiency-report.test.ts \
+            extensions/qa-lab/src/harness-parity.test.ts \
+            extensions/qa-lab/src/jsonl-replay.test.ts \
+            extensions/qa-lab/src/codex-plugin-lifecycle.test.ts \
+            extensions/qa-lab/src/scenario-catalog.test.ts \
+            extensions/qa-lab/src/confidence-report.test.ts \
+            extensions/codex/src/app-server/dynamic-tools.test.ts
+
+  mock_confidence:
+    name: Mock confidence proof bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout target
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 1
+
+      - name: Validate expected SHA
+        if: inputs.expected_sha != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          expected="${{ inputs.expected_sha }}"
+          if [[ "${actual,,}" != "${expected,,}" ]]; then
+            echo "target_ref resolved to ${actual}; expected ${expected}" >&2
+            exit 1
+          fi
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+
+      - name: Run required mock proof lanes
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".artifacts/qa-e2e"
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --runtime-suite tool-defaults \
+            --codex-tool-loading direct \
+            --concurrency 1 \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --runtime-pair pi,codex \
+            --output-dir "${root}/tool-defaults-direct"
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --runtime-suite openclaw-dynamic-tools \
+            --codex-tool-loading direct \
+            --concurrency 1 \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --runtime-pair pi,codex \
+            --output-dir "${root}/openclaw-dynamic-tools-direct"
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --runtime-suite tool-defaults \
+            --codex-tool-loading searchable \
+            --allow-failures \
+            --concurrency 1 \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --runtime-pair pi,codex \
+            --output-dir "${root}/tool-defaults-searchable"
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --runtime-suite first-hour-20 \
+            --codex-tool-loading direct \
+            --concurrency 1 \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --runtime-pair pi,codex \
+            --output-dir "${root}/first-hour-20-direct"
+          pnpm openclaw qa parity-report \
+            --repo-root . \
+            --runtime-axis \
+            --token-efficiency \
+            --summary "${root}/first-hour-20-direct/qa-suite-summary.json" \
+            --output-dir "${root}/first-hour-20-direct-report"
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --runtime-suite fault-injection-mock \
+            --codex-tool-loading direct \
+            --concurrency 1 \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --runtime-pair pi,codex \
+            --output-dir "${root}/fault-injection-mock"
+          pnpm openclaw qa jsonl-replay \
+            --provider-mode mock-openai \
+            --runtime-pair pi,codex \
+            --output-dir "${root}/jsonl-expanded"
+          pnpm openclaw qa confidence-self-test \
+            --output-dir "${root}/confidence-self-test"
+
+      - name: Run optional soak-100 lane
+        if: inputs.run_soak
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".artifacts/qa-e2e"
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --runtime-suite soak-100 \
+            --codex-tool-loading direct \
+            --concurrency 1 \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --runtime-pair pi,codex \
+            --output-dir "${root}/soak-100"
+
+      - name: Build strict confidence report
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm openclaw qa confidence-report \
+            --manifest extensions/qa-lab/confidence-profiles/codex-100.json \
+            --artifact-root .artifacts/qa-e2e \
+            --output-dir .artifacts/qa-e2e/confidence-report \
+            --strict-zero-unknowns
+
+      - name: Upload confidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qa-runtime-confidence-mock-${{ inputs.expected_sha || github.run_id }}
+          path: .artifacts/qa-e2e/**
+          if-no-files-found: warn
+
+  live_confidence:
+    name: Live confidence proof lanes
+    if: inputs.run_live
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - name: Checkout target
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 1
+
+      - name: Validate expected SHA
+        if: inputs.expected_sha != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          expected="${{ inputs.expected_sha }}"
+          if [[ "${actual,,}" != "${expected,,}" ]]; then
+            echo "target_ref resolved to ${actual}; expected ${expected}" >&2
+            exit 1
+          fi
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+
+      - name: Require live credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENAI_API_KEY// }" ]]; then
+            echo "OPENAI_API_KEY secret is required for live confidence lanes." >&2
+            exit 1
+          fi
+
+      - name: Run live proof lanes
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".artifacts/qa-e2e-live"
+          pnpm openclaw qa suite \
+            --provider-mode live-frontier \
+            --runtime-suite codex-native-live \
+            --codex-tool-loading direct \
+            --concurrency 1 \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --runtime-pair pi,codex \
+            --output-dir "${root}/codex-native-live"
+          pnpm openclaw qa suite \
+            --provider-mode live-frontier \
+            --runtime-suite first-hour-live \
+            --codex-tool-loading direct \
+            --concurrency 1 \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --runtime-pair pi,codex \
+            --output-dir "${root}/first-hour-live"
+          pnpm openclaw qa parity-report \
+            --repo-root . \
+            --runtime-axis \
+            --token-efficiency \
+            --summary "${root}/codex-native-live/qa-suite-summary.json" \
+            --output-dir "${root}/live-token-efficiency"
+
+      - name: Upload live confidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qa-runtime-confidence-live-${{ inputs.expected_sha || github.run_id }}
+          path: .artifacts/qa-e2e-live/**
+          if-no-files-found: warn

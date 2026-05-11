@@ -5,6 +5,10 @@ export type QaRuntimeSuiteName =
   | "first-hour-20"
   | "tool-defaults"
   | "openclaw-dynamic-tools"
+  | "codex-native-live"
+  | "fault-injection-mock"
+  | "fault-injection-live"
+  | "first-hour-live"
   | "soak-100";
 
 export const QA_RUNTIME_SUITE_NAMES: readonly QaRuntimeSuiteName[] = [
@@ -12,6 +16,10 @@ export const QA_RUNTIME_SUITE_NAMES: readonly QaRuntimeSuiteName[] = [
   "first-hour-20",
   "tool-defaults",
   "openclaw-dynamic-tools",
+  "codex-native-live",
+  "fault-injection-mock",
+  "fault-injection-live",
+  "first-hour-live",
   "soak-100",
 ] as const;
 
@@ -65,10 +73,61 @@ export const QA_RUNTIME_TOOL_DEFAULT_SCENARIO_IDS = [
 
 export const QA_RUNTIME_OPENCLAW_DYNAMIC_TOOL_SCENARIO_IDS = [
   "runtime-tool-image-generate",
+  "runtime-tool-memory-add",
+  "runtime-tool-memory-recall",
   "runtime-tool-session-status",
   "runtime-tool-sessions-spawn",
+  "runtime-tool-skill-invocation",
   "runtime-tool-web-fetch",
   "runtime-tool-web-search",
+] as const;
+
+export const QA_RUNTIME_CODEX_NATIVE_LIVE_SCENARIO_IDS = [
+  "streaming-final-integrity",
+  "approval-turn-tool-followthrough",
+  "instruction-followthrough-repo-contract",
+  "compaction-retry-mutating-tool",
+  "runtime-tool-fs-read",
+  "runtime-tool-fs-write",
+  "runtime-tool-edit",
+  "runtime-tool-apply-patch",
+  "runtime-tool-bash",
+  "runtime-tool-exec",
+  "runtime-tool-grep",
+] as const;
+
+export const QA_RUNTIME_FAULT_INJECTION_MOCK_SCENARIO_IDS = [
+  "empty-response-recovery-replay-safe-read",
+  "empty-response-retry-budget-exhausted",
+  "reasoning-only-recovery-replay-safe-read",
+  "reasoning-only-no-auto-retry-after-write",
+  "codex-plugin-install-race",
+] as const;
+
+export const QA_RUNTIME_FAULT_INJECTION_LIVE_SCENARIO_IDS = [
+  "gateway-restart-inflight-run",
+  "config-apply-restart-wakeup",
+  "cron-one-minute-ping",
+  "cron-single-run-no-duplicate",
+  "cron-natural-fire-no-duplicate",
+  "plugin-lifecycle-hot-reload",
+  "mcp-plugin-tools-call",
+  "memory-failure-fallback",
+  "qa-channel-reconnect-dedupe",
+  "thread-follow-up",
+  "group-message-tool-unavailable-fallback",
+] as const;
+
+export const QA_RUNTIME_FIRST_HOUR_LIVE_SCENARIO_IDS = [
+  ...QA_RUNTIME_FIRST_HOUR_SCENARIO_IDS,
+  "streaming-final-integrity",
+  "gateway-restart-inflight-run",
+  "config-apply-restart-wakeup",
+  "cron-one-minute-ping",
+  "plugin-lifecycle-hot-reload",
+  "mcp-plugin-tools-call",
+  "memory-failure-fallback",
+  "thread-follow-up",
 ] as const;
 
 export const QA_RUNTIME_SOAK_100_SCENARIO_IDS = ["runtime-soak-100-turn"] as const;
@@ -78,6 +137,10 @@ const RUNTIME_SUITE_SCENARIO_IDS: Record<QaRuntimeSuiteName, readonly string[]> 
   "first-hour-20": QA_RUNTIME_FIRST_HOUR_20_SCENARIO_IDS,
   "tool-defaults": QA_RUNTIME_TOOL_DEFAULT_SCENARIO_IDS,
   "openclaw-dynamic-tools": QA_RUNTIME_OPENCLAW_DYNAMIC_TOOL_SCENARIO_IDS,
+  "codex-native-live": QA_RUNTIME_CODEX_NATIVE_LIVE_SCENARIO_IDS,
+  "fault-injection-mock": QA_RUNTIME_FAULT_INJECTION_MOCK_SCENARIO_IDS,
+  "fault-injection-live": QA_RUNTIME_FAULT_INJECTION_LIVE_SCENARIO_IDS,
+  "first-hour-live": QA_RUNTIME_FIRST_HOUR_LIVE_SCENARIO_IDS,
   "soak-100": QA_RUNTIME_SOAK_100_SCENARIO_IDS,
 };
 
@@ -85,7 +148,11 @@ const RUNTIME_SUITE_ALLOWED_TIERS: Record<QaRuntimeSuiteName, ReadonlySet<QaRunt
   "first-hour": new Set(["standard"]),
   "first-hour-20": new Set(["standard"]),
   "tool-defaults": new Set(["standard", "optional"]),
-  "openclaw-dynamic-tools": new Set(["standard"]),
+  "openclaw-dynamic-tools": new Set(["standard", "optional"]),
+  "codex-native-live": new Set(["standard", "live-only"]),
+  "fault-injection-mock": new Set(["standard"]),
+  "fault-injection-live": new Set(["live-only"]),
+  "first-hour-live": new Set(["standard", "live-only"]),
   "soak-100": new Set(["soak"]),
 };
 

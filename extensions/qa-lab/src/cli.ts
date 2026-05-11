@@ -91,6 +91,22 @@ async function runQaHarnessParity(opts: {
   await runtime.runQaHarnessParityCommand(opts);
 }
 
+async function runQaConfidenceReport(opts: {
+  repoRoot?: string;
+  manifest: string;
+  artifactRoot?: string;
+  outputDir?: string;
+  strictZeroUnknowns?: boolean;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaConfidenceReportCommand(opts);
+}
+
+async function runQaConfidenceSelfTest(opts: { repoRoot?: string; outputDir?: string }) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaConfidenceSelfTestCommand(opts);
+}
+
 async function runQaCoverageReport(opts: { repoRoot?: string; output?: string; json?: boolean }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaCoverageReportCommand(opts);
@@ -299,7 +315,7 @@ export function registerQaLabCli(program: Command) {
     .option("--parity-pack <name>", 'Preset scenario pack; currently only "agentic" is supported')
     .option(
       "--runtime-suite <name>",
-      "Runtime parity suite: first-hour, first-hour-20, tool-defaults, openclaw-dynamic-tools, or soak-100",
+      "Runtime parity suite: first-hour, first-hour-20, tool-defaults, openclaw-dynamic-tools, codex-native-live, fault-injection-mock, fault-injection-live, first-hour-live, or soak-100",
     )
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option(
@@ -434,7 +450,7 @@ export function registerQaLabCli(program: Command) {
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option(
       "--runtime-suite <name>",
-      "Runtime parity suite: first-hour, first-hour-20, tool-defaults, openclaw-dynamic-tools, or soak-100",
+      "Runtime parity suite: first-hour, first-hour-20, tool-defaults, openclaw-dynamic-tools, codex-native-live, fault-injection-mock, fault-injection-live, first-hour-live, or soak-100",
     )
     .option("--provider-mode <mode>", formatQaProviderModeHelp(), DEFAULT_QA_LIVE_PROVIDER_MODE)
     .option("--model <ref>", "Primary provider/model ref")
@@ -476,6 +492,37 @@ export function registerQaLabCli(program: Command) {
         });
       },
     );
+
+  qa.command("confidence-report")
+    .description("Classify QA proof artifacts into a zero-unknown confidence report")
+    .requiredOption("--manifest <path>", "Confidence profile manifest JSON")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--artifact-root <path>", "Root directory for relative artifact paths", ".")
+    .option("--output-dir <path>", "Artifact directory for the confidence report")
+    .option(
+      "--strict-zero-unknowns",
+      "Fail unless every lane passes or has an explicit non-unknown verdict",
+      false,
+    )
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        manifest: string;
+        artifactRoot?: string;
+        outputDir?: string;
+        strictZeroUnknowns?: boolean;
+      }) => {
+        await runQaConfidenceReport(opts);
+      },
+    );
+
+  qa.command("confidence-self-test")
+    .description("Write seeded negative-control canaries proving the confidence gate detects drift")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Artifact directory for the confidence self-test")
+    .action(async (opts: { repoRoot?: string; outputDir?: string }) => {
+      await runQaConfidenceSelfTest(opts);
+    });
 
   qa.command("coverage")
     .description("Print the markdown scenario coverage inventory")

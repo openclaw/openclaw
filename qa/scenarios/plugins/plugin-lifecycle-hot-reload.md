@@ -4,6 +4,7 @@
 id: plugin-lifecycle-hot-reload
 title: Plugin lifecycle hot reload
 surface: plugins
+runtimeParityTier: live-only
 coverage:
   primary:
     - plugins.lifecycle

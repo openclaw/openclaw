@@ -18,12 +18,50 @@ from `extensions/qa-lab/src/runtime-suite.ts`:
 - `tool-defaults`: the 20 runtime tool fixtures under
   `qa/scenarios/runtime/tools/`, split into required default tools and
   optional/plugin-dependent tools by the tool coverage report.
+- `openclaw-dynamic-tools`: the OpenClaw-owned dynamic integration tool subset
+  used as the hard gate for Codex dynamic tool parity.
+- `codex-native-live`: live/OAuth proof for Codex-owned workspace behaviors
+  such as file reads/writes, edits, patches, exec, approval followthrough,
+  compaction retry, and final-message streaming integrity.
+- `fault-injection-mock`: mock-only retry/recovery rows for empty responses,
+  reasoning-only responses, and deterministic Codex plugin install ordering.
+- `fault-injection-live`: live gateway/config/cron/plugin/MCP/memory/channel
+  recovery rows that require a real gateway process.
+- `first-hour-live`: a live first-hour capability slice combining the standard
+  first-hour rows with gateway restart, config restart, cron, plugin hot reload,
+  MCP, memory fallback, and threaded follow-up coverage.
 - `soak-100`: an optional 100-turn same-session soak for Testbox, scheduled, or
   manual runs only.
 
 Every suite scenario declares `runtimeParityTier` in its `qa-scenario`
 metadata. The resolver rejects missing or invalid tier membership so the gate
 cannot silently drift.
+
+## Confidence Gate
+
+`qa confidence-report --manifest <profile.json> --artifact-root <dir>
+--strict-zero-unknowns` classifies an uploaded proof bundle. The default profile
+is `extensions/qa-lab/confidence-profiles/codex-100.json`.
+
+Each lane must either pass or carry an explicit verdict:
+
+- `pass`
+- `product-bug`
+- `qa-harness-bug`
+- `fixture-bug`
+- `optional-gap`
+- `mock-limitation`
+- `environment-blocked`
+
+Strict mode fails on missing or failing artifacts that lack a verdict. This is
+the "100% confidence" rule: zero unknowns in the defined matrix, not a claim
+that every possible OpenClaw behavior was exhaustively proven.
+
+`qa confidence-self-test` writes seeded negative-control canaries for prompt
+drift, tool description/schema drift, tool-call drops, tool-result mismatch,
+failure-mode drift, token-efficiency regression, and JSONL replay ordering
+drift. These canaries prove the gate can catch issues without filing fake
+product bugs.
 
 ## Harness Parity
 

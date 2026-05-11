@@ -4,6 +4,7 @@
 id: reasoning-only-no-auto-retry-after-write
 title: Reasoning-only no-auto-retry after write
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.reasoning-only-recovery

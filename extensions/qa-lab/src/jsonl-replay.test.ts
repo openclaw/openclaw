@@ -154,8 +154,8 @@ describe("jsonl replay", () => {
       { runCell: createMockJsonlReplayCellRunner() },
     );
 
-    expect(result.transcripts).toHaveLength(3);
-    expect(result.transcripts.map((entry) => entry.userTurnCount)).toEqual([3, 2, 2]);
+    expect(result.transcripts).toHaveLength(7);
+    expect(result.transcripts.map((entry) => entry.userTurnCount)).toEqual([2, 2, 3, 2, 2, 2, 2]);
     expect(result.transcripts.every((entry) => entry.firstDriftAtTurn === undefined)).toBe(true);
     expect(
       renderJsonlReplayMarkdownReport({

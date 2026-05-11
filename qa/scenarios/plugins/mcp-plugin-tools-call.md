@@ -4,6 +4,7 @@
 id: mcp-plugin-tools-call
 title: MCP plugin-tools call
 surface: mcp
+runtimeParityTier: live-only
 coverage:
   primary:
     - plugins.mcp-tools

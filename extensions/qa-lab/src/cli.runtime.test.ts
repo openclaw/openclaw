@@ -77,6 +77,8 @@ import {
   runQaCharacterEvalCommand,
   runQaCoverageReportCommand,
   runQaHarnessParityCommand,
+  runQaConfidenceReportCommand,
+  runQaConfidenceSelfTestCommand,
   runQaJsonlReplayCommand,
   runQaManualLaneCommand,
   runQaParityReportCommand,
@@ -342,6 +344,70 @@ describe("qa cli runtime", () => {
         runtimePair: ["pi", "codex"],
       }),
     );
+  });
+
+  it("runs confidence self-test artifacts", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-confidence-self-test-"));
+    const outputDir = "out";
+    try {
+      await runQaConfidenceSelfTestCommand({
+        repoRoot,
+        outputDir,
+      });
+
+      await expect(
+        fs.stat(path.join(repoRoot, outputDir, "qa-confidence-self-test-summary.json")),
+      ).resolves.toBeTruthy();
+      expectWriteContains(stdoutWrite, "QA confidence self-test summary:");
+    } finally {
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("runs strict confidence report from a manifest", async () => {
+    const confidenceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-confidence-report-"));
+    const manifestPath = path.join(confidenceRoot, "manifest.json");
+    const artifactRoot = path.join(confidenceRoot, "artifacts");
+    const outputDir = "out";
+    await fs.mkdir(path.join(artifactRoot, "suite"), { recursive: true });
+    await fs.writeFile(
+      path.join(artifactRoot, "suite", "qa-suite-summary.json"),
+      JSON.stringify({ counts: { total: 1, passed: 1, failed: 0 }, scenarios: [] }),
+      "utf8",
+    );
+    await fs.writeFile(
+      manifestPath,
+      JSON.stringify({
+        version: 1,
+        profile: "codex-100",
+        lanes: [
+          {
+            id: "suite",
+            title: "Suite",
+            kind: "qa-suite-summary",
+            artifact: "suite/qa-suite-summary.json",
+            required: true,
+          },
+        ],
+      }),
+      "utf8",
+    );
+    try {
+      await runQaConfidenceReportCommand({
+        repoRoot: confidenceRoot,
+        manifest: manifestPath,
+        artifactRoot,
+        outputDir,
+        strictZeroUnknowns: true,
+      });
+
+      await expect(
+        fs.stat(path.join(confidenceRoot, outputDir, "qa-confidence-summary.json")),
+      ).resolves.toBeTruthy();
+      expectWriteContains(stdoutWrite, "QA confidence verdict: pass");
+    } finally {
+      await fs.rm(confidenceRoot, { recursive: true, force: true });
+    }
   });
 
   it("runs harness parity variants through forced runtime cells", async () => {

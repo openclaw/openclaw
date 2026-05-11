@@ -4,6 +4,7 @@
 id: codex-plugin-install-race
 title: Codex plugin install race
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.codex-plugin.lifecycle

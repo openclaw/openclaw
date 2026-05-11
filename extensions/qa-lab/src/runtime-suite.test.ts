@@ -3,6 +3,10 @@ import {
   assertQaRuntimeSuiteScenarioMembership,
   QA_RUNTIME_FIRST_HOUR_20_SCENARIO_IDS,
   QA_RUNTIME_FIRST_HOUR_SCENARIO_IDS,
+  QA_RUNTIME_CODEX_NATIVE_LIVE_SCENARIO_IDS,
+  QA_RUNTIME_FAULT_INJECTION_LIVE_SCENARIO_IDS,
+  QA_RUNTIME_FAULT_INJECTION_MOCK_SCENARIO_IDS,
+  QA_RUNTIME_FIRST_HOUR_LIVE_SCENARIO_IDS,
   QA_RUNTIME_OPENCLAW_DYNAMIC_TOOL_SCENARIO_IDS,
   QA_RUNTIME_SOAK_100_SCENARIO_IDS,
   QA_RUNTIME_TOOL_DEFAULT_SCENARIO_IDS,
@@ -23,6 +27,18 @@ describe("runtime suite resolver", () => {
     ]);
     expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "openclaw-dynamic-tools" })).toEqual([
       ...QA_RUNTIME_OPENCLAW_DYNAMIC_TOOL_SCENARIO_IDS,
+    ]);
+    expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "codex-native-live" })).toEqual([
+      ...QA_RUNTIME_CODEX_NATIVE_LIVE_SCENARIO_IDS,
+    ]);
+    expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "fault-injection-mock" })).toEqual([
+      ...QA_RUNTIME_FAULT_INJECTION_MOCK_SCENARIO_IDS,
+    ]);
+    expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "fault-injection-live" })).toEqual([
+      ...QA_RUNTIME_FAULT_INJECTION_LIVE_SCENARIO_IDS,
+    ]);
+    expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "first-hour-live" })).toEqual([
+      ...QA_RUNTIME_FIRST_HOUR_LIVE_SCENARIO_IDS,
     ]);
     expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "soak-100" })).toEqual([
       ...QA_RUNTIME_SOAK_100_SCENARIO_IDS,
@@ -46,6 +62,10 @@ describe("runtime suite resolver", () => {
       "first-hour-20",
       "tool-defaults",
       "openclaw-dynamic-tools",
+      "codex-native-live",
+      "fault-injection-mock",
+      "fault-injection-live",
+      "first-hour-live",
       "soak-100",
     ]) {
       expect(() =>
