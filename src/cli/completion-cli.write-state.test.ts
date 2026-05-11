@@ -94,7 +94,7 @@ describe("completion-cli write-state", () => {
     await program.parseAsync(["completion", "--write-state"], { from: "user" });
 
     const cacheDir = path.join(stateDir, "completions");
-    expect((await fs.readdir(cacheDir)).sort()).toEqual([
+    expect((await fs.readdir(cacheDir)).toSorted()).toEqual([
       "openclaw.bash",
       "openclaw.fish",
       "openclaw.ps1",
@@ -137,7 +137,7 @@ describe("completion-cli write-state", () => {
         [program, "qa", process.argv, { purpose: "completion" }],
       ]);
       expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
-      expect((await fs.readdir(path.join(stateDir, "completions"))).sort()).toEqual([
+      expect((await fs.readdir(path.join(stateDir, "completions"))).toSorted()).toEqual([
         "openclaw.bash",
         "openclaw.fish",
         "openclaw.ps1",
