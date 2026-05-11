@@ -214,6 +214,7 @@ describe("cron service ops seam coverage", () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-04-09T08:00:00.000Z");
     const createdAtMs = now - 86_400_000;
+    const persistedUpdatedAtMs = Date.now();
     const nextRunAtMs = Date.parse("2026-04-10T09:00:00.000Z");
     const jobId = "future-sidecar-repair";
     const statePath = storePath.replace(/\.json$/, "-state.json");
@@ -276,7 +277,7 @@ describe("cron service ops seam coverage", () => {
 
       const persisted = await loadCronStore(storePath);
 
-      expect(persisted.jobs[0]?.updatedAtMs).toBe(createdAtMs);
+      expect(persisted.jobs[0]?.updatedAtMs).toBe(persistedUpdatedAtMs);
       expect(persisted.jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
       await expect(fs.stat(storePath)).rejects.toThrow();
     } finally {
