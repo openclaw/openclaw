@@ -141,8 +141,31 @@ describe("message action threading helpers", () => {
     expect(resolved).toBe("999");
   });
 
+  it.each([
+    { name: "threadId null", params: { threadId: null } },
+    { name: "topLevel true", params: { topLevel: true } },
+  ] as const)("skips auto-threading for $name", (testCase) => {
+    const resolveAutoThreadId = vi.fn(() => "42");
+    const actionParams: Record<string, unknown> = {
+      channel: "forum",
+      target: "forum:123",
+      message: "hi",
+      ...testCase.params,
+    };
+
+    const resolved = resolveAndApplyOutboundThreadId(actionParams, {
+      cfg: forumConfig,
+      to: "forum:123",
+      toolContext: defaultForumToolContext,
+      resolveAutoThreadId,
+    });
+
+    expect(resolved).toBeUndefined();
+    expect(resolveAutoThreadId).not.toHaveBeenCalled();
+  });
+
   it("passes explicit replyTo into auto-thread resolution", () => {
-    const resolveAutoThreadId = vi.fn(() => "thread-777");
+    const resolveAutoThreadId = vi.fn((_params: { replyToId?: string | null }) => "thread-777");
     const actionParams: Record<string, unknown> = {
       channel: "forum",
       target: "forum:123",
@@ -157,11 +180,8 @@ describe("message action threading helpers", () => {
       resolveAutoThreadId,
     });
 
-    expect(resolveAutoThreadId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyToId: "777",
-      }),
-    );
+    expect(resolveAutoThreadId).toHaveBeenCalledOnce();
+    expect(resolveAutoThreadId.mock.calls[0]?.[0]?.replyToId).toBe("777");
     expect(resolved).toBe("thread-777");
     expect(actionParams.threadId).toBe("thread-777");
   });
@@ -184,6 +204,27 @@ describe("message action threading helpers", () => {
 
     expect(resolved).toBe("msg-42");
     expect(actionParams.replyTo).toBe("msg-42");
+  });
+
+  it("skips inherited reply ids for explicit top-level sends", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "workspace",
+      target: "channel:C123",
+      message: "hi",
+      topLevel: true,
+    };
+
+    const resolved = resolveAndApplyOutboundReplyToId(actionParams, {
+      channel: "workspace",
+      toolContext: {
+        currentChannelId: "channel:C123",
+        currentMessageId: "msg-42",
+        replyToMode: "all",
+      },
+    });
+
+    expect(resolved).toBeUndefined();
+    expect(actionParams.replyTo).toBeUndefined();
   });
 
   it("skips inherited reply threading for batched mode", () => {

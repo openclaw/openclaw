@@ -143,7 +143,14 @@ async function refreshSessionOptions(state: AppViewState) {
     includeGlobal: true,
     includeUnknown: true,
     showArchived: state.sessionsShowArchived,
+    agentId: resolveSessionOptionsAgentId(state),
   });
+}
+
+function resolveSessionOptionsAgentId(state: AppViewState): string {
+  return (
+    parseAgentSessionKey(state.sessionKey)?.agentId ?? normalizeAgentId(state.agentsList?.defaultId)
+  );
 }
 
 async function refreshVisibleToolsEffectiveForCurrentSessionLazy(state: AppViewState) {
@@ -593,9 +600,15 @@ function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): 
     return state.sessionKey;
   }
   const rows = state.sessionsResult?.sessions ?? [];
-  const row = rows
-    .filter((entry) => isSessionKeyTiedToAgent(entry.key, normalizedAgentId, defaultAgentId))
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
+  let row: (typeof rows)[number] | undefined;
+  for (const entry of rows) {
+    if (!isSessionKeyTiedToAgent(entry.key, normalizedAgentId, defaultAgentId)) {
+      continue;
+    }
+    if (!row || (entry.updatedAt ?? 0) > (row.updatedAt ?? 0)) {
+      row = entry;
+    }
+  }
   return row?.key ?? buildAgentMainSessionKey({ agentId: normalizedAgentId });
 }
 

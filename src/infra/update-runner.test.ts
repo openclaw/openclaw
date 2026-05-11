@@ -12,7 +12,7 @@ import { runGatewayUpdate } from "./update-runner.js";
 
 type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
 type CommandResult = { stdout: string; stderr: string; code: number | null };
-const MATRIX_HELPER_API = bundledDistPluginFile("matrix", "helper-api.js");
+const TELEGRAM_RUNTIME_API = bundledDistPluginFile("telegram", "runtime-api.js");
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-update-" });
 
 function toCommandResult(response?: CommandResponse): CommandResult {
@@ -345,7 +345,7 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toBe("fetch-failed");
     expect(calls).toContain(fetchCommand);
-    expect(calls.slice(calls.indexOf(fetchCommand) + 1)).toEqual([]);
+    expect(calls.slice(calls.indexOf(fetchCommand) + 1)).toStrictEqual([]);
   });
 
   it("aborts rebase on failure", async () => {
@@ -381,8 +381,8 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("deps-install-failed");
-    expect(calls.some((call) => call === "pnpm build")).toBe(false);
-    expect(calls.some((call) => call === "pnpm ui:build")).toBe(false);
+    expect(calls).not.toContain("pnpm build");
+    expect(calls).not.toContain("pnpm ui:build");
   });
 
   it("returns error and stops early when build fails", async () => {
@@ -398,8 +398,8 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("build-failed");
-    expect(calls.some((call) => call === "pnpm install")).toBe(true);
-    expect(calls.some((call) => call === "pnpm ui:build")).toBe(false);
+    expect(calls).toContain("pnpm install");
+    expect(calls).not.toContain("pnpm ui:build");
   });
 
   it("uses stable tag when beta tag is older than release", async () => {
@@ -438,7 +438,7 @@ describe("runGatewayUpdate", () => {
         if (key === "pnpm --version") {
           const envPath = options?.env?.PATH ?? options?.env?.Path ?? "";
           if (envPath.includes("openclaw-update-pnpm-")) {
-            return { stdout: "10.0.0" };
+            return { stdout: "11.0.0" };
           }
           throw new Error("spawn pnpm ENOENT");
         }
@@ -448,7 +448,7 @@ describe("runGatewayUpdate", () => {
         if (key === "npm --version") {
           return { stdout: "10.0.0" };
         }
-        if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@10")) {
+        if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@11")) {
           return { stdout: "added 1 package" };
         }
         return undefined;
@@ -459,7 +459,8 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("ok");
     expect(calls).toContain("pnpm --version");
-    expect(calls.some((call) => call.startsWith("npm install --prefix "))).toBe(true);
+    const npmPrefixInstallCalls = calls.filter((call) => call.startsWith("npm install --prefix "));
+    expect(npmPrefixInstallCalls.length).toBeGreaterThan(0);
     expect(calls).toContain("npm --version");
     expect(calls).toContain("pnpm install");
     expect(calls).not.toContain("npm install --no-package-lock --legacy-peer-deps");
@@ -549,7 +550,7 @@ describe("runGatewayUpdate", () => {
         const envPath = options?.env?.PATH ?? options?.env?.Path ?? "";
         if (envPath.includes("openclaw-update-pnpm-")) {
           pnpmEnvPaths.push(envPath);
-          return { stdout: "10.0.0", stderr: "", code: 0 };
+          return { stdout: "11.0.0", stderr: "", code: 0 };
         }
         throw new Error("spawn pnpm ENOENT");
       }
@@ -559,7 +560,7 @@ describe("runGatewayUpdate", () => {
       if (key === "npm --version") {
         return { stdout: "10.0.0", stderr: "", code: 0 };
       }
-      if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@10")) {
+      if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@11")) {
         return { stdout: "added 1 package", stderr: "", code: 0 };
       }
       if (
@@ -616,7 +617,7 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain("pnpm build");
     expect(calls).not.toContain("pnpm lint");
     expect(calls).toContain("pnpm ui:build");
-    expect(pnpmEnvPaths.some((value) => value.includes("openclaw-update-pnpm-"))).toBe(true);
+    expect(pnpmEnvPaths.some((envPath) => envPath.includes("openclaw-update-pnpm-"))).toBe(true);
   });
 
   it("runs dev preflight lint in constrained mode when explicitly enabled", async () => {
@@ -708,11 +709,9 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("ok");
     expect(calls).toContain("pnpm lint");
     expect(lintEnv).toHaveLength(1);
-    expect(lintEnv[0]).toMatchObject({
-      OPENCLAW_LOCAL_CHECK: "1",
-      OPENCLAW_LOCAL_CHECK_MODE: "throttled",
-      OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
-    });
+    expect(lintEnv[0]?.OPENCLAW_LOCAL_CHECK).toBe("1");
+    expect(lintEnv[0]?.OPENCLAW_LOCAL_CHECK_MODE).toBe("throttled");
+    expect(lintEnv[0]?.OPENCLAW_OXLINT_SHARDS_SERIAL).toBe("1");
   });
 
   it("retries windows pnpm git installs with --ignore-scripts for dev updates", async () => {
@@ -1413,7 +1412,7 @@ describe("runGatewayUpdate", () => {
       if (key === "npm --version") {
         return { stdout: "10.0.0", stderr: "", code: 0 };
       }
-      if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@10")) {
+      if (key.startsWith("npm install --prefix ") && key.endsWith(" pnpm@11")) {
         return { stdout: "", stderr: "network exploded", code: 1 };
       }
       return { stdout: "", stderr: "", code: 0 };
@@ -1423,9 +1422,10 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("pnpm-npm-bootstrap-failed");
-    expect(calls.some((call) => call === "npm run build")).toBe(false);
-    expect(calls.some((call) => call === "npm run lint")).toBe(false);
-    expect(calls.some((call) => preflightPrefixPattern.test(call))).toBe(false);
+    expect(calls).not.toContain("npm run build");
+    expect(calls).not.toContain("npm run lint");
+    const preflightCalls = calls.filter((call) => preflightPrefixPattern.test(call));
+    expect(preflightCalls).toStrictEqual([]);
   });
 
   it("skips update when no git root", async () => {
@@ -1445,8 +1445,10 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("skipped");
     expect(result.reason).toBe("not-git-install");
-    expect(calls.some((call) => call.startsWith("pnpm add -g"))).toBe(false);
-    expect(calls.some((call) => call.startsWith("npm i -g"))).toBe(false);
+    const pnpmGlobalInstallCalls = calls.filter((call) => call.startsWith("pnpm add -g"));
+    const npmGlobalInstallCalls = calls.filter((call) => call.startsWith("npm i -g"));
+    expect(pnpmGlobalInstallCalls).toStrictEqual([]);
+    expect(npmGlobalInstallCalls).toStrictEqual([]);
   });
 
   async function runNpmGlobalUpdateCase(params: {
@@ -1569,7 +1571,7 @@ describe("runGatewayUpdate", () => {
     expect(result.mode).toBe("npm");
     expect(result.before?.version).toBe("1.0.0");
     expect(result.after?.version).toBe("2.0.0");
-    expect(calls.some((call) => call === expectedInstallCommand)).toBe(true);
+    expect(calls).toContain(expectedInstallCommand);
   });
 
   it("updates global npm installs from the GitHub main package spec", async () => {
@@ -1660,11 +1662,10 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toBe("doctor-failed");
     expect(calls).toContain(doctorCommand);
-    expect(result.steps.at(-1)).toMatchObject({
-      name: "openclaw doctor",
-      exitCode: 1,
-      stderrTail: "doctor refused migration",
-    });
+    const lastStep = result.steps.at(-1);
+    expect(lastStep?.name).toBe("openclaw doctor");
+    expect(lastStep?.exitCode).toBe(1);
+    expect(lastStep?.stderrTail).toBe("doctor refused migration");
   });
 
   it("falls back to global npm update when git is missing from PATH", async () => {
@@ -1768,10 +1769,10 @@ describe("runGatewayUpdate", () => {
         );
         await writeBundledRuntimeSidecars(pkgRoot);
         const inventory = await writePackageDistInventory(pkgRoot);
-        expect(inventory).toContain(MATRIX_HELPER_API);
-        const matrixHelperApiPath = path.join(pkgRoot, MATRIX_HELPER_API);
-        await expect(pathExists(matrixHelperApiPath)).resolves.toBe(true);
-        await fs.rm(matrixHelperApiPath);
+        expect(inventory).toContain(TELEGRAM_RUNTIME_API);
+        const telegramRuntimeApiPath = path.join(pkgRoot, TELEGRAM_RUNTIME_API);
+        await expect(pathExists(telegramRuntimeApiPath)).resolves.toBe(true);
+        await fs.rm(telegramRuntimeApiPath);
       },
     });
 
@@ -1780,7 +1781,7 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toBe("global-install-failed");
     expect(result.steps.at(-1)?.stderrTail).toContain(
-      `missing packaged dist file ${MATRIX_HELPER_API}`,
+      `missing packaged dist file ${TELEGRAM_RUNTIME_API}`,
     );
   });
 
@@ -1895,10 +1896,14 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("ok");
     expect(result.mode).toBe("pnpm");
     expect(result.after?.version).toBe("2.0.0");
-    expect(calls.some((call) => call.startsWith("npm i -g --prefix "))).toBe(true);
-    expect(calls.some((call) => call.startsWith("pnpm add -g"))).toBe(false);
+    const npmPrefixedGlobalInstallCalls = calls.filter((call) =>
+      call.startsWith("npm i -g --prefix "),
+    );
+    const pnpmAddGlobalCalls = calls.filter((call) => call.startsWith("pnpm add -g"));
+    expect(npmPrefixedGlobalInstallCalls.length).toBeGreaterThan(0);
+    expect(pnpmAddGlobalCalls).toStrictEqual([]);
     expect(result.steps.map((step) => step.name)).toEqual(["global update", "global install swap"]);
-    await expect(fs.access(staleInstallChunk)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(staleInstallChunk)).rejects.toHaveProperty("code", "ENOENT");
   });
 
   it("uses OPENCLAW_UPDATE_PACKAGE_SPEC for global package updates", async () => {
@@ -1944,7 +1949,7 @@ describe("runGatewayUpdate", () => {
       expect(result.mode).toBe("bun");
       expect(result.before?.version).toBe("1.0.0");
       expect(result.after?.version).toBe("2.0.0");
-      expect(calls.some((call) => call === "bun add -g openclaw@latest")).toBe(true);
+      expect(calls).toContain("bun add -g openclaw@latest");
     });
   });
 

@@ -37,6 +37,7 @@ vi.mock("./controllers/sessions.ts", () => ({
 import {
   createChatSession,
   dismissChatError,
+  handleChatManualRefresh,
   isCronSessionKey,
   parseSessionKey,
   resolveAssistantAttachmentAuthToken,
@@ -235,7 +236,7 @@ describe("parseSessionKey", () => {
     });
   });
 
-  it("returns raw key for unknown patterns", () => {
+  it("returns raw key for unknown parse patterns", () => {
     expect(parseSessionKey("something-unknown")).toEqual({
       prefix: "",
       fallbackName: "something-unknown",
@@ -318,7 +319,7 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("discord:123:456")).toBe("Discord Session");
   });
 
-  it("returns raw key for unknown patterns", () => {
+  it("returns raw key for unknown display-name patterns", () => {
     expect(resolveSessionDisplayName("something-custom")).toBe("something-custom");
   });
 
@@ -538,7 +539,7 @@ describe("resolveSessionOptionGroups", () => {
   it("does not synthesize active grouped sessions without a listed row", () => {
     const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
 
-    expect(labelsForSessionOptions({ sessionKey })).toEqual([]);
+    expect(labelsForSessionOptions({ sessionKey })).toStrictEqual([]);
     expect(
       labelsForSessionOptions({
         sessionKey,
@@ -647,6 +648,73 @@ describe("resolveSessionOptionGroups", () => {
   });
 });
 
+describe("handleChatManualRefresh", () => {
+  it("waits for chat history before scrolling and clearing refresh state", async () => {
+    const animationFrame = { callback: undefined as FrameRequestCallback | undefined };
+    const previousRequestAnimationFrame = globalThis.requestAnimationFrame;
+    Object.defineProperty(globalThis, "requestAnimationFrame", {
+      configurable: true,
+      writable: true,
+      value: vi.fn((callback: FrameRequestCallback) => {
+        animationFrame.callback = callback;
+        return 1;
+      }),
+    });
+    try {
+      let resolveRefresh: (() => void) | undefined;
+      refreshChatMock.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          resolveRefresh = resolve;
+        }),
+      );
+      const state = {
+        chatManualRefreshInFlight: false,
+        chatNewMessagesBelow: true,
+        updateComplete: Promise.resolve(),
+        resetToolStream: vi.fn(),
+        scrollToBottom: vi.fn(),
+      } as unknown as Parameters<typeof handleChatManualRefresh>[0];
+
+      const run = handleChatManualRefresh(state);
+      await Promise.resolve();
+
+      expect(state.scrollToBottom).not.toHaveBeenCalled();
+      if (!resolveRefresh) {
+        throw new Error("Expected chat refresh resolver to be initialized");
+      }
+      resolveRefresh();
+      await run;
+
+      expect(refreshChatMock).toHaveBeenCalledWith(state, {
+        awaitHistory: true,
+        scheduleScroll: false,
+      });
+      expect(state.scrollToBottom).toHaveBeenCalledWith({ smooth: true });
+      expect(state.chatManualRefreshInFlight).toBe(true);
+      expect(animationFrame.callback).toBeTypeOf("function");
+
+      const callback = animationFrame.callback;
+      if (!callback) {
+        throw new Error("expected manual refresh to schedule a frame callback");
+      }
+      callback(0);
+
+      expect(state.chatManualRefreshInFlight).toBe(false);
+      expect(state.chatNewMessagesBelow).toBe(false);
+    } finally {
+      if (previousRequestAnimationFrame === undefined) {
+        Reflect.deleteProperty(globalThis, "requestAnimationFrame");
+      } else {
+        Object.defineProperty(globalThis, "requestAnimationFrame", {
+          configurable: true,
+          writable: true,
+          value: previousRequestAnimationFrame,
+        });
+      }
+    }
+  });
+});
+
 describe("createChatSession", () => {
   it("creates a dashboard session, switches to it, and preserves the current composer", async () => {
     const state = createChatSessionState();
@@ -671,6 +739,7 @@ describe("createChatSession", () => {
         includeGlobal: true,
         includeUnknown: true,
         showArchived: false,
+        agentId: "ops",
       },
     );
     expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
@@ -679,7 +748,7 @@ describe("createChatSession", () => {
     expect(state.chatAttachments).toEqual([
       { id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" },
     ]);
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
   });
 
@@ -850,7 +919,7 @@ describe("switchChatSession", () => {
     switchChatSession(state, "agent:main:test-b");
     await Promise.resolve();
 
-    expect(state.chatQueue).toEqual([]);
+    expect(state.chatQueue).toStrictEqual([]);
     expect(state.chatQueueBySession.main).toEqual([
       { id: "queued", text: "message B", createdAt: 1 },
     ]);
@@ -872,6 +941,7 @@ describe("switchChatSession", () => {
       includeGlobal: true,
       includeUnknown: true,
       showArchived: false,
+      agentId: "main",
     });
     expect(
       (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })
@@ -879,7 +949,7 @@ describe("switchChatSession", () => {
     ).toHaveBeenCalledWith("agent:main:test-b", "Review Session");
   });
 
-  it("restores queued messages when switching back to their session", async () => {
+  it("restores queued messages when switching back to their session", () => {
     const settings = createSettings();
     const state = {
       sessionKey: "main",
@@ -918,7 +988,7 @@ describe("switchChatSession", () => {
     loadSessionsMock.mockResolvedValue(undefined);
 
     switchChatSession(state, "agent:main:other");
-    expect(state.chatQueue).toEqual([]);
+    expect(state.chatQueue).toStrictEqual([]);
 
     switchChatSession(state, "main");
 

@@ -41,9 +41,16 @@ async function captureProviderEntry(params: {
 }) {
   const captured = capturePluginRegistration(params.entry);
   const provider = captured.providers[0];
+  const modelCatalogProvider = captured.modelCatalogProviders[0];
   const catalog = await provider?.catalog?.run(createCatalogContext(params.config));
   const staticCatalog = await provider?.staticCatalog?.run(createCatalogContext(params.config));
-  return { captured, provider, catalog, staticCatalog };
+  const unifiedCatalog = await modelCatalogProvider?.liveCatalog?.(
+    createCatalogContext(params.config),
+  );
+  const unifiedStaticCatalog = await modelCatalogProvider?.staticCatalog?.(
+    createCatalogContext(params.config),
+  );
+  return { captured, provider, catalog, staticCatalog, unifiedCatalog, unifiedStaticCatalog };
 }
 
 describe("defineSingleProviderPluginEntry", () => {
@@ -82,28 +89,24 @@ describe("defineSingleProviderPluginEntry", () => {
       },
     });
 
-    const { captured, provider, catalog, staticCatalog } = await captureProviderEntry({ entry });
+    const { captured, provider, catalog, staticCatalog, unifiedCatalog, unifiedStaticCatalog } =
+      await captureProviderEntry({ entry });
     expect(captured.providers).toHaveLength(1);
-    expect(provider).toMatchObject({
-      id: "demo",
-      label: "Demo",
-      docsPath: "/providers/demo",
-      envVars: ["DEMO_API_KEY"],
-    });
+    expect(captured.modelCatalogProviders).toHaveLength(1);
+    expect(provider?.id).toBe("demo");
+    expect(provider?.label).toBe("Demo");
+    expect(provider?.docsPath).toBe("/providers/demo");
+    expect(provider?.envVars).toEqual(["DEMO_API_KEY"]);
     expect(provider?.auth).toHaveLength(1);
-    expect(provider?.auth[0]).toMatchObject({
-      id: "api-key",
-      label: "Demo API key",
-      hint: "Shared key",
-    });
-    expect(provider?.auth[0]?.wizard).toMatchObject({
-      choiceId: "demo-api-key",
-      choiceLabel: "Demo API key",
-      groupId: "demo",
-      groupLabel: "Demo",
-      groupHint: "Shared key",
-      methodId: "api-key",
-    });
+    expect(provider?.auth[0]?.id).toBe("api-key");
+    expect(provider?.auth[0]?.label).toBe("Demo API key");
+    expect(provider?.auth[0]?.hint).toBe("Shared key");
+    expect(provider?.auth[0]?.wizard?.choiceId).toBe("demo-api-key");
+    expect(provider?.auth[0]?.wizard?.choiceLabel).toBe("Demo API key");
+    expect(provider?.auth[0]?.wizard?.groupId).toBe("demo");
+    expect(provider?.auth[0]?.wizard?.groupLabel).toBe("Demo");
+    expect(provider?.auth[0]?.wizard?.groupHint).toBe("Shared key");
+    expect(provider?.auth[0]?.wizard?.methodId).toBe("api-key");
 
     expect(catalog).toEqual({
       provider: {
@@ -120,6 +123,24 @@ describe("defineSingleProviderPluginEntry", () => {
         models: [createModel("default", "Default")],
       },
     });
+    expect(unifiedCatalog).toEqual([
+      {
+        kind: "text",
+        provider: "demo",
+        model: "default",
+        label: "Default",
+        source: "live",
+      },
+    ]);
+    expect(unifiedStaticCatalog).toEqual([
+      {
+        kind: "text",
+        provider: "demo",
+        model: "default",
+        label: "Default",
+        source: "static",
+      },
+    ]);
   });
 
   it("supports provider overrides, explicit env vars, and extra registration", async () => {
@@ -194,23 +215,18 @@ describe("defineSingleProviderPluginEntry", () => {
       },
     });
     expect(captured.providers).toHaveLength(1);
+    expect(captured.modelCatalogProviders).toHaveLength(1);
     expect(captured.webSearchProviders).toHaveLength(1);
 
-    expect(provider).toMatchObject({
-      id: "gateway",
-      label: "Gateway",
-      aliases: ["gw"],
-      envVars: ["GATEWAY_KEY", "SECONDARY_KEY"],
-      capabilities: {
-        transcriptToolCallIdMode: "strict9",
-      },
-    });
-    expect(provider?.auth[0]?.wizard).toMatchObject({
-      choiceId: "gateway-api-key",
-      groupId: "shared-gateway",
-      groupLabel: "Shared Gateway",
-      groupHint: "Primary key",
-    });
+    expect(provider?.id).toBe("gateway");
+    expect(provider?.label).toBe("Gateway");
+    expect(provider?.aliases).toEqual(["gw"]);
+    expect(provider?.envVars).toEqual(["GATEWAY_KEY", "SECONDARY_KEY"]);
+    expect(provider?.capabilities?.transcriptToolCallIdMode).toBe("strict9");
+    expect(provider?.auth[0]?.wizard?.choiceId).toBe("gateway-api-key");
+    expect(provider?.auth[0]?.wizard?.groupId).toBe("shared-gateway");
+    expect(provider?.auth[0]?.wizard?.groupLabel).toBe("Shared Gateway");
+    expect(provider?.auth[0]?.wizard?.groupHint).toBe("Primary key");
 
     expect(catalog).toEqual({
       provider: {

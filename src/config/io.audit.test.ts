@@ -62,6 +62,13 @@ function readAuditLog(home: string): unknown[] {
     .map((line) => JSON.parse(line));
 }
 
+function requireAuditRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected audit JSONL record");
+  }
+  return value as Record<string, unknown>;
+}
+
 describe("config io audit helpers", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-audit-" });
 
@@ -189,11 +196,40 @@ describe("config io audit helpers", () => {
 
     const records = readAuditLog(home);
     expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      event: "config.write",
-      result: "rename",
-      nextHash: "next-hash",
+    const written = requireAuditRecord(records[0]);
+    expect(written.event).toBe("config.write");
+    expect(written.result).toBe("rename");
+    expect(written.nextHash).toBe("next-hash");
+  });
+
+  it("redacts structured audit records before persistence", async () => {
+    const home = await suiteRootTracker.make("append-redacted");
+    const record = finalizeConfigWriteAuditRecord({
+      base: {
+        ...createAuditRecordBase(path.join(home, ".openclaw", "openclaw.json")),
+        suspicious: [
+          "provider returned ya29.fake-access-token-with-enough-length",
+          "plugin returned AIzaSyD-very-real-looking-google-api-key-123",
+        ],
+      },
+      result: "failed",
+      err: Object.assign(new Error("payload contained abcd-efgh-ijkl-mnop"), { code: "EFAIL" }),
     });
+
+    await appendConfigAuditRecord({
+      fs,
+      env: {} as NodeJS.ProcessEnv,
+      homedir: () => home,
+      record,
+    });
+
+    const raw = fs.readFileSync(
+      path.join(home, ".openclaw", "logs", "config-audit.jsonl"),
+      "utf-8",
+    );
+    expect(raw).not.toContain("AIzaSyD-very-real-looking");
+    expect(raw).not.toContain("ya29.fake-access-token");
+    expect(raw).not.toContain("abcd-efgh-ijkl-mnop");
   });
 
   it("redacts argv values that follow known secret flag names", () => {
@@ -434,10 +470,9 @@ describe("config io audit helpers", () => {
 
     const records = readAuditLog(home);
     expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      event: "config.write",
-      result: "rename",
-      nextHash: "next-hash",
-    });
+    const written = requireAuditRecord(records[0]);
+    expect(written.event).toBe("config.write");
+    expect(written.result).toBe("rename");
+    expect(written.nextHash).toBe("next-hash");
   });
 });

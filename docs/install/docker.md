@@ -409,14 +409,15 @@ See [ClawDock](/install/clawdock) for the full helper guide.
 
     1. **Persist `/home/node`**: `export OPENCLAW_HOME_VOLUME="openclaw_home"`
     2. **Bake system deps**: `export OPENCLAW_DOCKER_APT_PACKAGES="git curl jq"`
-    3. **Install Playwright browsers**:
+    3. **Bake Playwright Chromium**: `export OPENCLAW_INSTALL_BROWSER=1`
+    4. **Or install Playwright browsers into a persisted volume**:
        ```bash
        docker compose run --rm openclaw-cli \
          node /app/node_modules/playwright-core/cli.js install chromium
        ```
-    4. **Persist browser downloads**: set
-       `PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright` and use
-       `OPENCLAW_HOME_VOLUME` or `OPENCLAW_EXTRA_MOUNTS`.
+    5. **Persist browser downloads**: use `OPENCLAW_HOME_VOLUME` or
+       `OPENCLAW_EXTRA_MOUNTS`. OpenClaw auto-detects the Docker image's
+       Playwright-managed Chromium on Linux.
 
   </Accordion>
 
@@ -427,8 +428,7 @@ See [ClawDock](/install/clawdock) for the full helper guide.
   </Accordion>
 
   <Accordion title="Base image metadata">
-    The main Docker runtime image uses `node:24-bookworm-slim` and publishes OCI
-    base-image annotations including `org.opencontainers.image.base.name`,
+    The main Docker runtime image uses `node:24-bookworm-slim` and includes `tini` as the entrypoint init process (PID 1) to ensure zombie processes are reaped and signals are handled correctly in long-running containers. It publishes OCI base-image annotations including `org.opencontainers.image.base.name`,
     `org.opencontainers.image.source`, and others. The Node base digest is
     refreshed through Dependabot Docker base-image PRs; release builds do not run
     a distro upgrade layer. See

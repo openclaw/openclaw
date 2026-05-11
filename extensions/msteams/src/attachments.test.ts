@@ -497,8 +497,10 @@ describe("msteams attachments", () => {
       const redirected = seen.find(
         (entry) => entry.url === "https://attacker.azureedge.net/collect",
       );
-      expect(redirected).toBeDefined();
-      expect(redirected?.auth).toBe("");
+      if (!redirected) {
+        throw new Error("expected Azure CDN redirect request to be observed");
+      }
+      expect(redirected.auth).toBe("");
     });
 
     it("skips urls outside the allowlist", async () => {
@@ -636,7 +638,7 @@ describe("msteams attachments", () => {
           return resolveRequestUrl(input);
         });
         // Should have hit the original host, NOT graph shares.
-        expect(calledUrls.some((url) => url === directUrl)).toBe(true);
+        expect(calledUrls).toContain(directUrl);
         expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(false);
       });
     });
@@ -658,13 +660,14 @@ describe("msteams attachments", () => {
         );
 
         expectAttachmentMediaLength(media, 0);
-        expect(logger.warn).toHaveBeenCalledWith(
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+        expect(logger.warn.mock.calls[0]).toStrictEqual([
           "msteams attachment download failed",
-          expect.objectContaining({
-            error: expect.stringContaining("HTTP 500"),
-            host: expect.any(String),
-          }),
-        );
+          {
+            error: "HTTP 500",
+            host: "x",
+          },
+        ]);
       });
 
       it("does not log when downloads succeed", async () => {

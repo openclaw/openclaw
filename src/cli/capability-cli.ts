@@ -10,12 +10,15 @@ import {
   loadAuthProfileStoreForRuntime,
 } from "../agents/auth-profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import { canonicalizeCaseOnlyCatalogModelRef } from "../agents/model-selection.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
+import { normalizeThinkLevel, type ThinkLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -559,6 +562,20 @@ function resolveModelRefOverride(raw: string | undefined): { provider?: string; 
   };
 }
 
+async function canonicalizeModelRunRef(params: {
+  raw: string | undefined;
+  cfg: OpenClawConfig;
+  preserveAuthProfile: boolean;
+}): Promise<string | undefined> {
+  return await canonicalizeCaseOnlyCatalogModelRef({
+    cfg: params.cfg,
+    raw: params.raw,
+    defaultProvider: DEFAULT_PROVIDER,
+    loadCatalog: () => loadModelCatalog({ config: params.cfg, readOnly: true }),
+    preserveAuthProfile: params.preserveAuthProfile,
+  });
+}
+
 function requireProviderModelOverride(
   raw: string | undefined,
 ): { provider: string; model: string } | undefined {
@@ -634,14 +651,40 @@ async function readModelRunImageFiles(files: string[] | undefined): Promise<Mode
   );
 }
 
+function normalizeModelRunThinking(value: unknown): ThinkLevel | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new Error("--thinking must be a string.");
+  }
+  const normalized = normalizeThinkLevel(value);
+  if (!normalized) {
+    throw new Error(
+      "Invalid thinking level. Use one of: off, minimal, low, medium, high, adaptive, xhigh, max.",
+    );
+  }
+  return normalized;
+}
+
 async function runModelRun(params: {
   prompt: string;
   files?: string[];
   model?: string;
+  thinking?: ThinkLevel;
   transport: CapabilityTransport;
 }) {
   const cfg = getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
+  const modelRef = await canonicalizeModelRunRef({
+    raw: params.model,
+    cfg,
+    preserveAuthProfile: params.transport === "local",
+  });
+  const explicitModelOverride = resolveModelRefOverride(params.model);
+  const hasExplicitProviderModelOverride = Boolean(
+    params.model?.trim() && explicitModelOverride.provider && explicitModelOverride.model,
+  );
   const imageFiles = await readModelRunImageFiles(params.files);
   const messageContent =
     imageFiles.length > 0
@@ -658,8 +701,9 @@ async function runModelRun(params: {
     const prepared = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId,
-      modelRef: params.model,
+      modelRef,
       allowMissingApiKeyModes: ["aws-sdk"],
+      ...(hasExplicitProviderModelOverride ? { allowBundledStaticCatalogFallback: true } : {}),
       skipPiDiscovery: true,
     });
     if ("error" in prepared) {
@@ -694,6 +738,7 @@ async function runModelRun(params: {
           typeof prepared.model.maxTokens === "number" && Number.isFinite(prepared.model.maxTokens)
             ? prepared.model.maxTokens
             : undefined,
+        ...(params.thinking ? { reasoning: params.thinking } : {}),
       },
     });
     const text = collectModelRunText(result.content);
@@ -731,7 +776,7 @@ async function runModelRun(params: {
     } satisfies CapabilityEnvelope;
   }
 
-  const { provider, model } = resolveModelRefOverride(params.model);
+  const { provider, model } = resolveModelRefOverride(modelRef);
   // Provider/model overrides require trusted-operator scope. Use the backend
   // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
   const hasModelOverride = Boolean(provider || model);
@@ -762,6 +807,7 @@ async function runModelRun(params: {
           : undefined,
       provider,
       model,
+      ...(params.thinking ? { thinking: params.thinking } : {}),
       modelRun: true,
       promptMode: "none",
       cleanupBundleMcpOnRunEnd: true,
@@ -1630,12 +1676,14 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--file <path>", "Image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
+    .option("--thinking <level>", "Thinking level override")
     .option("--local", "Force local execution", false)
     .option("--gateway", "Force gateway execution", false)
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const prompt = requireModelRunPrompt(opts.prompt);
+        const thinking = normalizeModelRunThinking(opts.thinking);
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
@@ -1646,6 +1694,7 @@ export function registerCapabilityCli(program: Command) {
           prompt,
           files: opts.file as string[] | undefined,
           model: opts.model as string | undefined,
+          thinking,
           transport,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);

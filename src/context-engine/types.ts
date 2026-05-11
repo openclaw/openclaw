@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 
 // Result types
@@ -173,6 +173,12 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   rewriteTranscriptEntries?: (
     request: TranscriptRewriteRequest,
   ) => Promise<TranscriptRewriteResult>;
+  /** LLM completion capability for engines that need model inference. */
+  llm?: {
+    complete: (
+      params: import("../plugins/runtime/types-core.js").LlmCompleteParams,
+    ) => Promise<import("../plugins/runtime/types-core.js").LlmCompleteResult>;
+  };
 };
 
 /**

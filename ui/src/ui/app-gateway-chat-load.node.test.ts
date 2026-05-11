@@ -179,7 +179,9 @@ function connectHost(tab: Tab) {
   const host = createHost(tab);
   connectGateway(host);
   const client = gatewayClients[0];
-  expect(client).toBeDefined();
+  if (!client) {
+    throw new Error("Expected gateway client instance");
+  }
   return { host, client };
 }
 

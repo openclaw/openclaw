@@ -170,6 +170,17 @@ function resolveSystemdUnitNameFromServicePath(sourcePath: string | undefined): 
   return base.endsWith(".service") ? base : "openclaw-gateway.service";
 }
 
+function shouldDeferUpdateModeSystemdServiceRepair(params: {
+  repairMode: DoctorPrompter["repairMode"];
+  shouldForce: boolean;
+}): boolean {
+  return (
+    process.platform === "linux" &&
+    isDoctorUpdateRepairMode(params.repairMode) &&
+    !params.shouldForce
+  );
+}
+
 async function suppressRunningSystemdExecStartRepairs(params: {
   command: GatewayServiceCommandConfig;
   issues: { code: string }[];
@@ -422,15 +433,16 @@ export async function maybeRepairGatewayServiceConfig(
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;
   const systemNodePath = systemNodeInfo?.supported ? systemNodeInfo.path : null;
-  if (needsNodeRuntime && !systemNodePath) {
+  if (needsNodeRuntime && !systemNodePath && runtimeChoice !== "node") {
     const warning = renderSystemNodeWarning(systemNodeInfo);
     if (warning) {
       note(warning, "Gateway runtime");
+    } else {
+      note(
+        "System Node 22 LTS (22.16+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
+        "Gateway runtime",
+      );
     }
-    note(
-      "System Node 22 LTS (22.16+) or Node 24 not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
-      "Gateway runtime",
-    );
   }
 
   const expectedRuntimePlan =
@@ -511,6 +523,19 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   const updateRepairMode = isDoctorUpdateRepairMode(prompter.repairMode);
+  if (
+    shouldDeferUpdateModeSystemdServiceRepair({
+      repairMode: prompter.repairMode,
+      shouldForce: prompter.shouldForce,
+    })
+  ) {
+    note(
+      "Update-mode doctor detected gateway service drift but left the live systemd unit unchanged. Review the service file and run `openclaw gateway install --force` when you want OpenClaw to replace operator-owned systemd directives.",
+      "Gateway service config",
+    );
+    return;
+  }
+
   const repairMessage = needsAggressive
     ? "Overwrite gateway service config with current defaults now?"
     : "Update gateway service config to the recommended defaults now?";

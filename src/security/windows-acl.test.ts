@@ -85,6 +85,15 @@ function expectInspectSuccess(
   expect(result.entries).toHaveLength(expectedEntries);
 }
 
+function expectIcaclsResetCommand(
+  result: ReturnType<typeof createIcaclsResetCommand>,
+): NonNullable<ReturnType<typeof createIcaclsResetCommand>> {
+  if (!result) {
+    throw new Error("Expected icacls reset command");
+  }
+  return result;
+}
+
 function expectSummaryCounts(
   entries: readonly WindowsAclEntry[],
   expected: { trusted?: number; untrustedWorld?: number; untrustedGroup?: number },
@@ -758,10 +767,16 @@ Successfully processed 1 files`;
         isDir: false,
         env,
       });
-      expect(result).not.toBeNull();
-      expect(result?.command).toBe(DEFAULT_ICACLS);
-      expect(result?.args).toContain("C:\\test\\file.txt");
-      expect(result?.args).toContain("/inheritance:r");
+      const command = expectIcaclsResetCommand(result);
+      expect(command.command).toBe(DEFAULT_ICACLS);
+      expect(command.args).toStrictEqual([
+        "C:\\test\\file.txt",
+        "/inheritance:r",
+        "/grant:r",
+        "WORKGROUP\\TestUser:F",
+        "/grant:r",
+        "*S-1-5-18:F",
+      ]);
     });
 
     it("uses a validated SystemRoot for the structured command executable", () => {
@@ -769,8 +784,9 @@ Successfully processed 1 files`;
         isDir: false,
         env: { SystemRoot: "D:\\Windows", USERNAME: "TestUser" },
       });
+      const command = expectIcaclsResetCommand(result);
 
-      expect(result?.command).toBe("D:\\Windows\\System32\\icacls.exe");
+      expect(command.command).toBe("D:\\Windows\\System32\\icacls.exe");
     });
 
     it("returns command with system username when env is empty (falls back to os.userInfo)", () => {
@@ -781,9 +797,16 @@ Successfully processed 1 files`;
         userInfo: mockUserInfo,
       });
       // Should return a valid command using the system username
-      expect(result).not.toBeNull();
-      expect(result?.command).toBe(DEFAULT_ICACLS);
-      expect(result?.args).toContain(`${MOCK_USERNAME}:F`);
+      const command = expectIcaclsResetCommand(result);
+      expect(command.command).toBe(DEFAULT_ICACLS);
+      expect(command.args).toStrictEqual([
+        "C:\\test\\file.txt",
+        "/inheritance:r",
+        "/grant:r",
+        `${MOCK_USERNAME}:F`,
+        "/grant:r",
+        "*S-1-5-18:F",
+      ]);
     });
 
     it("includes display string matching formatIcaclsResetCommand", () => {
@@ -796,7 +819,8 @@ Successfully processed 1 files`;
         isDir: false,
         env,
       });
-      expect(result?.display).toBe(expected);
+      const command = expectIcaclsResetCommand(result);
+      expect(command.display).toBe(expected);
     });
 
     it("world SIDs in USERSID env are not added to trusted set", () => {

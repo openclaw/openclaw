@@ -23,14 +23,14 @@ describe("agent-events sequencing", () => {
     resetAgentEventsForTest();
   });
 
-  test("stores and clears run context", async () => {
+  test("stores and clears run context", () => {
     registerAgentRunContext("run-1", { sessionKey: "main" });
     expect(getAgentRunContext("run-1")?.sessionKey).toBe("main");
     clearAgentRunContext("run-1");
     expect(getAgentRunContext("run-1")).toBeUndefined();
   });
 
-  test("maintains monotonic seq per runId", async () => {
+  test("maintains monotonic seq per runId", () => {
     const seen: Record<string, number[]> = {};
     const stop = onAgentEvent((evt) => {
       const list = seen[evt.runId] ?? [];
@@ -49,7 +49,7 @@ describe("agent-events sequencing", () => {
     expect(seen["run-2"]).toEqual([1]);
   });
 
-  test("preserves compaction ordering on the event bus", async () => {
+  test("preserves compaction ordering on the event bus", () => {
     const phases: Array<string> = [];
     const stop = onAgentEvent((evt) => {
       if (evt.runId !== "run-1") {
@@ -75,7 +75,7 @@ describe("agent-events sequencing", () => {
     expect(phases).toEqual(["start", "end"]);
   });
 
-  test("omits sessionKey for non-lifecycle runs hidden from Control UI", async () => {
+  test("omits sessionKey for non-lifecycle runs hidden from Control UI", () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden", {
       sessionKey: "session-quietchat",
@@ -97,7 +97,7 @@ describe("agent-events sequencing", () => {
     expect(receivedSessionKey).toBeUndefined();
   });
 
-  test("preserves sessionKey for lifecycle events hidden from Control UI", async () => {
+  test("preserves sessionKey for lifecycle events hidden from Control UI", () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden-lifecycle", {
       sessionKey: "session-quietchat",
@@ -119,7 +119,7 @@ describe("agent-events sequencing", () => {
     expect(receivedSessionKey).toBe("session-quietchat");
   });
 
-  test("falls back to registered sessionKey for hidden lifecycle events", async () => {
+  test("falls back to registered sessionKey for hidden lifecycle events", () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden-lifecycle-context", {
       sessionKey: "session-quietchat-context",
@@ -140,7 +140,7 @@ describe("agent-events sequencing", () => {
     expect(receivedSessionKey).toBe("session-quietchat-context");
   });
 
-  test("merges later run context updates into existing runs", async () => {
+  test("merges later run context updates into existing runs", () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-ctx", {
       sessionKey: "session-main",
@@ -152,16 +152,15 @@ describe("agent-events sequencing", () => {
       lastActiveAt: 12_345,
     });
 
-    expect(getAgentRunContext("run-ctx")).toMatchObject({
-      sessionKey: "session-main",
-      verboseLevel: "full",
-      isHeartbeat: true,
-      isControlUiVisible: true,
-      lastActiveAt: 12_345,
-    });
+    const context = getAgentRunContext("run-ctx");
+    expect(context?.sessionKey).toBe("session-main");
+    expect(context?.verboseLevel).toBe("full");
+    expect(context?.isHeartbeat).toBe(true);
+    expect(context?.isControlUiVisible).toBe(true);
+    expect(context?.lastActiveAt).toBe(12_345);
   });
 
-  test("falls back to registered sessionKey when event sessionKey is blank", async () => {
+  test("falls back to registered sessionKey when event sessionKey is blank", () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-ctx", { sessionKey: "session-main" });
 
@@ -180,7 +179,7 @@ describe("agent-events sequencing", () => {
     expect(receivedSessionKey).toBe("session-main");
   });
 
-  test("keeps notifying later listeners when one throws", async () => {
+  test("keeps notifying later listeners when one throws", () => {
     const seen: string[] = [];
     const stopBad = onAgentEvent(() => {
       throw new Error("boom");
@@ -189,13 +188,13 @@ describe("agent-events sequencing", () => {
       seen.push(evt.runId);
     });
 
-    expect(() =>
+    expect(
       emitAgentEvent({
         runId: "run-safe",
         stream: "assistant",
         data: { text: "hi" },
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     stopGood();
     stopBad();
@@ -232,7 +231,7 @@ describe("agent-events sequencing", () => {
 
     stop();
 
-    expect(second.getAgentRunContext("run-dup")).toMatchObject({ sessionKey: "session-dup" });
+    expect(second.getAgentRunContext("run-dup")?.sessionKey).toBe("session-dup");
     expect(seen).toEqual([
       { seq: 1, sessionKey: "session-dup" },
       { seq: 2, sessionKey: "session-dup" },
@@ -241,7 +240,7 @@ describe("agent-events sequencing", () => {
     first.resetAgentEventsForTest();
   });
 
-  test("sweeps stale run contexts and clears their sequence state", async () => {
+  test("sweeps stale run contexts and clears their sequence state", () => {
     const stop = vi.spyOn(Date, "now");
     stop.mockReturnValue(100);
     registerAgentRunContext("run-stale", { sessionKey: "session-stale", registeredAt: 100 });
@@ -256,7 +255,7 @@ describe("agent-events sequencing", () => {
     stop.mockReturnValue(1_000);
     expect(sweepStaleRunContexts(500)).toBe(1);
     expect(getAgentRunContext("run-stale")).toBeUndefined();
-    expect(getAgentRunContext("run-active")).toMatchObject({ sessionKey: "session-active" });
+    expect(getAgentRunContext("run-active")?.sessionKey).toBe("session-active");
 
     const seen: Array<{ runId: string; seq: number }> = [];
     const unsubscribe = onAgentEvent((evt) => {

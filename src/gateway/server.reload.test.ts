@@ -435,7 +435,7 @@ describe("gateway hot reload", () => {
     );
 
     await expect(params.applyReload()).rejects.toThrow(params.expectedError);
-    expect(drainSystemEvents(params.sessionKey)).toEqual([]);
+    expect(drainSystemEvents(params.sessionKey)).toStrictEqual([]);
   }
 
   async function expectSecretReloadRecovered(params: {
@@ -704,13 +704,21 @@ describe("gateway hot reload", () => {
       );
 
       expect(hoisted.stopGmailWatcher).toHaveBeenCalled();
-      expect(hoisted.startGmailWatcher).toHaveBeenCalledWith(expect.objectContaining(nextConfig));
+      const restartedGmailCall = hoisted.startGmailWatcher.mock.calls.at(-1) as
+        | [typeof nextConfig]
+        | undefined;
+      const restartedGmailConfig = restartedGmailCall?.[0];
+      expect(restartedGmailConfig?.hooks).toEqual(nextConfig.hooks);
+      expect(restartedGmailConfig?.channels).toEqual(nextConfig.channels);
 
       expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
       expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledTimes(1);
-      expect(hoisted.heartbeatUpdateConfig).toHaveBeenCalledWith(
-        expect.objectContaining(nextConfig),
-      );
+      const heartbeatUpdateCall = hoisted.heartbeatUpdateConfig.mock.calls.at(-1) as
+        | [typeof nextConfig]
+        | undefined;
+      const heartbeatConfig = heartbeatUpdateCall?.[0];
+      expect(heartbeatConfig?.agents).toEqual(nextConfig.agents);
+      expect(heartbeatConfig?.web).toEqual(nextConfig.web);
 
       await vi.waitFor(() => {
         expect(hoisted.cronInstances.length).toBeGreaterThanOrEqual(1);

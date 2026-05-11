@@ -123,7 +123,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
     });
     expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   };
 
   beforeAll(() => {
@@ -176,7 +176,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           },
         },
       }).changes,
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       normalizeCompatibilityConfigValues({
@@ -209,7 +209,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
 
     expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("does not add whatsapp config when only auth exists (issue #900)", () => {
@@ -286,7 +286,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     } as unknown as OpenClawConfig);
 
     expect(res.config.channels?.discord?.token).toBe("secretref-env:not-valid");
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("moves WhatsApp access defaults into accounts.default for named accounts", () => {
@@ -312,7 +312,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.channels?.whatsapp?.allowFrom).toBeUndefined();
     expect(res.config.channels?.whatsapp?.groupPolicy).toBeUndefined();
     expect(res.config.channels?.whatsapp?.groupAllowFrom).toBeUndefined();
-    expect(res.config.channels?.whatsapp?.accounts?.default).toMatchObject({
+    expect(res.config.channels?.whatsapp?.accounts?.default).toEqual({
       dmPolicy: "allowlist",
       allowFrom: ["+15550001111"],
       groupPolicy: "open",
@@ -384,7 +384,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.models?.providers?.google?.baseUrl).toBe(
       "https://generativelanguage.googleapis.com/v1beta",
     );
-    expect(res.config.models?.providers?.google?.models).toEqual([]);
+    expect(res.config.models?.providers?.google?.models).toStrictEqual([]);
     expect(res.config.skills?.entries).toBeUndefined();
     expect(res.changes).toEqual([
       "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3-pro-image-preview).",
@@ -466,10 +466,9 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     } as unknown as OpenClawConfig);
 
-    expect(res.config.models?.providers?.["openai-codex"]?.models?.[0]).toMatchObject({
-      id: "gpt-5.5",
-      metadataSource: "models-add",
-    });
+    const codexModel = res.config.models?.providers?.["openai-codex"]?.models?.[0];
+    expect(codexModel?.id).toBe("gpt-5.5");
+    expect(codexModel?.metadataSource).toBe("models-add");
     expect(res.changes).toContain(
       "Marked models.providers.openai-codex.models.gpt-5.5 as /models add metadata so official OpenAI Codex metadata can override it.",
     );
@@ -523,10 +522,10 @@ describe("normalizeCompatibilityConfigValues", () => {
         },
       },
     });
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 
-  it("migrates legacy Codex primary refs to OpenAI refs plus explicit Codex runtime", () => {
+  it("migrates legacy Codex primary refs to OpenAI refs without agent runtime pins", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
@@ -554,26 +553,25 @@ describe("normalizeCompatibilityConfigValues", () => {
       primary: "openai/gpt-5.5",
       fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini"],
     });
-    expect(res.config.agents?.defaults?.agentRuntime).toEqual({
-      id: "codex",
-    });
+    expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "auto" });
     expect(res.config.agents?.defaults?.models).toEqual({
       "codex/gpt-5.5": { alias: "legacy-codex" },
       "openai/gpt-5.5": { alias: "gpt", params: { temperature: 0.2 } },
       "codex/gpt-5.4-mini": {},
       "openai/gpt-5.4-mini": {},
     });
-    expect(res.config.agents?.list?.[0]).toMatchObject({
+    expect(res.config.agents?.list?.[0]).toEqual({
       id: "reviewer",
-      agentRuntime: { id: "codex" },
       model: "openai/gpt-5.4-mini",
     });
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        "Moved agents.defaults.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
-        "Moved agents.defaults.models legacy runtime keys to canonical provider keys.",
-        "Moved agents.list.reviewer.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
-      ]),
+    expect(res.changes).toContain(
+      "Moved agents.defaults.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
+    );
+    expect(res.changes).toContain(
+      "Moved agents.defaults.models legacy runtime keys to canonical provider keys.",
+    );
+    expect(res.changes).toContain(
+      "Moved agents.list.reviewer.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
     );
   });
 
@@ -595,10 +593,10 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues(input);
 
     expect(res.config).toEqual(input);
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 
-  it("migrates legacy Claude CLI primary refs to Anthropic refs plus explicit runtime", () => {
+  it("migrates legacy Claude CLI primary refs to Anthropic refs plus model runtime", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
@@ -618,14 +616,20 @@ describe("normalizeCompatibilityConfigValues", () => {
       primary: "anthropic/claude-opus-4-7",
       fallbacks: ["anthropic/claude-sonnet-4-6"],
     });
-    expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "claude-cli" });
+    expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(res.config.agents?.defaults?.models).toEqual({
       "claude-cli/claude-opus-4-7": { alias: "Opus" },
-      "anthropic/claude-opus-4-7": { alias: "Anthropic Opus" },
+      "anthropic/claude-opus-4-7": {
+        alias: "Anthropic Opus",
+        agentRuntime: { id: "claude-cli" },
+      },
+      "anthropic/claude-sonnet-4-6": {
+        agentRuntime: { id: "claude-cli" },
+      },
     });
   });
 
-  it("migrates legacy Codex CLI primary refs to OpenAI refs plus explicit runtime", () => {
+  it("migrates legacy Codex CLI primary refs to OpenAI refs plus model runtime", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
@@ -645,23 +649,29 @@ describe("normalizeCompatibilityConfigValues", () => {
       primary: "openai/gpt-5.5",
       fallbacks: ["openai/gpt-5.4-mini"],
     });
-    expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "codex-cli" });
+    expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(res.config.agents?.defaults?.models).toEqual({
       "codex-cli/gpt-5.5": { alias: "Codex CLI" },
-      "openai/gpt-5.5": { alias: "OpenAI GPT" },
+      "openai/gpt-5.5": {
+        alias: "OpenAI GPT",
+        agentRuntime: { id: "codex-cli" },
+      },
+      "openai/gpt-5.4-mini": {
+        agentRuntime: { id: "codex-cli" },
+      },
     });
   });
 
-  it("migrates legacy Gemini CLI primary refs to Google refs plus explicit runtime", () => {
+  it("migrates legacy Gemini CLI primary refs to Google refs plus model runtime", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
           model: {
-            primary: "google-gemini-cli/gemini-3.1-pro-preview",
+            primary: "google-gemini-cli/gemini-3-pro-preview",
             fallbacks: ["google-gemini-cli/gemini-3-flash-preview"],
           },
           models: {
-            "google-gemini-cli/gemini-3.1-pro-preview": { alias: "Gemini CLI" },
+            "google-gemini-cli/gemini-3-pro-preview": { alias: "Gemini CLI" },
             "google/gemini-3.1-pro-preview": { alias: "Gemini API" },
           },
         },
@@ -672,12 +682,16 @@ describe("normalizeCompatibilityConfigValues", () => {
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3-flash-preview"],
     });
-    expect(res.config.agents?.defaults?.agentRuntime).toEqual({
-      id: "google-gemini-cli",
-    });
+    expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(res.config.agents?.defaults?.models).toEqual({
-      "google-gemini-cli/gemini-3.1-pro-preview": { alias: "Gemini CLI" },
-      "google/gemini-3.1-pro-preview": { alias: "Gemini API" },
+      "google-gemini-cli/gemini-3-pro-preview": { alias: "Gemini CLI" },
+      "google/gemini-3.1-pro-preview": {
+        alias: "Gemini API",
+        agentRuntime: { id: "google-gemini-cli" },
+      },
+      "google/gemini-3-flash-preview": {
+        agentRuntime: { id: "google-gemini-cli" },
+      },
     });
   });
 
@@ -699,7 +713,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues(input);
 
     expect(res.config).toEqual(input);
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("prefers legacy nano-banana env.GEMINI_API_KEY over skill apiKey during migration", () => {
@@ -720,7 +734,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.models?.providers?.google?.baseUrl).toBe(
       "https://generativelanguage.googleapis.com/v1beta",
     );
-    expect(res.config.models?.providers?.google?.models).toEqual([]);
+    expect(res.config.models?.providers?.google?.models).toStrictEqual([]);
     expect(res.changes).toContain(
       "Moved skills.entries.nano-banana-pro.env.GEMINI_API_KEY → models.providers.google.apiKey.",
     );
@@ -968,7 +982,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues(input);
 
     expect(res.config).toEqual(input);
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("migrates tools.message.allowCrossContextSend to canonical crossContext settings", () => {
@@ -1104,15 +1118,14 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.models?.providers?.mistral?.models).toEqual([
-      expect.objectContaining({
-        id: "mistral-large-latest",
-        maxTokens: 16384,
-      }),
-      expect.objectContaining({
-        id: "magistral-small",
-        maxTokens: 40000,
-      }),
+    expect(
+      res.config.models?.providers?.mistral?.models?.map((model) => ({
+        id: model.id,
+        maxTokens: model.maxTokens,
+      })),
+    ).toEqual([
+      { id: "mistral-large-latest", maxTokens: 16384 },
+      { id: "magistral-small", maxTokens: 40000 },
     ]);
     expect(res.changes).toEqual([
       "Normalized models.providers.mistral.models[0].maxTokens (262144 → 16384) to avoid Mistral context-window rejects.",

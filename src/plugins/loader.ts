@@ -26,6 +26,8 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { buildPluginApi } from "./api-builder.js";
+import { attachPluginApiFacades } from "./api-facades.js";
+import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
   clearPluginCommands,
@@ -49,6 +51,7 @@ import {
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { toSafeImportPath } from "./import-specifier.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
@@ -119,6 +122,7 @@ import {
 } from "./plugin-scope.js";
 import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistryParams } from "./registry-types.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
@@ -166,6 +170,7 @@ export type PluginLoadOptions = {
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];
+  hostServices?: PluginRegistryParams["hostServices"];
   runtimeOptions?: CreatePluginRuntimeOptions;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cache?: boolean;
@@ -323,6 +328,7 @@ type PluginRegistrySnapshot = {
     channels: PluginRegistry["channels"];
     channelSetups: PluginRegistry["channelSetups"];
     providers: PluginRegistry["providers"];
+    modelCatalogProviders: PluginRegistry["modelCatalogProviders"];
     cliBackends: NonNullable<PluginRegistry["cliBackends"]>;
     textTransforms: PluginRegistry["textTransforms"];
     speechProviders: PluginRegistry["speechProviders"];
@@ -347,6 +353,7 @@ type PluginRegistrySnapshot = {
     securityAuditCollectors: NonNullable<PluginRegistry["securityAuditCollectors"]>;
     services: PluginRegistry["services"];
     commands: PluginRegistry["commands"];
+    sessionActions: NonNullable<PluginRegistry["sessionActions"]>;
     conversationBindingResolvedHandlers: PluginRegistry["conversationBindingResolvedHandlers"];
     diagnostics: PluginRegistry["diagnostics"];
   };
@@ -364,6 +371,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       channels: [...registry.channels],
       channelSetups: [...registry.channelSetups],
       providers: [...registry.providers],
+      modelCatalogProviders: [...registry.modelCatalogProviders],
       cliBackends: [...(registry.cliBackends ?? [])],
       textTransforms: [...registry.textTransforms],
       speechProviders: [...registry.speechProviders],
@@ -388,6 +396,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       securityAuditCollectors: [...(registry.securityAuditCollectors ?? [])],
       services: [...registry.services],
       commands: [...registry.commands],
+      sessionActions: [...(registry.sessionActions ?? [])],
       conversationBindingResolvedHandlers: [...registry.conversationBindingResolvedHandlers],
       diagnostics: [...registry.diagnostics],
     },
@@ -404,6 +413,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.channels = snapshot.arrays.channels;
   registry.channelSetups = snapshot.arrays.channelSetups;
   registry.providers = snapshot.arrays.providers;
+  registry.modelCatalogProviders = snapshot.arrays.modelCatalogProviders;
   registry.cliBackends = snapshot.arrays.cliBackends;
   registry.textTransforms = snapshot.arrays.textTransforms;
   registry.speechProviders = snapshot.arrays.speechProviders;
@@ -428,6 +438,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.securityAuditCollectors = snapshot.arrays.securityAuditCollectors;
   registry.services = snapshot.arrays.services;
   registry.commands = snapshot.arrays.commands;
+  registry.sessionActions = snapshot.arrays.sessionActions;
   registry.conversationBindingResolvedHandlers =
     snapshot.arrays.conversationBindingResolvedHandlers;
   registry.diagnostics = snapshot.arrays.diagnostics;
@@ -441,21 +452,29 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
   close: () => void;
 } {
   let closed = false;
-  return {
-    api: new Proxy(api, {
+  const guardedApi = attachPluginApiFacades(
+    new Proxy(api, {
       get(target, prop, receiver) {
         const value = Reflect.get(target, prop, receiver);
         if (typeof value !== "function") {
           return value;
         }
+        if (typeof prop === "string" && isLateCallablePluginApiMethod(prop)) {
+          return (...args: unknown[]) => Reflect.apply(value, target, args);
+        }
         return (...args: unknown[]) => {
-          if (closed) {
+          const isLateCallableMethod =
+            typeof prop === "string" && isLateCallablePluginApiMethod(prop);
+          if (closed && !isLateCallableMethod) {
             return undefined;
           }
           return Reflect.apply(value, target, args);
         };
       },
     }),
+  );
+  return {
+    api: guardedApi,
     close: () => {
       closed = true;
     },
@@ -569,6 +588,8 @@ export const __testing = {
   shouldLoadChannelPluginInSetupRuntime,
   shouldPreferNativeModuleLoad,
   toSafeImportPath,
+  createGuardedPluginRegistrationApi,
+  runPluginRegisterSync,
   getCompatibleActivePluginRegistry,
   resolvePluginLoadCacheContext,
   get maxPluginRegistryCacheEntries() {
@@ -1628,6 +1649,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       ...(options.coreGatewayMethodNames !== undefined && {
         coreGatewayMethodNames: options.coreGatewayMethodNames,
       }),
+      ...(options.hostServices !== undefined && {
+        hostServices: options.hostServices,
+      }),
       activateGlobalSideEffects: shouldActivate,
     });
 
@@ -2002,11 +2026,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           : runtimeCandidateEntry;
       const moduleLoadSource = resolveCanonicalDistRuntimeSource(loadEntry.source);
       const moduleRoot = resolveCanonicalDistRuntimeSource(loadEntry.rootDir);
+      const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+        origin: candidate.origin,
+        rootDir: candidate.rootDir,
+        env,
+      });
       const opened = openRootFileSync({
         absolutePath: moduleLoadSource,
         rootPath: moduleRoot,
         boundaryLabel: "plugin root",
-        rejectHardlinks: candidate.origin !== "bundled",
+        rejectHardlinks,
         skipLexicalRootCheck: true,
       });
       if (!opened.ok) {
@@ -2097,7 +2126,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               absolutePath: runtimeModuleSource,
               rootPath: runtimeModuleRoot,
               boundaryLabel: "plugin root",
-              rejectHardlinks: candidate.origin !== "bundled",
+              rejectHardlinks,
               skipLexicalRootCheck: true,
             });
             if (!runtimeOpened.ok) {
@@ -2678,7 +2707,11 @@ export async function loadOpenClawPluginCliRegistry(
       absolutePath: sourceForCliMetadata,
       rootPath: pluginRoot,
       boundaryLabel: "plugin root",
-      rejectHardlinks: candidate.origin !== "bundled",
+      rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+        origin: candidate.origin,
+        rootDir: candidate.rootDir,
+        env,
+      }),
       skipLexicalRootCheck: true,
     });
     if (!opened.ok) {

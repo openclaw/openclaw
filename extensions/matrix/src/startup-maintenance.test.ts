@@ -118,9 +118,11 @@ describe("runMatrixStartupMaintenance", () => {
         log: {},
       });
 
-      expect(deps.maybeCreateMatrixMigrationSnapshot).toHaveBeenCalledWith(
-        expect.objectContaining({ trigger: "gateway-startup" }),
-      );
+      expect(deps.maybeCreateMatrixMigrationSnapshot).toHaveBeenCalledWith({
+        trigger: "gateway-startup",
+        env: process.env,
+        log: {},
+      });
       expect(deps.autoMigrateLegacyMatrixState).toHaveBeenCalledOnce();
       expect(autoPrepareLegacyMatrixCryptoMock).toHaveBeenCalledOnce();
     });

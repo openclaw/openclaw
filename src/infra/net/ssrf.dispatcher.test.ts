@@ -88,7 +88,15 @@ describe("createPinnedDispatcher", () => {
 
     const dispatcher = createPinnedDispatcher(pinned);
 
-    expect(dispatcher).toBeDefined();
+    const dispatcherOptions = (
+      dispatcher as {
+        options?: { allowH2?: boolean; connect?: Record<string, unknown> };
+      }
+    ).options;
+    expect(dispatcherOptions?.connect?.lookup).toBe(lookup);
+    expect(dispatcherOptions?.connect?.autoSelectFamily).toBe(true);
+    expect(dispatcherOptions?.connect?.autoSelectFamilyAttemptTimeout).toBe(300);
+    expect(dispatcherOptions?.allowH2).toBe(false);
     expect(agentCtor).toHaveBeenCalledWith({
       connect: {
         lookup,
@@ -214,16 +222,19 @@ describe("createPinnedDispatcher", () => {
   });
 
   it("keeps the override bound to the matching hostname only", () => {
-    const originalLookup = vi.fn(
+    const originalLookupMock = vi.fn(
       (_hostname: string, callback: (err: null, address: string, family: number) => void) => {
         callback(null, "93.184.216.34", 4);
       },
-    ) as unknown as PinnedHostname["lookup"];
+    );
+    const originalLookup = originalLookupMock as unknown as PinnedHostname["lookup"];
     const lookup = createDispatcherWithPinnedOverride(originalLookup);
     const callback = vi.fn();
     lookup?.("example.com", callback);
 
-    expect(originalLookup).toHaveBeenCalledWith("example.com", expect.any(Function));
+    const originalLookupCall = originalLookupMock.mock.calls[0];
+    expect(originalLookupCall?.[0]).toBe("example.com");
+    expect(typeof originalLookupCall?.[1]).toBe("function");
     expect(callback).toHaveBeenCalledWith(null, "93.184.216.34", 4);
   });
 

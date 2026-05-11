@@ -166,9 +166,14 @@ describe("json-file helpers", () => {
         const linkPath = path.join(root, "config-link.json");
         fs.symlinkSync(targetPath, linkPath);
 
-        expect(() => saveJsonFile(linkPath, SAVED_PAYLOAD)).toThrow(
-          expect.objectContaining({ code: "ENOENT" }),
-        );
+        let saveError: unknown;
+        try {
+          saveJsonFile(linkPath, SAVED_PAYLOAD);
+        } catch (error) {
+          saveError = error;
+        }
+        expect(saveError).toBeDefined();
+        expect((saveError as { code?: unknown }).code).toBe("ENOENT");
         expect(fs.existsSync(missingTargetDir)).toBe(false);
         expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
       });

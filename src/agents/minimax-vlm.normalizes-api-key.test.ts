@@ -1,12 +1,6 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
-
-let isMinimaxVlmModel: typeof import("./minimax-vlm.js").isMinimaxVlmModel;
-let minimaxUnderstandImage: typeof import("./minimax-vlm.js").minimaxUnderstandImage;
-
-beforeAll(async () => {
-  ({ isMinimaxVlmModel, minimaxUnderstandImage } = await import("./minimax-vlm.js"));
-});
+import { isMinimaxVlmModel, minimaxUnderstandImage } from "./minimax-vlm.js";
 
 describe("minimaxUnderstandImage apiKey normalization", () => {
   const priorFetch = global.fetch;
@@ -106,7 +100,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
 });
 
 describe("isMinimaxVlmModel", () => {
-  it("only matches the canonical MiniMax VLM model id", async () => {
+  it("only matches the canonical MiniMax VLM model id", () => {
     expect(isMinimaxVlmModel("minimax", "MiniMax-VL-01")).toBe(true);
     expect(isMinimaxVlmModel("minimax-portal", "MiniMax-VL-01")).toBe(true);
     expect(isMinimaxVlmModel("minimax-portal", "custom-vision")).toBe(false);

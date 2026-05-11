@@ -188,9 +188,10 @@ describe("stageSandboxMedia", () => {
         expect(sessionCtx.MediaPath).toBe(stagedPath);
         expect(ctx.MediaUrl).toBe(stagedPath);
         expect(sessionCtx.MediaUrl).toBe(stagedPath);
-        await expect(
-          fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath))),
-        ).resolves.toBeTruthy();
+        const stagedStats = await fs.stat(
+          join(sandboxDir, "media", "inbound", basename(mediaPath)),
+        );
+        expect(stagedStats.isFile()).toBe(true);
       }
 
       {
@@ -208,7 +209,7 @@ describe("stageSandboxMedia", () => {
 
         await expect(
           fs.stat(join(sandboxDir, "media", "inbound", basename(sensitiveFile))),
-        ).rejects.toThrow();
+        ).rejects.toMatchObject({ code: "ENOENT" });
         expect(ctx.MediaPath).toBe(sensitiveFile);
       }
 
@@ -287,7 +288,7 @@ describe("stageSandboxMedia", () => {
 
       await expect(
         fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath))),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({ code: "ENOENT" });
       expect(ctx.MediaPath).toBe(mediaPath);
       expect(sessionCtx.MediaPath).toBe(mediaPath);
     });

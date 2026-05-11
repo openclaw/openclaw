@@ -19,6 +19,10 @@ function hasRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function listAgentRecords(cfg: OpenClawConfig): Record<string, unknown>[] {
+  return Array.isArray(cfg.agents?.list) ? cfg.agents.list.filter(hasRecord) : [];
+}
+
 function hasChannels(cfg: OpenClawConfig): boolean {
   return hasRecord(cfg.channels);
 }
@@ -73,7 +77,7 @@ function hasConfiguredSafeBins(cfg: OpenClawConfig): boolean {
   ) {
     return true;
   }
-  return (cfg.agents?.list ?? []).some((agent) => {
+  return listAgentRecords(cfg).some((agent) => {
     const agentExec = hasRecord(agent) && hasRecord(agent.tools) ? agent.tools.exec : undefined;
     return (
       hasRecord(agentExec) && Array.isArray(agentExec.safeBins) && agentExec.safeBins.length > 0
@@ -102,16 +106,19 @@ function resolveMessageToolAvailability(params: {
 }
 
 function collectMessageToolUnavailableTargets(cfg: OpenClawConfig): string[] {
-  const agents = cfg.agents?.list ?? [];
+  const agents = listAgentRecords(cfg);
   if (agents.length === 0) {
     return resolveMessageToolAvailability({ globalTools: cfg.tools })
       ? []
       : ["default tool policy"];
   }
   return agents.flatMap((agent) =>
-    resolveMessageToolAvailability({ globalTools: cfg.tools, agentTools: agent.tools })
+    resolveMessageToolAvailability({
+      globalTools: cfg.tools,
+      agentTools: agent.tools as AgentToolsConfig | undefined,
+    })
       ? []
-      : [`agent "${agent.id}"`],
+      : [`agent "${typeof agent.id === "string" ? agent.id : "unknown"}"`],
   );
 }
 

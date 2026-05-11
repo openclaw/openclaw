@@ -237,18 +237,16 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       "output.text.done",
     ]);
     expect(onTalkEvent.mock.calls.map(([event]) => event.turnId)).toEqual(["turn-1", "turn-1"]);
-    expect(onTalkEvent.mock.calls[0]?.[0]).toMatchObject({
-      itemId: "input-1",
-      payload: { role: "user", text: "hello" },
-      sessionId: "main:openai:webrtc",
-      transport: "webrtc",
-    });
-    expect(onTalkEvent.mock.calls[1]?.[0]).toMatchObject({
-      itemId: "response-1",
-      payload: { text: "hi there" },
-      sessionId: "main:openai:webrtc",
-      transport: "webrtc",
-    });
+    const userTranscriptEvent = onTalkEvent.mock.calls[0]?.[0];
+    expect(userTranscriptEvent.itemId).toBe("input-1");
+    expect(userTranscriptEvent.payload).toEqual({ role: "user", text: "hello" });
+    expect(userTranscriptEvent.sessionId).toBe("main:openai:webrtc");
+    expect(userTranscriptEvent.transport).toBe("webrtc");
+    const assistantTranscriptEvent = onTalkEvent.mock.calls[1]?.[0];
+    expect(assistantTranscriptEvent.itemId).toBe("response-1");
+    expect(assistantTranscriptEvent.payload).toEqual({ text: "hi there" });
+    expect(assistantTranscriptEvent.sessionId).toBe("main:openai:webrtc");
+    expect(assistantTranscriptEvent.transport).toBe("webrtc");
     transport.stop();
   });
 
@@ -264,12 +262,8 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         return { ok: true, aborted: true };
       }
       expect(method).toBe("talk.client.toolCall");
-      expect(params).toEqual(
-        expect.objectContaining({
-          callId: "call-1",
-          name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-        }),
-      );
+      expect(params.callId).toBe("call-1");
+      expect(params.name).toBe(REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME);
       return { runId: "run-1" };
     });
     const transport = new WebRtcSdpRealtimeTalkTransport(

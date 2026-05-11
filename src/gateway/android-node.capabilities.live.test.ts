@@ -46,8 +46,21 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
+function expectRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).not.toBeNull();
+  expect(typeof value, label).toBe("object");
+  expect(Array.isArray(value), label).toBe(false);
+  return value as Record<string, unknown>;
+}
+
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function expectNonEmptyString(value: unknown, label: string): string {
+  const text = readString(value);
+  expect(text, label).not.toBeNull();
+  return text as string;
 }
 
 function readStringArray(value: unknown): string[] {
@@ -105,7 +118,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("canvas.eval", payload);
-      expect(obj.result).toBeDefined();
+      expect(obj).toHaveProperty("result");
     },
   },
   "canvas.snapshot": {
@@ -114,8 +127,8 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("canvas.snapshot", payload);
-      expect(readString(obj.format)).not.toBeNull();
-      expect(readString(obj.base64)).not.toBeNull();
+      expectNonEmptyString(obj.format, "canvas.snapshot format");
+      expectNonEmptyString(obj.base64, "canvas.snapshot base64");
     },
   },
   "canvas.a2ui.push": {
@@ -148,7 +161,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("camera.snap", payload);
-      expect(readString(obj.base64)).not.toBeNull();
+      expectNonEmptyString(obj.base64, "camera.snap base64");
     },
   },
   "camera.clip": {
@@ -157,7 +170,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("camera.clip", payload);
-      expect(readString(obj.base64)).not.toBeNull();
+      expectNonEmptyString(obj.base64, "camera.clip base64");
     },
   },
   "location.get": {
@@ -182,8 +195,8 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.info", payload);
-      expect(readString(obj.systemName)).not.toBeNull();
-      expect(readString(obj.systemVersion)).not.toBeNull();
+      expectNonEmptyString(obj.systemName, "device.info systemName");
+      expectNonEmptyString(obj.systemVersion, "device.info systemVersion");
     },
   },
   "device.permissions": {
@@ -192,7 +205,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.permissions", payload);
-      expect(asRecord(obj.permissions)).toBeTruthy();
+      expectRecord(obj.permissions, "device.permissions payload");
     },
   },
   "device.health": {
@@ -201,7 +214,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.health", payload);
-      expect(asRecord(obj.memory)).toBeTruthy();
+      expectRecord(obj.memory, "device.health memory payload");
     },
   },
   "notifications.list": {
@@ -232,7 +245,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("sms.search", payload);
-      expect(typeof obj.count === "number" || typeof obj.count === "string").toBe(true);
+      expect(["number", "string"]).toContain(typeof obj.count);
       expect(Array.isArray(obj.messages)).toBe(true);
     },
   },
@@ -242,7 +255,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("debug.logs", payload);
-      expect(readString(obj.logs)).not.toBeNull();
+      expectNonEmptyString(obj.logs, "debug.logs logs");
     },
   },
   "debug.ed25519": {
@@ -251,7 +264,7 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     outcome: "success",
     onSuccess: (payload) => {
       const obj = assertObjectPayload("debug.ed25519", payload);
-      expect(readString(obj.diagnostics)).not.toBeNull();
+      expectNonEmptyString(obj.diagnostics, "debug.ed25519 diagnostics");
     },
   },
 };
@@ -313,7 +326,7 @@ describe("resolvePolicyConfigForRun", () => {
 
     expect(loadLocalConfig).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledWith("config.get", {});
-    expect(asRecord(result.gateway)).toBeTruthy();
+    expectRecord(result.gateway, "remote gateway config");
   });
 
   it("still uses local config loading for local loopback runs", async () => {
@@ -570,6 +583,8 @@ describeLive("android node capability integration (preconditioned)", () => {
         return;
       }
       const result = await invokeNodeCommand({ client, nodeId, command, profile, ctx });
+      expect(result.command).toBe(command);
+      expect(result.durationMs).toBeGreaterThanOrEqual(0);
       results.set(command, result);
       const issue = evaluateCommandResult({ result, profile, ctx });
       if (!issue) {
@@ -588,22 +603,20 @@ describeLive("android node capability integration (preconditioned)", () => {
 
   it("covers every advertised non-interactive command", () => {
     const missingRuns = commandsToRun.filter((command) => !results.has(command));
-    if (missingRuns.length === 0) {
-      return;
-    }
     const summary = [...results.values()]
       .map((entry) => {
         const status = entry.ok ? "ok" : `err:${entry.errorCode ?? "UNKNOWN"}`;
         return `${entry.command} -> ${status} (${entry.durationMs}ms)`;
       })
       .join("\n");
-    throw new Error(
+    expect(
+      missingRuns,
       [
         `advertised commands missing execution (${missingRuns.length}/${commandsToRun.length})`,
         ...missingRuns,
         "summary:",
         summary,
       ].join("\n"),
-    );
+    ).toStrictEqual([]);
   });
 });

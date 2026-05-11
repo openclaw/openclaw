@@ -1,5 +1,5 @@
-import { evaluateSenderGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
-import { normalizeE164, normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { looksLikeUuid } from "./uuid.js";
 
 export type SignalSender =
@@ -112,17 +112,4 @@ export function isSignalSenderAllowed(sender: SignalSender, allowFrom: string[])
     }
     return false;
   });
-}
-
-export function isSignalGroupAllowed(params: {
-  groupPolicy: "open" | "disabled" | "allowlist";
-  allowFrom: string[];
-  sender: SignalSender;
-}): boolean {
-  return evaluateSenderGroupAccessForPolicy({
-    groupPolicy: params.groupPolicy,
-    groupAllowFrom: params.allowFrom,
-    senderId: params.sender.raw,
-    isSenderAllowed: () => isSignalSenderAllowed(params.sender, params.allowFrom),
-  }).allowed;
 }

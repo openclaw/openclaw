@@ -87,10 +87,13 @@ describe("cron run log", () => {
       }
 
       const raw = await fs.readFile(logPath, "utf-8");
-      const lines = raw
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean);
+      const lines: string[] = [];
+      for (const rawLine of raw.split("\n")) {
+        const line = rawLine.trim();
+        if (line) {
+          lines.push(line);
+        }
+      }
       expect(lines.length).toBe(3);
       const last = JSON.parse(lines[2] ?? "{}") as { ts?: number };
       expect(last.ts).toBe(1009);
@@ -123,7 +126,7 @@ describe("cron run log", () => {
           durationMs: 100,
         }),
       ]);
-      expect(readCronRunLogEntriesSync(path.join(dir, "runs", "missing.jsonl"))).toEqual([]);
+      expect(readCronRunLogEntriesSync(path.join(dir, "runs", "missing.jsonl"))).toStrictEqual([]);
     });
   });
 
@@ -220,7 +223,7 @@ describe("cron run log", () => {
         limit: 10,
         jobId: "b",
       });
-      expect(wrongFilter).toEqual([]);
+      expect(wrongFilter).toStrictEqual([]);
     });
   });
 
@@ -307,7 +310,7 @@ describe("cron run log", () => {
             query: "-100",
           })
         ).entries,
-      ).toEqual([]);
+      ).toStrictEqual([]);
     });
   });
 

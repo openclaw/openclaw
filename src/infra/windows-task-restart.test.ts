@@ -92,32 +92,36 @@ describe("relaunchGatewayScheduledTask", () => {
 
     const result = relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
 
-    expect(result).toMatchObject({
-      ok: true,
-      method: "schtasks",
-      tried: expect.arrayContaining(['schtasks /Run /TN "OpenClaw Gateway (work)"']),
-    });
+    expect(result.ok).toBe(true);
+    expect(result.method).toBe("schtasks");
+    expect(result.tried).toContain('schtasks /Run /TN "OpenClaw Gateway (work)"');
     expect(result.tried).toContain(`cmd.exe /d /s /c ${seenCommandArg}`);
-    expect(spawnMock).toHaveBeenCalledWith(
-      "cmd.exe",
-      ["/d", "/s", "/c", expect.any(String)],
-      expect.objectContaining({
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-      }),
-    );
+    const spawnCall = spawnMock.mock.calls[0];
+    expect(spawnCall?.[0]).toBe("cmd.exe");
+    expect(spawnCall?.[1]).toEqual(["/d", "/s", "/c", expect.any(String)]);
+    expect(spawnCall?.[2]?.detached).toBe(true);
+    expect(spawnCall?.[2]?.stdio).toBe("ignore");
+    expect(spawnCall?.[2]?.windowsHide).toBe(true);
     expect(unref).toHaveBeenCalledOnce();
 
     const scriptPath = [...createdScriptPaths][0];
-    expect(scriptPath).toBeTruthy();
+    if (scriptPath === undefined) {
+      throw new Error("expected restart helper script path");
+    }
+    expect(fs.statSync(scriptPath).isFile()).toBe(true);
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain("timeout /t 1 /nobreak >nul");
     expect(script).toContain("gateway-restart.log");
     expect(script).toContain(
       'openclaw restart attempt source=windows-task-handoff target="OpenClaw Gateway (work)"',
     );
+    expect(script).toContain(
+      `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "(Get-ScheduledTask -TaskName 'OpenClaw Gateway (work)' -ErrorAction SilentlyContinue).State" 2>nul | findstr /I /C:"Running" >nul 2>&1`,
+    );
     expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (work)" >>');
+    expect(script.indexOf("powershell.exe -NoProfile")).toBeLessThan(
+      script.indexOf('schtasks /Run /TN "OpenClaw Gateway (work)"'),
+    );
     expect(script).toContain('del "%~f0" >nul 2>&1');
   });
 
@@ -135,6 +139,23 @@ describe("relaunchGatewayScheduledTask", () => {
     const scriptPath = [...createdScriptPaths][0];
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)" >>');
+  });
+
+  it("escapes custom task names in the PowerShell running-task probe", () => {
+    spawnMock.mockImplementation((_file: string, args: string[]) => {
+      createdScriptPaths.add(decodeCmdPathArg(args[3]));
+      return { unref: vi.fn() };
+    });
+
+    relaunchGatewayScheduledTask({
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (Bob's work)",
+    });
+
+    const scriptPath = [...createdScriptPaths][0];
+    const script = fs.readFileSync(scriptPath, "utf8");
+    expect(script).toContain(
+      "-Command \"(Get-ScheduledTask -TaskName 'OpenClaw Gateway (Bob''s work)' -ErrorAction SilentlyContinue).State\"",
+    );
   });
 
   it("returns failed when the helper cannot be spawned", () => {

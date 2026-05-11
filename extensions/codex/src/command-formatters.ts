@@ -1,7 +1,11 @@
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
-import { summarizeCodexRateLimits } from "./app-server/rate-limits.js";
+import {
+  summarizeCodexAccountRateLimits,
+  summarizeCodexRateLimits,
+} from "./app-server/rate-limits.js";
+import type { CodexAccountAuthOverview } from "./command-account.js";
 import type { SafeValue } from "./command-rpc.js";
 
 type CodexStatusProbes = {
@@ -102,13 +106,51 @@ export function formatThreads(response: JsonValue | undefined): string {
 export function formatAccount(
   account: SafeValue<JsonValue | undefined>,
   limits: SafeValue<JsonValue | undefined>,
+  authOverview?: CodexAccountAuthOverview,
 ): string {
+  if (authOverview) {
+    return formatAccountAuthOverview(authOverview);
+  }
+  const formattedLimits = limits.ok
+    ? formatCodexRateLimitDetails(limits.value)
+    : formatCodexDisplayText(limits.error);
+  const rateLimitBlock = formattedLimits.startsWith("Codex is ")
+    ? formattedLimits
+    : formattedLimits.includes("\n")
+      ? `Rate limits:\n${formattedLimits}`
+      : `Rate limits: ${formattedLimits}`;
   return [
     `Account: ${account.ok ? formatCodexAccountSummary(account.value) : formatCodexDisplayText(account.error)}`,
-    `Rate limits: ${
-      limits.ok ? formatCodexRateLimitSummary(limits.value) : formatCodexDisplayText(limits.error)
-    }`,
-  ].join("\n");
+    rateLimitBlock,
+  ].join("\n\n");
+}
+
+function formatAccountAuthOverview(overview: CodexAccountAuthOverview): string {
+  const lines: string[] = [];
+  if (overview.currentLine) {
+    lines.push(overview.currentLine, "");
+  }
+  if (overview.subscriptionLabel) {
+    lines.push(`Subscription  ${overview.subscriptionLabel}`);
+    if (overview.subscriptionUsage) {
+      lines.push(`  ${overview.subscriptionUsage}`);
+    }
+    lines.push("");
+  }
+  if (overview.rows.length > 0) {
+    lines.push(overview.orderTitle);
+    for (const [index, row] of overview.rows.entries()) {
+      lines.push(`  ${index + 1}. ${row.label}   ${row.kind}   — ${formatAuthRowStatus(row)}`);
+    }
+  }
+  while (lines.at(-1) === "") {
+    lines.pop();
+  }
+  return lines.map(formatCodexAccountLine).join("\n");
+}
+
+function formatAuthRowStatus(row: CodexAccountAuthOverview["rows"][number]): string {
+  return row.billingNote ? `${row.status} · ${row.billingNote}` : row.status;
 }
 
 export function formatComputerUseStatus(status: CodexComputerUseStatus): string {
@@ -178,13 +220,17 @@ function formatCodexAccountSummary(value: JsonValue | undefined): string {
 }
 
 function formatCodexTextForDisplay(value: string): string {
+  const safe = sanitizeCodexTextForDisplay(value).trim();
+  return safe || "<unknown>";
+}
+
+function sanitizeCodexTextForDisplay(value: string): string {
   let safe = "";
   for (const character of value) {
     const codePoint = character.codePointAt(0);
     safe += codePoint != null && isUnsafeDisplayCodePoint(codePoint) ? "?" : character;
   }
-  safe = safe.trim();
-  return safe || "<unknown>";
+  return safe;
 }
 
 function escapeCodexChatText(value: string): string {
@@ -206,6 +252,27 @@ function escapeCodexChatText(value: string): string {
 
 function escapeCodexChatTextPreservingAt(value: string): string {
   return escapeCodexChatText(value).replaceAll("\uff20", "@");
+}
+
+function formatCodexAccountLine(value: string): string {
+  if (value === "") {
+    return "";
+  }
+  const safe = sanitizeCodexTextForDisplay(value).trimEnd();
+  if (!safe.trim()) {
+    return "";
+  }
+  const emailPattern = /[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+/gu;
+  let formatted = "";
+  let lastIndex = 0;
+  for (const match of safe.matchAll(emailPattern)) {
+    const index = match.index ?? 0;
+    formatted += escapeCodexChatText(safe.slice(lastIndex, index));
+    formatted += escapeCodexChatTextPreservingAt(match[0]);
+    lastIndex = index + match[0].length;
+  }
+  formatted += escapeCodexChatText(safe.slice(lastIndex));
+  return formatted;
 }
 
 function isLikelyEmailAddress(value: string): boolean {
@@ -281,6 +348,14 @@ function summarizeArrayLike(value: JsonValue | undefined): string {
 
 function formatCodexRateLimitSummary(value: JsonValue | undefined): string {
   return formatCodexDisplayText(summarizeCodexRateLimits(value) ?? summarizeRateLimits(value));
+}
+
+function formatCodexRateLimitDetails(value: JsonValue | undefined): string {
+  const lines = summarizeCodexAccountRateLimits(value);
+  if (!lines) {
+    return formatCodexDisplayText(summarizeRateLimits(value));
+  }
+  return lines.map(formatCodexDisplayText).join("\n");
 }
 
 function summarizeRateLimits(value: JsonValue | undefined): string {

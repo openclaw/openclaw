@@ -11,7 +11,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
-import { sendGatewayAuthFailure, sendJson, sendMissingScopeForbidden } from "./http-common.js";
+import { sendGatewayAuthFailure, sendMissingScopeForbidden } from "./http-common.js";
 import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 

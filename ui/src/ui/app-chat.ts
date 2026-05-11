@@ -66,6 +66,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatModelCatalog: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
+  requestUpdate?: () => void;
   refreshSessionsAfterChat: Set<string>;
   pendingAbort?: { runId?: string | null; sessionKey: string } | null;
   chatSubmitGuards?: Map<string, Promise<void>>;
@@ -76,6 +77,10 @@ export type ChatHost = ChatInputHistoryState & {
 export type ChatSendOptions = {
   confirmReset?: boolean;
   restoreDraft?: boolean;
+};
+
+export type ChatAbortOptions = {
+  preserveDraft?: boolean;
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
@@ -150,20 +155,25 @@ function isBtwCommand(text: string) {
   return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
 }
 
-export async function handleAbortChat(host: ChatHost) {
+export async function handleAbortChat(host: ChatHost, opts?: ChatAbortOptions) {
   const activeRunId = host.chatRunId;
-  // If disconnected but this session is abortable, queue the abort for when we reconnect.
-  if (!host.connected && hasAbortableSessionRun(host)) {
+  const clearDraft = () => {
+    if (opts?.preserveDraft) {
+      return;
+    }
     host.chatMessage = "";
     resetChatInputHistoryNavigation(host);
+  };
+  // If disconnected but this session is abortable, queue the abort for when we reconnect.
+  if (!host.connected && hasAbortableSessionRun(host)) {
+    clearDraft();
     host.pendingAbort = { runId: activeRunId, sessionKey: host.sessionKey };
     return;
   }
   if (!host.connected) {
     return;
   }
-  host.chatMessage = "";
-  resetChatInputHistoryNavigation(host);
+  clearDraft();
   await abortChatRun(host as unknown as ChatState);
 }
 
@@ -745,22 +755,36 @@ function injectCommandResult(host: ChatHost, content: string) {
   ];
 }
 
-export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
-  void Promise.allSettled([
+export async function refreshChat(
+  host: ChatHost,
+  opts?: { scheduleScroll?: boolean; awaitHistory?: boolean },
+) {
+  const requestUpdate = () => host.requestUpdate?.();
+  const historyRefresh = loadChatHistory(host as unknown as ChatState).finally(() => {
+    if (opts?.scheduleScroll !== false) {
+      scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    }
+    requestUpdate();
+  });
+  const secondaryRefresh = Promise.allSettled([
     loadSessions(host as unknown as SessionsState, {
       activeMinutes: 0,
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,
+      agentId: resolveAgentIdForSession(host) ?? undefined,
     }),
     refreshChatAvatar(host),
     refreshChatModels(host),
     refreshChatCommands(host),
-  ]);
-  await loadChatHistory(host as unknown as ChatState);
-  if (opts?.scheduleScroll !== false) {
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+  ]).finally(requestUpdate);
+  void historyRefresh;
+  void secondaryRefresh;
+  if (opts?.awaitHistory === true) {
+    await historyRefresh;
+    return;
   }
+  await Promise.resolve();
 }
 
 async function refreshChatModels(host: ChatHost) {

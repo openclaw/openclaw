@@ -51,7 +51,7 @@ describe("system events (session routing)", () => {
       contextKey: "discord:reaction:added:msg:user:✅",
     });
 
-    expect(peekSystemEvents(mainKey)).toEqual([]);
+    expect(peekSystemEvents(mainKey)).toStrictEqual([]);
     expect(peekSystemEvents("discord:group:123")).toEqual(["Discord reaction added: ✅"]);
 
     // Main session gets no events — undefined returned
@@ -63,7 +63,7 @@ describe("system events (session routing)", () => {
     // Discord session gets its own events block
     const discord = await drainFormattedEvents("discord:group:123");
     expect(discord).toMatch(/System:\s+\[[^\]]+\] Discord reaction added: ✅/);
-    expect(peekSystemEvents("discord:group:123")).toEqual([]);
+    expect(peekSystemEvents("discord:group:123")).toStrictEqual([]);
   });
 
   it("requires an explicit session key", () => {
@@ -149,7 +149,7 @@ describe("system events (session routing)", () => {
     inspected[0].deliveryContext!.threadId = "42";
 
     expect(consumeSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual(["first"]);
-    expect(peekSystemEvents(key)).toEqual([]);
+    expect(peekSystemEvents(key)).toStrictEqual([]);
   });
 
   it("resolves the newest effective delivery context from queued events", () => {
@@ -203,12 +203,10 @@ describe("system events (session routing)", () => {
     first.resetSystemEventsForTest();
     second.enqueueSystemEvent("Node connected", { sessionKey: key, contextKey: "build:123" });
 
-    expect(first.peekSystemEventEntries(key)).toEqual([
-      expect.objectContaining({
-        text: "Node connected",
-        contextKey: "build:123",
-      }),
-    ]);
+    const entries = first.peekSystemEventEntries(key);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.text).toBe("Node connected");
+    expect(entries[0]?.contextKey).toBe("build:123");
     expect(first.isSystemEventContextChanged(key, "build:123")).toBe(false);
     expect(first.drainSystemEvents(key)).toEqual(["Node connected"]);
 
@@ -223,7 +221,7 @@ describe("system events (session routing)", () => {
 
     const result = await drainFormattedEvents(key);
     expect(result).toBeUndefined();
-    expect(peekSystemEvents(key)).toEqual([]);
+    expect(peekSystemEvents(key)).toStrictEqual([]);
   });
 
   it("leaves exec completion events queued for the dedicated heartbeat", async () => {
@@ -257,8 +255,11 @@ describe("system events (session routing)", () => {
     enqueueSystemEvent("Post-compaction context:\nline one\nline two", { sessionKey: key });
 
     const result = await drainFormattedEvents(key);
-    expect(result).toBeDefined();
-    const lines = result!.split("\n");
+    expect(result).toContain("Post-compaction context:");
+    if (!result) {
+      throw new Error("expected formatted system events");
+    }
+    const lines = result.split("\n");
     expect(lines.length).toBeGreaterThan(0);
     for (const line of lines) {
       expect(line).toMatch(/^System:/);

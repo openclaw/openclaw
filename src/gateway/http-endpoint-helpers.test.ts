@@ -25,7 +25,7 @@ vi.mock("./method-scopes.js", () => {
   };
 });
 
-const { readJsonBodyOrError, sendMethodNotAllowed, sendMissingScopeForbidden } =
+const { readJsonBodyOrError, sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } =
   await import("./http-common.js");
 const { authorizeGatewayHttpRequestOrReply, resolveTrustedHttpOperatorScopes } =
   await import("./http-utils.js");

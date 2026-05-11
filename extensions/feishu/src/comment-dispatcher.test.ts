@@ -34,6 +34,22 @@ vi.mock("./runtime.js", () => ({
 
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
 
+async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<"pending">((resolve) => {
+        timer = setTimeout(() => resolve("pending"), 0);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 describe("createFeishuCommentReplyDispatcher", () => {
   afterAll(() => {
     vi.doUnmock("./accounts.js");
@@ -61,7 +77,6 @@ describe("createFeishuCommentReplyDispatcher", () => {
 
   function latestReplyDispatcherOptions() {
     const options = createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0];
-    expect(options).toBeDefined();
     if (!options) {
       throw new Error("expected reply dispatcher options");
     }
@@ -137,22 +152,18 @@ describe("createFeishuCommentReplyDispatcher", () => {
     const deliverPromise = Promise.resolve(
       options.deliver({ text: "hello world" }, { kind: "final" }),
     );
-    const status = await Promise.race([
-      deliverPromise.then(() => "done"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const status = await raceWithNextMacrotask(deliverPromise.then(() => "done"));
 
     expect(status).toBe("done");
-    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        file_token: "doc_token_1",
-        file_type: "docx",
-        comment_id: "comment_1",
-        content: "hello world",
-        is_whole_comment: false,
-      }),
-    );
+    const client = createFeishuClientMock.mock.results[0]?.value;
+    expect(client).toBeDefined();
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(client, {
+      file_token: "doc_token_1",
+      file_type: "docx",
+      comment_id: "comment_1",
+      content: "hello world",
+      is_whole_comment: false,
+    });
     expect(cleanup).not.toHaveBeenCalled();
 
     void options.onCleanup?.();
