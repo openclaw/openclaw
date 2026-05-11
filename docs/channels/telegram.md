@@ -67,7 +67,7 @@ openclaw pairing approve telegram <CODE>
     - your Telegram user ID, used in `allowFrom` / `groupAllowFrom`
     - the Telegram group chat ID, used as the key under `channels.telegram.groups`
 
-    In the group, run `/whoami@<bot_username>` if native commands are enabled. You can also read the same values from `openclaw logs --follow` after sending a group message to the bot.
+    For first-time setup, get the group chat ID from `openclaw logs --follow`, a forwarded-ID bot, or Bot API `getUpdates`. After the group is allowed, `/whoami@<bot_username>` can confirm the user and group IDs.
 
     Negative Telegram supergroup IDs that start with `-100` are group chat IDs. Put them under `channels.telegram.groups`, not under `groupAllowFrom`.
 
@@ -185,8 +185,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     telegram: {
       enabled: true,
       dmPolicy: "pairing",
+      allowFrom: ["<YOUR_TELEGRAM_USER_ID>"],
       groupPolicy: "allowlist",
-      groupAllowFrom: ["<YOUR_TELEGRAM_USER_ID>"],
       groups: {
         "<GROUP_CHAT_ID>": {
           requireMention: true,
@@ -277,10 +277,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Getting the group chat ID:
 
-    - run `/whoami@<bot_username>` in the group if native commands are enabled
     - forward a group message to `@userinfobot` / `@getidsbot`
     - or read `chat.id` from `openclaw logs --follow`
     - or inspect Bot API `getUpdates`
+    - after the group is allowed, run `/whoami@<bot_username>` if native commands are enabled
 
   </Tab>
 </Tabs>
