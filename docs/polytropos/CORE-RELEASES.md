@@ -27,7 +27,7 @@ We standardize on a single top-level directory:
 Inside it:
 
 - `~/polytropos/releases/`
-  - `~/polytropos/releases/<version>/` — a **release directory**, equivalent to `dist/`
+  - `~/polytropos/releases/v<ver>+poly.<N>/` — a **release directory**, equivalent to `dist/`
   - `~/polytropos/releases/dev` — symlink to `~/polytropos/openclaw-polytropos/dist` (the core repo build output)
   - `~/polytropos/releases/current` — symlink to the release currently running (typically a versioned release, sometimes `dev`)
 
@@ -74,9 +74,9 @@ What it does (high level):
 
 - finds nearest reachable `upstream/<ver>` tag to determine `<ver>`
 - computes next global build number `poly.N` (always increments)
-- creates tag `polytropos/<ver>+poly.<N>`
+- creates tag `v<ver>+poly.<N>`
 - builds `dist/` (`pnpm install`, `pnpm ui:build`, `pnpm build`)
-- copies `dist/` → `~/polytropos/releases/<ver>+poly.<N>/`
+- copies `dist/` → `~/polytropos/releases/v<ver>+poly.<N>/`
 - updates symlinks (mandatory): `previous` then `current`
 - restarts the gateway
 

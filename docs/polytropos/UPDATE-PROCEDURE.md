@@ -8,7 +8,7 @@ See also:
 
 ## Inputs
 
-- Upstream OpenClaw tag: `<upstreamTag>` (example: `2026.4.1`)
+- Upstream OpenClaw tag: `<upstreamTag>` (example: `v2026.5.10`)
 
 ## Procedure
 

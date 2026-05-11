@@ -5,9 +5,9 @@
  * Constraints encoded:
  * - Release artifact is a byte-for-byte copy of `dist/`.
  * - Tags:
- *   - upstream/<ver>
- *   - polytropos/<ver>+poly.<N>  (N is a global build number)
- * - Determine <ver> from the nearest reachable upstream/<ver> tag.
+ *   - upstream tag: v<ver> (fetched from upstream remote)
+ *   - polytropos tag: v<ver>+poly.<N>  (N is a global build number)
+ * - Determine <ver> from package.json version (expected to match upstream tag version).
  * - Release always switches `previous` then `current` (mandatory).
  */
 
@@ -32,25 +32,22 @@ function getRepoRoot() {
   return sh('git', ['rev-parse', '--show-toplevel']);
 }
 
-function getNearestUpstreamTag() {
-  // Find the nearest reachable tag matching upstream/*
-  let tag = '';
+function getUpstreamVersionFromPackageJson(repoRoot) {
+  const pkgPath = path.join(repoRoot, 'package.json');
+  let pkg;
   try {
-    tag = sh('git', ['describe', '--tags', '--match', 'upstream/*', '--abbrev=0']);
-  } catch {
-    fail('no reachable upstream/* tag found from HEAD; tag the upstream base first');
+    pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  } catch (err) {
+    fail(`failed to read/parse package.json at ${pkgPath}: ${String(err)}`);
   }
-  if (!tag.startsWith('upstream/')) fail(`nearest upstream tag did not match expected format: ${tag}`);
-  return tag;
-}
-
-function parseUpstreamVersion(upstreamTag) {
-  return upstreamTag.slice('upstream/'.length);
+  const ver = pkg?.version;
+  if (!ver || typeof ver !== 'string') fail('package.json missing version; cannot derive upstream version');
+  return ver;
 }
 
 function getMaxPolyBuildNumber() {
   // Scan all polytropos/*+poly.N tags and find max N.
-  const out = sh('git', ['tag', '--list', 'polytropos/*+poly.*']);
+  const out = sh('git', ['tag', '--list', 'v*+poly.*']);
   if (!out) return -1;
   let max = -1;
   for (const line of out.split(/\r?\n/)) {
@@ -113,11 +110,11 @@ Usage:
 
 Behavior:
   - Requires clean git working tree
-  - Uses nearest reachable upstream/<ver> tag to determine <ver>
+  - Uses package.json version to determine upstream version (expects it matches upstream v<ver>)
   - Computes next global poly build number N = max(existing poly) + 1
-  - Creates tag polytropos/<ver>+poly.<N> at HEAD
+  - Creates tag v<ver>+poly.<N> at HEAD
   - Builds using: pnpm install; pnpm ui:build; pnpm build
-  - Copies dist/ -> ~/polytropos/releases/<ver>+poly.<N>/
+  - Copies dist/ -> ~/polytropos/releases/v<ver>+poly.<N>/
   - Updates ~/polytropos/releases/previous -> old current (if present)
   - Updates ~/polytropos/releases/current -> new release
   - Restarts gateway: systemctl --user restart openclaw-gateway
@@ -136,14 +133,13 @@ if (cmd !== 'release') {
 
 ensureCleanWorkingTree();
 const repoRoot = getRepoRoot();
-const upstreamTag = getNearestUpstreamTag();
-const ver = parseUpstreamVersion(upstreamTag);
+const ver = getUpstreamVersionFromPackageJson(repoRoot);
 
 const maxPoly = getMaxPolyBuildNumber();
 const nextPoly = maxPoly + 1;
-const polyTag = `polytropos/${ver}+poly.${nextPoly}`;
+const polyTag = `v${ver}+poly.${nextPoly}`;
 
-console.log(`Upstream base: ${upstreamTag}`);
+console.log(`Upstream version (from package.json): v${ver}`);
 console.log(`Next release tag: ${polyTag}`);
 
 // Create annotated tag
@@ -159,7 +155,7 @@ const distDir = ensureDistExists(repoRoot);
 
 // Publish into releases
 const relRoot = releasesRoot();
-const dest = path.join(relRoot, `${ver}+poly.${nextPoly}`);
+const dest = path.join(relRoot, `v${ver}+poly.${nextPoly}`);
 console.log(`Publishing release: ${dest}`);
 fs.mkdirSync(relRoot, { recursive: true });
 fs.rmSync(dest, { force: true, recursive: true });
