@@ -298,6 +298,36 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
+  it("prefers typed SQLite thread ids over thread ids parsed from session keys", () => {
+    const { env } = useTempStateDir();
+    const baseKey = "agent:main:telegram:group:98765";
+    const topicKey = `${baseKey}:topic:55`;
+    upsertSessionEntry({
+      agentId: "main",
+      env,
+      sessionKey: topicKey,
+      entry: {
+        ...buildEntry({
+          channel: "telegram",
+          to: "group:98765",
+          accountId: "main",
+          threadId: "66",
+        }),
+        lastThreadId: "66",
+      },
+    });
+
+    expect(extractDeliveryInfo(topicKey)).toEqual({
+      deliveryContext: {
+        channel: "telegram",
+        to: "group:98765",
+        accountId: "main",
+        threadId: "66",
+      },
+      threadId: "66",
+    });
+  });
+
   it("falls back to session metadata thread ids when deliveryContext.threadId is missing", () => {
     const { env } = useTempStateDir();
     const sessionKey = "agent:main:telegram:group:98765";

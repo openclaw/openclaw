@@ -494,6 +494,9 @@ Completed consolidation/deletion highlights:
 - Inbound session metadata updates now merge against the typed per-agent
   delivery row first; old `SessionEntry` delivery fields are only the fallback
   when no typed conversation row exists.
+- Restart/update delivery extraction now lets the typed SQLite delivery
+  `threadId` win over topic/thread fragments parsed from `sessionKey`; parsing
+  is only a fallback for legacy thread-shaped keys.
 - Gateway `chat.send` external-route inheritance now reads typed SQLite session
   routing metadata instead of inferring channel/direct/group scope from
   `sessionKey` pieces. Channel-scoped sessions inherit only when the typed

@@ -44,7 +44,10 @@ export function extractDeliveryInfo(
   } catch {
     // ignore: best-effort
   }
-  return { deliveryContext, threadId };
+  return {
+    deliveryContext,
+    threadId: threadId !== undefined ? (deliveryContext?.threadId ?? threadId) : undefined,
+  };
 }
 
 function resolveDeliveryStorePaths(cfg: OpenClawConfig, agentId: string): string[] {
