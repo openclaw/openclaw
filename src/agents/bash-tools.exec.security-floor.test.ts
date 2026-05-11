@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.js";
@@ -5,14 +8,39 @@ import { createExecTool } from "./bash-tools.exec.js";
 
 describe("exec security floor", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
+  let tempRoot: string | undefined;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["SHELL"]);
+    envSnapshot = captureEnv([
+      "HOME",
+      "USERPROFILE",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "OPENCLAW_STATE_DIR",
+      "SHELL",
+    ]);
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-security-floor-"));
+    process.env.HOME = tempRoot;
+    process.env.USERPROFILE = tempRoot;
+    process.env.OPENCLAW_STATE_DIR = path.join(tempRoot, "state");
+    if (process.platform === "win32") {
+      const parsed = path.parse(tempRoot);
+      process.env.HOMEDRIVE = parsed.root.slice(0, 2);
+      process.env.HOMEPATH = tempRoot.slice(2) || "\\";
+    } else {
+      delete process.env.HOMEDRIVE;
+      delete process.env.HOMEPATH;
+    }
     resetProcessRegistryForTests();
   });
 
   afterEach(() => {
+    const dir = tempRoot;
+    tempRoot = undefined;
     envSnapshot.restore();
+    if (dir) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("ignores model-supplied allowlist security when configured security is full", async () => {
