@@ -136,7 +136,10 @@ async function markSessionFailed(params: {
     params.storePath,
     (store) => {
       const entry = store[params.sessionKey];
-      if (!entry || entry.status !== "running") {
+      if (!entry) {
+        return;
+      }
+      if (entry.status && entry.status !== "running") {
         return;
       }
       entry.status = "failed";
@@ -226,7 +229,10 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
     storePath,
     (store) => {
       for (const [sessionKey, entry] of Object.entries(store)) {
-        if (!entry || entry.status !== "running") {
+        if (!entry) {
+          continue;
+        }
+        if (entry.status && entry.status !== "running") {
           continue;
         }
         if (shouldSkipMainRecovery(entry, sessionKey)) {
@@ -268,7 +274,13 @@ async function recoverStore(params: {
   for (const [sessionKey, entry] of Object.entries(store).toSorted(([a], [b]) =>
     a.localeCompare(b),
   )) {
-    if (!entry || entry.status !== "running" || entry.abortedLastRun !== true) {
+    if (!entry) {
+      continue;
+    }
+    if (entry.status && entry.status !== "running") {
+      continue;
+    }
+    if (entry.abortedLastRun !== true) {
       continue;
     }
     if (shouldSkipMainRecovery(entry, sessionKey)) {
