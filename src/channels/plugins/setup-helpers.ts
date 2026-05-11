@@ -25,6 +25,8 @@ const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
   "name",
   "token",
   "tokenFile",
+  "botId",
+  "secret",
   "botToken",
   "appToken",
   "account",
@@ -81,6 +83,7 @@ const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
 ]);
 
 const NAMED_ACCOUNT_PROMOTION_KEYS_BY_CHANNEL: Record<string, readonly string[]> = {
+  wecom: ["botId", "secret"],
   matrix: [
     "name",
     "homeserver",
@@ -288,24 +291,54 @@ export function createPatchedAccountSetupAdapter(params: {
       }),
     validateInput: params.validateInput,
     applyAccountConfig: ({ cfg, accountId, input }) => {
+      const scopedCfg =
+        params.alwaysUseAccounts || normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID
+          ? cfg
+          : (() => {
+              const channels = cfg.channels as Record<string, unknown> | undefined;
+              const base = channels?.[params.channelKey] as ChannelSectionBase | undefined;
+              const baseName = base?.name;
+              if (!baseName) {
+                return moveSingleAccountChannelSectionToDefaultAccount({
+                  cfg,
+                  channelKey: params.channelKey,
+                });
+              }
+              const { name: _ignored, ...baseWithoutName } = base;
+              const promoted = moveSingleAccountChannelSectionToDefaultAccount({
+                cfg: {
+                  ...cfg,
+                  channels: {
+                    ...cfg.channels,
+                    [params.channelKey]: baseWithoutName,
+                  },
+                } as OpenClawConfig,
+                channelKey: params.channelKey,
+              });
+              return {
+                ...promoted,
+                channels: {
+                  ...promoted.channels,
+                  [params.channelKey]: {
+                    ...((promoted.channels as Record<string, unknown> | undefined)?.[
+                      params.channelKey
+                    ] as ChannelSectionBase | undefined),
+                    name: baseName,
+                  },
+                },
+              } as OpenClawConfig;
+            })();
       const next = prepareScopedSetupConfig({
-        cfg,
+        cfg: scopedCfg,
         channelKey: params.channelKey,
         accountId,
         name: input.name,
         alwaysUseAccounts: params.alwaysUseAccounts,
         migrateBaseName: !params.alwaysUseAccounts,
       });
-      const promoted =
-        params.alwaysUseAccounts || normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID
-          ? next
-          : moveSingleAccountChannelSectionToDefaultAccount({
-              cfg: next,
-              channelKey: params.channelKey,
-            });
       const patch = params.buildPatch(input);
       return patchScopedAccountConfig({
-        cfg: promoted,
+        cfg: next,
         channelKey: params.channelKey,
         accountId,
         patch,

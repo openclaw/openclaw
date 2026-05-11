@@ -7,11 +7,12 @@ import { resolveChannelSetupWizardAdapterForPlugin } from "./registry.js";
 
 function createSetupPlugin(params: {
   setupWizard: ChannelSetupPlugin["setupWizard"];
+  id?: string;
 }): ChannelSetupPlugin {
   return {
     ...createChannelTestPluginBase({
-      id: "demo",
-      label: "Demo",
+      id: params.id ?? "demo",
+      label: params.id === "wecom" ? "WeCom" : "Demo",
     }),
     setup: {
       applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg,
@@ -70,5 +71,155 @@ describe("resolveChannelSetupWizardAdapterForPlugin", () => {
     const plugin = createSetupPlugin({ setupWizard });
 
     expect(resolveChannelSetupWizardAdapterForPlugin(plugin)).toBe(setupWizard);
+  });
+
+  it("scopes WeCom declarative wizard callbacks to the selected account", async () => {
+    const readDefaultAccount = (cfg: OpenClawConfig) => {
+      const channel = cfg.channels?.wecom as
+        | {
+            defaultAccount?: string;
+            botId?: string;
+            secret?: string;
+            accounts?: Record<string, { botId?: string; secret?: string; enabled?: boolean }>;
+          }
+        | undefined;
+      const accountId = channel?.defaultAccount ?? "default";
+      return {
+        accountId,
+        account: channel?.accounts?.[accountId] ?? channel ?? {},
+      };
+    };
+    const writeDefaultAccount = (
+      cfg: OpenClawConfig,
+      patch: Record<string, unknown>,
+    ): OpenClawConfig => {
+      const channel = cfg.channels?.wecom as
+        | { defaultAccount?: string; accounts?: Record<string, Record<string, unknown>> }
+        | undefined;
+      const accountId = channel?.defaultAccount ?? "default";
+      const accounts = channel?.accounts;
+      if (!accounts) {
+        return {
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            wecom: {
+              ...channel,
+              ...patch,
+            },
+          },
+        } as OpenClawConfig;
+      }
+      return {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          wecom: {
+            ...channel,
+            accounts: {
+              ...accounts,
+              [accountId]: {
+                ...accounts[accountId],
+                ...patch,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+    };
+    const setupWizard: ChannelSetupWizard = {
+      channel: "wecom",
+      status: {
+        configuredLabel: "Configured",
+        unconfiguredLabel: "Not configured",
+        resolveConfigured: ({ cfg }) => {
+          const { account } = readDefaultAccount(cfg);
+          return Boolean(account.botId && account.secret);
+        },
+      },
+      credentials: [
+        {
+          inputKey: "token",
+          providerHint: "WeCom",
+          credentialLabel: "Bot ID",
+          envPrompt: "Use env?",
+          keepPrompt: "Keep Bot ID?",
+          inputPrompt: "Bot ID",
+          inspect: ({ cfg }) => {
+            const { account } = readDefaultAccount(cfg);
+            return {
+              accountConfigured: Boolean(account.botId),
+              hasConfiguredValue: Boolean(account.botId),
+              resolvedValue: account.botId,
+            };
+          },
+          applySet: ({ cfg, resolvedValue }) => writeDefaultAccount(cfg, { botId: resolvedValue }),
+        },
+        {
+          inputKey: "privateKey",
+          providerHint: "WeCom",
+          credentialLabel: "Secret",
+          envPrompt: "Use env?",
+          keepPrompt: "Keep Secret?",
+          inputPrompt: "Secret",
+          inspect: ({ cfg }) => {
+            const { account } = readDefaultAccount(cfg);
+            return {
+              accountConfigured: Boolean(account.secret),
+              hasConfiguredValue: Boolean(account.secret),
+              resolvedValue: account.secret,
+            };
+          },
+          applySet: ({ cfg, resolvedValue }) => writeDefaultAccount(cfg, { secret: resolvedValue }),
+        },
+      ],
+      finalize: ({ cfg }) => {
+        const { account } = readDefaultAccount(cfg);
+        return account.botId && account.secret
+          ? { cfg: writeDefaultAccount(cfg, { enabled: true }) }
+          : undefined;
+      },
+    };
+    const plugin = createSetupPlugin({ id: "wecom", setupWizard });
+    const adapter = resolveChannelSetupWizardAdapterForPlugin(plugin);
+    const prompter = {
+      text: async ({ message }: { message: string }) =>
+        message === "Bot ID" ? "alerts-bot" : "alerts-secret",
+      confirm: async () => false,
+      select: async () => "unused",
+      note: async () => undefined,
+    };
+
+    const configured = await adapter?.configure({
+      cfg: {
+        channels: {
+          wecom: {
+            enabled: true,
+            botId: "main-bot",
+            secret: "main-secret",
+            accounts: {
+              main: { name: "Main" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      runtime: {} as never,
+      prompter: prompter as never,
+      options: { secretInputMode: "plaintext" },
+      accountOverrides: { wecom: "alerts" },
+      shouldPromptAccountIds: false,
+      forceAllowFrom: false,
+    });
+
+    expect(configured?.cfg.channels?.wecom).toMatchObject({
+      enabled: true,
+      accounts: {
+        main: { name: "Main", botId: "main-bot", secret: "main-secret" },
+        alerts: { enabled: true, botId: "alerts-bot", secret: "alerts-secret" },
+      },
+    });
+    expect(configured?.cfg.channels?.wecom).not.toHaveProperty("botId");
+    expect(configured?.cfg.channels?.wecom).not.toHaveProperty("secret");
+    expect(configured?.cfg.channels?.wecom).not.toHaveProperty("defaultAccount");
   });
 });

@@ -109,6 +109,20 @@ beforeEach(() => {
           },
         },
       },
+      {
+        pluginId: "resolverless-chat",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: "resolverless-chat",
+            label: "Resolverless Chat",
+          }),
+          setup: {
+            singleAccountKeysToMove: externalSingleAccountKeysToMove,
+            namedAccountPromotionKeys: externalNamedAccountPromotionKeys,
+          },
+        },
+      },
     ]),
   );
 });
@@ -292,6 +306,60 @@ describe("createPatchedAccountSetupAdapter", () => {
     });
     expect(next.channels?.["external-chat"]).not.toHaveProperty("botId");
     expect(next.channels?.["external-chat"]).not.toHaveProperty("botSecret");
+  });
+
+  it("promotes credentials into the sole existing account before seeding the selected account", () => {
+    const adapter = createPatchedAccountSetupAdapter({
+      channelKey: "resolverless-chat",
+      buildPatch: (input) => {
+        const record = input as ChannelSetupInput & Record<string, unknown>;
+        return {
+          botId: record.botId,
+          botSecret: record.botSecret,
+        };
+      },
+    });
+
+    const next = adapter.applyAccountConfig({
+      cfg: asConfig({
+        channels: {
+          "resolverless-chat": {
+            enabled: true,
+            botId: "main-bot",
+            botSecret: "main-secret",
+            accounts: {
+              main: { name: "Main" },
+            },
+          },
+        },
+      }),
+      accountId: "alerts",
+      input: {
+        name: "Alerts",
+        botId: "alerts-bot",
+        botSecret: "alerts-secret",
+      } as ChannelSetupInput,
+    });
+
+    expect(next.channels?.["resolverless-chat"]).toMatchObject({
+      enabled: true,
+      accounts: {
+        main: {
+          name: "Main",
+          botId: "main-bot",
+          botSecret: "main-secret",
+        },
+        alerts: {
+          enabled: true,
+          name: "Alerts",
+          botId: "alerts-bot",
+          botSecret: "alerts-secret",
+        },
+      },
+    });
+    expect(next.channels?.["resolverless-chat"]).not.toHaveProperty("botId");
+    expect(next.channels?.["resolverless-chat"]).not.toHaveProperty("botSecret");
+    expect(next.channels?.["resolverless-chat"]?.accounts).not.toHaveProperty("default");
   });
 
   it("can store the default account in accounts.default", () => {
