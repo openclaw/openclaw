@@ -542,6 +542,8 @@ export async function performGatewaySessionReset(params: {
     const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
     const resetPreservedSelection = resolveResetPreservedSelection({
       entry: currentEntry,
+      cfg,
+      agentId: sessionAgentId,
     });
     const resetEntry = {
       ...stripRuntimeModelState(currentEntry),

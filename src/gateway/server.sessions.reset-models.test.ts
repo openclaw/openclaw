@@ -148,6 +148,60 @@ test("sessions.reset preserves legacy explicit model overrides without modelOver
   expect(store["agent:main:main"]?.model).toBe("claude-opus-4-1");
 });
 
+test("sessions.reset drops stale legacy openai-codex overrides after native codex migration", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentConfig = {
+    agentRuntime: {
+      id: "codex",
+    },
+    model: {
+      primary: "openai/gpt-5.5",
+    },
+  };
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-native-codex-migration", {
+        providerOverride: "openai-codex",
+        modelOverride: "gpt-5.5",
+        modelProvider: "openai-codex",
+        model: "gpt-5.5",
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: {
+      providerOverride?: string;
+      modelOverride?: string;
+      modelProvider?: string;
+      model?: string;
+    };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.providerOverride).toBeUndefined();
+  expect(reset.payload?.entry.modelOverride).toBeUndefined();
+  expect(reset.payload?.entry.modelProvider).toBe("openai");
+  expect(reset.payload?.entry.model).toBe("gpt-5.5");
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      providerOverride?: string;
+      modelOverride?: string;
+      modelProvider?: string;
+      model?: string;
+    }
+  >;
+  expect(store["agent:main:main"]?.providerOverride).toBeUndefined();
+  expect(store["agent:main:main"]?.modelOverride).toBeUndefined();
+  expect(store["agent:main:main"]?.modelProvider).toBe("openai");
+  expect(store["agent:main:main"]?.model).toBe("gpt-5.5");
+});
+
 test("sessions.reset clears fallback-pinned model overrides and restores the selected model", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentConfig = {
