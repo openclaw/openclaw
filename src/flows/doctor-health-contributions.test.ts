@@ -202,7 +202,6 @@ describe("doctor health contributions", () => {
       mocks.replaceConfigFile.mockResolvedValue(undefined);
       mocks.logConfigUpdated.mockReturnValue(undefined);
       mocks.applyWizardMetadata.mockImplementation((cfg: unknown) => cfg);
-      mocks.formatCliCommand.mockImplementation((cmd: string) => cmd);
     });
 
     it("suppresses trailer on clean run with no pending changes", async () => {
@@ -217,13 +216,13 @@ describe("doctor health contributions", () => {
       expect(logMock).not.toHaveBeenCalledWith(expect.stringContaining("to apply changes"));
     });
 
-    it("prints trailer when pending changes exist and --fix was not passed", async () => {
+    it("suppresses trailer on write even when --fix was not passed (hint emitted upstream by finalize flow)", async () => {
       const contribution = requireDoctorContribution("doctor:write-config");
       const { ctx, logMock } = makeWriteConfigCtx({ shouldWriteConfig: true, shouldRepair: false });
 
       await contribution.run(ctx);
 
-      expect(logMock).toHaveBeenCalledWith(expect.stringContaining("to apply changes"));
+      expect(logMock).not.toHaveBeenCalledWith(expect.stringContaining("to apply changes"));
     });
 
     it("suppresses trailer when pending changes exist but --fix was passed", async () => {
