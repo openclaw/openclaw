@@ -777,12 +777,137 @@ describe("spawnAcpDirect", () => {
       mode: "persistent",
     });
     expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
+    const gatewayCalls = gatewayRequests();
+    const patchCallIndex = gatewayCalls.findIndex((call) => call.method === "sessions.patch");
+    const agentCallIndex = gatewayCalls.findIndex((call) => call.method === "agent");
+    expect(patchCallIndex).toBeGreaterThanOrEqual(0);
+    expect(agentCallIndex).toBeGreaterThanOrEqual(0);
+    const initializeOrder = hoisted.initializeSessionMock.mock.invocationCallOrder[0];
+    const patchOrder = hoisted.callGatewayMock.mock.invocationCallOrder[patchCallIndex];
+    const agentOrder = hoisted.callGatewayMock.mock.invocationCallOrder[agentCallIndex];
+    expect(initializeOrder).toBeLessThan(patchOrder);
+    expect(patchOrder).toBeLessThan(agentOrder);
     const transcriptCalls = hoisted.resolveSessionTranscriptFileMock.mock.calls.map(
       (call: unknown[]) => call[0] as { threadId?: string },
     );
     expect(transcriptCalls).toHaveLength(2);
     expect(transcriptCalls[0]?.threadId).toBeUndefined();
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
+  });
+
+  it("persists child-thread transcript metadata for fresh ACP session entries created during initialize", async () => {
+    let initializedSessionKey: string | undefined;
+    hoisted.loadSessionStoreMock.mockImplementation(() =>
+      initializedSessionKey
+        ? {
+            [initializedSessionKey]: {
+              sessionId: "fresh-sess-123",
+              updatedAt: Date.now(),
+            },
+          }
+        : {},
+    );
+    hoisted.initializeSessionMock.mockImplementationOnce(async (argsUnknown: unknown) => {
+      const args = argsUnknown as AcpInitializeSessionInput;
+      initializedSessionKey = args.sessionKey;
+      const runtimeSessionName = `${args.sessionKey}:runtime`;
+      return {
+        runtime: {
+          close: vi.fn().mockResolvedValue(undefined),
+        },
+        handle: {
+          sessionKey: args.sessionKey,
+          backend: "acpx",
+          runtimeSessionName,
+          agentSessionId: "codex-inner-1",
+          backendSessionId: "acpx-1",
+        },
+        meta: {
+          backend: "acpx",
+          agent: args.agent,
+          runtimeSessionName,
+          identity: {
+            state: "pending",
+            source: "ensure",
+            acpxSessionId: "acpx-1",
+            agentSessionId: "codex-inner-1",
+            lastUpdatedAt: Date.now(),
+          },
+          mode: args.mode,
+          state: "idle",
+          lastActivityAt: Date.now(),
+        },
+      };
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+        agentThreadId: "requester-thread",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    const transcriptCalls = hoisted.resolveSessionTranscriptFileMock.mock.calls.map(
+      (call: unknown[]) => call[0] as { sessionId?: string; threadId?: string },
+    );
+    expect(transcriptCalls).toHaveLength(2);
+    expect(transcriptCalls[0]).toEqual(
+      expect.objectContaining({
+        sessionId: "fresh-sess-123",
+        threadId: undefined,
+      }),
+    );
+    expect(transcriptCalls[1]).toEqual(
+      expect.objectContaining({
+        sessionId: "fresh-sess-123",
+        threadId: "child-thread",
+      }),
+    );
+  });
+
+  it("cleans up a child ACP session when initialization fails before session patching", async () => {
+    hoisted.initializeSessionMock.mockRejectedValueOnce(new Error("acpx unavailable"));
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+        agentThreadId: "requester-thread",
+      },
+    );
+
+    const failed = expectFailedSpawn(result, "error");
+    expect(failed.errorCode).toBe("spawn_failed");
+    expect(failed.error).toBe("acpx unavailable");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.patch",
+      }),
+    );
+    expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shouldDeleteSession: true,
+        deleteTranscript: true,
+      }),
+    );
   });
 
   it("allows ACP resume IDs recorded for the requester session", async () => {

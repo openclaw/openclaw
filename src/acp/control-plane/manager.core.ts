@@ -855,7 +855,9 @@ export class AcpSessionManager {
                 });
               },
             });
-            if (!turnOutcome.sawTerminalEvent) {
+            // Some ACP adapters close their async stream after final output
+            // without emitting a terminal done event.
+            if (!turnOutcome.sawTerminalEvent && !turnOutcome.sawOutput) {
               throw new AcpRuntimeError(
                 "ACP_TURN_FAILED",
                 "ACP turn ended without a terminal done event.",

@@ -12,6 +12,20 @@ export type AcpTurnStreamOutcome = {
   sawTerminalEvent: boolean;
 };
 
+function acpEventHasOutputEvidence(
+  event: Extract<AcpRuntimeEvent, { type: "text_delta" | "tool_call" }>,
+): boolean {
+  if (event.type === "text_delta") {
+    return event.stream !== "thought" && Boolean(normalizeText(event.text));
+  }
+  return Boolean(
+    normalizeText(event.text) ||
+    normalizeText(event.title) ||
+    normalizeText(event.status) ||
+    normalizeText(event.toolCallId),
+  );
+}
+
 export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
   turn: AcpRuntimeTurnInput;
@@ -37,7 +51,7 @@ export async function consumeAcpTurnStream(params: {
         normalizeText(event.message) || "ACP turn failed before completion.",
       );
     } else if (event.type === "text_delta" || event.type === "tool_call") {
-      sawOutput = true;
+      sawOutput ||= acpEventHasOutputEvidence(event);
       await params.onOutputEvent?.(event);
     }
     await params.onEvent?.(event);

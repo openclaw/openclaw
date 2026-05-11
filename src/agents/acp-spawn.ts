@@ -918,9 +918,9 @@ async function initializeAcpSpawnRuntime(params: {
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
-  const sessionStore = loadSessionStore(storePath);
+  let sessionStore = loadSessionStore(storePath);
   let sessionEntry: SessionEntry | undefined = sessionStore[params.sessionKey];
-  const sessionId = sessionEntry?.sessionId;
+  let sessionId = sessionEntry?.sessionId;
   if (sessionId) {
     sessionEntry = await persistAcpSpawnSessionFileBestEffort({
       sessionId,
@@ -950,6 +950,23 @@ async function initializeAcpSpawnRuntime(params: {
     cwd: params.cwd,
     backendId: params.cfg.acp?.backend,
   });
+
+  if (!sessionId) {
+    sessionStore = loadSessionStore(storePath);
+    sessionEntry = sessionStore[params.sessionKey];
+    sessionId = sessionEntry?.sessionId;
+    if (sessionId) {
+      sessionEntry = await persistAcpSpawnSessionFileBestEffort({
+        sessionId,
+        sessionKey: params.sessionKey,
+        sessionStore,
+        storePath,
+        sessionEntry,
+        agentId: params.targetAgentId,
+        stage: "spawn",
+      });
+    }
+  }
 
   return {
     initialized,
@@ -1285,16 +1302,6 @@ export async function spawnAcpDirect(
   let sessionCreated = false;
   let initializedRuntime: AcpSpawnRuntimeCloseHandle | undefined;
   try {
-    await callGateway({
-      method: "sessions.patch",
-      params: {
-        key: sessionKey,
-        spawnedBy: requesterInternalKey,
-        ...subagentEnvelopeState.childSessionPatch,
-        ...(params.label ? { label: params.label } : {}),
-      },
-      timeoutMs: 10_000,
-    });
     sessionCreated = true;
     const initializedSession = await initializeAcpSpawnRuntime({
       cfg,
@@ -1308,6 +1315,17 @@ export async function spawnAcpDirect(
       cwd: runtimeCwd,
     });
     initializedRuntime = initializedSession.runtimeCloseHandle;
+
+    await callGateway({
+      method: "sessions.patch",
+      params: {
+        key: sessionKey,
+        spawnedBy: requesterInternalKey,
+        ...subagentEnvelopeState.childSessionPatch,
+        ...(params.label ? { label: params.label } : {}),
+      },
+      timeoutMs: 10_000,
+    });
 
     if (preparedBinding) {
       ({ binding } = await bindPreparedAcpThread({

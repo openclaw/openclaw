@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import { resetHeartbeatWakeStateForTests } from "../../infra/heartbeat-wake.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
-import type { AcpRuntime, AcpRuntimeCapabilities } from "../runtime/types.js";
+import type { AcpRuntime, AcpRuntimeCapabilities, AcpRuntimeEvent } from "../runtime/types.js";
 
 const hoisted = vi.hoisted(() => {
   const listAcpSessionEntriesMock = vi.fn();
@@ -2214,7 +2214,7 @@ describe("AcpSessionManager", () => {
     expect(states.at(-1)).toBe("error");
   });
 
-  it("rejects ACP streams that end without a terminal done event", async () => {
+  it("accepts ACP streams that close after output without a terminal done event", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -2230,6 +2230,115 @@ describe("AcpSessionManager", () => {
         type: "text_delta" as const,
         stream: "output" as const,
         text: "Starting work...",
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-1",
+    });
+
+    const states = extractStatesFromUpserts();
+    expect(states).toContain("running");
+    expect(states.at(-1)).toBe("idle");
+  });
+
+  it("rejects ACP streams that close without output or a terminal done event", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    runtimeState.runTurn.mockImplementation(async function* () {
+      for (const event of [] as AcpRuntimeEvent[]) {
+        yield event;
+      }
+    });
+
+    const manager = new AcpSessionManager();
+    await expectRejectedRecord(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-1",
+      }),
+      {
+        code: "ACP_TURN_FAILED",
+        message: "ACP turn ended without a terminal done event.",
+      },
+    );
+
+    const states = extractStatesFromUpserts();
+    expect(states).toContain("running");
+    expect(states.at(-1)).toBe("error");
+  });
+
+  it("rejects ACP streams that close after only empty output without a terminal done event", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    runtimeState.runTurn.mockImplementation(async function* () {
+      yield {
+        type: "text_delta" as const,
+        stream: "output" as const,
+        text: "   ",
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await expectRejectedRecord(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-1",
+      }),
+      {
+        code: "ACP_TURN_FAILED",
+        message: "ACP turn ended without a terminal done event.",
+      },
+    );
+
+    const states = extractStatesFromUpserts();
+    expect(states).toContain("running");
+    expect(states.at(-1)).toBe("error");
+  });
+
+  it("rejects ACP streams that close after only thought output without a terminal done event", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    runtimeState.runTurn.mockImplementation(async function* () {
+      yield {
+        type: "text_delta" as const,
+        stream: "thought" as const,
+        text: "Thinking...",
       };
     });
 
