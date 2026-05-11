@@ -682,7 +682,7 @@ describe("scheduleRestartSentinelWake", () => {
     } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
     mocks.parseSessionThreadInfo.mockReturnValue({
       baseSessionKey: "agent:main:telegram:group:-1003826723328",
-      threadId: "13757",
+      threadId: "stale-topic-suffix",
     });
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},

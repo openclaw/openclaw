@@ -546,8 +546,8 @@ async function loadRestartSentinelStartupTask(params: {
     const to = origin?.to;
     const threadId =
       payload.threadId ??
-      sessionThreadId ??
-      (origin?.threadId != null ? stringifyRouteThreadId(origin.threadId) : undefined);
+      (origin?.threadId != null ? stringifyRouteThreadId(origin.threadId) : undefined) ??
+      sessionThreadId;
     let resolvedTo: string | undefined;
     let replyToId: string | undefined;
     let resolvedThreadId = threadId;
