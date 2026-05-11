@@ -3268,6 +3268,42 @@ public struct TalkSessionCreateParams: Codable, Sendable {
     }
 }
 
+public struct TalkRealtimeConsultParams: Codable, Sendable {
+    public let sessionkey: String?
+    public let args: AnyCodable
+    public let transcript: [[String: AnyCodable]]?
+
+    public init(
+        sessionkey: String?,
+        args: AnyCodable,
+        transcript: [[String: AnyCodable]]?)
+    {
+        self.sessionkey = sessionkey
+        self.args = args
+        self.transcript = transcript
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case args
+        case transcript
+    }
+}
+
+public struct TalkRealtimeConsultResult: Codable, Sendable {
+    public let result: String
+
+    public init(
+        result: String)
+    {
+        self.result = result
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case result
+    }
+}
+
 public struct TalkSessionCreateResult: Codable, Sendable {
     public let sessionid: String
     public let provider: String?

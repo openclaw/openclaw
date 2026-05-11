@@ -42,4 +42,11 @@ import Testing
             userInfo: [NSLocalizedDescriptionKey: "queue enqueue failed"])
         #expect(TalkModeManager._test_isPCMFormatRejectedByAPI(error) == false)
     }
+
+    @Test func normalizesOpenAITTSFormatsToMP3ForLocalPlayback() {
+        #expect(TalkModeManager._test_normalizedOpenAIResponseFormat("mp3") == "mp3")
+        #expect(TalkModeManager._test_normalizedOpenAIResponseFormat("wav") == "mp3")
+        #expect(TalkModeManager._test_normalizedOpenAIResponseFormat("opus") == "mp3")
+        #expect(TalkModeManager._test_normalizedOpenAIResponseFormat(nil) == "mp3")
+    }
 }
