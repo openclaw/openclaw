@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import * as musicGenerationRuntime from "../../music-generation/runtime.js";
+import * as fetchTimeout from "../../utils/fetch-timeout.js";
 import * as musicGenerateBackground from "./music-generate-background.js";
 import { createMusicGenerateTool } from "./music-generate-tool.js";
 
@@ -103,6 +104,15 @@ vi.mock("../../media/web-media.js", async () => {
   };
 });
 vi.mock("../../music-generation/runtime.js", () => musicGenerationRuntimeMocks);
+vi.mock("../../utils/fetch-timeout.js", async () => {
+  const actual = await vi.importActual<typeof import("../../utils/fetch-timeout.js")>(
+    "../../utils/fetch-timeout.js",
+  );
+  return {
+    ...actual,
+    buildTimeoutAbortSignal: vi.fn(actual.buildTimeoutAbortSignal),
+  };
+});
 vi.mock("./music-generate-background.js", () => musicGenerateBackgroundMocks);
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
@@ -128,6 +138,7 @@ function resetMusicGenerateMocks() {
   mediaStoreMocks.saveMediaBuffer.mockReset();
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+  vi.mocked(fetchTimeout.buildTimeoutAbortSignal).mockClear();
   taskExecutorMocks.createRunningTaskRun.mockReset();
   taskExecutorMocks.completeTaskRunByRunId.mockReset();
   taskExecutorMocks.failTaskRunByRunId.mockReset();
@@ -778,7 +789,7 @@ describe("createMusicGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
-            musicGenerationModel: { primary: "minimax/music-2.6" },
+            musicGenerationModel: { primary: "minimax/music-2.6", timeoutMs: 180_000 },
           },
         },
         tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
@@ -802,5 +813,12 @@ describe("createMusicGenerateTool", () => {
     };
     expect(loadOptions.requestInit?.signal).toBeInstanceOf(AbortSignal);
     expect(loadOptions.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
+    expect(generateMusicOptions().timeoutMs).toBe(180_000);
+    expect(fetchTimeout.buildTimeoutAbortSignal).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetchTimeout.buildTimeoutAbortSignal).mock.calls[0]?.[0]).toMatchObject({
+      operation: "music-generate.reference-fetch",
+      timeoutMs: 30_000,
+      url: "http://198.18.0.153/reference.png",
+    });
   });
 });
