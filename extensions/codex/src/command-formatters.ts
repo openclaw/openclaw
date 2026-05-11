@@ -243,6 +243,9 @@ function escapeCodexChatTextPreservingAt(value: string): string {
 }
 
 function formatCodexAccountLine(value: string): string {
+  if (value === "") {
+    return "";
+  }
   const safe = formatCodexTextForDisplay(value);
   const emailPattern = /[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+/gu;
   let formatted = "";
