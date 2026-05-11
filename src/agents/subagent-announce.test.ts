@@ -358,7 +358,6 @@ describe("subagent announce seam flow", () => {
         sessionId: "session-typed-channel-steer",
         updatedAt: Date.now(),
         deliveryContext: { channel: "discord", to: "channel:C1" },
-        lastChannel: "discord",
       },
     }));
     isEmbeddedPiRunActiveMock.mockReturnValue(true);
