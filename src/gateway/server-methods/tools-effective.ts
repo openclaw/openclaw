@@ -11,11 +11,12 @@ import {
   validateToolsEffectiveParams,
 } from "../protocol/index.js";
 import {
-  deliveryContextFromSession,
   getActivePluginChannelRegistryVersion,
   getActivePluginRegistryVersion,
   listAgentIds,
   loadSessionEntry,
+  readSqliteSessionDeliveryContext,
+  readSqliteSessionRoutingInfo,
   resolveEffectiveToolInventory,
   resolveReplyToMode,
   resolveRuntimeConfigCacheKey,
@@ -231,8 +232,18 @@ function resolveTrustedToolsEffectiveContext(params: {
     return null;
   }
 
-  const delivery = deliveryContextFromSession(loaded.entry);
+  const delivery = readSqliteSessionDeliveryContext({
+    agentId: loaded.agentId,
+    sessionKey: loaded.canonicalKey,
+  });
+  const routing = readSqliteSessionRoutingInfo({
+    agentId: loaded.agentId,
+    sessionKey: loaded.canonicalKey,
+  });
   const resolvedModel = resolveSessionModelRef(loaded.cfg, loaded.entry, sessionAgentId);
+  const messageProvider = delivery?.channel ?? routing?.channel ?? loaded.entry.channel;
+  const accountId = delivery?.accountId ?? routing?.accountId ?? loaded.entry.lastAccountId;
+  const threadId = delivery?.threadId ?? routing?.conversationThreadId ?? loaded.entry.lastThreadId;
   return {
     cfg: loaded.cfg,
     agentId: sessionAgentId,
@@ -240,32 +251,18 @@ function resolveTrustedToolsEffectiveContext(params: {
     senderIsOwner: params.senderIsOwner,
     modelProvider: resolvedModel.provider,
     modelId: resolvedModel.model,
-    messageProvider:
-      delivery?.channel ??
-      loaded.entry.lastChannel ??
-      loaded.entry.channel ??
-      loaded.entry.origin?.provider,
-    accountId: delivery?.accountId ?? loaded.entry.lastAccountId ?? loaded.entry.origin?.accountId,
+    messageProvider,
+    accountId,
     currentChannelId: delivery?.to,
-    currentThreadTs:
-      delivery?.threadId != null
-        ? stringifyRouteThreadId(delivery.threadId)
-        : loaded.entry.lastThreadId != null
-          ? stringifyRouteThreadId(loaded.entry.lastThreadId)
-          : loaded.entry.origin?.threadId != null
-            ? stringifyRouteThreadId(loaded.entry.origin.threadId)
-            : undefined,
+    currentThreadTs: threadId != null ? stringifyRouteThreadId(threadId) : undefined,
     groupId: loaded.entry.groupId,
     groupChannel: loaded.entry.groupChannel,
     groupSpace: loaded.entry.space,
     replyToMode: resolveReplyToMode(
       loaded.cfg,
-      delivery?.channel ??
-        loaded.entry.lastChannel ??
-        loaded.entry.channel ??
-        loaded.entry.origin?.provider,
-      delivery?.accountId ?? loaded.entry.lastAccountId ?? loaded.entry.origin?.accountId,
-      loaded.entry.chatType ?? loaded.entry.origin?.chatType,
+      messageProvider,
+      accountId,
+      routing?.chatType ?? loaded.entry.chatType,
     ),
   };
 }

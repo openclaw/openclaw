@@ -478,6 +478,10 @@ Completed consolidation/deletion highlights:
   delivery/routing rows before queueing heartbeat wakes or routed agent-turn
   continuations. It no longer reconstructs delivery context from the
   session-entry JSON shadow.
+- Gateway `tools.effective` context resolution now reads typed SQLite
+  delivery/routing rows for provider, account, target, thread, and reply-mode
+  inputs. It no longer recovers those hot routing fields from stale
+  `session_entries.entry_json` origin shadows.
 - Session delivery route preservation now follows typed chat metadata and
   persisted delivery columns. It no longer extracts channel hints, direct/main
   markers, or thread shape from `sessionKey`; internal webchat routes only
