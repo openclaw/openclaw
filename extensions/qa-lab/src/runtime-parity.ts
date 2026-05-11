@@ -157,7 +157,17 @@ function sha256(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function normalizeQaTempPaths(value: string) {
+  return value.replaceAll(
+    /\/(?:private\/)?tmp\/openclaw\/openclaw-qa-suite-[^/\s"',)]+/gu,
+    "<qa-temp>",
+  );
+}
+
 function normalizeForStableHash(value: unknown): unknown {
+  if (typeof value === "string") {
+    return normalizeVolatileRuntimeText(value);
+  }
   if (Array.isArray(value)) {
     return value.map((entry) => normalizeForStableHash(entry));
   }
@@ -188,8 +198,7 @@ function parseJsonValue(value: string): unknown {
 }
 
 function normalizeVolatileRuntimeText(value: string) {
-  return value
-    .replaceAll(/\/(?:private\/)?tmp\/openclaw\/openclaw-qa-suite-[^\s"',)]+/gu, "<qa-temp>")
+  return normalizeQaTempPaths(value)
     .replaceAll(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/giu, "<uuid>")
     .replaceAll(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\b/gu, "<timestamp>")
     .replaceAll(/EXTERNAL_UNTRUSTED_CONTENT id="[^"]+"/gu, 'EXTERNAL_UNTRUSTED_CONTENT id="<id>"')

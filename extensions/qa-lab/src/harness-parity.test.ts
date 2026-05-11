@@ -5,6 +5,7 @@ import {
   type HarnessVariant,
 } from "./harness-parity.js";
 import type { RuntimeId, RuntimeParityCell } from "./runtime-parity.js";
+import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
 
 const LEFT: HarnessVariant = { id: "left", label: "Left", runtime: "pi" };
 const RIGHT: HarnessVariant = { id: "right", label: "Right", runtime: "pi" };
@@ -48,7 +49,11 @@ function makeCell(
   };
 }
 
-function classify(left: Partial<RuntimeParityCell>, right: Partial<RuntimeParityCell>) {
+function classify(
+  left: Partial<RuntimeParityCell>,
+  right: Partial<RuntimeParityCell>,
+  comparisonMode?: RuntimeParityComparisonMode,
+) {
   return buildHarnessParityResult({
     scenarioId: "scenario",
     left: buildHarnessParityCell({
@@ -61,6 +66,7 @@ function classify(left: Partial<RuntimeParityCell>, right: Partial<RuntimeParity
       cell: makeCell("pi", right),
       tokenUsageSource: "live-usage",
     }),
+    ...(comparisonMode ? { comparisonMode } : {}),
   }).drift;
 }
 
@@ -140,6 +146,64 @@ describe("harness parity", () => {
       ),
     ).toBe("structural");
     expect(classify({ runtimeErrorClass: "timeout" }, {})).toBe("failure-mode");
+  });
+
+  it("honors native workspace comparison mode for outcome-only harness proofs", () => {
+    expect(
+      classify(
+        {
+          transcriptBytes:
+            '{"message":{"role":"assistant","content":"same"}}\n' +
+            '{"message":{"role":"tool","content":"same result"}}\n',
+          toolCalls: [{ tool: "bash", argsHash: "sed-160", resultHash: "same-result" }],
+        },
+        {
+          transcriptBytes: '{"message":{"role":"assistant","content":"same"}}\n',
+          toolCalls: [{ tool: "bash", argsHash: "sed-200", resultHash: "same-result" }],
+        },
+        "codex-native-workspace",
+      ),
+    ).toBe("none");
+
+    expect(
+      classify(
+        { toolCalls: [{ tool: "bash", argsHash: "a", resultHash: "r1" }] },
+        { toolCalls: [{ tool: "bash", argsHash: "b", resultHash: "r2" }] },
+        "outcome-only",
+      ),
+    ).toBe("none");
+  });
+
+  it("keeps prompt and tool surface checks strict under native workspace comparison mode", () => {
+    expect(
+      classify(
+        {},
+        {
+          systemPromptReport: {
+            ...BASE_PROMPT_REPORT,
+            systemPrompt: { chars: 101, projectContextChars: 40, nonProjectContextChars: 61 },
+          },
+          toolCalls: [{ tool: "bash", argsHash: "changed", resultHash: "changed" }],
+        },
+        "codex-native-workspace",
+      ),
+    ).toBe("system-prompt");
+    expect(
+      classify(
+        {},
+        {
+          systemPromptReport: {
+            ...BASE_PROMPT_REPORT,
+            tools: {
+              schemaChars: 20,
+              entries: [{ name: "read", summaryChars: 9, schemaChars: 20, propertiesCount: 1 }],
+            },
+          },
+          toolCalls: [{ tool: "bash", argsHash: "changed", resultHash: "changed" }],
+        },
+        "outcome-only",
+      ),
+    ).toBe("tool-description");
   });
 
   it("labels mock token estimates separately from live usage", () => {

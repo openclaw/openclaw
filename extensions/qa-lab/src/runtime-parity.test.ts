@@ -42,7 +42,19 @@ function makeCell(
   };
 }
 
+function normalizeVolatileRuntimeStringForTest(value: string) {
+  return value
+    .replaceAll(/\/(?:private\/)?tmp\/openclaw\/openclaw-qa-suite-[^/\s"',)]+/gu, "<qa-temp>")
+    .replaceAll(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/giu, "<uuid>")
+    .replaceAll(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\b/gu, "<timestamp>")
+    .replaceAll(/EXTERNAL_UNTRUSTED_CONTENT id="[^"]+"/gu, 'EXTERNAL_UNTRUSTED_CONTENT id="<id>"')
+    .replaceAll(/MEDIA:[^\s"')]+/gu, "MEDIA:<media>");
+}
+
 function normalizeForStableHashForTest(value: unknown): unknown {
+  if (typeof value === "string") {
+    return normalizeVolatileRuntimeStringForTest(value);
+  }
   if (Array.isArray(value)) {
     return value.map((entry) => normalizeForStableHashForTest(entry));
   }
@@ -619,6 +631,65 @@ describe("runtime parity", () => {
         tool: "web_search",
         argsHash: stableHashForTest({ query: "openclaw" }),
         resultHash: stableHashForTest({ status: "ok", results: [] }),
+      },
+    ]);
+  });
+
+  it("normalizes per-cell QA temp roots before hashing runtime tool arguments", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRoot(
+      [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "bash",
+                input: {
+                  command: "/bin/zsh -lc \"sed -n '1,160p' QA_KICKOFF_TASK.md\"",
+                  cwd: "/private/tmp/openclaw/openclaw-qa-suite-AbCd12/workspace",
+                },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "bash",
+            content: {
+              status: "ok",
+              cwd: "/tmp/openclaw/openclaw-qa-suite-EfGh34/workspace",
+            },
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: {
+        tempRoot,
+      },
+      scenarioResult: {
+        status: "pass",
+      },
+      wallClockMs: 42,
+    });
+
+    expect(cell.toolCalls).toEqual([
+      {
+        tool: "bash",
+        argsHash: stableHashForTest({
+          command: "/bin/zsh -lc \"sed -n '1,160p' QA_KICKOFF_TASK.md\"",
+          cwd: "<qa-temp>/workspace",
+        }),
+        resultHash: stableHashForTest({
+          status: "ok",
+          cwd: "<qa-temp>/workspace",
+        }),
       },
     ]);
   });

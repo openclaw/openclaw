@@ -60,7 +60,11 @@ import {
   assertQaRuntimeSuiteScenarioMembership,
   resolveQaRuntimeSuiteScenarioIds,
 } from "./runtime-suite.js";
-import { QA_CODEX_TOOL_LOADING_MODES, type QaCodexToolLoading } from "./runtime-tool-metadata.js";
+import {
+  QA_CODEX_TOOL_LOADING_MODES,
+  runtimeToolComparisonModeForScenario,
+  type QaCodexToolLoading,
+} from "./runtime-tool-metadata.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
@@ -754,6 +758,7 @@ export async function runQaHarnessParityCommand(opts: {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const providerMode = normalizeQaProviderMode(opts.providerMode);
   const catalog = readQaScenarioPack();
+  const scenariosById = new Map(catalog.scenarios.map((scenario) => [scenario.id, scenario]));
   if (opts.runtimeSuite?.trim()) {
     assertQaRuntimeSuiteScenarioMembership({
       runtimeSuite: opts.runtimeSuite,
@@ -827,11 +832,13 @@ export async function runQaHarnessParityCommand(opts: {
       runVariantCell(left, scenarioId, "left"),
       runVariantCell(right, scenarioId, "right"),
     ]);
+    const scenario = scenariosById.get(scenarioId);
     results.push(
       buildHarnessParityResult({
         scenarioId,
         left: leftCell,
         right: rightCell,
+        ...(scenario ? { comparisonMode: runtimeToolComparisonModeForScenario(scenario) } : {}),
       }),
     );
   }

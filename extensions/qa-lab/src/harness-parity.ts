@@ -7,6 +7,7 @@ import type {
   RuntimeParityToolCall,
   RuntimeParityUsage,
 } from "./runtime-parity.js";
+import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
 
 export type HarnessVariant = {
   id: string;
@@ -247,6 +248,7 @@ export function buildHarnessParityResult(params: {
   scenarioId: string;
   left: HarnessParityCell;
   right: HarnessParityCell;
+  comparisonMode?: RuntimeParityComparisonMode;
 }): HarnessParityResult {
   const promptDelta = {
     systemPromptChars:
@@ -323,38 +325,46 @@ export function buildHarnessParityResult(params: {
       firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
     };
   }
-  const toolCallDrift = compareToolCallShape(params.left.toolCalls, params.right.toolCalls);
-  if (toolCallDrift) {
-    return {
-      scenarioId: params.scenarioId,
-      left: params.left,
-      right: params.right,
-      drift: "tool-call-shape",
-      driftDetails: toolCallDrift,
-      promptDelta,
-      tokenDeltaPercent,
-      firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
-    };
-  }
-  const toolResultDrift = compareToolResultShape(params.left.toolCalls, params.right.toolCalls);
-  if (toolResultDrift) {
-    return {
-      scenarioId: params.scenarioId,
-      left: params.left,
-      right: params.right,
-      drift: "tool-result-shape",
-      driftDetails: toolResultDrift,
-      promptDelta,
-      tokenDeltaPercent,
-      firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
-    };
+  const compareToolShapes =
+    params.comparisonMode !== "codex-native-workspace" && params.comparisonMode !== "outcome-only";
+  const compareTranscriptStructure =
+    params.comparisonMode !== "codex-native-workspace" && params.comparisonMode !== "outcome-only";
+
+  if (compareToolShapes) {
+    const toolCallDrift = compareToolCallShape(params.left.toolCalls, params.right.toolCalls);
+    if (toolCallDrift) {
+      return {
+        scenarioId: params.scenarioId,
+        left: params.left,
+        right: params.right,
+        drift: "tool-call-shape",
+        driftDetails: toolCallDrift,
+        promptDelta,
+        tokenDeltaPercent,
+        firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
+      };
+    }
+    const toolResultDrift = compareToolResultShape(params.left.toolCalls, params.right.toolCalls);
+    if (toolResultDrift) {
+      return {
+        scenarioId: params.scenarioId,
+        left: params.left,
+        right: params.right,
+        drift: "tool-result-shape",
+        driftDetails: toolResultDrift,
+        promptDelta,
+        tokenDeltaPercent,
+        firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
+      };
+    }
   }
   const leftTranscriptRecords = countComparableTranscriptRecords(params.left.transcriptBytes);
   const rightTranscriptRecords = countComparableTranscriptRecords(params.right.transcriptBytes);
   if (
-    leftTranscriptRecords !== rightTranscriptRecords ||
-    (!params.left.finalText && !!params.right.finalText) ||
-    (!!params.left.finalText && !params.right.finalText)
+    compareTranscriptStructure &&
+    (leftTranscriptRecords !== rightTranscriptRecords ||
+      (!params.left.finalText && !!params.right.finalText) ||
+      (!!params.left.finalText && !params.right.finalText))
   ) {
     return {
       scenarioId: params.scenarioId,
