@@ -2,11 +2,15 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import type { ChatType } from "../channels/chat-type.js";
+import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { recordInboundSession } from "../channels/session.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import {
+  readSqliteSessionDeliveryContext,
+  readSqliteSessionRoutingInfo,
+} from "../config/sessions/session-entries.sqlite.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
@@ -38,10 +42,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { recordChannelMessageReplyDispatch } from "../plugin-sdk/channel-message.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
-import {
-  deliveryContextFromSession,
-  mergeDeliveryContext,
-} from "../utils/delivery-context.shared.js";
+import { mergeDeliveryContext } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./server-methods/agent-timestamp.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -502,21 +504,38 @@ async function loadRestartSentinelStartupTask(params: {
 
     const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
 
-    const { cfg, entry, canonicalKey } = loadSessionEntry(sessionKey);
+    const { cfg, agentId, entry, canonicalKey } = loadSessionEntry(sessionKey);
 
     const sentinelContext = payload.deliveryContext;
-    let sessionDeliveryContext = deliveryContextFromSession(entry);
-    let chatType = entry?.origin?.chatType ?? "direct";
+    let sessionDeliveryContext: DeliveryContext | undefined = readSqliteSessionDeliveryContext({
+      agentId,
+      sessionKey: canonicalKey,
+    });
+    const routingInfo = readSqliteSessionRoutingInfo({
+      agentId,
+      sessionKey: canonicalKey,
+    });
+    let chatType = normalizeChatType(routingInfo?.chatType ?? entry?.chatType) ?? "direct";
     if (
       !hasRoutableDeliveryContext(sessionDeliveryContext) &&
       baseSessionKey &&
       baseSessionKey !== sessionKey
     ) {
-      const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
-      chatType = entry?.origin?.chatType ?? baseEntry?.origin?.chatType ?? "direct";
+      const { agentId: baseAgentId, canonicalKey: canonicalBaseKey } =
+        loadSessionEntry(baseSessionKey);
+      const baseRoutingInfo = readSqliteSessionRoutingInfo({
+        agentId: baseAgentId,
+        sessionKey: canonicalBaseKey,
+      });
+      chatType =
+        normalizeChatType(routingInfo?.chatType ?? baseRoutingInfo?.chatType ?? entry?.chatType) ??
+        "direct";
       sessionDeliveryContext = mergeDeliveryContext(
         sessionDeliveryContext,
-        deliveryContextFromSession(baseEntry),
+        readSqliteSessionDeliveryContext({
+          agentId: baseAgentId,
+          sessionKey: canonicalBaseKey,
+        }),
       );
     }
 

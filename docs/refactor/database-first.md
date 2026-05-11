@@ -474,6 +474,10 @@ Completed consolidation/deletion highlights:
   `sessionKey` pieces. Channel-scoped sessions inherit only when the typed
   session channel and chat type match the stored delivery context; shared-main
   sessions keep their stricter CLI/no-client-metadata rule.
+- Restart-sentinel wake and continuation routing now reads typed SQLite
+  delivery/routing rows before queueing heartbeat wakes or routed agent-turn
+  continuations. It no longer reconstructs delivery context from the
+  session-entry JSON shadow.
 - Session delivery route preservation now follows typed chat metadata and
   persisted delivery columns. It no longer extracts channel hints, direct/main
   markers, or thread shape from `sessionKey`; internal webchat routes only
