@@ -50,6 +50,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/OpenAI-compatible: accept the `text` field on `/v1/responses` requests so clients using the OpenAI Node SDK >= 6.x or `@langchain/openai` >= 1.x (e.g. n8n's AI Agent) no longer fail with `Unrecognized key: "text"`. The schema validates `text.format` for `text`/`json_schema`/`json_object` and `text.verbosity` per the OpenAI spec; only the default `format.type === "text"` is honored at runtime today.
 - Redact persisted secret-shaped payloads [AI]. (#79006) Thanks @pgondhi987.
 - OpenAI Codex: surface browser OAuth and device-code login failures instead of treating failed logins as empty successful auth results. Refs #80363.
 - CLI agents: carry runtime-only current-turn sender/reply context into CLI model prompts while keeping prompt-build hook input and transcript text clean.
