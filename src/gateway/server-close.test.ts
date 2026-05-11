@@ -186,6 +186,68 @@ describe("createGatewayCloseHandler", () => {
     ).toBe(true);
   });
 
+  it("drains the active-session tracker with reason=shutdown on SIGTERM/SIGINT close", async () => {
+    const drainActiveSessionsForShutdown = vi.fn(async () => ({
+      emittedSessionIds: ["session-A", "session-B"],
+      timedOut: false,
+    }));
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ drainActiveSessionsForShutdown }),
+    );
+
+    await close({ reason: "SIGTERM" });
+
+    expect(drainActiveSessionsForShutdown).toHaveBeenCalledTimes(1);
+    expect(drainActiveSessionsForShutdown.mock.calls[0][0]).toMatchObject({
+      reason: "shutdown",
+    });
+  });
+
+  it("drains the active-session tracker with reason=restart when restartExpectedMs is set", async () => {
+    const drainActiveSessionsForShutdown = vi.fn(async () => ({
+      emittedSessionIds: ["session-A"],
+      timedOut: false,
+    }));
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ drainActiveSessionsForShutdown }),
+    );
+
+    await close({ reason: "gateway restarting", restartExpectedMs: 1234 });
+
+    expect(drainActiveSessionsForShutdown).toHaveBeenCalledTimes(1);
+    expect(drainActiveSessionsForShutdown.mock.calls[0][0]).toMatchObject({
+      reason: "restart",
+    });
+  });
+
+  it("records a warning and continues shutdown when the session-end drain reports a timeout", async () => {
+    const drainActiveSessionsForShutdown = vi.fn(async () => ({
+      emittedSessionIds: ["session-A"],
+      timedOut: true,
+    }));
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ drainActiveSessionsForShutdown }),
+    );
+
+    const result = await close({ reason: "SIGTERM" });
+
+    expect(drainActiveSessionsForShutdown).toHaveBeenCalledTimes(1);
+    expect(result.warnings).toContain("session-end-drain");
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("session-end-drain timed out"),
+      ),
+    ).toBe(true);
+  });
+
+  it("skips the session-end drain step when no drain helper is provided", async () => {
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+
+    const result = await close({ reason: "SIGTERM" });
+
+    expect(result.warnings).not.toContain("session-end-drain");
+  });
+
   it("continues restart shutdown and records a warning when gateway pre-restart hook stalls", async () => {
     vi.useFakeTimers();
     mocks.triggerInternalHook.mockImplementation((event: InternalHookEvent) => {
