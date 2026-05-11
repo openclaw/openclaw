@@ -50,16 +50,21 @@ describe("runtime context prompt submission", () => {
   });
 
   it("uses a marker prompt for runtime-only events", () => {
-    expect(
-      resolveRuntimeContextPromptParts({
-        effectivePrompt: "internal event",
-        transcriptPrompt: "",
-      }),
-    ).toEqual({
+    const parts = resolveRuntimeContextPromptParts({
+      effectivePrompt: "internal event",
+      transcriptPrompt: "",
+    });
+
+    expect(parts).toEqual({
       prompt: "Continue the OpenClaw runtime event.",
       runtimeContext: "internal event",
       runtimeOnly: true,
-      runtimeSystemContext: expect.stringContaining("internal event"),
+      runtimeSystemContext: [
+        "OpenClaw runtime event.",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "internal event",
+      ].join("\n"),
     });
   });
 

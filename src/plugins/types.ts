@@ -151,6 +151,7 @@ export type {
   PluginFormat,
 } from "./manifest-types.js";
 export type {
+  OpenClawPluginActiveModelContext,
   OpenClawPluginHookOptions,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,

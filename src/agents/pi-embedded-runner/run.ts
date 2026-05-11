@@ -32,9 +32,8 @@ import {
   type AuthProfileFailureReason,
   type AuthProfileStore,
   markAuthProfileFailure,
+  markAuthProfileSuccess,
   resolveAuthProfileEligibility,
-  markAuthProfileGood,
-  markAuthProfileUsed,
 } from "../auth-profiles.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import {
@@ -2881,14 +2880,9 @@ export async function runEmbeddedPiAgent(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
           if (lastProfileId) {
-            await markAuthProfileGood({
+            await markAuthProfileSuccess({
               store: authStore,
               provider,
-              profileId: lastProfileId,
-              agentDir: params.agentDir,
-            });
-            await markAuthProfileUsed({
-              store: authStore,
               profileId: lastProfileId,
               agentDir: params.agentDir,
             });

@@ -545,6 +545,11 @@ describe("buildInboundUserContextPrefix", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
       WasMentioned: true,
+      ExplicitlyMentionedBot: false,
+      MentionedUserIds: [" U_OTHER ", "", "U_HELPER"],
+      MentionedSubteamIds: [" S_ONCALL "],
+      ImplicitMentionKinds: ["bot_thread_participant"],
+      MentionSource: "implicit_thread",
       ReplyToBody: "quoted",
       ForwardedFrom: "sender",
       ThreadStarterBody: "starter",
@@ -554,6 +559,11 @@ describe("buildInboundUserContextPrefix", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["is_group_chat"]).toBe(true);
     expect(conversationInfo["was_mentioned"]).toBe(true);
+    expect(conversationInfo["explicitly_mentioned_bot"]).toBe(false);
+    expect(conversationInfo["mentioned_user_ids"]).toEqual(["U_OTHER", "U_HELPER"]);
+    expect(conversationInfo["mentioned_subteam_ids"]).toEqual(["S_ONCALL"]);
+    expect(conversationInfo["implicit_mention_kinds"]).toEqual(["bot_thread_participant"]);
+    expect(conversationInfo["mention_source"]).toBe("implicit_thread");
     expect(conversationInfo["has_reply_context"]).toBe(true);
     expect(conversationInfo["has_forwarded_context"]).toBe(true);
     expect(conversationInfo["has_thread_starter"]).toBe(true);
@@ -751,6 +761,48 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toContain("#1200 [reply target] Bot: Earlier technical answer");
     expect(text).not.toContain("Current local chat window (untrusted metadata):");
     expect(text).not.toContain('"message_id": "34273"');
+  });
+
+  it("does not duplicate reply chain or history when a chat window already covers them", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      ReplyToId: "34273",
+      ReplyToBody: "Expected",
+      ReplyChain: [
+        {
+          messageId: "34273",
+          sender: "Sam",
+          body: "Expected",
+        },
+      ],
+      InboundHistory: [{ sender: "Sam", timestamp: 1_736_380_700_000, body: "Expected" }],
+      UntrustedStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "selected_for_current_message",
+            messages: [
+              {
+                message_id: "34273",
+                sender: "Sam",
+                timestamp_ms: 1_736_380_700_000,
+                body: "Expected",
+                is_reply_target: true,
+              },
+            ],
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    expect(text).toContain("Conversation context (untrusted, chronological");
+    expect(text).toContain("#34273");
+    expect(text).not.toContain("Reply chain of current user message");
+    expect(text).not.toContain("Reply target of current user message");
+    expect(text).not.toContain("Chat history since last reply");
   });
 
   it("omits forwarded metadata blocks unless ForwardedFrom is present", () => {

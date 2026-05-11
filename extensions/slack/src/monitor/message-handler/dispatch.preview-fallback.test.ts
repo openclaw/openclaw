@@ -8,6 +8,7 @@ const createSlackDraftStreamMock = vi.fn();
 const deliverRepliesMock = vi.fn(async () => {});
 const finalizeSlackPreviewEditMock = vi.fn(async () => {});
 const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
+const updateLastRouteMock = vi.fn(async () => {});
 const appendSlackStreamMock = vi.fn(async () => {});
 const startSlackStreamMock = vi.fn(async () => ({
   channel: "C123",
@@ -192,6 +193,14 @@ function createPreparedSlackMessage(params?: {
     user: string;
   }>;
   replyToMode?: "off" | "first" | "all" | "batched";
+  isDirectMessage?: boolean;
+  route?: Partial<{
+    agentId: string;
+    accountId: string;
+    mainSessionKey: string;
+    sessionKey: string;
+    lastRoutePolicy: "main" | "session";
+  }>;
   setSlackThreadStatus?: (params: {
     channelId: string;
     threadTs?: string;
@@ -201,6 +210,11 @@ function createPreparedSlackMessage(params?: {
   ackReactionMessageTs?: string;
   ackReactionPromise?: Promise<boolean> | null;
 }) {
+  const routeSessionKey = params?.route?.sessionKey ?? "agent:agent-1:slack:C123";
+  const mainSessionKey = params?.route?.mainSessionKey ?? "main";
+  const lastRoutePolicy =
+    params?.route?.lastRoutePolicy ?? (routeSessionKey === mainSessionKey ? "main" : "session");
+
   return {
     ctx: {
       cfg: params?.cfg ?? {},
@@ -230,8 +244,10 @@ function createPreparedSlackMessage(params?: {
     route: {
       agentId: "agent-1",
       accountId: "default",
-      mainSessionKey: "main",
-      sessionKey: "agent:agent-1:slack:C123",
+      mainSessionKey,
+      sessionKey: routeSessionKey,
+      lastRoutePolicy,
+      ...params?.route,
     },
     channelConfig: null,
     replyTarget: "channel:C123",
@@ -244,7 +260,7 @@ function createPreparedSlackMessage(params?: {
       record: {},
     },
     replyToMode: params?.replyToMode ?? "all",
-    isDirectMessage: false,
+    isDirectMessage: params?.isDirectMessage ?? false,
     isRoomish: false,
     historyKey: "history-key",
     preview: "",
@@ -588,7 +604,7 @@ vi.mock("../allow-list.js", () => ({
 
 vi.mock("../config.runtime.js", () => ({
   resolveStorePath: () => "/tmp/openclaw-store.json",
-  updateLastRoute: async () => {},
+  updateLastRoute: updateLastRouteMock,
 }));
 
 vi.mock("../replies.js", () => ({
@@ -699,6 +715,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     deliverRepliesMock.mockReset();
     finalizeSlackPreviewEditMock.mockReset();
     postMessageMock.mockClear();
+    updateLastRouteMock.mockReset();
     appendSlackStreamMock.mockReset();
     startSlackStreamMock.mockReset();
     stopSlackStreamMock.mockReset();
@@ -739,6 +756,75 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("updates non-main DM last-route metadata on the prepared thread session", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { session: { dmScope: "per-channel-peer" } },
+        isDirectMessage: true,
+        message: {
+          channel: "D123",
+          user: "U1",
+          ts: "501.000",
+          thread_ts: "500.000",
+        },
+        route: {
+          agentId: "main",
+          mainSessionKey: "agent:main:main",
+          sessionKey: "agent:main:slack:direct:u1",
+          lastRoutePolicy: "session",
+        },
+        ctxPayload: {
+          MessageThreadId: "500.000",
+          SessionKey: "agent:main:slack:direct:u1:thread:500.000",
+        },
+      }),
+    );
+
+    expect(updateLastRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:slack:direct:u1:thread:500.000",
+        deliveryContext: expect.objectContaining({
+          threadId: "500.000",
+          to: "user:U1",
+        }),
+      }),
+    );
+  });
+
+  it("keeps default main-scope DM last-route metadata on the main session", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        isDirectMessage: true,
+        message: {
+          channel: "D123",
+          user: "U1",
+          ts: "601.000",
+          thread_ts: "600.000",
+        },
+        route: {
+          agentId: "main",
+          mainSessionKey: "agent:main:main",
+          sessionKey: "agent:main:main",
+          lastRoutePolicy: "main",
+        },
+        ctxPayload: {
+          MessageThreadId: "600.000",
+          SessionKey: "agent:main:main:thread:600.000",
+        },
+      }),
+    );
+
+    expect(updateLastRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        deliveryContext: expect.objectContaining({
+          threadId: "600.000",
+          to: "user:U1",
+        }),
+      }),
+    );
   });
 
   it("finalizes fast draft preview text without sending a duplicate normal reply", async () => {
