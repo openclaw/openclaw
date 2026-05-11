@@ -27,18 +27,20 @@ export async function setupWizardCommand(
     env: process.env,
   });
   if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
-    runtime.error(
-      formatDeprecatedNonInteractiveAuthChoiceError(originalAuthChoice, {
-        env: process.env,
-      })!,
-    );
+    const errorMessage = formatDeprecatedNonInteractiveAuthChoiceError(originalAuthChoice, {
+      env: process.env,
+    });
+    if (errorMessage) {
+      runtime.error(errorMessage);
+    }
     runtime.exit(1);
     return;
   }
   if (isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
-    runtime.log(
-      resolveDeprecatedAuthChoiceReplacement(originalAuthChoice, { env: process.env })!.message,
-    );
+    const replacement = resolveDeprecatedAuthChoiceReplacement(originalAuthChoice, { env: process.env });
+    if (replacement) {
+      runtime.log(replacement.message);
+    }
   }
   const flow = opts.flow === "manual" ? ("advanced" as const) : opts.flow;
   const normalizedOpts =

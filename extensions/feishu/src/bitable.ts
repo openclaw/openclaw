@@ -114,8 +114,11 @@ async function getAppTokenFromWiki(client: Lark.Client, nodeToken: string): Prom
   if (node.obj_type !== "bitable") {
     throw new Error(`Node is not a bitable (type: ${node.obj_type})`);
   }
+  if (!node.obj_token) {
+    throw new Error("Bitable node missing obj_token");
+  }
 
-  return node.obj_token!;
+  return node.obj_token;
 }
 
 /** Get bitable metadata from URL (handles both /base/ and /wiki/ URLs) */
@@ -145,10 +148,14 @@ async function getBitableMeta(client: Lark.Client, url: string) {
       path: { app_token: appToken },
     });
     if (tablesRes.code === 0) {
-      tables = (tablesRes.data?.items ?? []).map((t) => ({
-        table_id: t.table_id!,
-        name: t.name!,
-      }));
+      tables = (tablesRes.data?.items ?? [])
+        .filter((t): t is typeof t & { table_id: string; name: string } =>
+          t.table_id != null && t.name != null,
+        )
+        .map((t) => ({
+          table_id: t.table_id,
+          name: t.name,
+        }));
     }
   }
 
