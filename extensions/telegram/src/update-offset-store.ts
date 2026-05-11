@@ -90,18 +90,20 @@ function safeParseState(parsed: unknown): TelegramUpdateOffsetState | null {
   }
 }
 
+/**
+ * Why a persisted Telegram update offset was discarded:
+ *   - `bot-id-changed`: the configured token points at a different bot.
+ *   - `token-rotated`: same bot id, but the token secret changed
+ *     (typically BotFather `/revoke`); the stored fingerprint no longer
+ *     matches, so the persisted offset cannot be trusted across the
+ *     rotation.
+ *   - `legacy-state`: the persisted file predates per-token scoping and
+ *     has no fingerprint to verify against the current token.
+ */
+export type TelegramOffsetRotationReason = "bot-id-changed" | "token-rotated" | "legacy-state";
+
 export type TelegramUpdateOffsetRotationInfo = {
-  /**
-   * Why the stored offset was discarded:
-   *   - `bot-id-changed`: the configured token points at a different bot.
-   *   - `token-rotated`: same bot id, but the token secret changed
-   *     (typically BotFather `/revoke`); the stored fingerprint no longer
-   *     matches, so the persisted offset cannot be trusted across the
-   *     rotation.
-   *   - `legacy-state`: the persisted file predates per-token scoping and
-   *     has no fingerprint to verify against the current token.
-   */
-  reason: "bot-id-changed" | "token-rotated" | "legacy-state";
+  reason: TelegramOffsetRotationReason;
   /** Previous bot id, when known. */
   previousBotId: string | null;
   /** Bot id derived from the provided token. */
@@ -109,6 +111,101 @@ export type TelegramUpdateOffsetRotationInfo = {
   /** Stale offset value that was discarded. */
   staleLastUpdateId: number;
 };
+
+/**
+ * Rich result of inspecting the persisted offset for an account. Use this
+ * (instead of `readTelegramUpdateOffset`) when callers need to distinguish
+ * "no offset on disk" from "rotation discarded the stored offset".
+ */
+export type TelegramUpdateOffsetReadResult =
+  | { kind: "absent" }
+  | {
+      kind: "valid";
+      lastUpdateId: number;
+      botId: string | null;
+      tokenFingerprint: string | null;
+    }
+  | {
+      kind: "rotated";
+      rotation: TelegramUpdateOffsetRotationInfo;
+    };
+
+function classifyOffsetForToken(
+  parsed: TelegramUpdateOffsetState,
+  botToken?: string,
+): TelegramUpdateOffsetReadResult {
+  const expectedBotId = extractBotIdFromToken(botToken);
+  const expectedFingerprint = fingerprintFromToken(botToken);
+
+  const rotated = (reason: TelegramOffsetRotationReason): TelegramUpdateOffsetReadResult | null => {
+    if (parsed.lastUpdateId === null || !expectedBotId) {
+      return null;
+    }
+    return {
+      kind: "rotated",
+      rotation: {
+        reason,
+        previousBotId: parsed.botId,
+        currentBotId: expectedBotId,
+        staleLastUpdateId: parsed.lastUpdateId,
+      },
+    };
+  };
+
+  // Different bot entirely (different bot id in the token).
+  if (expectedBotId && parsed.botId && parsed.botId !== expectedBotId) {
+    return rotated("bot-id-changed") ?? { kind: "absent" };
+  }
+
+  // Legacy file from before per-bot scoping; cannot verify identity.
+  if (expectedBotId && parsed.botId === null) {
+    return rotated("legacy-state") ?? { kind: "absent" };
+  }
+
+  // Same bot id, but the token itself changed (e.g. BotFather /revoke).
+  // Without a fingerprint match we cannot trust the persisted offset, since
+  // a rotated token may start a fresh update_id sequence and lower IDs would
+  // otherwise be silently skipped by the in-process update tracker.
+  if (
+    expectedFingerprint &&
+    parsed.tokenFingerprint &&
+    parsed.tokenFingerprint !== expectedFingerprint
+  ) {
+    return rotated("token-rotated") ?? { kind: "absent" };
+  }
+
+  if (parsed.lastUpdateId === null) {
+    return { kind: "absent" };
+  }
+
+  return {
+    kind: "valid",
+    lastUpdateId: parsed.lastUpdateId,
+    botId: parsed.botId,
+    tokenFingerprint: parsed.tokenFingerprint,
+  };
+}
+
+/**
+ * Inspect the persisted offset for an account and return a typed result
+ * describing whether the offset is usable, missing, or stale due to a bot
+ * identity / token rotation. Prefer this over `readTelegramUpdateOffset`
+ * when the caller needs to act on rotations (logging, cleanup, doctor
+ * repair). The plain reader is implemented in terms of this function.
+ */
+export async function inspectTelegramUpdateOffset(params: {
+  accountId?: string;
+  botToken?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<TelegramUpdateOffsetReadResult> {
+  const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
+  const { value } = await readJsonFileWithFallback<unknown>(filePath, null);
+  const parsed = safeParseState(value);
+  if (!parsed) {
+    return { kind: "absent" };
+  }
+  return classifyOffsetForToken(parsed, params.botToken);
+}
 
 export async function readTelegramUpdateOffset(params: {
   accountId?: string;
@@ -121,52 +218,19 @@ export async function readTelegramUpdateOffset(params: {
    */
   onRotationDetected?: (info: TelegramUpdateOffsetRotationInfo) => void;
 }): Promise<number | null> {
-  const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
-  const { value } = await readJsonFileWithFallback<unknown>(filePath, null);
-  const parsed = safeParseState(value);
-  if (!parsed) {
+  const result = await inspectTelegramUpdateOffset({
+    ...(params.accountId !== undefined ? { accountId: params.accountId } : {}),
+    ...(params.botToken !== undefined ? { botToken: params.botToken } : {}),
+    ...(params.env !== undefined ? { env: params.env } : {}),
+  });
+  if (result.kind === "rotated") {
+    params.onRotationDetected?.(result.rotation);
     return null;
   }
-  const expectedBotId = extractBotIdFromToken(params.botToken);
-  const expectedFingerprint = fingerprintFromToken(params.botToken);
-
-  const reportRotation = (reason: TelegramUpdateOffsetRotationInfo["reason"]) => {
-    if (parsed.lastUpdateId !== null && expectedBotId) {
-      params.onRotationDetected?.({
-        reason,
-        previousBotId: parsed.botId,
-        currentBotId: expectedBotId,
-        staleLastUpdateId: parsed.lastUpdateId,
-      });
-    }
-  };
-
-  // Different bot entirely (different bot id in the token).
-  if (expectedBotId && parsed.botId && parsed.botId !== expectedBotId) {
-    reportRotation("bot-id-changed");
-    return null;
+  if (result.kind === "valid") {
+    return result.lastUpdateId;
   }
-
-  // Legacy file from before per-bot scoping; cannot verify identity.
-  if (expectedBotId && parsed.botId === null) {
-    reportRotation("legacy-state");
-    return null;
-  }
-
-  // Same bot id, but the token itself changed (e.g. BotFather /revoke).
-  // Without a fingerprint match we cannot trust the persisted offset, since
-  // a rotated token may start a fresh update_id sequence and lower IDs would
-  // otherwise be silently skipped by the in-process update tracker.
-  if (
-    expectedFingerprint &&
-    parsed.tokenFingerprint &&
-    parsed.tokenFingerprint !== expectedFingerprint
-  ) {
-    reportRotation("token-rotated");
-    return null;
-  }
-
-  return parsed.lastUpdateId ?? null;
+  return null;
 }
 
 export async function writeTelegramUpdateOffset(params: {

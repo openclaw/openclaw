@@ -170,8 +170,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     }
 
     const {
+      TelegramOffsetRotationHandler,
       TelegramPollingSession,
-      deleteTelegramUpdateOffset,
       readTelegramUpdateOffset,
       writeTelegramUpdateOffset,
     } = await loadTelegramMonitorPollingRuntime();
@@ -204,20 +204,15 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         });
       }
 
+      const rotationHandler = new TelegramOffsetRotationHandler({
+        accountId: account.accountId,
+        log,
+        logError: (line) => (opts.runtime?.error ?? console.error)(line),
+      });
       const persistedOffsetRaw = await readTelegramUpdateOffset({
         accountId: account.accountId,
         botToken: token,
-        onRotationDetected: ({ previousBotId, currentBotId, staleLastUpdateId }) => {
-          const previousLabel = previousBotId ?? "(legacy unscoped offset)";
-          log(
-            `[telegram] Detected bot identity change for account "${account.accountId}" (was ${previousLabel}, now ${currentBotId}); discarding stale update offset ${staleLastUpdateId} and starting fresh.`,
-          );
-          void deleteTelegramUpdateOffset({ accountId: account.accountId }).catch((err) => {
-            (opts.runtime?.error ?? console.error)(
-              `telegram: failed to delete stale update offset after rotation: ${formatErrorMessage(err)}`,
-            );
-          });
-        },
+        onRotationDetected: (info) => rotationHandler.handle(info),
       });
       let lastUpdateId = normalizePersistedUpdateId(persistedOffsetRaw);
       if (persistedOffsetRaw !== null && lastUpdateId === null) {
