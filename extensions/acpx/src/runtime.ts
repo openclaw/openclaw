@@ -390,6 +390,77 @@ function isCodexAcpCommand(command: string | undefined): boolean {
   return /^codex-acp(?:-wrapper)?(?:\.[cm]?js)?$/i.test(scriptName);
 }
 
+function isClaudeAcpPackageSpec(value: string): boolean {
+  return /^@agentclientprotocol\/claude-agent-acp(?:@.+)?$/i.test(value.trim());
+}
+
+function isClaudeAcpCommand(command: string | undefined): boolean {
+  if (!command) {
+    return false;
+  }
+  const parts = unwrapEnvCommand(splitCommandParts(command.trim()));
+  if (!parts.length) {
+    return false;
+  }
+  if (parts.some(isClaudeAcpPackageSpec)) {
+    return true;
+  }
+  const commandName = basename(parts[0] ?? "");
+  if (/^claude-agent-acp(?:\.exe)?$/i.test(commandName)) {
+    return true;
+  }
+  if (commandName !== "node") {
+    return false;
+  }
+  const scriptName = basename(parts[1] ?? "");
+  return /^claude-agent-acp(?:-wrapper)?(?:\.[cm]?js)?$/i.test(scriptName);
+}
+
+// Claude ACP exposes reasoning under the "effort" key with low/medium/high/max.
+// off/minimal map to no effort (skip the setConfigOption); unknown values are
+// safely dropped so callers carrying Codex-flavored values do not crash the
+// adapter with "Unknown config option" errors.
+function normalizeClaudeAcpEffort(rawThinking: string | undefined): string | undefined {
+  const normalized = rawThinking?.trim().toLowerCase();
+  if (!normalized || normalized === "off" || normalized === "minimal") {
+    return undefined;
+  }
+  if (
+    normalized === "xhigh" ||
+    normalized === "x-high" ||
+    normalized === "x_high" ||
+    normalized === "extra-high" ||
+    normalized === "extra_high" ||
+    normalized === "extra high"
+  ) {
+    return "max";
+  }
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high" ||
+    normalized === "max"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+// Claude ACP only accepts plain Claude model ids (default, sonnet, sonnet[1m],
+// haiku, ...). Generic OpenClaw model strings like "openai-codex/gpt-5.5" or
+// "sonnet/high" must not be forwarded to the adapter or it returns
+// "Invalid value for config option model" and the whole runtime tears down.
+function isClaudeAcpAcceptableModelValue(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.includes("/")) {
+    return false;
+  }
+  return !trimmed.toLowerCase().startsWith(CODEX_ACP_OPENCLAW_PREFIX);
+}
+
 function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never {
   throw new AcpRuntimeError(
     "ACP_INVALID_RUNTIME_OPTION",
@@ -925,6 +996,28 @@ export class AcpxRuntime implements AcpRuntime {
         }
       }
     }
+    if (isClaudeAcpCommand(command)) {
+      if (key === "timeout" || key === "timeout_seconds") {
+        return;
+      }
+      if (key === "model") {
+        if (!isClaudeAcpAcceptableModelValue(input.value)) {
+          return;
+        }
+      }
+      if (key === "thinking" || key === "thought_level" || key === "reasoning_effort") {
+        const effort = normalizeClaudeAcpEffort(input.value);
+        if (!effort) {
+          return;
+        }
+        await delegate.setConfigOption({
+          ...input,
+          key: "effort",
+          value: effort,
+        });
+        return;
+      }
+    }
     await delegate.setConfigOption(input);
   }
 
@@ -974,7 +1067,9 @@ export const __testing = {
   appendCodexAcpConfigOverrides,
   assertSupportedRuntimeSessionMode,
   codexAcpSessionModelId,
+  isClaudeAcpCommand,
   isCodexAcpCommand,
+  normalizeClaudeAcpEffort,
   normalizeCodexAcpModelOverride,
 };
 
