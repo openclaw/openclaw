@@ -642,6 +642,19 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("does not carry exact-origin trust across redirects to a different private host", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(redirectResponse("http://10.0.0.6:11434/"));
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://10.0.0.5:11434/start",
+        fetchImpl,
+        policy: { allowedOrigins: ["http://10.0.0.5:11434"] },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("allows a configured private DNS origin and blocks the same host on another port", async () => {
     const lookupFn: LookupFn = vi.fn(async () => [
       { address: "10.0.0.5", family: 4 },

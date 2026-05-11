@@ -51,6 +51,10 @@ export type SsrFPolicy = {
    */
   allowIpv6UniqueLocalRange?: boolean;
   allowedHostnames?: string[];
+  /**
+   * Exact HTTP origins that may promote only the current request hostname into
+   * `allowedHostnames`. Evaluated per URL inside the redirect loop.
+   */
   allowedOrigins?: string[];
   hostnameAllowlist?: string[];
 };

@@ -424,7 +424,8 @@ function resolveModelTransportSsrFPolicy(params: {
     requestMatchesBaseOrigin && params.trustConfiguredBaseUrlOrigin
       ? ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl)
       : undefined;
-  // Fake-IP trust is hostname-scoped by design and does not allow literal private IPs by itself.
+  // Fake-IP trust is hostname-scoped and orthogonal to exact-origin private-IP trust.
+  // It does not allow literal private IPs by itself.
   const fakeIpPolicy = requestMatchesBaseOrigin
     ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
     : undefined;
