@@ -275,7 +275,7 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
   class ListCommand extends Command {
     override name = "list";
     override description = "List active voice sessions with details";
-    defer = true;
+    override defer = true;
     ephemeral = params.ephemeralDefault;
 
     async run(interaction: CommandInteraction) {
@@ -302,7 +302,7 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
   class ChatCommand extends Command {
     override name = "chat";
     override description = "Show or set voice chat mode";
-    defer = true;
+    override defer = true;
     ephemeral = params.ephemeralDefault;
     options: CommandOptions = [
       {
