@@ -99,6 +99,7 @@ vi.mock("./groups.js", () => ({
 vi.mock("./inbound-meta.js", () => ({
   buildInboundMetaSystemPrompt: vi.fn().mockReturnValue(""),
   buildInboundUserContextPrefix: vi.fn().mockReturnValue(""),
+  resolveInboundUserContextPromptJoiner: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock("./queue/settings-runtime.js", () => ({
@@ -133,6 +134,7 @@ let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
 let buildDirectChatContext: typeof import("./groups.js").buildDirectChatContext;
 let buildGroupChatContext: typeof import("./groups.js").buildGroupChatContext;
 let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInboundUserContextPrefix;
+let resolveInboundUserContextPromptJoiner: typeof import("./inbound-meta.js").resolveInboundUserContextPromptJoiner;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
 let loadScopeCounter = 0;
@@ -252,7 +254,8 @@ describe("runPreparedReply media-only handling", () => {
     ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
     ({ resolveTypingMode } = await import("./typing-mode.js"));
     ({ buildDirectChatContext, buildGroupChatContext } = await import("./groups.js"));
-    ({ buildInboundUserContextPrefix } = await import("./inbound-meta.js"));
+    ({ buildInboundUserContextPrefix, resolveInboundUserContextPromptJoiner } =
+      await import("./inbound-meta.js"));
     ({ __testing: replyRunTesting, getActiveReplyRunCount } =
       await import("./reply-run-registry.js"));
   });
@@ -1142,6 +1145,7 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
       ["Current message:", '[Replying to: "quoted status body"]', "#34974 obviyus:"].join("\n"),
     );
+    vi.mocked(resolveInboundUserContextPromptJoiner).mockReturnValueOnce(" ");
 
     await runPreparedReply(
       baseParams({
@@ -1172,6 +1176,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.transcriptCommandBody).toBe("what does this mean?");
     expect(call?.followupRun.prompt).toContain("what does this mean?");
     expect(call?.followupRun.transcriptPrompt).toBe("what does this mean?");
+    expect(call?.followupRun.currentTurnContext?.promptJoiner).toBe(" ");
     expect(call?.followupRun.currentTurnContext?.text).toContain("Current message:");
     expect(call?.followupRun.currentTurnContext?.text).toContain(
       '[Replying to: "quoted status body"]',

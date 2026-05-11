@@ -30,6 +30,7 @@ export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "o
 
 export type CurrentTurnPromptContext = {
   text: string;
+  promptJoiner?: "\n\n" | "\n" | " ";
 };
 
 export type RunEmbeddedPiAgentParams = {

@@ -321,6 +321,10 @@ function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | und
     .join("\n");
 }
 
+export function resolveInboundUserContextPromptJoiner(ctx: TemplateContext): " " | undefined {
+  return formatTelegramCurrentMessageContext(ctx) ? " " : undefined;
+}
+
 function formatConversationTimestamp(
   value: unknown,
   envelope?: EnvelopeFormatOptions,
