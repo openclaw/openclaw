@@ -65,6 +65,7 @@ export const zh_TW: TranslationMap = {
     colorModeOption: "色彩模式：{mode}",
     resources: "資源",
     search: "搜尋",
+    all: "全部",
     save: "儲存",
     saving: "儲存中…",
     saveAndPublish: "儲存並發佈",
@@ -236,8 +237,30 @@ export const zh_TW: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
+    directory: {
+      searchLabel: "Search",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "Default",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "執行階段",
+      workspaceFilterLabel: "Workspace",
+      sortLabel: "排序",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "Workspace",
+        model: "Primary Model",
+        runtime: "執行階段",
+      },
+    },
     tabs: {
       overview: "Overview",
       files: "檔案",
@@ -475,8 +498,7 @@ export const zh_TW: TranslationMap = {
       roleUpgradeSummary: "此裝置已完成配對，但所要求的角色變更仍在等待核准。",
       metadataUpgradeTitle: "裝置中繼資料變更等待核准。",
       metadataUpgradeSummary: "此裝置已完成配對，但中繼資料變更仍在等待核准。",
-      mobileHint:
-        "在手機上？從桌面執行 openclaw dashboard --no-open 複製完整 URL（包括 #token=...）。",
+      mobileHint: "在手機上？從桌面執行 openclaw dashboard --no-open 複製完整 URL（包括 #token=...）。",
       docsTitle: "裝置配對文件（在新分頁中開啟）",
       docsLink: "文件：裝置配對",
     },
@@ -576,8 +598,7 @@ export const zh_TW: TranslationMap = {
     restartConfirmation: {
       title: "Restart Gateway to Apply Change",
       subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      warning: "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
       confirm: "Confirm Restart",
       restarting: "Restarting…",
       failed: "Could not apply change. Check your connection and try again.",
@@ -726,8 +747,7 @@ export const zh_TW: TranslationMap = {
       sessionsCount: "{count} 個工作階段",
     },
     query: {
-      placeholder:
-        "篩選工作階段（例如 key:agent:main:cron* model:gpt-4o has:errors minTokens:2000）",
+      placeholder: "篩選工作階段（例如 key:agent:main:cron* model:gpt-4o has:errors minTokens:2000）",
       apply: "篩選（用戶端）",
       matching: "{shown} / {total} 個工作階段符合條件",
       inRange: "範圍內有 {total} 個工作階段",
@@ -790,8 +810,7 @@ export const zh_TW: TranslationMap = {
       avgTokensHint: "此範圍內每則訊息的平均 token 數。",
       avgCost: "平均成本 / 訊息",
       avgCostHint: "當提供者回報成本時，每則訊息的平均成本。",
-      avgCostHintMissing:
-        "當提供者回報成本時，每則訊息的平均成本。此範圍內部分或全部工作階段缺少成本資料。",
+      avgCostHintMissing: "當提供者回報成本時，每則訊息的平均成本。此範圍內部分或全部工作階段缺少成本資料。",
       acrossMessages: "共 {count} 則訊息",
       sessions: "工作階段",
       sessionsHint: "範圍內的不同工作階段數。",

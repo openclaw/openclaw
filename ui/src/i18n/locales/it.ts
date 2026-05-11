@@ -65,6 +65,7 @@ export const it: TranslationMap = {
     colorModeOption: "Modalità colore: {mode}",
     resources: "Risorse",
     search: "Cerca",
+    all: "Tutte",
     save: "Salva",
     saving: "Salvataggio…",
     saveAndPublish: "Salva e pubblica",
@@ -92,15 +93,14 @@ export const it: TranslationMap = {
     gatewayUrlConfirmation: {
       title: "Modifica URL Gateway",
       subtitle: "Questo riconnetterà a un server gateway diverso",
-      warning:
-        "Conferma solo se ritieni attendibile questo URL. URL dannosi possono compromettere il tuo sistema.",
+      warning: "Conferma solo se ritieni attendibile questo URL. URL dannosi possono compromettere il tuo sistema.",
     },
     nostr: {
       profile: "Profilo",
       editProfile: "Modifica profilo",
       profilePicture: "Immagine del profilo",
       noProfile: "Nessun profilo impostato.",
-      noProfileHint: 'Fai clic su "Modifica profilo" per aggiungere nome, bio e avatar.',
+      noProfileHint: "Fai clic su \"Modifica profilo\" per aggiungere nome, bio e avatar.",
       name: "Nome",
       displayName: "Nome visualizzato",
       about: "Informazioni",
@@ -128,8 +128,7 @@ export const it: TranslationMap = {
   lazyView: {
     loadingTitle: "Caricamento pannello",
     errorTitle: "Impossibile caricare il pannello",
-    errorSubtitle:
-      "Ricarica la pagina per caricare il bundle Control UI più recente oppure riprova se la richiesta di rete non è riuscita.",
+    errorSubtitle: "Ricarica la pagina per caricare il bundle Control UI più recente oppure riprova se la richiesta di rete non è riuscita.",
     retry: "Riprova",
     unknownError: "Errore sconosciuto di caricamento modulo.",
   },
@@ -238,8 +237,30 @@ export const it: TranslationMap = {
     setDefault: "Imposta come predefinito",
     alreadyDefaultTitle: "Già l'agente predefinito",
     setDefaultTitle: "Imposta come agente predefinito",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "Seleziona un agente",
     selectSubtitle: "Scegli un agente per esaminarne lo spazio di lavoro e gli strumenti.",
+    directory: {
+      searchLabel: "Cerca",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "Predefinito",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "Runtime",
+      workspaceFilterLabel: "Spazio di lavoro",
+      sortLabel: "Ordina",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "Spazio di lavoro",
+        model: "Modello principale",
+        runtime: "Runtime",
+      },
+    },
     tabs: {
       overview: "Panoramica",
       files: "File",
@@ -297,8 +318,7 @@ export const it: TranslationMap = {
       coreFilesTitle: "File principali",
       coreFilesSubtitle: "Persona bootstrap, identità e guida agli strumenti.",
       workspace: "Spazio di lavoro",
-      loadHint:
-        "Carica i file dello spazio di lavoro dell'agente per modificare le istruzioni principali.",
+      loadHint: "Carica i file dello spazio di lavoro dell'agente per modificare le istruzioni principali.",
       empty: "Nessun file trovato.",
       missing: "mancante",
       selectFile: "Seleziona un file da modificare.",
@@ -309,8 +329,7 @@ export const it: TranslationMap = {
       updated: "Aggiornato {time}",
       notCreatedYet: "Non ancora creato",
       updatedUnknown: "Aggiornamento sconosciuto",
-      missingHint:
-        "Questo file è mancante. Il salvataggio lo creerà nello spazio di lavoro dell'agente.",
+      missingHint: "Questo file è mancante. Il salvataggio lo creerà nello spazio di lavoro dell'agente.",
       content: "Contenuto",
       words: "{count} parole",
       lines: "righe",
@@ -461,32 +480,25 @@ export const it: TranslationMap = {
       title: "Note",
       subtitle: "Promemoria rapidi per configurazioni di controllo remoto.",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Preferisci la modalità serve per mantenere il gateway su loopback con autenticazione tailnet.",
+      tailscaleText: "Preferisci la modalità serve per mantenere il gateway su loopback con autenticazione tailnet.",
       sessionTitle: "Igiene delle sessioni",
       sessionText: "Usa /new o sessions.patch per reimpostare il contesto.",
       cronTitle: "Promemoria cron",
       cronText: "Usa sessioni isolate per le esecuzioni ricorrenti.",
     },
     auth: {
-      required:
-        "Questo Gateway richiede l'autenticazione. Aggiungi un token o una password, quindi fai clic su Connetti.",
-      failed:
-        "Autenticazione non riuscita. Ricopia un URL con token usando {command}, oppure aggiorna il token, quindi fai clic su Connetti.",
+      required: "Questo Gateway richiede l'autenticazione. Aggiungi un token o una password, quindi fai clic su Connetti.",
+      failed: "Autenticazione non riuscita. Ricopia un URL con token usando {command}, oppure aggiorna il token, quindi fai clic su Connetti.",
     },
     pairing: {
       hint: "Questo dispositivo richiede l'approvazione dell'abbinamento dall'host del Gateway.",
       scopeUpgradeTitle: "Aggiornamento dell'ambito in attesa di approvazione.",
-      scopeUpgradeSummary:
-        "Questo dispositivo è già abbinato, ma l'ambito più ampio richiesto è in attesa di approvazione.",
+      scopeUpgradeSummary: "Questo dispositivo è già abbinato, ma l'ambito più ampio richiesto è in attesa di approvazione.",
       roleUpgradeTitle: "Aggiornamento del ruolo in attesa di approvazione.",
-      roleUpgradeSummary:
-        "Questo dispositivo è già abbinato, ma la modifica del ruolo richiesta è in attesa di approvazione.",
+      roleUpgradeSummary: "Questo dispositivo è già abbinato, ma la modifica del ruolo richiesta è in attesa di approvazione.",
       metadataUpgradeTitle: "Modifica dei metadati del dispositivo in attesa di approvazione.",
-      metadataUpgradeSummary:
-        "Questo dispositivo è già abbinato, ma la modifica dei metadati è in attesa di approvazione.",
-      mobileHint:
-        "Su mobile? Copia l'URL completo (incluso #token=...) da openclaw dashboard --no-open sul desktop.",
+      metadataUpgradeSummary: "Questo dispositivo è già abbinato, ma la modifica dei metadati è in attesa di approvazione.",
+      mobileHint: "Su mobile? Copia l'URL completo (incluso #token=...) da openclaw dashboard --no-open sul desktop.",
       docsTitle: "Documentazione sull'abbinamento dei dispositivi (si apre in una nuova scheda)",
       docsLink: "Docs: abbinamento dispositivi",
     },
@@ -586,8 +598,7 @@ export const it: TranslationMap = {
     restartConfirmation: {
       title: "Riavvia il Gateway per applicare la modifica",
       subtitle: "La modifica della modalità Dreaming riavvia il gateway.",
-      warning:
-        "Questa azione riavvierà il Gateway e potrebbe interrompere temporaneamente chat, automazioni e canali connessi.",
+      warning: "Questa azione riavvierà il Gateway e potrebbe interrompere temporaneamente chat, automazioni e canali connessi.",
       confirm: "Conferma riavvio",
       restarting: "Riavvio…",
       failed: "Impossibile applicare la modifica. Controlla la connessione e riprova.",
@@ -615,16 +626,14 @@ export const it: TranslationMap = {
     advanced: {
       eyebrow: "Revisione",
       title: "Revisione log giornaliero",
-      description:
-        "Rivedi ciò che proviene dal log giornaliero, ciò che attende la promozione e ciò che è stato promosso di recente.",
+      description: "Rivedi ciò che proviene dal log giornaliero, ciò che attende la promozione e ciò che è stato promosso di recente.",
       summaryFromDailyLog: "dal log giornaliero",
       summaryWaiting: "in attesa",
       summaryPromotedToday: "promossi oggi",
       stagedTitle: "Dal log giornaliero",
       stagedDescription: "Candidati di replay estratti da voci meno recenti del log giornaliero.",
       shortTermTitle: "In attesa di promozione",
-      shortTermDescription:
-        "Candidati a breve termine attuali in attesa di passare alla memoria reale.",
+      shortTermDescription: "Candidati a breve termine attuali in attesa di passare alla memoria reale.",
       sortRecent: "Più recenti",
       sortSignals: "Supporto più forte",
       originDailyLog: "rigiocato",
@@ -688,8 +697,7 @@ export const it: TranslationMap = {
   },
   usage: {
     page: {
-      subtitle:
-        "Scopri dove vanno i token, quando le sessioni hanno picchi e cosa determina i costi.",
+      subtitle: "Scopri dove vanno i token, quando le sessioni hanno picchi e cosa determina i costi.",
     },
     common: {
       emptyValue: "—",
@@ -739,8 +747,7 @@ export const it: TranslationMap = {
       sessionsCount: "{count} sessioni",
     },
     query: {
-      placeholder:
-        "Filtra sessioni (es. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
+      placeholder: "Filtra sessioni (es. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
       apply: "Filtra (lato client)",
       matching: "{shown} di {total} sessioni corrispondono",
       inRange: "{total} sessioni nell'intervallo",
@@ -753,8 +760,7 @@ export const it: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "La cache di utilizzo viene ricostruita in background. I totali visualizzati potrebbero non essere aggiornati.",
+      warning: "La cache di utilizzo viene ricostruita in background. I totali visualizzati potrebbero non essere aggiornati.",
       title: "{status}: {pending} in sospeso, {stale} obsoleti, {cached} memorizzati nella cache",
       status: {
         refreshing: "aggiornamento in corso",
@@ -764,8 +770,7 @@ export const it: TranslationMap = {
     },
     empty: {
       title: "Inizia con un intervallo di date",
-      subtitle:
-        "Carica i dati di utilizzo per confrontare i costi, ispezionare le sessioni e approfondire le timeline senza uscire dalla dashboard.",
+      subtitle: "Carica i dati di utilizzo per confrontare i costi, ispezionare le sessioni e approfondire le timeline senza uscire dalla dashboard.",
       hint: "Seleziona un intervallo di date e fai clic su Aggiorna per caricare l'utilizzo.",
       noData: "Nessun dato",
       featureOverview: "Schede panoramica",
@@ -805,23 +810,20 @@ export const it: TranslationMap = {
       avgTokensHint: "Token medi per messaggio in questo intervallo.",
       avgCost: "Costo medio / msg",
       avgCostHint: "Costo medio per messaggio quando i provider riportano i costi.",
-      avgCostHintMissing:
-        "Costo medio per messaggio quando i provider riportano i costi. I dati sui costi mancano per alcune o tutte le sessioni in questo intervallo.",
+      avgCostHintMissing: "Costo medio per messaggio quando i provider riportano i costi. I dati sui costi mancano per alcune o tutte le sessioni in questo intervallo.",
       acrossMessages: "Su {count} messaggi",
       sessions: "Sessioni",
       sessionsHint: "Sessioni distinte nell'intervallo.",
       sessionsInRange: "di {count} nell'intervallo",
       throughput: "Throughput",
-      throughputHint:
-        "Il throughput mostra i token al minuto durante il tempo attivo. Più alto è meglio.",
+      throughputHint: "Il throughput mostra i token al minuto durante il tempo attivo. Più alto è meglio.",
       tokensPerMinute: "tok/min",
       perMinute: "/ min",
       errorRate: "Tasso di errori",
       errorHint: "Tasso di errori = errori / messaggi totali. Più basso è meglio.",
       avgSession: "sessione media",
       cacheHitRate: "Tasso hit cache",
-      cacheHint:
-        "Tasso hit cache = letture cache / (input + letture cache + scritture cache). Più alto è meglio.",
+      cacheHint: "Tasso hit cache = letture cache / (input + letture cache + scritture cache). Più alto è meglio.",
       cached: "in cache",
       prompt: "prompt",
       calls: "chiamate",
@@ -857,8 +859,7 @@ export const it: TranslationMap = {
       selected: "Selezionate ({count})",
       copy: "Copia",
       copyName: "Copia nome sessione",
-      limitReached:
-        "Mostrate le prime 1.000 sessioni. Restringi l'intervallo di date per ottenere risultati completi.",
+      limitReached: "Mostrate le prime 1.000 sessioni. Restringi l'intervallo di date per ottenere risultati completi.",
     },
     details: {
       noUsageData: "Nessun dato di utilizzo per questa sessione.",
@@ -903,8 +904,7 @@ export const it: TranslationMap = {
     mosaic: {
       title: "Attività per orario",
       subtitleEmpty: "Le stime richiedono timestamp delle sessioni.",
-      subtitle:
-        "Stimato dagli intervalli delle sessioni (prima/ultima attività). Fuso orario: {zone}.",
+      subtitle: "Stimato dagli intervalli delle sessioni (prima/ultima attività). Fuso orario: {zone}.",
       noTimelineData: "Ancora nessun dato timeline.",
       dayOfWeek: "Giorno della settimana",
       midnight: "Mezzanotte",
@@ -1025,10 +1025,8 @@ export const it: TranslationMap = {
       },
       defaultName: "Automazione",
       whatHeading: "Cosa deve fare?",
-      whatHint:
-        "Descrivi l'attività in linguaggio naturale. L'agente eseguirà questo prompt ogni volta.",
-      promptPlaceholder:
-        "ad es., Controlla la mia posta in arrivo per email urgenti e riassumile...",
+      whatHint: "Descrivi l'attività in linguaggio naturale. L'agente eseguirà questo prompt ogni volta.",
+      promptPlaceholder: "ad es., Controlla la mia posta in arrivo per email urgenti e riassumile...",
       nameOptional: "Nome (facoltativo)",
       namePlaceholder: "ad es., Controllo posta mattutino",
       whenHeading: "Quando deve essere eseguita?",
@@ -1111,8 +1109,7 @@ export const it: TranslationMap = {
       namePlaceholder: "Brief del mattino",
       descriptionPlaceholder: "Contesto facoltativo per questo processo",
       agentPlaceholder: "main o ops",
-      agentHelp:
-        "Inizia a digitare per scegliere un agente noto oppure inseriscine uno personalizzato.",
+      agentHelp: "Inizia a digitare per scegliere un agente noto oppure inseriscine uno personalizzato.",
       schedule: "Pianificazione",
       scheduleSub: "Controlla quando viene eseguito questo processo.",
       every: "Ogni",
@@ -1128,17 +1125,14 @@ export const it: TranslationMap = {
       everyAmountPlaceholder: "30",
       timezoneOptional: "Fuso orario (facoltativo)",
       timezonePlaceholder: "America/Los_Angeles",
-      timezoneHelp:
-        "Scegli un fuso orario comune oppure inserisci qualsiasi fuso orario IANA valido.",
-      jitterHelp:
-        "Serve jitter? Usa Avanzate → finestra di scaglionamento / unità di scaglionamento.",
+      timezoneHelp: "Scegli un fuso orario comune oppure inserisci qualsiasi fuso orario IANA valido.",
+      jitterHelp: "Serve jitter? Usa Avanzate → finestra di scaglionamento / unità di scaglionamento.",
       execution: "Esecuzione",
       executionSub: "Scegli quando risvegliare e cosa deve fare questo processo.",
       session: "Sessione",
       main: "Principale",
       isolated: "Isolata",
-      sessionHelp:
-        "Principale pubblica un evento di sistema. Isolata esegue un turno agente dedicato.",
+      sessionHelp: "Principale pubblica un evento di sistema. Isolata esegue un turno agente dedicato.",
       wakeMode: "Modalità risveglio",
       now: "Ora",
       nextHeartbeat: "Prossimo heartbeat",
@@ -1146,13 +1140,11 @@ export const it: TranslationMap = {
       payloadKind: "Cosa deve essere eseguito?",
       systemEvent: "Pubblica messaggio nella timeline principale",
       agentTurn: "Esegui attività assistente (isolata)",
-      systemEventHelp:
-        "Invia il tuo testo alla timeline principale del gateway (utile per promemoria/trigger).",
+      systemEventHelp: "Invia il tuo testo alla timeline principale del gateway (utile per promemoria/trigger).",
       agentTurnHelp: "Avvia un'esecuzione assistente nella propria sessione usando il tuo prompt.",
       timeoutSeconds: "Timeout (secondi)",
       timeoutPlaceholder: "Facoltativo, es. 90",
-      timeoutHelp:
-        "Facoltativo. Lascia vuoto per usare il comportamento di timeout predefinito del gateway per questa esecuzione.",
+      timeoutHelp: "Facoltativo. Lascia vuoto per usare il comportamento di timeout predefinito del gateway per questa esecuzione.",
       mainTimelineMessage: "Messaggio timeline principale",
       assistantTaskPrompt: "Prompt attività assistente",
       deliverySection: "Consegna",
@@ -1161,8 +1153,7 @@ export const it: TranslationMap = {
       announceDefault: "Annuncia riepilogo (predefinito)",
       webhookPost: "POST webhook",
       noneInternal: "Nessuna (interna)",
-      deliveryHelp:
-        "Annuncia pubblica un riepilogo nella chat. Nessuna mantiene l'esecuzione interna.",
+      deliveryHelp: "Annuncia pubblica un riepilogo nella chat. Nessuna mantiene l'esecuzione interna.",
       webhookUrl: "URL webhook",
       channel: "Canale",
       webhookPlaceholder: "https://example.com/cron",
@@ -1172,8 +1163,7 @@ export const it: TranslationMap = {
       toPlaceholder: "+1555... o ID chat",
       toHelp: "Override facoltativo del destinatario (ID chat, telefono o ID utente).",
       advanced: "Avanzate",
-      advancedHelp:
-        "Override facoltativi per garanzie di consegna, jitter di pianificazione e controlli del modello.",
+      advancedHelp: "Override facoltativi per garanzie di consegna, jitter di pianificazione e controlli del modello.",
       deleteAfterRun: "Elimina dopo l'esecuzione",
       deleteAfterRunHelp: "Ideale per promemoria una tantum che devono pulirsi automaticamente.",
       clearAgentOverride: "Cancella override agente",
@@ -1186,8 +1176,7 @@ export const it: TranslationMap = {
       seconds: "Secondi",
       model: "Modello",
       modelPlaceholder: "openai/gpt-5.2",
-      modelHelp:
-        "Inizia a digitare per scegliere un modello noto oppure inseriscine uno personalizzato.",
+      modelHelp: "Inizia a digitare per scegliere un modello noto oppure inseriscine uno personalizzato.",
       thinking: "Thinking",
       thinkingPlaceholder: "low",
       thinkingHelp: "Usa un livello suggerito o inserisci un valore specifico del provider.",

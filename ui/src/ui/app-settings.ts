@@ -89,14 +89,17 @@ type SettingsHost = {
   sessionKey: string;
   tab: Tab;
   connected: boolean;
-  chatHasAutoScrolled: boolean;
-  logsAtBottom: boolean;
-  eventLog: unknown[];
-  eventLogBuffer: unknown[];
+  chatHasAutoScrolled?: boolean;
+  logsAtBottom?: boolean;
+  eventLog?: unknown[];
+  eventLogBuffer?: unknown[];
   basePath: string;
   agentsList?: AgentsListResult | null;
   agentsSelectedId?: string | null;
   agentsPanel?: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
+  agentsDirectoryQuery?: string;
+  agentsDirectorySortDir?: "asc" | "desc";
+  agentsDirectoryDefaultFilter?: "all" | "default" | "non-default";
   pendingGatewayUrl?: string | null;
   systemThemeCleanup?: (() => void) | null;
   pendingGatewayToken?: string | null;
@@ -320,8 +323,7 @@ async function refreshAgentsTab(host: SettingsHost, app: SettingsAppHost) {
   if (agentIds.length > 0) {
     void loadAgentIdentities(app, agentIds);
   }
-  const agentId =
-    host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
+  const agentId = host.agentsSelectedId ?? null;
   if (!agentId) {
     return;
   }
@@ -523,6 +525,9 @@ export function syncTabWithLocation(host: SettingsHost, replace: boolean) {
     return;
   }
   const resolved = tabFromPath(window.location.pathname, host.basePath) ?? "chat";
+  if (resolved === "agents") {
+    applyAgentsSelectionFromUrl(host, new URL(window.location.href));
+  }
   setTabFromRoute(host, resolved);
   syncUrlWithTab(host, resolved, replace);
 }
@@ -540,6 +545,10 @@ export function onPopState(host: SettingsHost) {
   const session = normalizeOptionalString(url.searchParams.get("session"));
   if (session) {
     applySessionSelection(host, session);
+  }
+
+  if (resolved === "agents") {
+    applyAgentsSelectionFromUrl(host, url);
   }
 
   setTabFromRoute(host, resolved);
@@ -626,6 +635,57 @@ export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, re
   const url = new URL(href);
   url.searchParams.set("session", sessionKey);
   updateBrowserHistory(url, replace);
+}
+
+export function syncUrlWithAgentsSelection(
+  host: SettingsHost,
+  params: { agentId: string | null; panel?: SettingsHost["agentsPanel"] | null },
+  replace: boolean,
+) {
+  const href = typeof window === "undefined" ? undefined : window.location?.href;
+  if (!href) {
+    return;
+  }
+  const url = new URL(href);
+  const agentId = normalizeOptionalString(params.agentId);
+  const panel = normalizeOptionalString(params.panel ?? null) as SettingsHost["agentsPanel"] | null;
+
+  if (agentId) {
+    url.searchParams.set("agent", agentId);
+  } else {
+    url.searchParams.delete("agent");
+  }
+  if (panel) {
+    url.searchParams.set("panel", panel);
+  } else {
+    url.searchParams.delete("panel");
+  }
+
+  const targetPath = normalizePath(pathForTab("agents", host.basePath));
+  if (normalizePath(url.pathname) !== targetPath) {
+    url.pathname = targetPath;
+  }
+
+  updateBrowserHistory(url, replace);
+}
+
+function applyAgentsSelectionFromUrl(host: SettingsHost, url: URL) {
+  const agentId = normalizeOptionalString(url.searchParams.get("agent"));
+  const panelRaw = normalizeOptionalString(url.searchParams.get("panel"));
+  const allowedPanels: Array<NonNullable<SettingsHost["agentsPanel"]>> = [
+    "overview",
+    "files",
+    "tools",
+    "skills",
+    "channels",
+    "cron",
+  ];
+  const panel = panelRaw && allowedPanels.includes(panelRaw as (typeof allowedPanels)[number])
+    ? (panelRaw as (typeof allowedPanels)[number])
+    : null;
+
+  host.agentsSelectedId = agentId;
+  host.agentsPanel = panel ?? (host.agentsPanel ?? "files");
 }
 
 export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolean }) {

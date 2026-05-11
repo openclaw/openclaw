@@ -65,6 +65,7 @@ export const ja_JP: TranslationMap = {
     colorModeOption: "カラーモード: {mode}",
     resources: "リソース",
     search: "検索",
+    all: "すべて",
     save: "保存",
     saving: "保存中…",
     saveAndPublish: "保存して公開",
@@ -92,16 +93,14 @@ export const ja_JP: TranslationMap = {
     gatewayUrlConfirmation: {
       title: "Gateway URL を変更",
       subtitle: "別の Gateway サーバーに再接続します",
-      warning:
-        "この URL を信頼できる場合のみ確認してください。悪意のある URL はシステムを危険にさらす可能性があります。",
+      warning: "この URL を信頼できる場合のみ確認してください。悪意のある URL はシステムを危険にさらす可能性があります。",
     },
     nostr: {
       profile: "プロフィール",
       editProfile: "プロフィールを編集",
       profilePicture: "プロフィール画像",
       noProfile: "プロフィールが設定されていません。",
-      noProfileHint:
-        '"プロフィールを編集" をクリックして、名前、自己紹介、アバターを追加してください。',
+      noProfileHint: "\"プロフィールを編集\" をクリックして、名前、自己紹介、アバターを追加してください。",
       name: "名前",
       displayName: "表示名",
       about: "概要",
@@ -129,19 +128,16 @@ export const ja_JP: TranslationMap = {
   lazyView: {
     loadingTitle: "パネルを読み込み中",
     errorTitle: "パネルの読み込みに失敗しました",
-    errorSubtitle:
-      "最新の Control UI バンドルを読み込むにはページを再読み込みしてください。ネットワークリクエストに失敗した場合は再試行してください。",
+    errorSubtitle: "最新の Control UI バンドルを読み込むにはページを再読み込みしてください。ネットワークリクエストに失敗した場合は再試行してください。",
     retry: "再試行",
     unknownError: "不明なモジュール読み込みエラーです。",
   },
   nodes: {
     binding: {
       loadConfigHint: "バインディングを編集するには設定を読み込んでください。",
-      formModeHint:
-        "ここでバインディングを編集するには、Config タブをフォームモードに切り替えてください。",
+      formModeHint: "ここでバインディングを編集するには、Config タブをフォームモードに切り替えてください。",
       execNodeBinding: "Exec ノードバインディング",
-      execNodeBindingSubtitle:
-        "exec host=node を使用する際に、エージェントを特定のノードに固定します。",
+      execNodeBindingSubtitle: "exec host=node を使用する際に、エージェントを特定のノードに固定します。",
       defaultBinding: "デフォルトのバインディング",
       defaultBindingHint: "エージェントがノードバインディングを上書きしない場合に使用されます。",
       node: "ノード",
@@ -241,8 +237,30 @@ export const ja_JP: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
+    directory: {
+      searchLabel: "検索",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "Default",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "ランタイム",
+      workspaceFilterLabel: "Workspace",
+      sortLabel: "並び替え",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "Workspace",
+        model: "Primary Model",
+        runtime: "ランタイム",
+      },
+    },
     tabs: {
       overview: "概要",
       files: "ファイル",
@@ -448,8 +466,7 @@ export const ja_JP: TranslationMap = {
       uptime: "稼働時間",
       tickInterval: "Tick 間隔",
       lastChannelsRefresh: "前回の Channels 更新",
-      channelsHint:
-        "Channels を使用して、WhatsApp、Telegram、Discord、Signal、または iMessage をリンクします。",
+      channelsHint: "Channels を使用して、WhatsApp、Telegram、Discord、Signal、または iMessage をリンクします。",
     },
     stats: {
       instances: "インスタンス",
@@ -463,32 +480,25 @@ export const ja_JP: TranslationMap = {
       title: "メモ",
       subtitle: "リモートコントロールのセットアップ向けの簡単なリマインダー。",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Gateway を loopback のまま tailnet 認証で使うには、serve モードを推奨します。",
+      tailscaleText: "Gateway を loopback のまま tailnet 認証で使うには、serve モードを推奨します。",
       sessionTitle: "セッション管理",
       sessionText: "コンテキストをリセットするには、/new または sessions.patch を使用します。",
       cronTitle: "Cron のリマインダー",
       cronText: "定期実行には分離されたセッションを使用します。",
     },
     auth: {
-      required:
-        "この Gateway では認証が必要です。トークンまたはパスワードを追加してから、［Connect］をクリックしてください。",
-      failed:
-        "認証に失敗しました。{command} でトークン付き URL を再コピーするか、トークンを更新してから、［Connect］をクリックしてください。",
+      required: "この Gateway では認証が必要です。トークンまたはパスワードを追加してから、［Connect］をクリックしてください。",
+      failed: "認証に失敗しました。{command} でトークン付き URL を再コピーするか、トークンを更新してから、［Connect］をクリックしてください。",
     },
     pairing: {
       hint: "このデバイスは Gateway ホストからのペアリング承認が必要です。",
       scopeUpgradeTitle: "スコープの拡張は承認待ちです。",
-      scopeUpgradeSummary:
-        "このデバイスはすでにペアリングされていますが、要求されたより広いスコープは承認待ちです。",
+      scopeUpgradeSummary: "このデバイスはすでにペアリングされていますが、要求されたより広いスコープは承認待ちです。",
       roleUpgradeTitle: "ロールの変更は承認待ちです。",
-      roleUpgradeSummary:
-        "このデバイスはすでにペアリングされていますが、要求されたロールの変更は承認待ちです。",
+      roleUpgradeSummary: "このデバイスはすでにペアリングされていますが、要求されたロールの変更は承認待ちです。",
       metadataUpgradeTitle: "デバイスのメタデータ変更は承認待ちです。",
-      metadataUpgradeSummary:
-        "このデバイスはすでにペアリングされていますが、メタデータの変更は承認待ちです。",
-      mobileHint:
-        "モバイルを使用していますか？ デスクトップで openclaw dashboard --no-open から完全な URL（#token=... を含む）をコピーしてください。",
+      metadataUpgradeSummary: "このデバイスはすでにペアリングされていますが、メタデータの変更は承認待ちです。",
+      mobileHint: "モバイルを使用していますか？ デスクトップで openclaw dashboard --no-open から完全な URL（#token=... を含む）をコピーしてください。",
       docsTitle: "デバイスのペアリングに関するドキュメント（新しいタブで開きます）",
       docsLink: "ドキュメント: デバイスのペアリング",
     },
@@ -588,8 +598,7 @@ export const ja_JP: TranslationMap = {
     restartConfirmation: {
       title: "Restart Gateway to Apply Change",
       subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      warning: "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
       confirm: "Confirm Restart",
       restarting: "Restarting…",
       failed: "Could not apply change. Check your connection and try again.",
@@ -738,8 +747,7 @@ export const ja_JP: TranslationMap = {
       sessionsCount: "{count} セッション",
     },
     query: {
-      placeholder:
-        "セッションを絞り込み（例: key:agent:main:cron* model:gpt-4o has:errors minTokens:2000）",
+      placeholder: "セッションを絞り込み（例: key:agent:main:cron* model:gpt-4o has:errors minTokens:2000）",
       apply: "絞り込み（クライアント側）",
       matching: "{total} 件中 {shown} 件のセッションが一致",
       inRange: "範囲内のセッション数: {total}",
@@ -752,8 +760,7 @@ export const ja_JP: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "使用状況キャッシュをバックグラウンドで再構築しています。表示される合計は古い可能性があります。",
+      warning: "使用状況キャッシュをバックグラウンドで再構築しています。表示される合計は古い可能性があります。",
       title: "{status}: 保留中 {pending}、古い {stale}、キャッシュ済み {cached}",
       status: {
         refreshing: "更新中",
@@ -763,8 +770,7 @@ export const ja_JP: TranslationMap = {
     },
     empty: {
       title: "まずは日付範囲を選択",
-      subtitle:
-        "ダッシュボードを離れずに、使用量データを読み込んでコストを比較し、セッションを確認し、タイムラインを詳しく分析できます。",
+      subtitle: "ダッシュボードを離れずに、使用量データを読み込んでコストを比較し、セッションを確認し、タイムラインを詳しく分析できます。",
       hint: "日付範囲を選択して［Refresh］をクリックし、使用量を読み込んでください。",
       noData: "データがありません",
       featureOverview: "概要カード",
@@ -804,23 +810,20 @@ export const ja_JP: TranslationMap = {
       avgTokensHint: "この範囲におけるメッセージごとの平均トークン数。",
       avgCost: "平均コスト / メッセージ",
       avgCostHint: "プロバイダーがコストを報告している場合のメッセージごとの平均コスト。",
-      avgCostHintMissing:
-        "プロバイダーがコストを報告している場合のメッセージごとの平均コスト。この範囲では、一部またはすべてのセッションでコストデータが不足しています。",
+      avgCostHintMissing: "プロバイダーがコストを報告している場合のメッセージごとの平均コスト。この範囲では、一部またはすべてのセッションでコストデータが不足しています。",
       acrossMessages: "{count} 件のメッセージ全体",
       sessions: "セッション",
       sessionsHint: "範囲内の一意のセッション数。",
       sessionsInRange: "範囲内 {count} 件中",
       throughput: "スループット",
-      throughputHint:
-        "スループットは、アクティブ時間あたりの 1 分ごとのトークン数を示します。高いほど良好です。",
+      throughputHint: "スループットは、アクティブ時間あたりの 1 分ごとのトークン数を示します。高いほど良好です。",
       tokensPerMinute: "tok/分",
       perMinute: "/ 分",
       errorRate: "エラー率",
       errorHint: "エラー率 = エラー数 / メッセージ総数。低いほど良好です。",
       avgSession: "平均セッション",
       cacheHitRate: "キャッシュヒット率",
-      cacheHint:
-        "キャッシュヒット率 = キャッシュ読み取り / （入力 + キャッシュ読み取り）。高いほど良好です。",
+      cacheHint: "キャッシュヒット率 = キャッシュ読み取り / （入力 + キャッシュ読み取り）。高いほど良好です。",
       cached: "キャッシュ済み",
       prompt: "プロンプト",
       calls: "呼び出し",
@@ -856,8 +859,7 @@ export const ja_JP: TranslationMap = {
       selected: "選択済み（{count}）",
       copy: "コピー",
       copyName: "セッション名をコピー",
-      limitReached:
-        "最初の 1,000 件のセッションを表示しています。完全な結果を表示するには日付範囲を絞り込んでください。",
+      limitReached: "最初の 1,000 件のセッションを表示しています。完全な結果を表示するには日付範囲を絞り込んでください。",
     },
     details: {
       noUsageData: "このセッションには使用状況データがありません。",
@@ -1023,8 +1025,7 @@ export const ja_JP: TranslationMap = {
       },
       defaultName: "自動化",
       whatHeading: "何を実行しますか？",
-      whatHint:
-        "タスクを自然言語で説明してください。エージェントは毎回このプロンプトを実行します。",
+      whatHint: "タスクを自然言語で説明してください。エージェントは毎回このプロンプトを実行します。",
       promptPlaceholder: "例: 受信トレイで緊急メールを確認して要約する...",
       nameOptional: "名前（任意）",
       namePlaceholder: "例: 朝の受信トレイ確認",
@@ -1124,17 +1125,14 @@ export const ja_JP: TranslationMap = {
       everyAmountPlaceholder: "30",
       timezoneOptional: "タイムゾーン（任意）",
       timezonePlaceholder: "America/Los_Angeles",
-      timezoneHelp:
-        "一般的なタイムゾーンを選択するか、有効な IANA タイムゾーンを入力してください。",
-      jitterHelp:
-        "ジッターが必要ですか？ ［Advanced］→［Stagger window］/［Stagger unit］を使用してください。",
+      timezoneHelp: "一般的なタイムゾーンを選択するか、有効な IANA タイムゾーンを入力してください。",
+      jitterHelp: "ジッターが必要ですか？ ［Advanced］→［Stagger window］/［Stagger unit］を使用してください。",
       execution: "実行",
       executionSub: "ウェイクするタイミングと、このジョブで行う内容を選択します。",
       session: "セッション",
       main: "メイン",
       isolated: "分離",
-      sessionHelp:
-        "Main はシステムイベントを投稿します。Isolated は専用のエージェントターンを実行します。",
+      sessionHelp: "Main はシステムイベントを投稿します。Isolated は専用のエージェントターンを実行します。",
       wakeMode: "ウェイクモード",
       now: "今すぐ",
       nextHeartbeat: "次の heartbeat",
@@ -1142,13 +1140,11 @@ export const ja_JP: TranslationMap = {
       payloadKind: "何を実行しますか？",
       systemEvent: "メインタイムラインにメッセージを投稿",
       agentTurn: "アシスタントタスクを実行（分離）",
-      systemEventHelp:
-        "テキストを Gateway のメインタイムラインに送信します（リマインダーやトリガーに適しています）。",
+      systemEventHelp: "テキストを Gateway のメインタイムラインに送信します（リマインダーやトリガーに適しています）。",
       agentTurnHelp: "プロンプトを使用して、独自のセッションでアシスタント実行を開始します。",
       timeoutSeconds: "タイムアウト（秒）",
       timeoutPlaceholder: "任意、例: 90",
-      timeoutHelp:
-        "任意です。空欄のままにすると、この実行では Gateway のデフォルトのタイムアウト動作が使用されます。",
+      timeoutHelp: "任意です。空欄のままにすると、この実行では Gateway のデフォルトのタイムアウト動作が使用されます。",
       mainTimelineMessage: "メインタイムラインメッセージ",
       assistantTaskPrompt: "アシスタントタスクのプロンプト",
       deliverySection: "配信",
@@ -1157,8 +1153,7 @@ export const ja_JP: TranslationMap = {
       announceDefault: "概要を通知（デフォルト）",
       webhookPost: "Webhook POST",
       noneInternal: "なし（内部）",
-      deliveryHelp:
-        "［Announce］は概要をチャットに投稿します。［None］は実行を内部のみに保ちます。",
+      deliveryHelp: "［Announce］は概要をチャットに投稿します。［None］は実行を内部のみに保ちます。",
       webhookUrl: "Webhook URL",
       channel: "チャンネル",
       webhookPlaceholder: "https://example.com/cron",

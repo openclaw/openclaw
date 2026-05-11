@@ -65,6 +65,7 @@ export const id: TranslationMap = {
     colorModeOption: "Mode warna: {mode}",
     resources: "Sumber daya",
     search: "Cari",
+    all: "Semua",
     save: "Simpan",
     saving: "Menyimpan…",
     saveAndPublish: "Simpan & Publikasikan",
@@ -92,15 +93,14 @@ export const id: TranslationMap = {
     gatewayUrlConfirmation: {
       title: "Ubah URL Gateway",
       subtitle: "Ini akan menyambungkan ulang ke server gateway yang berbeda",
-      warning:
-        "Konfirmasi hanya jika Anda memercayai URL ini. URL berbahaya dapat membahayakan sistem Anda.",
+      warning: "Konfirmasi hanya jika Anda memercayai URL ini. URL berbahaya dapat membahayakan sistem Anda.",
     },
     nostr: {
       profile: "Profil",
       editProfile: "Edit Profil",
       profilePicture: "Foto profil",
       noProfile: "Belum ada profil yang disetel.",
-      noProfileHint: 'Klik "Edit Profil" untuk menambahkan nama, bio, dan avatar Anda.',
+      noProfileHint: "Klik \"Edit Profil\" untuk menambahkan nama, bio, dan avatar Anda.",
       name: "Nama",
       displayName: "Nama Tampilan",
       about: "Tentang",
@@ -128,8 +128,7 @@ export const id: TranslationMap = {
   lazyView: {
     loadingTitle: "Memuat panel",
     errorTitle: "Panel gagal dimuat",
-    errorSubtitle:
-      "Muat ulang halaman untuk memuat bundel Control UI terbaru, atau coba lagi jika permintaan jaringan gagal.",
+    errorSubtitle: "Muat ulang halaman untuk memuat bundel Control UI terbaru, atau coba lagi jika permintaan jaringan gagal.",
     retry: "Coba lagi",
     unknownError: "Kesalahan pemuatan modul yang tidak diketahui.",
   },
@@ -238,8 +237,30 @@ export const id: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
+    directory: {
+      searchLabel: "Cari",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "Default",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "Runtime",
+      workspaceFilterLabel: "Workspace",
+      sortLabel: "Urutkan",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "Workspace",
+        model: "Primary Model",
+        runtime: "Runtime",
+      },
+    },
     tabs: {
       overview: "Ikhtisar",
       files: "File",
@@ -445,8 +466,7 @@ export const id: TranslationMap = {
       uptime: "Waktu aktif",
       tickInterval: "Interval Tick",
       lastChannelsRefresh: "Refresh Saluran Terakhir",
-      channelsHint:
-        "Gunakan Channels untuk menautkan WhatsApp, Telegram, Discord, Signal, atau iMessage.",
+      channelsHint: "Gunakan Channels untuk menautkan WhatsApp, Telegram, Discord, Signal, atau iMessage.",
     },
     stats: {
       instances: "Instans",
@@ -460,8 +480,7 @@ export const id: TranslationMap = {
       title: "Catatan",
       subtitle: "Pengingat cepat untuk pengaturan kendali jarak jauh.",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Utamakan mode serve untuk menjaga gateway tetap di loopback dengan auth tailnet.",
+      tailscaleText: "Utamakan mode serve untuk menjaga gateway tetap di loopback dengan auth tailnet.",
       sessionTitle: "Kebersihan sesi",
       sessionText: "Gunakan /new atau sessions.patch untuk mereset konteks.",
       cronTitle: "Pengingat cron",
@@ -469,22 +488,17 @@ export const id: TranslationMap = {
     },
     auth: {
       required: "Gateway ini memerlukan auth. Tambahkan token atau kata sandi, lalu klik Connect.",
-      failed:
-        "Auth gagal. Salin ulang URL bertoken dengan {command}, atau perbarui token, lalu klik Connect.",
+      failed: "Auth gagal. Salin ulang URL bertoken dengan {command}, atau perbarui token, lalu klik Connect.",
     },
     pairing: {
       hint: "Perangkat ini memerlukan persetujuan pairing dari host gateway.",
       scopeUpgradeTitle: "Peningkatan cakupan menunggu persetujuan.",
-      scopeUpgradeSummary:
-        "Perangkat ini sudah dipasangkan, tetapi perluasan cakupan yang diminta sedang menunggu persetujuan.",
+      scopeUpgradeSummary: "Perangkat ini sudah dipasangkan, tetapi perluasan cakupan yang diminta sedang menunggu persetujuan.",
       roleUpgradeTitle: "Peningkatan peran menunggu persetujuan.",
-      roleUpgradeSummary:
-        "Perangkat ini sudah dipasangkan, tetapi perubahan peran yang diminta sedang menunggu persetujuan.",
+      roleUpgradeSummary: "Perangkat ini sudah dipasangkan, tetapi perubahan peran yang diminta sedang menunggu persetujuan.",
       metadataUpgradeTitle: "Perubahan metadata perangkat menunggu persetujuan.",
-      metadataUpgradeSummary:
-        "Perangkat ini sudah dipasangkan, tetapi perubahan metadata sedang menunggu persetujuan.",
-      mobileHint:
-        "Di seluler? Salin URL lengkap (termasuk #token=...) dari openclaw dashboard --no-open di desktop Anda.",
+      metadataUpgradeSummary: "Perangkat ini sudah dipasangkan, tetapi perubahan metadata sedang menunggu persetujuan.",
+      mobileHint: "Di seluler? Salin URL lengkap (termasuk #token=...) dari openclaw dashboard --no-open di desktop Anda.",
       docsTitle: "Dokumentasi pemasangan perangkat (dibuka di tab baru)",
       docsLink: "Dokumentasi: Pemasangan perangkat",
     },
@@ -584,8 +598,7 @@ export const id: TranslationMap = {
     restartConfirmation: {
       title: "Restart Gateway to Apply Change",
       subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      warning: "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
       confirm: "Confirm Restart",
       restarting: "Restarting…",
       failed: "Could not apply change. Check your connection and try again.",
@@ -613,16 +626,14 @@ export const id: TranslationMap = {
     advanced: {
       eyebrow: "Tinjau",
       title: "Tinjauan Log Harian",
-      description:
-        "Tinjau apa yang berasal dari log harian, apa yang menunggu untuk dipromosikan, dan apa yang baru-baru ini dipromosikan.",
+      description: "Tinjau apa yang berasal dari log harian, apa yang menunggu untuk dipromosikan, dan apa yang baru-baru ini dipromosikan.",
       summaryFromDailyLog: "dari log harian",
       summaryWaiting: "menunggu",
       summaryPromotedToday: "dipromosikan hari ini",
       stagedTitle: "Dari Log Harian",
       stagedDescription: "Putar ulang kandidat yang diambil dari entri log harian yang lebih lama.",
       shortTermTitle: "Menunggu Promosi",
-      shortTermDescription:
-        "Kandidat jangka pendek saat ini yang menunggu untuk naik menjadi memori nyata.",
+      shortTermDescription: "Kandidat jangka pendek saat ini yang menunggu untuk naik menjadi memori nyata.",
       sortRecent: "Terbaru",
       sortSignals: "Dukungan terkuat",
       originDailyLog: "diputar ulang",
@@ -749,8 +760,7 @@ export const id: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "Cache penggunaan sedang dibangun ulang di latar belakang. Total yang ditampilkan mungkin sudah kedaluwarsa.",
+      warning: "Cache penggunaan sedang dibangun ulang di latar belakang. Total yang ditampilkan mungkin sudah kedaluwarsa.",
       title: "{status}: {pending} tertunda, {stale} kedaluwarsa, {cached} tersimpan dalam cache",
       status: {
         refreshing: "menyegarkan",
@@ -760,8 +770,7 @@ export const id: TranslationMap = {
     },
     empty: {
       title: "Mulai dengan rentang tanggal",
-      subtitle:
-        "Muat data penggunaan untuk membandingkan biaya, memeriksa sesi, dan menelusuri linimasa tanpa meninggalkan dasbor.",
+      subtitle: "Muat data penggunaan untuk membandingkan biaya, memeriksa sesi, dan menelusuri linimasa tanpa meninggalkan dasbor.",
       hint: "Pilih rentang tanggal dan klik Refresh untuk memuat penggunaan.",
       noData: "Tidak ada data",
       featureOverview: "Kartu ikhtisar",
@@ -801,23 +810,20 @@ export const id: TranslationMap = {
       avgTokensHint: "Rata-rata token per pesan dalam rentang ini.",
       avgCost: "Rata-rata Biaya / Pesan",
       avgCostHint: "Rata-rata biaya per pesan saat penyedia melaporkan biaya.",
-      avgCostHintMissing:
-        "Rata-rata biaya per pesan saat penyedia melaporkan biaya. Data biaya tidak tersedia untuk sebagian atau semua sesi dalam rentang ini.",
+      avgCostHintMissing: "Rata-rata biaya per pesan saat penyedia melaporkan biaya. Data biaya tidak tersedia untuk sebagian atau semua sesi dalam rentang ini.",
       acrossMessages: "Di seluruh {count} pesan",
       sessions: "Sesi",
       sessionsHint: "Sesi berbeda dalam rentang.",
       sessionsInRange: "dari {count} dalam rentang",
       throughput: "Throughput",
-      throughputHint:
-        "Throughput menunjukkan token per menit selama waktu aktif. Semakin tinggi semakin baik.",
+      throughputHint: "Throughput menunjukkan token per menit selama waktu aktif. Semakin tinggi semakin baik.",
       tokensPerMinute: "tok/menit",
       perMinute: "/ menit",
       errorRate: "Tingkat Kesalahan",
       errorHint: "Tingkat kesalahan = kesalahan / total pesan. Semakin rendah semakin baik.",
       avgSession: "rata-rata sesi",
       cacheHitRate: "Tingkat Hit Cache",
-      cacheHint:
-        "Tingkat hit cache = cache read / (input + cache read). Semakin tinggi semakin baik.",
+      cacheHint: "Tingkat hit cache = cache read / (input + cache read). Semakin tinggi semakin baik.",
       cached: "di-cache",
       prompt: "prompt",
       calls: "panggilan",
@@ -853,8 +859,7 @@ export const id: TranslationMap = {
       selected: "Dipilih ({count})",
       copy: "Salin",
       copyName: "Salin nama sesi",
-      limitReached:
-        "Menampilkan 1.000 sesi pertama. Persempit rentang tanggal untuk hasil lengkap.",
+      limitReached: "Menampilkan 1.000 sesi pertama. Persempit rentang tanggal untuk hasil lengkap.",
     },
     details: {
       noUsageData: "Tidak ada data penggunaan untuk sesi ini.",
@@ -1135,13 +1140,11 @@ export const id: TranslationMap = {
       payloadKind: "Apa yang harus dijalankan?",
       systemEvent: "Posting pesan ke linimasa utama",
       agentTurn: "Jalankan tugas asisten (terisolasi)",
-      systemEventHelp:
-        "Mengirim teks Anda ke linimasa utama Gateway (bagus untuk pengingat/pemicu).",
+      systemEventHelp: "Mengirim teks Anda ke linimasa utama Gateway (bagus untuk pengingat/pemicu).",
       agentTurnHelp: "Memulai proses asisten di sesinya sendiri menggunakan prompt Anda.",
       timeoutSeconds: "Batas waktu (detik)",
       timeoutPlaceholder: "Opsional, mis. 90",
-      timeoutHelp:
-        "Opsional. Biarkan kosong untuk menggunakan perilaku batas waktu default Gateway untuk proses ini.",
+      timeoutHelp: "Opsional. Biarkan kosong untuk menggunakan perilaku batas waktu default Gateway untuk proses ini.",
       mainTimelineMessage: "Pesan linimasa utama",
       assistantTaskPrompt: "Prompt tugas asisten",
       deliverySection: "Pengiriman",
@@ -1160,8 +1163,7 @@ export const id: TranslationMap = {
       toPlaceholder: "+1555... atau ID chat",
       toHelp: "Penggantian penerima opsional (ID chat, telepon, atau ID pengguna).",
       advanced: "Lanjutan",
-      advancedHelp:
-        "Penggantian opsional untuk jaminan pengiriman, jitter jadwal, dan kontrol model.",
+      advancedHelp: "Penggantian opsional untuk jaminan pengiriman, jitter jadwal, dan kontrol model.",
       deleteAfterRun: "Hapus setelah proses",
       deleteAfterRunHelp: "Terbaik untuk pengingat sekali pakai yang harus dibersihkan otomatis.",
       clearAgentOverride: "Hapus penggantian agen",

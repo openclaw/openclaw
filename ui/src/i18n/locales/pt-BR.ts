@@ -65,6 +65,7 @@ export const pt_BR: TranslationMap = {
     colorModeOption: "Modo de cor: {mode}",
     resources: "Recursos",
     search: "Pesquisar",
+    all: "Todas",
     save: "Salvar",
     saving: "Salvando…",
     saveAndPublish: "Salvar e publicar",
@@ -92,15 +93,14 @@ export const pt_BR: TranslationMap = {
     gatewayUrlConfirmation: {
       title: "Alterar URL do Gateway",
       subtitle: "Isso reconectará a um servidor Gateway diferente",
-      warning:
-        "Confirme apenas se você confiar nesta URL. URLs maliciosas podem comprometer seu sistema.",
+      warning: "Confirme apenas se você confiar nesta URL. URLs maliciosas podem comprometer seu sistema.",
     },
     nostr: {
       profile: "Perfil",
       editProfile: "Editar perfil",
       profilePicture: "Foto do perfil",
       noProfile: "Nenhum perfil definido.",
-      noProfileHint: 'Clique em "Editar perfil" para adicionar seu nome, bio e avatar.',
+      noProfileHint: "Clique em \"Editar perfil\" para adicionar seu nome, bio e avatar.",
       name: "Nome",
       displayName: "Nome de exibição",
       about: "Sobre",
@@ -128,8 +128,7 @@ export const pt_BR: TranslationMap = {
   lazyView: {
     loadingTitle: "Carregando painel",
     errorTitle: "Falha ao carregar o painel",
-    errorSubtitle:
-      "Recarregue a página para carregar o pacote mais recente do Control UI ou tente novamente se a solicitação de rede falhou.",
+    errorSubtitle: "Recarregue a página para carregar o pacote mais recente do Control UI ou tente novamente se a solicitação de rede falhou.",
     retry: "Tentar novamente",
     unknownError: "Erro desconhecido ao carregar módulo.",
   },
@@ -238,8 +237,30 @@ export const pt_BR: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
+    directory: {
+      searchLabel: "Search",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "Default",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "Runtime",
+      workspaceFilterLabel: "Workspace",
+      sortLabel: "Ordenar",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "Workspace",
+        model: "Primary Model",
+        runtime: "Runtime",
+      },
+    },
     tabs: {
       overview: "Overview",
       files: "Arquivos",
@@ -459,32 +480,25 @@ export const pt_BR: TranslationMap = {
       title: "Notas",
       subtitle: "Lembretes rápidos para configurações de controle remoto.",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Prefira o modo serve para manter o gateway em loopback com autenticação tailnet.",
+      tailscaleText: "Prefira o modo serve para manter o gateway em loopback com autenticação tailnet.",
       sessionTitle: "Higiene de sessão",
       sessionText: "Use /new ou sessions.patch para redefinir o contexto.",
       cronTitle: "Lembretes de Cron",
       cronText: "Use sessões isoladas para execuções recorrentes.",
     },
     auth: {
-      required:
-        "Este gateway requer autenticação. Adicione um token ou senha e clique em Conectar.",
-      failed:
-        "Falha na autenticação. Recopie uma URL com token usando {command}, ou atualize o token e clique em Conectar.",
+      required: "Este gateway requer autenticação. Adicione um token ou senha e clique em Conectar.",
+      failed: "Falha na autenticação. Recopie uma URL com token usando {command}, ou atualize o token e clique em Conectar.",
     },
     pairing: {
       hint: "Este dispositivo precisa de aprovação de pareamento do host do gateway.",
       scopeUpgradeTitle: "Ampliação de escopo aguardando aprovação.",
-      scopeUpgradeSummary:
-        "Este dispositivo já está pareado, mas a ampliação de escopo solicitada está aguardando aprovação.",
+      scopeUpgradeSummary: "Este dispositivo já está pareado, mas a ampliação de escopo solicitada está aguardando aprovação.",
       roleUpgradeTitle: "Alteração de função aguardando aprovação.",
-      roleUpgradeSummary:
-        "Este dispositivo já está pareado, mas a alteração de função solicitada está aguardando aprovação.",
+      roleUpgradeSummary: "Este dispositivo já está pareado, mas a alteração de função solicitada está aguardando aprovação.",
       metadataUpgradeTitle: "Alteração de metadados do dispositivo aguardando aprovação.",
-      metadataUpgradeSummary:
-        "Este dispositivo já está pareado, mas a alteração de metadados está aguardando aprovação.",
-      mobileHint:
-        "No celular? Copie a URL completa (incluindo #token=...) executando openclaw dashboard --no-open no desktop.",
+      metadataUpgradeSummary: "Este dispositivo já está pareado, mas a alteração de metadados está aguardando aprovação.",
+      mobileHint: "No celular? Copie a URL completa (incluindo #token=...) executando openclaw dashboard --no-open no desktop.",
       docsTitle: "Documentação de pareamento de dispositivo (abre em nova aba)",
       docsLink: "Docs: Pareamento de dispositivo",
     },
@@ -584,8 +598,7 @@ export const pt_BR: TranslationMap = {
     restartConfirmation: {
       title: "Restart Gateway to Apply Change",
       subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      warning: "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
       confirm: "Confirm Restart",
       restarting: "Restarting…",
       failed: "Could not apply change. Check your connection and try again.",
@@ -613,16 +626,14 @@ export const pt_BR: TranslationMap = {
     advanced: {
       eyebrow: "Revisão",
       title: "Revisão do Log Diário",
-      description:
-        "Revise o que veio do log diário, o que está aguardando promoção e o que foi promovido recentemente.",
+      description: "Revise o que veio do log diário, o que está aguardando promoção e o que foi promovido recentemente.",
       summaryFromDailyLog: "do log diário",
       summaryWaiting: "aguardando",
       summaryPromotedToday: "promovido hoje",
       stagedTitle: "Do Log Diário",
       stagedDescription: "Reproduza candidatos extraídos de entradas antigas do log diário.",
       shortTermTitle: "Aguardando Promoção",
-      shortTermDescription:
-        "Candidatos atuais de curto prazo aguardando passar para a memória real.",
+      shortTermDescription: "Candidatos atuais de curto prazo aguardando passar para a memória real.",
       sortRecent: "Mais recente",
       sortSignals: "Suporte mais forte",
       originDailyLog: "reproduzido",
@@ -736,8 +747,7 @@ export const pt_BR: TranslationMap = {
       sessionsCount: "{count} sessões",
     },
     query: {
-      placeholder:
-        "Filtrar sessões (ex.: key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
+      placeholder: "Filtrar sessões (ex.: key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
       apply: "Filtrar (lado do cliente)",
       matching: "{shown} de {total} sessões correspondem",
       inRange: "{total} sessões no intervalo",
@@ -750,8 +760,7 @@ export const pt_BR: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "O cache de uso está sendo reconstruído em segundo plano. Os totais exibidos podem estar desatualizados.",
+      warning: "O cache de uso está sendo reconstruído em segundo plano. Os totais exibidos podem estar desatualizados.",
       title: "{status}: {pending} pendentes, {stale} desatualizados, {cached} em cache",
       status: {
         refreshing: "atualizando",
@@ -761,8 +770,7 @@ export const pt_BR: TranslationMap = {
     },
     empty: {
       title: "Comece com um intervalo de datas",
-      subtitle:
-        "Carregue os dados de uso para comparar custos, inspecionar sessões e explorar cronogramas sem sair do painel.",
+      subtitle: "Carregue os dados de uso para comparar custos, inspecionar sessões e explorar cronogramas sem sair do painel.",
       hint: "Selecione um intervalo de datas e clique em Atualizar para carregar o uso.",
       noData: "Sem dados",
       featureOverview: "Cards de visão geral",
@@ -802,23 +810,20 @@ export const pt_BR: TranslationMap = {
       avgTokensHint: "Média de tokens por mensagem neste intervalo.",
       avgCost: "Média de custo / msg",
       avgCostHint: "Custo médio por mensagem quando os provedores informam custos.",
-      avgCostHintMissing:
-        "Custo médio por mensagem quando os provedores informam custos. Os dados de custo estão ausentes para algumas ou todas as sessões neste intervalo.",
+      avgCostHintMissing: "Custo médio por mensagem quando os provedores informam custos. Os dados de custo estão ausentes para algumas ou todas as sessões neste intervalo.",
       acrossMessages: "Em {count} mensagens",
       sessions: "Sessões",
       sessionsHint: "Sessões distintas no intervalo.",
       sessionsInRange: "de {count} no intervalo",
       throughput: "Taxa de transferência",
-      throughputHint:
-        "A taxa de transferência mostra tokens por minuto durante o tempo ativo. Quanto maior, melhor.",
+      throughputHint: "A taxa de transferência mostra tokens por minuto durante o tempo ativo. Quanto maior, melhor.",
       tokensPerMinute: "tok/min",
       perMinute: "/ min",
       errorRate: "Taxa de erro",
       errorHint: "Taxa de erro = erros / total de mensagens. Quanto menor, melhor.",
       avgSession: "sessão média",
       cacheHitRate: "Taxa de acerto de cache",
-      cacheHint:
-        "Taxa de acerto de cache = leitura de cache / (entrada + leitura de cache). Quanto maior, melhor.",
+      cacheHint: "Taxa de acerto de cache = leitura de cache / (entrada + leitura de cache). Quanto maior, melhor.",
       cached: "em cache",
       prompt: "prompt",
       calls: "chamadas",
@@ -854,8 +859,7 @@ export const pt_BR: TranslationMap = {
       selected: "Selecionadas ({count})",
       copy: "Copiar",
       copyName: "Copiar nome da sessão",
-      limitReached:
-        "Mostrando as primeiras 1.000 sessões. Reduza o intervalo de datas para obter resultados completos.",
+      limitReached: "Mostrando as primeiras 1.000 sessões. Reduza o intervalo de datas para obter resultados completos.",
     },
     details: {
       noUsageData: "Não há dados de uso para esta sessão.",
@@ -900,8 +904,7 @@ export const pt_BR: TranslationMap = {
     mosaic: {
       title: "Atividade por horário",
       subtitleEmpty: "As estimativas exigem carimbos de data e hora das sessões.",
-      subtitle:
-        "Estimado a partir dos intervalos das sessões (primeira/última atividade). Fuso horário: {zone}.",
+      subtitle: "Estimado a partir dos intervalos das sessões (primeira/última atividade). Fuso horário: {zone}.",
       noTimelineData: "Ainda não há dados de linha do tempo.",
       dayOfWeek: "Dia da semana",
       midnight: "Meia-noite",
@@ -1022,10 +1025,8 @@ export const pt_BR: TranslationMap = {
       },
       defaultName: "Automação",
       whatHeading: "O que ela deve fazer?",
-      whatHint:
-        "Descreva a tarefa em linguagem natural. O agente executará este prompt a cada vez.",
-      promptPlaceholder:
-        "ex.: Verifique minha caixa de entrada em busca de e-mails urgentes e resuma-os...",
+      whatHint: "Descreva a tarefa em linguagem natural. O agente executará este prompt a cada vez.",
+      promptPlaceholder: "ex.: Verifique minha caixa de entrada em busca de e-mails urgentes e resuma-os...",
       nameOptional: "Nome (opcional)",
       namePlaceholder: "ex.: Verificação da caixa de entrada pela manhã",
       whenHeading: "Quando ela deve ser executada?",
@@ -1125,15 +1126,13 @@ export const pt_BR: TranslationMap = {
       timezoneOptional: "Fuso horário (opcional)",
       timezonePlaceholder: "America/Los_Angeles",
       timezoneHelp: "Escolha um fuso horário comum ou insira qualquer fuso horário IANA válido.",
-      jitterHelp:
-        "Precisa de jitter? Use Avançado → Janela de escalonamento / Unidade de escalonamento.",
+      jitterHelp: "Precisa de jitter? Use Avançado → Janela de escalonamento / Unidade de escalonamento.",
       execution: "Execução",
       executionSub: "Escolha quando despertar e o que esta tarefa deve fazer.",
       session: "Sessão",
       main: "Principal",
       isolated: "Isolada",
-      sessionHelp:
-        "Principal publica um evento do sistema. Isolada executa um turno dedicado do agente.",
+      sessionHelp: "Principal publica um evento do sistema. Isolada executa um turno dedicado do agente.",
       wakeMode: "Modo de ativação",
       now: "Agora",
       nextHeartbeat: "Próximo heartbeat",
@@ -1141,13 +1140,11 @@ export const pt_BR: TranslationMap = {
       payloadKind: "O que deve ser executado?",
       systemEvent: "Publicar mensagem na linha do tempo principal",
       agentTurn: "Executar tarefa do assistente (isolada)",
-      systemEventHelp:
-        "Envia seu texto para a linha do tempo principal do Gateway (bom para lembretes/disparadores).",
+      systemEventHelp: "Envia seu texto para a linha do tempo principal do Gateway (bom para lembretes/disparadores).",
       agentTurnHelp: "Inicia uma execução do assistente em sua própria sessão usando seu prompt.",
       timeoutSeconds: "Tempo limite (segundos)",
       timeoutPlaceholder: "Opcional, ex.: 90",
-      timeoutHelp:
-        "Opcional. Deixe em branco para usar o comportamento padrão de tempo limite do Gateway nesta execução.",
+      timeoutHelp: "Opcional. Deixe em branco para usar o comportamento padrão de tempo limite do Gateway nesta execução.",
       mainTimelineMessage: "Mensagem da linha do tempo principal",
       assistantTaskPrompt: "Prompt da tarefa do assistente",
       deliverySection: "Entrega",
@@ -1166,8 +1163,7 @@ export const pt_BR: TranslationMap = {
       toPlaceholder: "+1555... ou ID do chat",
       toHelp: "Substituição opcional do destinatário (ID do chat, telefone ou ID do usuário).",
       advanced: "Avançado",
-      advancedHelp:
-        "Substituições opcionais para garantias de entrega, jitter de agendamento e controles de modelo.",
+      advancedHelp: "Substituições opcionais para garantias de entrega, jitter de agendamento e controles de modelo.",
       deleteAfterRun: "Excluir após a execução",
       deleteAfterRunHelp: "Ideal para lembretes únicos que devem ser limpos automaticamente.",
       clearAgentOverride: "Limpar substituição de agente",

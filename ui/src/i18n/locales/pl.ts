@@ -65,6 +65,7 @@ export const pl: TranslationMap = {
     colorModeOption: "Tryb kolorów: {mode}",
     resources: "Zasoby",
     search: "Szukaj",
+    all: "Wszystkie",
     save: "Zapisz",
     saving: "Zapisywanie…",
     saveAndPublish: "Zapisz i opublikuj",
@@ -92,8 +93,7 @@ export const pl: TranslationMap = {
     gatewayUrlConfirmation: {
       title: "Zmień URL Gateway",
       subtitle: "To spowoduje ponowne połączenie z innym serwerem Gateway",
-      warning:
-        "Potwierdź tylko, jeśli ufasz temu URL-owi. Złośliwe adresy URL mogą zagrozić bezpieczeństwu twojego systemu.",
+      warning: "Potwierdź tylko, jeśli ufasz temu URL-owi. Złośliwe adresy URL mogą zagrozić bezpieczeństwu twojego systemu.",
     },
     nostr: {
       profile: "Profil",
@@ -128,8 +128,7 @@ export const pl: TranslationMap = {
   lazyView: {
     loadingTitle: "Ładowanie panelu",
     errorTitle: "Nie udało się załadować panelu",
-    errorSubtitle:
-      "Odśwież stronę, aby załadować najnowszy pakiet Control UI, lub spróbuj ponownie, jeśli żądanie sieciowe się nie powiodło.",
+    errorSubtitle: "Odśwież stronę, aby załadować najnowszy pakiet Control UI, lub spróbuj ponownie, jeśli żądanie sieciowe się nie powiodło.",
     retry: "Spróbuj ponownie",
     unknownError: "Nieznany błąd ładowania modułu.",
   },
@@ -138,8 +137,7 @@ export const pl: TranslationMap = {
       loadConfigHint: "Wczytaj konfigurację, aby edytować powiązania.",
       formModeHint: "Przełącz kartę Konfiguracja na tryb Formularz, aby edytować tutaj powiązania.",
       execNodeBinding: "Powiązanie węzła exec",
-      execNodeBindingSubtitle:
-        "Przypnij agentów do konkretnego węzła podczas używania exec host=node.",
+      execNodeBindingSubtitle: "Przypnij agentów do konkretnego węzła podczas używania exec host=node.",
       defaultBinding: "Domyślne powiązanie",
       defaultBindingHint: "Używane, gdy agenci nie nadpisują powiązania węzła.",
       node: "Węzeł",
@@ -239,8 +237,30 @@ export const pl: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
+    directory: {
+      searchLabel: "Szukaj",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "Default",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "Środowisko uruchomieniowe",
+      workspaceFilterLabel: "Workspace",
+      sortLabel: "Sortuj",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "Workspace",
+        model: "Primary Model",
+        runtime: "Środowisko uruchomieniowe",
+      },
+    },
     tabs: {
       overview: "Przegląd",
       files: "Pliki",
@@ -460,32 +480,25 @@ export const pl: TranslationMap = {
       title: "Notatki",
       subtitle: "Szybkie przypomnienia dotyczące zdalnych konfiguracji sterowania.",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Preferuj tryb serve, aby utrzymać Gateway na loopback z uwierzytelnianiem tailnet.",
+      tailscaleText: "Preferuj tryb serve, aby utrzymać Gateway na loopback z uwierzytelnianiem tailnet.",
       sessionTitle: "Higiena sesji",
       sessionText: "Użyj /new lub sessions.patch, aby zresetować kontekst.",
       cronTitle: "Przypomnienia Cron",
       cronText: "Używaj odizolowanych sesji do cyklicznych uruchomień.",
     },
     auth: {
-      required:
-        "Ten Gateway wymaga uwierzytelnienia. Dodaj token lub hasło, a następnie kliknij Połącz.",
-      failed:
-        "Uwierzytelnianie nie powiodło się. Ponownie skopiuj URL z tokenem za pomocą {command} lub zaktualizuj token, a następnie kliknij Połącz.",
+      required: "Ten Gateway wymaga uwierzytelnienia. Dodaj token lub hasło, a następnie kliknij Połącz.",
+      failed: "Uwierzytelnianie nie powiodło się. Ponownie skopiuj URL z tokenem za pomocą {command} lub zaktualizuj token, a następnie kliknij Połącz.",
     },
     pairing: {
       hint: "To urządzenie wymaga zatwierdzenia parowania przez host Gateway.",
       scopeUpgradeTitle: "Rozszerzenie zakresu oczekuje na zatwierdzenie.",
-      scopeUpgradeSummary:
-        "To urządzenie jest już sparowane, ale żądane rozszerzenie zakresu oczekuje na zatwierdzenie.",
+      scopeUpgradeSummary: "To urządzenie jest już sparowane, ale żądane rozszerzenie zakresu oczekuje na zatwierdzenie.",
       roleUpgradeTitle: "Zmiana roli oczekuje na zatwierdzenie.",
-      roleUpgradeSummary:
-        "To urządzenie jest już sparowane, ale żądana zmiana roli oczekuje na zatwierdzenie.",
+      roleUpgradeSummary: "To urządzenie jest już sparowane, ale żądana zmiana roli oczekuje na zatwierdzenie.",
       metadataUpgradeTitle: "Zmiana metadanych urządzenia oczekuje na zatwierdzenie.",
-      metadataUpgradeSummary:
-        "To urządzenie jest już sparowane, ale zmiana metadanych oczekuje na zatwierdzenie.",
-      mobileHint:
-        "Na urządzeniu mobilnym? Skopiuj pełny URL (w tym #token=...) z openclaw dashboard --no-open na komputerze.",
+      metadataUpgradeSummary: "To urządzenie jest już sparowane, ale zmiana metadanych oczekuje na zatwierdzenie.",
+      mobileHint: "Na urządzeniu mobilnym? Skopiuj pełny URL (w tym #token=...) z openclaw dashboard --no-open na komputerze.",
       docsTitle: "Dokumentacja parowania urządzeń (otwiera się w nowej karcie)",
       docsLink: "Dokumentacja: Parowanie urządzeń",
     },
@@ -523,8 +536,7 @@ export const pl: TranslationMap = {
       modelAuthExpiresIn: "wygasa {when}",
       modelAuthAttentionExpiredTitle: "Uwierzytelnianie modeli wygasło",
       modelAuthAttentionExpiringTitle: "Uwierzytelnianie modeli wkrótce wygaśnie",
-      modelAuthAttentionExpiredDesc:
-        "{providers} — uwierzytelnij ponownie za pomocą openclaw models auth",
+      modelAuthAttentionExpiredDesc: "{providers} — uwierzytelnij ponownie za pomocą openclaw models auth",
       modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
@@ -586,8 +598,7 @@ export const pl: TranslationMap = {
     restartConfirmation: {
       title: "Restart Gateway to Apply Change",
       subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      warning: "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
       confirm: "Confirm Restart",
       restarting: "Restarting…",
       failed: "Could not apply change. Check your connection and try again.",
@@ -615,17 +626,14 @@ export const pl: TranslationMap = {
     advanced: {
       eyebrow: "Przegląd",
       title: "Przegląd dziennego dziennika",
-      description:
-        "Sprawdź, co pochodzi z dziennego dziennika, co czeka na awans i co zostało ostatnio awansowane.",
+      description: "Sprawdź, co pochodzi z dziennego dziennika, co czeka na awans i co zostało ostatnio awansowane.",
       summaryFromDailyLog: "z dziennego dziennika",
       summaryWaiting: "oczekujące",
       summaryPromotedToday: "awansowane dzisiaj",
       stagedTitle: "Z dziennego dziennika",
-      stagedDescription:
-        "Kandydaci do odtworzenia wyciągnięci ze starszych wpisów dziennego dziennika.",
+      stagedDescription: "Kandydaci do odtworzenia wyciągnięci ze starszych wpisów dziennego dziennika.",
       shortTermTitle: "Oczekujące na awans",
-      shortTermDescription:
-        "Bieżący kandydaci krótkoterminowi czekający na przejście do prawdziwej pamięci.",
+      shortTermDescription: "Bieżący kandydaci krótkoterminowi czekający na przejście do prawdziwej pamięci.",
       sortRecent: "Najnowsze",
       sortSignals: "Najsilniejsze wsparcie",
       originDailyLog: "odtworzone",
@@ -739,8 +747,7 @@ export const pl: TranslationMap = {
       sessionsCount: "{count} sesji",
     },
     query: {
-      placeholder:
-        "Filtruj sesje (np. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
+      placeholder: "Filtruj sesje (np. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
       apply: "Filtruj (po stronie klienta)",
       matching: "Pasuje {shown} z {total} sesji",
       inRange: "{total} sesji w zakresie",
@@ -753,10 +760,8 @@ export const pl: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "Pamięć podręczna użycia jest odbudowywana w tle. Wyświetlane sumy mogą być nieaktualne.",
-      title:
-        "{status}: oczekujące: {pending}, nieaktualne: {stale}, z pamięci podręcznej: {cached}",
+      warning: "Pamięć podręczna użycia jest odbudowywana w tle. Wyświetlane sumy mogą być nieaktualne.",
+      title: "{status}: oczekujące: {pending}, nieaktualne: {stale}, z pamięci podręcznej: {cached}",
       status: {
         refreshing: "odświeżanie",
         stale: "nieaktualne",
@@ -765,8 +770,7 @@ export const pl: TranslationMap = {
     },
     empty: {
       title: "Zacznij od zakresu dat",
-      subtitle:
-        "Wczytaj dane użycia, aby porównać koszty, sprawdzić sesje i analizować osie czasu bez opuszczania panelu.",
+      subtitle: "Wczytaj dane użycia, aby porównać koszty, sprawdzić sesje i analizować osie czasu bez opuszczania panelu.",
       hint: "Wybierz zakres dat i kliknij Odśwież, aby wczytać dane użycia.",
       noData: "Brak danych",
       featureOverview: "Karty przeglądu",
@@ -806,23 +810,20 @@ export const pl: TranslationMap = {
       avgTokensHint: "Średnia liczba tokenów na wiadomość w tym zakresie.",
       avgCost: "Śr. koszt / wiadomość",
       avgCostHint: "Średni koszt na wiadomość, gdy dostawcy raportują koszty.",
-      avgCostHintMissing:
-        "Średni koszt na wiadomość, gdy dostawcy raportują koszty. Dla części lub wszystkich sesji w tym zakresie brakuje danych o kosztach.",
+      avgCostHintMissing: "Średni koszt na wiadomość, gdy dostawcy raportują koszty. Dla części lub wszystkich sesji w tym zakresie brakuje danych o kosztach.",
       acrossMessages: "Łącznie dla {count} wiadomości",
       sessions: "Sesje",
       sessionsHint: "Unikalne sesje w wybranym zakresie.",
       sessionsInRange: "z {count} w zakresie",
       throughput: "Przepustowość",
-      throughputHint:
-        "Przepustowość pokazuje liczbę tokenów na minutę aktywnego czasu. Im wyższa, tym lepiej.",
+      throughputHint: "Przepustowość pokazuje liczbę tokenów na minutę aktywnego czasu. Im wyższa, tym lepiej.",
       tokensPerMinute: "tok/min",
       perMinute: "/ min",
       errorRate: "Wskaźnik błędów",
       errorHint: "Wskaźnik błędów = błędy / wszystkie wiadomości. Im niższy, tym lepiej.",
       avgSession: "średnia na sesję",
       cacheHitRate: "Współczynnik trafień pamięci podręcznej",
-      cacheHint:
-        "Współczynnik trafień pamięci podręcznej = odczyt z pamięci podręcznej / (wejście + odczyt z pamięci podręcznej). Im wyższy, tym lepiej.",
+      cacheHint: "Współczynnik trafień pamięci podręcznej = odczyt z pamięci podręcznej / (wejście + odczyt z pamięci podręcznej). Im wyższy, tym lepiej.",
       cached: "z pamięci podręcznej",
       prompt: "prompt",
       calls: "wywołania",
@@ -858,8 +859,7 @@ export const pl: TranslationMap = {
       selected: "Zaznaczone ({count})",
       copy: "Kopiuj",
       copyName: "Kopiuj nazwę sesji",
-      limitReached:
-        "Wyświetlanych jest pierwszych 1000 sesji. Zawęź zakres dat, aby uzyskać pełne wyniki.",
+      limitReached: "Wyświetlanych jest pierwszych 1000 sesji. Zawęź zakres dat, aby uzyskać pełne wyniki.",
     },
     details: {
       noUsageData: "Brak danych o użyciu dla tej sesji.",
@@ -904,8 +904,7 @@ export const pl: TranslationMap = {
     mosaic: {
       title: "Aktywność według czasu",
       subtitleEmpty: "Szacunki wymagają znaczników czasu sesji.",
-      subtitle:
-        "Oszacowano na podstawie zakresów sesji (pierwsza/ostatnia aktywność). Strefa czasowa: {zone}.",
+      subtitle: "Oszacowano na podstawie zakresów sesji (pierwsza/ostatnia aktywność). Strefa czasowa: {zone}.",
       noTimelineData: "Brak jeszcze danych osi czasu.",
       dayOfWeek: "Dzień tygodnia",
       midnight: "Północ",
@@ -1027,8 +1026,7 @@ export const pl: TranslationMap = {
       defaultName: "Automatyzacja",
       whatHeading: "Co ma zrobić?",
       whatHint: "Opisz zadanie językiem naturalnym. Agent uruchomi ten prompt za każdym razem.",
-      promptPlaceholder:
-        "np. Sprawdź moją skrzynkę odbiorczą pod kątem pilnych e-maili i podsumuj je...",
+      promptPlaceholder: "np. Sprawdź moją skrzynkę odbiorczą pod kątem pilnych e-maili i podsumuj je...",
       nameOptional: "Nazwa (opcjonalnie)",
       namePlaceholder: "np. Poranne sprawdzanie skrzynki",
       whenHeading: "Kiedy ma się uruchamiać?",
@@ -1127,17 +1125,14 @@ export const pl: TranslationMap = {
       everyAmountPlaceholder: "30",
       timezoneOptional: "Strefa czasowa (opcjonalnie)",
       timezonePlaceholder: "America/Los_Angeles",
-      timezoneHelp:
-        "Wybierz popularną strefę czasową lub wpisz dowolną prawidłową strefę czasową IANA.",
-      jitterHelp:
-        "Potrzebujesz opóźnienia losowego? Użyj Zaawansowane → Okno rozrzutu / Jednostka rozrzutu.",
+      timezoneHelp: "Wybierz popularną strefę czasową lub wpisz dowolną prawidłową strefę czasową IANA.",
+      jitterHelp: "Potrzebujesz opóźnienia losowego? Użyj Zaawansowane → Okno rozrzutu / Jednostka rozrzutu.",
       execution: "Wykonanie",
       executionSub: "Wybierz, kiedy wybudzić i co to zadanie ma zrobić.",
       session: "Sesja",
       main: "Główna",
       isolated: "Izolowana",
-      sessionHelp:
-        "Główna publikuje zdarzenie systemowe. Izolowana uruchamia dedykowaną turę agenta.",
+      sessionHelp: "Główna publikuje zdarzenie systemowe. Izolowana uruchamia dedykowaną turę agenta.",
       wakeMode: "Tryb wybudzenia",
       now: "Teraz",
       nextHeartbeat: "Następny heartbeat",
@@ -1145,13 +1140,11 @@ export const pl: TranslationMap = {
       payloadKind: "Co ma zostać uruchomione?",
       systemEvent: "Opublikuj wiadomość na głównej osi czasu",
       agentTurn: "Uruchom zadanie asystenta (izolowane)",
-      systemEventHelp:
-        "Wysyła Twój tekst na główną oś czasu Gateway (dobre do przypomnień/wyzwalaczy).",
+      systemEventHelp: "Wysyła Twój tekst na główną oś czasu Gateway (dobre do przypomnień/wyzwalaczy).",
       agentTurnHelp: "Uruchamia działanie asystenta w osobnej sesji przy użyciu Twojego promptu.",
       timeoutSeconds: "Limit czasu (sekundy)",
       timeoutPlaceholder: "Opcjonalnie, np. 90",
-      timeoutHelp:
-        "Opcjonalne. Pozostaw puste, aby użyć domyślnego zachowania limitu czasu Gateway dla tego uruchomienia.",
+      timeoutHelp: "Opcjonalne. Pozostaw puste, aby użyć domyślnego zachowania limitu czasu Gateway dla tego uruchomienia.",
       mainTimelineMessage: "Wiadomość na głównej osi czasu",
       assistantTaskPrompt: "Prompt zadania asystenta",
       deliverySection: "Dostarczanie",
@@ -1160,8 +1153,7 @@ export const pl: TranslationMap = {
       announceDefault: "Ogłoś podsumowanie (domyślnie)",
       webhookPost: "Webhook POST",
       noneInternal: "Brak (wewnętrzne)",
-      deliveryHelp:
-        "Ogłoś publikuje podsumowanie na czacie. Brak zachowuje wykonanie jako wewnętrzne.",
+      deliveryHelp: "Ogłoś publikuje podsumowanie na czacie. Brak zachowuje wykonanie jako wewnętrzne.",
       webhookUrl: "URL webhooka",
       channel: "Kanał",
       webhookPlaceholder: "https://example.com/cron",
@@ -1169,14 +1161,11 @@ export const pl: TranslationMap = {
       webhookHelp: "Wysyłaj podsumowania uruchomień do endpointu webhooka.",
       to: "Do",
       toPlaceholder: "+1555... lub identyfikator czatu",
-      toHelp:
-        "Opcjonalne nadpisanie odbiorcy (identyfikator czatu, numer telefonu lub identyfikator użytkownika).",
+      toHelp: "Opcjonalne nadpisanie odbiorcy (identyfikator czatu, numer telefonu lub identyfikator użytkownika).",
       advanced: "Zaawansowane",
-      advancedHelp:
-        "Opcjonalne nadpisania gwarancji dostarczenia, losowego rozrzutu harmonogramu i ustawień modelu.",
+      advancedHelp: "Opcjonalne nadpisania gwarancji dostarczenia, losowego rozrzutu harmonogramu i ustawień modelu.",
       deleteAfterRun: "Usuń po uruchomieniu",
-      deleteAfterRunHelp:
-        "Najlepsze dla jednorazowych przypomnień, które powinny zostać automatycznie usunięte.",
+      deleteAfterRunHelp: "Najlepsze dla jednorazowych przypomnień, które powinny zostać automatycznie usunięte.",
       clearAgentOverride: "Wyczyść nadpisanie agenta",
       clearAgentHelp: "Wymuś użycie domyślnego asystenta Gateway dla tego zadania.",
       exactTiming: "Dokładne wyczucie czasu (bez rozrzutu)",
@@ -1192,8 +1181,7 @@ export const pl: TranslationMap = {
       thinkingPlaceholder: "low",
       thinkingHelp: "Użyj sugerowanego poziomu lub wpisz wartość specyficzną dla dostawcy.",
       bestEffortDelivery: "Dostarczanie best effort",
-      bestEffortHelp:
-        "Nie oznaczaj zadania jako nieudanego, jeśli samo dostarczenie się nie powiedzie.",
+      bestEffortHelp: "Nie oznaczaj zadania jako nieudanego, jeśli samo dostarczenie się nie powiedzie.",
       cantAddYet: "Nie można jeszcze dodać zadania",
       fillRequired: "Wypełnij wymagane pola poniżej, aby włączyć wysyłanie.",
       fixFields: "Popraw {count} pole, aby kontynuować.",

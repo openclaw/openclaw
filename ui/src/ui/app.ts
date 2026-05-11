@@ -353,6 +353,11 @@ export class OpenClawApp extends LitElement {
   @state() agentsList: AgentsListResult | null = null;
   @state() agentsError: string | null = null;
   @state() agentsSelectedId: string | null = null;
+  @state() agentsDirectoryQuery = "";
+  @state() agentsDirectorySortDir: "asc" | "desc" = "asc";
+  @state() agentsDirectoryDefaultFilter: "all" | "default" | "non-default" = "all";
+  @state() agentsDirectoryRuntimeFilter = "all";
+  @state() agentsDirectoryWorkspaceFilter = "all";
   @state() toolsCatalogLoading = false;
   @state() toolsCatalogError: string | null = null;
   @state() toolsCatalogResult: ToolsCatalogResult | null = null;

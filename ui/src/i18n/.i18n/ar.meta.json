@@ -1,11 +1,22 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-05-06T03:20:52.601Z",
+  "fallbackKeys": [
+    "agents.directory.defaultOnly",
+    "agents.directory.emptySubtitle",
+    "agents.directory.emptyTitle",
+    "agents.directory.nonDefaultOnly",
+    "agents.directory.resultsCount",
+    "agents.directory.searchPlaceholder",
+    "agents.directory.sortAsc",
+    "agents.directory.sortDesc",
+    "agents.openFiles",
+    "agents.openFilesTitle"
+  ],
+  "generatedAt": "2026-05-11T11:05:37.908Z",
   "locale": "ar",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "c97d50965a8485bb290aa7f158bae5dbadf3642e71bf4712207555f0abea23c2",
-  "totalKeys": 1017,
-  "translatedKeys": 1017,
+  "sourceHash": "49a53c9b0ad773580d608f9f91343beb8bd126cbf21529f9b22c48618ec3195c",
+  "totalKeys": 1036,
+  "translatedKeys": 1026,
   "workflow": 1
 }

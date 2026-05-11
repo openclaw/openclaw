@@ -231,6 +231,9 @@ export type AppViewState = {
   agentsList: AgentsListResult | null;
   agentsError: string | null;
   agentsSelectedId: string | null;
+  agentsDirectoryQuery: string;
+  agentsDirectorySortDir: "asc" | "desc";
+  agentsDirectoryDefaultFilter: "all" | "default" | "non-default";
   toolsCatalogLoading: boolean;
   toolsCatalogError: string | null;
   toolsCatalogResult: ToolsCatalogResult | null;

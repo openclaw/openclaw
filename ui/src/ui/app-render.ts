@@ -18,7 +18,7 @@ import {
   dismissChatError,
   switchChatSession,
 } from "./app-render.helpers.ts";
-import { warnQueryToken } from "./app-settings.ts";
+import { syncUrlWithAgentsSelection, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import {
   controlUiNowMs,
@@ -825,12 +825,7 @@ export function renderApp(state: AppViewState) {
     })();
   };
   const basePath = normalizeBasePath(state.basePath ?? "");
-  const resolveSelectedAgentId = () =>
-    state.agentsSelectedId ??
-    state.agentsList?.defaultId ??
-    state.agentsList?.agents?.[0]?.id ??
-    null;
-  const resolvedAgentId = resolveSelectedAgentId();
+  const resolvedAgentId = state.agentsSelectedId ?? null;
   const activeSessionAgentId = resolveAgentIdFromSessionKey(state.sessionKey);
   const toolsPanelUsesActiveSession = Boolean(
     resolvedAgentId && activeSessionAgentId && resolvedAgentId === activeSessionAgentId,
@@ -1980,8 +1975,13 @@ export function renderApp(state: AppViewState) {
                 loading: state.agentsLoading,
                 error: state.agentsError,
                 agentsList: state.agentsList,
-                selectedAgentId: resolvedAgentId,
-                activePanel: state.agentsPanel,
+                selectedAgentId: state.agentsSelectedId,
+                activePanel: state.agentsPanel ?? "files",
+                directory: {
+                  query: state.agentsDirectoryQuery ?? "",
+                  sortDir: state.agentsDirectorySortDir ?? "asc",
+                  defaultFilter: state.agentsDirectoryDefaultFilter ?? "all",
+                },
                 config: {
                   form: configValue,
                   loading: state.configLoading,
@@ -2038,20 +2038,32 @@ export function renderApp(state: AppViewState) {
                   if (agentIds.length > 0) {
                     void loadAgentIdentities(state, agentIds);
                   }
-                  loadAgentPanelDataForSelectedAgent(resolveSelectedAgentId());
-                  refreshAgentsPanelSupplementalData(state.agentsPanel);
-                },
-                onSelectAgent: (agentId) => {
-                  if (state.agentsSelectedId === agentId) {
-                    return;
+                  if (state.agentsSelectedId) {
+                    loadAgentPanelDataForSelectedAgent(state.agentsSelectedId);
+                    refreshAgentsPanelSupplementalData(state.agentsPanel);
                   }
+                },
+                onOpenAgent: (agentId, panel) => {
+                  const nextPanel = panel ?? "overview";
                   state.agentsSelectedId = agentId;
+                  state.agentsPanel = nextPanel;
                   resetAgentSelectionPanelState();
                   void loadAgentIdentity(state, agentId);
                   loadAgentPanelDataForSelectedAgent(agentId);
+                  syncUrlWithAgentsSelection(state, { agentId, panel: nextPanel }, false);
+                },
+                onBackToDirectory: () => {
+                  state.agentsSelectedId = null;
+                  resetAgentSelectionPanelState();
+                  syncUrlWithAgentsSelection(state, { agentId: null, panel: null }, false);
                 },
                 onSelectPanel: (panel) => {
                   state.agentsPanel = panel;
+                  syncUrlWithAgentsSelection(
+                    state,
+                    { agentId: state.agentsSelectedId, panel },
+                    true,
+                  );
                   if (
                     panel === "files" &&
                     resolvedAgentId &&
@@ -2089,6 +2101,11 @@ export function renderApp(state: AppViewState) {
                     }
                   }
                   refreshAgentsPanelSupplementalData(panel);
+                },
+                onDirectoryChange: (patch) => {
+                  if (typeof patch.query === "string") state.agentsDirectoryQuery = patch.query;
+                  if (patch.sortDir) state.agentsDirectorySortDir = patch.sortDir;
+                  if (patch.defaultFilter) state.agentsDirectoryDefaultFilter = patch.defaultFilter;
                 },
                 onLoadFiles: (agentId) => loadAgentFiles(state, agentId),
                 onSelectFile: (name) => {

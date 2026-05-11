@@ -65,6 +65,7 @@ export const nl: TranslationMap = {
     colorModeOption: "Kleurmodus: {mode}",
     resources: "Bronnen",
     search: "Zoeken",
+    all: "Alle",
     save: "Opslaan",
     saving: "Opslaan…",
     saveAndPublish: "Opslaan en publiceren",
@@ -92,15 +93,14 @@ export const nl: TranslationMap = {
     gatewayUrlConfirmation: {
       title: "Gateway-URL wijzigen",
       subtitle: "Hiermee wordt opnieuw verbinding gemaakt met een andere Gateway-server",
-      warning:
-        "Bevestig dit alleen als je deze URL vertrouwt. Kwaadaardige URL's kunnen je systeem in gevaar brengen.",
+      warning: "Bevestig dit alleen als je deze URL vertrouwt. Kwaadaardige URL's kunnen je systeem in gevaar brengen.",
     },
     nostr: {
       profile: "Profiel",
       editProfile: "Profiel bewerken",
       profilePicture: "Profielfoto",
       noProfile: "Geen profiel ingesteld.",
-      noProfileHint: 'Klik op "Profiel bewerken" om je naam, bio en avatar toe te voegen.',
+      noProfileHint: "Klik op \"Profiel bewerken\" om je naam, bio en avatar toe te voegen.",
       name: "Naam",
       displayName: "Weergavenaam",
       about: "Over",
@@ -128,19 +128,16 @@ export const nl: TranslationMap = {
   lazyView: {
     loadingTitle: "Paneel laden",
     errorTitle: "Paneel kan niet worden geladen",
-    errorSubtitle:
-      "Laad de pagina opnieuw om de nieuwste Control UI-bundel te laden, of probeer het opnieuw als de netwerkaanvraag is mislukt.",
+    errorSubtitle: "Laad de pagina opnieuw om de nieuwste Control UI-bundel te laden, of probeer het opnieuw als de netwerkaanvraag is mislukt.",
     retry: "Opnieuw proberen",
     unknownError: "Onbekende fout bij laden van module.",
   },
   nodes: {
     binding: {
       loadConfigHint: "Laad de config om bindingen te bewerken.",
-      formModeHint:
-        "Schakel het tabblad Config over naar formuliermodus om hier bindingen te bewerken.",
+      formModeHint: "Schakel het tabblad Config over naar formuliermodus om hier bindingen te bewerken.",
       execNodeBinding: "Exec-nodebinding",
-      execNodeBindingSubtitle:
-        "Koppel agents aan een specifieke node wanneer exec host=node wordt gebruikt.",
+      execNodeBindingSubtitle: "Koppel agents aan een specifieke node wanneer exec host=node wordt gebruikt.",
       defaultBinding: "Standaardbinding",
       defaultBindingHint: "Wordt gebruikt wanneer agents geen nodebinding overschrijven.",
       node: "Node",
@@ -240,8 +237,30 @@ export const nl: TranslationMap = {
     setDefault: "Als standaard instellen",
     alreadyDefaultTitle: "Al de standaardagent",
     setDefaultTitle: "Als standaardagent instellen",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "Selecteer een agent",
     selectSubtitle: "Kies een agent om de workspace en tools te bekijken.",
+    directory: {
+      searchLabel: "Zoeken",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "Standaard",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "Runtime",
+      workspaceFilterLabel: "Workspace",
+      sortLabel: "Sorteren",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "Workspace",
+        model: "Primair model",
+        runtime: "Runtime",
+      },
+    },
     tabs: {
       overview: "Overzicht",
       files: "Bestanden",
@@ -447,8 +466,7 @@ export const nl: TranslationMap = {
       uptime: "Uptime",
       tickInterval: "Tick-interval",
       lastChannelsRefresh: "Laatste Channels-vernieuwing",
-      channelsHint:
-        "Gebruik Channels om WhatsApp, Telegram, Discord, Signal of iMessage te koppelen.",
+      channelsHint: "Gebruik Channels om WhatsApp, Telegram, Discord, Signal of iMessage te koppelen.",
     },
     stats: {
       instances: "Instanties",
@@ -462,32 +480,25 @@ export const nl: TranslationMap = {
       title: "Notities",
       subtitle: "Snelle herinneringen voor configuraties voor bediening op afstand.",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Gebruik bij voorkeur serve-modus om de Gateway op loopback te houden met tailnet-auth.",
+      tailscaleText: "Gebruik bij voorkeur serve-modus om de Gateway op loopback te houden met tailnet-auth.",
       sessionTitle: "Sessiebeheer",
       sessionText: "Gebruik /new of sessions.patch om context te resetten.",
       cronTitle: "Cron-herinneringen",
       cronText: "Gebruik geïsoleerde sessies voor terugkerende runs.",
     },
     auth: {
-      required:
-        "Deze Gateway vereist auth. Voeg een token of wachtwoord toe en klik daarna op Verbinden.",
-      failed:
-        "Auth mislukt. Kopieer opnieuw een URL met token met {command}, of werk het token bij, en klik daarna op Verbinden.",
+      required: "Deze Gateway vereist auth. Voeg een token of wachtwoord toe en klik daarna op Verbinden.",
+      failed: "Auth mislukt. Kopieer opnieuw een URL met token met {command}, of werk het token bij, en klik daarna op Verbinden.",
     },
     pairing: {
       hint: "Dit apparaat heeft koppelingsgoedkeuring nodig van de Gateway-host.",
       scopeUpgradeTitle: "Scope-upgrade wacht op goedkeuring.",
-      scopeUpgradeSummary:
-        "Dit apparaat is al gekoppeld, maar de aangevraagde bredere scope wacht op goedkeuring.",
+      scopeUpgradeSummary: "Dit apparaat is al gekoppeld, maar de aangevraagde bredere scope wacht op goedkeuring.",
       roleUpgradeTitle: "Rolupgrade wacht op goedkeuring.",
-      roleUpgradeSummary:
-        "Dit apparaat is al gekoppeld, maar de aangevraagde rolwijziging wacht op goedkeuring.",
+      roleUpgradeSummary: "Dit apparaat is al gekoppeld, maar de aangevraagde rolwijziging wacht op goedkeuring.",
       metadataUpgradeTitle: "Wijziging van apparaatmetadata wacht op goedkeuring.",
-      metadataUpgradeSummary:
-        "Dit apparaat is al gekoppeld, maar de metadatawijziging wacht op goedkeuring.",
-      mobileHint:
-        "Op mobiel? Kopieer de volledige URL (inclusief #token=...) vanuit openclaw dashboard --no-open op je desktop.",
+      metadataUpgradeSummary: "Dit apparaat is al gekoppeld, maar de metadatawijziging wacht op goedkeuring.",
+      mobileHint: "Op mobiel? Kopieer de volledige URL (inclusief #token=...) vanuit openclaw dashboard --no-open op je desktop.",
       docsTitle: "Docs voor apparaatkoppeling (opent in nieuw tabblad)",
       docsLink: "Docs: Apparaatkoppeling",
     },
@@ -587,8 +598,7 @@ export const nl: TranslationMap = {
     restartConfirmation: {
       title: "Start Gateway opnieuw om wijziging toe te passen",
       subtitle: "Het wijzigen van de Dromen-modus start de Gateway opnieuw.",
-      warning:
-        "Deze actie start de Gateway opnieuw en kan chats, automatiseringen en verbonden kanalen tijdelijk onderbreken.",
+      warning: "Deze actie start de Gateway opnieuw en kan chats, automatiseringen en verbonden kanalen tijdelijk onderbreken.",
       confirm: "Herstart bevestigen",
       restarting: "Opnieuw starten…",
       failed: "Kan wijziging niet toepassen. Controleer je verbinding en probeer het opnieuw.",
@@ -616,16 +626,14 @@ export const nl: TranslationMap = {
     advanced: {
       eyebrow: "Beoordeling",
       title: "Dagelijkse logbeoordeling",
-      description:
-        "Bekijk wat uit het dagelijkse logboek kwam, wat op promotie wacht en wat onlangs is gepromoveerd.",
+      description: "Bekijk wat uit het dagelijkse logboek kwam, wat op promotie wacht en wat onlangs is gepromoveerd.",
       summaryFromDailyLog: "uit dagelijks logboek",
       summaryWaiting: "wachtend",
       summaryPromotedToday: "vandaag gepromoveerd",
       stagedTitle: "Uit het dagelijkse logboek",
       stagedDescription: "Replay-kandidaten opgehaald uit oudere dagelijkse logboekvermeldingen.",
       shortTermTitle: "Wacht op promotie",
-      shortTermDescription:
-        "Huidige kortetermijnkandidaten die wachten om naar echt geheugen te promoveren.",
+      shortTermDescription: "Huidige kortetermijnkandidaten die wachten om naar echt geheugen te promoveren.",
       sortRecent: "Meest recent",
       sortSignals: "Sterkste ondersteuning",
       originDailyLog: "opnieuw afgespeeld",
@@ -739,8 +747,7 @@ export const nl: TranslationMap = {
       sessionsCount: "{count} sessies",
     },
     query: {
-      placeholder:
-        "Sessies filteren (bijv. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
+      placeholder: "Sessies filteren (bijv. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
       apply: "Filteren (client-side)",
       matching: "{shown} van {total} sessies komen overeen",
       inRange: "{total} sessies binnen bereik",
@@ -753,8 +760,7 @@ export const nl: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "Gebruikscache wordt op de achtergrond opnieuw opgebouwd. Weergegeven totalen kunnen verouderd zijn.",
+      warning: "Gebruikscache wordt op de achtergrond opnieuw opgebouwd. Weergegeven totalen kunnen verouderd zijn.",
       title: "{status}: {pending} in behandeling, {stale} verouderd, {cached} gecachet",
       status: {
         refreshing: "verversen",
@@ -764,8 +770,7 @@ export const nl: TranslationMap = {
     },
     empty: {
       title: "Begin met een datumbereik",
-      subtitle:
-        "Laad gebruiksgegevens om kosten te vergelijken, sessies te bekijken en in tijdlijnen in te zoomen zonder het dashboard te verlaten.",
+      subtitle: "Laad gebruiksgegevens om kosten te vergelijken, sessies te bekijken en in tijdlijnen in te zoomen zonder het dashboard te verlaten.",
       hint: "Selecteer een datumbereik en klik op Vernieuwen om gebruik te laden.",
       noData: "Geen gegevens",
       featureOverview: "Overzichtskaarten",
@@ -805,8 +810,7 @@ export const nl: TranslationMap = {
       avgTokensHint: "Gemiddeld aantal tokens per bericht in dit bereik.",
       avgCost: "Gem. kosten / bericht",
       avgCostHint: "Gemiddelde kosten per bericht wanneer providers kosten rapporteren.",
-      avgCostHintMissing:
-        "Gemiddelde kosten per bericht wanneer providers kosten rapporteren. Kostengegevens ontbreken voor sommige of alle sessies in dit bereik.",
+      avgCostHintMissing: "Gemiddelde kosten per bericht wanneer providers kosten rapporteren. Kostengegevens ontbreken voor sommige of alle sessies in dit bereik.",
       acrossMessages: "Over {count} berichten",
       sessions: "Sessies",
       sessionsHint: "Unieke sessies binnen het bereik.",
@@ -819,8 +823,7 @@ export const nl: TranslationMap = {
       errorHint: "Foutpercentage = fouten / totaal aantal berichten. Lager is beter.",
       avgSession: "gem. sessie",
       cacheHitRate: "Cache-hitpercentage",
-      cacheHint:
-        "Cache-hitpercentage = cache gelezen / (input + cache gelezen + cache schrijven). Hoger is beter.",
+      cacheHint: "Cache-hitpercentage = cache gelezen / (input + cache gelezen + cache schrijven). Hoger is beter.",
       cached: "gecached",
       prompt: "prompt",
       calls: "aanroepen",
@@ -856,8 +859,7 @@ export const nl: TranslationMap = {
       selected: "Geselecteerd ({count})",
       copy: "Kopiëren",
       copyName: "Sessienaam kopiëren",
-      limitReached:
-        "Eerste 1.000 sessies worden weergegeven. Beperk het datumbereik voor volledige resultaten.",
+      limitReached: "Eerste 1.000 sessies worden weergegeven. Beperk het datumbereik voor volledige resultaten.",
     },
     details: {
       noUsageData: "Geen gebruiksgegevens voor deze sessie.",
@@ -1130,8 +1132,7 @@ export const nl: TranslationMap = {
       session: "Sessie",
       main: "Main",
       isolated: "Geïsoleerd",
-      sessionHelp:
-        "Main plaatst een systeemgebeurtenis. Geïsoleerd voert een speciale agent-beurt uit.",
+      sessionHelp: "Main plaatst een systeemgebeurtenis. Geïsoleerd voert een speciale agent-beurt uit.",
       wakeMode: "Wekmodus",
       now: "Nu",
       nextHeartbeat: "Volgende heartbeat",
@@ -1139,13 +1140,11 @@ export const nl: TranslationMap = {
       payloadKind: "Wat moet er worden uitgevoerd?",
       systemEvent: "Bericht plaatsen op main-tijdlijn",
       agentTurn: "Assistenttaak uitvoeren (geïsoleerd)",
-      systemEventHelp:
-        "Stuurt je tekst naar de main-tijdlijn van de Gateway (goed voor herinneringen/triggers).",
+      systemEventHelp: "Stuurt je tekst naar de main-tijdlijn van de Gateway (goed voor herinneringen/triggers).",
       agentTurnHelp: "Start een assistent-run in een eigen sessie met je prompt.",
       timeoutSeconds: "Timeout (seconden)",
       timeoutPlaceholder: "Optioneel, bijv. 90",
-      timeoutHelp:
-        "Optioneel. Laat leeg om het standaard timeoutgedrag van de Gateway voor deze run te gebruiken.",
+      timeoutHelp: "Optioneel. Laat leeg om het standaard timeoutgedrag van de Gateway voor deze run te gebruiken.",
       mainTimelineMessage: "Main-tijdlijnbericht",
       assistantTaskPrompt: "Prompt voor assistenttaak",
       deliverySection: "Levering",
@@ -1154,8 +1153,7 @@ export const nl: TranslationMap = {
       announceDefault: "Samenvatting aankondigen (standaard)",
       webhookPost: "Webhook POST",
       noneInternal: "Geen (intern)",
-      deliveryHelp:
-        "Aankondigen plaatst een samenvatting in chat. Geen houdt de uitvoering intern.",
+      deliveryHelp: "Aankondigen plaatst een samenvatting in chat. Geen houdt de uitvoering intern.",
       webhookUrl: "Webhook-URL",
       channel: "Kanaal",
       webhookPlaceholder: "https://example.com/cron",
@@ -1167,8 +1165,7 @@ export const nl: TranslationMap = {
       advanced: "Geavanceerd",
       advancedHelp: "Optionele overrides voor leveringsgaranties, schemajitter en modelbesturing.",
       deleteAfterRun: "Verwijderen na run",
-      deleteAfterRunHelp:
-        "Ideaal voor eenmalige herinneringen die automatisch moeten worden opgeschoond.",
+      deleteAfterRunHelp: "Ideaal voor eenmalige herinneringen die automatisch moeten worden opgeschoond.",
       clearAgentOverride: "Agent-override wissen",
       clearAgentHelp: "Forceer deze taak om de standaardassistent van de Gateway te gebruiken.",
       exactTiming: "Exacte timing (geen spreiding)",

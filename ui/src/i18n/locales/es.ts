@@ -65,6 +65,7 @@ export const es: TranslationMap = {
     colorModeOption: "Modo de color: {mode}",
     resources: "Recursos",
     search: "Buscar",
+    all: "Todas",
     save: "Guardar",
     saving: "Guardando…",
     saveAndPublish: "Guardar y publicar",
@@ -92,15 +93,14 @@ export const es: TranslationMap = {
     gatewayUrlConfirmation: {
       title: "Cambiar URL del Gateway",
       subtitle: "Esto volverá a conectarse a un servidor Gateway diferente",
-      warning:
-        "Confirma solo si confías en esta URL. Las URL maliciosas pueden comprometer tu sistema.",
+      warning: "Confirma solo si confías en esta URL. Las URL maliciosas pueden comprometer tu sistema.",
     },
     nostr: {
       profile: "Perfil",
       editProfile: "Editar perfil",
       profilePicture: "Foto de perfil",
       noProfile: "No hay un perfil configurado.",
-      noProfileHint: 'Haz clic en "Editar perfil" para agregar tu nombre, biografía y avatar.',
+      noProfileHint: "Haz clic en \"Editar perfil\" para agregar tu nombre, biografía y avatar.",
       name: "Nombre",
       displayName: "Nombre para mostrar",
       about: "Acerca de",
@@ -128,8 +128,7 @@ export const es: TranslationMap = {
   lazyView: {
     loadingTitle: "Cargando panel",
     errorTitle: "No se pudo cargar el panel",
-    errorSubtitle:
-      "Vuelve a cargar la página para cargar el paquete más reciente de Control UI, o inténtalo de nuevo si falló la solicitud de red.",
+    errorSubtitle: "Vuelve a cargar la página para cargar el paquete más reciente de Control UI, o inténtalo de nuevo si falló la solicitud de red.",
     retry: "Reintentar",
     unknownError: "Error desconocido al cargar el módulo.",
   },
@@ -238,8 +237,30 @@ export const es: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
+    directory: {
+      searchLabel: "Buscar",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "Default",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "Tiempo de ejecución",
+      workspaceFilterLabel: "Workspace",
+      sortLabel: "Ordenar",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "Workspace",
+        model: "Primary Model",
+        runtime: "Tiempo de ejecución",
+      },
+    },
     tabs: {
       overview: "Overview",
       files: "Archivos",
@@ -459,32 +480,25 @@ export const es: TranslationMap = {
       title: "Notas",
       subtitle: "Recordatorios rápidos para configuraciones de control remoto.",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Prefiere el modo serve para mantener la puerta de enlace en loopback con autenticación tailnet.",
+      tailscaleText: "Prefiere el modo serve para mantener la puerta de enlace en loopback con autenticación tailnet.",
       sessionTitle: "Higiene de sesión",
       sessionText: "Usa /new o sessions.patch para reiniciar el contexto.",
       cronTitle: "Recordatorios de Cron",
       cronText: "Usa sesiones aisladas para ejecuciones recurrentes.",
     },
     auth: {
-      required:
-        "Esta puerta de enlace requiere autenticación. Añade un token o contraseña y haz clic en Conectar.",
-      failed:
-        "Autenticación fallida. Vuelve a copiar una URL con token mediante {command}, o actualiza el token y haz clic en Conectar.",
+      required: "Esta puerta de enlace requiere autenticación. Añade un token o contraseña y haz clic en Conectar.",
+      failed: "Autenticación fallida. Vuelve a copiar una URL con token mediante {command}, o actualiza el token y haz clic en Conectar.",
     },
     pairing: {
       hint: "Este dispositivo necesita aprobación de emparejamiento del host de la puerta de enlace.",
       scopeUpgradeTitle: "Ampliación del alcance pendiente de aprobación.",
-      scopeUpgradeSummary:
-        "Este dispositivo ya está emparejado, pero el alcance más amplio solicitado está pendiente de aprobación.",
+      scopeUpgradeSummary: "Este dispositivo ya está emparejado, pero el alcance más amplio solicitado está pendiente de aprobación.",
       roleUpgradeTitle: "Actualización del rol pendiente de aprobación.",
-      roleUpgradeSummary:
-        "Este dispositivo ya está emparejado, pero el cambio de rol solicitado está pendiente de aprobación.",
+      roleUpgradeSummary: "Este dispositivo ya está emparejado, pero el cambio de rol solicitado está pendiente de aprobación.",
       metadataUpgradeTitle: "Cambio de metadatos del dispositivo pendiente de aprobación.",
-      metadataUpgradeSummary:
-        "Este dispositivo ya está emparejado, pero el cambio de metadatos está pendiente de aprobación.",
-      mobileHint:
-        "¿En el móvil? Copia la URL completa (incluyendo #token=...) desde openclaw dashboard --no-open en tu escritorio.",
+      metadataUpgradeSummary: "Este dispositivo ya está emparejado, pero el cambio de metadatos está pendiente de aprobación.",
+      mobileHint: "¿En el móvil? Copia la URL completa (incluyendo #token=...) desde openclaw dashboard --no-open en tu escritorio.",
       docsTitle: "Documentación de emparejamiento de dispositivos (se abre en una pestaña nueva)",
       docsLink: "Documentación: Emparejamiento de dispositivos",
     },
@@ -584,8 +598,7 @@ export const es: TranslationMap = {
     restartConfirmation: {
       title: "Restart Gateway to Apply Change",
       subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      warning: "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
       confirm: "Confirm Restart",
       restarting: "Restarting…",
       failed: "Could not apply change. Check your connection and try again.",
@@ -613,17 +626,14 @@ export const es: TranslationMap = {
     advanced: {
       eyebrow: "Revisión",
       title: "Revisión del registro diario",
-      description:
-        "Revisa lo que proviene del registro diario, lo que está esperando promoción y lo que fue promovido recientemente.",
+      description: "Revisa lo que proviene del registro diario, lo que está esperando promoción y lo que fue promovido recientemente.",
       summaryFromDailyLog: "del registro diario",
       summaryWaiting: "en espera",
       summaryPromotedToday: "promovido hoy",
       stagedTitle: "Del registro diario",
-      stagedDescription:
-        "Volver a reproducir candidatos extraídos de entradas anteriores del registro diario.",
+      stagedDescription: "Volver a reproducir candidatos extraídos de entradas anteriores del registro diario.",
       shortTermTitle: "Esperando promoción",
-      shortTermDescription:
-        "Candidatos actuales a corto plazo que esperan ascender a memoria real.",
+      shortTermDescription: "Candidatos actuales a corto plazo que esperan ascender a memoria real.",
       sortRecent: "Más reciente",
       sortSignals: "Mayor respaldo",
       originDailyLog: "reproducido",
@@ -657,8 +667,7 @@ export const es: TranslationMap = {
     diary: {
       title: "Diario de sueños",
       noDreamsYet: "Aún no hay sueños",
-      noDreamsHint:
-        "Los sueños aparecerán aquí después de que se ejecute el primer ciclo de sueño.",
+      noDreamsHint: "Los sueños aparecerán aquí después de que se ejecute el primer ciclo de sueño.",
       waitingTitle: "El diario está esperando",
       waitingHint: "Las entradas narrativas aparecerán después del próximo ciclo de sueño.",
       older: "Anteriores",
@@ -688,8 +697,7 @@ export const es: TranslationMap = {
   },
   usage: {
     page: {
-      subtitle:
-        "Consulta adónde van los tokens, cuándo aumentan las sesiones y qué impulsa el costo.",
+      subtitle: "Consulta adónde van los tokens, cuándo aumentan las sesiones y qué impulsa el costo.",
     },
     common: {
       emptyValue: "—",
@@ -739,8 +747,7 @@ export const es: TranslationMap = {
       sessionsCount: "{count} sesiones",
     },
     query: {
-      placeholder:
-        "Filtra sesiones (p. ej., key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
+      placeholder: "Filtra sesiones (p. ej., key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
       apply: "Filtrar (del lado del cliente)",
       matching: "{shown} de {total} sesiones coinciden",
       inRange: "{total} sesiones en el rango",
@@ -753,8 +760,7 @@ export const es: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "La caché de uso se está reconstruyendo en segundo plano. Los totales mostrados pueden estar desactualizados.",
+      warning: "La caché de uso se está reconstruyendo en segundo plano. Los totales mostrados pueden estar desactualizados.",
       title: "{status}: {pending} pendientes, {stale} desactualizados, {cached} en caché",
       status: {
         refreshing: "actualizando",
@@ -764,8 +770,7 @@ export const es: TranslationMap = {
     },
     empty: {
       title: "Comienza con un rango de fechas",
-      subtitle:
-        "Carga datos de uso para comparar costos, inspeccionar sesiones y explorar cronologías sin salir del panel.",
+      subtitle: "Carga datos de uso para comparar costos, inspeccionar sesiones y explorar cronologías sin salir del panel.",
       hint: "Selecciona un rango de fechas y haz clic en Actualizar para cargar el uso.",
       noData: "Sin datos",
       featureOverview: "Tarjetas de resumen",
@@ -805,23 +810,20 @@ export const es: TranslationMap = {
       avgTokensHint: "Promedio de tokens por mensaje en este rango.",
       avgCost: "Costo prom. / mensaje",
       avgCostHint: "Costo promedio por mensaje cuando los proveedores informan costos.",
-      avgCostHintMissing:
-        "Costo promedio por mensaje cuando los proveedores informan costos. Faltan datos de costo para algunas o todas las sesiones de este rango.",
+      avgCostHintMissing: "Costo promedio por mensaje cuando los proveedores informan costos. Faltan datos de costo para algunas o todas las sesiones de este rango.",
       acrossMessages: "En {count} mensajes",
       sessions: "Sesiones",
       sessionsHint: "Sesiones distintas dentro del rango.",
       sessionsInRange: "de {count} en el rango",
       throughput: "Rendimiento",
-      throughputHint:
-        "El rendimiento muestra tokens por minuto durante el tiempo activo. Cuanto más alto, mejor.",
+      throughputHint: "El rendimiento muestra tokens por minuto durante el tiempo activo. Cuanto más alto, mejor.",
       tokensPerMinute: "tok/min",
       perMinute: "/ min",
       errorRate: "Tasa de errores",
       errorHint: "Tasa de errores = errores / mensajes totales. Cuanto más baja, mejor.",
       avgSession: "sesión prom.",
       cacheHitRate: "Tasa de aciertos de caché",
-      cacheHint:
-        "Tasa de aciertos de caché = lectura de caché / (entrada + lectura de caché). Cuanto más alta, mejor.",
+      cacheHint: "Tasa de aciertos de caché = lectura de caché / (entrada + lectura de caché). Cuanto más alta, mejor.",
       cached: "en caché",
       prompt: "prompt",
       calls: "llamadas",
@@ -857,8 +859,7 @@ export const es: TranslationMap = {
       selected: "Seleccionadas ({count})",
       copy: "Copiar",
       copyName: "Copiar nombre de la sesión",
-      limitReached:
-        "Mostrando las primeras 1,000 sesiones. Reduce el rango de fechas para ver los resultados completos.",
+      limitReached: "Mostrando las primeras 1,000 sesiones. Reduce el rango de fechas para ver los resultados completos.",
     },
     details: {
       noUsageData: "No hay datos de uso para esta sesión.",
@@ -903,8 +904,7 @@ export const es: TranslationMap = {
     mosaic: {
       title: "Actividad por hora",
       subtitleEmpty: "Las estimaciones requieren marcas de tiempo de las sesiones.",
-      subtitle:
-        "Estimado a partir de los intervalos de las sesiones (primera/última actividad). Zona horaria: {zone}.",
+      subtitle: "Estimado a partir de los intervalos de las sesiones (primera/última actividad). Zona horaria: {zone}.",
       noTimelineData: "Todavía no hay datos de cronología.",
       dayOfWeek: "Día de la semana",
       midnight: "Medianoche",
@@ -1026,8 +1026,7 @@ export const es: TranslationMap = {
       defaultName: "Automatización",
       whatHeading: "¿Qué debe hacer?",
       whatHint: "Describe la tarea en lenguaje natural. El agente ejecutará este prompt cada vez.",
-      promptPlaceholder:
-        "p. ej., Revisa mi bandeja de entrada para ver si hay correos urgentes y resúmelos...",
+      promptPlaceholder: "p. ej., Revisa mi bandeja de entrada para ver si hay correos urgentes y resúmelos...",
       nameOptional: "Nombre (opcional)",
       namePlaceholder: "p. ej., Revisión matutina de la bandeja de entrada",
       whenHeading: "¿Cuándo debe ejecutarse?",
@@ -1110,8 +1109,7 @@ export const es: TranslationMap = {
       namePlaceholder: "Resumen matutino",
       descriptionPlaceholder: "Contexto opcional para esta tarea",
       agentPlaceholder: "main u ops",
-      agentHelp:
-        "Comienza a escribir para seleccionar un agente conocido o ingresa uno personalizado.",
+      agentHelp: "Comienza a escribir para seleccionar un agente conocido o ingresa uno personalizado.",
       schedule: "Programación",
       scheduleSub: "Controla cuándo se ejecuta esta tarea.",
       every: "Cada",
@@ -1128,15 +1126,13 @@ export const es: TranslationMap = {
       timezoneOptional: "Zona horaria (opcional)",
       timezonePlaceholder: "America/Los_Angeles",
       timezoneHelp: "Selecciona una zona horaria común o ingresa cualquier zona IANA válida.",
-      jitterHelp:
-        "¿Necesitas variación? Usa Avanzado → Ventana de escalonamiento / Unidad de escalonamiento.",
+      jitterHelp: "¿Necesitas variación? Usa Avanzado → Ventana de escalonamiento / Unidad de escalonamiento.",
       execution: "Ejecución",
       executionSub: "Elige cuándo activar y qué debe hacer esta tarea.",
       session: "Sesión",
       main: "Principal",
       isolated: "Aislada",
-      sessionHelp:
-        "Principal publica un evento del sistema. Aislada ejecuta un turno dedicado del agente.",
+      sessionHelp: "Principal publica un evento del sistema. Aislada ejecuta un turno dedicado del agente.",
       wakeMode: "Modo de activación",
       now: "Ahora",
       nextHeartbeat: "Próximo latido",
@@ -1144,13 +1140,11 @@ export const es: TranslationMap = {
       payloadKind: "¿Qué debe ejecutarse?",
       systemEvent: "Publicar mensaje en la línea de tiempo principal",
       agentTurn: "Ejecutar tarea del asistente (aislada)",
-      systemEventHelp:
-        "Envía tu texto a la línea de tiempo principal de la puerta de enlace (ideal para recordatorios/activadores).",
+      systemEventHelp: "Envía tu texto a la línea de tiempo principal de la puerta de enlace (ideal para recordatorios/activadores).",
       agentTurnHelp: "Inicia una ejecución del asistente en su propia sesión usando tu indicación.",
       timeoutSeconds: "Tiempo de espera (segundos)",
       timeoutPlaceholder: "Opcional, ej. 90",
-      timeoutHelp:
-        "Opcional. Déjalo en blanco para usar el comportamiento de tiempo de espera predeterminado de la puerta de enlace para esta ejecución.",
+      timeoutHelp: "Opcional. Déjalo en blanco para usar el comportamiento de tiempo de espera predeterminado de la puerta de enlace para esta ejecución.",
       mainTimelineMessage: "Mensaje de la línea de tiempo principal",
       assistantTaskPrompt: "Indicación para la tarea del asistente",
       deliverySection: "Entrega",
@@ -1159,8 +1153,7 @@ export const es: TranslationMap = {
       announceDefault: "Anunciar resumen (predeterminado)",
       webhookPost: "Webhook POST",
       noneInternal: "Ninguna (interno)",
-      deliveryHelp:
-        "Anunciar publica un resumen en el chat. Ninguna mantiene la ejecución interna.",
+      deliveryHelp: "Anunciar publica un resumen en el chat. Ninguna mantiene la ejecución interna.",
       webhookUrl: "URL del webhook",
       channel: "Canal",
       webhookPlaceholder: "https://example.com/cron",
@@ -1170,14 +1163,11 @@ export const es: TranslationMap = {
       toPlaceholder: "+1555... o ID de chat",
       toHelp: "Anulación opcional del destinatario (ID de chat, teléfono o ID de usuario).",
       advanced: "Avanzado",
-      advancedHelp:
-        "Anulaciones opcionales para garantías de entrega, variación de programación y controles del modelo.",
+      advancedHelp: "Anulaciones opcionales para garantías de entrega, variación de programación y controles del modelo.",
       deleteAfterRun: "Eliminar después de ejecutar",
-      deleteAfterRunHelp:
-        "Ideal para recordatorios de un solo uso que deben limpiarse automáticamente.",
+      deleteAfterRunHelp: "Ideal para recordatorios de un solo uso que deben limpiarse automáticamente.",
       clearAgentOverride: "Limpiar anulación de agente",
-      clearAgentHelp:
-        "Forza a esta tarea a usar el asistente predeterminado de la puerta de enlace.",
+      clearAgentHelp: "Forza a esta tarea a usar el asistente predeterminado de la puerta de enlace.",
       exactTiming: "Tiempo exacto (sin escalonamiento)",
       exactTimingHelp: "Ejecutar en límites exactos de cron sin dispersión.",
       staggerWindow: "Ventana de escalonamiento",
@@ -1186,8 +1176,7 @@ export const es: TranslationMap = {
       seconds: "Segundos",
       model: "Modelo",
       modelPlaceholder: "openai/gpt-5.2",
-      modelHelp:
-        "Comienza a escribir para seleccionar un modelo conocido o ingresa uno personalizado.",
+      modelHelp: "Comienza a escribir para seleccionar un modelo conocido o ingresa uno personalizado.",
       thinking: "Pensamiento",
       thinkingPlaceholder: "bajo",
       thinkingHelp: "Usa un nivel sugerido o ingresa un valor específico del proveedor.",

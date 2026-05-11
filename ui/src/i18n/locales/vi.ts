@@ -65,6 +65,7 @@ export const vi: TranslationMap = {
     colorModeOption: "Chế độ màu: {mode}",
     resources: "Tài nguyên",
     search: "Tìm kiếm",
+    all: "Tất cả",
     save: "Lưu",
     saving: "Đang lưu…",
     saveAndPublish: "Lưu & Xuất bản",
@@ -92,15 +93,14 @@ export const vi: TranslationMap = {
     gatewayUrlConfirmation: {
       title: "Thay đổi URL Gateway",
       subtitle: "Thao tác này sẽ kết nối lại tới một máy chủ gateway khác",
-      warning:
-        "Chỉ xác nhận nếu bạn tin tưởng URL này. URL độc hại có thể xâm phạm hệ thống của bạn.",
+      warning: "Chỉ xác nhận nếu bạn tin tưởng URL này. URL độc hại có thể xâm phạm hệ thống của bạn.",
     },
     nostr: {
       profile: "Hồ sơ",
       editProfile: "Chỉnh sửa hồ sơ",
       profilePicture: "Ảnh hồ sơ",
       noProfile: "Chưa thiết lập hồ sơ.",
-      noProfileHint: 'Nhấp vào "Chỉnh sửa hồ sơ" để thêm tên, tiểu sử và ảnh đại diện của bạn.',
+      noProfileHint: "Nhấp vào \"Chỉnh sửa hồ sơ\" để thêm tên, tiểu sử và ảnh đại diện của bạn.",
       name: "Tên",
       displayName: "Tên hiển thị",
       about: "Giới thiệu",
@@ -128,8 +128,7 @@ export const vi: TranslationMap = {
   lazyView: {
     loadingTitle: "Đang tải bảng điều khiển",
     errorTitle: "Không tải được bảng điều khiển",
-    errorSubtitle:
-      "Tải lại trang để tải gói Control UI mới nhất, hoặc thử lại nếu yêu cầu mạng thất bại.",
+    errorSubtitle: "Tải lại trang để tải gói Control UI mới nhất, hoặc thử lại nếu yêu cầu mạng thất bại.",
     retry: "Thử lại",
     unknownError: "Lỗi tải mô-đun không xác định.",
   },
@@ -238,8 +237,30 @@ export const vi: TranslationMap = {
     setDefault: "Đặt làm mặc định",
     alreadyDefaultTitle: "Đã là agent mặc định",
     setDefaultTitle: "Đặt làm agent mặc định",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "Chọn một agent",
     selectSubtitle: "Chọn một agent để kiểm tra workspace và công cụ của agent đó.",
+    directory: {
+      searchLabel: "Tìm kiếm",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "Mặc định",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "Runtime",
+      workspaceFilterLabel: "Workspace",
+      sortLabel: "Sắp xếp",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "Workspace",
+        model: "Mô hình chính",
+        runtime: "Runtime",
+      },
+    },
     tabs: {
       overview: "Tổng quan",
       files: "Tệp",
@@ -467,22 +488,17 @@ export const vi: TranslationMap = {
     },
     auth: {
       required: "Gateway này yêu cầu xác thực. Thêm token hoặc mật khẩu, rồi nhấp Kết nối.",
-      failed:
-        "Xác thực thất bại. Sao chép lại URL có token bằng {command}, hoặc cập nhật token, rồi nhấp Kết nối.",
+      failed: "Xác thực thất bại. Sao chép lại URL có token bằng {command}, hoặc cập nhật token, rồi nhấp Kết nối.",
     },
     pairing: {
       hint: "Thiết bị này cần phê duyệt ghép nối từ máy chủ Gateway.",
       scopeUpgradeTitle: "Nâng cấp phạm vi đang chờ phê duyệt.",
-      scopeUpgradeSummary:
-        "Thiết bị này đã được ghép nối, nhưng phạm vi rộng hơn được yêu cầu đang chờ phê duyệt.",
+      scopeUpgradeSummary: "Thiết bị này đã được ghép nối, nhưng phạm vi rộng hơn được yêu cầu đang chờ phê duyệt.",
       roleUpgradeTitle: "Nâng cấp vai trò đang chờ phê duyệt.",
-      roleUpgradeSummary:
-        "Thiết bị này đã được ghép nối, nhưng thay đổi vai trò được yêu cầu đang chờ phê duyệt.",
+      roleUpgradeSummary: "Thiết bị này đã được ghép nối, nhưng thay đổi vai trò được yêu cầu đang chờ phê duyệt.",
       metadataUpgradeTitle: "Thay đổi siêu dữ liệu thiết bị đang chờ phê duyệt.",
-      metadataUpgradeSummary:
-        "Thiết bị này đã được ghép nối, nhưng thay đổi siêu dữ liệu đang chờ phê duyệt.",
-      mobileHint:
-        "Đang dùng di động? Sao chép URL đầy đủ (bao gồm #token=...) từ openclaw dashboard --no-open trên máy tính của bạn.",
+      metadataUpgradeSummary: "Thiết bị này đã được ghép nối, nhưng thay đổi siêu dữ liệu đang chờ phê duyệt.",
+      mobileHint: "Đang dùng di động? Sao chép URL đầy đủ (bao gồm #token=...) từ openclaw dashboard --no-open trên máy tính của bạn.",
       docsTitle: "Tài liệu ghép nối thiết bị (mở trong tab mới)",
       docsLink: "Tài liệu: Ghép nối thiết bị",
     },
@@ -582,8 +598,7 @@ export const vi: TranslationMap = {
     restartConfirmation: {
       title: "Khởi động lại Gateway để áp dụng thay đổi",
       subtitle: "Thay đổi chế độ Dreaming sẽ khởi động lại Gateway.",
-      warning:
-        "Hành động này sẽ khởi động lại Gateway và có thể tạm thời gián đoạn trò chuyện, tự động hóa và các kênh đã kết nối.",
+      warning: "Hành động này sẽ khởi động lại Gateway và có thể tạm thời gián đoạn trò chuyện, tự động hóa và các kênh đã kết nối.",
       confirm: "Xác nhận khởi động lại",
       restarting: "Đang khởi động lại…",
       failed: "Không thể áp dụng thay đổi. Kiểm tra kết nối của bạn và thử lại.",
@@ -611,16 +626,14 @@ export const vi: TranslationMap = {
     advanced: {
       eyebrow: "Đánh giá",
       title: "Đánh giá nhật ký hằng ngày",
-      description:
-        "Đánh giá nội dung đến từ nhật ký hằng ngày, nội dung đang chờ thăng hạng và nội dung đã được thăng hạng gần đây.",
+      description: "Đánh giá nội dung đến từ nhật ký hằng ngày, nội dung đang chờ thăng hạng và nội dung đã được thăng hạng gần đây.",
       summaryFromDailyLog: "từ nhật ký hằng ngày",
       summaryWaiting: "đang chờ",
       summaryPromotedToday: "đã thăng hạng hôm nay",
       stagedTitle: "Từ nhật ký hằng ngày",
       stagedDescription: "Các ứng viên phát lại được lấy từ các mục nhật ký hằng ngày cũ hơn.",
       shortTermTitle: "Đang chờ thăng hạng",
-      shortTermDescription:
-        "Các ứng viên ngắn hạn hiện tại đang chờ được chuyển thành bộ nhớ thực.",
+      shortTermDescription: "Các ứng viên ngắn hạn hiện tại đang chờ được chuyển thành bộ nhớ thực.",
       sortRecent: "Gần đây nhất",
       sortSignals: "Hỗ trợ mạnh nhất",
       originDailyLog: "đã phát lại",
@@ -747,8 +760,7 @@ export const vi: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "Bộ nhớ đệm mức sử dụng đang được xây dựng lại trong nền. Tổng số hiển thị có thể đã lỗi thời.",
+      warning: "Bộ nhớ đệm mức sử dụng đang được xây dựng lại trong nền. Tổng số hiển thị có thể đã lỗi thời.",
       title: "{status}: {pending} đang chờ, {stale} lỗi thời, {cached} đã lưu vào bộ nhớ đệm",
       status: {
         refreshing: "đang làm mới",
@@ -758,8 +770,7 @@ export const vi: TranslationMap = {
     },
     empty: {
       title: "Bắt đầu bằng một khoảng ngày",
-      subtitle:
-        "Tải dữ liệu sử dụng để so sánh chi phí, kiểm tra phiên và đi sâu vào dòng thời gian mà không cần rời bảng điều khiển.",
+      subtitle: "Tải dữ liệu sử dụng để so sánh chi phí, kiểm tra phiên và đi sâu vào dòng thời gian mà không cần rời bảng điều khiển.",
       hint: "Chọn khoảng ngày và nhấp Làm mới để tải mức sử dụng.",
       noData: "Không có dữ liệu",
       featureOverview: "Thẻ tổng quan",
@@ -799,23 +810,20 @@ export const vi: TranslationMap = {
       avgTokensHint: "Số token trung bình trên mỗi tin nhắn trong phạm vi này.",
       avgCost: "Chi phí TB / Tin nhắn",
       avgCostHint: "Chi phí trung bình trên mỗi tin nhắn khi nhà cung cấp báo cáo chi phí.",
-      avgCostHintMissing:
-        "Chi phí trung bình trên mỗi tin nhắn khi nhà cung cấp báo cáo chi phí. Dữ liệu chi phí bị thiếu cho một số hoặc tất cả phiên trong phạm vi này.",
+      avgCostHintMissing: "Chi phí trung bình trên mỗi tin nhắn khi nhà cung cấp báo cáo chi phí. Dữ liệu chi phí bị thiếu cho một số hoặc tất cả phiên trong phạm vi này.",
       acrossMessages: "Trên {count} tin nhắn",
       sessions: "Phiên",
       sessionsHint: "Các phiên riêng biệt trong phạm vi.",
       sessionsInRange: "trong số {count} trong phạm vi",
       throughput: "Thông lượng",
-      throughputHint:
-        "Thông lượng hiển thị số token mỗi phút trong thời gian hoạt động. Càng cao càng tốt.",
+      throughputHint: "Thông lượng hiển thị số token mỗi phút trong thời gian hoạt động. Càng cao càng tốt.",
       tokensPerMinute: "tok/phút",
       perMinute: "/ phút",
       errorRate: "Tỷ lệ lỗi",
       errorHint: "Tỷ lệ lỗi = lỗi / tổng số tin nhắn. Càng thấp càng tốt.",
       avgSession: "phiên TB",
       cacheHitRate: "Tỷ lệ trúng bộ nhớ đệm",
-      cacheHint:
-        "Tỷ lệ trúng bộ nhớ đệm = đọc bộ nhớ đệm / (đầu vào + đọc bộ nhớ đệm + ghi bộ nhớ đệm). Càng cao càng tốt.",
+      cacheHint: "Tỷ lệ trúng bộ nhớ đệm = đọc bộ nhớ đệm / (đầu vào + đọc bộ nhớ đệm + ghi bộ nhớ đệm). Càng cao càng tốt.",
       cached: "đã lưu đệm",
       prompt: "prompt",
       calls: "lượt gọi",
@@ -1018,8 +1026,7 @@ export const vi: TranslationMap = {
       defaultName: "Tự động hóa",
       whatHeading: "Nó nên làm gì?",
       whatHint: "Mô tả tác vụ bằng ngôn ngữ tự nhiên. Agent sẽ chạy lời nhắc này mỗi lần.",
-      promptPlaceholder:
-        "ví dụ: Kiểm tra hộp thư của tôi để tìm email khẩn cấp và tóm tắt chúng...",
+      promptPlaceholder: "ví dụ: Kiểm tra hộp thư của tôi để tìm email khẩn cấp và tóm tắt chúng...",
       nameOptional: "Tên (tùy chọn)",
       namePlaceholder: "ví dụ: Kiểm tra hộp thư buổi sáng",
       whenHeading: "Khi nào nên chạy?",
@@ -1133,13 +1140,11 @@ export const vi: TranslationMap = {
       payloadKind: "Cần chạy gì?",
       systemEvent: "Đăng tin nhắn lên dòng thời gian chính",
       agentTurn: "Chạy tác vụ trợ lý (tách biệt)",
-      systemEventHelp:
-        "Gửi văn bản của bạn đến dòng thời gian chính của gateway (phù hợp cho lời nhắc/kích hoạt).",
+      systemEventHelp: "Gửi văn bản của bạn đến dòng thời gian chính của gateway (phù hợp cho lời nhắc/kích hoạt).",
       agentTurnHelp: "Bắt đầu một lượt chạy trợ lý trong phiên riêng bằng prompt của bạn.",
       timeoutSeconds: "Thời gian chờ (giây)",
       timeoutPlaceholder: "Tùy chọn, ví dụ: 90",
-      timeoutHelp:
-        "Tùy chọn. Để trống để dùng hành vi thời gian chờ mặc định của gateway cho lần chạy này.",
+      timeoutHelp: "Tùy chọn. Để trống để dùng hành vi thời gian chờ mặc định của gateway cho lần chạy này.",
       mainTimelineMessage: "Tin nhắn dòng thời gian chính",
       assistantTaskPrompt: "Prompt tác vụ trợ lý",
       deliverySection: "Gửi",

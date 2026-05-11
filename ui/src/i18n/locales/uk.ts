@@ -65,6 +65,7 @@ export const uk: TranslationMap = {
     colorModeOption: "Колірний режим: {mode}",
     resources: "Ресурси",
     search: "Пошук",
+    all: "Усі",
     save: "Зберегти",
     saving: "Збереження…",
     saveAndPublish: "Зберегти й опублікувати",
@@ -92,15 +93,14 @@ export const uk: TranslationMap = {
     gatewayUrlConfirmation: {
       title: "Змінити URL Gateway",
       subtitle: "Це перепідключить до іншого сервера Gateway",
-      warning:
-        "Підтверджуйте лише якщо довіряєте цьому URL. Шкідливі URL можуть скомпрометувати вашу систему.",
+      warning: "Підтверджуйте лише якщо довіряєте цьому URL. Шкідливі URL можуть скомпрометувати вашу систему.",
     },
     nostr: {
       profile: "Профіль",
       editProfile: "Редагувати профіль",
       profilePicture: "Зображення профілю",
       noProfile: "Профіль не налаштовано.",
-      noProfileHint: 'Натисніть "Edit Profile", щоб додати своє ім’я, біографію та аватар.',
+      noProfileHint: "Натисніть \"Edit Profile\", щоб додати своє ім’я, біографію та аватар.",
       name: "Назва",
       displayName: "Відображуване ім’я",
       about: "Про себе",
@@ -128,8 +128,7 @@ export const uk: TranslationMap = {
   lazyView: {
     loadingTitle: "Завантаження панелі",
     errorTitle: "Не вдалося завантажити панель",
-    errorSubtitle:
-      "Перезавантажте сторінку, щоб завантажити найновіший пакет Control UI, або повторіть спробу, якщо мережевий запит не вдався.",
+    errorSubtitle: "Перезавантажте сторінку, щоб завантажити найновіший пакет Control UI, або повторіть спробу, якщо мережевий запит не вдався.",
     retry: "Повторити",
     unknownError: "Невідома помилка завантаження модуля.",
   },
@@ -138,8 +137,7 @@ export const uk: TranslationMap = {
       loadConfigHint: "Завантажте конфігурацію, щоб редагувати прив’язки.",
       formModeHint: "Перемкніть вкладку Config у режим Form, щоб редагувати прив’язки тут.",
       execNodeBinding: "Прив’язка exec-вузла",
-      execNodeBindingSubtitle:
-        "Закріплюйте агентів за певним вузлом під час використання exec host=node.",
+      execNodeBindingSubtitle: "Закріплюйте агентів за певним вузлом під час використання exec host=node.",
       defaultBinding: "Прив’язка за замовчуванням",
       defaultBindingHint: "Використовується, коли агенти не перевизначають прив’язку вузла.",
       node: "Вузол",
@@ -239,8 +237,30 @@ export const uk: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
+    directory: {
+      searchLabel: "Пошук",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "Default",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "Середовище виконання",
+      workspaceFilterLabel: "Workspace",
+      sortLabel: "Сортування",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "Workspace",
+        model: "Primary Model",
+        runtime: "Середовище виконання",
+      },
+    },
     tabs: {
       overview: "Огляд",
       files: "Файли",
@@ -446,8 +466,7 @@ export const uk: TranslationMap = {
       uptime: "Час роботи",
       tickInterval: "Інтервал тіку",
       lastChannelsRefresh: "Останнє оновлення каналів",
-      channelsHint:
-        "Використовуйте «Канали», щоб прив’язати WhatsApp, Telegram, Discord, Signal або iMessage.",
+      channelsHint: "Використовуйте «Канали», щоб прив’язати WhatsApp, Telegram, Discord, Signal або iMessage.",
     },
     stats: {
       instances: "Екземпляри",
@@ -461,32 +480,25 @@ export const uk: TranslationMap = {
       title: "Нотатки",
       subtitle: "Швидкі нагадування для налаштувань віддаленого керування.",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Надавайте перевагу режиму serve, щоб шлюз залишався на loopback з автентифікацією tailnet.",
+      tailscaleText: "Надавайте перевагу режиму serve, щоб шлюз залишався на loopback з автентифікацією tailnet.",
       sessionTitle: "Гігієна сеансів",
       sessionText: "Використовуйте /new або sessions.patch, щоб скинути контекст.",
       cronTitle: "Нагадування Cron",
       cronText: "Використовуйте ізольовані сеанси для повторюваних запусків.",
     },
     auth: {
-      required:
-        "Цей шлюз потребує автентифікації. Додайте токен або пароль, а потім натисніть «Підключити».",
-      failed:
-        "Автентифікація не вдалася. Знову скопіюйте URL з токеном за допомогою {command} або оновіть токен, а потім натисніть «Підключити».",
+      required: "Цей шлюз потребує автентифікації. Додайте токен або пароль, а потім натисніть «Підключити».",
+      failed: "Автентифікація не вдалася. Знову скопіюйте URL з токеном за допомогою {command} або оновіть токен, а потім натисніть «Підключити».",
     },
     pairing: {
       hint: "Цей пристрій потребує схвалення спарювання від хоста шлюзу.",
       scopeUpgradeTitle: "Розширення області дії очікує на схвалення.",
-      scopeUpgradeSummary:
-        "Цей пристрій уже сполучено, але запитуване ширше охоплення очікує на схвалення.",
+      scopeUpgradeSummary: "Цей пристрій уже сполучено, але запитуване ширше охоплення очікує на схвалення.",
       roleUpgradeTitle: "Зміна ролі очікує на схвалення.",
-      roleUpgradeSummary:
-        "Цей пристрій уже сполучено, але запитувана зміна ролі очікує на схвалення.",
+      roleUpgradeSummary: "Цей пристрій уже сполучено, але запитувана зміна ролі очікує на схвалення.",
       metadataUpgradeTitle: "Зміна метаданих пристрою очікує на схвалення.",
-      metadataUpgradeSummary:
-        "Цей пристрій уже сполучено, але зміна метаданих очікує на схвалення.",
-      mobileHint:
-        "На мобільному? Скопіюйте повний URL (включно з #token=...) з openclaw dashboard --no-open на вашому комп’ютері.",
+      metadataUpgradeSummary: "Цей пристрій уже сполучено, але зміна метаданих очікує на схвалення.",
+      mobileHint: "На мобільному? Скопіюйте повний URL (включно з #token=...) з openclaw dashboard --no-open на вашому комп’ютері.",
       docsTitle: "Документація щодо сполучення пристроїв (відкривається в новій вкладці)",
       docsLink: "Документація: Сполучення пристроїв",
     },
@@ -524,8 +536,7 @@ export const uk: TranslationMap = {
       modelAuthExpiresIn: "спливає {when}",
       modelAuthAttentionExpiredTitle: "Авторизація моделей прострочена",
       modelAuthAttentionExpiringTitle: "Термін авторизації моделей скоро спливає",
-      modelAuthAttentionExpiredDesc:
-        "{providers} — повторно виконайте авторизацію через openclaw models auth",
+      modelAuthAttentionExpiredDesc: "{providers} — повторно виконайте авторизацію через openclaw models auth",
       modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
@@ -587,8 +598,7 @@ export const uk: TranslationMap = {
     restartConfirmation: {
       title: "Restart Gateway to Apply Change",
       subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      warning: "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
       confirm: "Confirm Restart",
       restarting: "Restarting…",
       failed: "Could not apply change. Check your connection and try again.",
@@ -616,17 +626,14 @@ export const uk: TranslationMap = {
     advanced: {
       eyebrow: "Огляд",
       title: "Огляд щоденного журналу",
-      description:
-        "Перегляньте, що надійшло зі щоденного журналу, що очікує на підвищення та що було підвищено нещодавно.",
+      description: "Перегляньте, що надійшло зі щоденного журналу, що очікує на підвищення та що було підвищено нещодавно.",
       summaryFromDailyLog: "зі щоденного журналу",
       summaryWaiting: "очікує",
       summaryPromotedToday: "підвищено сьогодні",
       stagedTitle: "Із щоденного журналу",
-      stagedDescription:
-        "Кандидати для повторного відтворення, взяті зі старіших записів щоденного журналу.",
+      stagedDescription: "Кандидати для повторного відтворення, взяті зі старіших записів щоденного журналу.",
       shortTermTitle: "Очікують на підвищення",
-      shortTermDescription:
-        "Поточні короткострокові кандидати, які очікують переходу до справжньої пам’яті.",
+      shortTermDescription: "Поточні короткострокові кандидати, які очікують переходу до справжньої пам’яті.",
       sortRecent: "Найновіші",
       sortSignals: "Найсильніша підтримка",
       originDailyLog: "повторено",
@@ -690,8 +697,7 @@ export const uk: TranslationMap = {
   },
   usage: {
     page: {
-      subtitle:
-        "Переглядайте, куди йдуть токени, коли зростає кількість сеансів і що формує вартість.",
+      subtitle: "Переглядайте, куди йдуть токени, коли зростає кількість сеансів і що формує вартість.",
     },
     common: {
       emptyValue: "—",
@@ -741,8 +747,7 @@ export const uk: TranslationMap = {
       sessionsCount: "{count} сеансів",
     },
     query: {
-      placeholder:
-        "Фільтруйте сеанси (наприклад, key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
+      placeholder: "Фільтруйте сеанси (наприклад, key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
       apply: "Фільтрувати (на боці клієнта)",
       matching: "Збігаються {shown} із {total} сеансів",
       inRange: "{total} сеансів у діапазоні",
@@ -755,8 +760,7 @@ export const uk: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "Кеш використання перебудовується у фоновому режимі. Відображені підсумки можуть бути застарілими.",
+      warning: "Кеш використання перебудовується у фоновому режимі. Відображені підсумки можуть бути застарілими.",
       title: "{status}: {pending} очікує, {stale} застаріло, {cached} кешовано",
       status: {
         refreshing: "оновлення",
@@ -766,8 +770,7 @@ export const uk: TranslationMap = {
     },
     empty: {
       title: "Почніть із діапазону дат",
-      subtitle:
-        "Завантажте дані про використання, щоб порівнювати витрати, переглядати сеанси та деталізувати часові шкали, не залишаючи панель керування.",
+      subtitle: "Завантажте дані про використання, щоб порівнювати витрати, переглядати сеанси та деталізувати часові шкали, не залишаючи панель керування.",
       hint: "Виберіть діапазон дат і натисніть «Оновити», щоб завантажити дані про використання.",
       noData: "Немає даних",
       featureOverview: "Картки огляду",
@@ -807,15 +810,13 @@ export const uk: TranslationMap = {
       avgTokensHint: "Середня кількість токенів на повідомлення в цьому діапазоні.",
       avgCost: "Сер. вартість / повід.",
       avgCostHint: "Середня вартість на повідомлення, коли провайдери повідомляють вартість.",
-      avgCostHintMissing:
-        "Середня вартість на повідомлення, коли провайдери повідомляють вартість. Дані про вартість відсутні для деяких або всіх сеансів у цьому діапазоні.",
+      avgCostHintMissing: "Середня вартість на повідомлення, коли провайдери повідомляють вартість. Дані про вартість відсутні для деяких або всіх сеансів у цьому діапазоні.",
       acrossMessages: "Для {count} повідомлень",
       sessions: "Сеанси",
       sessionsHint: "Окремі сеанси в діапазоні.",
       sessionsInRange: "із {count} у діапазоні",
       throughput: "Пропускна здатність",
-      throughputHint:
-        "Пропускна здатність показує кількість токенів за хвилину активного часу. Більше — краще.",
+      throughputHint: "Пропускна здатність показує кількість токенів за хвилину активного часу. Більше — краще.",
       tokensPerMinute: "ток/хв",
       perMinute: "/ хв",
       errorRate: "Рівень помилок",
@@ -1124,10 +1125,8 @@ export const uk: TranslationMap = {
       everyAmountPlaceholder: "30",
       timezoneOptional: "Часовий пояс (необов’язково)",
       timezonePlaceholder: "America/Los_Angeles",
-      timezoneHelp:
-        "Виберіть поширений часовий пояс або введіть будь-який дійсний часовий пояс IANA.",
-      jitterHelp:
-        "Потрібен джитер? Використовуйте Додатково → Вікно розподілу / Одиниця розподілу.",
+      timezoneHelp: "Виберіть поширений часовий пояс або введіть будь-який дійсний часовий пояс IANA.",
+      jitterHelp: "Потрібен джитер? Використовуйте Додатково → Вікно розподілу / Одиниця розподілу.",
       execution: "Виконання",
       executionSub: "Виберіть, коли пробуджувати та що має робити це завдання.",
       session: "Сеанс",
@@ -1141,14 +1140,11 @@ export const uk: TranslationMap = {
       payloadKind: "Що слід запустити?",
       systemEvent: "Опублікувати повідомлення в основній часовій шкалі",
       agentTurn: "Запустити завдання асистента (ізольовано)",
-      systemEventHelp:
-        "Надсилає ваш текст до основної часової шкали шлюзу (добре для нагадувань/тригерів).",
-      agentTurnHelp:
-        "Запускає виконання асистента у власному сеансі з використанням вашого запиту.",
+      systemEventHelp: "Надсилає ваш текст до основної часової шкали шлюзу (добре для нагадувань/тригерів).",
+      agentTurnHelp: "Запускає виконання асистента у власному сеансі з використанням вашого запиту.",
       timeoutSeconds: "Тайм-аут (секунди)",
       timeoutPlaceholder: "Необов’язково, наприклад 90",
-      timeoutHelp:
-        "Необов’язково. Залиште порожнім, щоб для цього запуску використовувалася типова поведінка тайм-ауту шлюзу.",
+      timeoutHelp: "Необов’язково. Залиште порожнім, щоб для цього запуску використовувалася типова поведінка тайм-ауту шлюзу.",
       mainTimelineMessage: "Повідомлення основної часової шкали",
       assistantTaskPrompt: "Запит для завдання асистента",
       deliverySection: "Доставка",
@@ -1167,8 +1163,7 @@ export const uk: TranslationMap = {
       toPlaceholder: "+1555... або id чату",
       toHelp: "Необов’язкове перевизначення одержувача (id чату, телефон або id користувача).",
       advanced: "Додатково",
-      advancedHelp:
-        "Необов’язкові перевизначення для гарантій доставки, джитера розкладу та керування моделлю.",
+      advancedHelp: "Необов’язкові перевизначення для гарантій доставки, джитера розкладу та керування моделлю.",
       deleteAfterRun: "Видалити після запуску",
       deleteAfterRunHelp: "Найкраще для одноразових нагадувань, які мають автоматично очищатися.",
       clearAgentOverride: "Очистити перевизначення агента",
@@ -1184,8 +1179,7 @@ export const uk: TranslationMap = {
       modelHelp: "Почніть вводити, щоб вибрати відому модель, або введіть власну.",
       thinking: "Обмірковування",
       thinkingPlaceholder: "low",
-      thinkingHelp:
-        "Використовуйте запропонований рівень або введіть значення, специфічне для провайдера.",
+      thinkingHelp: "Використовуйте запропонований рівень або введіть значення, специфічне для провайдера.",
       bestEffortDelivery: "Доставка best effort",
       bestEffortHelp: "Не позначати завдання як помилкове, якщо сама доставка не вдалася.",
       cantAddYet: "Поки що не можна додати завдання",

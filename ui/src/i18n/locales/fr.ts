@@ -65,6 +65,7 @@ export const fr: TranslationMap = {
     colorModeOption: "Mode de couleur : {mode}",
     resources: "Ressources",
     search: "Rechercher",
+    all: "Tous",
     save: "Enregistrer",
     saving: "Enregistrement…",
     saveAndPublish: "Enregistrer et publier",
@@ -92,16 +93,14 @@ export const fr: TranslationMap = {
     gatewayUrlConfirmation: {
       title: "Changer l’URL du Gateway",
       subtitle: "Cela reconnectera à un autre serveur Gateway",
-      warning:
-        "Confirmez uniquement si vous faites confiance à cette URL. Des URL malveillantes peuvent compromettre votre système.",
+      warning: "Confirmez uniquement si vous faites confiance à cette URL. Des URL malveillantes peuvent compromettre votre système.",
     },
     nostr: {
       profile: "Profil",
       editProfile: "Modifier le profil",
       profilePicture: "Photo de profil",
       noProfile: "Aucun profil défini.",
-      noProfileHint:
-        'Cliquez sur "Modifier le profil" pour ajouter votre nom, votre bio et votre avatar.',
+      noProfileHint: "Cliquez sur \"Modifier le profil\" pour ajouter votre nom, votre bio et votre avatar.",
       name: "Nom",
       displayName: "Nom d’affichage",
       about: "À propos",
@@ -129,8 +128,7 @@ export const fr: TranslationMap = {
   lazyView: {
     loadingTitle: "Chargement du panneau",
     errorTitle: "Échec du chargement du panneau",
-    errorSubtitle:
-      "Rechargez la page pour charger la dernière version du bundle Control UI, ou réessayez si la requête réseau a échoué.",
+    errorSubtitle: "Rechargez la page pour charger la dernière version du bundle Control UI, ou réessayez si la requête réseau a échoué.",
     retry: "Réessayer",
     unknownError: "Erreur inconnue de chargement du module.",
   },
@@ -139,8 +137,7 @@ export const fr: TranslationMap = {
       loadConfigHint: "Chargez la config pour modifier les bindings.",
       formModeHint: "Passez l’onglet Config en mode Form pour modifier les bindings ici.",
       execNodeBinding: "Binding du nœud d’exécution",
-      execNodeBindingSubtitle:
-        "Épinglez les agents à un nœud spécifique lors de l’utilisation de exec host=node.",
+      execNodeBindingSubtitle: "Épinglez les agents à un nœud spécifique lors de l’utilisation de exec host=node.",
       defaultBinding: "Binding par défaut",
       defaultBindingHint: "Utilisé lorsque les agents ne remplacent pas un binding de nœud.",
       node: "Nœud",
@@ -240,8 +237,30 @@ export const fr: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
+    directory: {
+      searchLabel: "Rechercher",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "Default",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "Exécution",
+      workspaceFilterLabel: "Workspace",
+      sortLabel: "Trier",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "Workspace",
+        model: "Primary Model",
+        runtime: "Exécution",
+      },
+    },
     tabs: {
       overview: "Aperçu",
       files: "Fichiers",
@@ -461,32 +480,25 @@ export const fr: TranslationMap = {
       title: "Notes",
       subtitle: "Rappels rapides pour les configurations de contrôle à distance.",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Privilégiez le mode serve pour garder le Gateway sur loopback avec l’authentification tailnet.",
+      tailscaleText: "Privilégiez le mode serve pour garder le Gateway sur loopback avec l’authentification tailnet.",
       sessionTitle: "Hygiène des sessions",
       sessionText: "Utilisez /new ou sessions.patch pour réinitialiser le contexte.",
       cronTitle: "Rappels cron",
       cronText: "Utilisez des sessions isolées pour les exécutions récurrentes.",
     },
     auth: {
-      required:
-        "Ce Gateway nécessite une authentification. Ajoutez un jeton ou un mot de passe, puis cliquez sur Connect.",
-      failed:
-        "Échec de l’authentification. Recopiez une URL avec jeton avec {command}, ou mettez à jour le jeton, puis cliquez sur Connect.",
+      required: "Ce Gateway nécessite une authentification. Ajoutez un jeton ou un mot de passe, puis cliquez sur Connect.",
+      failed: "Échec de l’authentification. Recopiez une URL avec jeton avec {command}, ou mettez à jour le jeton, puis cliquez sur Connect.",
     },
     pairing: {
       hint: "Cet appareil nécessite une approbation d’appairage de l’hôte Gateway.",
       scopeUpgradeTitle: "Mise à niveau de portée en attente d’approbation.",
-      scopeUpgradeSummary:
-        "Cet appareil est déjà appairé, mais l’élargissement de portée demandé est en attente d’approbation.",
+      scopeUpgradeSummary: "Cet appareil est déjà appairé, mais l’élargissement de portée demandé est en attente d’approbation.",
       roleUpgradeTitle: "Mise à niveau du rôle en attente d’approbation.",
-      roleUpgradeSummary:
-        "Cet appareil est déjà appairé, mais le changement de rôle demandé est en attente d’approbation.",
+      roleUpgradeSummary: "Cet appareil est déjà appairé, mais le changement de rôle demandé est en attente d’approbation.",
       metadataUpgradeTitle: "Modification des métadonnées de l’appareil en attente d’approbation.",
-      metadataUpgradeSummary:
-        "Cet appareil est déjà appairé, mais la modification des métadonnées est en attente d’approbation.",
-      mobileHint:
-        "Sur mobile ? Copiez l’URL complète (y compris #token=...) depuis openclaw dashboard --no-open sur votre ordinateur.",
+      metadataUpgradeSummary: "Cet appareil est déjà appairé, mais la modification des métadonnées est en attente d’approbation.",
+      mobileHint: "Sur mobile ? Copiez l’URL complète (y compris #token=...) depuis openclaw dashboard --no-open sur votre ordinateur.",
       docsTitle: "Documentation sur l’appairage des appareils (s’ouvre dans un nouvel onglet)",
       docsLink: "Documentation : Appairage des appareils",
     },
@@ -498,13 +510,11 @@ export const fr: TranslationMap = {
       title: "Comment se connecter",
       step1: "Démarrez le Gateway sur votre machine hôte :",
       step2: "Obtenez une URL du tableau de bord avec jeton :",
-      step3:
-        "Collez l’URL WebSocket et le jeton ci-dessus, ou ouvrez directement l’URL avec jeton.",
+      step3: "Collez l’URL WebSocket et le jeton ci-dessus, ou ouvrez directement l’URL avec jeton.",
       step4: "Ou générez un jeton réutilisable :",
       docsHint: "Pour l’accès à distance, Tailscale Serve est recommandé. ",
       docsLink: "Lire la documentation →",
-      authDocsTitle:
-        "Documentation sur l’authentification de la Control UI (s’ouvre dans un nouvel onglet)",
+      authDocsTitle: "Documentation sur l’authentification de la Control UI (s’ouvre dans un nouvel onglet)",
       authDocsLink: "Documentation : Authentification de la Control UI",
       tailscaleDocsTitle: "Documentation sur Tailscale Serve (s’ouvre dans un nouvel onglet)",
       tailscaleDocsLink: "Documentation : Tailscale Serve",
@@ -588,8 +598,7 @@ export const fr: TranslationMap = {
     restartConfirmation: {
       title: "Restart Gateway to Apply Change",
       subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      warning: "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
       confirm: "Confirm Restart",
       restarting: "Restarting…",
       failed: "Could not apply change. Check your connection and try again.",
@@ -617,16 +626,14 @@ export const fr: TranslationMap = {
     advanced: {
       eyebrow: "Vérification",
       title: "Vérification du journal quotidien",
-      description:
-        "Vérifiez ce qui provient du journal quotidien, ce qui est en attente de promotion et ce qui a été promu récemment.",
+      description: "Vérifiez ce qui provient du journal quotidien, ce qui est en attente de promotion et ce qui a été promu récemment.",
       summaryFromDailyLog: "du journal quotidien",
       summaryWaiting: "en attente",
       summaryPromotedToday: "promu aujourd’hui",
       stagedTitle: "Du journal quotidien",
       stagedDescription: "Rejouer les candidats extraits d’anciennes entrées du journal quotidien.",
       shortTermTitle: "En attente de promotion",
-      shortTermDescription:
-        "Candidats à court terme actuels en attente d’être promus en mémoire réelle.",
+      shortTermDescription: "Candidats à court terme actuels en attente d’être promus en mémoire réelle.",
       sortRecent: "Les plus récents",
       sortSignals: "Support le plus fort",
       originDailyLog: "rejoué",
@@ -690,8 +697,7 @@ export const fr: TranslationMap = {
   },
   usage: {
     page: {
-      subtitle:
-        "Voyez où vont les jetons, quand les sessions augmentent et ce qui génère les coûts.",
+      subtitle: "Voyez où vont les jetons, quand les sessions augmentent et ce qui génère les coûts.",
     },
     common: {
       emptyValue: "—",
@@ -741,8 +747,7 @@ export const fr: TranslationMap = {
       sessionsCount: "{count} sessions",
     },
     query: {
-      placeholder:
-        "Filtrer les sessions (ex. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
+      placeholder: "Filtrer les sessions (ex. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
       apply: "Filtrer (côté client)",
       matching: "{shown} sessions sur {total} correspondent",
       inRange: "{total} sessions dans l’intervalle",
@@ -755,8 +760,7 @@ export const fr: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "Le cache d’utilisation est en cours de reconstruction en arrière-plan. Les totaux affichés peuvent être obsolètes.",
+      warning: "Le cache d’utilisation est en cours de reconstruction en arrière-plan. Les totaux affichés peuvent être obsolètes.",
       title: "{status} : {pending} en attente, {stale} obsolètes, {cached} en cache",
       status: {
         refreshing: "actualisation",
@@ -766,8 +770,7 @@ export const fr: TranslationMap = {
     },
     empty: {
       title: "Commencez par une plage de dates",
-      subtitle:
-        "Chargez les données d’utilisation pour comparer les coûts, examiner les sessions et explorer les chronologies sans quitter le tableau de bord.",
+      subtitle: "Chargez les données d’utilisation pour comparer les coûts, examiner les sessions et explorer les chronologies sans quitter le tableau de bord.",
       hint: "Sélectionnez une plage de dates et cliquez sur Actualiser pour charger l’utilisation.",
       noData: "Aucune donnée",
       featureOverview: "Cartes d’aperçu",
@@ -807,23 +810,20 @@ export const fr: TranslationMap = {
       avgTokensHint: "Nombre moyen de jetons par message dans cet intervalle.",
       avgCost: "Coût moy. / msg",
       avgCostHint: "Coût moyen par message lorsque les providers signalent les coûts.",
-      avgCostHintMissing:
-        "Coût moyen par message lorsque les providers signalent les coûts. Les données de coût sont manquantes pour certaines ou toutes les sessions de cet intervalle.",
+      avgCostHintMissing: "Coût moyen par message lorsque les providers signalent les coûts. Les données de coût sont manquantes pour certaines ou toutes les sessions de cet intervalle.",
       acrossMessages: "Sur {count} messages",
       sessions: "Sessions",
       sessionsHint: "Sessions distinctes dans l’intervalle.",
       sessionsInRange: "sur {count} dans l’intervalle",
       throughput: "Débit",
-      throughputHint:
-        "Le débit indique les jetons par minute pendant le temps d’activité. Plus il est élevé, mieux c’est.",
+      throughputHint: "Le débit indique les jetons par minute pendant le temps d’activité. Plus il est élevé, mieux c’est.",
       tokensPerMinute: "jet/min",
       perMinute: "/ min",
       errorRate: "Taux d’erreur",
       errorHint: "Taux d’erreur = erreurs / total des messages. Plus il est faible, mieux c’est.",
       avgSession: "session moy.",
       cacheHitRate: "Taux de réussite du cache",
-      cacheHint:
-        "Taux de réussite du cache = lecture du cache / (entrée + lecture du cache). Plus il est élevé, mieux c’est.",
+      cacheHint: "Taux de réussite du cache = lecture du cache / (entrée + lecture du cache). Plus il est élevé, mieux c’est.",
       cached: "en cache",
       prompt: "prompt",
       calls: "appels",
@@ -859,8 +859,7 @@ export const fr: TranslationMap = {
       selected: "Sélectionnées ({count})",
       copy: "Copier",
       copyName: "Copier le nom de la session",
-      limitReached:
-        "Affichage des 1 000 premières sessions. Réduisez la plage de dates pour obtenir des résultats complets.",
+      limitReached: "Affichage des 1 000 premières sessions. Réduisez la plage de dates pour obtenir des résultats complets.",
     },
     details: {
       noUsageData: "Aucune donnée d’utilisation pour cette session.",
@@ -905,8 +904,7 @@ export const fr: TranslationMap = {
     mosaic: {
       title: "Activité par heure",
       subtitleEmpty: "Les estimations nécessitent des horodatages de session.",
-      subtitle:
-        "Estimé à partir des plages de session (première/dernière activité). Fuseau horaire : {zone}.",
+      subtitle: "Estimé à partir des plages de session (première/dernière activité). Fuseau horaire : {zone}.",
       noTimelineData: "Aucune donnée de chronologie pour le moment.",
       dayOfWeek: "Jour de la semaine",
       midnight: "Minuit",
@@ -1027,10 +1025,8 @@ export const fr: TranslationMap = {
       },
       defaultName: "Automatisation",
       whatHeading: "Que doit-elle faire ?",
-      whatHint:
-        "Décrivez la tâche en langage naturel. L’agent exécutera cette invite à chaque fois.",
-      promptPlaceholder:
-        "p. ex., Vérifie ma boîte de réception pour les e-mails urgents et résume-les...",
+      whatHint: "Décrivez la tâche en langage naturel. L’agent exécutera cette invite à chaque fois.",
+      promptPlaceholder: "p. ex., Vérifie ma boîte de réception pour les e-mails urgents et résume-les...",
       nameOptional: "Nom (facultatif)",
       namePlaceholder: "p. ex., Vérification de la boîte de réception du matin",
       whenHeading: "Quand doit-elle s’exécuter ?",
@@ -1129,8 +1125,7 @@ export const fr: TranslationMap = {
       everyAmountPlaceholder: "30",
       timezoneOptional: "Fuseau horaire (facultatif)",
       timezonePlaceholder: "America/Los_Angeles",
-      timezoneHelp:
-        "Choisissez un fuseau horaire courant ou saisissez n’importe quel fuseau horaire IANA valide.",
+      timezoneHelp: "Choisissez un fuseau horaire courant ou saisissez n’importe quel fuseau horaire IANA valide.",
       jitterHelp: "Besoin de jitter ? Utilisez Avancé → Fenêtre de décalage / Unité de décalage.",
       execution: "Exécution",
       executionSub: "Choisissez quand réveiller et ce que cette tâche doit faire.",
@@ -1141,19 +1136,15 @@ export const fr: TranslationMap = {
       wakeMode: "Mode de réveil",
       now: "Maintenant",
       nextHeartbeat: "Prochain heartbeat",
-      wakeModeHelp:
-        "Maintenant déclenche immédiatement. Prochain heartbeat attend le cycle suivant.",
+      wakeModeHelp: "Maintenant déclenche immédiatement. Prochain heartbeat attend le cycle suivant.",
       payloadKind: "Que faut-il exécuter ?",
       systemEvent: "Publier un message dans la chronologie principale",
       agentTurn: "Exécuter une tâche d’assistant (isolée)",
-      systemEventHelp:
-        "Envoie votre texte à la chronologie principale du Gateway (idéal pour les rappels/déclencheurs).",
-      agentTurnHelp:
-        "Démarre une exécution de l’assistant dans sa propre session à partir de votre prompt.",
+      systemEventHelp: "Envoie votre texte à la chronologie principale du Gateway (idéal pour les rappels/déclencheurs).",
+      agentTurnHelp: "Démarre une exécution de l’assistant dans sa propre session à partir de votre prompt.",
       timeoutSeconds: "Délai d’expiration (secondes)",
       timeoutPlaceholder: "Facultatif, ex. 90",
-      timeoutHelp:
-        "Facultatif. Laissez vide pour utiliser le comportement de délai d’expiration par défaut du Gateway pour cette exécution.",
+      timeoutHelp: "Facultatif. Laissez vide pour utiliser le comportement de délai d’expiration par défaut du Gateway pour cette exécution.",
       mainTimelineMessage: "Message de la chronologie principale",
       assistantTaskPrompt: "Prompt de tâche de l’assistant",
       deliverySection: "Distribution",
@@ -1162,8 +1153,7 @@ export const fr: TranslationMap = {
       announceDefault: "Annoncer le résumé (par défaut)",
       webhookPost: "Webhook POST",
       noneInternal: "Aucun (interne)",
-      deliveryHelp:
-        "Annoncer publie un résumé dans le chat. Aucun conserve l’exécution en interne.",
+      deliveryHelp: "Annoncer publie un résumé dans le chat. Aucun conserve l’exécution en interne.",
       webhookUrl: "URL du webhook",
       channel: "Canal",
       webhookPlaceholder: "https://example.com/cron",
@@ -1173,11 +1163,9 @@ export const fr: TranslationMap = {
       toPlaceholder: "+1555... ou ID de chat",
       toHelp: "Remplacement facultatif du destinataire (ID de chat, téléphone ou ID utilisateur).",
       advanced: "Avancé",
-      advancedHelp:
-        "Remplacements facultatifs pour les garanties de distribution, le jitter de planification et les contrôles du modèle.",
+      advancedHelp: "Remplacements facultatifs pour les garanties de distribution, le jitter de planification et les contrôles du modèle.",
       deleteAfterRun: "Supprimer après exécution",
-      deleteAfterRunHelp:
-        "Idéal pour les rappels ponctuels qui doivent se nettoyer automatiquement.",
+      deleteAfterRunHelp: "Idéal pour les rappels ponctuels qui doivent se nettoyer automatiquement.",
       clearAgentOverride: "Effacer le remplacement d’agent",
       clearAgentHelp: "Force cette tâche à utiliser l’assistant par défaut du Gateway.",
       exactTiming: "Timing exact (sans décalage)",

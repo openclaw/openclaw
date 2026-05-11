@@ -65,6 +65,7 @@ export const de: TranslationMap = {
     colorModeOption: "Farbmodus: {mode}",
     resources: "Ressourcen",
     search: "Suchen",
+    all: "Alle",
     save: "Speichern",
     saving: "Wird gespeichert…",
     saveAndPublish: "Speichern & veröffentlichen",
@@ -92,16 +93,14 @@ export const de: TranslationMap = {
     gatewayUrlConfirmation: {
       title: "Gateway-URL ändern",
       subtitle: "Dadurch wird die Verbindung zu einem anderen Gateway-Server hergestellt",
-      warning:
-        "Bestätigen Sie dies nur, wenn Sie dieser URL vertrauen. Bösartige URLs können Ihr System gefährden.",
+      warning: "Bestätigen Sie dies nur, wenn Sie dieser URL vertrauen. Bösartige URLs können Ihr System gefährden.",
     },
     nostr: {
       profile: "Profil",
       editProfile: "Profil bearbeiten",
       profilePicture: "Profilbild",
       noProfile: "Kein Profil festgelegt.",
-      noProfileHint:
-        'Klicken Sie auf "Profil bearbeiten", um Ihren Namen, Ihre Bio und Ihren Avatar hinzuzufügen.',
+      noProfileHint: "Klicken Sie auf \"Profil bearbeiten\", um Ihren Namen, Ihre Bio und Ihren Avatar hinzuzufügen.",
       name: "Name",
       displayName: "Anzeigename",
       about: "Über",
@@ -129,19 +128,16 @@ export const de: TranslationMap = {
   lazyView: {
     loadingTitle: "Panel wird geladen",
     errorTitle: "Panel konnte nicht geladen werden",
-    errorSubtitle:
-      "Laden Sie die Seite neu, um das neueste Control UI-Bundle zu laden, oder versuchen Sie es erneut, wenn die Netzwerkanfrage fehlgeschlagen ist.",
+    errorSubtitle: "Laden Sie die Seite neu, um das neueste Control UI-Bundle zu laden, oder versuchen Sie es erneut, wenn die Netzwerkanfrage fehlgeschlagen ist.",
     retry: "Erneut versuchen",
     unknownError: "Unbekannter Fehler beim Laden des Moduls.",
   },
   nodes: {
     binding: {
       loadConfigHint: "Laden Sie die Konfiguration, um Bindungen zu bearbeiten.",
-      formModeHint:
-        "Wechseln Sie im Tab „Konfiguration“ in den Formularmodus, um Bindungen hier zu bearbeiten.",
+      formModeHint: "Wechseln Sie im Tab „Konfiguration“ in den Formularmodus, um Bindungen hier zu bearbeiten.",
       execNodeBinding: "Exec-Knotenbindung",
-      execNodeBindingSubtitle:
-        "Agenten an einen bestimmten Knoten anheften, wenn exec host=node verwendet wird.",
+      execNodeBindingSubtitle: "Agenten an einen bestimmten Knoten anheften, wenn exec host=node verwendet wird.",
       defaultBinding: "Standardbindung",
       defaultBindingHint: "Wird verwendet, wenn Agenten keine Knotenbindung überschreiben.",
       node: "Knoten",
@@ -241,8 +237,30 @@ export const de: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
+    directory: {
+      searchLabel: "Suchen",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "Default",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "Laufzeit",
+      workspaceFilterLabel: "Workspace",
+      sortLabel: "Sortieren",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "Workspace",
+        model: "Primary Model",
+        runtime: "Laufzeit",
+      },
+    },
     tabs: {
       overview: "Overview",
       files: "Dateien",
@@ -448,8 +466,7 @@ export const de: TranslationMap = {
       uptime: "Betriebszeit",
       tickInterval: "Tick-Intervall",
       lastChannelsRefresh: "Letzte Kanalaktualisierung",
-      channelsHint:
-        "Verwenden Sie Kanäle, um WhatsApp, Telegram, Discord, Signal oder iMessage zu verknüpfen.",
+      channelsHint: "Verwenden Sie Kanäle, um WhatsApp, Telegram, Discord, Signal oder iMessage zu verknüpfen.",
     },
     stats: {
       instances: "Instanzen",
@@ -463,32 +480,25 @@ export const de: TranslationMap = {
       title: "Notizen",
       subtitle: "Kurze Hinweise für Remote-Steuerung.",
       tailscaleTitle: "Tailscale Serve",
-      tailscaleText:
-        "Bevorzugen Sie den Serve-Modus, um das Gateway auf Loopback mit Tailnet-Auth zu halten.",
+      tailscaleText: "Bevorzugen Sie den Serve-Modus, um das Gateway auf Loopback mit Tailnet-Auth zu halten.",
       sessionTitle: "Sitzungshygiene",
       sessionText: "Verwenden Sie /new oder sessions.patch, um den Kontext zurückzusetzen.",
       cronTitle: "Cron-Erinnerungen",
       cronText: "Verwenden Sie isolierte Sitzungen für wiederkehrende Läufe.",
     },
     auth: {
-      required:
-        "Dieses Gateway erfordert Authentifizierung. Fügen Sie ein Token oder Passwort hinzu und klicken Sie auf Verbinden.",
-      failed:
-        "Authentifizierung fehlgeschlagen. Kopieren Sie erneut eine URL mit Token über {command}, oder aktualisieren Sie das Token und klicken Sie auf Verbinden.",
+      required: "Dieses Gateway erfordert Authentifizierung. Fügen Sie ein Token oder Passwort hinzu und klicken Sie auf Verbinden.",
+      failed: "Authentifizierung fehlgeschlagen. Kopieren Sie erneut eine URL mit Token über {command}, oder aktualisieren Sie das Token und klicken Sie auf Verbinden.",
     },
     pairing: {
       hint: "Dieses Gerät benötigt eine Pairing-Freigabe vom Gateway-Host.",
       scopeUpgradeTitle: "Umfangserweiterung wartet auf Genehmigung.",
-      scopeUpgradeSummary:
-        "Dieses Gerät ist bereits gekoppelt, aber der angeforderte erweiterte Umfang wartet auf Genehmigung.",
+      scopeUpgradeSummary: "Dieses Gerät ist bereits gekoppelt, aber der angeforderte erweiterte Umfang wartet auf Genehmigung.",
       roleUpgradeTitle: "Rollenänderung wartet auf Genehmigung.",
-      roleUpgradeSummary:
-        "Dieses Gerät ist bereits gekoppelt, aber die angeforderte Rollenänderung wartet auf Genehmigung.",
+      roleUpgradeSummary: "Dieses Gerät ist bereits gekoppelt, aber die angeforderte Rollenänderung wartet auf Genehmigung.",
       metadataUpgradeTitle: "Änderung der Gerätemetadaten wartet auf Genehmigung.",
-      metadataUpgradeSummary:
-        "Dieses Gerät ist bereits gekoppelt, aber die Änderung der Metadaten wartet auf Genehmigung.",
-      mobileHint:
-        "Auf dem Mobilgerät? Kopieren Sie die vollständige URL (einschließlich #token=...) von openclaw dashboard --no-open auf Ihrem Desktop.",
+      metadataUpgradeSummary: "Dieses Gerät ist bereits gekoppelt, aber die Änderung der Metadaten wartet auf Genehmigung.",
+      mobileHint: "Auf dem Mobilgerät? Kopieren Sie die vollständige URL (einschließlich #token=...) von openclaw dashboard --no-open auf Ihrem Desktop.",
       docsTitle: "Gerätekopplungs-Dokumentation (öffnet sich in neuem Tab)",
       docsLink: "Docs: Gerätekopplung",
     },
@@ -500,8 +510,7 @@ export const de: TranslationMap = {
       title: "So verbindest du dich",
       step1: "Starte das Gateway auf deinem Host-Rechner:",
       step2: "Rufe eine tokenisierte Dashboard-URL ab:",
-      step3:
-        "Füge oben die WebSocket-URL und das Token ein oder öffne die tokenisierte URL direkt.",
+      step3: "Füge oben die WebSocket-URL und das Token ein oder öffne die tokenisierte URL direkt.",
       step4: "Oder generiere ein wiederverwendbares Token:",
       docsHint: "Für den Remote-Zugriff wird Tailscale Serve empfohlen. ",
       docsLink: "Dokumentation lesen →",
@@ -527,8 +536,7 @@ export const de: TranslationMap = {
       modelAuthExpiresIn: "läuft {when} ab",
       modelAuthAttentionExpiredTitle: "Modell-Authentifizierung abgelaufen",
       modelAuthAttentionExpiringTitle: "Modell-Authentifizierung läuft bald ab",
-      modelAuthAttentionExpiredDesc:
-        "{providers} — mit openclaw models auth erneut authentifizieren",
+      modelAuthAttentionExpiredDesc: "{providers} — mit openclaw models auth erneut authentifizieren",
       modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
@@ -590,8 +598,7 @@ export const de: TranslationMap = {
     restartConfirmation: {
       title: "Restart Gateway to Apply Change",
       subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      warning: "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
       confirm: "Confirm Restart",
       restarting: "Restarting…",
       failed: "Could not apply change. Check your connection and try again.",
@@ -619,16 +626,14 @@ export const de: TranslationMap = {
     advanced: {
       eyebrow: "Prüfen",
       title: "Prüfung des Tagesprotokolls",
-      description:
-        "Prüfe, was aus dem Tagesprotokoll stammt, was auf eine Beförderung wartet und was kürzlich befördert wurde.",
+      description: "Prüfe, was aus dem Tagesprotokoll stammt, was auf eine Beförderung wartet und was kürzlich befördert wurde.",
       summaryFromDailyLog: "aus dem Tagesprotokoll",
       summaryWaiting: "wartend",
       summaryPromotedToday: "heute befördert",
       stagedTitle: "Aus dem Tagesprotokoll",
       stagedDescription: "Wiedergabe-Kandidaten aus älteren Tagesprotokoll-Einträgen.",
       shortTermTitle: "Wartet auf Beförderung",
-      shortTermDescription:
-        "Aktuelle kurzfristige Kandidaten, die darauf warten, in den echten Speicher überzugehen.",
+      shortTermDescription: "Aktuelle kurzfristige Kandidaten, die darauf warten, in den echten Speicher überzugehen.",
       sortRecent: "Neueste zuerst",
       sortSignals: "Stärkste Unterstützung",
       originDailyLog: "wiedergegeben",
@@ -742,8 +747,7 @@ export const de: TranslationMap = {
       sessionsCount: "{count} Sitzungen",
     },
     query: {
-      placeholder:
-        "Sitzungen filtern (z. B. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
+      placeholder: "Sitzungen filtern (z. B. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
       apply: "Filtern (clientseitig)",
       matching: "{shown} von {total} Sitzungen stimmen überein",
       inRange: "{total} Sitzungen im Bereich",
@@ -756,8 +760,7 @@ export const de: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "Der Nutzungscache wird im Hintergrund neu aufgebaut. Angezeigte Summen können veraltet sein.",
+      warning: "Der Nutzungscache wird im Hintergrund neu aufgebaut. Angezeigte Summen können veraltet sein.",
       title: "{status}: {pending} ausstehend, {stale} veraltet, {cached} zwischengespeichert",
       status: {
         refreshing: "wird aktualisiert",
@@ -767,8 +770,7 @@ export const de: TranslationMap = {
     },
     empty: {
       title: "Mit einem Datumsbereich beginnen",
-      subtitle:
-        "Lade Nutzungsdaten, um Kosten zu vergleichen, Sitzungen zu prüfen und in Zeitachsen einzutauchen, ohne das Dashboard zu verlassen.",
+      subtitle: "Lade Nutzungsdaten, um Kosten zu vergleichen, Sitzungen zu prüfen und in Zeitachsen einzutauchen, ohne das Dashboard zu verlassen.",
       hint: "Wähle einen Datumsbereich aus und klicke auf Aktualisieren, um Nutzungsdaten zu laden.",
       noData: "Keine Daten",
       featureOverview: "Übersichtskarten",
@@ -808,15 +810,13 @@ export const de: TranslationMap = {
       avgTokensHint: "Durchschnittliche Tokens pro Nachricht in diesem Bereich.",
       avgCost: "Ø Kosten / Nachricht",
       avgCostHint: "Durchschnittliche Kosten pro Nachricht, wenn Anbieter Kosten melden.",
-      avgCostHintMissing:
-        "Durchschnittliche Kosten pro Nachricht, wenn Anbieter Kosten melden. Für einige oder alle Sitzungen in diesem Bereich fehlen Kostendaten.",
+      avgCostHintMissing: "Durchschnittliche Kosten pro Nachricht, wenn Anbieter Kosten melden. Für einige oder alle Sitzungen in diesem Bereich fehlen Kostendaten.",
       acrossMessages: "Über {count} Nachrichten",
       sessions: "Sitzungen",
       sessionsHint: "Eindeutige Sitzungen im Bereich.",
       sessionsInRange: "von {count} im Bereich",
       throughput: "Durchsatz",
-      throughputHint:
-        "Der Durchsatz zeigt Tokens pro Minute über die aktive Zeit. Höher ist besser.",
+      throughputHint: "Der Durchsatz zeigt Tokens pro Minute über die aktive Zeit. Höher ist besser.",
       tokensPerMinute: "Tok./Min.",
       perMinute: "/ Min.",
       errorRate: "Fehlerrate",
@@ -859,8 +859,7 @@ export const de: TranslationMap = {
       selected: "Ausgewählt ({count})",
       copy: "Kopieren",
       copyName: "Sitzungsnamen kopieren",
-      limitReached:
-        "Die ersten 1.000 Sitzungen werden angezeigt. Schränke den Datumsbereich ein, um vollständige Ergebnisse zu erhalten.",
+      limitReached: "Die ersten 1.000 Sitzungen werden angezeigt. Schränke den Datumsbereich ein, um vollständige Ergebnisse zu erhalten.",
     },
     details: {
       noUsageData: "Keine Nutzungsdaten für diese Sitzung.",
@@ -1026,10 +1025,8 @@ export const de: TranslationMap = {
       },
       defaultName: "Automatisierung",
       whatHeading: "Was soll ausgeführt werden?",
-      whatHint:
-        "Beschreiben Sie die Aufgabe in natürlicher Sprache. Der Agent führt diesen Prompt jedes Mal aus.",
-      promptPlaceholder:
-        "z. B. Mein Postfach auf dringende E-Mails prüfen und sie zusammenfassen...",
+      whatHint: "Beschreiben Sie die Aufgabe in natürlicher Sprache. Der Agent führt diesen Prompt jedes Mal aus.",
+      promptPlaceholder: "z. B. Mein Postfach auf dringende E-Mails prüfen und sie zusammenfassen...",
       nameOptional: "Name (optional)",
       namePlaceholder: "z. B. Morgendliche Postfachprüfung",
       whenHeading: "Wann soll es ausgeführt werden?",
@@ -1112,8 +1109,7 @@ export const de: TranslationMap = {
       namePlaceholder: "Morgenbriefing",
       descriptionPlaceholder: "Optionaler Kontext für diesen Job",
       agentPlaceholder: "main oder ops",
-      agentHelp:
-        "Beginne zu tippen, um einen bekannten Agenten auszuwählen, oder gib einen benutzerdefinierten ein.",
+      agentHelp: "Beginne zu tippen, um einen bekannten Agenten auszuwählen, oder gib einen benutzerdefinierten ein.",
       schedule: "Zeitplan",
       scheduleSub: "Steuere, wann dieser Job ausgeführt wird.",
       every: "Alle",
@@ -1129,32 +1125,26 @@ export const de: TranslationMap = {
       everyAmountPlaceholder: "30",
       timezoneOptional: "Zeitzone (optional)",
       timezonePlaceholder: "America/Los_Angeles",
-      timezoneHelp:
-        "Wähle eine gängige Zeitzone oder gib eine beliebige gültige IANA-Zeitzone ein.",
-      jitterHelp:
-        "Brauchst du Jitter? Verwende Erweitert → Staffelungsfenster / Staffelungseinheit.",
+      timezoneHelp: "Wähle eine gängige Zeitzone oder gib eine beliebige gültige IANA-Zeitzone ein.",
+      jitterHelp: "Brauchst du Jitter? Verwende Erweitert → Staffelungsfenster / Staffelungseinheit.",
       execution: "Ausführung",
       executionSub: "Wähle, wann aufgeweckt wird und was dieser Job tun soll.",
       session: "Sitzung",
       main: "Haupt",
       isolated: "Isoliert",
-      sessionHelp:
-        "Main sendet ein Systemereignis. Isoliert führt einen dedizierten Agentenzug aus.",
+      sessionHelp: "Main sendet ein Systemereignis. Isoliert führt einen dedizierten Agentenzug aus.",
       wakeMode: "Aufweckmodus",
       now: "Jetzt",
       nextHeartbeat: "Nächster Heartbeat",
-      wakeModeHelp:
-        "Jetzt wird sofort ausgelöst. Nächster Heartbeat wartet auf den nächsten Zyklus.",
+      wakeModeHelp: "Jetzt wird sofort ausgelöst. Nächster Heartbeat wartet auf den nächsten Zyklus.",
       payloadKind: "Was soll ausgeführt werden?",
       systemEvent: "Nachricht in der Main-Zeitachse posten",
       agentTurn: "Assistentenaufgabe ausführen (isoliert)",
-      systemEventHelp:
-        "Sendet deinen Text an die Main-Zeitachse des Gateway (gut für Erinnerungen/Trigger).",
+      systemEventHelp: "Sendet deinen Text an die Main-Zeitachse des Gateway (gut für Erinnerungen/Trigger).",
       agentTurnHelp: "Startet einen Assistentenlauf in einer eigenen Sitzung mit deinem Prompt.",
       timeoutSeconds: "Timeout (Sekunden)",
       timeoutPlaceholder: "Optional, z. B. 90",
-      timeoutHelp:
-        "Optional. Leer lassen, um für diesen Lauf das Standard-Timeout-Verhalten des Gateway zu verwenden.",
+      timeoutHelp: "Optional. Leer lassen, um für diesen Lauf das Standard-Timeout-Verhalten des Gateway zu verwenden.",
       mainTimelineMessage: "Nachricht für die Main-Zeitachse",
       assistantTaskPrompt: "Prompt für die Assistentenaufgabe",
       deliverySection: "Zustellung",
@@ -1163,8 +1153,7 @@ export const de: TranslationMap = {
       announceDefault: "Zusammenfassung ankündigen (Standard)",
       webhookPost: "Webhook-POST",
       noneInternal: "Keine (intern)",
-      deliveryHelp:
-        "Ankündigen postet eine Zusammenfassung in den Chat. Keine hält die Ausführung intern.",
+      deliveryHelp: "Ankündigen postet eine Zusammenfassung in den Chat. Keine hält die Ausführung intern.",
       webhookUrl: "Webhook-URL",
       channel: "Kanal",
       webhookPlaceholder: "https://example.com/cron",
@@ -1174,11 +1163,9 @@ export const de: TranslationMap = {
       toPlaceholder: "+1555... oder Chat-ID",
       toHelp: "Optionale Empfängerüberschreibung (Chat-ID, Telefonnummer oder Benutzer-ID).",
       advanced: "Erweitert",
-      advancedHelp:
-        "Optionale Überschreibungen für Zustellungsgarantien, Zeitplan-Jitter und Modellsteuerung.",
+      advancedHelp: "Optionale Überschreibungen für Zustellungsgarantien, Zeitplan-Jitter und Modellsteuerung.",
       deleteAfterRun: "Nach Ausführung löschen",
-      deleteAfterRunHelp:
-        "Am besten für einmalige Erinnerungen, die automatisch bereinigt werden sollen.",
+      deleteAfterRunHelp: "Am besten für einmalige Erinnerungen, die automatisch bereinigt werden sollen.",
       clearAgentOverride: "Agentenüberschreibung löschen",
       clearAgentHelp: "Erzwingt, dass dieser Job den Standardassistenten des Gateway verwendet.",
       exactTiming: "Exaktes Timing (keine Staffelung)",
@@ -1189,12 +1176,10 @@ export const de: TranslationMap = {
       seconds: "Sekunden",
       model: "Modell",
       modelPlaceholder: "openai/gpt-5.2",
-      modelHelp:
-        "Beginne zu tippen, um ein bekanntes Modell auszuwählen, oder gib ein benutzerdefiniertes ein.",
+      modelHelp: "Beginne zu tippen, um ein bekanntes Modell auszuwählen, oder gib ein benutzerdefiniertes ein.",
       thinking: "Denken",
       thinkingPlaceholder: "low",
-      thinkingHelp:
-        "Verwende eine vorgeschlagene Stufe oder gib einen anbieterspezifischen Wert ein.",
+      thinkingHelp: "Verwende eine vorgeschlagene Stufe oder gib einen anbieterspezifischen Wert ein.",
       bestEffortDelivery: "Best-Effort-Zustellung",
       bestEffortHelp: "Den Job nicht fehlschlagen lassen, wenn die Zustellung selbst fehlschlägt.",
       cantAddYet: "Job kann noch nicht hinzugefügt werden",

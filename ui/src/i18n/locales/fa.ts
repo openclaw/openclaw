@@ -65,6 +65,7 @@ export const fa: TranslationMap = {
     colorModeOption: "حالت رنگ: {mode}",
     resources: "منابع",
     search: "جستجو",
+    all: "همه",
     save: "ذخیره",
     saving: "در حال ذخیره…",
     saveAndPublish: "ذخیره و انتشار",
@@ -92,15 +93,14 @@ export const fa: TranslationMap = {
     gatewayUrlConfirmation: {
       title: "تغییر URL Gateway",
       subtitle: "این کار به یک سرور Gateway دیگر دوباره متصل می‌شود",
-      warning:
-        "فقط در صورتی تأیید کنید که به این URL اعتماد دارید. URLهای مخرب می‌توانند سیستم شما را به خطر بیندازند.",
+      warning: "فقط در صورتی تأیید کنید که به این URL اعتماد دارید. URLهای مخرب می‌توانند سیستم شما را به خطر بیندازند.",
     },
     nostr: {
       profile: "نمایه",
       editProfile: "ویرایش نمایه",
       profilePicture: "تصویر نمایه",
       noProfile: "هیچ نمایه‌ای تنظیم نشده است.",
-      noProfileHint: 'برای افزودن نام، زندگی‌نامه و آواتار خود، روی "ویرایش نمایه" کلیک کنید.',
+      noProfileHint: "برای افزودن نام، زندگی‌نامه و آواتار خود، روی \"ویرایش نمایه\" کلیک کنید.",
       name: "نام",
       displayName: "نام نمایشی",
       about: "درباره",
@@ -128,8 +128,7 @@ export const fa: TranslationMap = {
   lazyView: {
     loadingTitle: "در حال بارگیری پنل",
     errorTitle: "پنل بارگیری نشد",
-    errorSubtitle:
-      "برای بارگیری آخرین بسته Control UI صفحه را دوباره بارگیری کنید، یا اگر درخواست شبکه ناموفق بود دوباره تلاش کنید.",
+    errorSubtitle: "برای بارگیری آخرین بسته Control UI صفحه را دوباره بارگیری کنید، یا اگر درخواست شبکه ناموفق بود دوباره تلاش کنید.",
     retry: "تلاش دوباره",
     unknownError: "خطای نامشخص در بارگیری ماژول.",
   },
@@ -138,8 +137,7 @@ export const fa: TranslationMap = {
       loadConfigHint: "برای ویرایش اتصال‌ها، پیکربندی را بارگیری کنید.",
       formModeHint: "برای ویرایش اتصال‌ها در اینجا، زبانه Config را به حالت Form تغییر دهید.",
       execNodeBinding: "اتصال گره Exec",
-      execNodeBindingSubtitle:
-        "هنگام استفاده از exec host=node، عامل‌ها را به یک گره مشخص پین کنید.",
+      execNodeBindingSubtitle: "هنگام استفاده از exec host=node، عامل‌ها را به یک گره مشخص پین کنید.",
       defaultBinding: "اتصال پیش‌فرض",
       defaultBindingHint: "وقتی عامل‌ها اتصال گره را بازنویسی نکنند استفاده می‌شود.",
       node: "گره",
@@ -239,8 +237,30 @@ export const fa: TranslationMap = {
     setDefault: "تنظیم به‌عنوان پیش‌فرض",
     alreadyDefaultTitle: "همین حالا عامل پیش‌فرض است",
     setDefaultTitle: "تنظیم به‌عنوان عامل پیش‌فرض",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "انتخاب عامل",
     selectSubtitle: "یک عامل را انتخاب کنید تا فضای کاری و ابزارهای آن را بررسی کنید.",
+    directory: {
+      searchLabel: "جستجو",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "پیش‌فرض",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "زمان اجرا",
+      workspaceFilterLabel: "فضای کاری",
+      sortLabel: "مرتب‌سازی",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "فضای کاری",
+        model: "مدل اصلی",
+        runtime: "زمان اجرا",
+      },
+    },
     tabs: {
       overview: "نمای کلی",
       files: "فایل‌ها",
@@ -446,8 +466,7 @@ export const fa: TranslationMap = {
       uptime: "زمان کارکرد",
       tickInterval: "فاصله Tick",
       lastChannelsRefresh: "آخرین تازه‌سازی کانال‌ها",
-      channelsHint:
-        "برای پیوند دادن WhatsApp، Telegram، Discord، Signal یا iMessage از کانال‌ها استفاده کنید.",
+      channelsHint: "برای پیوند دادن WhatsApp، Telegram، Discord، Signal یا iMessage از کانال‌ها استفاده کنید.",
     },
     stats: {
       instances: "نمونه‌ها",
@@ -461,31 +480,25 @@ export const fa: TranslationMap = {
       title: "یادداشت‌ها",
       subtitle: "یادآوری‌های سریع برای راه‌اندازی‌های کنترل از راه دور.",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "حالت serve را ترجیح دهید تا Gateway با احراز هویت tailnet روی loopback بماند.",
+      tailscaleText: "حالت serve را ترجیح دهید تا Gateway با احراز هویت tailnet روی loopback بماند.",
       sessionTitle: "بهداشت نشست",
       sessionText: "برای بازنشانی زمینه از /new یا sessions.patch استفاده کنید.",
       cronTitle: "یادآوری‌های Cron",
       cronText: "برای اجراهای تکرارشونده از نشست‌های ایزوله استفاده کنید.",
     },
     auth: {
-      required:
-        "این Gateway به احراز هویت نیاز دارد. یک توکن یا گذرواژه اضافه کنید، سپس روی اتصال کلیک کنید.",
-      failed:
-        "احراز هویت ناموفق بود. یک URL دارای توکن را با {command} دوباره کپی کنید، یا توکن را به‌روزرسانی کنید، سپس روی اتصال کلیک کنید.",
+      required: "این Gateway به احراز هویت نیاز دارد. یک توکن یا گذرواژه اضافه کنید، سپس روی اتصال کلیک کنید.",
+      failed: "احراز هویت ناموفق بود. یک URL دارای توکن را با {command} دوباره کپی کنید، یا توکن را به‌روزرسانی کنید، سپس روی اتصال کلیک کنید.",
     },
     pairing: {
       hint: "این دستگاه به تأیید جفت‌سازی از میزبان Gateway نیاز دارد.",
       scopeUpgradeTitle: "ارتقای دامنه در انتظار تأیید است.",
-      scopeUpgradeSummary:
-        "این دستگاه قبلاً جفت شده است، اما دامنه گسترده‌تر درخواست‌شده در انتظار تأیید است.",
+      scopeUpgradeSummary: "این دستگاه قبلاً جفت شده است، اما دامنه گسترده‌تر درخواست‌شده در انتظار تأیید است.",
       roleUpgradeTitle: "ارتقای نقش در انتظار تأیید است.",
-      roleUpgradeSummary:
-        "این دستگاه قبلاً جفت شده است، اما تغییر نقش درخواست‌شده در انتظار تأیید است.",
+      roleUpgradeSummary: "این دستگاه قبلاً جفت شده است، اما تغییر نقش درخواست‌شده در انتظار تأیید است.",
       metadataUpgradeTitle: "تغییر فراداده دستگاه در انتظار تأیید است.",
       metadataUpgradeSummary: "این دستگاه قبلاً جفت شده است، اما تغییر فراداده در انتظار تأیید است.",
-      mobileHint:
-        "روی موبایل هستید؟ URL کامل (شامل #token=...) را از openclaw dashboard --no-open روی دسکتاپ خود کپی کنید.",
+      mobileHint: "روی موبایل هستید؟ URL کامل (شامل #token=...) را از openclaw dashboard --no-open روی دسکتاپ خود کپی کنید.",
       docsTitle: "مستندات جفت‌سازی دستگاه (در زبانه جدید باز می‌شود)",
       docsLink: "مستندات: جفت‌سازی دستگاه",
     },
@@ -585,8 +598,7 @@ export const fa: TranslationMap = {
     restartConfirmation: {
       title: "برای اعمال تغییر، Gateway را بازراه‌اندازی کنید",
       subtitle: "تغییر حالت رؤیاپردازی، Gateway را بازراه‌اندازی می‌کند.",
-      warning:
-        "این اقدام Gateway را بازراه‌اندازی می‌کند و ممکن است چت‌ها، اتوماسیون‌ها و کانال‌های متصل را موقتاً قطع کند.",
+      warning: "این اقدام Gateway را بازراه‌اندازی می‌کند و ممکن است چت‌ها، اتوماسیون‌ها و کانال‌های متصل را موقتاً قطع کند.",
       confirm: "تأیید بازراه‌اندازی",
       restarting: "در حال بازراه‌اندازی…",
       failed: "تغییر اعمال نشد. اتصال خود را بررسی کنید و دوباره تلاش کنید.",
@@ -614,8 +626,7 @@ export const fa: TranslationMap = {
     advanced: {
       eyebrow: "بازبینی",
       title: "بازبینی گزارش روزانه",
-      description:
-        "بررسی کنید چه چیزهایی از گزارش روزانه آمده، چه چیزهایی در انتظار ارتقا هستند و چه چیزهایی اخیراً ارتقا یافته‌اند.",
+      description: "بررسی کنید چه چیزهایی از گزارش روزانه آمده، چه چیزهایی در انتظار ارتقا هستند و چه چیزهایی اخیراً ارتقا یافته‌اند.",
       summaryFromDailyLog: "از گزارش روزانه",
       summaryWaiting: "در انتظار",
       summaryPromotedToday: "امروز ارتقا یافته",
@@ -686,8 +697,7 @@ export const fa: TranslationMap = {
   },
   usage: {
     page: {
-      subtitle:
-        "ببینید توکن‌ها کجا مصرف می‌شوند، نشست‌ها چه زمانی جهش می‌کنند و چه چیزی هزینه را افزایش می‌دهد.",
+      subtitle: "ببینید توکن‌ها کجا مصرف می‌شوند، نشست‌ها چه زمانی جهش می‌کنند و چه چیزی هزینه را افزایش می‌دهد.",
     },
     common: {
       emptyValue: "—",
@@ -737,8 +747,7 @@ export const fa: TranslationMap = {
       sessionsCount: "{count} نشست",
     },
     query: {
-      placeholder:
-        "فیلتر کردن نشست‌ها (مثلاً key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
+      placeholder: "فیلتر کردن نشست‌ها (مثلاً key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
       apply: "فیلتر (سمت کلاینت)",
       matching: "{shown} از {total} نشست مطابق است",
       inRange: "{total} نشست در بازه",
@@ -751,8 +760,7 @@ export const fa: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "کشِ استفاده در پس‌زمینه در حال بازسازی است. مجموع‌های نمایش‌داده‌شده ممکن است قدیمی باشند.",
+      warning: "کشِ استفاده در پس‌زمینه در حال بازسازی است. مجموع‌های نمایش‌داده‌شده ممکن است قدیمی باشند.",
       title: "{status}: {pending} در انتظار، {stale} قدیمی، {cached} کش‌شده",
       status: {
         refreshing: "در حال تازه‌سازی",
@@ -762,8 +770,7 @@ export const fa: TranslationMap = {
     },
     empty: {
       title: "با یک بازه تاریخ شروع کنید",
-      subtitle:
-        "داده‌های مصرف را بارگیری کنید تا هزینه‌ها را مقایسه کنید، نشست‌ها را بررسی کنید و بدون خروج از داشبورد وارد جزئیات خط زمانی شوید.",
+      subtitle: "داده‌های مصرف را بارگیری کنید تا هزینه‌ها را مقایسه کنید، نشست‌ها را بررسی کنید و بدون خروج از داشبورد وارد جزئیات خط زمانی شوید.",
       hint: "یک بازه تاریخ انتخاب کنید و برای بارگیری مصرف روی تازه‌سازی کلیک کنید.",
       noData: "داده‌ای وجود ندارد",
       featureOverview: "کارت‌های نمای کلی",
@@ -803,23 +810,20 @@ export const fa: TranslationMap = {
       avgTokensHint: "میانگین توکن به‌ازای هر پیام در این بازه.",
       avgCost: "میانگین هزینه / پیام",
       avgCostHint: "میانگین هزینه به‌ازای هر پیام وقتی ارائه‌دهنده‌ها هزینه‌ها را گزارش می‌کنند.",
-      avgCostHintMissing:
-        "میانگین هزینه به‌ازای هر پیام وقتی ارائه‌دهنده‌ها هزینه‌ها را گزارش می‌کنند. داده هزینه برای برخی یا همه نشست‌های این بازه موجود نیست.",
+      avgCostHintMissing: "میانگین هزینه به‌ازای هر پیام وقتی ارائه‌دهنده‌ها هزینه‌ها را گزارش می‌کنند. داده هزینه برای برخی یا همه نشست‌های این بازه موجود نیست.",
       acrossMessages: "در میان {count} پیام",
       sessions: "نشست‌ها",
       sessionsHint: "نشست‌های متمایز در بازه.",
       sessionsInRange: "از {count} در بازه",
       throughput: "توان عملیاتی",
-      throughputHint:
-        "توان عملیاتی، توکن‌ها در دقیقه را در زمان فعال نشان می‌دهد. هرچه بیشتر باشد بهتر است.",
+      throughputHint: "توان عملیاتی، توکن‌ها در دقیقه را در زمان فعال نشان می‌دهد. هرچه بیشتر باشد بهتر است.",
       tokensPerMinute: "توکن/دقیقه",
       perMinute: "/ دقیقه",
       errorRate: "نرخ خطا",
       errorHint: "نرخ خطا = خطاها / مجموع پیام‌ها. هرچه کمتر باشد بهتر است.",
       avgSession: "میانگین نشست",
       cacheHitRate: "نرخ اصابت کش",
-      cacheHint:
-        "نرخ اصابت کش = خواندن کش / (ورودی + خواندن کش + نوشتن کش). هرچه بیشتر باشد بهتر است.",
+      cacheHint: "نرخ اصابت کش = خواندن کش / (ورودی + خواندن کش + نوشتن کش). هرچه بیشتر باشد بهتر است.",
       cached: "کش‌شده",
       prompt: "پرامپت",
       calls: "فراخوانی‌ها",
@@ -1136,13 +1140,11 @@ export const fa: TranslationMap = {
       payloadKind: "چه چیزی باید اجرا شود؟",
       systemEvent: "ارسال پیام به خط زمانی اصلی",
       agentTurn: "اجرای وظیفه دستیار (ایزوله)",
-      systemEventHelp:
-        "متن شما را به خط زمانی اصلی Gateway می‌فرستد (برای یادآوری‌ها/محرک‌ها مناسب است).",
+      systemEventHelp: "متن شما را به خط زمانی اصلی Gateway می‌فرستد (برای یادآوری‌ها/محرک‌ها مناسب است).",
       agentTurnHelp: "یک اجرای دستیار را در نشست خودش با استفاده از پرامپت شما شروع می‌کند.",
       timeoutSeconds: "مهلت زمانی (ثانیه)",
       timeoutPlaceholder: "اختیاری، مثلاً 90",
-      timeoutHelp:
-        "اختیاری. برای استفاده از رفتار پیش‌فرض مهلت زمانی Gateway برای این اجرا، خالی بگذارید.",
+      timeoutHelp: "اختیاری. برای استفاده از رفتار پیش‌فرض مهلت زمانی Gateway برای این اجرا، خالی بگذارید.",
       mainTimelineMessage: "پیام خط زمانی اصلی",
       assistantTaskPrompt: "پرامپت وظیفه دستیار",
       deliverySection: "تحویل",

@@ -65,6 +65,7 @@ export const ko: TranslationMap = {
     colorModeOption: "색상 모드: {mode}",
     resources: "리소스",
     search: "검색",
+    all: "전체",
     save: "저장",
     saving: "저장 중…",
     saveAndPublish: "저장 및 게시",
@@ -99,7 +100,7 @@ export const ko: TranslationMap = {
       editProfile: "프로필 편집",
       profilePicture: "프로필 사진",
       noProfile: "설정된 프로필이 없습니다.",
-      noProfileHint: '"Edit Profile"을 클릭하여 이름, 소개, 아바타를 추가하세요.',
+      noProfileHint: "\"Edit Profile\"을 클릭하여 이름, 소개, 아바타를 추가하세요.",
       name: "이름",
       displayName: "표시 이름",
       about: "소개",
@@ -127,8 +128,7 @@ export const ko: TranslationMap = {
   lazyView: {
     loadingTitle: "패널 로드 중",
     errorTitle: "패널을 로드하지 못했습니다",
-    errorSubtitle:
-      "최신 Control UI 번들을 로드하려면 페이지를 새로고침하거나, 네트워크 요청이 실패한 경우 다시 시도하세요.",
+    errorSubtitle: "최신 Control UI 번들을 로드하려면 페이지를 새로고침하거나, 네트워크 요청이 실패한 경우 다시 시도하세요.",
     retry: "다시 시도",
     unknownError: "알 수 없는 모듈 로드 오류입니다.",
   },
@@ -237,8 +237,30 @@ export const ko: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
+    directory: {
+      searchLabel: "검색",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "Default",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "런타임",
+      workspaceFilterLabel: "Workspace",
+      sortLabel: "정렬",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "Workspace",
+        model: "Primary Model",
+        runtime: "런타임",
+      },
+    },
     tabs: {
       overview: "개요",
       files: "파일",
@@ -444,8 +466,7 @@ export const ko: TranslationMap = {
       uptime: "가동 시간",
       tickInterval: "틱 간격",
       lastChannelsRefresh: "마지막 채널 새로고침",
-      channelsHint:
-        "Channels를 사용해 WhatsApp, Telegram, Discord, Signal 또는 iMessage를 연결하세요.",
+      channelsHint: "Channels를 사용해 WhatsApp, Telegram, Discord, Signal 또는 iMessage를 연결하세요.",
     },
     stats: {
       instances: "인스턴스",
@@ -466,24 +487,18 @@ export const ko: TranslationMap = {
       cronText: "반복 실행에는 격리된 세션을 사용하세요.",
     },
     auth: {
-      required:
-        "이 Gateway에는 인증이 필요합니다. 토큰이나 비밀번호를 추가한 다음 Connect를 클릭하세요.",
-      failed:
-        "인증에 실패했습니다. {command}로 토큰이 포함된 URL을 다시 복사하거나 토큰을 업데이트한 다음 Connect를 클릭하세요.",
+      required: "이 Gateway에는 인증이 필요합니다. 토큰이나 비밀번호를 추가한 다음 Connect를 클릭하세요.",
+      failed: "인증에 실패했습니다. {command}로 토큰이 포함된 URL을 다시 복사하거나 토큰을 업데이트한 다음 Connect를 클릭하세요.",
     },
     pairing: {
       hint: "이 디바이스는 gateway host의 페어링 승인이 필요합니다.",
       scopeUpgradeTitle: "범위 업그레이드가 승인 대기 중입니다.",
-      scopeUpgradeSummary:
-        "이 기기는 이미 페어링되어 있지만, 요청된 더 넓은 범위는 승인을 기다리고 있습니다.",
+      scopeUpgradeSummary: "이 기기는 이미 페어링되어 있지만, 요청된 더 넓은 범위는 승인을 기다리고 있습니다.",
       roleUpgradeTitle: "역할 업그레이드가 승인 대기 중입니다.",
-      roleUpgradeSummary:
-        "이 기기는 이미 페어링되어 있지만, 요청된 역할 변경은 승인을 기다리고 있습니다.",
+      roleUpgradeSummary: "이 기기는 이미 페어링되어 있지만, 요청된 역할 변경은 승인을 기다리고 있습니다.",
       metadataUpgradeTitle: "기기 메타데이터 변경이 승인 대기 중입니다.",
-      metadataUpgradeSummary:
-        "이 기기는 이미 페어링되어 있지만, 메타데이터 변경은 승인을 기다리고 있습니다.",
-      mobileHint:
-        "모바일에서 사용 중이신가요? 데스크톱에서 openclaw dashboard --no-open으로 전체 URL(#token=... 포함)을 복사하세요.",
+      metadataUpgradeSummary: "이 기기는 이미 페어링되어 있지만, 메타데이터 변경은 승인을 기다리고 있습니다.",
+      mobileHint: "모바일에서 사용 중이신가요? 데스크톱에서 openclaw dashboard --no-open으로 전체 URL(#token=... 포함)을 복사하세요.",
       docsTitle: "기기 페어링 문서(새 탭에서 열림)",
       docsLink: "문서: 기기 페어링",
     },
@@ -583,8 +598,7 @@ export const ko: TranslationMap = {
     restartConfirmation: {
       title: "Restart Gateway to Apply Change",
       subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      warning: "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
       confirm: "Confirm Restart",
       restarting: "Restarting…",
       failed: "Could not apply change. Check your connection and try again.",
@@ -612,8 +626,7 @@ export const ko: TranslationMap = {
     advanced: {
       eyebrow: "검토",
       title: "일일 로그 검토",
-      description:
-        "일일 로그에서 들어온 항목, 승격 대기 중인 항목, 그리고 최근에 승격된 항목을 검토합니다.",
+      description: "일일 로그에서 들어온 항목, 승격 대기 중인 항목, 그리고 최근에 승격된 항목을 검토합니다.",
       summaryFromDailyLog: "일일 로그에서",
       summaryWaiting: "대기 중",
       summaryPromotedToday: "오늘 승격됨",
@@ -684,8 +697,7 @@ export const ko: TranslationMap = {
   },
   usage: {
     page: {
-      subtitle:
-        "토큰이 어디에 사용되는지, 언제 세션이 급증하는지, 무엇이 비용을 유발하는지 확인하세요.",
+      subtitle: "토큰이 어디에 사용되는지, 언제 세션이 급증하는지, 무엇이 비용을 유발하는지 확인하세요.",
     },
     common: {
       emptyValue: "—",
@@ -748,8 +760,7 @@ export const ko: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "사용량 캐시가 백그라운드에서 다시 빌드되고 있습니다. 표시된 합계가 최신이 아닐 수 있습니다.",
+      warning: "사용량 캐시가 백그라운드에서 다시 빌드되고 있습니다. 표시된 합계가 최신이 아닐 수 있습니다.",
       title: "{status}: 대기 중 {pending}, 오래됨 {stale}, 캐시됨 {cached}",
       status: {
         refreshing: "새로 고치는 중",
@@ -759,8 +770,7 @@ export const ko: TranslationMap = {
     },
     empty: {
       title: "날짜 범위부터 시작하세요",
-      subtitle:
-        "대시보드를 벗어나지 않고 사용량 데이터를 불러와 비용을 비교하고, 세션을 살펴보고, 타임라인을 자세히 분석하세요.",
+      subtitle: "대시보드를 벗어나지 않고 사용량 데이터를 불러와 비용을 비교하고, 세션을 살펴보고, 타임라인을 자세히 분석하세요.",
       hint: "날짜 범위를 선택하고 Refresh를 클릭해 사용량을 불러오세요.",
       noData: "데이터 없음",
       featureOverview: "개요 카드",
@@ -800,8 +810,7 @@ export const ko: TranslationMap = {
       avgTokensHint: "이 범위에서 메시지당 평균 토큰 수입니다.",
       avgCost: "메시지당 평균 비용",
       avgCostHint: "Provider가 비용을 보고할 때의 메시지당 평균 비용입니다.",
-      avgCostHintMissing:
-        "Provider가 비용을 보고할 때의 메시지당 평균 비용입니다. 이 범위의 일부 또는 전체 세션에 비용 데이터가 없습니다.",
+      avgCostHintMissing: "Provider가 비용을 보고할 때의 메시지당 평균 비용입니다. 이 범위의 일부 또는 전체 세션에 비용 데이터가 없습니다.",
       acrossMessages: "총 {count}개 메시지 기준",
       sessions: "세션",
       sessionsHint: "범위 내 고유 세션 수입니다.",

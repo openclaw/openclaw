@@ -326,7 +326,7 @@ export function resolveAgentEmoji(
 }
 
 function resolveAgentTextAvatar(
-  agent: { identity?: { emoji?: string; avatar?: string } },
+  agent: { id: string; name?: string; identity?: { emoji?: string; avatar?: string } },
   agentIdentity?: AgentIdentityResult | null,
 ): string | null {
   const candidates = [
@@ -341,7 +341,29 @@ function resolveAgentTextAvatar(
       return textAvatar;
     }
   }
-  return null;
+
+  // Fallback to suitable emojis based on ID/Name
+  const id = agent.id.toLowerCase();
+  const name = (agent.name ?? "").toLowerCase();
+  const combined = `${id} ${name}`;
+
+  if (id === "main") return "🚀";
+  if (id === "orchestrator" || combined.includes("orchestrator")) return "🧠";
+  if (combined.includes("search") || combined.includes("find")) return "🔍";
+  if (combined.includes("code") || combined.includes("dev") || combined.includes("program")) return "💻";
+  if (combined.includes("chat") || combined.includes("message") || combined.includes("talk")) return "💬";
+  if (combined.includes("file") || combined.includes("doc") || combined.includes("read")) return "📄";
+  if (combined.includes("tool") || combined.includes("util") || combined.includes("help")) return "🛠️";
+  if (combined.includes("skill") || combined.includes("master") || combined.includes("expert")) return "🎓";
+  if (combined.includes("cron") || combined.includes("time") || combined.includes("schedule")) return "⏰";
+  if (combined.includes("media") || combined.includes("image") || combined.includes("art")) return "🎨";
+  if (combined.includes("web") || combined.includes("browser") || combined.includes("net")) return "🌐";
+  if (combined.includes("data") || combined.includes("base") || combined.includes("store")) return "💾";
+  if (combined.includes("auth") || combined.includes("security") || combined.includes("lock")) return "🔒";
+  if (combined.includes("node") || combined.includes("device") || combined.includes("hardware")) return "📟";
+  if (combined.includes("ai") || combined.includes("bot") || combined.includes("agent")) return "🤖";
+
+  return "👤"; // Generic fallback
 }
 
 export function agentBadgeText(agentId: string, defaultId: string | null) {
@@ -410,11 +432,11 @@ export function buildAgentContext(
     config.defaults?.workspace ||
     agent.workspace ||
     "default";
-  const modelLabel = config.entry?.model
-    ? resolveModelLabel(config.entry?.model)
-    : config.defaults?.model
-      ? resolveModelLabel(config.defaults?.model)
-      : resolveModelLabel(agent.model);
+  const modelLabel =
+    resolveModelPrimary(config.entry?.model) ||
+    resolveModelPrimary(config.defaults?.model) ||
+    resolveModelPrimary(agent.model) ||
+    "-";
   const runtime = resolveAgentRuntimeLabel(agent.agentRuntime);
   const identityName =
     normalizeOptionalString(agent.identity?.name) ||

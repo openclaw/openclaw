@@ -65,6 +65,7 @@ export const ar: TranslationMap = {
     colorModeOption: "وضع اللون: {mode}",
     resources: "الموارد",
     search: "بحث",
+    all: "الكل",
     save: "حفظ",
     saving: "جارٍ الحفظ…",
     saveAndPublish: "حفظ ونشر",
@@ -99,7 +100,7 @@ export const ar: TranslationMap = {
       editProfile: "تعديل الملف الشخصي",
       profilePicture: "صورة الملف الشخصي",
       noProfile: "لم يتم تعيين ملف شخصي.",
-      noProfileHint: 'انقر على "تعديل الملف الشخصي" لإضافة اسمك وسيرتك الذاتية وصورتك الرمزية.',
+      noProfileHint: "انقر على \"تعديل الملف الشخصي\" لإضافة اسمك وسيرتك الذاتية وصورتك الرمزية.",
       name: "الاسم",
       displayName: "اسم العرض",
       about: "نبذة",
@@ -127,8 +128,7 @@ export const ar: TranslationMap = {
   lazyView: {
     loadingTitle: "جارٍ تحميل اللوحة",
     errorTitle: "فشل تحميل اللوحة",
-    errorSubtitle:
-      "أعد تحميل الصفحة لتحميل أحدث حزمة Control UI، أو أعد المحاولة إذا فشل طلب الشبكة.",
+    errorSubtitle: "أعد تحميل الصفحة لتحميل أحدث حزمة Control UI، أو أعد المحاولة إذا فشل طلب الشبكة.",
     retry: "إعادة المحاولة",
     unknownError: "خطأ غير معروف في تحميل الوحدة.",
   },
@@ -237,8 +237,30 @@ export const ar: TranslationMap = {
     setDefault: "تعيين كافتراضي",
     alreadyDefaultTitle: "الوكيل الافتراضي بالفعل",
     setDefaultTitle: "تعيينه كوكيل افتراضي",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "اختر وكيلاً",
     selectSubtitle: "اختر وكيلاً لفحص مساحة العمل والأدوات الخاصة به.",
+    directory: {
+      searchLabel: "بحث",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "افتراضي",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "وقت التشغيل",
+      workspaceFilterLabel: "مساحة العمل",
+      sortLabel: "فرز",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "مساحة العمل",
+        model: "النموذج الأساسي",
+        runtime: "وقت التشغيل",
+      },
+    },
     tabs: {
       overview: "نظرة عامة",
       files: "الملفات",
@@ -466,8 +488,7 @@ export const ar: TranslationMap = {
     },
     auth: {
       required: "يتطلب هذا Gateway مصادقة. أضف رمزًا أو كلمة مرور، ثم انقر على اتصال.",
-      failed:
-        "فشلت المصادقة. أعد نسخ عنوان URL مزود برمز باستخدام {command}، أو حدّث الرمز، ثم انقر على اتصال.",
+      failed: "فشلت المصادقة. أعد نسخ عنوان URL مزود برمز باستخدام {command}، أو حدّث الرمز، ثم انقر على اتصال.",
     },
     pairing: {
       hint: "يحتاج هذا الجهاز إلى موافقة الاقتران من مضيف Gateway.",
@@ -477,8 +498,7 @@ export const ar: TranslationMap = {
       roleUpgradeSummary: "هذا الجهاز مقترن بالفعل، لكن تغيير الدور المطلوب بانتظار الموافقة.",
       metadataUpgradeTitle: "تغيير بيانات تعريف الجهاز بانتظار الموافقة.",
       metadataUpgradeSummary: "هذا الجهاز مقترن بالفعل، لكن تغيير بيانات التعريف بانتظار الموافقة.",
-      mobileHint:
-        "على الهاتف؟ انسخ عنوان URL الكامل (بما في ذلك #token=...) من openclaw dashboard --no-open على سطح المكتب.",
+      mobileHint: "على الهاتف؟ انسخ عنوان URL الكامل (بما في ذلك #token=...) من openclaw dashboard --no-open على سطح المكتب.",
       docsTitle: "مستندات اقتران الأجهزة (تُفتح في تبويب جديد)",
       docsLink: "المستندات: اقتران الأجهزة",
     },
@@ -578,8 +598,7 @@ export const ar: TranslationMap = {
     restartConfirmation: {
       title: "أعد تشغيل Gateway لتطبيق التغيير",
       subtitle: "يؤدي تغيير وضع الحلم إلى إعادة تشغيل Gateway.",
-      warning:
-        "سيؤدي هذا الإجراء إلى إعادة تشغيل Gateway وقد يقطع مؤقتًا الدردشات، والأتمتة، والقنوات المتصلة.",
+      warning: "سيؤدي هذا الإجراء إلى إعادة تشغيل Gateway وقد يقطع مؤقتًا الدردشات، والأتمتة، والقنوات المتصلة.",
       confirm: "تأكيد إعادة التشغيل",
       restarting: "جارٍ إعادة التشغيل…",
       failed: "تعذر تطبيق التغيير. تحقق من اتصالك وحاول مرة أخرى.",
@@ -614,8 +633,7 @@ export const ar: TranslationMap = {
       stagedTitle: "من السجل اليومي",
       stagedDescription: "مرشحو إعادة التشغيل المستخرجون من إدخالات السجل اليومي الأقدم.",
       shortTermTitle: "بانتظار الترقية",
-      shortTermDescription:
-        "المرشحون الحاليون قصيرو الأجل الذين ينتظرون الانتقال إلى الذاكرة الحقيقية.",
+      shortTermDescription: "المرشحون الحاليون قصيرو الأجل الذين ينتظرون الانتقال إلى الذاكرة الحقيقية.",
       sortRecent: "الأحدث",
       sortSignals: "أقوى دعم",
       originDailyLog: "أُعيد تشغيله",
@@ -729,8 +747,7 @@ export const ar: TranslationMap = {
       sessionsCount: "{count} جلسة",
     },
     query: {
-      placeholder:
-        "تصفية الجلسات (مثال: key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
+      placeholder: "تصفية الجلسات (مثال: key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
       apply: "تصفية (من جهة العميل)",
       matching: "{shown} من {total} جلسة متطابقة",
       inRange: "{total} جلسة ضمن النطاق",
@@ -743,8 +760,7 @@ export const ar: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "تجري إعادة بناء ذاكرة الاستخدام المؤقتة في الخلفية. قد تكون الإجماليات المعروضة قديمة.",
+      warning: "تجري إعادة بناء ذاكرة الاستخدام المؤقتة في الخلفية. قد تكون الإجماليات المعروضة قديمة.",
       title: "{status}: {pending} معلّقة، {stale} قديمة، {cached} مخزّنة مؤقتًا",
       status: {
         refreshing: "جارٍ التحديث",
@@ -754,8 +770,7 @@ export const ar: TranslationMap = {
     },
     empty: {
       title: "ابدأ بنطاق تاريخ",
-      subtitle:
-        "حمّل بيانات الاستخدام لمقارنة التكاليف، وفحص الجلسات، والتعمق في الجداول الزمنية دون مغادرة لوحة المعلومات.",
+      subtitle: "حمّل بيانات الاستخدام لمقارنة التكاليف، وفحص الجلسات، والتعمق في الجداول الزمنية دون مغادرة لوحة المعلومات.",
       hint: "حدد نطاق تاريخ وانقر على تحديث لتحميل الاستخدام.",
       noData: "لا توجد بيانات",
       featureOverview: "بطاقات النظرة العامة",
@@ -795,8 +810,7 @@ export const ar: TranslationMap = {
       avgTokensHint: "متوسط الرموز لكل رسالة في هذا النطاق.",
       avgCost: "متوسط التكلفة / رسالة",
       avgCostHint: "متوسط التكلفة لكل رسالة عندما يبلّغ المزودون عن التكاليف.",
-      avgCostHintMissing:
-        "متوسط التكلفة لكل رسالة عندما يبلّغ المزودون عن التكاليف. بيانات التكلفة مفقودة لبعض الجلسات أو كلها في هذا النطاق.",
+      avgCostHintMissing: "متوسط التكلفة لكل رسالة عندما يبلّغ المزودون عن التكاليف. بيانات التكلفة مفقودة لبعض الجلسات أو كلها في هذا النطاق.",
       acrossMessages: "عبر {count} رسالة",
       sessions: "الجلسات",
       sessionsHint: "الجلسات المميزة ضمن النطاق.",
@@ -809,8 +823,7 @@ export const ar: TranslationMap = {
       errorHint: "معدل الأخطاء = الأخطاء / إجمالي الرسائل. الأقل أفضل.",
       avgSession: "متوسط الجلسة",
       cacheHitRate: "معدل إصابة ذاكرة التخزين المؤقت",
-      cacheHint:
-        "معدل إصابة ذاكرة التخزين المؤقت = قراءة ذاكرة التخزين المؤقت / (الإدخال + قراءة ذاكرة التخزين المؤقت + كتابة ذاكرة التخزين المؤقت). الأعلى أفضل.",
+      cacheHint: "معدل إصابة ذاكرة التخزين المؤقت = قراءة ذاكرة التخزين المؤقت / (الإدخال + قراءة ذاكرة التخزين المؤقت + كتابة ذاكرة التخزين المؤقت). الأعلى أفضل.",
       cached: "مخزن مؤقتًا",
       prompt: "المطالبة",
       calls: "الاستدعاءات",
@@ -1150,8 +1163,7 @@ export const ar: TranslationMap = {
       toPlaceholder: "+1555... أو معرّف الدردشة",
       toHelp: "تجاوز اختياري للمستلم (معرّف الدردشة، أو الهاتف، أو معرّف المستخدم).",
       advanced: "متقدم",
-      advancedHelp:
-        "تجاوزات اختيارية لضمانات التسليم، وتباين الجدول العشوائي، وعناصر التحكم في النموذج.",
+      advancedHelp: "تجاوزات اختيارية لضمانات التسليم، وتباين الجدول العشوائي، وعناصر التحكم في النموذج.",
       deleteAfterRun: "الحذف بعد التشغيل",
       deleteAfterRunHelp: "الأفضل للتذكيرات لمرة واحدة التي يجب تنظيفها تلقائيًا.",
       clearAgentOverride: "مسح تجاوز الوكيل",

@@ -68,7 +68,7 @@ export async function loadAgents(state: AgentsState) {
     if (res) {
       state.agentsList = res;
       const selected = state.agentsSelectedId;
-      if (!selected || !res.agents.some((entry) => entry.id === selected)) {
+      if (selected && !res.agents.some((entry) => entry.id === selected)) {
         state.agentsSelectedId = res.defaultId ?? res.agents[0]?.id ?? null;
       }
     }

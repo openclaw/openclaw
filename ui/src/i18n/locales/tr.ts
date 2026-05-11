@@ -65,6 +65,7 @@ export const tr: TranslationMap = {
     colorModeOption: "Renk modu: {mode}",
     resources: "Kaynaklar",
     search: "Ara",
+    all: "Tümü",
     save: "Kaydet",
     saving: "Kaydediliyor…",
     saveAndPublish: "Kaydet ve Yayımla",
@@ -92,16 +93,14 @@ export const tr: TranslationMap = {
     gatewayUrlConfirmation: {
       title: "Gateway URL'sini Değiştir",
       subtitle: "Bu işlem farklı bir gateway sunucusuna yeniden bağlanacaktır",
-      warning:
-        "Yalnızca bu URL'ye güveniyorsanız onaylayın. Kötü amaçlı URL'ler sisteminizi tehlikeye atabilir.",
+      warning: "Yalnızca bu URL'ye güveniyorsanız onaylayın. Kötü amaçlı URL'ler sisteminizi tehlikeye atabilir.",
     },
     nostr: {
       profile: "Profil",
       editProfile: "Profili Düzenle",
       profilePicture: "Profil resmi",
       noProfile: "Profil ayarlanmadı.",
-      noProfileHint:
-        '"Profili Düzenle" seçeneğine tıklayarak adınızı, biyografinizi ve avatarınızı ekleyin.',
+      noProfileHint: "\"Profili Düzenle\" seçeneğine tıklayarak adınızı, biyografinizi ve avatarınızı ekleyin.",
       name: "Ad",
       displayName: "Görünen Ad",
       about: "Hakkında",
@@ -129,8 +128,7 @@ export const tr: TranslationMap = {
   lazyView: {
     loadingTitle: "Panel yükleniyor",
     errorTitle: "Panel yüklenemedi",
-    errorSubtitle:
-      "En son Control UI paketini yüklemek için sayfayı yeniden yükleyin veya ağ isteği başarısız olduysa tekrar deneyin.",
+    errorSubtitle: "En son Control UI paketini yüklemek için sayfayı yeniden yükleyin veya ağ isteği başarısız olduysa tekrar deneyin.",
     retry: "Tekrar dene",
     unknownError: "Bilinmeyen modül yükleme hatası.",
   },
@@ -139,8 +137,7 @@ export const tr: TranslationMap = {
       loadConfigHint: "Bağlamaları düzenlemek için yapılandırmayı yükleyin.",
       formModeHint: "Bağlamaları burada düzenlemek için Yapılandırma sekmesini Form moduna alın.",
       execNodeBinding: "Exec düğüm bağlaması",
-      execNodeBindingSubtitle:
-        "exec host=node kullanırken agent'ları belirli bir düğüme sabitleyin.",
+      execNodeBindingSubtitle: "exec host=node kullanırken agent'ları belirli bir düğüme sabitleyin.",
       defaultBinding: "Varsayılan bağlama",
       defaultBindingHint: "Agent'lar bir düğüm bağlamasını geçersiz kılmadığında kullanılır.",
       node: "Düğüm",
@@ -240,8 +237,30 @@ export const tr: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    openFiles: "Open Files",
+    openFilesTitle: "Open this agent's files",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
+    directory: {
+      searchLabel: "Ara",
+      searchPlaceholder: "Search by id or name…",
+      defaultFilterLabel: "Default",
+      defaultOnly: "Default only",
+      nonDefaultOnly: "Non-default only",
+      runtimeFilterLabel: "Çalışma zamanı",
+      workspaceFilterLabel: "Workspace",
+      sortLabel: "Sırala",
+      sortAsc: "A → Z",
+      sortDesc: "Z → A",
+      resultsCount: "{count} agents",
+      emptyTitle: "No agents match your filters",
+      emptySubtitle: "Try clearing search text or widening filters.",
+      card: {
+        workspace: "Workspace",
+        model: "Primary Model",
+        runtime: "Çalışma zamanı",
+      },
+    },
     tabs: {
       overview: "Genel Bakış",
       files: "Dosyalar",
@@ -447,8 +466,7 @@ export const tr: TranslationMap = {
       uptime: "Çalışma Süresi",
       tickInterval: "Tick Aralığı",
       lastChannelsRefresh: "Son Kanal Yenilemesi",
-      channelsHint:
-        "WhatsApp, Telegram, Discord, Signal veya iMessage bağlamak için Kanallar'ı kullanın.",
+      channelsHint: "WhatsApp, Telegram, Discord, Signal veya iMessage bağlamak için Kanallar'ı kullanın.",
     },
     stats: {
       instances: "Örnekler",
@@ -462,32 +480,25 @@ export const tr: TranslationMap = {
       title: "Notlar",
       subtitle: "Uzaktan kontrol kurulumları için hızlı hatırlatmalar.",
       tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Gateway’i tailnet kimlik doğrulamasıyla loopback üzerinde tutmak için serve modunu tercih edin.",
+      tailscaleText: "Gateway’i tailnet kimlik doğrulamasıyla loopback üzerinde tutmak için serve modunu tercih edin.",
       sessionTitle: "Oturum hijyeni",
       sessionText: "Bağlamı sıfırlamak için /new veya sessions.patch kullanın.",
       cronTitle: "Cron hatırlatmaları",
       cronText: "Yinelenen çalıştırmalar için yalıtılmış oturumlar kullanın.",
     },
     auth: {
-      required:
-        "Bu Gateway kimlik doğrulama gerektiriyor. Bir token veya parola ekleyin, ardından Bağlan'a tıklayın.",
-      failed:
-        "Kimlik doğrulama başarısız oldu. {command} ile token içeren URL'yi yeniden kopyalayın veya token'ı güncelleyin, ardından Bağlan'a tıklayın.",
+      required: "Bu Gateway kimlik doğrulama gerektiriyor. Bir token veya parola ekleyin, ardından Bağlan'a tıklayın.",
+      failed: "Kimlik doğrulama başarısız oldu. {command} ile token içeren URL'yi yeniden kopyalayın veya token'ı güncelleyin, ardından Bağlan'a tıklayın.",
     },
     pairing: {
       hint: "Bu cihazın Gateway ana bilgisayarından eşleştirme onayı alması gerekiyor.",
       scopeUpgradeTitle: "Kapsam yükseltmesi onay bekliyor.",
-      scopeUpgradeSummary:
-        "Bu cihaz zaten eşleştirilmiş, ancak istenen daha geniş kapsam onay bekliyor.",
+      scopeUpgradeSummary: "Bu cihaz zaten eşleştirilmiş, ancak istenen daha geniş kapsam onay bekliyor.",
       roleUpgradeTitle: "Rol yükseltmesi onay bekliyor.",
-      roleUpgradeSummary:
-        "Bu cihaz zaten eşleştirilmiş, ancak istenen rol değişikliği onay bekliyor.",
+      roleUpgradeSummary: "Bu cihaz zaten eşleştirilmiş, ancak istenen rol değişikliği onay bekliyor.",
       metadataUpgradeTitle: "Cihaz meta veri değişikliği onay bekliyor.",
-      metadataUpgradeSummary:
-        "Bu cihaz zaten eşleştirilmiş, ancak meta veri değişikliği onay bekliyor.",
-      mobileHint:
-        "Mobilde misiniz? Masaüstünüzde openclaw dashboard --no-open komutundan tam URL'yi (#token=... dahil) kopyalayın.",
+      metadataUpgradeSummary: "Bu cihaz zaten eşleştirilmiş, ancak meta veri değişikliği onay bekliyor.",
+      mobileHint: "Mobilde misiniz? Masaüstünüzde openclaw dashboard --no-open komutundan tam URL'yi (#token=... dahil) kopyalayın.",
       docsTitle: "Cihaz eşleştirme belgeleri (yeni sekmede açılır)",
       docsLink: "Belgeler: Cihaz eşleştirme",
     },
@@ -499,8 +510,7 @@ export const tr: TranslationMap = {
       title: "Nasıl bağlanılır",
       step1: "Ana bilgisayarınızda Gateway’i başlatın:",
       step2: "Token içeren bir kontrol paneli URL'si alın:",
-      step3:
-        "Yukarıya WebSocket URL'sini ve token'ı yapıştırın veya token içeren URL'yi doğrudan açın.",
+      step3: "Yukarıya WebSocket URL'sini ve token'ı yapıştırın veya token içeren URL'yi doğrudan açın.",
       step4: "Ya da yeniden kullanılabilir bir token oluşturun:",
       docsHint: "Uzaktan erişim için Tailscale Serve önerilir. ",
       docsLink: "Dokümanları oku →",
@@ -526,8 +536,7 @@ export const tr: TranslationMap = {
       modelAuthExpiresIn: "{when} süresi doluyor",
       modelAuthAttentionExpiredTitle: "Model kimlik doğrulamasının süresi doldu",
       modelAuthAttentionExpiringTitle: "Model kimlik doğrulamasının süresi yakında dolacak",
-      modelAuthAttentionExpiredDesc:
-        "{providers} — openclaw models auth ile yeniden kimlik doğrulayın",
+      modelAuthAttentionExpiredDesc: "{providers} — openclaw models auth ile yeniden kimlik doğrulayın",
       modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
@@ -589,8 +598,7 @@ export const tr: TranslationMap = {
     restartConfirmation: {
       title: "Restart Gateway to Apply Change",
       subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      warning: "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
       confirm: "Confirm Restart",
       restarting: "Restarting…",
       failed: "Could not apply change. Check your connection and try again.",
@@ -618,8 +626,7 @@ export const tr: TranslationMap = {
     advanced: {
       eyebrow: "İncele",
       title: "Günlük Kayıt İncelemesi",
-      description:
-        "Günlük kayıttan nelerin geldiğini, nelerin terfi etmeyi beklediğini ve yakın zamanda nelerin terfi ettiğini inceleyin.",
+      description: "Günlük kayıttan nelerin geldiğini, nelerin terfi etmeyi beklediğini ve yakın zamanda nelerin terfi ettiğini inceleyin.",
       summaryFromDailyLog: "günlük kayıttan",
       summaryWaiting: "bekliyor",
       summaryPromotedToday: "bugün terfi etti",
@@ -690,8 +697,7 @@ export const tr: TranslationMap = {
   },
   usage: {
     page: {
-      subtitle:
-        "Token'ların nereye gittiğini, oturumların ne zaman arttığını ve maliyeti neyin belirlediğini görün.",
+      subtitle: "Token'ların nereye gittiğini, oturumların ne zaman arttığını ve maliyeti neyin belirlediğini görün.",
     },
     common: {
       emptyValue: "—",
@@ -741,8 +747,7 @@ export const tr: TranslationMap = {
       sessionsCount: "{count} oturum",
     },
     query: {
-      placeholder:
-        "Oturumları filtrele (örn. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
+      placeholder: "Oturumları filtrele (örn. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
       apply: "Filtrele (istemci tarafında)",
       matching: "{shown} / {total} oturum eşleşiyor",
       inRange: "Aralıkta {total} oturum var",
@@ -755,8 +760,7 @@ export const tr: TranslationMap = {
       json: "JSON",
     },
     cacheStatus: {
-      warning:
-        "Kullanım önbelleği arka planda yeniden oluşturuluyor. Görüntülenen toplamlar güncel olmayabilir.",
+      warning: "Kullanım önbelleği arka planda yeniden oluşturuluyor. Görüntülenen toplamlar güncel olmayabilir.",
       title: "{status}: {pending} beklemede, {stale} güncel değil, {cached} önbellekte",
       status: {
         refreshing: "yenileniyor",
@@ -766,8 +770,7 @@ export const tr: TranslationMap = {
     },
     empty: {
       title: "Bir tarih aralığıyla başlayın",
-      subtitle:
-        "Kontrol panelinden ayrılmadan maliyetleri karşılaştırmak, oturumları incelemek ve zaman çizelgelerinde ayrıntıya inmek için kullanım verilerini yükleyin.",
+      subtitle: "Kontrol panelinden ayrılmadan maliyetleri karşılaştırmak, oturumları incelemek ve zaman çizelgelerinde ayrıntıya inmek için kullanım verilerini yükleyin.",
       hint: "Kullanımı yüklemek için bir tarih aralığı seçin ve Yenile'ye tıklayın.",
       noData: "Veri yok",
       featureOverview: "Genel bakış kartları",
@@ -807,23 +810,20 @@ export const tr: TranslationMap = {
       avgTokensHint: "Bu aralıktaki mesaj başına ortalama token.",
       avgCost: "Ort. Maliyet / Mesaj",
       avgCostHint: "Sağlayıcılar maliyet bildirdiğinde mesaj başına ortalama maliyet.",
-      avgCostHintMissing:
-        "Sağlayıcılar maliyet bildirdiğinde mesaj başına ortalama maliyet. Bu aralıktaki bazı veya tüm oturumlar için maliyet verisi eksik.",
+      avgCostHintMissing: "Sağlayıcılar maliyet bildirdiğinde mesaj başına ortalama maliyet. Bu aralıktaki bazı veya tüm oturumlar için maliyet verisi eksik.",
       acrossMessages: "{count} mesaj genelinde",
       sessions: "Oturumlar",
       sessionsHint: "Aralıktaki farklı oturumlar.",
       sessionsInRange: "aralıkta {count} içinden",
       throughput: "Verim",
-      throughputHint:
-        "Verim, etkin süre boyunca dakika başına token sayısını gösterir. Daha yüksek olması daha iyidir.",
+      throughputHint: "Verim, etkin süre boyunca dakika başına token sayısını gösterir. Daha yüksek olması daha iyidir.",
       tokensPerMinute: "tok/dk",
       perMinute: "/ dk",
       errorRate: "Hata Oranı",
       errorHint: "Hata oranı = hatalar / toplam mesajlar. Daha düşük olması daha iyidir.",
       avgSession: "ort. oturum",
       cacheHitRate: "Önbellek İsabet Oranı",
-      cacheHint:
-        "Önbellek isabet oranı = önbellek okuma / (girdi + önbellek okuma). Daha yüksek olması daha iyidir.",
+      cacheHint: "Önbellek isabet oranı = önbellek okuma / (girdi + önbellek okuma). Daha yüksek olması daha iyidir.",
       cached: "önbellekten",
       prompt: "istem",
       calls: "çağrı",
@@ -1125,16 +1125,14 @@ export const tr: TranslationMap = {
       everyAmountPlaceholder: "30",
       timezoneOptional: "Saat dilimi (isteğe bağlı)",
       timezonePlaceholder: "America/Los_Angeles",
-      timezoneHelp:
-        "Yaygın bir saat dilimi seçin veya geçerli herhangi bir IANA saat dilimi girin.",
+      timezoneHelp: "Yaygın bir saat dilimi seçin veya geçerli herhangi bir IANA saat dilimi girin.",
       jitterHelp: "Jitter mı gerekiyor? Gelişmiş → Dağıtma penceresi / Dağıtma birimi kullanın.",
       execution: "Çalıştırma",
       executionSub: "Ne zaman uyandırılacağını ve bu işin ne yapacağını seçin.",
       session: "Oturum",
       main: "Ana",
       isolated: "Yalıtılmış",
-      sessionHelp:
-        "Ana, bir sistem olayı gönderir. Yalıtılmış, ayrılmış bir aracı turu çalıştırır.",
+      sessionHelp: "Ana, bir sistem olayı gönderir. Yalıtılmış, ayrılmış bir aracı turu çalıştırır.",
       wakeMode: "Uyandırma modu",
       now: "Şimdi",
       nextHeartbeat: "Sonraki heartbeat",
@@ -1142,13 +1140,11 @@ export const tr: TranslationMap = {
       payloadKind: "Ne çalıştırılsın?",
       systemEvent: "Ana zaman çizelgesine mesaj gönder",
       agentTurn: "Asistan görevini çalıştır (yalıtılmış)",
-      systemEventHelp:
-        "Metninizi gateway ana zaman çizelgesine gönderir (hatırlatıcılar/tetikleyiciler için uygundur).",
+      systemEventHelp: "Metninizi gateway ana zaman çizelgesine gönderir (hatırlatıcılar/tetikleyiciler için uygundur).",
       agentTurnHelp: "İsteminizi kullanarak kendi oturumunda bir asistan çalıştırması başlatır.",
       timeoutSeconds: "Zaman aşımı (saniye)",
       timeoutPlaceholder: "İsteğe bağlı, örn. 90",
-      timeoutHelp:
-        "İsteğe bağlı. Bu çalıştırma için Gateway varsayılan zaman aşımı davranışını kullanmak üzere boş bırakın.",
+      timeoutHelp: "İsteğe bağlı. Bu çalıştırma için Gateway varsayılan zaman aşımı davranışını kullanmak üzere boş bırakın.",
       mainTimelineMessage: "Ana zaman çizelgesi mesajı",
       assistantTaskPrompt: "Asistan görev istemi",
       deliverySection: "Teslimat",
@@ -1167,11 +1163,9 @@ export const tr: TranslationMap = {
       toPlaceholder: "+1555... veya sohbet kimliği",
       toHelp: "İsteğe bağlı alıcı geçersiz kılma (sohbet kimliği, telefon veya kullanıcı kimliği).",
       advanced: "Gelişmiş",
-      advancedHelp:
-        "Teslimat garantileri, zamanlama jitter'ı ve model kontrolleri için isteğe bağlı geçersiz kılmalar.",
+      advancedHelp: "Teslimat garantileri, zamanlama jitter'ı ve model kontrolleri için isteğe bağlı geçersiz kılmalar.",
       deleteAfterRun: "Çalıştırmadan sonra sil",
-      deleteAfterRunHelp:
-        "Otomatik olarak temizlenmesi gereken tek seferlik hatırlatıcılar için en uygunudur.",
+      deleteAfterRunHelp: "Otomatik olarak temizlenmesi gereken tek seferlik hatırlatıcılar için en uygunudur.",
       clearAgentOverride: "Aracı geçersiz kılmasını temizle",
       clearAgentHelp: "Bu işi Gateway varsayılan asistanını kullanmaya zorlayın.",
       exactTiming: "Tam zamanlama (dağıtma yok)",
