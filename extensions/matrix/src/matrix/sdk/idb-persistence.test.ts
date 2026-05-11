@@ -123,11 +123,11 @@ describe("Matrix IndexedDB persistence", () => {
 
     const restored = await restoreIdbFromState(ref);
     expect(restored).toBe(false);
-    expect(warnSpy).toHaveBeenCalledWith(
-      "IdbPersistence",
-      "Failed to restore IndexedDB snapshot from SQLite state:",
-      expect.any(Error),
-    );
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [scope, message, error] = warnSpy.mock.calls[0] ?? [];
+    expect(scope).toBe("IdbPersistence");
+    expect(message).toBe("Failed to restore IndexedDB snapshot from SQLite state:");
+    expect(error).toBeInstanceOf(Error);
   });
 
   it("returns false for empty snapshot payloads without restoring databases", async () => {
