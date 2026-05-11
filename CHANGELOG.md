@@ -293,7 +293,6 @@ Docs: https://docs.openclaw.ai
 - ACPX/Windows: hide the MCP proxy target child process window on Windows so ACP-backed agents do not flash or fail because of terminal window handling. Fixes #60672. (#60678) Thanks @KChow-ctrl.
 - Agents: abort generic repeated no-progress tool loops at the critical threshold when identical calls keep returning identical outcomes. (#80668) Thanks @frankekn.
 - Exec approvals: omit generated command highlights for non-POSIX Windows and shell-wrapper approval commands until those command languages have native highlighting support. (#80566) Thanks @jesse-merhi.
-- Codex app-server: scale context-engine projection caps from the active runtime context budget so native Codex receives the assembled context frontier instead of silently clipping to 24k characters. Fixes #80760. (#80761) Thanks @100yenadmin.
 
 ## 2026.5.9
 

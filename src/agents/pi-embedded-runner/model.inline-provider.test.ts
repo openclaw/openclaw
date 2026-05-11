@@ -38,11 +38,12 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toEqual([
-      expect.objectContaining({
-        id: "custom-model",
+      {
+        ...makeModel("custom-model"),
         provider: "custom",
         baseUrl: "http://localhost:8000",
-      }),
+        api: undefined,
+      },
     ]);
   });
 
@@ -58,11 +59,12 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toEqual([
-      expect.objectContaining({
-        id: "custom-model",
+      {
+        ...makeModel("custom-model"),
         provider: "custom",
+        baseUrl: "http://localhost:8000",
         api: "anthropic-messages",
-      }),
+      },
     ]);
   });
 
@@ -78,11 +80,12 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toEqual([
-      expect.objectContaining({
-        id: "custom-model",
+      {
+        ...makeModel("custom-model"),
         provider: "custom",
+        baseUrl: "http://localhost:8000",
         api: "anthropic-messages",
-      }),
+      },
     ]);
   });
 
@@ -134,11 +137,13 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toEqual([
-      expect.objectContaining({
-        id: "claude-sonnet-4-6",
+      {
+        ...makeModel("claude-sonnet-4-6"),
         provider: "proxy",
+        baseUrl: "https://proxy.example.com",
+        api: "anthropic-messages",
         headers: { "User-Agent": "custom-agent/1.0" },
-      }),
+      },
     ]);
   });
 

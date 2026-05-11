@@ -361,13 +361,13 @@ describe("validateAnthropicTurns", () => {
         stopReason: "error",
         errorMessage: "Overloaded",
       },
-      expect.objectContaining({
+      {
         role: "user",
         content: [
           { type: "text", text: "Steering: try again" },
           { type: "text", text: "Another follow-up" },
         ],
-      }),
+      },
     ]);
   });
 });

@@ -48,10 +48,11 @@ function expectSingleProfileCredential(
   profileId: string,
 ) {
   expect(profiles).toStrictEqual([
-    expect.objectContaining({
+    {
       credential: expect.any(Object),
+      persistence: profileId === OPENAI_CODEX_DEFAULT_PROFILE_ID ? "runtime-only" : "persisted",
       profileId,
-    }),
+    },
   ]);
   const credential = profiles[0]?.credential;
   if (!credential) {
@@ -65,10 +66,11 @@ function expectSingleProfile(
   profileId: string,
 ) {
   expect(profiles).toStrictEqual([
-    expect.objectContaining({
+    {
       credential: expect.any(Object),
+      persistence: profileId === OPENAI_CODEX_DEFAULT_PROFILE_ID ? "runtime-only" : "persisted",
       profileId,
-    }),
+    },
   ]);
   const profile = profiles[0];
   if (!profile?.credential) {
