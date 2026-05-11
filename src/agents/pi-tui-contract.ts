@@ -1,4 +1,4 @@
-export { CombinedAutocompleteProvider, type SlashCommand } from "@mariozechner/pi-tui";
+export { CombinedAutocompleteProvider, type SlashCommand } from "@earendil-works/pi-tui";
 export {
   Box,
   Container,
@@ -25,4 +25,4 @@ export {
   type SelectListTheme,
   type SettingItem,
   type SettingsListTheme,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
