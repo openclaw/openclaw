@@ -312,6 +312,33 @@ describe("resolveAnnounceOrigin threaded route targets", () => {
     });
   });
 
+  it("prefers typed delivery context over compatibility session fields", () => {
+    expect(
+      resolveAnnounceOrigin(
+        {
+          lastChannel: "topicchat",
+          lastTo: "topicchat:room-stale:topic:99",
+          lastThreadId: 99,
+        },
+        {
+          channel: "topicchat",
+          to: "topicchat:room-typed",
+        },
+        {
+          channel: "topicchat",
+          to: "topicchat:room-typed:topic:42",
+          accountId: "workspace-1",
+          threadId: 42,
+        },
+      ),
+    ).toEqual({
+      channel: "topicchat",
+      to: "topicchat:room-typed",
+      accountId: "workspace-1",
+      threadId: 42,
+    });
+  });
+
   it("preserves stored thread ids for group-prefixed requester targets", () => {
     expect(
       resolveAnnounceOrigin(

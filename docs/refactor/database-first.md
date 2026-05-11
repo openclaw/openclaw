@@ -488,6 +488,9 @@ Completed consolidation/deletion highlights:
 - Cron isolated-agent delivery target resolution also hydrates its current
   route from the typed per-agent session delivery row before falling back to the
   compatibility entry payload.
+- Subagent announce origin resolution now threads the typed requester-session
+  delivery context through `loadRequesterSessionEntry` and prefers that row over
+  compatibility `last*`/`deliveryContext` shadows.
 - Gateway `chat.send` external-route inheritance now reads typed SQLite session
   routing metadata instead of inferring channel/direct/group scope from
   `sessionKey` pieces. Channel-scoped sessions inherit only when the typed

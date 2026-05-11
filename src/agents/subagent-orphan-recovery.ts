@@ -106,8 +106,8 @@ async function announceRecoveryInProgress(params: {
   const requesterIsSubagent = isInternalAnnounceRequesterSession(requesterSessionKey);
   let directOrigin = requesterOrigin;
   if (!requesterIsSubagent) {
-    const { entry } = loadRequesterSessionEntry(requesterSessionKey);
-    directOrigin = resolveAnnounceOrigin(entry, requesterOrigin);
+    const { entry, deliveryContext } = loadRequesterSessionEntry(requesterSessionKey);
+    directOrigin = resolveAnnounceOrigin(entry, requesterOrigin, deliveryContext);
   }
 
   const prompt = buildRecoveryProgressPrompt({

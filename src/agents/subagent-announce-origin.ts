@@ -61,9 +61,11 @@ function shouldStripThreadFromAnnounceEntry(
 export function resolveAnnounceOrigin(
   entry?: DeliveryContextSessionSource,
   requesterOrigin?: DeliveryContext,
+  entryDeliveryContext?: DeliveryContext,
 ): DeliveryContext | undefined {
   const normalizedRequester = normalizeDeliveryContext(requesterOrigin);
-  const normalizedEntry = deliveryContextFromSession(entry);
+  const normalizedEntry =
+    normalizeDeliveryContext(entryDeliveryContext) ?? deliveryContextFromSession(entry);
   if (normalizedRequester?.channel && isInternalMessageChannel(normalizedRequester.channel)) {
     return mergeDeliveryContext(
       {

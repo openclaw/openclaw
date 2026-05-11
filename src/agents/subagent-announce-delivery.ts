@@ -1,4 +1,5 @@
 import { completionRequiresMessageToolDelivery } from "../auto-reply/reply/completion-delivery-policy.js";
+import { readSqliteSessionDeliveryContext } from "../config/sessions/session-entries.sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
@@ -446,7 +447,13 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
   const agentId = resolveAgentIdFromSessionKey(canonicalKey);
   const entry = getSessionEntry({ agentId, sessionKey: canonicalKey });
-  return { cfg, entry, canonicalKey };
+  let deliveryContext: DeliveryContext | undefined;
+  try {
+    deliveryContext = readSqliteSessionDeliveryContext({ agentId, sessionKey: canonicalKey });
+  } catch {
+    deliveryContext = undefined;
+  }
+  return { cfg, entry, canonicalKey, deliveryContext };
 }
 
 export function loadSessionEntryByKey(sessionKey: string) {
@@ -478,7 +485,7 @@ async function maybeQueueSubagentAnnounce(params: {
   if (params.signal?.aborted) {
     return "none";
   }
-  const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
+  const { cfg, entry, deliveryContext } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
   const { sessionId, isActive } = resolveRequesterSessionActivity(canonicalKey);
   if (!sessionId) {
@@ -511,7 +518,7 @@ async function maybeQueueSubagentAnnounce(params: {
     isActive &&
     (shouldFollowup || queueSettings.mode === "steer" || queueSettings.mode === "queue")
   ) {
-    const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
+    const origin = resolveAnnounceOrigin(entry, params.requesterOrigin, deliveryContext);
     const didQueue = enqueueAnnounce({
       key: buildAnnounceQueueKey(canonicalKey, origin),
       item: {
