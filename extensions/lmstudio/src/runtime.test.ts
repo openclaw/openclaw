@@ -261,6 +261,30 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBe("template-lmstudio-key");
   });
 
+  it("resolves arbitrary env-template api keys from config", async () => {
+    await expect(
+      resolveLmstudioConfiguredApiKey({
+        config: buildLmstudioConfig({
+          apiKey: "${LMSTUDIO_API_KEY}",
+        }),
+        env: {
+          LMSTUDIO_API_KEY: "custom-template-lmstudio-key",
+        },
+      }),
+    ).resolves.toBe("custom-template-lmstudio-key");
+  });
+
+  it("throws a path-specific error when an env-template api key cannot be resolved", async () => {
+    await expect(
+      resolveLmstudioConfiguredApiKey({
+        config: buildLmstudioConfig({
+          apiKey: "${LMSTUDIO_API_KEY}",
+        }),
+        env: {},
+      }),
+    ).rejects.toThrow(/models\.providers\.lmstudio\.apiKey/i);
+  });
+
   it("throws a path-specific error when a SecretRef header cannot be resolved", async () => {
     const headerRef = {
       "X-Proxy-Auth": {

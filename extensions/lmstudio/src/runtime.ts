@@ -81,14 +81,29 @@ export async function resolveLmstudioConfiguredApiKey(params: {
     return undefined;
   }
 
+  const path = params.path ?? "models.providers.lmstudio.apiKey";
+  const env = params.env ?? process.env;
   const directApiKey = normalizeOptionalSecretInput(apiKeyInput);
   if (directApiKey !== undefined) {
-    const trimmed = normalizeApiKeyConfig(directApiKey).trim();
+    const resolved = params.config
+      ? await resolveConfiguredSecretInputString({
+          config: params.config,
+          env,
+          value: directApiKey,
+          path,
+          unresolvedReasonStyle: "detailed",
+        })
+      : { value: directApiKey };
+    if (resolved.unresolvedRefReason) {
+      throw new Error(`${path}: ${resolved.unresolvedRefReason}`);
+    }
+    const resolvedValue = normalizeOptionalSecretInput(resolved.value);
+    const trimmed = resolvedValue ? normalizeApiKeyConfig(resolvedValue).trim() : "";
     if (!trimmed) {
       return undefined;
     }
     if (isKnownEnvApiKeyMarker(trimmed)) {
-      const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[trimmed]);
+      const envValue = normalizeOptionalSecretInput(env[trimmed]);
       return envValue;
     }
     return isNonSecretApiKeyMarker(trimmed) ? undefined : trimmed;
@@ -97,10 +112,9 @@ export async function resolveLmstudioConfiguredApiKey(params: {
   if (!params.config) {
     return undefined;
   }
-  const path = params.path ?? "models.providers.lmstudio.apiKey";
   const resolved = await resolveConfiguredSecretInputString({
     config: params.config,
-    env: params.env ?? process.env,
+    env,
     value: apiKeyInput,
     path,
     unresolvedReasonStyle: "detailed",
