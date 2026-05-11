@@ -96,23 +96,16 @@ function ensureFalModelPath(model: string | undefined, hasInputImages: boolean):
   if (!hasInputImages) {
     return trimmed;
   }
-  // GPT Image 2 and NanoBanana 2 use /edit; Flux uses /image-to-image
-  if (
-    trimmed.startsWith("openai/gpt-image-") ||
-    trimmed.startsWith("fal-ai/nano-banana-")
-  ) {
-    if (trimmed.endsWith("/edit")) {
-      return trimmed;
-    }
-    return `${trimmed}/edit`;
-  }
-  // Preserve any model already ending in /edit or /image-to-image
   if (
     trimmed.endsWith("/edit") ||
     trimmed.endsWith(`/${DEFAULT_FAL_EDIT_SUBPATH}`) ||
     trimmed.includes("/image-to-image/")
   ) {
     return trimmed;
+  }
+  // GPT Image 2 and Nano Banana 2 use /edit; Flux uses /image-to-image.
+  if (trimmed.startsWith("openai/gpt-image-") || trimmed.startsWith("fal-ai/nano-banana-")) {
+    return `${trimmed}/edit`;
   }
   return `${trimmed}/${DEFAULT_FAL_EDIT_SUBPATH}`;
 }
@@ -374,10 +367,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           throw new Error("fal image edit request missing reference image");
         }
         // GPT Image 2 and NB2 use image_urls (array); Flux uses image_url (singular)
-        if (
-          model.startsWith("openai/gpt-image-") ||
-          model.startsWith("fal-ai/nano-banana-")
-        ) {
+        if (model.startsWith("openai/gpt-image-") || model.startsWith("fal-ai/nano-banana-")) {
           requestBody.image_urls = req.inputImages!.map((img) => toImageDataUrl(img));
         } else {
           requestBody.image_url = toImageDataUrl(input);
