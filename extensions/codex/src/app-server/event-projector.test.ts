@@ -526,6 +526,33 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.promptErrorSource).toBe("prompt");
   });
 
+  it("preserves Codex retry hints when failed turns omit structured reset details", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "failed",
+          error: {
+            message:
+              "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at May 11th, 2026 9:00 AM.",
+            codexErrorInfo: "usageLimitExceeded",
+            additionalDetails: null,
+          },
+          items: [],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
+    expect(result.promptError).not.toContain("Codex did not return a reset time");
+    expect(result.promptErrorSource).toBe("prompt");
+  });
+
   it("normalizes snake_case current token usage fields", async () => {
     const projector = await createProjector();
 

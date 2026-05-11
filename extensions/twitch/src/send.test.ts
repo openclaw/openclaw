@@ -318,7 +318,13 @@ describe("send", () => {
         secondaryAccount,
         "secondary-channel",
         "Hello!",
-        expect.any(Object),
+        {
+          channels: {
+            twitch: {
+              defaultAccount: "secondary",
+            },
+          },
+        },
         "secondary",
       );
     });

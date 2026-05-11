@@ -252,9 +252,8 @@ describe("resolveDiscordThreadStarter", () => {
     });
 
     expect(requireThreadStarter(result).text).toBe("starter content");
-    expect(get).toHaveBeenCalledWith(
-      expect.stringContaining("/channels/thread-1/messages/thread-1"),
-    );
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get.mock.calls[0]?.[0]).toBe("/channels/thread-1/messages/thread-1");
   });
 
   it("returns null when content, embeds, and snapshots are all empty", async () => {

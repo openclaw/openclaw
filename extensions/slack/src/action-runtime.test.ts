@@ -571,6 +571,28 @@ describe("handleSlackAction", () => {
     expectLastSlackSend("Threaded reply", cfg, "1111111111.111111");
   });
 
+  it.each([
+    { name: "topLevel true", patch: { topLevel: true } },
+    { name: "threadTs null", patch: { threadTs: null } },
+  ] as const)("does not auto-inject threadTs for $name", async (testCase) => {
+    const cfg = slackConfig();
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "Channel root",
+        ...testCase.patch,
+      },
+      cfg,
+      {
+        currentChannelId: "C123",
+        currentThreadTs: "1111111111.111111",
+        replyToMode: "all",
+      },
+    );
+    expectLastSlackSend("Channel root", cfg);
+  });
+
   it("replyToMode=first threads first message then stops", async () => {
     const { cfg, context } = createReplyToFirstScenario();
 

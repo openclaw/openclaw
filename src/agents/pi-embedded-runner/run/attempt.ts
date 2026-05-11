@@ -1602,6 +1602,7 @@ export async function runEmbeddedAttempt(
     let removeToolResultContextGuard: (() => void) | undefined;
     let trajectoryRecorder: ReturnType<typeof createTrajectoryRuntimeRecorder> | null = null;
     let trajectoryEndRecorded = false;
+    let buildAbortSettlePromise: () => Promise<void> | null = () => null;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -1905,8 +1906,38 @@ export async function runEmbeddedAttempt(
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
       let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
         "assembled";
+      const inFlightPromptSettlePromises = new Set<Promise<void>>();
+      const inFlightAbortSettlePromises = new Set<Promise<void>>();
+      const trackSettlePromise = (
+        promises: Set<Promise<void>>,
+        promise: Promise<void>,
+      ): Promise<void> => {
+        promises.add(promise);
+        void promise.then(
+          () => {
+            promises.delete(promise);
+          },
+          () => {
+            promises.delete(promise);
+          },
+        );
+        return promise;
+      };
+      const trackPromptSettlePromise = (promise: Promise<void>): Promise<void> =>
+        trackSettlePromise(inFlightPromptSettlePromises, promise);
+      const trackAbortSettlePromise = (promise: Promise<void>): Promise<void> =>
+        trackSettlePromise(inFlightAbortSettlePromises, promise);
+      const abortActiveSession = (): Promise<void> =>
+        trackAbortSettlePromise(Promise.resolve(activeSession.abort()));
+      buildAbortSettlePromise = (): Promise<void> | null => {
+        const promises = [...inFlightPromptSettlePromises, ...inFlightAbortSettlePromises];
+        if (promises.length === 0) {
+          return null;
+        }
+        return Promise.allSettled(promises).then(() => undefined);
+      };
       abortSessionForYield = () => {
-        yieldAbortSettled = Promise.resolve(activeSession.abort());
+        yieldAbortSettled = abortActiveSession();
       };
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
@@ -2596,7 +2627,7 @@ export async function runEmbeddedAttempt(
           runAbortController.abort(reason);
         }
         abortCompaction();
-        void activeSession.abort();
+        void abortActiveSession();
       };
       idleTimeoutTrigger = (error) => {
         idleTimedOut = true;
@@ -2604,6 +2635,11 @@ export async function runEmbeddedAttempt(
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> =>
         abortableWithSignal(runAbortController.signal, promise);
+      const promptActiveSession = (
+        prompt: string,
+        options?: Parameters<typeof activeSession.prompt>[1],
+      ): Promise<void> =>
+        abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options)));
 
       const subscription = subscribeEmbeddedPiSession(
         buildEmbeddedSubscriptionParams({
@@ -3488,7 +3524,7 @@ export async function runEmbeddedAttempt(
               inFlightPrompt: promptForModel,
             });
             if (promptSubmission.runtimeOnly) {
-              await abortable(activeSession.prompt(promptForModel));
+              await promptActiveSession(promptForModel);
             } else {
               await queueRuntimeContextForNextTurn({
                 session: activeSession,
@@ -3498,11 +3534,9 @@ export async function runEmbeddedAttempt(
               // Only pass images option if there are actually images to pass
               // This avoids potential issues with models that don't expect the images parameter
               if (imageResult.images.length > 0) {
-                await abortable(
-                  activeSession.prompt(promptForModel, { images: imageResult.images }),
-                );
+                await promptActiveSession(promptForModel, { images: imageResult.images });
               } else {
-                await abortable(activeSession.prompt(promptForModel));
+                await promptActiveSession(promptForModel);
               }
             }
           }
@@ -4116,6 +4150,12 @@ export async function runEmbeddedAttempt(
           runId: params.runId,
           catalogRef: toolSearchCatalogRef,
         });
+        const cleanupAborted =
+          Boolean(params.abortSignal?.aborted) ||
+          aborted ||
+          timedOut ||
+          idleTimedOut ||
+          timedOutDuringCompaction;
         await cleanupEmbeddedAttemptResources({
           removeToolResultContextGuard,
           flushPendingToolResultsAfterIdle,
@@ -4124,14 +4164,10 @@ export async function runEmbeddedAttempt(
           bundleMcpRuntime,
           bundleLspRuntime,
           sessionLock,
-          // PERF: If the run was aborted (user stop, timeout, etc.), skip the idle wait
-          // and clear pending results synchronously so we can release the session lock ASAP.
-          aborted:
-            Boolean(params.abortSignal?.aborted) ||
-            aborted ||
-            timedOut ||
-            idleTimedOut ||
-            timedOutDuringCompaction,
+          aborted: cleanupAborted,
+          abortSettlePromise: cleanupAborted ? buildAbortSettlePromise() : null,
+          runId: params.runId,
+          sessionId: params.sessionId,
         });
       } catch (err) {
         cleanupError = err;
