@@ -47,12 +47,6 @@ A release directory **is the `dist/` tree**. At minimum it must include:
 
 Practically: copy the entire `dist/` directory from the installed package or from a fork build.
 
-## Cutover note
-
-The one-time systemd `ExecStart` cutover is documented separately in:
-
-- [`docs/polytropos/planning/CUTOVER-EXECSTART.md`](./planning/CUTOVER-EXECSTART.md)
-
 ## Switching versions
 
 Switching is done by updating the `current` symlink atomically:
@@ -115,7 +109,6 @@ ln -sfn ~/polytropos/releases/<tag> ~/polytropos/releases/current
 
 Restart the gateway and verify health.
 
-(One-time systemd cutover is documented separately in [`docs/polytropos/planning/CUTOVER-EXECSTART.md`](./planning/CUTOVER-EXECSTART.md).)
 
 ## Dev mode (without a second gateway)
 
