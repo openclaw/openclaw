@@ -387,6 +387,38 @@ function normalizeToolSearchDisplayToolName(toolName: string | undefined): strin
   return normalizeOptionalString(catalogIdMatch?.[1]) ?? value;
 }
 
+function collectToolSearchDescribeBindings(code: string): Map<string, string> {
+  const bindings = new Map<string, string>();
+  const bindingPattern =
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?openclaw\.tools\.describe\s*\(\s*("[^"]{1,240}"|'[^']{1,240}')\s*(?:,|\))/gs;
+  for (const match of code.matchAll(bindingPattern)) {
+    const variableName = match[1];
+    const target = summarizeToolSearchTarget(match[2]);
+    if (variableName && target) {
+      bindings.set(variableName, target);
+    }
+  }
+  return bindings;
+}
+
+function resolveToolSearchCallTarget(
+  code: string,
+  rawTarget: string | undefined,
+): string | undefined {
+  const target = normalizeOptionalString(rawTarget);
+  if (!target) {
+    return undefined;
+  }
+  const idReference = target.match(/^([A-Za-z_$][\w$]*)\.id\b/s);
+  if (idReference?.[1]) {
+    const describedTarget = collectToolSearchDescribeBindings(code).get(idReference[1]);
+    if (describedTarget) {
+      return describedTarget;
+    }
+  }
+  return summarizeToolSearchTarget(target);
+}
+
 function summarizeToolSearchTarget(raw: string | undefined): string | undefined {
   const value = normalizeOptionalString(raw);
   if (!value) {
@@ -538,7 +570,7 @@ export function resolveToolSearchCodeDisplayTarget(
   const code = record.code;
   const call = parseToolSearchCall(code);
   if (call) {
-    const toolName = summarizeToolSearchTarget(call.target);
+    const toolName = resolveToolSearchCallTarget(code, call.target);
     if (!toolName) {
       return { toolName: "tool_search_code", detail: "call selected tool", bridgeVerb: "call" };
     }

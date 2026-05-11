@@ -577,6 +577,39 @@ describe("repairSessionFileIfNeeded", () => {
     expect(after).toBe(original);
   });
 
+  it.each(["error", "aborted"] as const)(
+    "does not insert missing code-mode tool results for %s assistant turns",
+    async (stopReason) => {
+      const { file } = await createTempSessionPath();
+      const { header, message } = buildSessionHeaderAndMessage();
+      const incompleteAssistant = {
+        type: "message",
+        id: `msg-asst-${stopReason}`,
+        parentId: "msg-1",
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "assistant",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          api: "openai-codex-responses",
+          content: [
+            { type: "toolCall", id: `call_${stopReason}|fc_1`, name: "exec", arguments: {} },
+          ],
+          stopReason,
+        },
+      };
+      const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(incompleteAssistant)}\n`;
+      await fs.writeFile(file, original, "utf-8");
+
+      const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+      expect(result.repaired).toBe(false);
+      expect(result.insertedToolResults ?? 0).toBe(0);
+      const after = await fs.readFile(file, "utf-8");
+      expect(after).toBe(original);
+    },
+  );
+
   it("preserves final text assistant turn that follows a tool-call/tool-result pair", async () => {
     // Regression: a trailing assistant message with stopReason "stop" that follows a
     // tool-call turn and its matching tool-result must never be trimmed by the repair

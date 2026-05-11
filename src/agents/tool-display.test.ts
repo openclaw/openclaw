@@ -9,8 +9,8 @@ describe("tool display details", () => {
         code: "const tool = await openclaw.tools.describe('openclaw:core:exec'); return await openclaw.tools.call(tool.id, { command: 'echo hi' });",
       }),
     ).toEqual({
-      toolName: "tool",
-      displayToolName: "tool",
+      toolName: "openclaw:core:exec",
+      displayToolName: "exec",
       displayArgs: { command: "echo hi" },
       detail: "echo hi",
       bridgeVerb: "call",

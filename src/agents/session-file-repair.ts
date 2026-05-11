@@ -199,11 +199,18 @@ function isCodeModeToolCallRepairCandidate(entry: unknown): entry is SessionMess
   if (record.type !== "message" || !record.message || typeof record.message !== "object") {
     return false;
   }
-  const message = record.message as { role?: unknown; api?: unknown; provider?: unknown };
+  const message = record.message as {
+    role?: unknown;
+    api?: unknown;
+    provider?: unknown;
+    stopReason?: unknown;
+  };
   return (
     message.role === "assistant" &&
     message.api === "openai-codex-responses" &&
-    message.provider === "openai-codex"
+    message.provider === "openai-codex" &&
+    message.stopReason !== "error" &&
+    message.stopReason !== "aborted"
   );
 }
 
