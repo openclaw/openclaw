@@ -475,12 +475,18 @@ export async function runGatewayUpdateCheck(params: {
             tag,
           });
         } else {
-          params.log.info("auto-update attempt failed", {
-            channel,
-            version: resolved.version,
-            tag,
-            reason: outcome.reason ?? `exit:${outcome.code}`,
-          });
+          const reason = outcome.reason ?? `exit:${outcome.code}`;
+          const stderrTail = (outcome.stderr ?? "")
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0)
+            .slice(-5)
+            .join(" | ");
+          const suffix = stderrTail ? ` stderr=${JSON.stringify(stderrTail)}` : "";
+          params.log.info(
+            `auto-update attempt failed: reason=${reason} version=${resolved.version} tag=${tag}${suffix}`,
+            { channel, version: resolved.version, tag, reason },
+          );
         }
       }
     }
