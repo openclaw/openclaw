@@ -70,6 +70,13 @@ const TELEGRAM_TEST_TIMINGS = {
   textFragmentGapMs: 30,
 } as const;
 
+function stripAnsi(value: string): string {
+  return value.replace(
+    new RegExp(`${String.fromCharCode(0x1b)}\\[[\\x20-\\x3f]*[\\x40-\\x7e]`, "g"),
+    "",
+  );
+}
+
 type TelegramMiddlewareTestContext = Record<string, unknown>;
 type TelegramMiddleware = (
   ctx: TelegramMiddlewareTestContext,
