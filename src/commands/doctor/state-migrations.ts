@@ -43,6 +43,7 @@ import {
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -960,6 +961,18 @@ function buildCurrentConversationKey(record: SessionBindingRecord): string | nul
   ].join("\u241f");
 }
 
+function normalizeCurrentConversationKind(value: unknown): "channel" | "direct" | "group" {
+  return value === "channel" || value === "group" || value === "direct" ? value : "direct";
+}
+
+function metadataTextValue(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string | null {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 function importLegacyCurrentConversationBindingsToSqlite(
   filePath: string,
   env: NodeJS.ProcessEnv,
@@ -1005,11 +1018,16 @@ function importLegacyCurrentConversationBindingsToSqlite(
             .values({
               binding_key: key,
               binding_id: normalized.bindingId,
+              target_agent_id: resolveAgentIdFromSessionKey(normalized.targetSessionKey),
+              target_session_id: metadataTextValue(normalized.metadata, "targetSessionId"),
+              target_session_key: normalized.targetSessionKey,
               channel: normalized.conversation.channel,
               account_id: normalized.conversation.accountId,
+              conversation_kind: normalizeCurrentConversationKind(
+                normalized.conversation.conversationKind,
+              ),
               parent_conversation_id: normalized.conversation.parentConversationId ?? null,
               conversation_id: normalized.conversation.conversationId,
-              target_session_key: normalized.targetSessionKey,
               target_kind: normalized.targetKind,
               status: normalized.status,
               bound_at: normalized.boundAt,
@@ -1022,11 +1040,14 @@ function importLegacyCurrentConversationBindingsToSqlite(
             .onConflict((conflict) =>
               conflict.column("binding_key").doUpdateSet({
                 binding_id: (eb) => eb.ref("excluded.binding_id"),
+                target_agent_id: (eb) => eb.ref("excluded.target_agent_id"),
+                target_session_id: (eb) => eb.ref("excluded.target_session_id"),
+                target_session_key: (eb) => eb.ref("excluded.target_session_key"),
                 channel: (eb) => eb.ref("excluded.channel"),
                 account_id: (eb) => eb.ref("excluded.account_id"),
+                conversation_kind: (eb) => eb.ref("excluded.conversation_kind"),
                 parent_conversation_id: (eb) => eb.ref("excluded.parent_conversation_id"),
                 conversation_id: (eb) => eb.ref("excluded.conversation_id"),
-                target_session_key: (eb) => eb.ref("excluded.target_session_key"),
                 target_kind: (eb) => eb.ref("excluded.target_kind"),
                 status: (eb) => eb.ref("excluded.status"),
                 bound_at: (eb) => eb.ref("excluded.bound_at"),

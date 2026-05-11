@@ -219,12 +219,35 @@ describe("generic current-conversation bindings", () => {
         channel: "workspace",
         accountId: "default",
         conversationId: "user:U123",
+        conversationKind: "direct",
       },
       metadata: {
         label: "workspace-dm",
+        targetSessionId: "workspace-session",
       },
     });
     const { database, db } = getCurrentConversationBindingsTestDb();
+    const before = executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("current_conversation_bindings")
+        .select([
+          "target_agent_id",
+          "target_session_id",
+          "target_session_key",
+          "conversation_kind",
+          "conversation_id",
+        ]),
+    ).rows;
+    expect(before).toEqual([
+      {
+        target_agent_id: "codex",
+        target_session_id: "workspace-session",
+        target_session_key: "agent:codex:acp:workspace-dm",
+        conversation_kind: "direct",
+        conversation_id: "user:U123",
+      },
+    ]);
     executeSqliteQuerySync(
       database.db,
       db

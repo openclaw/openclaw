@@ -1,10 +1,7 @@
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
-import { getSessionEntry } from "./store.js";
-export { parseSessionThreadInfo } from "./thread-info.js";
+import { readSqliteSessionDeliveryContext } from "./session-entries.sqlite.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
-import type { SessionEntry } from "./types.js";
-export { parseSessionThreadInfo };
+export { parseSessionThreadInfo } from "./thread-info.js";
 
 function hasRoutableDeliveryContext(context?: {
   channel?: string;
@@ -39,20 +36,11 @@ export function extractDeliveryInfo(
     | undefined;
   try {
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    let entry = getSessionEntry({ agentId, sessionKey });
-    let storedDeliveryContext = deliveryContextFromSession(entry);
-    if (!hasRoutableDeliveryContext(storedDeliveryContext) && baseSessionKey !== sessionKey) {
-      entry = getSessionEntry({ agentId, sessionKey: baseSessionKey });
-      storedDeliveryContext = deliveryContextFromSession(entry);
-    }
-    if (hasRoutableDeliveryContext(storedDeliveryContext)) {
-      deliveryContext = {
-        channel: storedDeliveryContext.channel,
-        to: storedDeliveryContext.to,
-        accountId: storedDeliveryContext.accountId,
-        threadId: storedDeliveryContext.threadId,
-      };
-    }
+    deliveryContext =
+      readSqliteSessionDeliveryContext({ agentId, sessionKey }) ??
+      (baseSessionKey !== sessionKey
+        ? readSqliteSessionDeliveryContext({ agentId, sessionKey: baseSessionKey })
+        : undefined);
   } catch {
     // ignore: best-effort
   }

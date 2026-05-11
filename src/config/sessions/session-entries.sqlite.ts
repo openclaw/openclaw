@@ -11,6 +11,10 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { type OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import {
+  conversationIdentityFromSessionEntry,
+  type ConversationIdentity,
+} from "./conversation-identity.js";
 import { normalizeSessionEntries } from "./session-entry-normalize.js";
 import type { SessionEntry } from "./types.js";
 
@@ -22,6 +26,7 @@ export type SqliteSessionEntriesOptions = OpenClawStateDatabaseOptions & {
 export type ReplaceSqliteSessionEntryOptions = SqliteSessionEntriesOptions & {
   sessionKey: string;
   entry: SessionEntry;
+  conversationIdentities?: readonly ConversationIdentity[];
 };
 
 export type ApplySqliteSessionEntriesPatchOptions = SqliteSessionEntriesOptions & {
@@ -29,15 +34,51 @@ export type ApplySqliteSessionEntriesPatchOptions = SqliteSessionEntriesOptions 
   expectedEntries?: ReadonlyMap<string, SessionEntry | null>;
 };
 
+export type SqliteSessionDeliveryContext = {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string;
+};
+
+export type SqliteSessionRoutingInfo = {
+  sessionScope?: string;
+  chatType?: string;
+  channel?: string;
+  accountId?: string;
+  primaryConversationId?: string;
+};
+
 type SessionEntriesTable = OpenClawAgentKyselyDatabase["session_entries"];
 type SessionsTable = OpenClawAgentKyselyDatabase["sessions"];
-type SessionEntriesDatabase = Pick<OpenClawAgentKyselyDatabase, "session_entries" | "sessions">;
+type ConversationsTable = OpenClawAgentKyselyDatabase["conversations"];
+type SessionConversationsTable = OpenClawAgentKyselyDatabase["session_conversations"];
+type SessionEntriesDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "conversations" | "session_conversations" | "session_entries" | "sessions"
+>;
 
 type SessionEntryRow = Pick<Selectable<SessionEntriesTable>, "entry_json" | "session_key"> &
-  Partial<Pick<Selectable<SessionEntriesTable>, "updated_at">>;
+  Partial<Pick<Selectable<SessionEntriesTable>, "updated_at">> & {
+    typed_session_id?: string | null;
+    typed_updated_at?: number | null;
+    typed_started_at?: number | null;
+    typed_ended_at?: number | null;
+    typed_status?: string | null;
+    typed_chat_type?: string | null;
+    typed_channel?: string | null;
+    typed_account_id?: string | null;
+    typed_model_provider?: string | null;
+    typed_model?: string | null;
+    typed_agent_harness_id?: string | null;
+    typed_parent_session_key?: string | null;
+    typed_spawned_by?: string | null;
+    typed_display_name?: string | null;
+  };
 type BoundSessionEntryRow = {
   entry: Insertable<SessionEntriesTable>;
   session: Insertable<SessionsTable>;
+  conversations: readonly ConversationIdentity[];
 };
 
 function resolveNow(options: SqliteSessionEntriesOptions): number {
@@ -58,6 +99,105 @@ function parseSessionEntry(row: SessionEntryRow): SessionEntry | null {
   }
 }
 
+function projectTypedSessionColumns(row: SessionEntryRow): SessionEntry | null {
+  const parsed = parseSessionEntry(row);
+  const sessionId = optionalString(row.typed_session_id) ?? parsed?.sessionId;
+  const updatedAt =
+    typeof row.typed_updated_at === "number" && Number.isFinite(row.typed_updated_at)
+      ? row.typed_updated_at
+      : parsed?.updatedAt;
+  if (!parsed && (!sessionId || typeof updatedAt !== "number")) {
+    return null;
+  }
+  const next: SessionEntry = {
+    ...(parsed ?? {
+      sessionId: sessionId ?? row.session_key,
+      updatedAt: updatedAt ?? 0,
+    }),
+  };
+  if (sessionId) {
+    next.sessionId = sessionId;
+  }
+  if (typeof updatedAt === "number" && Number.isFinite(updatedAt)) {
+    next.updatedAt = updatedAt;
+  }
+  if (typeof row.typed_started_at === "number" && Number.isFinite(row.typed_started_at)) {
+    next.startedAt = row.typed_started_at;
+  }
+  if (typeof row.typed_ended_at === "number" && Number.isFinite(row.typed_ended_at)) {
+    next.endedAt = row.typed_ended_at;
+  }
+  const status = optionalString(row.typed_status);
+  if (status) {
+    next.status = status;
+  }
+  const chatType = optionalString(row.typed_chat_type);
+  if (chatType) {
+    next.chatType = chatType;
+  }
+  const channel = optionalString(row.typed_channel);
+  if (channel) {
+    next.channel = channel;
+    next.lastChannel ??= channel;
+  }
+  const accountId = optionalString(row.typed_account_id);
+  if (accountId) {
+    next.lastAccountId ??= accountId;
+  }
+  const modelProvider = optionalString(row.typed_model_provider);
+  if (modelProvider) {
+    next.modelProvider = modelProvider;
+  }
+  const model = optionalString(row.typed_model);
+  if (model) {
+    next.model = model;
+  }
+  const agentHarnessId = optionalString(row.typed_agent_harness_id);
+  if (agentHarnessId) {
+    next.agentHarnessId = agentHarnessId;
+  }
+  const parentSessionKey = optionalString(row.typed_parent_session_key);
+  if (parentSessionKey) {
+    next.parentSessionKey = parentSessionKey;
+  }
+  const spawnedBy = optionalString(row.typed_spawned_by);
+  if (spawnedBy) {
+    next.spawnedBy = spawnedBy;
+  }
+  const displayName = optionalString(row.typed_display_name);
+  if (displayName) {
+    next.displayName = displayName;
+  }
+  return next;
+}
+
+function selectSessionEntryRows(
+  db: ReturnType<typeof getNodeSqliteKysely<SessionEntriesDatabase>>,
+) {
+  return db
+    .selectFrom("session_entries as se")
+    .innerJoin("sessions as s", "s.session_id", "se.session_id")
+    .select([
+      "se.session_key as session_key",
+      "se.entry_json as entry_json",
+      "se.updated_at as updated_at",
+      "s.session_id as typed_session_id",
+      "s.updated_at as typed_updated_at",
+      "s.started_at as typed_started_at",
+      "s.ended_at as typed_ended_at",
+      "s.status as typed_status",
+      "s.chat_type as typed_chat_type",
+      "s.channel as typed_channel",
+      "s.account_id as typed_account_id",
+      "s.model_provider as typed_model_provider",
+      "s.model as typed_model",
+      "s.agent_harness_id as typed_agent_harness_id",
+      "s.parent_session_key as typed_parent_session_key",
+      "s.spawned_by as typed_spawned_by",
+      "s.display_name as typed_display_name",
+    ]);
+}
+
 function serializeSessionEntry(sessionKey: string, entry: SessionEntry): string {
   const entries = { [sessionKey]: entry };
   normalizeSessionEntries(entries);
@@ -68,8 +208,32 @@ function nullableString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function optionalString(value: unknown): string | undefined {
+  return nullableString(value) ?? undefined;
+}
+
+function optionalThreadId(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return optionalString(value);
+}
+
 function sessionDisplayName(entry: SessionEntry): string | null {
   return nullableString(entry.displayName) ?? nullableString(entry.label);
+}
+
+function resolveSessionScope(params: { entry: SessionEntry; sessionKey: string }): string {
+  const chatType =
+    nullableString(params.entry.chatType) ?? nullableString(params.entry.origin?.chatType);
+  const key = params.sessionKey.trim().toLowerCase();
+  if (chatType === "direct" && (key === "main" || key.endsWith(":main"))) {
+    return "shared-main";
+  }
+  if (chatType === "group" || chatType === "channel") {
+    return chatType;
+  }
+  return "conversation";
 }
 
 function resolveSessionCreatedAt(entry: SessionEntry, updatedAt: number): number {
@@ -85,6 +249,7 @@ function bindSessionRoot(params: {
   sessionKey: string;
   entry: SessionEntry;
   updatedAt: number;
+  primaryConversation?: ConversationIdentity | null;
 }): Insertable<SessionsTable> {
   const sessionId = nullableString(params.entry.sessionId) ?? params.sessionKey;
   const updatedAt =
@@ -94,6 +259,7 @@ function bindSessionRoot(params: {
   return {
     session_id: sessionId,
     session_key: params.sessionKey,
+    session_scope: resolveSessionScope(params),
     created_at: resolveSessionCreatedAt(params.entry, updatedAt),
     updated_at: updatedAt,
     started_at:
@@ -107,6 +273,11 @@ function bindSessionRoot(params: {
     status: nullableString(params.entry.status),
     chat_type: nullableString(params.entry.chatType),
     channel: nullableString(params.entry.channel) ?? nullableString(params.entry.lastChannel),
+    account_id:
+      nullableString(params.primaryConversation?.accountId) ??
+      nullableString(params.entry.lastAccountId) ??
+      nullableString(params.entry.origin?.accountId),
+    primary_conversation_id: nullableString(params.primaryConversation?.conversationId),
     model_provider: nullableString(params.entry.modelProvider),
     model: nullableString(params.entry.model),
     agent_harness_id: nullableString(params.entry.agentHarnessId),
@@ -120,16 +291,66 @@ function bindSessionEntry(params: {
   sessionKey: string;
   entry: SessionEntry;
   updatedAt: number;
+  conversationIdentities?: readonly ConversationIdentity[];
 }): BoundSessionEntryRow {
-  const session = bindSessionRoot(params);
+  const conversations = [
+    ...(params.conversationIdentities ?? []),
+    conversationIdentityFromSessionEntry(params.entry),
+  ].filter((entry): entry is ConversationIdentity => entry !== null);
+  const uniqueConversations = Array.from(
+    new Map(
+      conversations.map((conversation) => [conversation.conversationId, conversation]),
+    ).values(),
+  );
+  const session = bindSessionRoot({
+    ...params,
+    primaryConversation: uniqueConversations[0] ?? null,
+  });
   return {
     session,
+    conversations: uniqueConversations,
     entry: {
       session_key: params.sessionKey,
       session_id: session.session_id,
       entry_json: serializeSessionEntry(params.sessionKey, params.entry),
       updated_at: session.updated_at,
     },
+  };
+}
+
+function conversationToRow(
+  conversation: ConversationIdentity,
+  now: number,
+): Insertable<ConversationsTable> {
+  return {
+    conversation_id: conversation.conversationId,
+    channel: conversation.channel,
+    account_id: conversation.accountId,
+    kind: conversation.kind,
+    peer_id: conversation.peerId,
+    parent_conversation_id: conversation.parentConversationId ?? null,
+    thread_id: conversation.threadId ?? null,
+    native_channel_id: conversation.nativeChannelId ?? null,
+    native_direct_user_id: conversation.nativeDirectUserId ?? null,
+    label: conversation.label ?? null,
+    metadata_json: conversation.metadata ? JSON.stringify(conversation.metadata) : null,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+function sessionConversationToRow(params: {
+  sessionId: string;
+  conversationId: string;
+  role: "primary" | "related";
+  now: number;
+}): Insertable<SessionConversationsTable> {
+  return {
+    session_id: params.sessionId,
+    conversation_id: params.conversationId,
+    role: params.role,
+    first_seen_at: params.now,
+    last_seen_at: params.now,
   };
 }
 
@@ -145,6 +366,40 @@ function upsertSessionEntries(
     return;
   }
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
+  const now = Date.now();
+  const conversationRows = Array.from(
+    new Map(
+      rows.flatMap((row) =>
+        row.conversations.map((conversation) => [
+          conversation.conversationId,
+          conversationToRow(conversation, now),
+        ]),
+      ),
+    ).values(),
+  );
+  if (conversationRows.length > 0) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("conversations")
+        .values(conversationRows)
+        .onConflict((conflict) =>
+          conflict.column("conversation_id").doUpdateSet({
+            channel: (eb) => eb.ref("excluded.channel"),
+            account_id: (eb) => eb.ref("excluded.account_id"),
+            kind: (eb) => eb.ref("excluded.kind"),
+            peer_id: (eb) => eb.ref("excluded.peer_id"),
+            parent_conversation_id: (eb) => eb.ref("excluded.parent_conversation_id"),
+            thread_id: (eb) => eb.ref("excluded.thread_id"),
+            native_channel_id: (eb) => eb.ref("excluded.native_channel_id"),
+            native_direct_user_id: (eb) => eb.ref("excluded.native_direct_user_id"),
+            label: (eb) => eb.ref("excluded.label"),
+            metadata_json: (eb) => eb.ref("excluded.metadata_json"),
+            updated_at: (eb) => eb.ref("excluded.updated_at"),
+          }),
+        ),
+    );
+  }
   executeSqliteQuerySync(
     database.db,
     db
@@ -153,12 +408,15 @@ function upsertSessionEntries(
       .onConflict((conflict) =>
         conflict.column("session_id").doUpdateSet({
           session_key: (eb) => eb.ref("excluded.session_key"),
+          session_scope: (eb) => eb.ref("excluded.session_scope"),
           updated_at: (eb) => eb.ref("excluded.updated_at"),
           started_at: (eb) => eb.ref("excluded.started_at"),
           ended_at: (eb) => eb.ref("excluded.ended_at"),
           status: (eb) => eb.ref("excluded.status"),
           chat_type: (eb) => eb.ref("excluded.chat_type"),
           channel: (eb) => eb.ref("excluded.channel"),
+          account_id: (eb) => eb.ref("excluded.account_id"),
+          primary_conversation_id: (eb) => eb.ref("excluded.primary_conversation_id"),
           model_provider: (eb) => eb.ref("excluded.model_provider"),
           model: (eb) => eb.ref("excluded.model"),
           agent_harness_id: (eb) => eb.ref("excluded.agent_harness_id"),
@@ -168,6 +426,29 @@ function upsertSessionEntries(
         }),
       ),
   );
+  const sessionConversationRows = rows.flatMap((row) =>
+    row.conversations.map((conversation, index) =>
+      sessionConversationToRow({
+        sessionId: row.session.session_id,
+        conversationId: conversation.conversationId,
+        role: index === 0 ? "primary" : "related",
+        now,
+      }),
+    ),
+  );
+  if (sessionConversationRows.length > 0) {
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("session_conversations")
+        .values(sessionConversationRows)
+        .onConflict((conflict) =>
+          conflict.columns(["session_id", "conversation_id", "role"]).doUpdateSet({
+            last_seen_at: (eb) => eb.ref("excluded.last_seen_at"),
+          }),
+        ),
+    );
+  }
   executeSqliteQuerySync(
     database.db,
     db
@@ -236,6 +517,7 @@ export function replaceSqliteSessionEntry(options: ReplaceSqliteSessionEntryOpti
         sessionKey: options.sessionKey,
         entry,
         updatedAt,
+        conversationIdentities: options.conversationIdentities,
       }),
     ]);
   }, options);
@@ -285,6 +567,99 @@ export function readSqliteSessionEntry(
       .where("session_key", "=", options.sessionKey),
   );
   return row ? (parseSessionEntry(row) ?? undefined) : undefined;
+}
+
+function deliveryContextFromTypedRow(row: {
+  channel: string;
+  account_id: string;
+  peer_id: string;
+  thread_id: string | null;
+}): SqliteSessionDeliveryContext {
+  return {
+    channel: row.channel,
+    to: row.peer_id,
+    accountId: row.account_id,
+    ...(row.thread_id ? { threadId: row.thread_id } : {}),
+  };
+}
+
+function deliveryContextFromEntry(
+  entry: SessionEntry | undefined,
+): SqliteSessionDeliveryContext | undefined {
+  const channel =
+    optionalString(entry?.deliveryContext?.channel) ??
+    optionalString(entry?.lastChannel) ??
+    optionalString(entry?.channel) ??
+    optionalString(entry?.origin?.provider);
+  const to =
+    optionalString(entry?.deliveryContext?.to) ??
+    optionalString(entry?.lastTo) ??
+    optionalString(entry?.origin?.to) ??
+    optionalString(entry?.origin?.from);
+  if (!channel || !to) {
+    return undefined;
+  }
+  return {
+    channel,
+    to,
+    accountId:
+      optionalString(entry?.deliveryContext?.accountId) ??
+      optionalString(entry?.lastAccountId) ??
+      optionalString(entry?.origin?.accountId),
+    threadId: optionalThreadId(
+      entry?.deliveryContext?.threadId ?? entry?.lastThreadId ?? entry?.origin?.threadId,
+    ),
+  };
+}
+
+export function readSqliteSessionDeliveryContext(
+  options: SqliteSessionEntriesOptions & { sessionKey: string },
+): SqliteSessionDeliveryContext | undefined {
+  const database = openOpenClawAgentDatabase(options);
+  const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("sessions as s")
+      .innerJoin("session_conversations as sc", "sc.session_id", "s.session_id")
+      .innerJoin("conversations as c", "c.conversation_id", "sc.conversation_id")
+      .select([
+        "c.channel as channel",
+        "c.account_id as account_id",
+        "c.peer_id as peer_id",
+        "c.thread_id as thread_id",
+      ])
+      .where("s.session_key", "=", options.sessionKey)
+      .orderBy("sc.role", "asc")
+      .orderBy("sc.last_seen_at", "desc"),
+  );
+  if (row) {
+    return deliveryContextFromTypedRow(row);
+  }
+  return deliveryContextFromEntry(readSqliteSessionEntry(options));
+}
+
+export function readSqliteSessionRoutingInfo(
+  options: SqliteSessionEntriesOptions & { sessionKey: string },
+): SqliteSessionRoutingInfo | undefined {
+  const database = openOpenClawAgentDatabase(options);
+  const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("sessions")
+      .select(["session_scope", "chat_type", "channel", "account_id", "primary_conversation_id"])
+      .where("session_key", "=", options.sessionKey),
+  );
+  return row
+    ? {
+        sessionScope: optionalString(row.session_scope),
+        chatType: optionalString(row.chat_type),
+        channel: optionalString(row.channel),
+        accountId: optionalString(row.account_id),
+        primaryConversationId: optionalString(row.primary_conversation_id),
+      }
+    : undefined;
 }
 
 export function deleteSqliteSessionEntry(

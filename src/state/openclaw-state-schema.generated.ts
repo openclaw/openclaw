@@ -1022,11 +1022,14 @@ CREATE INDEX IF NOT EXISTS idx_subagent_runs_ended_cleanup
 CREATE TABLE IF NOT EXISTS current_conversation_bindings (
   binding_key TEXT NOT NULL PRIMARY KEY,
   binding_id TEXT NOT NULL,
+  target_agent_id TEXT NOT NULL,
+  target_session_id TEXT,
+  target_session_key TEXT NOT NULL,
   channel TEXT NOT NULL,
   account_id TEXT NOT NULL,
+  conversation_kind TEXT NOT NULL,
   parent_conversation_id TEXT,
   conversation_id TEXT NOT NULL,
-  target_session_key TEXT NOT NULL,
   target_kind TEXT NOT NULL,
   status TEXT NOT NULL,
   bound_at INTEGER NOT NULL,
@@ -1037,7 +1040,9 @@ CREATE TABLE IF NOT EXISTS current_conversation_bindings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_target
-  ON current_conversation_bindings(target_session_key, updated_at DESC, binding_key);
+  ON current_conversation_bindings(target_agent_id, target_session_key, updated_at DESC, binding_key);
+CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_conversation
+  ON current_conversation_bindings(channel, account_id, conversation_kind, conversation_id);
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_expires
   ON current_conversation_bindings(expires_at, binding_key);
 

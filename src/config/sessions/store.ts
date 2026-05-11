@@ -7,6 +7,10 @@ import {
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import {
+  conversationIdentityFromMsgContext,
+  type ConversationIdentity,
+} from "./conversation-identity.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
   applySqliteSessionEntriesPatch,
@@ -59,6 +63,7 @@ export function upsertSessionEntry(
   options: SessionEntryRowOptions & {
     sessionKey: string;
     entry: SessionEntry;
+    conversationIdentities?: readonly ConversationIdentity[];
   },
 ): void {
   replaceSqliteSessionEntry(options);
@@ -198,6 +203,12 @@ export async function recordSessionMetaFromInbound(params: {
     ...rowOptions,
     sessionKey: normalizedKey,
     entry: next,
+    conversationIdentities: [
+      conversationIdentityFromMsgContext({
+        ctx,
+        groupResolution: params.groupResolution,
+      }),
+    ].filter((entry) => entry !== null),
   });
   return next;
 }
@@ -283,6 +294,15 @@ export async function updateLastRoute(params: {
     ...rowOptions,
     sessionKey: normalizedKey,
     entry: next,
+    conversationIdentities: ctx
+      ? [
+          conversationIdentityFromMsgContext({
+            ctx,
+            deliveryContext: normalized.deliveryContext,
+            groupResolution: params.groupResolution,
+          }),
+        ].filter((entry) => entry !== null)
+      : undefined,
   });
   return next;
 }

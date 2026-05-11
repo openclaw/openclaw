@@ -4,6 +4,7 @@ import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type {
+  ConversationBindingKind,
   ConversationRef,
   SessionBindingBindInput,
   SessionBindingCapabilities,
@@ -88,6 +90,19 @@ function normalizeNumber(value: number | bigint | null): number | undefined {
   return typeof value === "number" ? value : undefined;
 }
 
+function normalizeConversationKind(value: unknown): ConversationBindingKind {
+  return value === "channel" || value === "group" || value === "direct" ? value : "direct";
+}
+
+function resolveTargetAgentId(sessionKey: string): string {
+  return resolveAgentIdFromSessionKey(sessionKey) ?? "main";
+}
+
+function metadataString(record: Record<string, unknown> | undefined, key: string): string | null {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 function recordToRow(record: SessionBindingRecord): Insertable<CurrentConversationBindingsTable> {
   const conversation = normalizeConversationRef(record.conversation);
   const bindingKey = buildConversationKey(conversation);
@@ -101,11 +116,14 @@ function recordToRow(record: SessionBindingRecord): Insertable<CurrentConversati
   return {
     binding_key: bindingKey,
     binding_id: bindingId,
+    target_agent_id: resolveTargetAgentId(normalized.targetSessionKey),
+    target_session_id: metadataString(normalized.metadata, "targetSessionId"),
+    target_session_key: normalized.targetSessionKey,
     channel: conversation.channel,
     account_id: conversation.accountId,
+    conversation_kind: normalizeConversationKind(conversation.conversationKind),
     parent_conversation_id: conversation.parentConversationId ?? null,
     conversation_id: conversation.conversationId,
-    target_session_key: normalized.targetSessionKey,
     target_kind: normalized.targetKind,
     status: normalized.status,
     bound_at: normalized.boundAt,
@@ -117,10 +135,18 @@ function recordToRow(record: SessionBindingRecord): Insertable<CurrentConversati
 }
 
 function rowToRecord(row: CurrentConversationBindingRow): SessionBindingRecord | null {
+  const parsedMetadata = parseJsonRecord(row.metadata_json);
+  const metadata =
+    row.target_session_id && parsedMetadata?.targetSessionId == null
+      ? { ...(parsedMetadata ?? {}), targetSessionId: row.target_session_id }
+      : parsedMetadata;
   const conversation = normalizeConversationRef({
     channel: row.channel,
     accountId: row.account_id,
     conversationId: row.conversation_id,
+    ...(row.conversation_kind !== "direct"
+      ? { conversationKind: normalizeConversationKind(row.conversation_kind) }
+      : {}),
     ...(row.parent_conversation_id ? { parentConversationId: row.parent_conversation_id } : {}),
   });
   const targetSessionKey = row.target_session_key.trim();
@@ -138,7 +164,7 @@ function rowToRecord(row: CurrentConversationBindingRow): SessionBindingRecord |
         : "active",
     boundAt: normalizeNumber(row.bound_at) ?? 0,
     ...(row.expires_at != null ? { expiresAt: normalizeNumber(row.expires_at) } : {}),
-    metadata: parseJsonRecord(row.metadata_json),
+    metadata,
   };
 }
 
@@ -153,11 +179,14 @@ function upsertBindingRow(record: SessionBindingRecord, env?: NodeJS.ProcessEnv)
         .onConflict((conflict) =>
           conflict.column("binding_key").doUpdateSet({
             binding_id: (eb) => eb.ref("excluded.binding_id"),
+            target_agent_id: (eb) => eb.ref("excluded.target_agent_id"),
+            target_session_id: (eb) => eb.ref("excluded.target_session_id"),
+            target_session_key: (eb) => eb.ref("excluded.target_session_key"),
             channel: (eb) => eb.ref("excluded.channel"),
             account_id: (eb) => eb.ref("excluded.account_id"),
+            conversation_kind: (eb) => eb.ref("excluded.conversation_kind"),
             parent_conversation_id: (eb) => eb.ref("excluded.parent_conversation_id"),
             conversation_id: (eb) => eb.ref("excluded.conversation_id"),
-            target_session_key: (eb) => eb.ref("excluded.target_session_key"),
             target_kind: (eb) => eb.ref("excluded.target_kind"),
             status: (eb) => eb.ref("excluded.status"),
             bound_at: (eb) => eb.ref("excluded.bound_at"),

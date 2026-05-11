@@ -50,6 +50,12 @@ This migration has one canonical runtime shape:
 - Legacy session config aliases belong only to doctor migration. Runtime does
   not interpret `session.idleMinutes`, `session.resetByType.dm`, or
   cross-agent `agent:main:*` main-session aliases for another configured agent.
+- Session routing identity is typed relational state. Hot runtime and UI paths
+  should read `sessions.session_scope`, `sessions.account_id`,
+  `sessions.primary_conversation_id`, `conversations`, and
+  `session_conversations`; they must not parse `session_key` or mine
+  `session_entries.entry_json` for provider identity except as a compatibility
+  shadow while old call sites are being deleted.
 - Channel-level direct-message markers such as `dm` versus `direct` are routing
   vocabulary, not transcript locators or file-store compatibility handles.
 - Legacy hook handler config belongs only to doctor warning/migration surfaces.
@@ -228,11 +234,17 @@ The branch already has a real shared SQLite base:
   schema version, timestamps, and agent id for agent databases. The layout still
   stays at `user_version = 1` because this SQLite schema has not shipped yet.
 - Per-agent session identity now has a canonical `sessions` root table keyed by
-  `session_id`, with `session_key`, timestamps, display fields, model metadata,
+  `session_id`, with `session_key`, `session_scope`, `account_id`,
+  `primary_conversation_id`, timestamps, display fields, model metadata,
   harness id, and parent/spawn linkage as queryable columns. The old
   `session_entries.entry_json` compatibility-shaped payload hangs off that root
   by foreign key; it is no longer the only schema-level representation of a
   session.
+- Per-agent external conversation identity is relational too:
+  `conversations` stores normalized provider/account/conversation identity, and
+  `session_conversations` links one OpenClaw session to one or more external
+  conversations. This covers shared-main DM sessions where multiple peers can
+  intentionally map to one session without lying in `session_key`.
 - Transcript events, transcript snapshots, and trajectory runtime events now
   reference the canonical per-agent `sessions` root and cascade on session
   deletion. Transcript identity/idempotency rows continue to cascade from the
@@ -252,9 +264,10 @@ The branch already has a real shared SQLite base:
   with indexed child, requester, and controller session keys. The old
   `subagents/runs.json` file is doctor migration input only.
 - Current conversation bindings now live in typed shared
-  `current_conversation_bindings` rows keyed by normalized conversation id and
-  indexed by target session. The old `bindings/current-conversations.json` file
-  is doctor migration input only.
+  `current_conversation_bindings` rows keyed by normalized conversation id, with
+  target agent/session columns and conversation kind stored outside
+  `record_json`. The old `bindings/current-conversations.json` file is doctor
+  migration input only.
 - TUI last-session restore pointers now live in typed shared
   `tui_last_sessions` rows keyed by the hashed TUI connection/session scope.
   The old TUI JSON file is doctor migration input only.
@@ -433,6 +446,14 @@ Completed consolidation/deletion highlights:
   prunes legacy alias keys; doctor owns canonicalization. The
   standalone JSON import helper is gone, and migration merges upsert newer rows
   instead of replacing the whole session table.
+- `src/config/sessions/delivery-info.ts` now resolves delivery context from the
+  typed per-agent `sessions` + `conversations` + `session_conversations` rows
+  first. `session_entries.entry_json` is only a compatibility fallback when a
+  typed conversation row is unavailable.
+- Stored-session reset decisions now prefer typed `sessions.session_scope`,
+  `sessions.chat_type`, and `sessions.channel` metadata before falling back to
+  `sessionKey` shape. `sessionKey` parsing remains only for explicit thread
+  suffixes and old compatibility fallback behavior.
 - Runtime session rows no longer carry the old `lastProvider` route alias.
   Helpers and tests use `lastChannel`, `deliveryContext`, and `origin` instead;
   doctor migration is the only place that should translate older route aliases.
@@ -1173,7 +1194,7 @@ task_runs(...)
 task_delivery_state(...)
 flow_runs(...)
 subagent_runs(run_id, child_session_key, requester_session_key, controller_session_key, created_at, ended_at, cleanup_handled, payload_json)
-current_conversation_bindings(binding_key, binding_id, channel, account_id, conversation_id, target_session_key, status, bound_at, expires_at, record_json)
+current_conversation_bindings(binding_key, binding_id, target_agent_id, target_session_id, target_session_key, channel, account_id, conversation_kind, parent_conversation_id, conversation_id, target_kind, status, bound_at, expires_at, metadata_json, record_json, updated_at)
 plugin_binding_approvals(plugin_root, channel, account_id, plugin_id, plugin_name, approved_at)
 tui_last_sessions(scope_key, session_key, updated_at)
 plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, expires_at)
@@ -1214,7 +1235,9 @@ Agent database:
 
 ```text
 schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
-sessions(session_id, session_key, created_at, updated_at, started_at, ended_at, status, chat_type, channel, model_provider, model, agent_harness_id, parent_session_key, spawned_by, display_name)
+sessions(session_id, session_key, session_scope, created_at, updated_at, started_at, ended_at, status, chat_type, channel, account_id, primary_conversation_id, model_provider, model, agent_harness_id, parent_session_key, spawned_by, display_name)
+conversations(conversation_id, channel, account_id, kind, peer_id, parent_conversation_id, thread_id, native_channel_id, native_direct_user_id, label, metadata_json, created_at, updated_at)
+session_conversations(session_id, conversation_id, role, first_seen_at, last_seen_at)
 session_entries(session_key, session_id, entry_json, updated_at)
 transcript_events(session_id, seq, event_json, created_at)
 transcript_event_identities(session_id, event_id, seq, event_type, has_parent, parent_id, message_idempotency_key, created_at)
@@ -1476,6 +1499,8 @@ The agent DB owns:
 
 - `sessions` as the canonical session root, with `session_entries` as the
   compatibility-shaped payload table attached to that root
+- `conversations` and `session_conversations` as the normalized provider
+  routing identity attached to sessions
 - `transcript_events`
 - transcript snapshots and compaction checkpoints. Done for runtime writes.
 - `vfs_entries`

@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT NOT NULL PRIMARY KEY,
   session_key TEXT NOT NULL,
+  session_scope TEXT NOT NULL DEFAULT 'conversation',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   started_at INTEGER,
@@ -18,12 +19,15 @@ CREATE TABLE IF NOT EXISTS sessions (
   status TEXT,
   chat_type TEXT,
   channel TEXT,
+  account_id TEXT,
+  primary_conversation_id TEXT,
   model_provider TEXT,
   model TEXT,
   agent_harness_id TEXT,
   parent_session_key TEXT,
   spawned_by TEXT,
-  display_name TEXT
+  display_name TEXT,
+  FOREIGN KEY (primary_conversation_id) REFERENCES conversations(conversation_id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated_at
@@ -34,6 +38,46 @@ CREATE INDEX IF NOT EXISTS idx_agent_sessions_created_at
 
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_session_key
   ON sessions(session_key);
+
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_conversation
+  ON sessions(primary_conversation_id, updated_at DESC, session_id)
+  WHERE primary_conversation_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS conversations (
+  conversation_id TEXT NOT NULL PRIMARY KEY,
+  channel TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  peer_id TEXT NOT NULL,
+  parent_conversation_id TEXT,
+  thread_id TEXT,
+  native_channel_id TEXT,
+  native_direct_user_id TEXT,
+  label TEXT,
+  metadata_json TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_conversations_lookup
+  ON conversations(channel, account_id, kind, peer_id, thread_id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_conversations_updated
+  ON conversations(updated_at DESC, conversation_id);
+
+CREATE TABLE IF NOT EXISTS session_conversations (
+  session_id TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'primary',
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, conversation_id, role),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
+  FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_conversations_conversation
+  ON session_conversations(conversation_id, last_seen_at DESC, session_id);
 
 CREATE TABLE IF NOT EXISTS session_entries (
   session_key TEXT NOT NULL PRIMARY KEY,

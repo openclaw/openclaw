@@ -1,6 +1,7 @@
 export type BindingTargetKind = "subagent" | "session";
 export type BindingStatus = "active" | "ending" | "ended";
 export type SessionBindingPlacement = "current" | "child";
+export type ConversationBindingKind = "channel" | "direct" | "group";
 export type SessionBindingErrorCode =
   | "BINDING_ADAPTER_UNAVAILABLE"
   | "BINDING_CAPABILITY_UNSUPPORTED"
@@ -10,6 +11,7 @@ export type ConversationRef = {
   channel: string;
   accountId: string;
   conversationId: string;
+  conversationKind?: ConversationBindingKind;
   parentConversationId?: string;
 };
 

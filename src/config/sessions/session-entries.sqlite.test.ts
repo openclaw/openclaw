@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { OriginatingChannelType } from "../../auto-reply/templating.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -19,6 +20,7 @@ import {
   getSessionEntry,
   listSessionEntries,
   patchSessionEntry,
+  recordSessionMetaFromInbound,
   upsertSessionEntry,
 } from "./store.js";
 import {
@@ -28,10 +30,22 @@ import {
 import type { SessionEntry } from "./types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
-type SessionEntriesTestDatabase = Pick<OpenClawAgentKyselyDatabase, "sessions" | "session_entries">;
+type SessionEntriesTestDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  | "conversations"
+  | "memory_index_chunks"
+  | "memory_index_sources"
+  | "session_conversations"
+  | "session_entries"
+  | "sessions"
+>;
 
 function createTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-session-entries-"));
+}
+
+function originatingChannel(channel: string): OriginatingChannelType {
+  return channel as OriginatingChannelType;
 }
 
 afterEach(() => {
@@ -128,6 +142,7 @@ describe("SQLite session row backend", () => {
     expect(row).toMatchObject({
       session_id: "ops-session",
       session_key: "discord:ops",
+      session_scope: "conversation",
       created_at: 100,
       updated_at: 200,
       status: "running",
@@ -137,6 +152,177 @@ describe("SQLite session row backend", () => {
       model: "gpt-5.5",
       agent_harness_id: "codex",
       display_name: "Ops",
+    });
+  });
+
+  it("stores direct conversation identity in typed agent rows", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+
+    upsertSessionEntry({
+      agentId: "ops",
+      env,
+      sessionKey: "discord:main",
+      entry: {
+        sessionId: "main-session",
+        updatedAt: 200,
+        chatType: "direct",
+        deliveryContext: {
+          channel: "discord",
+          to: "user:U1",
+          accountId: "work",
+        },
+        origin: {
+          provider: "discord",
+          chatType: "direct",
+          nativeDirectUserId: "U1",
+          nativeChannelId: "D1",
+          accountId: "work",
+        },
+      },
+    });
+
+    const database = openOpenClawAgentDatabase({ agentId: "ops", env });
+    const db = getNodeSqliteKysely<SessionEntriesTestDatabase>(database.db);
+    const session = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db.selectFrom("sessions").selectAll().where("session_id", "=", "main-session"),
+    );
+    expect(session).toMatchObject({
+      session_scope: "shared-main",
+      account_id: "work",
+    });
+    expect(session?.primary_conversation_id).toMatch(/^conv_/);
+    const conversation = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("conversations")
+        .selectAll()
+        .where("conversation_id", "=", session?.primary_conversation_id ?? ""),
+    );
+    expect(conversation).toMatchObject({
+      channel: "discord",
+      account_id: "work",
+      kind: "direct",
+      peer_id: "U1",
+      native_channel_id: "D1",
+      native_direct_user_id: "U1",
+    });
+    expect(
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_conversations")
+          .select(["session_id", "conversation_id", "role"])
+          .where("session_id", "=", "main-session"),
+      ).rows,
+    ).toEqual([
+      {
+        session_id: "main-session",
+        conversation_id: session?.primary_conversation_id,
+        role: "primary",
+      },
+    ]);
+  });
+
+  it("links multiple direct peers to a shared main DM session", async () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    await recordSessionMetaFromInbound({
+      agentId: "ops",
+      sessionKey: "discord:main",
+      ctx: {
+        Provider: "discord",
+        ChatType: "direct",
+        From: "discord:user:U1",
+        To: "bot",
+        OriginatingChannel: originatingChannel("discord"),
+        OriginatingTo: "user:U1",
+        AccountId: "work",
+        NativeDirectUserId: "U1",
+      },
+    });
+    await recordSessionMetaFromInbound({
+      agentId: "ops",
+      sessionKey: "discord:main",
+      ctx: {
+        Provider: "discord",
+        ChatType: "direct",
+        From: "discord:user:U2",
+        To: "bot",
+        OriginatingChannel: originatingChannel("discord"),
+        OriginatingTo: "user:U2",
+        AccountId: "work",
+        NativeDirectUserId: "U2",
+      },
+    });
+
+    const stored = getSessionEntry({ agentId: "ops", env, sessionKey: "discord:main" });
+    expect(stored?.sessionId).toBeTruthy();
+
+    const database = openOpenClawAgentDatabase({ agentId: "ops", env });
+    const db = getNodeSqliteKysely<SessionEntriesTestDatabase>(database.db);
+    const conversations = executeSqliteQuerySync(
+      database.db,
+      db.selectFrom("conversations").select(["kind", "peer_id"]).orderBy("peer_id", "asc"),
+    ).rows;
+    expect(conversations).toEqual([
+      { kind: "direct", peer_id: "U1" },
+      { kind: "direct", peer_id: "U2" },
+    ]);
+    const links = executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("session_conversations")
+        .select(["session_id", "conversation_id"])
+        .where("session_id", "=", stored?.sessionId ?? "")
+        .orderBy("conversation_id", "asc"),
+    ).rows;
+    expect(links).toHaveLength(2);
+  });
+
+  it("stores group conversation identity in typed agent rows", async () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    await recordSessionMetaFromInbound({
+      agentId: "ops",
+      sessionKey: "slack:group:T1:C1",
+      ctx: {
+        Provider: "slack",
+        ChatType: "channel",
+        From: "slack:channel:C1",
+        To: "bot",
+        OriginatingChannel: originatingChannel("slack"),
+        OriginatingTo: "channel:C1",
+        AccountId: "workspace-a",
+        GroupChannel: "#ops",
+        GroupSpace: "T1",
+        NativeChannelId: "C1",
+      },
+      groupResolution: {
+        key: "slack:channel:c1",
+        channel: "slack",
+        id: "c1",
+        chatType: "channel",
+      },
+    });
+
+    const database = openOpenClawAgentDatabase({ agentId: "ops", env });
+    const db = getNodeSqliteKysely<SessionEntriesTestDatabase>(database.db);
+    const conversation = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db.selectFrom("conversations").selectAll(),
+    );
+    expect(conversation).toMatchObject({
+      channel: "slack",
+      account_id: "workspace-a",
+      kind: "channel",
+      peer_id: "c1",
+      native_channel_id: "C1",
     });
   });
 
@@ -272,6 +458,38 @@ describe("SQLite session row backend", () => {
       sessionId: "ops-session",
       event: { type: "session", id: "ops-session" },
     });
+    const database = openOpenClawAgentDatabase({ agentId: "ops", env });
+    const db = getNodeSqliteKysely<SessionEntriesTestDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db.insertInto("memory_index_sources").values({
+        source_kind: "sessions",
+        source_key: "session:ops-session",
+        path: "transcript:ops:ops-session",
+        session_id: "ops-session",
+        hash: "hash",
+        mtime: 100,
+        size: 10,
+      }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db.insertInto("memory_index_chunks").values({
+        id: "chunk-1",
+        source_kind: "sessions",
+        source_key: "session:ops-session",
+        path: "transcript:ops:ops-session",
+        session_id: "ops-session",
+        start_line: 0,
+        end_line: 1,
+        hash: "hash",
+        model: "test",
+        text: "hello",
+        embedding: new Uint8Array([0, 0, 0, 0]),
+        embedding_dims: 1,
+        updated_at: 100,
+      }),
+    );
 
     expect(
       hasSqliteSessionTranscriptEvents({ agentId: "ops", env, sessionId: "ops-session" }),
@@ -281,13 +499,25 @@ describe("SQLite session row backend", () => {
     expect(
       hasSqliteSessionTranscriptEvents({ agentId: "ops", env, sessionId: "ops-session" }),
     ).toBe(false);
-
-    const database = openOpenClawAgentDatabase({ agentId: "ops", env });
-    const db = getNodeSqliteKysely<SessionEntriesTestDatabase>(database.db);
     expect(
       executeSqliteQueryTakeFirstSync(
         database.db,
         db.selectFrom("sessions").select("session_id").where("session_id", "=", "ops-session"),
+      ),
+    ).toBeUndefined();
+    expect(
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("memory_index_sources")
+          .select("source_key")
+          .where("source_key", "=", "session:ops-session"),
+      ),
+    ).toBeUndefined();
+    expect(
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        db.selectFrom("memory_index_chunks").select("id").where("id", "=", "chunk-1"),
       ),
     ).toBeUndefined();
   });

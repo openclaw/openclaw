@@ -43,6 +43,7 @@ import {
   type SessionEntry,
   upsertSessionEntry,
 } from "../../config/sessions.js";
+import { readSqliteSessionRoutingInfo } from "../../config/sessions/session-entries.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatUncaughtError } from "../../infra/errors.js";
@@ -975,12 +976,20 @@ export const agentHandlers: GatewayRequestHandlers = {
       } = loadSessionEntry(requestedSessionKey);
       cfgForAgent = cfg;
       const now = Date.now();
+      const routingInfo = readSqliteSessionRoutingInfo({
+        agentId: sessionAgentId,
+        sessionKey: canonicalKey,
+      });
       const resetPolicy = resolveSessionResetPolicy({
         sessionCfg: cfg.session,
-        resetType: resolveSessionResetType({ sessionKey: canonicalKey }),
+        resetType: resolveSessionResetType({
+          sessionKey: canonicalKey,
+          sessionScope: routingInfo?.sessionScope,
+          chatType: routingInfo?.chatType,
+        }),
         resetOverride: resolveChannelResetConfig({
           sessionCfg: cfg.session,
-          channel: entry?.lastChannel ?? entry?.channel ?? request.channel,
+          channel: routingInfo?.channel ?? entry?.lastChannel ?? entry?.channel ?? request.channel,
         }),
       });
       const freshness = entry

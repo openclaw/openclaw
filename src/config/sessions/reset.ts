@@ -26,6 +26,8 @@ export function isThreadSessionKey(sessionKey?: string | null): boolean {
 
 export function resolveSessionResetType(params: {
   sessionKey?: string | null;
+  sessionScope?: string | null;
+  chatType?: string | null;
   isGroup?: boolean;
   isThread?: boolean;
 }): SessionResetType {
@@ -34,6 +36,15 @@ export function resolveSessionResetType(params: {
   }
   if (params.isGroup) {
     return "group";
+  }
+  if (params.chatType === "group" || params.chatType === "channel") {
+    return "group";
+  }
+  if (params.sessionScope === "group" || params.sessionScope === "channel") {
+    return "group";
+  }
+  if (params.chatType === "direct" || params.sessionScope === "shared-main") {
+    return "direct";
   }
   const normalized = normalizeLowercaseStringOrEmpty(params.sessionKey);
   if (GROUP_SESSION_MARKERS.some((marker) => normalized.includes(marker))) {

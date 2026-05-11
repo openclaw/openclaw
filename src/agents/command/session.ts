@@ -16,6 +16,7 @@ import {
   resolveSessionResetPolicy,
 } from "../../config/sessions/reset-policy.js";
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
+import { readSqliteSessionRoutingInfo } from "../../config/sessions/session-entries.sqlite.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { listSessionEntries } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -226,11 +227,22 @@ export function resolveSession(opts: {
   const now = Date.now();
 
   const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
+  const routingInfo = sessionKey
+    ? readSqliteSessionRoutingInfo({ agentId, sessionKey })
+    : undefined;
 
-  const resetType = resolveSessionResetType({ sessionKey });
+  const resetType = resolveSessionResetType({
+    sessionKey,
+    sessionScope: routingInfo?.sessionScope,
+    chatType: routingInfo?.chatType,
+  });
   const channelReset = resolveChannelResetConfig({
     sessionCfg,
-    channel: sessionEntry?.lastChannel ?? sessionEntry?.channel ?? sessionEntry?.origin?.provider,
+    channel:
+      routingInfo?.channel ??
+      sessionEntry?.lastChannel ??
+      sessionEntry?.channel ??
+      sessionEntry?.origin?.provider,
   });
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg,

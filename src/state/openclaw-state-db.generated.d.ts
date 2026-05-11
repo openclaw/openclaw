@@ -296,12 +296,15 @@ export interface CurrentConversationBindings {
   bound_at: number;
   channel: string;
   conversation_id: string;
+  conversation_kind: string;
   expires_at: number | null;
   metadata_json: string | null;
   parent_conversation_id: string | null;
   record_json: string;
   status: string;
+  target_agent_id: string;
   target_kind: string;
+  target_session_id: string | null;
   target_session_key: string;
   updated_at: number;
 }

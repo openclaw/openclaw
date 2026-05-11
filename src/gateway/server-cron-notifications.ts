@@ -14,6 +14,7 @@ import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -54,6 +55,10 @@ function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> 
     headers.Authorization = `Bearer ${webhookToken}`;
   }
   return headers;
+}
+
+function redactWebhookUrl(url: string): string {
+  return redactSensitiveUrlLikeString(url);
 }
 
 async function postCronWebhook(params: {
