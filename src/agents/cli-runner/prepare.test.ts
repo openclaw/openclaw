@@ -217,6 +217,55 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     ).toBe(false);
   });
 
+  it("skips local cli auth for identity-less OAuth profiles when execution is prepared", () => {
+    expect(
+      shouldSkipLocalCliCredentialEpoch({
+        authProfileId: "anthropic:claude-cli",
+        authCredential: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+        preparedExecution: { env: {} },
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps local cli auth for identity-bearing OAuth profiles in combined mode", () => {
+    expect(
+      shouldSkipLocalCliCredentialEpoch({
+        authProfileId: "anthropic:work",
+        authCredential: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+          email: "user@example.com",
+        },
+        preparedExecution: { env: {} },
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps local cli auth for identity-less OAuth when no execution is prepared", () => {
+    expect(
+      shouldSkipLocalCliCredentialEpoch({
+        authProfileId: "anthropic:claude-cli",
+        authCredential: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+        preparedExecution: null,
+      }),
+    ).toBe(false);
+  });
+
   it("applies prompt-build hook context to Claude-style CLI preparation", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {

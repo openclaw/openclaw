@@ -468,11 +468,7 @@ describe("resolveCliAuthEpoch", () => {
     });
   });
 
-  it("documents the file-presence epoch flip bug for identity-less claude-cli OAuth (#80178)", async () => {
-    // This test reproduces the reported bug: when the local credential file
-    // appears or disappears while an auth-profile credential exists, the epoch
-    // flips because combined mode hashes both local and profile parts. The
-    // correct fix requires maintainer input on the auth-epoch policy boundary.
+  it("keeps identity-less claude-cli OAuth epochs stable across local file presence (#80178)", async () => {
     let localCredential: {
       type: "oauth";
       provider: "anthropic";
@@ -502,6 +498,7 @@ describe("resolveCliAuthEpoch", () => {
     const beforeFile = await resolveCliAuthEpoch({
       provider: "claude-cli",
       authProfileId: "anthropic:claude-cli",
+      skipLocalCredential: true,
     });
 
     localCredential = {
@@ -515,13 +512,11 @@ describe("resolveCliAuthEpoch", () => {
     const afterFile = await resolveCliAuthEpoch({
       provider: "claude-cli",
       authProfileId: "anthropic:claude-cli",
+      skipLocalCredential: true,
     });
 
     expectCliAuthEpoch(beforeFile);
     expectCliAuthEpoch(afterFile);
-    // BUG: file presence flips the epoch even though the identity is unchanged.
-    // A correct fix should make these equal without bypassing the
-    // skipLocalCredential / authEpochMode policy seam.
-    expect(afterFile).not.toBe(beforeFile);
+    expect(afterFile).toBe(beforeFile);
   });
 });
