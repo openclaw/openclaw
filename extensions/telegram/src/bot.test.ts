@@ -1,5 +1,5 @@
 import { rm } from "node:fs/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
@@ -1660,33 +1660,25 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
-    const contexts = requireArray(
+    const [conversationContext] = requireArray(
       payload.UntrustedStructuredContext,
-      "untrusted structured context",
-    ).map((item) => requireRecord(item, "context item"));
-    expect(contexts).toHaveLength(2);
-    const nearbyContext = contexts.find((item) => item.label === "Nearby reply target window");
-    const nearbyPayload = requireRecord(nearbyContext?.payload, "nearby context payload");
-    expect(nearbyPayload.relation).toBe("around_reply_target");
-    const nearbyMessages = requireArray(nearbyPayload.messages, "nearby messages").map((item) =>
-      requireRecord(item, "nearby message"),
+      "structured context",
     );
-    const replyTarget = nearbyMessages.find((item) => item.message_id === "100");
-    expect(replyTarget?.sender).toBe("Assistant");
-    expect(replyTarget?.body).toBe("Earlier deployment answer");
-    expect(replyTarget?.is_reply_target).toBe(true);
-    const currentContext = contexts.find((item) => item.label === "Current local chat window");
-    const currentPayload = requireRecord(currentContext?.payload, "current context payload");
-    expect(currentPayload.relation).toBe("before_current_message");
-    const currentMessages = requireArray(currentPayload.messages, "current messages").map((item) =>
-      requireRecord(item, "current message"),
+    const contextRecord = requireRecord(conversationContext, "conversation context");
+    expect(contextRecord.label).toBe("Conversation context");
+    const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+    expect(contextPayload.relation).toBe("selected_for_current_message");
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
     );
-    const lunchMessage = currentMessages.find((item) => item.message_id === "200");
-    expect(lunchMessage?.sender).toBe("Sam");
-    expect(lunchMessage?.body).toBe("Lunch after standup?");
-    const reviewMessage = currentMessages.find((item) => item.message_id === "201");
-    expect(reviewMessage?.sender).toBe("Riley");
-    expect(reviewMessage?.body).toBe("After the incident review.");
+    const messagesById = new Map(messages.map((message) => [message.message_id, message]));
+    expect(messagesById.get("100")?.sender).toBe("Assistant");
+    expect(messagesById.get("100")?.body).toBe("Earlier deployment answer");
+    expect(messagesById.get("100")?.is_reply_target).toBe(true);
+    expect(messagesById.get("200")?.sender).toBe("Sam");
+    expect(messagesById.get("200")?.body).toBe("Lunch after standup?");
+    expect(messagesById.get("201")?.sender).toBe("Riley");
+    expect(messagesById.get("201")?.body).toBe("After the incident review.");
   });
 
   it("uses quote text when a Telegram partial reply is received", async () => {

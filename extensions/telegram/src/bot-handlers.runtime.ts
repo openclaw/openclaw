@@ -8,13 +8,13 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
-import { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
-import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
+import { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,
@@ -106,6 +106,7 @@ import {
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import { dispatchTelegramPluginInteractiveHandler } from "./interactive-dispatch.js";
 import {
+  buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
   resolveTelegramMessageCachePath,
@@ -705,50 +706,32 @@ export const registerTelegramHandlers = ({
       messageId,
     });
     const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
-    const currentWindow = messageCache.recentBefore({
-      accountId,
-      chatId: msg.chat.id,
+    const conversationContext = buildTelegramConversationContext({
+      cache: messageCache,
       messageId,
-      ...(Number.isFinite(threadId) ? { threadId } : {}),
-      limit: 10,
-    });
-    const replyTargetId = replyChainNodes[0]?.messageId;
-    const replyTargetWindow = messageCache.around({
       accountId,
       chatId: msg.chat.id,
-      messageId: replyTargetId,
       ...(Number.isFinite(threadId) ? { threadId } : {}),
-      before: 2,
-      after: 2,
+      replyChainNodes,
+      recentLimit: 10,
+      replyTargetWindowSize: 2,
     });
-    const entries: TelegramPromptContextEntry[] = [];
-    if (replyTargetWindow.length > 0) {
-      entries.push({
-        label: "Nearby reply target window",
-        source: "telegram",
-        type: "chat_window",
-        payload: {
-          order: "chronological",
-          relation: "around_reply_target",
-          messages: replyTargetWindow.map((node) =>
-            toPromptContextMessage(node, { replyTarget: node.messageId === replyTargetId }),
-          ),
-        },
-      });
-    }
-    if (currentWindow.length > 0) {
-      entries.push({
-        label: "Current local chat window",
-        source: "telegram",
-        type: "chat_window",
-        payload: {
-          order: "chronological",
-          relation: "before_current_message",
-          messages: currentWindow.map((node) => toPromptContextMessage(node)),
-        },
-      });
-    }
-    return entries;
+    return conversationContext.length > 0
+      ? [
+          {
+            label: "Conversation context",
+            source: "telegram",
+            type: "chat_window",
+            payload: {
+              order: "chronological",
+              relation: "selected_for_current_message",
+              messages: conversationContext.map((entry) =>
+                toPromptContextMessage(entry.node, { replyTarget: entry.isReplyTarget }),
+              ),
+            },
+          },
+        ]
+      : [];
   };
 
   const resolveReplyMediaForChain = async (
@@ -951,7 +934,7 @@ export const registerTelegramHandlers = ({
   };
 
   class TelegramRetryableCallbackError extends Error {
-    constructor(public readonly cause: unknown) {
+    constructor(public override readonly cause: unknown) {
       super(String(cause));
       this.name = "TelegramRetryableCallbackError";
     }

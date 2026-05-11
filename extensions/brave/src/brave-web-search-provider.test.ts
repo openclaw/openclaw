@@ -102,7 +102,8 @@ describe("brave web search provider", () => {
 
     expect(result).toMatchObject({
       error: "missing_brave_api_key",
-      message: expect.stringContaining("use web_fetch for a specific URL or the browser tool"),
+      message:
+        "web_search (brave) needs a Brave Search API key. Run `openclaw configure --section web` to store it, or set BRAVE_API_KEY in the Gateway environment. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
     });
   });
 
@@ -313,12 +314,15 @@ describe("brave web search provider", () => {
     if (result.ok) {
       return;
     }
-    expect(result.errors).toContainEqual(
-      expect.objectContaining({
+    expect(result.errors).toEqual([
+      {
         path: "webSearch.mode",
+        message: 'must be equal to one of the allowed values (allowed: "web", "llm-context")',
+        text: 'webSearch.mode: must be equal to one of the allowed values (allowed: "web", "llm-context")',
         allowedValues: ["web", "llm-context"],
-      }),
-    );
+        allowedValuesHiddenCount: 0,
+      },
+    ]);
   });
 
   it("maps llm-context results into wrapped source entries", () => {
@@ -614,40 +618,34 @@ describe("brave web search provider", () => {
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const messages = loggerInfoMock.mock.calls.map((call) => call[0]);
-    expect(messages).toEqual(
-      expect.arrayContaining([
-        "brave http cache miss",
-        "brave http request",
-        "brave http response",
-        "brave http cache write",
-        "brave http cache hit",
-      ]),
+    expect(messages).toEqual([
+      "brave http cache miss",
+      "brave http request",
+      "brave http response",
+      "brave http cache write",
+      "brave http cache hit",
+    ]);
+    const requestLog = loggerInfoMock.mock.calls.find(
+      ([message]) => message === "brave http request",
     );
-    expect(loggerInfoMock.mock.calls).toEqual(
-      expect.arrayContaining([
-        [
-          "brave http request",
-          expect.objectContaining({
-            mode: "web",
-            query: "unique brave diagnostics query",
-            params: expect.objectContaining({ q: "unique brave diagnostics query", count: "1" }),
-            url: expect.stringContaining("api.search.brave.com/res/v1/web/search"),
-          }),
-        ],
-        [
-          "brave http response",
-          expect.objectContaining({
-            mode: "web",
-            status: 200,
-            ok: true,
-          }),
-        ],
-      ]),
-    );
+    expect(requestLog?.[1]).toEqual({
+      mode: "web",
+      query: "unique brave diagnostics query",
+      params: {
+        count: "1",
+        q: "unique brave diagnostics query",
+      },
+      url: "https://api.search.brave.com/res/v1/web/search?q=unique+brave+diagnostics+query&count=1",
+    });
     const responseLog = loggerInfoMock.mock.calls.find(
       ([message]) => message === "brave http response",
     );
-    const responsePayload = responseLog?.[1] as { durationMs?: unknown } | undefined;
+    const responsePayload = responseLog?.[1] as
+      | { durationMs?: unknown; mode?: unknown; ok?: unknown; status?: unknown }
+      | undefined;
+    expect(responsePayload?.mode).toBe("web");
+    expect(responsePayload?.status).toBe(200);
+    expect(responsePayload?.ok).toBe(true);
     expect(typeof responsePayload?.durationMs).toBe("number");
     expect(responsePayload?.durationMs).toBeGreaterThanOrEqual(0);
     expect(JSON.stringify(loggerInfoMock.mock.calls)).not.toContain("brave-test-key");

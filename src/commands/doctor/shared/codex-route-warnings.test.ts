@@ -65,7 +65,8 @@ describe("collectCodexRouteWarnings", () => {
       } as OpenClawConfig,
     });
 
-    expect(warnings).toEqual([expect.stringContaining("Legacy `openai-codex/*`")]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("Legacy `openai-codex/*`");
     expect(warnings[0]).toContain("agents.defaults.model");
     expect(warnings[0]).toContain("openai/gpt-5.5");
     expect(warnings[0]).not.toContain("agentRuntime.id");
@@ -85,7 +86,8 @@ describe("collectCodexRouteWarnings", () => {
       } as OpenClawConfig,
     });
 
-    expect(warnings).toEqual([expect.stringContaining("openai/gpt-5.5")]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("openai/gpt-5.5");
     expect(warnings[0]).toContain('runtime is "codex"');
   });
 
@@ -103,7 +105,8 @@ describe("collectCodexRouteWarnings", () => {
       },
     });
 
-    expect(warnings).toEqual([expect.stringContaining('runtime is "codex"')]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('runtime is "codex"');
   });
 
   it("does not warn for canonical OpenAI refs", () => {
@@ -193,14 +196,23 @@ describe("collectCodexRouteWarnings", () => {
     });
 
     expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toEqual([
-      expect.stringContaining("Repaired Codex model routes"),
+    expect(result.changes).toHaveLength(6);
+    expect(result.changes[0]).toContain("Repaired Codex model routes");
+    expect(result.changes[1]).toBe(
       'Set agents.defaults.models.openai/gpt-5.5.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
+    );
+    expect(result.changes[2]).toBe(
       'Set agents.defaults.models.openai/gpt-5.4.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
+    );
+    expect(result.changes[3]).toBe(
       'Set agents.list.worker.models.openai/gpt-5.4.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
+    );
+    expect(result.changes[4]).toBe(
       "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
+    );
+    expect(result.changes[5]).toBe(
       "Removed agents.list.worker.agentRuntime; runtime is now provider/model scoped.",
-    ]);
+    );
     expect(result.cfg.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.5",
       fallbacks: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
@@ -451,11 +463,10 @@ describe("collectCodexRouteWarnings", () => {
       }).runtime,
     ).toBe("pi");
     expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toEqual([
-      expect.stringContaining(
-        "agents.defaults.heartbeat.model: openai-codex/gpt-5.4 should become openai/gpt-5.4",
-      ),
-    ]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain(
+      "agents.defaults.heartbeat.model: openai-codex/gpt-5.4 should become openai/gpt-5.4",
+    );
   });
 
   it("repairs non-agent OpenAI Codex refs when canonical OpenAI already uses Codex runtime", () => {
@@ -542,11 +553,10 @@ describe("collectCodexRouteWarnings", () => {
       }).runtime,
     ).toBe("pi");
     expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toEqual([
-      expect.stringContaining(
-        "hooks.gmail.model: openai-codex/gpt-5.4 should become openai/gpt-5.4",
-      ),
-    ]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain(
+      "hooks.gmail.model: openai-codex/gpt-5.4 should become openai/gpt-5.4",
+    );
   });
 
   it("repairs persisted session route refs, clears stale runtime pins, and preserves auth pins", () => {

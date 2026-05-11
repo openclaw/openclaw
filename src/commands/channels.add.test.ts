@@ -97,7 +97,8 @@ vi.mock("./onboard-channels.js", async () => {
     await vi.importActual<typeof import("./onboard-channels.js")>("./onboard-channels.js");
   return {
     ...actual,
-    setupChannels: (...args: unknown[]) => channelWizardMocks.setupChannels(...args),
+    setupChannels: (...args: Parameters<typeof actual.setupChannels>) =>
+      channelWizardMocks.setupChannels(...args),
   };
 });
 
@@ -455,6 +456,22 @@ describe("channelsAddCommand", () => {
     expect(setupOptions().promptAccountIds).toBe(true);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("No channel changes made.");
+  });
+
+  it("exits quietly when guided channel setup is cancelled", async () => {
+    const { WizardCancelledError } = await import("../wizard/prompts.js");
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: { channels: {} },
+      config: { channels: {} },
+    });
+    channelWizardMocks.setupChannels.mockRejectedValue(new WizardCancelledError());
+
+    await channelsAddCommand({}, runtime, { hasFlags: false });
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("runs channel lifecycle hooks only when account config changes", async () => {
