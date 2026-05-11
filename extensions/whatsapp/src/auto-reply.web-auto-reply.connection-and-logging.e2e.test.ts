@@ -169,6 +169,60 @@ describe("web auto-reply connection", () => {
     }
   });
 
+  it("widens append catch-up after reconnect from an active listener", async () => {
+    const sleep = vi.fn(async () => {});
+    const scripted = createScriptedWebListenerFactory();
+    const { controller, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory: scripted.listenerFactory,
+      sleep,
+      messageTimeoutMs: 30 * 60_000,
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(scripted.getListenerCount()).toBe(1);
+      },
+      { timeout: 250, interval: 2 },
+    );
+    expect(
+      (
+        mockCallArg(scripted.listenerFactory, 0, 0) as {
+          appendReplyGraceMs?: number;
+        }
+      ).appendReplyGraceMs,
+    ).toBeUndefined();
+
+    const spies = createWebInboundDeliverySpies();
+    await sendWebDirectInboundMessage({
+      onMessage: requireOnMessage(scripted.getOnMessage()),
+      body: "hi before reconnect",
+      from: "+1",
+      to: "+2",
+      id: "active-before-reconnect",
+      spies,
+    });
+
+    scripted.resolveClose(0, { status: 408, isLoggedOut: false, error: new Error("timeout") });
+    await vi.waitFor(
+      () => {
+        expect(scripted.getListenerCount()).toBe(2);
+      },
+      { timeout: 250, interval: 2 },
+    );
+
+    expect(
+      (
+        mockCallArg(scripted.listenerFactory, 1, 0) as {
+          appendReplyGraceMs?: number;
+        }
+      ).appendReplyGraceMs,
+    ).toBe(30 * 60_000);
+
+    controller.abort();
+    await run;
+  });
+
   it("treats status 440 as non-retryable and stops without retrying", async () => {
     const sleep = vi.fn(async () => {});
     const scripted = createScriptedWebListenerFactory();

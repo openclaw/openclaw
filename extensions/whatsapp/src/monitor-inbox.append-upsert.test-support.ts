@@ -58,6 +58,31 @@ describe("append upsert handling (#20952)", () => {
     await listener.close();
   });
 
+  it("processes reconnect catch-up append messages inside the configured grace window", async () => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage, {
+      appendReplyGraceMs: 30 * 60_000,
+    });
+
+    const catchUpTs = Math.floor(Date.now() / 1000) - 15 * 60;
+    sock.ev.emit("messages.upsert", {
+      type: "append",
+      messages: [
+        {
+          key: { id: "catch-up-1", fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          message: { conversation: "missed while reconnecting" },
+          messageTimestamp: catchUpTs,
+          pushName: "Reconnect Tester",
+        },
+      ],
+    });
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+
+    await listener.close();
+  });
+
   it("skips append messages with NaN/non-finite timestamps", async () => {
     const onMessage = vi.fn(async () => {});
     const { listener, sock } = await startInboxMonitor(onMessage);

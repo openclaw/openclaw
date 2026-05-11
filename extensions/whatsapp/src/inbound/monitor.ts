@@ -54,6 +54,7 @@ import type { WebInboundMessage, WebListenerCloseReason } from "./types.js";
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress";
 const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const DEFAULT_APPEND_REPLY_GRACE_MS = 60_000;
 export const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
 type WhatsAppGroupMetadataCacheEntry = {
@@ -147,6 +148,8 @@ type MonitorWebInboxOptions = {
   sendReadReceipts?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
+  /** Maximum age before connect for append/history messages that may auto-reply. */
+  appendReplyGraceMs?: number;
   /** Optional debounce gating predicate. */
   shouldDebounce?: (msg: WebInboundMessage) => boolean;
   /** Optional shared socket reference so reply closures can follow reconnects. */
@@ -176,6 +179,12 @@ export async function attachWebInboxToSocket(
   const inboundConsoleLog = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
   const sock = options.sock;
   const connectedAtMs = Date.now();
+  const appendReplyGraceMs =
+    typeof options.appendReplyGraceMs === "number" &&
+    Number.isFinite(options.appendReplyGraceMs) &&
+    options.appendReplyGraceMs > 0
+      ? options.appendReplyGraceMs
+      : DEFAULT_APPEND_REPLY_GRACE_MS;
   if (options.socketRef) {
     options.socketRef.current = sock;
   }
@@ -818,11 +827,10 @@ export async function attachWebInboxToSocket(
 
       // If this is history/offline catch-up, mark read above but skip auto-reply.
       if (upsert.type === "append") {
-        const APPEND_RECENT_GRACE_MS = 60_000;
         const msgTsRaw = msg.messageTimestamp;
         const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : Number.NaN;
         const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
-        if (msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS) {
+        if (msgTsMs < connectedAtMs - appendReplyGraceMs) {
           continue;
         }
       }

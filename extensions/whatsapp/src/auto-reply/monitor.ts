@@ -324,6 +324,9 @@ export async function monitorWebChannel(
               selfChatMode: account.selfChatMode,
               sendReadReceipts: account.sendReadReceipts,
               debounceMs: inboundDebounceMs,
+              appendReplyGraceMs: connection.openedAfterRecentInbound
+                ? Math.max(messageTimeoutMs, 60_000)
+                : undefined,
               shouldDebounce,
               socketRef: controller.socketRef,
               shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),
