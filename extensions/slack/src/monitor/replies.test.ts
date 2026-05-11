@@ -6,11 +6,16 @@ vi.mock("../send.js", () => ({
 }));
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
+let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
+let resolveDeliveredSlackReplyThreadTs: typeof import("./replies.js").resolveDeliveredSlackReplyThreadTs;
 let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
 import { deliverSlackSlashReplies } from "./replies.js";
 
+const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
+
 function baseParams(overrides?: Record<string, unknown>) {
   return {
+    cfg: SLACK_TEST_CFG,
     replies: [{ text: "hello" }],
     target: "C123",
     token: "xoxb-test",
@@ -21,9 +26,22 @@ function baseParams(overrides?: Record<string, unknown>) {
   };
 }
 
+function requireSendCall(index = 0) {
+  const call = sendMock.mock.calls[index] as [string, string, Record<string, unknown>] | undefined;
+  if (!call) {
+    throw new Error(`sendMessageSlack call ${index} missing`);
+  }
+  return call;
+}
+
 describe("deliverReplies identity passthrough", () => {
   beforeAll(async () => {
-    ({ deliverReplies, resolveSlackThreadTs } = await import("./replies.js"));
+    ({
+      createSlackReplyDeliveryPlan,
+      deliverReplies,
+      resolveDeliveredSlackReplyThreadTs,
+      resolveSlackThreadTs,
+    } = await import("./replies.js"));
   });
 
   beforeEach(() => {
@@ -35,7 +53,8 @@ describe("deliverReplies identity passthrough", () => {
     await deliverReplies(baseParams({ identity }));
 
     expect(sendMock).toHaveBeenCalledOnce();
-    expect(sendMock.mock.calls[0][2]).toMatchObject({ identity });
+    const [, , options] = requireSendCall();
+    expect(options.identity).toBe(identity);
   });
 
   it("passes identity to sendMessageSlack for media replies", async () => {
@@ -49,7 +68,8 @@ describe("deliverReplies identity passthrough", () => {
     );
 
     expect(sendMock).toHaveBeenCalledOnce();
-    expect(sendMock.mock.calls[0][2]).toMatchObject({ identity });
+    const [, , options] = requireSendCall();
+    expect(options.identity).toBe(identity);
   });
 
   it("omits identity key when not provided", async () => {
@@ -92,13 +112,10 @@ describe("deliverReplies identity passthrough", () => {
     );
 
     expect(sendMock).toHaveBeenCalledOnce();
-    expect(sendMock).toHaveBeenCalledWith(
-      "C123",
-      "",
-      expect.objectContaining({
-        blocks,
-      }),
-    );
+    const [target, text, options] = requireSendCall();
+    expect(target).toBe("C123");
+    expect(text).toBe("");
+    expect(options.blocks).toStrictEqual(blocks);
   });
 
   it("renders interactive replies into Slack blocks during delivery", async () => {
@@ -124,21 +141,18 @@ describe("deliverReplies identity passthrough", () => {
     );
 
     expect(sendMock).toHaveBeenCalledOnce();
-    expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
-      blocks: [
-        expect.objectContaining({ type: "section" }),
-        expect.objectContaining({
-          type: "actions",
-          elements: [
-            expect.objectContaining({
-              action_id: "openclaw:reply_button:1:1",
-              style: "primary",
-              value: "approve",
-            }),
-          ],
-        }),
-      ],
-    });
+    const [, , options] = requireSendCall();
+    const blocks = options.blocks as Array<{
+      type?: string;
+      elements?: Array<{ action_id?: string; style?: string; value?: string }>;
+    }>;
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]?.type).toBe("section");
+    expect(blocks[1]?.type).toBe("actions");
+    expect(blocks[1]?.elements).toHaveLength(1);
+    expect(blocks[1]?.elements?.[0]?.action_id).toBe("openclaw:reply_button:1:1");
+    expect(blocks[1]?.elements?.[0]?.style).toBe("primary");
+    expect(blocks[1]?.elements?.[0]?.value).toBe("approve");
   });
 
   it("rejects replies when merged Slack blocks exceed the platform limit", async () => {
@@ -163,6 +177,41 @@ describe("deliverReplies identity passthrough", () => {
         }),
       ),
     ).rejects.toThrow(/Slack blocks cannot exceed 50 items/i);
+  });
+});
+
+describe("resolveDeliveredSlackReplyThreadTs", () => {
+  beforeAll(async () => {
+    ({ resolveDeliveredSlackReplyThreadTs } = await import("./replies.js"));
+  });
+
+  it("prefers explicit reply targets when reply tags are enabled", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "first",
+        payloadReplyToId: "explicit-thread",
+        replyThreadTs: "planned-thread",
+      }),
+    ).toBe("explicit-thread");
+  });
+
+  it("ignores explicit reply tags when replyToMode is off", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "off",
+        payloadReplyToId: "explicit-thread",
+        replyThreadTs: "planned-thread",
+      }),
+    ).toBe("planned-thread");
+  });
+
+  it("falls back to the planned reply thread when no explicit reply tag exists", () => {
+    expect(
+      resolveDeliveredSlackReplyThreadTs({
+        replyToMode: "batched",
+        replyThreadTs: "planned-thread",
+      }),
+    ).toBe("planned-thread");
   });
 });
 
@@ -211,6 +260,29 @@ describe("resolveSlackThreadTs fallback classification", () => {
   });
 });
 
+describe("createSlackReplyDeliveryPlan", () => {
+  it("lets draft previews inspect first thread targets without consuming them", () => {
+    const hasRepliedRef = { value: false };
+    const plan = createSlackReplyDeliveryPlan({
+      replyToMode: "first",
+      incomingThreadTs: undefined,
+      messageTs: "9999999999.999999",
+      hasRepliedRef,
+      isThreadReply: false,
+    });
+
+    expect(plan.peekThreadTs()).toBe("9999999999.999999");
+    expect(plan.peekThreadTs()).toBe("9999999999.999999");
+    expect(hasRepliedRef.value).toBe(false);
+
+    plan.markSent();
+
+    expect(hasRepliedRef.value).toBe(true);
+    expect(plan.peekThreadTs()).toBeUndefined();
+    expect(plan.nextThreadTs()).toBeUndefined();
+  });
+});
+
 describe("deliverSlackSlashReplies chunking", () => {
   it("keeps a 4205-character reply in a single slash response by default", async () => {
     const respond = vi.fn(async () => undefined);
@@ -227,6 +299,33 @@ describe("deliverSlackSlashReplies chunking", () => {
     expect(respond).toHaveBeenCalledWith({
       text,
       response_type: "ephemeral",
+    });
+  });
+
+  it("sends block-only slash replies instead of dropping them", async () => {
+    const respond = vi.fn(async () => undefined);
+    const blocks = [{ type: "divider" }];
+
+    await deliverSlackSlashReplies({
+      replies: [
+        {
+          channelData: {
+            slack: {
+              blocks,
+            },
+          },
+        },
+      ],
+      respond,
+      ephemeral: false,
+      textLimit: 8000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith({
+      text: "",
+      blocks,
+      response_type: "in_channel",
     });
   });
 });

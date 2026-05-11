@@ -22,10 +22,35 @@ export function forwardSignalToVitestProcessGroup(params) {
     params.kill(target, params.signal);
     return true;
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ESRCH") {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error.code === "ESRCH" || error.code === "EPERM")
+    ) {
       return false;
     }
     throw error;
+  }
+}
+
+function ensureProcessListenerCapacity(processObject, eventName, additionalListeners = 1) {
+  if (
+    typeof processObject.getMaxListeners !== "function" ||
+    typeof processObject.setMaxListeners !== "function" ||
+    typeof processObject.listenerCount !== "function"
+  ) {
+    return;
+  }
+
+  const currentLimit = processObject.getMaxListeners();
+  if (currentLimit === 0) {
+    return;
+  }
+
+  const neededLimit = processObject.listenerCount(eventName) + additionalListeners + 1;
+  if (neededLimit > currentLimit) {
+    processObject.setMaxListeners(neededLimit);
   }
 }
 
@@ -57,12 +82,14 @@ export function installVitestProcessGroupCleanup(params) {
       forward(signal);
     };
     signalHandlers.set(signal, handler);
+    ensureProcessListenerCapacity(processObject, signal);
     processObject.on(signal, handler);
   }
 
   const exitHandler = () => {
     forward(cleanupSignal);
   };
+  ensureProcessListenerCapacity(processObject, "exit");
   processObject.on("exit", exitHandler);
 
   return () => {

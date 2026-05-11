@@ -1,11 +1,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearCompactionProviders,
+  registerCompactionProvider,
+} from "../../plugins/compaction-provider.js";
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -34,6 +38,7 @@ const {
   formatPreservedTurnsSection,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
+  prependPreviousSummaryForRedistill,
   appendSummarySection,
   resolveRecentTurnsPreserve,
   resolveQualityGuardMaxRetries,
@@ -59,6 +64,7 @@ beforeEach(() => {
 
 afterEach(() => {
   __testing.setSummarizeInStagesForTest();
+  clearCompactionProviders();
 });
 
 function stubSessionManager(): ExtensionContext["sessionManager"] {
@@ -108,7 +114,10 @@ const createCompactionHandler = () => {
   } as unknown as ExtensionAPI;
   compactionSafeguardExtension(mockApi);
   expect(compactionHandler).toBeDefined();
-  return compactionHandler as CompactionHandler;
+  if (!compactionHandler) {
+    throw new Error("Expected compaction safeguard to register a handler.");
+  }
+  return compactionHandler;
 };
 
 const createCompactionEvent = (params: { messageText: string; tokensBefore: number }) => ({
@@ -187,7 +196,6 @@ function expectCompactionResult(result: {
   };
 }) {
   expect(result.cancel).not.toBe(true);
-  expect(result.compaction).toBeDefined();
   if (!result.compaction) {
     throw new Error("Expected compaction result");
   }
@@ -504,7 +512,7 @@ describe("compaction-safeguard runtime registry", () => {
   it("clears entry when value is null", () => {
     const sm = {};
     setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.7 });
-    expect(getCompactionSafeguardRuntime(sm)).not.toBeNull();
+    expect(getCompactionSafeguardRuntime(sm)).toEqual({ maxHistoryShare: 0.7 });
     setCompactionSafeguardRuntime(sm, null);
     expect(getCompactionSafeguardRuntime(sm)).toBeNull();
   });
@@ -892,7 +900,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const identifiers = extractOpaqueIdentifiers(
       "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and again a1b2c3d4e5f6",
     );
-    expect(identifiers.filter((id) => id === "A1B2C3D4E5F6")).toHaveLength(1); // pragma: allowlist secret
+    expect(
+      identifiers.reduce((count, id) => count + (id === "A1B2C3D4E5F6" ? 1 : 0), 0), // pragma: allowlist secret
+    ).toBe(1);
   });
 
   it("dedupes identifiers before applying the result cap", () => {
@@ -1193,6 +1203,20 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(buildStructuredFallbackSummary(structured)).toBe(structured);
   });
 
+  it("converts previous summaries into redistill input instead of update-prompt state", () => {
+    const messages: AgentMessage[] = [{ role: "user", content: "new context", timestamp: 1 }];
+    const redistillMessages = prependPreviousSummaryForRedistill({
+      messages,
+      previousSummary: "## Goal\nold duplicate summary",
+    });
+
+    expect(redistillMessages).toHaveLength(2);
+    expect(redistillMessages[0]?.role).toBe("user");
+    expect(JSON.stringify(redistillMessages[0])).toContain("<previous-compaction-summary>");
+    expect(JSON.stringify(redistillMessages[0])).toContain("Prune stale, duplicate");
+    expect(redistillMessages[1]).toBe(messages[0]);
+  });
+
   it("restructures summaries with near-match headings instead of reusing them", () => {
     const nearMatch = [
       "## Decisions",
@@ -1281,6 +1305,89 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
   });
 
+  it("caps summarization reserve tokens to the model output limit", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const compactionHandler = createCompactionHandler();
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "large history", timestamp: 1 } as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 250_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 240_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    await compactionHandler(event, mockContext);
+
+    const call = mockSummarizeInStages.mock.calls[0]?.[0];
+    expect(call?.reserveTokens).toBe(128_000);
+  });
+
+  it("adds Copilot IDE headers to built-in compaction summarization", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      provider: "github-copilot",
+      api: "openai-responses" as const,
+      baseUrl: "https://api.githubcopilot.com",
+    });
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({
+      ok: true,
+      apiKey: "github-token",
+      headers: { "X-Test": "1" },
+    });
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock,
+    });
+    const compactionHandler = createCompactionHandler();
+    const event = createCompactionEvent({
+      messageText: "summarize me",
+      tokensBefore: 1000,
+    });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4000,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as { cancel?: boolean };
+
+    expect(result.cancel).not.toBe(true);
+    const summaryCall = mockSummarizeInStages.mock.calls.at(-1)?.[0];
+    expect(summaryCall?.headers?.["Copilot-Integration-Id"]).toBe("vscode-chat");
+    expect(summaryCall?.headers?.["Editor-Plugin-Version"]).toBe("copilot-chat/0.35.0");
+    expect(summaryCall?.headers?.["Openai-Organization"]).toBe("github-copilot");
+    expect(summaryCall?.headers?.["User-Agent"]).toBe("GitHubCopilotChat/0.26.7");
+    expect(summaryCall?.headers?.["X-Test"]).toBe("1");
+    expect(summaryCall?.headers?.["x-initiator"]).toBe("user");
+  });
+
   it("does not retry summaries unless quality guard is explicitly enabled", async () => {
     mockSummarizeInStages.mockReset();
     mockSummarizeInStages.mockResolvedValue("summary missing headings");
@@ -1367,6 +1474,13 @@ describe("compaction-safeguard recent-turn preservation", () => {
       preparation: {
         messagesToSummarize: [
           { role: "user", content: "older context", timestamp: 1 },
+          {
+            role: "custom",
+            customType: "openclaw.runtime-context",
+            content: "secret runtime context",
+            display: false,
+            timestamp: 1.5,
+          } as unknown as AgentMessage,
           { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
           { role: "user", content: "latest ask status", timestamp: 3 },
           {
@@ -1633,6 +1747,145 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summary).toContain("## Exact identifiers");
     expect(summary).toContain("legacy summary without headings");
   });
+
+  it("re-distills prior summaries on the LLM path instead of preserving them verbatim", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(
+      [
+        "## Decisions",
+        "Condensed prior context with latest status.",
+        "## Open TODOs",
+        "None.",
+        "## Constraints/Rules",
+        "Preserve identifiers.",
+        "## Pending user asks",
+        "latest ask status",
+        "## Exact identifiers",
+        "None.",
+      ].join("\n"),
+    );
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [{ role: "user", content: "latest ask status", timestamp: 1 }],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: "## Goal\nOld duplicated section that should be re-distilled.",
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    const call = mockSummarizeInStages.mock.calls[0]?.[0];
+    expect(call?.previousSummary).toBeUndefined();
+    expect(JSON.stringify(call?.messages[0])).toContain("<previous-compaction-summary>");
+    expect(JSON.stringify(call?.messages[0])).toContain("Old duplicated section");
+  });
+
+  it("passes compaction instructions to providers and preserves suffix context", async () => {
+    mockSummarizeInStages.mockReset();
+    const providerSummarize = vi.fn().mockResolvedValue("provider summary body");
+    registerCompactionProvider({
+      id: "test-provider",
+      label: "Test Provider",
+      summarize: providerSummarize,
+    });
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "test-provider",
+      recentTurnsPreserve: 1,
+      identifierPolicy: "custom",
+      identifierInstructions: "Preserve ticket IDs exactly.",
+      customInstructions: "Keep milestone names.",
+    });
+
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "older context", timestamp: 1 },
+          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+          { role: "user", content: "latest ask status", timestamp: 3 },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "latest assistant reply" }],
+            timestamp: 4,
+          } as AgentMessage,
+        ],
+        turnPrefixMessages: [
+          { role: "user", content: "prefix request that was split out", timestamp: 0 },
+        ],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: "previous provider summary",
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
+      sessionManager,
+      event,
+      apiKey: null,
+    });
+
+    const compaction = expectCompactionResult(result);
+    expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
+    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+    const providerInput = providerSummarize.mock.calls[0]?.[0];
+    expect(providerInput?.previousSummary).toBe("previous provider summary");
+    expect(providerInput?.customInstructions).toContain("Keep milestone names.");
+    expect(providerInput?.summarizationInstructions).toEqual({
+      identifierPolicy: "custom",
+      identifierInstructions: "Preserve ticket IDs exactly.",
+    });
+    const providerMessages = providerSummarize.mock.calls[0]?.[0]?.messages ?? [];
+    expect(JSON.stringify(providerMessages)).not.toContain("openclaw.runtime-context");
+    expect(JSON.stringify(providerMessages)).not.toContain("secret runtime context");
+    expect(compaction.summary).toContain("provider summary body");
+    expect(compaction.summary).toContain("**Turn Context (split turn):**");
+    expect(compaction.summary).toContain("prefix request that was split out");
+    expect(compaction.summary).toContain("## Recent turns preserved verbatim");
+    expect(compaction.summary).toContain("latest ask status");
+    expect(compaction.summary).toContain("latest assistant reply");
+  });
 });
 
 describe("compaction-safeguard extension model fallback", () => {
@@ -1822,6 +2075,139 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(result).toEqual({ cancel: true });
   });
 
+  it("does not write boundary when visible custom turn-prefix content is real conversation", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [
+          {
+            role: "custom" as const,
+            customType: "cron-request",
+            content: "prepare the daily report",
+            display: true,
+            timestamp: 1,
+          },
+          {
+            role: "assistant" as const,
+            content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+            timestamp: 2,
+          },
+          {
+            role: "toolResult" as const,
+            toolCallId: "call-1",
+            toolName: "read",
+            content: [{ type: "text", text: "report source data" }],
+            timestamp: 3,
+          },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 38085,
+        fileOps: { read: [], edited: [], written: [] },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+    });
+
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalled();
+  });
+
+  it("falls back to visible custom session branch entries before writing an empty boundary", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("branch summary");
+
+    const now = Date.now();
+    const sessionManager = {
+      ...stubSessionManager(),
+      getBranch: () => [
+        {
+          type: "custom_message",
+          id: "custom-1",
+          parentId: null,
+          timestamp: new Date(now).toISOString(),
+          customType: "cron-request",
+          content: "prepare the daily report",
+          display: true,
+        },
+        {
+          type: "message",
+          id: "assistant-1",
+          parentId: "custom-1",
+          timestamp: new Date(now + 1).toISOString(),
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+            timestamp: now + 1,
+          },
+        },
+        {
+          type: "message",
+          id: "tool-1",
+          parentId: "assistant-1",
+          timestamp: new Date(now + 2).toISOString(),
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read",
+            content: [{ type: "text", text: "report source data" }],
+            timestamp: now + 2,
+          },
+        },
+      ],
+    } as ExtensionContext["sessionManager"];
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 38085,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "test-key",
+    });
+
+    const compaction = expectCompactionResult(result);
+    expect(compaction.summary).toContain("branch summary");
+    expect(compaction.summary).not.toContain("No prior history.");
+    expect(mockSummarizeInStages).toHaveBeenCalled();
+    const summaryCall = mockSummarizeInStages.mock.calls[0]?.[0];
+    const summaryMessages = summaryCall?.messages ?? [];
+    const cronRequest = summaryMessages.find(
+      (message) =>
+        message.role === "custom" &&
+        "customType" in message &&
+        message.customType === "cron-request",
+    ) as { content?: unknown } | undefined;
+    expect(cronRequest?.content).toBe("prepare the daily report");
+    expect(
+      summaryMessages.some(
+        (message) =>
+          message.role === "toolResult" && "toolName" in message && message.toolName === "read",
+      ),
+    ).toBe(true);
+  });
+
   it("continues when messages include real conversation content", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
@@ -1840,7 +2226,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(getApiKeyAndHeadersMock).toHaveBeenCalled();
   });
 
-  it("treats tool results as real conversation only when linked to a meaningful user ask", async () => {
+  it("treats tool results as real conversation only when linked to a meaningful user ask", () => {
     expect(
       __testing.isRealConversationMessage(
         {

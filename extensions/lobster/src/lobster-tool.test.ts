@@ -1,9 +1,8 @@
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../runtime-api.js";
+import { createLobsterTool } from "./lobster-tool.js";
 import { createFakeTaskFlow } from "./taskflow-test-helpers.js";
-
-let createLobsterTool: typeof import("./lobster-tool.js").createLobsterTool;
 
 function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi {
   return createTestPluginApi({
@@ -30,10 +29,15 @@ function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPl
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
 describe("lobster plugin tool", () => {
   it("returns the Lobster envelope in details", async () => {
-    ({ createLobsterTool } = await import("./lobster-tool.js"));
-
     const runner = {
       run: vi.fn().mockResolvedValue({
         ok: true,
@@ -57,17 +61,14 @@ describe("lobster plugin tool", () => {
       timeoutMs: 1000,
       maxStdoutBytes: 512_000,
     });
-    expect(res.details).toMatchObject({
-      ok: true,
-      status: "ok",
-      output: [{ hello: "world" }],
-      requiresApproval: null,
-    });
+    const details = requireRecord(res.details, "lobster tool details");
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("ok");
+    expect(details.output).toEqual([{ hello: "world" }]);
+    expect(details.requiresApproval).toBeNull();
   });
 
   it("supports approval envelopes without changing the tool contract", async () => {
-    ({ createLobsterTool } = await import("./lobster-tool.js"));
-
     const runner = {
       run: vi.fn().mockResolvedValue({
         ok: true,
@@ -99,20 +100,16 @@ describe("lobster plugin tool", () => {
       timeoutMs: 1500,
       maxStdoutBytes: 4096,
     });
-    expect(res.details).toMatchObject({
-      ok: true,
-      status: "needs_approval",
-      requiresApproval: {
-        type: "approval_request",
-        prompt: "Send these alerts?",
-        resumeToken: "resume-token-1",
-      },
-    });
+    const details = requireRecord(res.details, "approval lobster tool details");
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("needs_approval");
+    const approval = requireRecord(details.requiresApproval, "approval request");
+    expect(approval.type).toBe("approval_request");
+    expect(approval.prompt).toBe("Send these alerts?");
+    expect(approval.resumeToken).toBe("resume-token-1");
   });
 
   it("throws when the runner returns an error envelope", async () => {
-    ({ createLobsterTool } = await import("./lobster-tool.js"));
-
     const tool = createLobsterTool(fakeApi(), {
       runner: {
         run: vi.fn().mockResolvedValue({
@@ -134,8 +131,6 @@ describe("lobster plugin tool", () => {
   });
 
   it("can run through managed TaskFlow mode", async () => {
-    ({ createLobsterTool } = await import("./lobster-tool.js"));
-
     const runner = {
       run: vi.fn().mockResolvedValue({
         ok: true,
@@ -146,6 +141,7 @@ describe("lobster plugin tool", () => {
           prompt: "Approve this?",
           items: [{ id: "item-1" }],
           resumeToken: "resume-1",
+          approvalId: "approval-1",
         },
       }),
     };
@@ -177,23 +173,19 @@ describe("lobster plugin tool", () => {
         prompt: "Approve this?",
         items: [{ id: "item-1" }],
         resumeToken: "resume-1",
+        approvalId: "approval-1",
       },
     });
-    expect(res.details).toMatchObject({
-      ok: true,
-      status: "needs_approval",
-      flow: {
-        flowId: "flow-1",
-      },
-      mutation: {
-        applied: true,
-      },
-    });
+    const details = requireRecord(res.details, "managed run lobster tool details");
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("needs_approval");
+    const flow = requireRecord(details.flow, "managed run flow details");
+    expect(flow.flowId).toBe("flow-1");
+    const mutation = requireRecord(details.mutation, "managed run mutation details");
+    expect(mutation.applied).toBe(true);
   });
 
   it("rejects managed TaskFlow params when no bound taskFlow runtime is available", async () => {
-    ({ createLobsterTool } = await import("./lobster-tool.js"));
-
     const tool = createLobsterTool(fakeApi(), {
       runner: { run: vi.fn() },
     });
@@ -209,8 +201,6 @@ describe("lobster plugin tool", () => {
   });
 
   it("rejects invalid flowStateJson in managed TaskFlow mode", async () => {
-    ({ createLobsterTool } = await import("./lobster-tool.js"));
-
     const tool = createLobsterTool(fakeApi(), {
       runner: { run: vi.fn() },
       taskFlow: createFakeTaskFlow(),
@@ -227,9 +217,49 @@ describe("lobster plugin tool", () => {
     ).rejects.toThrow(/flowStateJson must be valid JSON/);
   });
 
-  it("rejects managed TaskFlow resume mode without a token", async () => {
-    ({ createLobsterTool } = await import("./lobster-tool.js"));
+  it("can resume managed TaskFlow mode with only approvalId", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+    };
+    const taskFlow = createFakeTaskFlow();
+    const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
 
+    const res = await tool.execute("call-managed-resume-approval-id", {
+      action: "resume",
+      approvalId: "approval-1",
+      approve: true,
+      flowId: "flow-1",
+      flowExpectedRevision: 1,
+      flowCurrentStep: "resume_lobster",
+    });
+
+    expect(taskFlow.resume).toHaveBeenCalledWith({
+      flowId: "flow-1",
+      expectedRevision: 1,
+      status: "running",
+      currentStep: "resume_lobster",
+    });
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "resume",
+      approvalId: "approval-1",
+      approve: true,
+      cwd: process.cwd(),
+      timeoutMs: 20_000,
+      maxStdoutBytes: 512_000,
+    });
+    const details = requireRecord(res.details, "managed resume lobster tool details");
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("ok");
+    const mutation = requireRecord(details.mutation, "managed resume mutation details");
+    expect(mutation.applied).toBe(true);
+  });
+
+  it("rejects managed TaskFlow resume mode without a token or approvalId", async () => {
     const tool = createLobsterTool(fakeApi(), {
       runner: { run: vi.fn() },
       taskFlow: createFakeTaskFlow(),
@@ -242,12 +272,10 @@ describe("lobster plugin tool", () => {
         flowExpectedRevision: 1,
         approve: true,
       }),
-    ).rejects.toThrow(/token required when using managed TaskFlow resume mode/);
+    ).rejects.toThrow(/token or approvalId required when using managed TaskFlow resume mode/);
   });
 
   it("rejects managed TaskFlow resume mode without approve", async () => {
-    ({ createLobsterTool } = await import("./lobster-tool.js"));
-
     const tool = createLobsterTool(fakeApi(), {
       runner: { run: vi.fn() },
       taskFlow: createFakeTaskFlow(),
@@ -264,8 +292,6 @@ describe("lobster plugin tool", () => {
   });
 
   it("requires action", async () => {
-    ({ createLobsterTool } = await import("./lobster-tool.js"));
-
     const tool = createLobsterTool(fakeApi(), {
       runner: { run: vi.fn() },
     });
@@ -273,8 +299,6 @@ describe("lobster plugin tool", () => {
   });
 
   it("rejects unknown action", async () => {
-    ({ createLobsterTool } = await import("./lobster-tool.js"));
-
     const tool = createLobsterTool(fakeApi(), {
       runner: { run: vi.fn() },
     });
@@ -286,8 +310,6 @@ describe("lobster plugin tool", () => {
   });
 
   it("rejects absolute cwd", async () => {
-    ({ createLobsterTool } = await import("./lobster-tool.js"));
-
     const tool = createLobsterTool(fakeApi(), {
       runner: { run: vi.fn() },
     });
@@ -301,8 +323,6 @@ describe("lobster plugin tool", () => {
   });
 
   it("rejects cwd that escapes the gateway working directory", async () => {
-    ({ createLobsterTool } = await import("./lobster-tool.js"));
-
     const tool = createLobsterTool(fakeApi(), {
       runner: { run: vi.fn() },
     });
@@ -315,9 +335,7 @@ describe("lobster plugin tool", () => {
     ).rejects.toThrow(/must stay within/);
   });
 
-  it("can be gated off in sandboxed contexts", async () => {
-    ({ createLobsterTool } = await import("./lobster-tool.js"));
-
+  it("can be gated off in sandboxed contexts", () => {
     const api = fakeApi();
     const factoryTool = (ctx: OpenClawPluginToolContext) => {
       if (ctx.sandboxed) {

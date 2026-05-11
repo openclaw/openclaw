@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SandboxSshSettings } from "../../config/types.sandbox.js";
 import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -116,6 +116,7 @@ export function resolveSandboxDockerConfig(params: {
     memory: agentDocker?.memory ?? globalDocker?.memory,
     memorySwap: agentDocker?.memorySwap ?? globalDocker?.memorySwap,
     cpus: agentDocker?.cpus ?? globalDocker?.cpus,
+    gpus: normalizeOptionalString(agentDocker?.gpus ?? globalDocker?.gpus),
     ulimits,
     seccompProfile: agentDocker?.seccompProfile ?? globalDocker?.seccompProfile,
     apparmorProfile: agentDocker?.apparmorProfile ?? globalDocker?.apparmorProfile,

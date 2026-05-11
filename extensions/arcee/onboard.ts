@@ -2,7 +2,7 @@ import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
-import { ARCEE_BASE_URL } from "./api.js";
+import { ARCEE_BASE_URL } from "./models.js";
 import {
   buildArceeCatalogModels,
   buildArceeOpenRouterCatalogModels,
@@ -33,10 +33,6 @@ const arceeOpenRouterPresetAppliers = createModelCatalogPresetAppliers({
     aliases: [{ modelRef: ARCEE_OPENROUTER_DEFAULT_MODEL_REF, alias: "Arcee AI (OpenRouter)" }],
   }),
 });
-
-export function applyArceeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return arceePresetAppliers.applyProviderConfig(cfg);
-}
 
 export function applyArceeConfig(cfg: OpenClawConfig): OpenClawConfig {
   return arceePresetAppliers.applyConfig(cfg);

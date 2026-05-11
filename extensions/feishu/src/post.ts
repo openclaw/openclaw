@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isRecord } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 
@@ -133,7 +134,7 @@ function renderElement(
     return escapeMarkdownText(toStringOrEmpty(element));
   }
 
-  const tag = toStringOrEmpty(element.tag).toLowerCase();
+  const tag = normalizeLowercaseStringOrEmpty(toStringOrEmpty(element.tag));
   switch (tag) {
     case "text":
       return renderTextElement(element);
@@ -165,6 +166,9 @@ function renderElement(
     }
     case "emotion":
       return renderEmotionElement(element);
+    case "md":
+    case "lark_md":
+      return toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
     case "br":
       return "\n";
     case "hr":

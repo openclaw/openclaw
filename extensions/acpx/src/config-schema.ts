@@ -1,12 +1,12 @@
-import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
-import { z } from "openclaw/plugin-sdk/zod";
-import type { OpenClawPluginConfigSchema } from "../runtime-api.js";
+import { z } from "zod";
 
-export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
+const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 
-export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
+const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
+
+export const DEFAULT_ACPX_TIMEOUT_SECONDS = 120;
 
 export type McpServerConfig = {
   command: string;
@@ -24,22 +24,26 @@ export type AcpxMcpServer = {
 export type AcpxPluginConfig = {
   cwd?: string;
   stateDir?: string;
+  probeAgent?: string;
   permissionMode?: AcpxPermissionMode;
   nonInteractivePermissions?: AcpxNonInteractivePermissionPolicy;
   pluginToolsMcpBridge?: boolean;
+  openClawToolsMcpBridge?: boolean;
   strictWindowsCmdWrapper?: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
   mcpServers?: Record<string, McpServerConfig>;
-  agents?: Record<string, { command: string }>;
+  agents?: Record<string, { command: string; args?: string[] }>;
 };
 
 export type ResolvedAcpxPluginConfig = {
   cwd: string;
   stateDir: string;
+  probeAgent?: string;
   permissionMode: AcpxPermissionMode;
   nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
   pluginToolsMcpBridge: boolean;
+  openClawToolsMcpBridge: boolean;
   strictWindowsCmdWrapper: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds: number;
@@ -75,6 +79,7 @@ const McpServerConfigSchema = z.object({
 export const AcpxPluginConfigSchema = z.strictObject({
   cwd: nonEmptyTrimmedString("cwd must be a non-empty string").optional(),
   stateDir: nonEmptyTrimmedString("stateDir must be a non-empty string").optional(),
+  probeAgent: nonEmptyTrimmedString("probeAgent must be a non-empty string").optional(),
   permissionMode: z
     .enum(ACPX_PERMISSION_MODES, {
       error: `permissionMode must be one of: ${ACPX_PERMISSION_MODES.join(", ")}`,
@@ -86,13 +91,16 @@ export const AcpxPluginConfigSchema = z.strictObject({
     })
     .optional(),
   pluginToolsMcpBridge: z.boolean({ error: "pluginToolsMcpBridge must be a boolean" }).optional(),
+  openClawToolsMcpBridge: z
+    .boolean({ error: "openClawToolsMcpBridge must be a boolean" })
+    .optional(),
   strictWindowsCmdWrapper: z
     .boolean({ error: "strictWindowsCmdWrapper must be a boolean" })
     .optional(),
   timeoutSeconds: z
     .number({ error: "timeoutSeconds must be a number >= 0.001" })
     .min(0.001, { error: "timeoutSeconds must be a number >= 0.001" })
-    .optional(),
+    .default(DEFAULT_ACPX_TIMEOUT_SECONDS),
   queueOwnerTtlSeconds: z
     .number({ error: "queueOwnerTtlSeconds must be a number >= 0" })
     .min(0, { error: "queueOwnerTtlSeconds must be a number >= 0" })
@@ -103,11 +111,8 @@ export const AcpxPluginConfigSchema = z.strictObject({
       z.string(),
       z.strictObject({
         command: nonEmptyTrimmedString("agents.<id>.command must be a non-empty string"),
+        args: z.array(z.string({ error: "args must be an array of strings" })).optional(),
       }),
     )
     .optional(),
 });
-
-export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
-  return buildPluginConfigSchema(AcpxPluginConfigSchema);
-}

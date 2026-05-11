@@ -1,13 +1,31 @@
 import { resolveUserTimezone } from "../../agents/date-time.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import {
   formatUtcTimestamp,
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { drainSystemEventEntries } from "../../infra/system-events.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
+import {
+  consumeSelectedSystemEventEntries,
+  peekSystemEventEntries,
+  type SystemEvent,
+} from "../../infra/system-events.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+
+const selectGenericSystemEvents = (events: readonly SystemEvent[]): SystemEvent[] => {
+  const selected: SystemEvent[] = [];
+  for (const event of events) {
+    if (!isExecCompletionEvent(event.text)) {
+      selected.push(event);
+    }
+  }
+  return selected;
+};
 
 /** Drain queued system events, format as `System:` lines, return the block (or undefined). */
 export async function drainFormattedSystemEvents(params: {
@@ -21,7 +39,7 @@ export async function drainFormattedSystemEvents(params: {
     if (!trimmed) {
       return null;
     }
-    const lower = trimmed.toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(trimmed);
     if (lower.includes("reason periodic")) {
       return null;
     }
@@ -44,7 +62,7 @@ export async function drainFormattedSystemEvents(params: {
     if (!raw) {
       return { mode: "local" as const };
     }
-    const lowered = raw.toLowerCase();
+    const lowered = normalizeLowercaseStringOrEmpty(raw);
     if (lowered === "utc" || lowered === "gmt") {
       return { mode: "utc" as const };
     }
@@ -79,34 +97,44 @@ export async function drainFormattedSystemEvents(params: {
     );
   };
 
+  const summaryLines: string[] = [];
   const systemLines: string[] = [];
-  const queued = drainSystemEventEntries(params.sessionKey);
-  systemLines.push(
-    ...queued.flatMap((event) => {
-      const compacted = compactSystemEvent(event.text);
-      if (!compacted) {
-        return [];
-      }
-      const prefix = event.trusted === false ? "System (untrusted)" : "System";
-      const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
-      return compacted
-        .split("\n")
-        .map((subline, index) => `${prefix}: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
-    }),
+  // Exec completions have a dedicated heartbeat prompt; leave those entries queued
+  // so the heartbeat path can consume and deliver them.
+  const queued = consumeSelectedSystemEventEntries(
+    params.sessionKey,
+    selectGenericSystemEvents(peekSystemEventEntries(params.sessionKey)),
   );
+  for (const event of queued) {
+    const compacted = compactSystemEvent(event.text);
+    if (!compacted) {
+      continue;
+    }
+    const prefix = event.trusted === false ? "System (untrusted)" : "System";
+    const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
+    let index = 0;
+    for (const subline of compacted.split("\n")) {
+      systemLines.push(`${prefix}: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
+      index += 1;
+    }
+  }
   if (params.isMainSession && params.isNewSession) {
     const summary = await buildChannelSummary(params.cfg);
     if (summary.length > 0) {
-      systemLines.unshift(
-        ...summary.flatMap((line) => line.split("\n").map((subline) => `System: ${subline}`)),
-      );
+      for (const line of summary) {
+        for (const subline of line.split("\n")) {
+          summaryLines.push(`System: ${subline}`);
+        }
+      }
     }
   }
-  if (systemLines.length === 0) {
+  if (summaryLines.length === 0 && systemLines.length === 0) {
     return undefined;
   }
 
   // Each sub-line gets its own prefix so continuation lines can't be mistaken
   // for regular user content.
-  return systemLines.join("\n");
+  return summaryLines.length > 0
+    ? [...summaryLines, ...systemLines].join("\n")
+    : systemLines.join("\n");
 }

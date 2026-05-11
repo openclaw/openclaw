@@ -9,6 +9,8 @@
  */
 
 import { lookup } from "node:dns/promises";
+import { isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildUserAgent } from "./user-agent.js";
 
 /**
@@ -32,72 +34,10 @@ export const CONSENT_UPLOAD_HOST_ALLOWLIST = [
 ] as const;
 
 /**
- * Returns true if the given IPv4 or IPv6 address is in a private, loopback,
- * or link-local range that must never be reached via consent uploads.
+ * Returns true if the given IPv4 or IPv6 address is private, internal, or
+ * special-use and must never be reached via consent uploads.
  */
-export function isPrivateOrReservedIP(ip: string): boolean {
-  // Handle IPv4-mapped IPv6 first (e.g., ::ffff:127.0.0.1, ::ffff:10.0.0.1)
-  const ipv4MappedMatch = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
-  if (ipv4MappedMatch) {
-    return isPrivateOrReservedIP(ipv4MappedMatch[1]);
-  }
-
-  // IPv4 checks
-  const v4Parts = ip.split(".");
-  if (v4Parts.length === 4) {
-    const octets = v4Parts.map(Number);
-    // Validate all octets are integers in 0-255
-    if (octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
-      return false;
-    }
-    const [a, b] = octets;
-    // 10.0.0.0/8
-    if (a === 10) {
-      return true;
-    }
-    // 172.16.0.0/12
-    if (a === 172 && b >= 16 && b <= 31) {
-      return true;
-    }
-    // 192.168.0.0/16
-    if (a === 192 && b === 168) {
-      return true;
-    }
-    // 127.0.0.0/8 (loopback)
-    if (a === 127) {
-      return true;
-    }
-    // 169.254.0.0/16 (link-local)
-    if (a === 169 && b === 254) {
-      return true;
-    }
-    // 0.0.0.0/8
-    if (a === 0) {
-      return true;
-    }
-  }
-
-  // IPv6 checks
-  const normalized = ip.toLowerCase();
-  // ::1 loopback
-  if (normalized === "::1") {
-    return true;
-  }
-  // fe80::/10 link-local
-  if (normalized.startsWith("fe80:") || normalized.startsWith("fe80")) {
-    return true;
-  }
-  // fc00::/7 unique-local (fc00:: and fd00::)
-  if (normalized.startsWith("fc") || normalized.startsWith("fd")) {
-    return true;
-  }
-  // :: unspecified
-  if (normalized === "::") {
-    return true;
-  }
-
-  return false;
-}
+export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
 
 /**
  * Validate that a consent upload URL is safe to PUT to.
@@ -128,7 +68,7 @@ export async function validateConsentUploadUrl(
   }
 
   // 2. Hostname allowlist check
-  const hostname = parsed.hostname.toLowerCase();
+  const hostname = normalizeLowercaseStringOrEmpty(parsed.hostname);
   const allowlist = opts?.allowlist ?? CONSENT_UPLOAD_HOST_ALLOWLIST;
   const hostAllowed = allowlist.some(
     (entry) => hostname === entry || hostname.endsWith(`.${entry}`),
@@ -155,7 +95,7 @@ export async function validateConsentUploadUrl(
   }
 }
 
-export interface FileConsentCardParams {
+interface FileConsentCardParams {
   filename: string;
   description?: string;
   sizeInBytes: number;
@@ -163,7 +103,7 @@ export interface FileConsentCardParams {
   context?: Record<string, unknown>;
 }
 
-export interface FileInfoCardParams {
+interface FileInfoCardParams {
   filename: string;
   contentUrl: string;
   uniqueId: string;
@@ -203,7 +143,7 @@ export function buildFileInfoCard(params: FileInfoCardParams) {
   };
 }
 
-export interface FileConsentUploadInfo {
+interface FileConsentUploadInfo {
   name: string;
   uploadUrl: string;
   contentUrl: string;
@@ -211,7 +151,7 @@ export interface FileConsentUploadInfo {
   fileType: string;
 }
 
-export interface FileConsentResponse {
+interface FileConsentResponse {
   action: "accept" | "decline";
   uploadInfo?: FileConsentUploadInfo;
   context?: Record<string, unknown>;

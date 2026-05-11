@@ -7,13 +7,14 @@ import {
   listProfilesForProvider,
   normalizeApiKeyInput,
   normalizeOptionalSecretInput,
-  type SecretInput,
   upsertAuthProfile,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildCloudflareAiGatewayCatalogProvider } from "./catalog-provider.js";
 import { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "./models.js";
 import { applyCloudflareAiGatewayConfig, buildCloudflareAiGatewayConfigPatch } from "./onboard.js";
+import { wrapCloudflareAiGatewayProviderStream } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "cloudflare-ai-gateway";
 const PROVIDER_ENV_VAR = "CLOUDFLARE_AI_GATEWAY_API_KEY";
@@ -33,8 +34,8 @@ async function resolveCloudflareGatewayMetadataInteractive(ctx: {
     }) => Promise<unknown>;
   };
 }) {
-  let accountId = ctx.accountId?.trim() ?? "";
-  let gatewayId = ctx.gatewayId?.trim() ?? "";
+  let accountId = normalizeOptionalString(ctx.accountId) ?? "";
+  let gatewayId = normalizeOptionalString(ctx.gatewayId) ?? "";
   if (!accountId) {
     const value = await ctx.prompter.text({
       message: "Enter Cloudflare Account ID",
@@ -82,7 +83,7 @@ export default definePluginEntry({
               gatewayId: normalizeOptionalSecretInput(ctx.opts?.cloudflareAiGatewayGatewayId),
               prompter: ctx.prompter,
             });
-            let capturedSecretInput: SecretInput | undefined;
+            let capturedSecretInput: Parameters<typeof buildApiKeyCredential>[1] = "";
             let capturedCredential = false;
             let capturedMode: "plaintext" | "ref" | undefined;
             await ensureApiKeyFromOptionEnvOrPrompt({
@@ -136,10 +137,12 @@ export default definePluginEntry({
             const storedMetadata =
               authStore.profiles[PROFILE_ID]?.type === "api_key"
                 ? {
-                    accountId:
-                      authStore.profiles[PROFILE_ID]?.metadata?.accountId?.trim() || undefined,
-                    gatewayId:
-                      authStore.profiles[PROFILE_ID]?.metadata?.gatewayId?.trim() || undefined,
+                    accountId: normalizeOptionalString(
+                      authStore.profiles[PROFILE_ID]?.metadata?.accountId,
+                    ),
+                    gatewayId: normalizeOptionalString(
+                      authStore.profiles[PROFILE_ID]?.metadata?.gatewayId,
+                    ),
                   }
                 : {};
             const accountId =
@@ -194,7 +197,9 @@ export default definePluginEntry({
           const authStore = ensureAuthProfileStore(ctx.agentDir, {
             allowKeychainPrompt: false,
           });
-          const envManagedApiKey = ctx.env[PROVIDER_ENV_VAR]?.trim() ? PROVIDER_ENV_VAR : undefined;
+          const envManagedApiKey = normalizeOptionalString(ctx.env[PROVIDER_ENV_VAR])
+            ? PROVIDER_ENV_VAR
+            : undefined;
           for (const profileId of listProfilesForProvider(authStore, PROVIDER_ID)) {
             const provider = buildCloudflareAiGatewayCatalogProvider({
               credential: authStore.profiles[profileId],
@@ -212,6 +217,7 @@ export default definePluginEntry({
       },
       classifyFailoverReason: ({ errorMessage }) =>
         /\bworkers?_ai\b.*\b(?:rate|limit|quota)\b/i.test(errorMessage) ? "rate_limit" : undefined,
+      wrapStreamFn: wrapCloudflareAiGatewayProviderStream,
     });
   },
 });

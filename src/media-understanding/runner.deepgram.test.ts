@@ -1,7 +1,17 @@
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
+
+vi.mock("../agents/model-auth.js", async () => {
+  const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
+  return createAvailableModelAuthMockModule();
+});
+
+vi.mock("../plugins/capability-provider-runtime.js", async () => {
+  const { createEmptyCapabilityProviderMockModule } = await import("./runner.test-mocks.js");
+  return createEmptyCapabilityProviderMockModule();
+});
 
 describe("runCapability deepgram provider options", () => {
   it("merges provider options, headers, and baseUrl overrides", async () => {
@@ -106,9 +116,14 @@ describe("runCapability deepgram provider options", () => {
         media,
         providerRegistry,
       });
-      expect(result.outputs[0]?.text).toBe("ok");
+      expect(result.outputs).toHaveLength(1);
+      const [output] = result.outputs;
+      if (!output) {
+        throw new Error("Expected Deepgram media output");
+      }
+      expect(output.text).toBe("ok");
       expect(seenBaseUrl).toBe("https://entry.example");
-      expect(seenHeaders).toMatchObject({
+      expect(seenHeaders).toStrictEqual({
         "X-Provider": "1",
         "X-Provider-Managed": "secretref-managed",
         "X-Config": "2",
@@ -116,7 +131,7 @@ describe("runCapability deepgram provider options", () => {
         "X-Entry": "3",
         "X-Entry-Managed": "secretref-managed",
       });
-      expect(seenQuery).toMatchObject({
+      expect(seenQuery).toStrictEqual({
         detect_language: false,
         punctuate: false,
         smart_format: true,

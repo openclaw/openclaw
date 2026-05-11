@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { vi } from "vitest";
 
-type BaileysExports = typeof import("@whiskeysockets/baileys");
+type BaileysExports = typeof import("baileys");
 type FetchLatestBaileysVersionFn = BaileysExports["fetchLatestBaileysVersion"];
 type MakeCacheableSignalKeyStoreFn = BaileysExports["makeCacheableSignalKeyStore"];
 type MakeWASocketFn = BaileysExports["makeWASocket"];
@@ -25,7 +25,11 @@ export type MockBaileysSocket = {
   user?: { id?: string };
 };
 
-export type MockBaileysModule = {
+type MockBaileysModule = {
+  BufferJSON: {
+    replacer: (key: string, value: unknown) => unknown;
+    reviver: (key: string, value: unknown) => unknown;
+  };
   DisconnectReason: { loggedOut: number };
   extractMessageContent: ReturnType<typeof vi.fn<ExtractMessageContentFn>>;
   fetchLatestBaileysVersion: ReturnType<typeof vi.fn<FetchLatestBaileysVersionFn>>;
@@ -148,6 +152,10 @@ export function createMockBaileys(): {
   });
 
   const mod: MockBaileysModule = {
+    BufferJSON: {
+      replacer: (_key: string, value: unknown) => value,
+      reviver: (_key: string, value: unknown) => value,
+    },
     DisconnectReason: { loggedOut: 401 },
     extractMessageContent: vi.fn<ExtractMessageContentFn>((message) =>
       mockExtractMessageContent(message),

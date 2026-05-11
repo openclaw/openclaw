@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnSubagentResult } from "../../agents/subagent-spawn.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createEmptyInlineDirectives } from "./commands-subagents.test-helpers.js";
 import { handleSubagentsSpawnAction } from "./commands-subagents/action-spawn.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import type { InlineDirectives } from "./directive-handling.js";
 
 const spawnSubagentDirectMock = vi.hoisted(() => vi.fn());
 
@@ -41,25 +41,6 @@ function buildContext(params?: {
   context?: Partial<HandleCommandsParams["ctx"]>;
   sessionEntry?: SessionEntry | undefined;
 }) {
-  const directives: InlineDirectives = {
-    cleaned: "",
-    hasThinkDirective: false,
-    hasVerboseDirective: false,
-    hasFastDirective: false,
-    hasReasoningDirective: false,
-    hasElevatedDirective: false,
-    hasExecDirective: false,
-    hasExecOptions: false,
-    invalidExecHost: false,
-    invalidExecSecurity: false,
-    invalidExecAsk: false,
-    invalidExecNode: false,
-    hasStatusDirective: false,
-    hasModelDirective: false,
-    hasQueueDirective: false,
-    queueReset: false,
-    hasQueueOptions: false,
-  };
   const ctx = {
     OriginatingChannel: "whatsapp",
     OriginatingTo: "channel:origin",
@@ -81,7 +62,7 @@ function buildContext(params?: {
         commandBodyNormalized: "",
         to: params?.commandTo ?? "channel:command",
       },
-      directives,
+      directives: createEmptyInlineDirectives(),
       elevated: { enabled: false, allowed: false, failures: [] },
       sessionKey: "agent:main:main",
       workspaceDir: "/tmp/openclaw-subagents-spawn",
@@ -100,6 +81,24 @@ function buildContext(params?: {
     runs: [],
     restTokens: params?.restTokens ?? ["beta", "do", "the", "thing"],
   } satisfies Parameters<typeof handleSubagentsSpawnAction>[0];
+}
+
+function latestSpawnCall(): {
+  options: Record<string, unknown>;
+  context: Record<string, unknown>;
+} {
+  const call = spawnSubagentDirectMock.mock.calls.at(-1);
+  if (!call) {
+    throw new Error("expected spawnSubagentDirect call");
+  }
+  const [options, context] = call;
+  if (!options || typeof options !== "object" || !context || typeof context !== "object") {
+    throw new Error("expected spawnSubagentDirect object args");
+  }
+  return {
+    options: options as Record<string, unknown>,
+    context: context as Record<string, unknown>,
+  };
 }
 
 describe("subagents spawn action", () => {
@@ -138,22 +137,18 @@ describe("subagents spawn action", () => {
         text: "Spawned subagent beta (session agent:beta:subagent:test-uuid, run run-spaw).",
       },
     });
-    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "beta",
-        task: "do the thing",
-        mode: "run",
-        cleanup: "keep",
-        expectsCompletionMessage: true,
-      }),
-      expect.objectContaining({
-        agentSessionKey: "agent:main:main",
-        agentChannel: "whatsapp",
-        agentAccountId: "default",
-        agentTo: "channel:origin",
-        agentThreadId: "thread-1",
-      }),
-    );
+    expect(spawnSubagentDirectMock).toHaveBeenCalledOnce();
+    const { options, context } = latestSpawnCall();
+    expect(options.agentId).toBe("beta");
+    expect(options.task).toBe("do the thing");
+    expect(options.mode).toBe("run");
+    expect(options.cleanup).toBe("keep");
+    expect(options.expectsCompletionMessage).toBe(true);
+    expect(context.agentSessionKey).toBe("agent:main:main");
+    expect(context.agentChannel).toBe("whatsapp");
+    expect(context.agentAccountId).toBe("default");
+    expect(context.agentTo).toBe("channel:origin");
+    expect(context.agentThreadId).toBe("thread-1");
   });
 
   it("passes --model through to spawnSubagentDirect", async () => {
@@ -163,13 +158,9 @@ describe("subagents spawn action", () => {
         restTokens: ["beta", "do", "the", "thing", "--model", "openai/gpt-4o"],
       }),
     );
-    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "openai/gpt-4o",
-        task: "do the thing",
-      }),
-      expect.anything(),
-    );
+    const { options } = latestSpawnCall();
+    expect(options.model).toBe("openai/gpt-4o");
+    expect(options.task).toBe("do the thing");
   });
 
   it("passes --thinking through to spawnSubagentDirect", async () => {
@@ -179,13 +170,9 @@ describe("subagents spawn action", () => {
         restTokens: ["beta", "do", "the", "thing", "--thinking", "high"],
       }),
     );
-    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        thinking: "high",
-        task: "do the thing",
-      }),
-      expect.anything(),
-    );
+    const { options } = latestSpawnCall();
+    expect(options.thinking).toBe("high");
+    expect(options.task).toBe("do the thing");
   });
 
   it("passes group context from the session entry", async () => {
@@ -201,14 +188,10 @@ describe("subagents spawn action", () => {
         },
       }),
     );
-    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        agentGroupId: "group-1",
-        agentGroupChannel: "#group-channel",
-        agentGroupSpace: "workspace-1",
-      }),
-    );
+    const { context } = latestSpawnCall();
+    expect(context.agentGroupId).toBe("group-1");
+    expect(context.agentGroupChannel).toBe("#group-channel");
+    expect(context.agentGroupSpace).toBe("workspace-1");
   });
 
   it("uses the requester key chosen by earlier routing", async () => {
@@ -224,14 +207,72 @@ describe("subagents spawn action", () => {
         },
       }),
     );
-    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        agentSessionKey: "agent:main:target",
-        agentChannel: "discord",
-        agentTo: "channel:12345",
+    const { context } = latestSpawnCall();
+    expect(context.agentSessionKey).toBe("agent:main:target");
+    expect(context.agentChannel).toBe("discord");
+    expect(context.agentTo).toBe("channel:12345");
+  });
+
+  it("prefers the requester-key session entry for group metadata", async () => {
+    spawnSubagentDirectMock.mockResolvedValue(acceptedResult());
+    await handleSubagentsSpawnAction(
+      buildContext({
+        requesterKey: "agent:main:target",
+        sessionEntry: {
+          sessionId: "wrapper-session",
+          updatedAt: Date.now(),
+          groupId: "wrapper-group",
+          groupChannel: "#wrapper",
+          space: "wrapper-space",
+        },
       }),
     );
+    let context = latestSpawnCall().context;
+    expect(context.agentSessionKey).toBe("agent:main:target");
+    expect(context.agentGroupId).toBe("wrapper-group");
+    expect(context.agentGroupChannel).toBe("#wrapper");
+    expect(context.agentGroupSpace).toBe("wrapper-space");
+
+    spawnSubagentDirectMock.mockClear();
+    await handleSubagentsSpawnAction({
+      ...buildContext({
+        requesterKey: "agent:main:target",
+        sessionEntry: {
+          sessionId: "wrapper-session",
+          updatedAt: Date.now(),
+          groupId: "wrapper-group",
+          groupChannel: "#wrapper",
+          space: "wrapper-space",
+        },
+      }),
+      params: {
+        ...buildContext({
+          requesterKey: "agent:main:target",
+          sessionEntry: {
+            sessionId: "wrapper-session",
+            updatedAt: Date.now(),
+            groupId: "wrapper-group",
+            groupChannel: "#wrapper",
+            space: "wrapper-space",
+          },
+        }).params,
+        sessionStore: {
+          "agent:main:target": {
+            sessionId: "target-session",
+            updatedAt: Date.now(),
+            groupId: "target-group",
+            groupChannel: "#target",
+            space: "target-space",
+          },
+        },
+      },
+    });
+
+    context = latestSpawnCall().context;
+    expect(context.agentSessionKey).toBe("agent:main:target");
+    expect(context.agentGroupId).toBe("target-group");
+    expect(context.agentGroupChannel).toBe("#target");
+    expect(context.agentGroupSpace).toBe("target-space");
   });
 
   it("falls back to OriginatingTo when command.to is missing", async () => {
@@ -246,12 +287,7 @@ describe("subagents spawn action", () => {
         },
       }),
     );
-    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        agentTo: "channel:manual",
-      }),
-    );
+    expect(latestSpawnCall().context.agentTo).toBe("channel:manual");
   });
 
   it("formats forbidden spawn failures", async () => {

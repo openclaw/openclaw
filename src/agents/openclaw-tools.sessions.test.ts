@@ -1,33 +1,38 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelMessagingAdapter } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
+const loadSessionEntryByKeyMock = vi.fn();
+vi.mock("./subagent-announce-delivery.js", () => ({
+  loadSessionEntryByKey: (sessionKey: string) => loadSessionEntryByKeyMock(sessionKey),
+}));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: () => ({
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-        agentToAgent: { maxPingPongTurns: 2 },
-      },
-      tools: {
-        // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
-        sessions: { visibility: "all" },
-        agentToAgent: { enabled: true },
-      },
-    }),
-    resolveGatewayPort: () => 18789,
-  };
-});
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => ({
+    session: {
+      mainKey: "main",
+      scope: "per-sender",
+      agentToAgent: { maxPingPongTurns: 2 },
+    },
+    tools: {
+      // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
+      sessions: { visibility: "all" },
+      agentToAgent: { enabled: true },
+    },
+  }),
+  resolveGatewayPort: () => 18789,
+}));
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { __testing as agentStepTesting } from "./tools/agent-step.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -46,6 +51,81 @@ const TEST_CONFIG = {
     agentToAgent: { enabled: true },
   },
 } as OpenClawConfig;
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+const resolveSessionConversationStub: NonNullable<
+  ChannelMessagingAdapter["resolveSessionConversation"]
+> = ({ rawId }) => ({
+  id: rawId,
+});
+const resolveSessionTargetStub: NonNullable<ChannelMessagingAdapter["resolveSessionTarget"]> = ({
+  kind,
+  id,
+  threadId,
+}) => (threadId ? `${kind}:${id}:thread:${threadId}` : `${kind}:${id}`);
+
+function installMessagingTestRegistry() {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        source: "test",
+        plugin: {
+          id: "discord",
+          meta: {
+            id: "discord",
+            label: "Discord",
+            selectionLabel: "Discord",
+            docsPath: "/channels/discord",
+            blurb: "Discord test stub.",
+          },
+          capabilities: { chatTypes: ["direct", "channel", "thread"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
+        pluginId: "whatsapp",
+        source: "test",
+        plugin: {
+          id: "whatsapp",
+          meta: {
+            id: "whatsapp",
+            label: "WhatsApp",
+            selectionLabel: "WhatsApp",
+            docsPath: "/channels/whatsapp",
+            blurb: "WhatsApp test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "group"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+    ]),
+  );
+}
 
 function createOpenClawTools(options?: {
   agentSessionKey?: string;
@@ -87,10 +167,71 @@ const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2
   );
 };
 
+type GatewayCall = {
+  method?: string;
+  params?: Record<string, unknown>;
+};
+
+type AgentCallParams = {
+  message?: string;
+  lane?: string;
+  channel?: string;
+  sessionKey?: string;
+  extraSystemPrompt?: string;
+  inputProvenance?: {
+    kind?: string;
+    sourceSessionKey?: string;
+  };
+};
+
+type SessionsSendDetails = {
+  status?: string;
+  runId?: string;
+  reply?: string;
+  error?: string;
+  sessionKey?: string;
+  delivery?: {
+    status?: string;
+    mode?: string;
+  };
+};
+
+function requireGatewayCall(call: unknown, method: string): GatewayCall {
+  const request = call as GatewayCall | undefined;
+  if (request?.method !== method) {
+    throw new Error(`expected ${method} gateway call`);
+  }
+  return request;
+}
+
+function agentParams(call: { params?: unknown }): AgentCallParams {
+  return (call.params ?? {}) as AgentCallParams;
+}
+
+function expectInterSessionAgentCall(call: { params?: unknown }): void {
+  const params = agentParams(call);
+  expect(params.message).toContain("[Inter-session message");
+  expect(params.message).toContain("isUser=false");
+  expect(params.lane).toMatch(/^nested(?::|$)/);
+  expect(params.channel).toBe("webchat");
+  expect(params.inputProvenance?.kind).toBe("inter_session");
+}
+
+function sessionsSendDetails(details: unknown): SessionsSendDetails {
+  return details as SessionsSendDetails;
+}
+
 describe("sessions tools", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
+    loadSessionEntryByKeyMock.mockReset();
+    loadSessionEntryByKeyMock.mockReturnValue(undefined);
+    installMessagingTestRegistry();
     agentStepTesting.setDepsForTest({
+      agentCommandFromIngress: async () => ({
+        payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
+        meta: { durationMs: 1 },
+      }),
       callGateway: (opts: unknown) => callGatewayMock(opts),
     });
     sessionsResolutionTesting.setDepsForTest({
@@ -105,7 +246,6 @@ describe("sessions tools", () => {
     const tools = createOpenClawTools();
     const byName = (name: string) => {
       const tool = tools.find((candidate) => candidate.name === name);
-      expect(tool).toBeDefined();
       if (!tool) {
         throw new Error(`missing ${name} tool`);
       }
@@ -124,7 +264,6 @@ describe("sessions tools", () => {
 
       const properties = schema.properties ?? {};
       const value = properties[prop] as { type?: unknown } | undefined;
-      expect(value).toBeDefined();
       if (!value) {
         throw new Error(`missing ${toolName} schema prop: ${prop}`);
       }
@@ -135,10 +274,15 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_list", "limit").type).toBe("number");
     expect(schemaProp("sessions_list", "activeMinutes").type).toBe("number");
     expect(schemaProp("sessions_list", "messageLimit").type).toBe("number");
+    expect(schemaProp("sessions_list", "label").type).toBe("string");
+    expect(schemaProp("sessions_list", "agentId").type).toBe("string");
+    expect(schemaProp("sessions_list", "search").type).toBe("string");
+    expect(schemaProp("sessions_list", "includeDerivedTitles").type).toBe("boolean");
+    expect(schemaProp("sessions_list", "includeLastMessage").type).toBe("boolean");
     expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
   });
 
-  it("sessions_list filters kinds and includes messages", async () => {
+  it("sessions_list forwards mailbox filters and includes messages", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -151,6 +295,8 @@ describe("sessions tools", () => {
               sessionId: "s-main",
               updatedAt: 10,
               lastChannel: "whatsapp",
+              derivedTitle: "Main mailbox",
+              lastMessagePreview: "Latest assistant update",
             },
             {
               key: "discord:group:dev",
@@ -164,6 +310,8 @@ describe("sessions tools", () => {
               runtimeMs: 42,
               estimatedCostUsd: 0.0042,
               childSessions: ["agent:main:subagent:worker"],
+              derivedTitle: "Dev room",
+              lastMessagePreview: "Need review on the patch",
             },
             {
               key: "agent:main:dashboard:child",
@@ -205,16 +353,40 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_list");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_list tool");
     }
 
-    const result = await tool.execute("call1", { messageLimit: 1 });
+    const result = await tool.execute("call1", {
+      agentId: "main",
+      label: "mailbox",
+      search: "review",
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      messageLimit: 1,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.list",
+      params: {
+        activeMinutes: undefined,
+        agentId: "main",
+        includeDerivedTitles: false,
+        includeLastMessage: false,
+        includeGlobal: true,
+        includeUnknown: true,
+        label: "mailbox",
+        limit: undefined,
+        search: "review",
+        spawnedBy: undefined,
+      },
+    });
     const details = result.details as {
       sessions?: Array<{
         key?: string;
+        agentId?: string;
         channel?: string;
+        derivedTitle?: string;
+        lastMessagePreview?: string;
         spawnedBy?: string;
         status?: string;
         startedAt?: number;
@@ -227,7 +399,10 @@ describe("sessions tools", () => {
     };
     expect(details.sessions).toHaveLength(5);
     const main = details.sessions?.find((s) => s.key === "main");
+    expect(main?.agentId).toBe("main");
     expect(main?.channel).toBe("whatsapp");
+    expect(main?.derivedTitle).toBe("Main mailbox");
+    expect(main?.lastMessagePreview).toBe("Latest assistant update");
     expect(main?.messages?.length).toBe(1);
     expect(main?.messages?.[0]?.role).toBe("assistant");
 
@@ -237,6 +412,8 @@ describe("sessions tools", () => {
     expect(group?.runtimeMs).toBe(42);
     expect(group?.estimatedCostUsd).toBe(0.0042);
     expect(group?.childSessions).toEqual(["agent:main:subagent:worker"]);
+    expect(group?.derivedTitle).toBe("Dev room");
+    expect(group?.lastMessagePreview).toBe("Need review on the patch");
 
     const dashboardChild = details.sessions?.find((s) => s.key === "agent:main:dashboard:child");
     expect(dashboardChild?.parentSessionKey).toBe("agent:main:main");
@@ -250,6 +427,91 @@ describe("sessions tools", () => {
     };
     expect(cronDetails.sessions).toHaveLength(1);
     expect(cronDetails.sessions?.[0]?.kind).toBe("cron");
+  });
+
+  it("derives mailbox previews only after agent visibility filtering", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-preview-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, "visible.jsonl"),
+        [
+          JSON.stringify({ type: "session", id: "visible" }),
+          JSON.stringify({ message: { role: "user", content: "Visible project kickoff" } }),
+          JSON.stringify({ message: { role: "assistant", content: "Visible latest reply" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(tmpDir, "hidden.jsonl"),
+        [
+          JSON.stringify({ type: "session", id: "hidden" }),
+          JSON.stringify({ message: { role: "user", content: "Hidden cross-agent topic" } }),
+          JSON.stringify({ message: { role: "assistant", content: "Hidden latest reply" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: Record<string, unknown> };
+        if (request.method === "sessions.list") {
+          expect(request.params?.includeDerivedTitles).toBe(false);
+          expect(request.params?.includeLastMessage).toBe(false);
+          return {
+            path: storePath,
+            sessions: [
+              {
+                key: "agent:main:main",
+                kind: "direct",
+                sessionId: "visible",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:other:main",
+                kind: "direct",
+                sessionId: "hidden",
+                updatedAt: 21,
+              },
+            ],
+          };
+        }
+        return {};
+      });
+
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:main:main",
+        config: {
+          ...TEST_CONFIG,
+          tools: {
+            sessions: { visibility: "agent" },
+            agentToAgent: { enabled: false },
+          },
+        } as OpenClawConfig,
+      }).find((candidate) => candidate.name === "sessions_list");
+      if (!tool) {
+        throw new Error("missing sessions_list tool");
+      }
+
+      const result = await tool.execute("call-preview", {
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+      });
+      const details = result.details as {
+        sessions?: Array<{
+          key?: string;
+          derivedTitle?: string;
+          lastMessagePreview?: string;
+        }>;
+      };
+      expect(details.sessions).toHaveLength(1);
+      const visible = details.sessions?.[0];
+      expect(visible?.key).toBe("agent:main:main");
+      expect(visible?.derivedTitle).toBe("Visible project kickoff");
+      expect(visible?.lastMessagePreview).toBe("Visible latest reply");
+      expect(JSON.stringify(details.sessions)).not.toContain("Hidden");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("sessions_list resolves transcriptPath from agent state dir for multi-store listings", async () => {
@@ -272,7 +534,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_list");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_list tool");
     }
@@ -307,7 +568,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -356,7 +616,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -420,7 +679,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -469,7 +727,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -510,7 +767,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -548,7 +804,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -559,10 +814,8 @@ describe("sessions tools", () => {
     const historyCall = callGatewayMock.mock.calls.find(
       (call) => (call[0] as { method?: string }).method === "chat.history",
     );
-    expect(historyCall?.[0]).toMatchObject({
-      method: "chat.history",
-      params: { sessionKey: targetKey },
-    });
+    const request = requireGatewayCall(historyCall?.[0], "chat.history");
+    expect(request.params?.sessionKey).toBe(targetKey);
   });
 
   it("sessions_history errors on missing sessionId", async () => {
@@ -576,7 +829,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -590,7 +842,8 @@ describe("sessions tools", () => {
   it("sessions_send supports fire-and-forget and wait", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
-    let _historyCallCount = 0;
+    let historyCallCount = 0;
+    let waitCallCount = 0;
     let sendCallCount = 0;
     let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
@@ -604,9 +857,9 @@ describe("sessions tools", () => {
         const params = request.params as { message?: string; sessionKey?: string } | undefined;
         const message = params?.message ?? "";
         let reply = "REPLY_SKIP";
-        if (message === "ping" || message === "wait") {
+        if (message.includes("ping") || message.includes("wait")) {
           reply = "done";
-        } else if (message === "Agent-to-agent announce step.") {
+        } else if (message.includes("Agent-to-agent announce step.")) {
           reply = "ANNOUNCE_SKIP";
         } else if (params?.sessionKey === requesterKey) {
           reply = "pong";
@@ -619,12 +872,13 @@ describe("sessions tools", () => {
         };
       }
       if (request.method === "agent.wait") {
+        waitCallCount += 1;
         const params = request.params as { runId?: string } | undefined;
         lastWaitedRunId = params?.runId;
         return { runId: params?.runId ?? "run-1", status: "ok" };
       }
       if (request.method === "chat.history") {
-        _historyCallCount += 1;
+        historyCallCount += 1;
         const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
         return {
           messages: [
@@ -652,7 +906,6 @@ describe("sessions tools", () => {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -662,14 +915,14 @@ describe("sessions tools", () => {
       message: "ping",
       timeoutSeconds: 0,
     });
-    expect(fire.details).toMatchObject({
-      status: "accepted",
-      runId: "run-1",
-      delivery: { status: "pending", mode: "announce" },
-    });
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 4);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 4);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 4);
+    const fireDetails = sessionsSendDetails(fire.details);
+    expect(fireDetails.status).toBe("accepted");
+    expect(fireDetails.runId).toBe("run-1");
+    expect(fireDetails.delivery?.status).toBe("pending");
+    expect(fireDetails.delivery?.mode).toBe("announce");
+    await waitForCalls(() => agentCallCount, 3);
+    await waitForCalls(() => waitCallCount, 3);
+    await waitForCalls(() => historyCallCount, 3);
 
     const waitPromise = tool.execute("call6", {
       sessionKey: "main",
@@ -677,26 +930,22 @@ describe("sessions tools", () => {
       timeoutSeconds: 1,
     });
     const waited = await waitPromise;
-    expect(waited.details).toMatchObject({
-      status: "ok",
-      reply: "done",
-      delivery: { status: "pending", mode: "announce" },
-    });
+    const waitedDetails = sessionsSendDetails(waited.details);
+    expect(waitedDetails.status).toBe("ok");
+    expect(waitedDetails.reply).toBe("done");
+    expect(waitedDetails.delivery?.status).toBe("pending");
+    expect(waitedDetails.delivery?.mode).toBe("announce");
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 8);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 8);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 8);
+    await waitForCalls(() => agentCallCount, 6);
+    await waitForCalls(() => waitCallCount, 6);
+    await waitForCalls(() => historyCallCount, 7);
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     const waitCalls = calls.filter((call) => call.method === "agent.wait");
     const historyOnlyCalls = calls.filter((call) => call.method === "chat.history");
-    expect(agentCalls).toHaveLength(8);
+    expect(agentCalls).toHaveLength(6);
     for (const call of agentCalls) {
-      expect(call.params).toMatchObject({
-        lane: "nested",
-        channel: "webchat",
-        inputProvenance: { kind: "inter_session" },
-      });
+      expectInterSessionAgentCall(call);
     }
     expect(
       agentCalls.some(
@@ -716,17 +965,8 @@ describe("sessions tools", () => {
           ),
       ),
     ).toBe(true);
-    expect(
-      agentCalls.some(
-        (call) =>
-          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-          (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
-            "Agent-to-agent announce step",
-          ),
-      ),
-    ).toBe(true);
-    expect(waitCalls).toHaveLength(8);
-    expect(historyOnlyCalls).toHaveLength(9);
+    expect(waitCalls).toHaveLength(6);
+    expect(historyOnlyCalls).toHaveLength(7);
     expect(sendCallCount).toBe(0);
   });
 
@@ -757,7 +997,6 @@ describe("sessions tools", () => {
       agentSessionKey: "main",
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -772,10 +1011,8 @@ describe("sessions tools", () => {
     const agentCall = callGatewayMock.mock.calls.find(
       (call) => (call[0] as { method?: string }).method === "agent",
     );
-    expect(agentCall?.[0]).toMatchObject({
-      method: "agent",
-      params: { sessionKey: targetKey },
-    });
+    const request = requireGatewayCall(agentCall?.[0], "agent");
+    expect(request.params?.sessionKey).toBe(targetKey);
   });
 
   it("sessions_send runs ping-pong then announces", async () => {
@@ -843,12 +1080,18 @@ describe("sessions tools", () => {
       }
       return {};
     });
+    agentStepTesting.setDepsForTest({
+      agentCommandFromIngress: async () => ({
+        payloads: [{ text: "announce now", mediaUrl: null }],
+        meta: { durationMs: 1 },
+      }),
+      callGateway: (opts: unknown) => callGatewayMock(opts),
+    });
 
     const tool = createOpenClawTools({
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -858,25 +1101,23 @@ describe("sessions tools", () => {
       message: "ping",
       timeoutSeconds: 1,
     });
-    expect(waited.details).toMatchObject({
-      status: "ok",
-      reply: "initial",
-    });
+    const waitedDetails = sessionsSendDetails(waited.details);
+    expect(waitedDetails.status).toBe("ok");
+    expect(waitedDetails.reply).toBe("initial");
     await vi.waitFor(
       () => {
-        expect(calls.filter((call) => call.method === "agent")).toHaveLength(4);
+        expect(countMatching(calls, (call) => call.method === "agent")).toBe(3);
       },
       { timeout: 2_000, interval: 5 },
     );
 
     const agentCalls = calls.filter((call) => call.method === "agent");
-    expect(agentCalls).toHaveLength(4);
+    expect(agentCalls).toHaveLength(3);
     for (const call of agentCalls) {
-      expect(call.params).toMatchObject({
-        lane: "nested",
-        channel: "webchat",
-        inputProvenance: { kind: "inter_session" },
-      });
+      const params = agentParams(call);
+      expect(params.lane).toMatch(/^nested(?::|$)/);
+      expect(params.channel).toBe("webchat");
+      expect(params.inputProvenance?.kind).toBe("inter_session");
     }
 
     const replySteps = calls.filter(
@@ -888,10 +1129,382 @@ describe("sessions tools", () => {
         ),
     );
     expect(replySteps).toHaveLength(2);
-    expect(sendParams).toMatchObject({
-      to: "group:target",
-      channel: "discord",
-      message: "announce now",
+    expect(sendParams.to).toBe("group:target");
+    expect(sendParams.channel).toBe("discord");
+    expect(sendParams.message).toBe("announce now");
+  });
+
+  it("sessions_send keeps delayed requester replies alive after a wait timeout", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "agent:main:main";
+    const targetKey = "agent:director1:main";
+    let targetWaitCount = 0;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        if (params?.sessionKey === targetKey) {
+          return { runId: "run-target", status: "accepted", acceptedAt: 2000 };
+        }
+        if (params?.sessionKey === requesterKey) {
+          return { runId: "run-requester", status: "accepted", acceptedAt: 2001 };
+        }
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        if (params?.runId === "run-target") {
+          targetWaitCount += 1;
+          return targetWaitCount === 1
+            ? { runId: "run-target", status: "timeout" }
+            : { runId: "run-target", status: "ok" };
+        }
+        if (params?.runId === "run-requester") {
+          return { runId: "run-requester", status: "ok" };
+        }
+      }
+      if (request.method === "chat.history") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        if (params?.sessionKey === targetKey && targetWaitCount > 1) {
+          return {
+            messages: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "late director reply" }],
+                timestamp: 20,
+              },
+            ],
+          };
+        }
+        if (params?.sessionKey === requesterKey) {
+          return {
+            messages: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "requester saw director" }],
+                timestamp: 21,
+              },
+            ],
+          };
+        }
+        return { messages: [] };
+      }
+      return {};
     });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+      config: {
+        ...TEST_CONFIG,
+        session: {
+          ...TEST_CONFIG.session,
+          agentToAgent: { maxPingPongTurns: 1 },
+        },
+      },
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-delayed", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("accepted");
+    expect(details.sessionKey).toBe(targetKey);
+    expect(details.delivery?.status).toBe("pending");
+    expect(details.delivery?.mode).toBe("announce");
+
+    await vi.waitFor(
+      () => {
+        const requesterReplyCall = calls.find(
+          (call) =>
+            call.method === "agent" &&
+            (call.params as { sessionKey?: string } | undefined)?.sessionKey === requesterKey,
+        );
+        if (!requesterReplyCall) {
+          throw new Error("expected requester reply call");
+        }
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    const requesterReplyCall = calls.find(
+      (call) =>
+        call.method === "agent" &&
+        (call.params as { sessionKey?: string } | undefined)?.sessionKey === requesterKey,
+    );
+    const replyParams = requesterReplyCall?.params as
+      | {
+          extraSystemPrompt?: string;
+          inputProvenance?: { sourceSessionKey?: string };
+          message?: string;
+          sessionKey?: string;
+        }
+      | undefined;
+    expect(replyParams?.sessionKey).toBe(requesterKey);
+    expect(replyParams?.inputProvenance?.sourceSessionKey).toBe(targetKey);
+    expect(replyParams?.message).toContain("late director reply");
+    expect(replyParams?.extraSystemPrompt).toContain("Agent-to-agent reply step");
+    expect(replyParams?.extraSystemPrompt).toContain("Current agent: Agent 1 (requester)");
+    expect(calls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
+  it("sessions_send preserves terminal timeouts without starting A2A", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "agent:main:main";
+    const targetKey = "agent:director1:main";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-terminal", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return {
+          runId: "run-terminal",
+          status: "timeout",
+          endedAt: 3000,
+          stopReason: "timeout",
+          error: "agent run timed out",
+        };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-terminal", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("timeout");
+    expect(details.error).toBe("agent run timed out");
+    expect(details.sessionKey).toBe(targetKey);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
+  });
+
+  it("sessions_send skips duplicate A2A delivery for waited parent-owned native subagents", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "agent:main:discord:direct:parent";
+    const targetKey = "agent:main:subagent:child";
+    let historyCallCount = 0;
+    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+      sessionKey === targetKey
+        ? {
+            sessionId: "child-session",
+            updatedAt: 1,
+            spawnedBy: requesterKey,
+            deliveryContext: {
+              channel: "discord",
+              to: "direct:parent",
+            },
+          }
+        : undefined,
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-child", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        historyCallCount += 1;
+        return {
+          messages:
+            historyCallCount === 1
+              ? []
+              : [
+                  {
+                    role: "assistant",
+                    content: [{ type: "text", text: "child reply" }],
+                    timestamp: 20,
+                  },
+                ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call-parent-owned-native-subagent", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    const waitedDetails = sessionsSendDetails(waited.details);
+    expect(waitedDetails.status).toBe("ok");
+    expect(waitedDetails.reply).toBe("child reply");
+    expect(waitedDetails.delivery?.status).toBe("skipped");
+    expect(waitedDetails.delivery?.mode).toBe("announce");
+    expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
+    const replyPromptAgentCalls = calls.filter(
+      (call) =>
+        call.method === "agent" &&
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string }).extraSystemPrompt?.includes(
+          "Agent-to-agent reply step",
+        ),
+    );
+    expect(replyPromptAgentCalls).toStrictEqual([]);
+    expect(calls.some((call) => call.method === "send")).toBe(false);
+  });
+
+  it("sessions_send preserves threadId when announce target is hydrated via sessions.list", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    const requesterKey = "discord:group:req";
+    const targetKey = "agent:main:worker";
+    let sendParams: {
+      to?: string;
+      channel?: string;
+      accountId?: string;
+      message?: string;
+      threadId?: string;
+    } = {};
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | {
+              sessionKey?: string;
+              extraSystemPrompt?: string;
+            }
+          | undefined;
+        let reply = "initial";
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+          reply = params.sessionKey === requesterKey ? "pong-1" : "pong-2";
+        }
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+          reply = "announce now";
+        }
+        replyByRunId.set(runId, reply);
+        return {
+          runId,
+          status: "accepted",
+          acceptedAt: 3000 + agentCallCount,
+        };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "sessions.list") {
+        return {
+          sessions: [
+            {
+              key: targetKey,
+              deliveryContext: {
+                channel: "whatsapp",
+                to: "123@g.us",
+                accountId: "work",
+                threadId: 99,
+              },
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        const params = request.params as
+          | {
+              to?: string;
+              channel?: string;
+              accountId?: string;
+              message?: string;
+              threadId?: string;
+            }
+          | undefined;
+        sendParams = {
+          to: params?.to,
+          channel: params?.channel,
+          accountId: params?.accountId,
+          message: params?.message,
+          threadId: params?.threadId,
+        };
+        return { messageId: "m-threaded-announce" };
+      }
+      return {};
+    });
+    agentStepTesting.setDepsForTest({
+      agentCommandFromIngress: async () => ({
+        payloads: [{ text: "announce now", mediaUrl: null }],
+        meta: { durationMs: 1 },
+      }),
+      callGateway: (opts: unknown) => callGatewayMock(opts),
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call-thread", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    const waitedDetails = sessionsSendDetails(waited.details);
+    expect(waitedDetails.status).toBe("ok");
+    expect(waitedDetails.reply).toBe("initial");
+    await vi.waitFor(
+      () => {
+        expect(countMatching(calls, (call) => call.method === "send")).toBe(1);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+
+    expect(sendParams.to).toBe("123@g.us");
+    expect(sendParams.channel).toBe("whatsapp");
+    expect(sendParams.accountId).toBe("work");
+    expect(sendParams.message).toBe("announce now");
+    expect(sendParams.threadId).toBe("99");
   });
 });

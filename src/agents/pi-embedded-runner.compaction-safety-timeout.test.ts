@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   compactWithSafetyTimeout,
   EMBEDDED_COMPACTION_TIMEOUT_MS,
@@ -6,7 +6,13 @@ import {
 } from "./pi-embedded-runner/compaction-safety-timeout.js";
 
 describe("compactWithSafetyTimeout", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
   afterEach(() => {
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 
@@ -140,7 +146,7 @@ describe("resolveCompactionTimeoutMs", () => {
   it("returns default for NaN", () => {
     expect(
       resolveCompactionTimeoutMs({
-        agents: { defaults: { compaction: { timeoutSeconds: NaN } } },
+        agents: { defaults: { compaction: { timeoutSeconds: Number.NaN } } },
       }),
     ).toBe(EMBEDDED_COMPACTION_TIMEOUT_MS);
   });

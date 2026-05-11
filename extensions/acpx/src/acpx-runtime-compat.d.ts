@@ -1,4 +1,4 @@
-declare module "acpx/dist/runtime.js" {
+declare module "acpx/runtime" {
   export const ACPX_BACKEND_ID: string;
 
   export type AcpRuntimeDoctorReport = import("../runtime-api.js").AcpRuntimeDoctorReport;
@@ -25,10 +25,12 @@ declare module "acpx/dist/runtime.js" {
     cwd: string;
     sessionStore: AcpSessionStore;
     agentRegistry: AcpAgentRegistry;
+    probeAgent?: string;
     mcpServers?: unknown;
     permissionMode?: unknown;
     nonInteractivePermissions?: unknown;
     timeoutMs?: number;
+    probeAgent?: string;
   };
 
   export class AcpxRuntime {
@@ -45,7 +47,11 @@ declare module "acpx/dist/runtime.js" {
     setMode(input: { handle: AcpRuntimeHandle; mode: string }): Promise<void>;
     setConfigOption(input: { handle: AcpRuntimeHandle; key: string; value: string }): Promise<void>;
     cancel(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void>;
-    close(input: { handle: AcpRuntimeHandle; reason?: string }): Promise<void>;
+    close(input: {
+      handle: AcpRuntimeHandle;
+      reason?: string;
+      discardPersistentState?: boolean;
+    }): Promise<void>;
   }
 
   export function createAcpRuntime(...args: unknown[]): AcpxRuntime;

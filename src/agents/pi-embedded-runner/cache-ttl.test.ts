@@ -16,7 +16,7 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
         return true;
       }
       if (params.context.provider === "openrouter") {
-        return ["anthropic/", "moonshot/", "moonshotai/", "zai/"].some((prefix) =>
+        return ["anthropic/", "deepseek/", "moonshot/", "moonshotai/", "zai/"].some((prefix) =>
           params.context.modelId.startsWith(prefix),
         );
       }
@@ -25,7 +25,7 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
   };
 });
 
-import { isCacheTtlEligibleProvider } from "./cache-ttl.js";
+import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 
 describe("isCacheTtlEligibleProvider", () => {
   it("allows anthropic", () => {
@@ -44,6 +44,7 @@ describe("isCacheTtlEligibleProvider", () => {
 
   it("allows openrouter cache-ttl models", () => {
     expect(isCacheTtlEligibleProvider("openrouter", "anthropic/claude-sonnet-4")).toBe(true);
+    expect(isCacheTtlEligibleProvider("openrouter", "deepseek/deepseek-v3.2")).toBe(true);
     expect(isCacheTtlEligibleProvider("openrouter", "moonshotai/kimi-k2.5")).toBe(true);
     expect(isCacheTtlEligibleProvider("openrouter", "moonshot/kimi-k2.5")).toBe(true);
     expect(isCacheTtlEligibleProvider("openrouter", "zai/glm-5")).toBe(true);
@@ -83,5 +84,60 @@ describe("isCacheTtlEligibleProvider", () => {
         "anthropic-messages",
       ),
     ).toBe(true);
+  });
+});
+
+describe("readLastCacheTtlTimestamp", () => {
+  it("returns the latest matching timestamp for the active provider/model", () => {
+    const sessionManager = {
+      getEntries: () => [
+        {
+          type: "custom",
+          customType: "openclaw.cache-ttl",
+          data: {
+            timestamp: 1_700_000_000_000,
+            provider: "anthropic",
+            modelId: "claude-sonnet-4-5",
+          },
+        },
+        {
+          type: "custom",
+          customType: "openclaw.cache-ttl",
+          data: {
+            timestamp: 1_700_000_001_000,
+            provider: "google",
+            modelId: "gemini-3.1-pro-preview",
+          },
+        },
+      ],
+    };
+
+    expect(
+      readLastCacheTtlTimestamp(sessionManager, {
+        provider: "Anthropic",
+        modelId: "Claude-Sonnet-4-5",
+      }),
+    ).toBe(1_700_000_000_000);
+  });
+
+  it("ignores unscoped cache-ttl entries when a context filter is requested", () => {
+    const sessionManager = {
+      getEntries: () => [
+        {
+          type: "custom",
+          customType: "openclaw.cache-ttl",
+          data: {
+            timestamp: 1_700_000_000_000,
+          },
+        },
+      ],
+    };
+
+    expect(
+      readLastCacheTtlTimestamp(sessionManager, {
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-5",
+      }),
+    ).toBeNull();
   });
 });

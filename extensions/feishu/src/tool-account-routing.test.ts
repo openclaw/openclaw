@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
@@ -60,6 +60,11 @@ describe("feishu tool account routing", () => {
         ...(await import("./wiki.js")),
       })));
     ({ registerFeishuWikiTools } = await import("./wiki.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.resetModules();
   });
 
   beforeEach(() => {
@@ -180,7 +185,7 @@ describe("feishu tool account routing", () => {
     const result = await tool.execute("call", { action: "search" });
 
     expect(createFeishuClientMock).not.toHaveBeenCalled();
-    expect(String(result.details.error ?? "")).toContain(
+    expect(typeof result.details.error === "string" ? result.details.error : "").toContain(
       "Resolve this command against an active gateway runtime snapshot before reading it.",
     );
   });

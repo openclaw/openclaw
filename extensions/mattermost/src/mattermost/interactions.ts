@@ -1,9 +1,18 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
-import { isTrustedProxyAddress, resolveClientIp, type OpenClawConfig } from "./runtime-api.js";
+import {
+  isTrustedProxyAddress,
+  readRequestBodyWithLimit,
+  resolveClientIp,
+  type OpenClawConfig,
+} from "./runtime-api.js";
 
 const INTERACTION_MAX_BODY_BYTES = 64 * 1024;
 const INTERACTION_BODY_TIMEOUT_MS = 10_000;
@@ -14,7 +23,7 @@ const SIGNED_CHANNEL_ID_CONTEXT_KEY = "__openclaw_channel_id";
  * Sent by Mattermost when a user clicks an action button.
  * See: https://developers.mattermost.com/integrate/plugins/interactive-messages/
  */
-export type MattermostInteractionPayload = {
+type MattermostInteractionPayload = {
   user_id: string;
   user_name?: string;
   channel_id: string;
@@ -34,7 +43,7 @@ export type MattermostInteractionResponse = {
   ephemeral_text?: string;
 };
 
-export type MattermostInteractionAuthorizationResult =
+type MattermostInteractionAuthorizationResult =
   | { ok: true }
   | { ok: false; statusCode?: number; response?: MattermostInteractionResponse };
 
@@ -85,9 +94,9 @@ function normalizeCallbackBaseUrl(baseUrl: string): string {
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   if (Array.isArray(value)) {
-    return value[0]?.trim() || undefined;
+    return normalizeOptionalString(value[0]);
   }
-  return value?.trim() || undefined;
+  return normalizeOptionalString(value);
 }
 
 function isAllowedInteractionSource(params: {
@@ -123,8 +132,8 @@ export function computeInteractionCallbackUrl(
   // Prefer merged per-account config when available, but keep the top-level path for
   // callers/tests that still pass the root Mattermost config shape directly.
   const callbackBaseUrl =
-    cfg?.interactions?.callbackBaseUrl?.trim() ??
-    cfg?.channels?.mattermost?.interactions?.callbackBaseUrl?.trim();
+    normalizeOptionalString(cfg?.interactions?.callbackBaseUrl) ??
+    normalizeOptionalString(cfg?.channels?.mattermost?.interactions?.callbackBaseUrl);
   if (callbackBaseUrl) {
     return `${normalizeCallbackBaseUrl(callbackBaseUrl)}${path}`;
   }
@@ -231,7 +240,7 @@ export function verifyInteractionToken(
 
 // ── Button builder helpers ─────────────────────────────────────────────
 
-export type MattermostButton = {
+type MattermostButton = {
   id: string;
   type: "button" | "select";
   name: string;
@@ -242,7 +251,7 @@ export type MattermostButton = {
   };
 };
 
-export type MattermostAttachment = {
+type MattermostAttachment = {
   text?: string;
   actions?: MattermostButton[];
   [key: string]: unknown;
@@ -319,8 +328,8 @@ export function buildButtonProps(params: {
 
   const buttons = rawButtons
     .map((btn) => ({
-      id: String(btn.id ?? btn.callback_data ?? "").trim(),
-      name: String(btn.text ?? btn.name ?? btn.label ?? "").trim(),
+      id: normalizeStringifiedOptionalString(btn.id ?? btn.callback_data) ?? "",
+      name: normalizeStringifiedOptionalString(btn.text ?? btn.name ?? btn.label) ?? "",
       style: btn.style ?? "default",
       context:
         typeof btn.context === "object" && btn.context !== null
@@ -349,35 +358,9 @@ export function buildButtonProps(params: {
 // ── Request body reader ────────────────────────────────────────────────
 
 function readInteractionBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-
-    const timer = setTimeout(() => {
-      req.destroy();
-      reject(new Error("Request body read timeout"));
-    }, INTERACTION_BODY_TIMEOUT_MS);
-
-    req.on("data", (chunk: Buffer) => {
-      totalBytes += chunk.length;
-      if (totalBytes > INTERACTION_MAX_BODY_BYTES) {
-        req.destroy();
-        clearTimeout(timer);
-        reject(new Error("Request body too large"));
-        return;
-      }
-      chunks.push(chunk);
-    });
-
-    req.on("end", () => {
-      clearTimeout(timer);
-      resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-
-    req.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
+  return readRequestBodyWithLimit(req, {
+    maxBytes: INTERACTION_MAX_BODY_BYTES,
+    timeoutMs: INTERACTION_BODY_TIMEOUT_MS,
   });
 }
 

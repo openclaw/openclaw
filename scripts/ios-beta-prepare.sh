@@ -8,7 +8,7 @@ Usage:
     scripts/ios-beta-prepare.sh --build-number 7 [--team-id TEAMID]
 
 Prepares local beta-release inputs without touching local signing overrides:
-- reads package.json.version and writes apps/ios/build/Version.xcconfig
+- reads apps/ios/version.json and writes apps/ios/build/Version.xcconfig
 - writes apps/ios/build/BetaRelease.xcconfig with canonical bundle IDs
 - configures the beta build for relay-backed APNs registration
 - regenerates apps/ios/OpenClaw.xcodeproj via xcodegen
@@ -21,12 +21,14 @@ BUILD_DIR="${IOS_DIR}/build"
 BETA_XCCONFIG="${IOS_DIR}/build/BetaRelease.xcconfig"
 TEAM_HELPER="${ROOT_DIR}/scripts/ios-team-id.sh"
 VERSION_HELPER="${ROOT_DIR}/scripts/ios-write-version-xcconfig.sh"
+IOS_VERSION_HELPER="${ROOT_DIR}/scripts/ios-version.ts"
+VERSION_SYNC_HELPER="${ROOT_DIR}/scripts/ios-sync-versioning.ts"
 
 BUILD_NUMBER=""
 TEAM_ID="${IOS_DEVELOPMENT_TEAM:-}"
 PUSH_RELAY_BASE_URL="${OPENCLAW_PUSH_RELAY_BASE_URL:-${IOS_PUSH_RELAY_BASE_URL:-}}"
 PUSH_RELAY_BASE_URL_XCCONFIG=""
-PACKAGE_VERSION="$(cd "${ROOT_DIR}" && node -p "require('./package.json').version" 2>/dev/null || true)"
+IOS_VERSION=""
 
 prepare_build_dir() {
   if [[ -L "${BUILD_DIR}" ]]; then
@@ -133,6 +135,16 @@ PUSH_RELAY_BASE_URL_XCCONFIG="$(
 prepare_build_dir
 
 (
+  cd "${ROOT_DIR}" && node --import tsx "${VERSION_SYNC_HELPER}" --check
+)
+
+IOS_VERSION="$(cd "${ROOT_DIR}" && node --import tsx "${IOS_VERSION_HELPER}" --field canonicalVersion)"
+if [[ -z "${IOS_VERSION}" ]]; then
+  echo "Unable to resolve iOS version from ${ROOT_DIR}/apps/ios/version.json." >&2
+  exit 1
+fi
+
+(
   bash "${VERSION_HELPER}" --build-number "${BUILD_NUMBER}"
 )
 
@@ -161,5 +173,5 @@ EOF
   xcodegen generate
 )
 
-echo "Prepared iOS beta release: version=${PACKAGE_VERSION} build=${BUILD_NUMBER} team=${TEAM_ID}"
+echo "Prepared iOS beta release: version=${IOS_VERSION} build=${BUILD_NUMBER} team=${TEAM_ID}"
 echo "XCODE_XCCONFIG_FILE=${BETA_XCCONFIG}"

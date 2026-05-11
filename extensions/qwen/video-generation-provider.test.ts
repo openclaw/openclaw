@@ -1,71 +1,65 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildQwenVideoGenerationProvider } from "./video-generation-provider.js";
+import {
+  getProviderHttpMocks,
+  installProviderHttpMockCleanup,
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import {
+  expectDashscopeVideoTaskPoll,
+  expectExplicitVideoGenerationCapabilities,
+  expectSuccessfulDashscopeVideoResult,
+  mockSuccessfulDashscopeVideoTask,
+} from "openclaw/plugin-sdk/provider-test-contracts";
+import { beforeAll, describe, expect, it } from "vitest";
 
-const {
-  resolveApiKeyForProviderMock,
-  postJsonRequestMock,
-  fetchWithTimeoutMock,
-  assertOkOrThrowHttpErrorMock,
-  resolveProviderHttpRequestConfigMock,
-} = vi.hoisted(() => ({
-  resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "qwen-key" })),
-  postJsonRequestMock: vi.fn(),
-  fetchWithTimeoutMock: vi.fn(),
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders),
-    dispatcherPolicy: undefined,
-  })),
-}));
+const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
 
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
+let buildQwenVideoGenerationProvider: typeof import("./video-generation-provider.js").buildQwenVideoGenerationProvider;
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  fetchWithTimeout: fetchWithTimeoutMock,
-  postJsonRequest: postJsonRequestMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-}));
+beforeAll(async () => {
+  ({ buildQwenVideoGenerationProvider } = await import("./video-generation-provider.js"));
+});
+
+installProviderHttpMockCleanup();
+
+function expectPostJsonRequest(
+  call: unknown,
+  expected: {
+    url: string;
+    body: Record<string, unknown>;
+  },
+) {
+  if (!call || typeof call !== "object") {
+    throw new Error("expected postJsonRequest call object");
+  }
+  const request = call as {
+    url?: unknown;
+    headers?: unknown;
+    body?: unknown;
+    timeoutMs?: unknown;
+    fetchFn?: unknown;
+    allowPrivateNetwork?: unknown;
+    dispatcherPolicy?: unknown;
+  };
+  expect(request.url).toBe(expected.url);
+  expect(request.body).toEqual(expected.body);
+  expect(request.timeoutMs).toBe(120_000);
+  expect(request.fetchFn).toBe(globalThis.fetch);
+  expect(request.allowPrivateNetwork).toBe(false);
+  expect(request.dispatcherPolicy).toBeUndefined();
+  expect(request.headers).toBeInstanceOf(Headers);
+  expect(Array.from((request.headers as Headers).entries())).toEqual([
+    ["authorization", "Bearer provider-key"],
+    ["content-type", "application/json"],
+    ["x-dashscope-async", "enable"],
+  ]);
+}
 
 describe("qwen video generation provider", () => {
-  afterEach(() => {
-    resolveApiKeyForProviderMock.mockClear();
-    postJsonRequestMock.mockReset();
-    fetchWithTimeoutMock.mockReset();
-    assertOkOrThrowHttpErrorMock.mockClear();
-    resolveProviderHttpRequestConfigMock.mockClear();
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildQwenVideoGenerationProvider());
   });
 
   it("submits async Wan generation, polls task status, and downloads the resulting video", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          request_id: "req-1",
-          output: {
-            task_id: "task-1",
-          },
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
-          output: {
-            task_status: "SUCCEEDED",
-            results: [{ video_url: "https://example.com/out.mp4" }],
-          },
-        }),
-        headers: new Headers(),
-      })
-      .mockResolvedValueOnce({
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-        headers: new Headers({ "content-type": "video/mp4" }),
-      });
+    mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
 
     const provider = buildQwenVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -78,34 +72,23 @@ describe("qwen video generation provider", () => {
       audio: true,
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
-        body: expect.objectContaining({
-          model: "wan2.6-r2v-flash",
-          input: expect.objectContaining({
-            prompt: "animate this shot",
-            img_url: "https://example.com/ref.png",
-          }),
-        }),
-      }),
-    );
-    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
-      1,
-      "https://dashscope-intl.aliyuncs.com/api/v1/tasks/task-1",
-      expect.objectContaining({ method: "GET" }),
-      120000,
-      fetch,
-    );
-    expect(result.videos).toHaveLength(1);
-    expect(result.videos[0]?.mimeType).toBe("video/mp4");
-    expect(result.metadata).toEqual(
-      expect.objectContaining({
-        requestId: "req-1",
-        taskId: "task-1",
-        taskStatus: "SUCCEEDED",
-      }),
-    );
+    expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
+    expectPostJsonRequest(postJsonRequestMock.mock.calls[0]?.[0], {
+      url: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+      body: {
+        model: "wan2.6-r2v-flash",
+        input: {
+          prompt: "animate this shot",
+          img_url: "https://example.com/ref.png",
+        },
+        parameters: {
+          duration: 6,
+          enable_audio: true,
+        },
+      },
+    });
+    expectDashscopeVideoTaskPoll(fetchWithTimeoutMock);
+    expectSuccessfulDashscopeVideoResult(result);
   });
 
   it("fails fast when reference inputs are local buffers instead of remote URLs", async () => {
@@ -126,31 +109,13 @@ describe("qwen video generation provider", () => {
   });
 
   it("preserves dedicated coding endpoints for dedicated API keys", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          request_id: "req-2",
-          output: {
-            task_id: "task-2",
-          },
-        }),
+    mockSuccessfulDashscopeVideoTask(
+      {
+        postJsonRequestMock,
+        fetchWithTimeoutMock,
       },
-      release: vi.fn(async () => {}),
-    });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
-          output: {
-            task_status: "SUCCEEDED",
-            results: [{ video_url: "https://example.com/out.mp4" }],
-          },
-        }),
-        headers: new Headers(),
-      })
-      .mockResolvedValueOnce({
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-        headers: new Headers({ "content-type": "video/mp4" }),
-      });
+      { requestId: "req-2", taskId: "task-2" },
+    );
 
     const provider = buildQwenVideoGenerationProvider();
     await provider.generateVideo({
@@ -169,17 +134,22 @@ describe("qwen video generation provider", () => {
       },
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://coding-intl.dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
-      }),
-    );
-    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
-      1,
-      "https://coding-intl.dashscope.aliyuncs.com/api/v1/tasks/task-2",
-      expect.objectContaining({ method: "GET" }),
-      120000,
-      fetch,
-    );
+    expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
+    expectPostJsonRequest(postJsonRequestMock.mock.calls[0]?.[0], {
+      url: "https://coding-intl.dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+      body: {
+        model: "wan2.6-t2v",
+        input: {
+          prompt: "animate this shot",
+        },
+        parameters: {
+          duration: 5,
+        },
+      },
+    });
+    expectDashscopeVideoTaskPoll(fetchWithTimeoutMock, {
+      baseUrl: "https://coding-intl.dashscope.aliyuncs.com",
+      taskId: "task-2",
+    });
   });
 });

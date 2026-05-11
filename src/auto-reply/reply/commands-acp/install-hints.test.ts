@@ -1,7 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { resolveAcpInstallCommandHint, resolveConfiguredAcpBackendId } from "./install-hints.js";
+import { resolveAcpInstallCommandHint } from "./install-hints.js";
 
 function withAcpConfig(acp: OpenClawConfig["acp"]): OpenClawConfig {
   return { acp } as OpenClawConfig;
@@ -35,7 +35,6 @@ describe("ACP install hints", () => {
 
   it("returns generic plugin hint for non-acpx backend", () => {
     const cfg = withAcpConfig({ backend: "custom-backend" });
-    expect(resolveConfiguredAcpBackendId(cfg)).toBe("custom-backend");
     expect(resolveAcpInstallCommandHint(cfg)).toContain('ACP backend "custom-backend"');
   });
 });

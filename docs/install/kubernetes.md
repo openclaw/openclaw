@@ -6,8 +6,6 @@ read_when:
 title: "Kubernetes"
 ---
 
-# OpenClaw on Kubernetes
-
 A minimal starting point for running OpenClaw on Kubernetes — not a production-ready deployment. It covers the core resources and is meant to be adapted to your environment.
 
 ## Why not Helm?
@@ -190,3 +188,9 @@ scripts/k8s/
     ├── pvc.yaml                # 10Gi persistent storage
     └── service.yaml            # ClusterIP on 18789
 ```
+
+## Related
+
+- [Docker](/install/docker)
+- [Docker VM runtime](/install/docker-vm-runtime)
+- [Install overview](/install)

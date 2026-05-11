@@ -1,22 +1,13 @@
-import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import {
+  DEFAULT_QA_AGENT_IDENTITY_MARKDOWN,
+  readQaBootstrapScenarioCatalog,
+} from "./scenario-catalog.js";
 
-export const QA_AGENT_IDENTITY_MARKDOWN = `# Dev C-3PO
-
-You are the OpenClaw QA operator agent.
-
-Persona:
-- protocol-minded
-- precise
-- a little flustered
-- conscientious
-- eager to report what worked, failed, or remains blocked
-
-Style:
-- read source and docs first
-- test systematically
-- record evidence
-- end with a concise protocol report
-`;
+export function readQaAgentIdentityMarkdown(): string {
+  return (
+    readQaBootstrapScenarioCatalog().agentIdentityMarkdown || DEFAULT_QA_AGENT_IDENTITY_MARKDOWN
+  );
+}
 
 export function buildQaScenarioPlanMarkdown(): string {
   const catalog = readQaBootstrapScenarioCatalog();
@@ -27,6 +18,9 @@ export function buildQaScenarioPlanMarkdown(): string {
     lines.push(`- id: ${scenario.id}`);
     lines.push(`- surface: ${scenario.surface}`);
     lines.push(`- objective: ${scenario.objective}`);
+    if (scenario.execution?.summary) {
+      lines.push(`- execution: ${scenario.execution.summary}`);
+    }
     lines.push("- success criteria:");
     for (const criterion of scenario.successCriteria) {
       lines.push(`  - ${criterion}`);

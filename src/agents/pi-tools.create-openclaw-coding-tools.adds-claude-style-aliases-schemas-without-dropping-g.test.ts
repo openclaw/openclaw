@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createOpenClawReadTool, createSandboxedReadTool } from "./pi-tools.read.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
@@ -86,7 +86,7 @@ describe("createOpenClawCodingTools read behavior", () => {
       const result = await readTool.execute("read-cap-1", { path: "huge.txt" });
       const text = extractToolText(result);
       expect(text).toContain("line-0001");
-      expect(text).toContain("[Read output capped at 50KB for this call. Use offset=");
+      expect(text).toContain("[Read output capped at 32KB for this call. Use offset=");
       expect(text).not.toContain("line-8000");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -123,11 +123,9 @@ describe("createOpenClawCodingTools read behavior", () => {
     const result = await wrapped.execute("read-strip-1", { path: "demo.txt", limit: 1 });
 
     const details = (result as { details?: { truncation?: Record<string, unknown> } }).details;
-    expect(details?.truncation).toMatchObject({
-      truncated: true,
-      outputLines: 1,
-      firstLineExceedsLimit: false,
-    });
+    expect(details?.truncation?.truncated).toBe(true);
+    expect(details?.truncation?.outputLines).toBe(1);
+    expect(details?.truncation?.firstLineExceedsLimit).toBe(false);
     expect(details?.truncation).not.toHaveProperty("content");
   });
 });

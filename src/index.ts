@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { formatCliFailureLines } from "./cli/failure-output.js";
+import { assertNotRoot } from "./cli/root-guard.js";
 import { formatUncaughtError } from "./infra/errors.js";
+import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { isMainModule } from "./infra/is-main.js";
-import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
+import {
+  installUnhandledRejectionHandler,
+  isBenignUncaughtExceptionError,
+  isUncaughtExceptionHandled,
+} from "./infra/unhandled-rejections.js";
 
 type LegacyCliDeps = {
-  installGaxiosFetchCompat: () => Promise<void>;
   runCli: (argv: string[]) => Promise<void>;
 };
 
@@ -36,11 +42,8 @@ export let saveSessionStore: LibraryExports["saveSessionStore"];
 export let waitForever: LibraryExports["waitForever"];
 
 async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
-  const [{ installGaxiosFetchCompat }, { runCli }] = await Promise.all([
-    import("./infra/gaxios-fetch-compat.js"),
-    import("./cli/run-main.js"),
-  ]);
-  return { installGaxiosFetchCompat, runCli };
+  const { runCli } = await import("./cli/run-main.js");
+  return { runCli };
 }
 
 // Legacy direct file entrypoint only. Package root exports now live in library.ts.
@@ -48,8 +51,15 @@ export async function runLegacyCliEntry(
   argv: string[] = process.argv,
   deps?: LegacyCliDeps,
 ): Promise<void> {
-  const { installGaxiosFetchCompat, runCli } = deps ?? (await loadLegacyCliDeps());
-  await installGaxiosFetchCompat();
+  // Block root execution on the legacy path too, matching src/entry.ts.
+  // Unlike entry.ts (which has fast-path help/version exits before startup),
+  // this path always calls runCli() which runs startup work (dotenv loading,
+  // debug capture init) before rendering help/version output.  Block
+  // unconditionally — the assertNotRoot error message already shows the
+  // OPENCLAW_ALLOW_ROOT=1 escape hatch.
+  assertNotRoot();
+
+  const { runCli } = deps ?? (await loadLegacyCliDeps());
   await runCli(argv);
 }
 
@@ -90,13 +100,41 @@ if (isMain) {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
-    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+    if (isUncaughtExceptionHandled(error)) {
+      return;
+    }
+    if (isBenignUncaughtExceptionError(error)) {
+      console.warn(
+        "[openclaw] Non-fatal uncaught exception (continuing):",
+        formatUncaughtError(error),
+      );
+      return;
+    }
+    for (const line of formatCliFailureLines({
+      title: "OpenClaw hit an unexpected runtime error.",
+      error,
+      argv: process.argv,
+    })) {
+      console.error(line);
+    }
+    for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
+      console.error("[openclaw]", message);
+    }
     restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
     process.exit(1);
   });
 
   void runLegacyCliEntry(process.argv).catch((err) => {
-    console.error("[openclaw] CLI failed:", formatUncaughtError(err));
+    for (const line of formatCliFailureLines({
+      title: "The CLI command failed.",
+      error: err,
+      argv: process.argv,
+    })) {
+      console.error(line);
+    }
+    for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
+      console.error("[openclaw]", message);
+    }
     restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
     process.exit(1);
   });

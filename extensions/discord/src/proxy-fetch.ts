@@ -1,13 +1,14 @@
 import { isIP } from "node:net";
-import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { makeProxyFetch } from "openclaw/plugin-sdk/infra-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 
-export function resolveDiscordProxyUrl(
+function resolveDiscordProxyUrl(
   account: Pick<ResolvedDiscordAccount, "config">,
-  cfg?: OpenClawConfig,
+  cfg: OpenClawConfig,
 ): string | undefined {
   const accountProxy = account.config.proxy?.trim();
   if (accountProxy) {
@@ -21,7 +22,7 @@ export function resolveDiscordProxyUrl(
   return trimmed || undefined;
 }
 
-export function resolveDiscordProxyFetchByUrl(
+function resolveDiscordProxyFetchByUrl(
   proxyUrl: string | undefined,
   runtime?: Pick<RuntimeEnv, "error">,
 ): typeof fetch | undefined {
@@ -30,7 +31,7 @@ export function resolveDiscordProxyFetchByUrl(
 
 export function resolveDiscordProxyFetchForAccount(
   account: Pick<ResolvedDiscordAccount, "config">,
-  cfg?: OpenClawConfig,
+  cfg: OpenClawConfig,
   runtime?: Pick<RuntimeEnv, "error">,
 ): typeof fetch | undefined {
   return resolveDiscordProxyFetchByUrl(resolveDiscordProxyUrl(account, cfg), runtime);
@@ -71,7 +72,7 @@ export function validateDiscordProxyUrl(proxyUrl: string): string {
 }
 
 function isLoopbackProxyHostname(hostname: string): boolean {
-  const normalized = hostname.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(hostname);
   if (!normalized) {
     return false;
   }

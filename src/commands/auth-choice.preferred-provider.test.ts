@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { resolvePluginProviders as resolvePluginProvidersFn } from "../plugins/providers.runtime.js";
+
+type ResolvePluginProvidersOptions = Parameters<typeof resolvePluginProvidersFn>[0];
 
 const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn());
 const resolveManifestDeprecatedProviderAuthChoice = vi.hoisted(() => vi.fn());
@@ -100,5 +103,32 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       "chutes",
     );
     expect(resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("passes untrusted-workspace filtering through setup-provider fallback lookup", async () => {
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "demo-provider",
+        label: "Demo Provider",
+        auth: [{ id: "api-key", label: "API key", kind: "api_key" }],
+      },
+    ] as never);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "demo-provider" },
+      method: { id: "api-key" },
+    });
+
+    await expect(
+      resolvePreferredProviderForAuthChoice({
+        choice: "demo-provider",
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).resolves.toBe("demo-provider");
+    expect(resolvePluginProviders).toHaveBeenCalledOnce();
+    const [pluginProviderOptions] = resolvePluginProviders.mock.calls[0] as unknown as [
+      ResolvePluginProvidersOptions,
+    ];
+    expect(pluginProviderOptions?.mode).toBe("setup");
+    expect(pluginProviderOptions?.includeUntrustedWorkspacePlugins).toBe(false);
   });
 });

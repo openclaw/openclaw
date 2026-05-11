@@ -1,4 +1,7 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentHarness } from "../harness/types.js";
+import type { AgentInternalEvent } from "../internal-events.js";
+import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import {
   makeAttemptResult,
   makeCompactionSuccess,
@@ -8,13 +11,20 @@ import {
 } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedBuildAgentRuntimePlan,
+  mockedBuildEmbeddedRunPayloads,
   mockedCoerceToFailoverError,
   mockedCompactDirect,
   mockedContextEngine,
   mockedDescribeFailoverError,
   mockedEvaluateContextWindowGuard,
+  mockedEnsureAuthProfileStore,
+  mockedEnsureAuthProfileStoreWithoutExternalProfiles,
   mockedGlobalHookRunner,
+  mockedGetApiKeyForModel,
+  mockedMarkAuthProfileSuccess,
   mockedPickFallbackThinkingLevel,
+  mockedResolveAuthProfileOrder,
   mockedResolveContextWindowInfo,
   mockedResolveFailoverStatus,
   mockedRunContextEngineMaintenance,
@@ -24,8 +34,162 @@ import {
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
+import type { RunEmbeddedPiAgentParams } from "./run/params.js";
+import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
+type RuntimePlanOverrides = Partial<Omit<AgentRuntimePlan, "auth" | "resolvedRef">> & {
+  auth?: Partial<AgentRuntimePlan["auth"]>;
+  resolvedRef?: Partial<AgentRuntimePlan["resolvedRef"]>;
+};
+function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
+  return {
+    runId: "forward-attempt-params",
+    params: {
+      toolsAllow: ["exec", "read"],
+      ownerOnlyToolAllowlist: ["cron"],
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "cron",
+      disableMessageTool: true,
+      forceMessageTool: true,
+      requireExplicitMessageTarget: true,
+      internalEvents,
+    },
+    expected: {
+      toolsAllow: ["exec", "read"],
+      ownerOnlyToolAllowlist: ["cron"],
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "cron",
+      disableMessageTool: true,
+      forceMessageTool: true,
+      requireExplicitMessageTarget: true,
+    },
+  } satisfies {
+    runId: string;
+    params: Partial<RunEmbeddedPiAgentParams>;
+    expected: Record<string, unknown>;
+  };
+}
+
+function makeForwardedRuntimePlan(overrides: RuntimePlanOverrides = {}): AgentRuntimePlan {
+  const transcriptPolicy = {
+    sanitizeMode: "full",
+    sanitizeToolCallIds: true,
+    preserveNativeAnthropicToolUseIds: false,
+    repairToolUseResultPairing: true,
+    preserveSignatures: false,
+    sanitizeThinkingSignatures: true,
+    dropThinkingBlocks: false,
+    applyGoogleTurnOrdering: false,
+    validateGeminiTurns: false,
+    validateAnthropicTurns: false,
+    allowSyntheticToolResults: false,
+  } satisfies AgentRuntimePlan["transcript"]["policy"];
+  const basePlan: AgentRuntimePlan = {
+    auth: {
+      authProfileProviderForAuth: "anthropic",
+      providerForAuth: "anthropic",
+    },
+    delivery: {
+      isSilentPayload: vi.fn(() => false),
+      resolveFollowupRoute: vi.fn(),
+    },
+    observability: {
+      provider: "anthropic",
+      resolvedRef: "anthropic/test-model",
+      modelId: "test-model",
+    },
+    outcome: {
+      classifyRunResult: vi.fn(() => undefined),
+    },
+    prompt: {
+      provider: "anthropic",
+      modelId: "test-model",
+      resolveSystemPromptContribution: vi.fn(),
+      transformSystemPrompt: vi.fn((context) => context.systemPrompt),
+    },
+    transcript: {
+      policy: transcriptPolicy,
+      resolvePolicy: vi.fn((params): AgentRuntimePlan["transcript"]["policy"] => ({
+        ...transcriptPolicy,
+        sanitizeMode: params?.modelApi === "anthropic-messages" ? "full" : "images-only",
+      })),
+    },
+    transport: {
+      extraParams: {},
+      resolveExtraParams: vi.fn(() => ({})),
+    },
+    resolvedRef: {
+      provider: "anthropic",
+      modelId: "test-model",
+      harnessId: "pi",
+    },
+    tools: {
+      normalize: vi.fn((tools) => tools),
+      logDiagnostics: vi.fn(),
+    },
+  };
+  return {
+    ...basePlan,
+    ...overrides,
+    auth: {
+      ...basePlan.auth,
+      ...overrides.auth,
+    },
+    resolvedRef: {
+      ...basePlan.resolvedRef,
+      ...overrides.resolvedRef,
+    },
+  };
+}
+
+type MockWithCalls = {
+  mock: {
+    calls: Array<Array<unknown>>;
+  };
+};
+
+function mockCallArg(mock: MockWithCalls, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex];
+  expect(call).toBeDefined();
+  return call?.[argIndex];
+}
+
+function expectRecordFields(
+  record: unknown,
+  expected: Record<string, unknown>,
+): Record<string, unknown> {
+  expect(record).toBeDefined();
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
+function expectMockCallFields(
+  mock: MockWithCalls,
+  expected: Record<string, unknown>,
+  callIndex = 0,
+): Record<string, unknown> {
+  return expectRecordFields(mockCallArg(mock, callIndex), expected);
+}
+
+function expectRuntimePlanFields(
+  runtimePlan: unknown,
+  expected: {
+    auth?: Record<string, unknown>;
+    resolvedRef?: Record<string, unknown>;
+  },
+): void {
+  const plan = expectRecordFields(runtimePlan, {});
+  if (expected.resolvedRef) {
+    expectRecordFields(plan.resolvedRef, expected.resolvedRef);
+  }
+  if (expected.auth) {
+    expectRecordFields(plan.auth, expected.auth);
+  }
+}
 
 describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
   beforeAll(async () => {
@@ -34,6 +198,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
 
   beforeEach(() => {
     resetRunOverflowCompactionHarnessMocks();
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
   });
 
   it("passes precomputed legacy before_agent_start result into the attempt", async () => {
@@ -58,11 +223,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     });
 
     expect(mockedGlobalHookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        legacyBeforeAgentStartResult: legacyResult,
-      }),
-    );
+    expectMockCallFields(mockedRunEmbeddedAttempt, {
+      legacyBeforeAgentStartResult: legacyResult,
+    });
   });
 
   it("passes resolved auth profile into run attempts for context-engine afterTurn propagation", async () => {
@@ -72,13 +235,609 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       ...overflowBaseRunParams,
       runId: "run-auth-profile-passthrough",
     });
+    expectMockCallFields(mockedRunEmbeddedAttempt, {
+      authProfileId: "test-profile",
+      authProfileIdSource: "auto",
+    });
+  });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+  it("uses the lightweight auth profile store during reply startup", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-lightweight-auth-store",
+    });
+
+    expect(mockedEnsureAuthProfileStore).not.toHaveBeenCalled();
+    expect(mockedEnsureAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith(
+      expect.stringMatching(/[/\\]\.openclaw[/\\]agents[/\\]main[/\\]agent$/),
+      { allowKeychainPrompt: false },
+    );
+  });
+
+  it("forwards optional attempt params and the runtime plan into one attempt call", async () => {
+    const internalEvents: AgentInternalEvent[] = [];
+    const forwardingCase = makeForwardingCase(internalEvents);
+    const runtimePlan = makeForwardedRuntimePlan();
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      ...forwardingCase.params,
+      runId: forwardingCase.runId,
+    });
+
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    const forwardedAttempt = expectMockCallFields(
+      mockedRunEmbeddedAttempt,
+      forwardingCase.expected,
+    );
+    expectRuntimePlanFields(forwardedAttempt.runtimePlan, {
+      resolvedRef: {
+        provider: "anthropic",
+        modelId: "test-model",
+      },
+    });
+    const forwardedPlan = expectRecordFields(forwardedAttempt.runtimePlan, {});
+    const forwardedTools = expectRecordFields(forwardedPlan.tools, {});
+    expect(typeof forwardedTools.normalize).toBe("function");
+    const forwardedTransport = expectRecordFields(forwardedPlan.transport, {});
+    expect(typeof forwardedTransport.resolveExtraParams).toBe("function");
+    const attemptParams = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as
+      | EmbeddedRunAttemptParams
+      | undefined;
+    expect(attemptParams?.runtimePlan).toBe(runtimePlan);
+    expect(attemptParams?.internalEvents).toBe(internalEvents);
+  });
+
+  it("forwards explicit OpenAI Codex auth profiles to codex plugin harnesses", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({ assistantTexts: ["ok"] }),
+    );
+    const runtimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "codex",
+        modelId: "gpt-5.4",
+        harnessId: "codex",
+      },
+      auth: {
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:work",
+      },
+    });
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt: pluginRunAttempt,
+    });
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
+    mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
+    const codexAuthStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:work": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+        "openai-codex:other": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "other-access",
+          refresh: "other-refresh",
+          expires: Date.now() + 60_000,
+        },
+        "anthropic:work": {
+          type: "api_key" as const,
+          provider: "anthropic",
+          key: "sk-ant",
+        },
+      },
+    };
+    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValueOnce(codexAuthStore);
+
+    try {
+      await runEmbeddedPiAgent({
+        ...overflowBaseRunParams,
+        provider: "codex",
+        model: "gpt-5.4",
+        config: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        authProfileId: "openai-codex:work",
+        authProfileIdSource: "user",
+        runId: "plugin-harness-forwards-openai-codex-auth",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    const pluginParams = expectMockCallFields(pluginRunAttempt, {
+      provider: "codex",
+      authProfileId: "openai-codex:work",
+      authProfileIdSource: "user",
+    });
+    expectRuntimePlanFields(pluginParams.runtimePlan, {
+      resolvedRef: {
+        provider: "codex",
+        modelId: "gpt-5.4",
+        harnessId: "codex",
+      },
+      auth: {
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:work",
+      },
+    });
+    const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
+    expect(harnessParams?.runtimePlan).toBe(runtimePlan);
+    expect(Object.keys(harnessParams?.authProfileStore.profiles ?? {})).toEqual([
+      "openai-codex:work",
+    ]);
+    expectRecordFields(harnessParams?.authProfileStore.profiles["openai-codex:work"], {
+      provider: "openai-codex",
+    });
+  });
+
+  it("forwards OpenAI Codex auth profiles when openai/* is forced through codex", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({ assistantTexts: ["ok"] }),
+    );
+    const runtimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "openai",
+        modelId: "gpt-5.4",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:work",
+      },
+    });
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: false }),
+      runAttempt: pluginRunAttempt,
+    });
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
+    mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
+
+    try {
+      await runEmbeddedPiAgent({
+        ...overflowBaseRunParams,
+        provider: "openai",
+        model: "gpt-5.4",
+        config: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        authProfileId: "openai-codex:work",
+        authProfileIdSource: "user",
+        runId: "forced-codex-harness-forwards-openai-codex-auth",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    const pluginParams = expectMockCallFields(pluginRunAttempt, {
+      provider: "openai",
+      authProfileId: "openai-codex:work",
+      authProfileIdSource: "user",
+    });
+    expectRuntimePlanFields(pluginParams.runtimePlan, {
+      resolvedRef: {
+        provider: "openai",
+        modelId: "gpt-5.4",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:work",
+      },
+    });
+    const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
+    expect(harnessParams?.runtimePlan).toBe(runtimePlan);
+    expect(mockedMarkAuthProfileSuccess).toHaveBeenCalledWith(
       expect.objectContaining({
-        authProfileId: "test-profile",
-        authProfileIdSource: "auto",
+        provider: "openai-codex",
+        profileId: "openai-codex:work",
       }),
     );
+  });
+
+  it("keeps auto-selected OpenAI Codex auth profiles for forced codex harness runs", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({ assistantTexts: ["ok"] }),
+    );
+    const runtimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:default",
+      },
+    });
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: false }),
+      runAttempt: pluginRunAttempt,
+    });
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
+    mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
+
+    try {
+      await runEmbeddedPiAgent({
+        ...overflowBaseRunParams,
+        provider: "openai",
+        model: "gpt-5.5",
+        config: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        authProfileId: "openai-codex:default",
+        authProfileIdSource: "auto",
+        runId: "forced-codex-harness-keeps-auto-openai-codex-auth",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    const pluginParams = expectMockCallFields(pluginRunAttempt, {
+      provider: "openai",
+      authProfileId: "openai-codex:default",
+      authProfileIdSource: "auto",
+    });
+    expectRuntimePlanFields(pluginParams.runtimePlan, {
+      resolvedRef: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:default",
+      },
+    });
+    const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
+    expect(harnessParams?.runtimePlan).toBe(runtimePlan);
+  });
+
+  it("auto-selects OpenAI Codex auth profiles for forced codex harness channel runs", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({ assistantTexts: ["ok"] }),
+    );
+    const runtimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:default",
+      },
+    });
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: false }),
+      runAttempt: pluginRunAttempt,
+    });
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
+    mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
+    mockedResolveAuthProfileOrder.mockReturnValueOnce(["openai-codex:default"]);
+
+    try {
+      await runEmbeddedPiAgent({
+        ...overflowBaseRunParams,
+        provider: "openai",
+        model: "gpt-5.5",
+        config: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        runId: "forced-codex-harness-auto-selects-openai-codex-auth",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expectMockCallFields(mockedResolveAuthProfileOrder, {
+      provider: "openai-codex",
+    });
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    const pluginParams = expectMockCallFields(pluginRunAttempt, {
+      provider: "openai",
+      authProfileId: "openai-codex:default",
+      authProfileIdSource: "auto",
+    });
+    expectRuntimePlanFields(pluginParams.runtimePlan, {
+      resolvedRef: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:default",
+      },
+    });
+    const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
+    expect(harnessParams?.runtimePlan).toBe(runtimePlan);
+  });
+
+  it("auto-selects friendly OpenAI-named Codex auth profiles for forced codex harness runs", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({ assistantTexts: ["ok"] }),
+    );
+    const runtimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai:personal",
+      },
+    });
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: false }),
+      runAttempt: pluginRunAttempt,
+    });
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
+    mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
+    mockedResolveAuthProfileOrder.mockReturnValueOnce(["openai:personal"]);
+    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:personal": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    });
+
+    try {
+      await runEmbeddedPiAgent({
+        ...overflowBaseRunParams,
+        provider: "openai",
+        model: "gpt-5.5",
+        config: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        runId: "forced-codex-harness-auto-selects-friendly-openai-auth",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expectMockCallFields(mockedResolveAuthProfileOrder, {
+      provider: "openai-codex",
+    });
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    const pluginParams = expectMockCallFields(pluginRunAttempt, {
+      provider: "openai",
+      authProfileId: "openai:personal",
+      authProfileIdSource: "auto",
+    });
+    expectRuntimePlanFields(pluginParams.runtimePlan, {
+      resolvedRef: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai:personal",
+      },
+    });
+    const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
+    expect(harnessParams?.runtimePlan).toBe(runtimePlan);
+    expect(Object.keys(harnessParams?.authProfileStore.profiles ?? {})).toEqual([
+      "openai:personal",
+    ]);
+    expectRecordFields(harnessParams?.authProfileStore.profiles["openai:personal"], {
+      provider: "openai-codex",
+    });
+  });
+
+  it("rotates Codex harness auth profiles after a prompt-level subscription limit", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const subscriptionLimit = new Error(
+      "You've reached your Codex subscription usage limit. Next reset in 20 hours.",
+    );
+    const normalizedLimit = Object.assign(new Error(subscriptionLimit.message), {
+      name: "FailoverError",
+      reason: "rate_limit",
+      status: 429,
+    });
+    let attemptCount = 0;
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => {
+      attemptCount += 1;
+      return attemptCount === 1
+        ? makeAttemptResult({ promptError: subscriptionLimit })
+        : makeAttemptResult({ assistantTexts: ["backup ok"], promptError: null });
+    });
+    const firstRuntimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai-codex:sub",
+        forwardedAuthProfileCandidateIds: ["openai-codex:sub", "openai:backup"],
+      },
+    });
+    const secondRuntimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+      auth: {
+        providerForAuth: "openai",
+        harnessAuthProvider: "openai-codex",
+        forwardedAuthProfileId: "openai:backup",
+        forwardedAuthProfileCandidateIds: ["openai-codex:sub", "openai:backup"],
+      },
+    });
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: false }),
+      runAttempt: pluginRunAttempt,
+    });
+    mockedBuildAgentRuntimePlan
+      .mockReturnValueOnce(firstRuntimePlan)
+      .mockReturnValueOnce(secondRuntimePlan);
+    mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
+    mockedResolveAuthProfileOrder.mockReturnValueOnce(["openai-codex:sub", "openai:backup"]);
+    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai-codex:sub": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+        "openai:backup": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-test",
+        },
+      },
+    });
+    mockedCoerceToFailoverError.mockReturnValueOnce(normalizedLimit);
+    mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
+      message: err instanceof Error ? err.message : String(err),
+      reason: err === normalizedLimit ? "rate_limit" : undefined,
+      status: err === normalizedLimit ? 429 : undefined,
+      code: undefined,
+    }));
+
+    try {
+      await runEmbeddedPiAgent({
+        ...overflowBaseRunParams,
+        provider: "openai",
+        model: "gpt-5.5",
+        config: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        runId: "forced-codex-harness-rotates-subscription-limit-auth",
+        authProfileId: "openai-codex:sub",
+        authProfileIdSource: "auto",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(2);
+    const firstAttempt = expectMockCallFields(pluginRunAttempt, {
+      provider: "openai",
+      authProfileId: "openai-codex:sub",
+      authProfileIdSource: "auto",
+    });
+    const secondAttempt = expectMockCallFields(
+      pluginRunAttempt,
+      {
+        provider: "openai",
+        authProfileId: "openai:backup",
+        authProfileIdSource: "auto",
+      },
+      1,
+    );
+    expectRuntimePlanFields(firstAttempt.runtimePlan, {
+      auth: {
+        forwardedAuthProfileId: "openai-codex:sub",
+        forwardedAuthProfileCandidateIds: ["openai-codex:sub", "openai:backup"],
+      },
+    });
+    expectRuntimePlanFields(secondAttempt.runtimePlan, {
+      auth: {
+        forwardedAuthProfileId: "openai:backup",
+        forwardedAuthProfileCandidateIds: ["openai-codex:sub", "openai:backup"],
+      },
+    });
+    const firstAuthProfileStore = expectRecordFields(firstAttempt.authProfileStore, {});
+    const firstAuthProfiles = expectRecordFields(firstAuthProfileStore.profiles, {});
+    expect(Object.keys(firstAuthProfiles)).toEqual(["openai-codex:sub", "openai:backup"]);
+    expect(secondAttempt.authProfileStore).toBe(firstAttempt.authProfileStore);
   });
 
   it("blocks undersized models before dispatching a provider attempt", async () => {
@@ -91,6 +850,8 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       shouldBlock: true,
       tokens: 800,
       source: "model",
+      hardMinTokens: 1000,
+      warnBelowTokens: 5000,
     });
 
     await expect(
@@ -98,7 +859,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         ...overflowBaseRunParams,
         runId: "run-small-context",
       }),
-    ).rejects.toThrow("Model context window too small (800 tokens). Minimum is 1000.");
+    ).rejects.toThrow(
+      "Model context window too small (800 tokens; source=model). Minimum is 1000.",
+    );
 
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
   });
@@ -112,16 +875,64 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     await runEmbeddedPiAgent(overflowBaseRunParams);
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedCompactDirect).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "test-session",
-        sessionFile: "/tmp/session.json",
-        runtimeContext: expect.objectContaining({
-          trigger: "overflow",
-          authProfileId: "test-profile",
+    const compactParams = expectMockCallFields(mockedCompactDirect, {
+      sessionId: "test-session",
+      sessionFile: "/tmp/session.json",
+    });
+    expectRecordFields(compactParams.runtimeContext, {
+      trigger: "overflow",
+      authProfileId: "test-profile",
+    });
+  });
+
+  it("threads prompt-cache runtime context into overflow compaction", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: makeOverflowError(),
+          promptCache: {
+            retention: "short",
+            lastCallUsage: {
+              input: 150000,
+              cacheRead: 32000,
+              total: 182000,
+            },
+            observation: {
+              broke: false,
+              cacheRead: 32000,
+            },
+            lastCacheTouchAt: 1_700_000_000_000,
+          },
         }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        tokensBefore: 150000,
+        tokensAfter: 80000,
       }),
     );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    const compactParams = expectMockCallFields(mockedCompactDirect, {});
+    const runtimeContext = expectRecordFields(compactParams.runtimeContext, {
+      trigger: "overflow",
+    });
+    const promptCache = expectRecordFields(runtimeContext.promptCache, {
+      retention: "short",
+      lastCacheTouchAt: 1_700_000_000_000,
+    });
+    expectRecordFields(promptCache.lastCallUsage, {
+      input: 150000,
+      cacheRead: 32000,
+    });
+    expectRecordFields(promptCache.observation, {
+      broke: false,
+      cacheRead: 32000,
+    });
+    expect(result.meta.agentMeta?.compactionTokensAfter).toBe(80_000);
   });
 
   it("passes observed overflow token counts into compaction when providers report them", async () => {
@@ -142,11 +953,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
 
     const result = await runEmbeddedPiAgent(overflowBaseRunParams);
 
-    expect(mockedCompactDirect).toHaveBeenCalledWith(
-      expect.objectContaining({
-        currentTokenCount: 277403,
-      }),
-    );
+    expectMockCallFields(mockedCompactDirect, {
+      currentTokenCount: 277403,
+    });
     expect(result.meta.error).toBeUndefined();
   });
 
@@ -214,23 +1023,22 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
 
     await runEmbeddedPiAgent(overflowBaseRunParams);
 
-    expect(mockedGlobalHookRunner.runBeforeCompaction).toHaveBeenCalledWith(
-      { messageCount: -1, sessionFile: "/tmp/session.json" },
-      expect.objectContaining({
-        sessionKey: "test-key",
-      }),
-    );
-    expect(mockedGlobalHookRunner.runAfterCompaction).toHaveBeenCalledWith(
-      {
-        messageCount: -1,
-        compactedCount: -1,
-        tokenCount: 50,
-        sessionFile: "/tmp/session.json",
-      },
-      expect.objectContaining({
-        sessionKey: "test-key",
-      }),
-    );
+    expectRecordFields(mockCallArg(mockedGlobalHookRunner.runBeforeCompaction), {
+      messageCount: -1,
+      sessionFile: "/tmp/session.json",
+    });
+    expectRecordFields(mockCallArg(mockedGlobalHookRunner.runBeforeCompaction, 0, 1), {
+      sessionKey: "test-key",
+    });
+    expectRecordFields(mockCallArg(mockedGlobalHookRunner.runAfterCompaction), {
+      messageCount: -1,
+      compactedCount: -1,
+      tokenCount: 50,
+      sessionFile: "/tmp/session.json",
+    });
+    expectRecordFields(mockCallArg(mockedGlobalHookRunner.runAfterCompaction, 0, 1), {
+      sessionKey: "test-key",
+    });
   });
 
   it("runs maintenance after successful overflow-recovery compaction", async () => {
@@ -249,19 +1057,52 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
 
     await runEmbeddedPiAgent(overflowBaseRunParams);
 
-    expect(mockedRunContextEngineMaintenance).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contextEngine: mockedContextEngine,
-        sessionId: "test-session",
-        sessionKey: "test-key",
-        sessionFile: "/tmp/session.json",
-        reason: "compaction",
-        runtimeContext: expect.objectContaining({
-          trigger: "overflow",
-          authProfileId: "test-profile",
+    const maintenanceParams = expectMockCallFields(mockedRunContextEngineMaintenance, {
+      contextEngine: mockedContextEngine,
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      reason: "compaction",
+    });
+    expectRecordFields(maintenanceParams.runtimeContext, {
+      trigger: "overflow",
+      authProfileId: "test-profile",
+    });
+  });
+
+  it("retries overflow recovery against the rotated compacted transcript", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: makeOverflowError() }))
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: null,
+          sessionIdUsed: "rotated-session",
+          sessionFileUsed: "/tmp/rotated-session.json",
         }),
+      );
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "rotated overflow compaction",
+        tokensAfter: 50,
+        sessionId: "rotated-session",
+        sessionFile: "/tmp/rotated-session.json",
       }),
     );
+
+    await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expectMockCallFields(
+      mockedRunEmbeddedAttempt,
+      {
+        sessionId: "rotated-session",
+        sessionFile: "/tmp/rotated-session.json",
+      },
+      1,
+    );
+    expectMockCallFields(mockedRunContextEngineMaintenance, {
+      sessionId: "rotated-session",
+      sessionFile: "/tmp/rotated-session.json",
+    });
   });
 
   it("guards thrown engine-owned overflow compaction attempts", async () => {
@@ -300,7 +1141,30 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(32);
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(result.meta.error?.kind).toBe("retry_limit");
+    expect(result.meta.livenessState).toBe("blocked");
     expect(result.payloads?.[0]?.isError).toBe(true);
+  });
+
+  it("preserves replay invalidation when retries exhaust after side effects", async () => {
+    mockedRunEmbeddedAttempt.mockClear();
+    mockedCompactDirect.mockClear();
+    mockedPickFallbackThinkingLevel.mockReset();
+    mockedPickFallbackThinkingLevel.mockReturnValue("low");
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        promptError: new Error("unsupported reasoning mode"),
+        replayMetadata: {
+          hadPotentialSideEffects: true,
+          replaySafe: false,
+        },
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    expect(result.meta.error?.kind).toBe("retry_limit");
+    expect(result.meta.replayInvalid).toBe(true);
+    expect(result.meta.livenessState).toBe("blocked");
   });
 
   it("normalizes abort-wrapped prompt errors before handing off to model fallback", async () => {
@@ -345,14 +1209,12 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       }),
     ).rejects.toBe(normalized);
 
-    expect(mockedCoerceToFailoverError).toHaveBeenCalledWith(
-      promptError,
-      expect.objectContaining({
-        provider: "anthropic",
-        model: "test-model",
-        profileId: "test-profile",
-      }),
-    );
+    expect(mockCallArg(mockedCoerceToFailoverError)).toBe(promptError);
+    expectRecordFields(mockCallArg(mockedCoerceToFailoverError, 0, 1), {
+      provider: "anthropic",
+      model: "test-model",
+      profileId: "test-profile",
+    });
     expect(mockedResolveFailoverStatus).toHaveBeenCalledWith("rate_limit");
   });
 });

@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 const buildHuggingfaceProviderMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -20,7 +20,7 @@ vi.mock("./onboard.js", () => ({
 
 import plugin from "./index.js";
 
-function _registerProvider() {
+function registerProvider() {
   return registerProviderWithPluginConfig({});
 }
 
@@ -40,15 +40,35 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
   );
 
   expect(registerProviderMock).toHaveBeenCalledTimes(1);
-  return registerProviderMock.mock.calls[0]?.[0];
+  const firstCall = registerProviderMock.mock.calls.at(0);
+  if (!firstCall) {
+    throw new Error("expected huggingface provider registration");
+  }
+  return firstCall[0];
 }
 
 describe("huggingface plugin", () => {
+  afterAll(() => {
+    vi.doUnmock("./provider-catalog.js");
+    vi.doUnmock("./onboard.js");
+    vi.resetModules();
+  });
+
   it("skips catalog discovery when plugin discovery is disabled", async () => {
-    const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
+    const provider = registerProvider();
 
     const result = await provider.catalog.run({
-      config: {},
+      config: {
+        plugins: {
+          entries: {
+            huggingface: {
+              config: {
+                discovery: { enabled: false },
+              },
+            },
+          },
+        },
+      },
       resolveProviderApiKey: () => ({
         apiKey: "hf_test_token",
         discoveryApiKey: "hf_test_token",

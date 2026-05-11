@@ -1,13 +1,18 @@
 import { coerceNativeSetting, normalizeAllowFromList } from "openclaw/plugin-sdk/channel-policy";
+import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import {
-  isDangerousNameMatchingEnabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
-} from "openclaw/plugin-sdk/config-runtime";
-import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
+} from "openclaw/plugin-sdk/native-command-config-runtime";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { isDiscordMutableAllowEntry } from "./security-doctor.js";
+
+function normalizeOptionalString(value: string | null | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
 
 function addDiscordNameBasedEntries(params: {
   target: Set<string>;
@@ -21,7 +26,7 @@ function addDiscordNameBasedEntries(params: {
     if (!isDiscordMutableAllowEntry(String(value))) {
       continue;
     }
-    const text = String(value).trim();
+    const text = normalizeOptionalString(String(value)) ?? "";
     if (!text) {
       continue;
     }
@@ -44,7 +49,8 @@ export async function collectDiscordSecurityAuditFindings(params: {
     remediation?: string;
   }> = [];
   const discordCfg = params.account.config ?? {};
-  const accountId = params.accountId?.trim() || params.account.accountId || "default";
+  const accountId =
+    normalizeOptionalString(params.accountId) ?? params.account.accountId ?? "default";
   const dangerousNameMatchingEnabled = isDangerousNameMatchingEnabled(discordCfg);
   const storeAllowFrom = await readChannelAllowFromStore("discord", process.env, accountId).catch(
     () => [],

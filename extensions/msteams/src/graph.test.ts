@@ -31,6 +31,7 @@ import { searchGraphUsers } from "./graph-users.js";
 import {
   deleteGraphRequest,
   escapeOData,
+  fetchAllGraphPages,
   fetchGraphJson,
   listChannelsForTeam,
   listTeamsByName,
@@ -82,16 +83,36 @@ function graphCollection<T>(...items: T[]) {
   return { value: items };
 }
 
-function mockGraphCollection<T>(...items: T[]) {
+function mockGraphCollection(...items: unknown[]) {
   mockJsonFetchResponse(graphCollection(...items));
 }
 
 function requestUrl(input: string | URL | Request) {
-  return typeof input === "string" ? input : String(input);
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return input.url;
 }
 
 function fetchCallUrl(index: number) {
-  return String(vi.mocked(globalThis.fetch).mock.calls[index]?.[0]);
+  const input = vi.mocked(globalThis.fetch).mock.calls[index]?.[0];
+  if (!input) {
+    return "";
+  }
+  return requestUrl(input);
+}
+
+function fetchCallInit(index: number) {
+  return vi.mocked(globalThis.fetch).mock.calls[index]?.[1];
+}
+
+function fetchCallHeader(index: number, name: string) {
+  const headers = fetchCallInit(index)?.headers;
+  expect(headers).toBeDefined();
+  return (headers as Record<string, string> | undefined)?.[name];
 }
 
 function expectFetchPathContains(index: number, expectedPath: string) {
@@ -157,15 +178,9 @@ describe("msteams graph helpers", () => {
       }),
     ).resolves.toEqual(graphCollection(groupOne));
 
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      "https://graph.microsoft.com/v1.0/groups?$select=id",
-      {
-        headers: expect.objectContaining({
-          Authorization: `Bearer ${graphToken}`,
-          ConsistencyLevel: "eventual",
-        }),
-      },
-    );
+    expect(fetchCallUrl(0)).toBe("https://graph.microsoft.com/v1.0/groups?$select=id");
+    expect(fetchCallHeader(0, "Authorization")).toBe(`Bearer ${graphToken}`);
+    expect(fetchCallHeader(0, "ConsistencyLevel")).toBe("eventual");
 
     mockTextFetchResponse("forbidden", { status: 403 });
 
@@ -202,26 +217,16 @@ describe("msteams graph helpers", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(globalThis.fetch).toHaveBeenNthCalledWith(
-      1,
-      "https://graph.microsoft.com/v1.0/chats/chat-1/pinnedMessages",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ messageId: "msg-1" }),
-        headers: expect.objectContaining({
-          Authorization: `Bearer ${graphToken}`,
-          "Content-Type": "application/json",
-        }),
-      }),
-    );
-    expect(globalThis.fetch).toHaveBeenNthCalledWith(
-      2,
+    expect(fetchCallUrl(0)).toBe("https://graph.microsoft.com/v1.0/chats/chat-1/pinnedMessages");
+    expect(fetchCallInit(0)?.method).toBe("POST");
+    expect(fetchCallInit(0)?.body).toBe(JSON.stringify({ messageId: "msg-1" }));
+    expect(fetchCallHeader(0, "Authorization")).toBe(`Bearer ${graphToken}`);
+    expect(fetchCallHeader(0, "Content-Type")).toBe("application/json");
+    expect(fetchCallUrl(1)).toBe(
       "https://graph.microsoft.com/beta/chats/chat-1/messages/msg-1/setReaction",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ reactionType: "like" }),
-      }),
     );
+    expect(fetchCallInit(1)?.method).toBe("POST");
+    expect(fetchCallInit(1)?.body).toBe(JSON.stringify({ reactionType: "like" }));
   });
 
   it("surfaces POST and DELETE graph failures with method-specific labels", async () => {
@@ -324,19 +329,177 @@ describe("msteams graph helpers", () => {
     });
     await expectSearchGraphUsers("carol", [], { token: "token-4" });
 
-    const calls = vi.mocked(globalThis.fetch).mock.calls;
     expectFetchPathContains(
       0,
       "/users?$search=%22displayName%3Abob%22&$select=id,displayName,mail,userPrincipalName&$top=25",
     );
-    expect(calls[0]?.[1]).toEqual(
-      expect.objectContaining({
-        headers: expect.objectContaining({ ConsistencyLevel: "eventual" }),
-      }),
-    );
+    expect(fetchCallHeader(0, "ConsistencyLevel")).toBe("eventual");
     expectFetchPathContains(
       1,
       "/users?$search=%22displayName%3Acarol%22&$select=id,displayName,mail,userPrincipalName&$top=10",
     );
+  });
+
+  describe("fetchAllGraphPages", () => {
+    type Item = { id: string; name: string };
+
+    /** Build a paged Graph response with optional nextLink. */
+    function pagedResponse(items: Item[], nextLink?: string) {
+      const body: Record<string, unknown> = { value: items };
+      if (nextLink) {
+        body["@odata.nextLink"] = nextLink;
+      }
+      return body;
+    }
+
+    it("single page, no nextLink", async () => {
+      const items = [{ id: "1", name: "a" }];
+      mockJsonFetchResponse(pagedResponse(items));
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+      });
+
+      expect(result).toEqual({ items, truncated: false });
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("multiple pages with nextLink chain", async () => {
+      const page1Items = [{ id: "1", name: "a" }];
+      const page2Items = [{ id: "2", name: "b" }];
+      const page3Items = [{ id: "3", name: "c" }];
+      let callCount = 0;
+
+      mockFetch(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return jsonResponse(
+            pagedResponse(page1Items, "https://graph.microsoft.com/v1.0/items?$skiptoken=page2"),
+          );
+        }
+        if (callCount === 2) {
+          return jsonResponse(
+            pagedResponse(page2Items, "https://graph.microsoft.com/v1.0/items?$skiptoken=page3"),
+          );
+        }
+        return jsonResponse(pagedResponse(page3Items));
+      });
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+      });
+
+      expect(result.items).toEqual([...page1Items, ...page2Items, ...page3Items]);
+      expect(result.truncated).toBe(false);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+    });
+
+    it("truncation at maxPages", async () => {
+      mockFetch(async () =>
+        jsonResponse(
+          pagedResponse(
+            [{ id: "x", name: "x" }],
+            "https://graph.microsoft.com/v1.0/items?$skiptoken=more",
+          ),
+        ),
+      );
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+        maxPages: 2,
+      });
+
+      expect(result.items).toHaveLength(2);
+      expect(result.truncated).toBe(true);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("findOne early exit", async () => {
+      const target = { id: "target", name: "found-it" };
+      let callCount = 0;
+
+      mockFetch(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return jsonResponse(
+            pagedResponse(
+              [{ id: "1", name: "a" }],
+              "https://graph.microsoft.com/v1.0/items?$skiptoken=p2",
+            ),
+          );
+        }
+        // Page 2 contains the target; page 3 should never be fetched
+        return jsonResponse(
+          pagedResponse(
+            [{ id: "2", name: "b" }, target],
+            "https://graph.microsoft.com/v1.0/items?$skiptoken=p3",
+          ),
+        );
+      });
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+        findOne: (item) => item.id === "target",
+      });
+
+      expect(result.found).toEqual(target);
+      expect(result.truncated).toBe(false);
+      // Page 1 items + page 2 items (where match was found)
+      expect(result.items).toEqual([{ id: "1", name: "a" }, { id: "2", name: "b" }, target]);
+      // Only 2 fetches; page 3 was never requested
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("findOne with no match (exhausted)", async () => {
+      mockJsonFetchResponse(pagedResponse([{ id: "1", name: "a" }]));
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+        findOne: (item) => item.id === "missing",
+      });
+
+      expect(result.found).toBeUndefined();
+      expect(result.truncated).toBe(false);
+      expect(result.items).toEqual([{ id: "1", name: "a" }]);
+    });
+
+    it("findOne with no match (truncated)", async () => {
+      mockFetch(async () =>
+        jsonResponse(
+          pagedResponse(
+            [{ id: "x", name: "x" }],
+            "https://graph.microsoft.com/v1.0/items?$skiptoken=more",
+          ),
+        ),
+      );
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+        maxPages: 2,
+        findOne: (item) => item.id === "missing",
+      });
+
+      expect(result.found).toBeUndefined();
+      expect(result.truncated).toBe(true);
+      expect(result.items).toHaveLength(2);
+    });
+
+    it("empty first page", async () => {
+      mockJsonFetchResponse(pagedResponse([]));
+
+      const result = await fetchAllGraphPages<Item>({
+        token: graphToken,
+        path: "/items",
+      });
+
+      expect(result).toEqual({ items: [], truncated: false });
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
   });
 });

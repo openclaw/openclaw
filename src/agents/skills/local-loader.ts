@@ -1,34 +1,31 @@
 import fs from "node:fs";
 import path from "node:path";
-import { openVerifiedFileSync } from "../../infra/safe-open-sync.js";
+import { openRootFileSync } from "../../infra/boundary-file-read.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
+import type { ParsedSkillFrontmatter } from "./types.js";
 
-function isPathWithinRoot(rootRealPath: string, candidatePath: string): boolean {
-  const relative = path.relative(rootRealPath, candidatePath);
-  return (
-    relative === "" ||
-    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
-  );
-}
+type LoadedLocalSkill = {
+  skill: Skill;
+  frontmatter: ParsedSkillFrontmatter;
+};
 
 function readSkillFileSync(params: {
   rootRealPath: string;
   filePath: string;
   maxBytes?: number;
 }): string | null {
-  const opened = openVerifiedFileSync({
-    filePath: params.filePath,
-    rejectPathSymlink: true,
+  const opened = openRootFileSync({
+    absolutePath: params.filePath,
+    rootPath: params.rootRealPath,
+    rootRealPath: params.rootRealPath,
+    boundaryLabel: "skill root",
     maxBytes: params.maxBytes,
   });
   if (!opened.ok) {
     return null;
   }
   try {
-    if (!isPathWithinRoot(params.rootRealPath, opened.path)) {
-      return null;
-    }
     return fs.readFileSync(opened.fd, "utf8");
   } finally {
     fs.closeSync(opened.fd);
@@ -40,7 +37,7 @@ function loadSingleSkillDirectory(params: {
   source: string;
   rootRealPath: string;
   maxBytes?: number;
-}): Skill | null {
+}): LoadedLocalSkill | null {
   const skillFilePath = path.join(params.skillDir, "SKILL.md");
   const raw = readSkillFileSync({
     rootRealPath: params.rootRealPath,
@@ -69,18 +66,21 @@ function loadSingleSkillDirectory(params: {
   const baseDir = path.resolve(params.skillDir);
 
   return {
-    name,
-    description,
-    filePath,
-    baseDir,
-    source: params.source,
-    sourceInfo: createSyntheticSourceInfo(filePath, {
-      source: params.source,
+    skill: {
+      name,
+      description,
+      filePath,
       baseDir,
-      scope: "project",
-      origin: "top-level",
-    }),
-    disableModelInvocation: invocation.disableModelInvocation,
+      source: params.source,
+      sourceInfo: createSyntheticSourceInfo(filePath, {
+        source: params.source,
+        baseDir,
+        scope: "project",
+        origin: "top-level",
+      }),
+      disableModelInvocation: invocation.disableModelInvocation,
+    },
+    frontmatter,
   };
 }
 
@@ -101,13 +101,14 @@ function listCandidateSkillDirs(dir: string): string[] {
 
 export function loadSkillsFromDirSafe(params: { dir: string; source: string; maxBytes?: number }): {
   skills: Skill[];
+  frontmatterByFilePath: ReadonlyMap<string, ParsedSkillFrontmatter>;
 } {
   const rootDir = path.resolve(params.dir);
   let rootRealPath: string;
   try {
     rootRealPath = fs.realpathSync(rootDir);
   } catch {
-    return { skills: [] };
+    return { skills: [], frontmatterByFilePath: new Map() };
   }
 
   const rootSkill = loadSingleSkillDirectory({
@@ -117,10 +118,13 @@ export function loadSkillsFromDirSafe(params: { dir: string; source: string; max
     maxBytes: params.maxBytes,
   });
   if (rootSkill) {
-    return { skills: [rootSkill] };
+    return {
+      skills: [rootSkill.skill],
+      frontmatterByFilePath: new Map([[rootSkill.skill.filePath, rootSkill.frontmatter]]),
+    };
   }
 
-  const skills = listCandidateSkillDirs(rootDir)
+  const loadedSkills = listCandidateSkillDirs(rootDir)
     .map((skillDir) =>
       loadSingleSkillDirectory({
         skillDir,
@@ -129,9 +133,16 @@ export function loadSkillsFromDirSafe(params: { dir: string; source: string; max
         maxBytes: params.maxBytes,
       }),
     )
-    .filter((skill): skill is Skill => skill !== null);
+    .filter((skill): skill is LoadedLocalSkill => skill !== null);
+  const frontmatterByFilePath = new Map<string, ParsedSkillFrontmatter>();
+  for (const loaded of loadedSkills) {
+    frontmatterByFilePath.set(loaded.skill.filePath, loaded.frontmatter);
+  }
 
-  return { skills };
+  return {
+    skills: loadedSkills.map((loaded) => loaded.skill),
+    frontmatterByFilePath,
+  };
 }
 
 export function readSkillFrontmatterSafe(params: {

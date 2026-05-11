@@ -4,13 +4,14 @@ import {
   resolveGatewaySystemdServiceName,
 } from "../../daemon/constants.js";
 import { renderGatewayServiceCleanupHints } from "../../daemon/inspect.js";
-import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
+import { resolveGatewayLogPaths, resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
 } from "../../daemon/systemd-hints.js";
 import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailable.js";
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
+import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize } from "../../terminal/theme.js";
@@ -48,6 +49,24 @@ function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
       command: nextCommand,
     },
   };
+}
+
+function formatProbeKindLabel(kind?: "connect" | "read") {
+  return kind === "read" ? "Read probe:" : "Connectivity probe:";
+}
+
+function formatCapabilityLabel(capability?: string) {
+  if (!capability) {
+    return null;
+  }
+  return capability.replaceAll("_", "-");
+}
+
+function formatCliVersionLine(cli: DaemonStatus["cli"]): string | null {
+  if (!cli) {
+    return null;
+  }
+  return cli.entrypoint ? `${cli.version} (${shortenHomePath(cli.entrypoint)})` : cli.version;
 }
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
@@ -113,6 +132,14 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         );
       }
     }
+    if (status.config.cli.warnings?.length) {
+      defaultRuntime.error(warnText("Config warnings:"));
+      for (const warning of status.config.cli.warnings.slice(0, 5)) {
+        defaultRuntime.error(
+          warnText(formatConfigIssueLine(warning, "-", { normalizeRoot: true })),
+        );
+      }
+    }
     if (status.config.daemon) {
       const daemonCfg = `${shortenHomePath(status.config.daemon.path)}${status.config.daemon.exists ? "" : " (missing)"}${status.config.daemon.valid ? "" : " (invalid)"}`;
       defaultRuntime.log(`${label("Config (service):")} ${infoText(daemonCfg)}`);
@@ -120,6 +147,18 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         for (const issue of status.config.daemon.issues.slice(0, 5)) {
           defaultRuntime.error(
             `${errorText("Service config issue:")} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
+          );
+        }
+      }
+      if (status.config.daemon !== status.config.cli && status.config.daemon.warnings?.length) {
+        const warningsLabel =
+          status.config.daemon.path === status.config.cli.path
+            ? "Config warnings:"
+            : "Service config warnings:";
+        defaultRuntime.error(warnText(warningsLabel));
+        for (const warning of status.config.daemon.warnings.slice(0, 5)) {
+          defaultRuntime.error(
+            warnText(formatConfigIssueLine(warning, "-", { normalizeRoot: true })),
           );
         }
       }
@@ -154,6 +193,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         bind: status.gateway.bindMode,
         customBindHost: status.gateway.customBindHost,
         basePath: status.config?.daemon?.controlUi?.basePath,
+        tlsEnabled: status.gateway.tlsEnabled === true,
       });
       defaultRuntime.log(`${label("Dashboard:")} ${infoText(links.httpUrl)}`);
     }
@@ -163,10 +203,35 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
+  const gatewayVersion = rpc?.server?.version?.trim();
+  const cliVersionLine = formatCliVersionLine(status.cli);
+  if (gatewayVersion) {
+    if (cliVersionLine) {
+      defaultRuntime.log(`${label("CLI version:")} ${infoText(cliVersionLine)}`);
+    }
+    defaultRuntime.log(`${label("Gateway version:")} ${infoText(gatewayVersion)}`);
+    if (status.cli?.version && status.cli.version !== gatewayVersion) {
+      defaultRuntime.error(
+        warnText(
+          `Warning: this OpenClaw command is version ${status.cli.version}, but the running Gateway is version ${gatewayVersion}.`,
+        ),
+      );
+      defaultRuntime.error(
+        warnText(
+          "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`; if this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
+        ),
+      );
+    }
+    spacer();
+  }
+
   const runtimeLine = formatRuntimeStatus(service.runtime);
   if (runtimeLine) {
     const runtimeColor = resolveRuntimeStatusColor(service.runtime?.status);
     defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
+  }
+  if (service.restartHandoff) {
+    defaultRuntime.log(infoText(formatGatewayRestartHandoffDiagnostic(service.restartHandoff)));
   }
 
   if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {
@@ -175,22 +240,25 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     );
   }
   if (rpc) {
+    const probeLabel = formatProbeKindLabel(rpc.kind);
     if (rpc.ok) {
-      defaultRuntime.log(`${label("RPC probe:")} ${okText("ok")}`);
+      defaultRuntime.log(`${label(probeLabel)} ${okText("ok")}`);
     } else {
-      defaultRuntime.error(`${label("RPC probe:")} ${errorText("failed")}`);
+      defaultRuntime.error(`${label(probeLabel)} ${errorText("failed")}`);
       if (rpc.authWarning) {
-        defaultRuntime.error(`${label("RPC auth:")} ${warnText(rpc.authWarning)}`);
+        defaultRuntime.error(`${label("Probe auth:")} ${warnText(rpc.authWarning)}`);
       }
       if (rpc.url) {
-        defaultRuntime.error(`${label("RPC target:")} ${rpc.url}`);
+        defaultRuntime.error(`${label("Probe target:")} ${rpc.url}`);
       }
-      const lines = String(rpc.error ?? "unknown")
-        .split(/\r?\n/)
-        .filter(Boolean);
+      const lines = (rpc.error ?? "unknown").split(/\r?\n/).filter(Boolean);
       for (const line of lines.slice(0, 12)) {
         defaultRuntime.error(`  ${errorText(line)}`);
       }
+    }
+    const capability = formatCapabilityLabel(rpc.capability);
+    if (capability) {
+      defaultRuntime.log(`${label("Capability:")} ${infoText(capability)}`);
     }
     spacer();
   }
@@ -234,6 +302,15 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   if (service.runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
     for (const hint of renderRuntimeHints(service.runtime, process.env, status.logFile)) {
+      defaultRuntime.error(errorText(hint));
+    }
+  } else if (service.runtime?.missingSupervision) {
+    defaultRuntime.error(errorText("LaunchAgent plist exists but launchd has no loaded job."));
+    for (const hint of renderRuntimeHints(
+      service.runtime,
+      service.command?.environment ?? process.env,
+      status.logFile,
+    )) {
       defaultRuntime.error(errorText(hint));
     }
   } else if (service.loaded && service.runtime?.status === "stopped") {
@@ -290,20 +367,23 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     defaultRuntime.error(
       errorText(`Gateway port ${status.port.port} is not listening (service appears running).`),
     );
+    const serviceEnv = { ...process.env, ...service.command?.environment };
     if (status.lastError) {
       defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
     }
     if (process.platform === "linux") {
-      const env = service.command?.environment ?? process.env;
-      const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+      const unit = resolveGatewaySystemdServiceName(serviceEnv.OPENCLAW_PROFILE);
       defaultRuntime.error(
         errorText(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`),
       );
     } else if (process.platform === "darwin") {
-      const logs = resolveGatewayLogPaths(service.command?.environment ?? process.env);
+      const logs = resolveGatewayLogPaths(serviceEnv);
       defaultRuntime.error(`${errorText("Logs:")} ${shortenHomePath(logs.stdoutPath)}`);
       defaultRuntime.error(`${errorText("Errors:")} ${shortenHomePath(logs.stderrPath)}`);
     }
+    defaultRuntime.error(
+      `${errorText("Restart log:")} ${shortenHomePath(resolveGatewayRestartLogPath(serviceEnv))}`,
+    );
     spacer();
   }
 

@@ -25,7 +25,7 @@ export function makeDeps(): CliDeps {
   };
 }
 
-export function mockEmbeddedPayloads(payloads: Array<{ text?: string; isError?: boolean }>) {
+function mockEmbeddedPayloads(payloads: Array<{ text?: string; isError?: boolean }>) {
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
     payloads,
     meta: {
@@ -35,7 +35,7 @@ export function mockEmbeddedPayloads(payloads: Array<{ text?: string; isError?: 
   });
 }
 
-export function mockEmbeddedTexts(texts: string[]) {
+function mockEmbeddedTexts(texts: string[]) {
   mockEmbeddedPayloads(texts.map((text) => ({ text })));
 }
 
@@ -60,12 +60,15 @@ export function expectEmbeddedProviderModel(expected: { provider: string; model:
 
 export async function readSessionEntry(storePath: string, key: string) {
   const raw = await fs.readFile(storePath, "utf-8");
-  const store = JSON.parse(raw) as Record<string, { sessionId?: string; label?: string }>;
+  const store = JSON.parse(raw) as Record<
+    string,
+    { sessionId?: string; label?: string; sessionFile?: string }
+  >;
   return store[key];
 }
 
 export const DEFAULT_MESSAGE = "do it";
-export const DEFAULT_SESSION_KEY = "cron:job-1";
+const DEFAULT_SESSION_KEY = "cron:job-1";
 export const DEFAULT_AGENT_TURN_PAYLOAD: CronJob["payload"] = {
   kind: "agentTurn",
   message: DEFAULT_MESSAGE,

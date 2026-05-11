@@ -1,6 +1,6 @@
-import { promises as fs } from "node:fs";
+import fsSync, { promises as fs } from "node:fs";
 import path from "node:path";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
@@ -8,11 +8,14 @@ import {
   updateSessionStore,
   type SessionEntry,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
-import { type SubagentRunOutcome } from "./subagent-announce.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
-import { runOutcomesEqual } from "./subagent-registry-completion.js";
+import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -26,14 +29,14 @@ export {
 } from "./subagent-session-metrics.js";
 
 export const MIN_ANNOUNCE_RETRY_DELAY_MS = 1_000;
-export const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
+const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
 export const MAX_ANNOUNCE_RETRY_COUNT = 3;
 export const ANNOUNCE_EXPIRY_MS = 5 * 60_000;
 export const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000;
 
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
 
-export type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
+type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id" | "stale-unended-run";
 
 export function capFrozenResultText(resultText: string): string {
   const trimmed = resultText.trim();
@@ -76,9 +79,9 @@ function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: 
   if (direct) {
     return direct;
   }
-  const normalized = sessionKey.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
   for (const [key, entry] of Object.entries(store)) {
-    if (key.toLowerCase() === normalized) {
+    if (normalizeLowercaseStringOrEmpty(key) === normalized) {
       return entry;
     }
   }
@@ -91,7 +94,7 @@ export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
     return;
   }
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(childSessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const startedAt = getSubagentSessionStartedAt(entry);
@@ -138,13 +141,15 @@ export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
 export function resolveSubagentRunOrphanReason(params: {
   entry: SubagentRunRecord;
   storeCache?: Map<string, Record<string, SessionEntry>>;
+  includeStaleUnended?: boolean;
+  now?: number;
 }): SubagentRunOrphanReason | null {
   const childSessionKey = params.entry.childSessionKey?.trim();
   if (!childSessionKey) {
     return "missing-session-entry";
   }
   try {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const agentId = resolveAgentIdFromSessionKey(childSessionKey);
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
     let store = params.storeCache?.get(storePath);
@@ -159,11 +164,25 @@ export function resolveSubagentRunOrphanReason(params: {
     if (typeof sessionEntry.sessionId !== "string" || !sessionEntry.sessionId.trim()) {
       return "missing-session-id";
     }
+    if (
+      params.includeStaleUnended === true &&
+      sessionEntry.abortedLastRun !== true &&
+      isStaleUnendedSubagentRun(params.entry, params.now)
+    ) {
+      return "stale-unended-run";
+    }
     return null;
   } catch {
     // Best-effort guard: avoid false orphan pruning on transient read/config failures.
     return null;
   }
+}
+
+function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
+  const rootWithSep = params.rootPath.endsWith(path.sep)
+    ? params.rootPath
+    : `${params.rootPath}${path.sep}`;
+  return params.childPath.startsWith(rootWithSep);
 }
 
 export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<void> {
@@ -193,11 +212,43 @@ export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promis
 
     const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
     const dirBase = dirReal;
-    const rootWithSep = rootBase.endsWith(path.sep) ? rootBase : `${rootBase}${path.sep}`;
-    if (!dirBase.startsWith(rootWithSep)) {
+    if (!isResolvedChildPath({ childPath: dirBase, rootPath: rootBase })) {
       return;
     }
     await fs.rm(dirBase, { recursive: true, force: true });
+  } catch {
+    // best effort
+  }
+}
+
+function safeRemoveAttachmentsDirSync(entry: SubagentRunRecord): void {
+  if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
+    return;
+  }
+
+  const resolveReal = (targetPath: string): string | null => {
+    try {
+      return fsSync.realpathSync.native(targetPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        return null;
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const rootReal = resolveReal(entry.attachmentsRootDir);
+    const dirReal = resolveReal(entry.attachmentsDir);
+    if (!dirReal) {
+      return;
+    }
+
+    const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
+    if (!isResolvedChildPath({ childPath: dirReal, rootPath: rootBase })) {
+      return;
+    }
+    fsSync.rmSync(dirReal, { recursive: true, force: true });
   } catch {
     // best effort
   }
@@ -217,11 +268,17 @@ export function reconcileOrphanedRun(params: {
     params.entry.endedAt = now;
     changed = true;
   }
-  const orphanOutcome: SubagentRunOutcome = {
-    status: "error",
-    error: `orphaned subagent run (${params.reason})`,
-  };
-  if (!runOutcomesEqual(params.entry.outcome, orphanOutcome)) {
+  const orphanOutcome = withSubagentOutcomeTiming(
+    {
+      status: "error",
+      error: `orphaned subagent run (${params.reason})`,
+    },
+    {
+      startedAt: params.entry.startedAt,
+      endedAt: params.entry.endedAt,
+    },
+  );
+  if (shouldUpdateRunOutcome(params.entry.outcome, orphanOutcome)) {
     params.entry.outcome = orphanOutcome;
     changed = true;
   }
@@ -240,7 +297,7 @@ export function reconcileOrphanedRun(params: {
   const shouldDeleteAttachments =
     params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
   if (shouldDeleteAttachments) {
-    void safeRemoveAttachmentsDir(params.entry);
+    safeRemoveAttachmentsDirSync(params.entry);
   }
   const removed = params.runs.delete(params.runId);
   params.resumedRuns.delete(params.runId);
@@ -258,11 +315,14 @@ export function reconcileOrphanedRestoredRuns(params: {
   resumedRuns: Set<string>;
 }) {
   const storeCache = new Map<string, Record<string, SessionEntry>>();
+  const now = Date.now();
   let changed = false;
   for (const [runId, entry] of params.runs.entries()) {
     const orphanReason = resolveSubagentRunOrphanReason({
       entry,
       storeCache,
+      includeStaleUnended: true,
+      now,
     });
     if (!orphanReason) {
       continue;
@@ -283,8 +343,8 @@ export function reconcileOrphanedRestoredRuns(params: {
   return changed;
 }
 
-export function resolveArchiveAfterMs(cfg?: ReturnType<typeof loadConfig>) {
-  const config = cfg ?? loadConfig();
+export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
+  const config = cfg ?? getRuntimeConfig();
   const minutes = config.agents?.defaults?.subagents?.archiveAfterMinutes ?? 60;
   if (!Number.isFinite(minutes) || minutes < 0) {
     return undefined;

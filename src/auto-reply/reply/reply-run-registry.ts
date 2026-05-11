@@ -54,6 +54,11 @@ export type ReplyOperation = {
   attachBackend(handle: ReplyBackendHandle): void;
   detachBackend(handle: ReplyBackendHandle): void;
   complete(): void;
+  /**
+   * Complete the operation, clear active-run state, then run follow-up work.
+   * Use when the follow-up can create another ReplyOperation for this session.
+   */
+  completeThen(afterClear: () => void): void;
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): void;
   abortForRestart(): void;
@@ -104,14 +109,6 @@ export class ReplyRunAlreadyActiveError extends Error {
   }
 }
 
-function normalizeSessionKey(sessionKey: string | undefined): string | undefined {
-  return normalizeOptionalString(sessionKey);
-}
-
-function normalizeSessionId(sessionId: string | undefined): string | undefined {
-  return normalizeOptionalString(sessionId);
-}
-
 function createUserAbortError(): Error {
   const err = new Error("Reply operation aborted by user");
   err.name = "AbortError";
@@ -143,7 +140,7 @@ function notifyReplyRunEnded(sessionKey: string): void {
 }
 
 function resolveReplyRunForCurrentSessionId(sessionId: string): ReplyOperation | undefined {
-  const normalizedSessionId = normalizeSessionId(sessionId);
+  const normalizedSessionId = normalizeOptionalString(sessionId);
   if (!normalizedSessionId) {
     return undefined;
   }
@@ -155,7 +152,7 @@ function resolveReplyRunForCurrentSessionId(sessionId: string): ReplyOperation |
 }
 
 function resolveReplyRunWaitKey(sessionId: string): string | undefined {
-  const normalizedSessionId = normalizeSessionId(sessionId);
+  const normalizedSessionId = normalizeOptionalString(sessionId);
   if (!normalizedSessionId) {
     return undefined;
   }
@@ -202,8 +199,8 @@ export function createReplyOperation(params: {
   resetTriggered: boolean;
   upstreamAbortSignal?: AbortSignal;
 }): ReplyOperation {
-  const sessionKey = normalizeSessionKey(params.sessionKey);
-  const sessionId = normalizeSessionId(params.sessionId);
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionKey) {
     throw new Error("Reply operations require a canonical sessionKey");
   }
@@ -293,7 +290,7 @@ export function createReplyOperation(params: {
       if (result) {
         return;
       }
-      const normalizedNextSessionId = normalizeSessionId(nextSessionId);
+      const normalizedNextSessionId = normalizeOptionalString(nextSessionId);
       if (!normalizedNextSessionId || normalizedNextSessionId === currentSessionId) {
         return;
       }
@@ -340,6 +337,10 @@ export function createReplyOperation(params: {
       }
       clearState();
     },
+    completeThen(afterClear) {
+      operation.complete();
+      afterClear();
+    },
     fail(code, cause) {
       if (!result) {
         result = { kind: "failed", code, cause };
@@ -380,14 +381,14 @@ export const replyRunRegistry: ReplyRunRegistry = {
     return createReplyOperation(params);
   },
   get(sessionKey) {
-    const normalizedSessionKey = normalizeSessionKey(sessionKey);
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
     if (!normalizedSessionKey) {
       return undefined;
     }
     return replyRunState.activeRunsByKey.get(normalizedSessionKey);
   },
   isActive(sessionKey) {
-    const normalizedSessionKey = normalizeSessionKey(sessionKey);
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
     if (!normalizedSessionKey) {
       return false;
     }
@@ -409,7 +410,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
     return true;
   },
   waitForIdle(sessionKey, timeoutMs = 15_000) {
-    const normalizedSessionKey = normalizeSessionKey(sessionKey);
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
     if (!normalizedSessionKey || !replyRunState.activeRunsByKey.has(normalizedSessionKey)) {
       return Promise.resolve(true);
     }
@@ -441,7 +442,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
     });
   },
   resolveSessionId(sessionKey) {
-    const normalizedSessionKey = normalizeSessionKey(sessionKey);
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
     if (!normalizedSessionKey) {
       return undefined;
     }
@@ -484,6 +485,15 @@ export function abortReplyRunBySessionId(sessionId: string): boolean {
     return false;
   }
   operation.abortByUser();
+  return true;
+}
+
+export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown): boolean {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  if (!operation) {
+    return false;
+  }
+  operation.fail("run_failed", cause);
   return true;
 }
 

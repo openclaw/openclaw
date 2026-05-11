@@ -1,16 +1,19 @@
 import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { parseNodeList, parsePairingList } from "./format.js";
 import type { NodeListNode, NodesRpcOpts } from "./types.js";
 
 type NodesCliRpcRuntimeModule = typeof import("./rpc.runtime.js");
 
-let nodesCliRpcRuntimePromise: Promise<NodesCliRpcRuntimeModule> | undefined;
+const nodesCliRpcRuntimeLoader = createLazyImportLoader<NodesCliRpcRuntimeModule>(
+  () => import("./rpc.runtime.js"),
+);
 
 async function loadNodesCliRpcRuntime(): Promise<NodesCliRpcRuntimeModule> {
-  nodesCliRpcRuntimePromise ??= import("./rpc.runtime.js");
-  return nodesCliRpcRuntimePromise;
+  return nodesCliRpcRuntimeLoader.load();
 }
 
 export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
@@ -50,7 +53,7 @@ export function buildNodeInvokeParams(params: {
 }
 
 export function unauthorizedHintForMessage(message: string): string | null {
-  const haystack = message.toLowerCase();
+  const haystack = normalizeLowercaseStringOrEmpty(message);
   if (
     haystack.includes("unauthorizedclient") ||
     haystack.includes("bridge client is not authorized") ||

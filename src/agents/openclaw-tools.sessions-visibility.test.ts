@@ -13,7 +13,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: () => mockConfig,
+    getRuntimeConfig: () => mockConfig,
     resolveGatewayPort: () => 18789,
   };
 });
@@ -58,7 +58,7 @@ describe("sessions tools visibility", () => {
         return { sessions: [{ key: "subagent:child-1" }] };
       }
       if (req.method === "sessions.resolve") {
-        const key = typeof req.params?.key === "string" ? String(req.params?.key) : "";
+        const key = typeof req.params?.key === "string" ? req.params.key : "";
         return { key };
       }
       return undefined;
@@ -67,14 +67,12 @@ describe("sessions tools visibility", () => {
     const tool = getSessionsHistoryTool();
 
     const denied = await tool.execute("call1", {
-      sessionKey: "agent:main:discord:direct:someone-else",
+      sessionKey: "agent:main:quietchat:direct:someone-else",
     });
-    expect(denied.details).toMatchObject({ status: "forbidden" });
+    expect((denied.details as { status?: string }).status).toBe("forbidden");
 
     const allowed = await tool.execute("call2", { sessionKey: "subagent:child-1" });
-    expect(allowed.details).toMatchObject({
-      sessionKey: "subagent:child-1",
-    });
+    expect((allowed.details as { sessionKey?: string }).sessionKey).toBe("subagent:child-1");
   });
 
   it("allows broader access when tools.sessions.visibility=all", async () => {
@@ -86,11 +84,11 @@ describe("sessions tools visibility", () => {
     const tool = getSessionsHistoryTool();
 
     const result = await tool.execute("call3", {
-      sessionKey: "agent:main:discord:direct:someone-else",
+      sessionKey: "agent:main:quietchat:direct:someone-else",
     });
-    expect(result.details).toMatchObject({
-      sessionKey: "agent:main:discord:direct:someone-else",
-    });
+    expect((result.details as { sessionKey?: string }).sessionKey).toBe(
+      "agent:main:quietchat:direct:someone-else",
+    );
   });
 
   it("clamps sandboxed sessions to tree when agents.defaults.sandbox.sessionToolsVisibility=spawned", async () => {
@@ -111,6 +109,6 @@ describe("sessions tools visibility", () => {
     const denied = await tool.execute("call4", {
       sessionKey: "agent:other:main",
     });
-    expect(denied.details).toMatchObject({ status: "forbidden" });
+    expect((denied.details as { status?: string }).status).toBe("forbidden");
   });
 });

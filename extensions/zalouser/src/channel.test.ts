@@ -1,7 +1,15 @@
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import "./zalo-js.test-mocks.js";
-import { zalouserPlugin } from "./channel.js";
+import {
+  zalouserAuthAdapter,
+  zalouserGroupsAdapter,
+  zalouserMessageActions,
+  zalouserOutboundAdapter,
+  zalouserPairingTextAdapter,
+  zalouserResolverAdapter,
+  zalouserSecurityAdapter,
+} from "./channel.adapters.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 import {
@@ -27,7 +35,7 @@ const mockSendMessage = vi.mocked(sendMessageZalouser);
 const mockSendReaction = vi.mocked(sendReactionZalouser);
 
 function requireZalouserSendText() {
-  const sendText = zalouserPlugin.outbound?.sendText;
+  const sendText = zalouserOutboundAdapter.sendText;
   if (!sendText) {
     throw new Error("zalouser outbound.sendText unavailable");
   }
@@ -35,7 +43,7 @@ function requireZalouserSendText() {
 }
 
 function getResolveToolPolicy() {
-  const resolveToolPolicy = zalouserPlugin.groups?.resolveToolPolicy;
+  const resolveToolPolicy = zalouserGroupsAdapter.resolveToolPolicy;
   if (!resolveToolPolicy) {
     throw new Error("resolveToolPolicy unavailable");
   }
@@ -43,7 +51,7 @@ function getResolveToolPolicy() {
 }
 
 function requireZalouserResolveRequireMention() {
-  const resolveRequireMention = zalouserPlugin.groups?.resolveRequireMention;
+  const resolveRequireMention = zalouserGroupsAdapter.resolveRequireMention;
   if (!resolveRequireMention) {
     throw new Error("resolveRequireMention unavailable");
   }
@@ -51,7 +59,7 @@ function requireZalouserResolveRequireMention() {
 }
 
 function requireZalouserPairingNormalizer() {
-  const normalizeAllowEntry = zalouserPlugin.pairing?.normalizeAllowEntry;
+  const normalizeAllowEntry = zalouserPairingTextAdapter.normalizeAllowEntry;
   if (!normalizeAllowEntry) {
     throw new Error("pairing.normalizeAllowEntry unavailable");
   }
@@ -99,30 +107,76 @@ describe("zalouser outbound", () => {
       accountId: "default",
     } as never);
 
-    expect(mockSendMessage).toHaveBeenCalledWith(
-      "123456",
-      "hello world\nthis is a test",
-      expect.objectContaining({
-        profile: "default",
-        isGroup: true,
-        textMode: "markdown",
-        textChunkMode: "newline",
-        textChunkLimit: 10,
-      }),
-    );
-    expect(result).toEqual(
-      expect.objectContaining({
-        channel: "zalouser",
-        messageId: "mid-1",
-        ok: true,
-      }),
-    );
+    expect(mockSendMessage).toHaveBeenCalledWith("123456", "hello world\nthis is a test", {
+      profile: "default",
+      isGroup: true,
+      textMode: "markdown",
+      textChunkMode: "newline",
+      textChunkLimit: 10,
+    });
+    expect(result).toEqual({
+      channel: "zalouser",
+      messageId: "mid-1",
+      ok: true,
+    });
+  });
+
+  it("uses the selected account profile for direct outbound messages", async () => {
+    const sendText = requireZalouserSendText();
+
+    const result = await sendText({
+      cfg: {
+        channels: {
+          zalouser: {
+            accounts: {
+              work: {
+                profile: "work-profile",
+              },
+            },
+          },
+        },
+      } as never,
+      to: "user:987654",
+      text: "hello user",
+      accountId: "work",
+    } as never);
+
+    expect(mockSendMessage).toHaveBeenCalledWith("987654", "hello user", {
+      profile: "work-profile",
+      isGroup: false,
+      textMode: "markdown",
+      textChunkMode: "newline",
+      textChunkLimit: 10,
+    });
+    expect(result).toEqual({
+      channel: "zalouser",
+      messageId: "mid-1",
+      ok: true,
+    });
+  });
+
+  it("keeps the default account profile for unscoped outbound messages", async () => {
+    const sendText = requireZalouserSendText();
+
+    await sendText({
+      cfg: { channels: { zalouser: { enabled: true } } } as never,
+      to: "user:111222",
+      text: "hello default",
+    } as never);
+
+    expect(mockSendMessage).toHaveBeenCalledWith("111222", "hello default", {
+      profile: "default",
+      isGroup: false,
+      textMode: "markdown",
+      textChunkMode: "newline",
+      textChunkLimit: 10,
+    });
   });
 });
 
 describe("zalouser outbound chunking", () => {
   it("chunks outbound text without requiring Zalouser runtime initialization", () => {
-    const chunker = zalouserPlugin.outbound?.chunker;
+    const chunker = zalouserOutboundAdapter.chunker;
     if (!chunker) {
       throw new Error("zalouser outbound.chunker unavailable");
     }
@@ -134,11 +188,11 @@ describe("zalouser outbound chunking", () => {
 describe("zalouser channel policies", () => {
   beforeEach(() => {
     mockSendReaction.mockClear();
-    mockSendReaction.mockResolvedValue({ ok: true });
+    mockSendReaction.mockResolvedValue({ ok: true } as never);
   });
 
   it("normalizes dm allowlist entries after trimming channel prefixes", () => {
-    const resolveDmPolicy = zalouserPlugin.security?.resolveDmPolicy;
+    const resolveDmPolicy = zalouserSecurityAdapter.resolveDmPolicy;
     if (!resolveDmPolicy) {
       throw new Error("resolveDmPolicy unavailable");
     }
@@ -209,7 +263,7 @@ describe("zalouser channel policies", () => {
   });
 
   it("handles react action", async () => {
-    const actions = zalouserPlugin.actions;
+    const actions = zalouserMessageActions;
     expect(
       actions?.describeMessageTool?.({ cfg: { channels: { zalouser: { enabled: true } } } })
         ?.actions,
@@ -241,7 +295,7 @@ describe("zalouser channel policies", () => {
       emoji: "👍",
       remove: false,
     });
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       content: [{ type: "text", text: "Reacted 👍 on 111" }],
       details: {
         messageId: "111",
@@ -252,7 +306,7 @@ describe("zalouser channel policies", () => {
   });
 
   it("honors the selected Zalouser account during discovery", () => {
-    const actions = zalouserPlugin.actions;
+    const actions = zalouserMessageActions;
     const cfg = {
       channels: {
         zalouser: {
@@ -285,7 +339,7 @@ describe("zalouser account resolution", () => {
   });
 
   it("uses the configured default account for omitted target lookup", async () => {
-    const resolveTargets = zalouserPlugin.resolver?.resolveTargets;
+    const resolveTargets = zalouserResolverAdapter.resolveTargets;
     if (!resolveTargets) {
       throw new Error("zalouser resolver.resolveTargets unavailable");
     }
@@ -314,17 +368,18 @@ describe("zalouser account resolution", () => {
 
     expect(listZaloFriendsMatchingMock).toHaveBeenCalledWith("work-profile", "Work User");
     expect(result).toEqual([
-      expect.objectContaining({
+      {
         input: "Work User",
         resolved: true,
         id: "42",
         name: "Work User",
-      }),
+        note: undefined,
+      },
     ]);
   });
 
   it("uses the configured default account for omitted qr login", async () => {
-    const login = zalouserPlugin.auth?.login;
+    const login = zalouserAuthAdapter.login;
     if (!login) {
       throw new Error("zalouser auth.login unavailable");
     }

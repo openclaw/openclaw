@@ -32,6 +32,7 @@ describe("resolveRunFailoverDecision", () => {
       resolveRunFailoverDecision({
         stage: "prompt",
         aborted: false,
+        externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
         failoverReason: "rate_limit",
@@ -48,6 +49,7 @@ describe("resolveRunFailoverDecision", () => {
       resolveRunFailoverDecision({
         stage: "prompt",
         aborted: false,
+        externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: true,
         failoverReason: "rate_limit",
@@ -59,16 +61,53 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("surfaces deterministic prompt format failures instead of rotating or falling back", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "format",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "format",
+    });
+  });
+
+  it("can still rotate explicitly retryable prompt format failures", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        allowFormatRetry: true,
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "format",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "rotate_profile",
+      reason: "format",
+    });
+  });
+
   it("treats classified assistant-side 429s as rotation candidates even without error stopReason", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "assistant",
         aborted: false,
+        externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: false,
         failoverReason: "rate_limit",
         timedOut: false,
         timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
         profileRotated: false,
       }),
     ).toEqual({
@@ -77,16 +116,59 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("surfaces deterministic assistant format failures instead of rotating or falling back", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "format",
+        timedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "format",
+    });
+  });
+
+  it("can still rotate explicitly retryable assistant format failures", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        allowFormatRetry: true,
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "format",
+        timedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "rotate_profile",
+      reason: "format",
+    });
+  });
+
   it("falls back after assistant rotation is exhausted", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "assistant",
         aborted: false,
+        externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: false,
         failoverReason: "rate_limit",
         timedOut: false,
         timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
         profileRotated: true,
       }),
     ).toEqual({
@@ -100,15 +182,112 @@ describe("resolveRunFailoverDecision", () => {
       resolveRunFailoverDecision({
         stage: "assistant",
         aborted: false,
+        externalAbort: false,
         fallbackConfigured: true,
         failoverFailure: false,
         failoverReason: null,
         timedOut: false,
         timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
         profileRotated: false,
       }),
     ).toEqual({
       action: "continue_normal",
+    });
+  });
+
+  it("does not model-fallback prompt failures after an external abort", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: true,
+        externalAbort: true,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "timeout",
+    });
+  });
+
+  it("does not rotate or fallback assistant timeouts that fired during tool execution (#52147)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: true,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "continue_normal",
+    });
+  });
+
+  it("does not fallback assistant tool-execution timeouts even after profile rotation exhausted (#52147)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "continue_normal",
+    });
+  });
+
+  it("still rotates assistant timeouts that fired during LLM phase (no active tool execution)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "rotate_profile",
+      reason: null,
+    });
+  });
+
+  it("does not rotate or fallback assistant timeouts after an external abort", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: true,
+        externalAbort: true,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: null,
     });
   });
 });

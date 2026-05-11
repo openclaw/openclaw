@@ -1,25 +1,27 @@
+import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { resolveReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { HealthSummary } from "./health.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 
-let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
-let securityAuditModulePromise: Promise<typeof import("../security/audit.runtime.js")> | undefined;
-let gatewayCallModulePromise: Promise<typeof import("../gateway/call.js")> | undefined;
+const providerUsageLoader = createLazyImportLoader(() => import("../infra/provider-usage.js"));
+const securityAuditModuleLoader = createLazyImportLoader(
+  () => import("../security/audit.runtime.js"),
+);
+const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
 
 function loadProviderUsage() {
-  providerUsagePromise ??= import("../infra/provider-usage.js");
-  return providerUsagePromise;
+  return providerUsageLoader.load();
 }
 
 function loadSecurityAuditModule() {
-  securityAuditModulePromise ??= import("../security/audit.runtime.js");
-  return securityAuditModulePromise;
+  return securityAuditModuleLoader.load();
 }
 
 function loadGatewayCallModule() {
-  gatewayCallModulePromise ??= import("../gateway/call.js");
-  return gatewayCallModulePromise;
+  return gatewayCallModuleLoader.load();
 }
 
 export async function resolveStatusSecurityAudit(params: {
@@ -27,18 +29,36 @@ export async function resolveStatusSecurityAudit(params: {
   sourceConfig: OpenClawConfig;
 }) {
   const { runSecurityAudit } = await loadSecurityAuditModule();
+  const readOnlyPlugins = resolveReadOnlyChannelPluginsForConfig(params.config, {
+    activationSourceConfig: params.sourceConfig,
+    includeSetupFallbackPlugins: false,
+  });
   return await runSecurityAudit({
     config: params.config,
     sourceConfig: params.sourceConfig,
     deep: false,
     includeFilesystem: true,
     includeChannelSecurity: true,
+    loadPluginSecurityCollectors: false,
+    ...(readOnlyPlugins.missingConfiguredChannelIds.length === 0
+      ? { plugins: readOnlyPlugins.plugins }
+      : {}),
   });
 }
 
-export async function resolveStatusUsageSummary(timeoutMs?: number) {
+type StatusUsageSummaryOptions = {
+  config: OpenClawConfig;
+  timeoutMs?: number;
+  agentDir?: string;
+};
+
+export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
   const { loadProviderUsageSummary } = await loadProviderUsage();
-  return await loadProviderUsageSummary({ timeoutMs });
+  return await loadProviderUsageSummary({
+    timeoutMs: params.timeoutMs,
+    config: params.config,
+    agentDir: params.agentDir ?? resolveDefaultAgentDir(params.config),
+  });
 }
 
 export async function loadStatusProviderUsageModule() {
@@ -117,7 +137,7 @@ export async function resolveStatusRuntimeDetails(params: {
   deep?: boolean;
   gatewayReachable: boolean;
   suppressHealthErrors?: boolean;
-  resolveUsage?: (timeoutMs?: number) => Promise<StatusUsageSummary>;
+  resolveUsage?: (input: StatusUsageSummaryOptions) => Promise<StatusUsageSummary>;
   resolveHealth?: (input: {
     config: OpenClawConfig;
     timeoutMs?: number;
@@ -125,7 +145,12 @@ export async function resolveStatusRuntimeDetails(params: {
 }) {
   const resolveUsageSummary = params.resolveUsage ?? resolveStatusUsageSummary;
   const resolveGatewayHealthSummary = params.resolveHealth ?? resolveStatusGatewayHealth;
-  const usage = params.usage ? await resolveUsageSummary(params.timeoutMs) : undefined;
+  const usage = params.usage
+    ? await resolveUsageSummary({
+        timeoutMs: params.timeoutMs,
+        config: params.config,
+      })
+    : undefined;
   const health = params.deep
     ? params.suppressHealthErrors
       ? await resolveGatewayHealthSummary({
@@ -174,7 +199,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
     config: OpenClawConfig;
     sourceConfig: OpenClawConfig;
   }) => Promise<StatusSecurityAudit>;
-  resolveUsage?: (timeoutMs?: number) => Promise<StatusUsageSummary>;
+  resolveUsage?: (input: StatusUsageSummaryOptions) => Promise<StatusUsageSummary>;
   resolveHealth?: (input: {
     config: OpenClawConfig;
     timeoutMs?: number;

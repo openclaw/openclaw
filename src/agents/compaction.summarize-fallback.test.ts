@@ -1,16 +1,17 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { UserMessage } from "@mariozechner/pi-ai";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { UserMessage } from "@earendil-works/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { summarizeWithFallback } from "./compaction.js";
 
 const piCodingAgentMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(),
   estimateTokens: vi.fn((_message: unknown) => 100),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
+vi.mock("@earendil-works/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
+    "@earendil-works/pi-coding-agent",
   );
   return {
     ...actual,
@@ -18,8 +19,6 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
     estimateTokens: piCodingAgentMocks.estimateTokens,
   };
 });
-
-const { summarizeWithFallback } = await import("./compaction.js");
 
 const testModel = {
   id: "test",
@@ -60,8 +59,8 @@ describe("summarizeWithFallback", () => {
 
     expect(result).toContain("Context contained 1 messages");
     expect(result).toContain("0 oversized");
-    // Full path: retryAsync attempts (3) for a single chunk; partial path must not run.
-    expect(piCodingAgentMocks.generateSummary).toHaveBeenCalledTimes(3);
+    // "fetch failed" is timeout-classed now, so summarizeChunks does not retry it.
+    expect(piCodingAgentMocks.generateSummary).toHaveBeenCalledTimes(1);
   });
 
   it("still attempts partial summarization when oversized messages were excluded", async () => {
@@ -97,7 +96,7 @@ describe("summarizeWithFallback", () => {
     });
 
     expect(result).toContain("2 messages (1 oversized)");
-    // Full attempt (3 retries) plus distinct partial transcript (3 retries).
-    expect(piCodingAgentMocks.generateSummary.mock.calls.length).toBe(6);
+    // Full attempt plus distinct partial transcript; timeout-classed failures do not retry.
+    expect(piCodingAgentMocks.generateSummary.mock.calls.length).toBe(2);
   });
 });

@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { AgentCompactionIdentifierPolicy } from "../../config/types.agent-defaults.js";
 import { createSessionManagerRuntimeRegistry } from "./session-manager-runtime-registry.js";
 
@@ -17,6 +17,12 @@ export type CompactionSafeguardRuntimeValue = {
   recentTurnsPreserve?: number;
   qualityGuardEnabled?: boolean;
   qualityGuardMaxRetries?: number;
+  /**
+   * Id of a registered compaction provider plugin.
+   * When set and found in the compaction provider registry, the provider's
+   * `summarize()` is called instead of the built-in `summarizeInStages()`.
+   */
+  provider?: string;
   /**
    * Pending human-readable cancel reason from the current safeguard compaction
    * attempt. OpenClaw consumes this to replace the upstream generic

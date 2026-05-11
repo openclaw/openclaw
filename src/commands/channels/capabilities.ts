@@ -1,15 +1,19 @@
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   createMessageActionDiscoveryContext,
   resolveMessageActionDiscoveryForPlugin,
 } from "../../channels/plugins/message-action-discovery.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import type {
   ChannelCapabilities,
   ChannelCapabilitiesDiagnostics,
   ChannelCapabilitiesDisplayLine,
   ChannelPlugin,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.public.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import { formatUnknownChannelMessage } from "../../cli/error-format.js";
+import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
   readConfigFileSnapshot,
   replaceConfigFile,
@@ -18,7 +22,10 @@ import {
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
@@ -187,7 +194,7 @@ async function resolveChannelReports(params: {
       includeActions: true,
     }).actions;
     const actions = Array.from(
-      new Set<string>(["send", "broadcast", ...discoveredActions.map((action) => String(action))]),
+      new Set<string>(["send", "broadcast", ...discoveredActions.map((action) => action)]),
     );
 
     reports.push({
@@ -220,21 +227,31 @@ export async function channelsCapabilitiesCommand(
   }
   let cfg = loadedCfg;
   const timeoutMs = normalizeTimeout(opts.timeout, 10_000);
-  const rawChannel = typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
-  const rawTarget = typeof opts.target === "string" ? opts.target.trim() : "";
+  const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
+  const rawTarget = normalizeOptionalString(opts.target) ?? "";
 
   if (opts.account && (!rawChannel || rawChannel === "all")) {
-    runtime.error(danger("--account requires a specific --channel."));
+    runtime.error(
+      danger(
+        `--account requires a specific --channel. Run ${formatCliCommand("openclaw channels list")} to choose one.`,
+      ),
+    );
     runtime.exit(1);
     return;
   }
   if (rawTarget && (!rawChannel || rawChannel === "all")) {
-    runtime.error(danger("--target requires a specific --channel."));
+    runtime.error(
+      danger(
+        `--target requires a specific --channel. Run ${formatCliCommand("openclaw channels list")} to choose one.`,
+      ),
+    );
     runtime.exit(1);
     return;
   }
 
-  const plugins = listChannelPlugins();
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    includeSetupFallbackPlugins: true,
+  });
   const selected =
     !rawChannel || rawChannel === "all"
       ? plugins
@@ -247,16 +264,40 @@ export async function channelsCapabilitiesCommand(
           });
           if (resolved.configChanged) {
             cfg = resolved.cfg;
-            await replaceConfigFile({
-              nextConfig: cfg,
-              baseHash: (await sourceSnapshotPromise)?.hash,
-            });
+            const shouldMovePluginInstalls = Boolean(
+              cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
+            );
+            if (shouldMovePluginInstalls) {
+              const committed = await commitConfigWithPendingPluginInstalls({
+                nextConfig: cfg,
+                baseHash: (await sourceSnapshotPromise)?.hash,
+              });
+              cfg = committed.config;
+              await refreshPluginRegistryAfterConfigMutation({
+                config: cfg,
+                reason: "source-changed",
+                installRecords: committed.installRecords,
+                logger: { warn: (message) => runtime.log(message) },
+              });
+            } else {
+              await replaceConfigFile({
+                nextConfig: cfg,
+                baseHash: (await sourceSnapshotPromise)?.hash,
+              });
+              if (resolved.pluginInstalled) {
+                await refreshPluginRegistryAfterConfigMutation({
+                  config: cfg,
+                  reason: "source-changed",
+                  logger: { warn: (message) => runtime.log(message) },
+                });
+              }
+            }
           }
           return resolved.plugin ? [resolved.plugin] : null;
         })();
 
   if (!selected || selected.length === 0) {
-    runtime.error(danger(`Unknown channel "${rawChannel}".`));
+    runtime.error(danger(formatUnknownChannelMessage({ channel: rawChannel })));
     runtime.exit(1);
     return;
   }
@@ -286,6 +327,7 @@ export async function channelsCapabilitiesCommand(
       channel: report.channel,
       accountId: report.accountId,
       name: report.accountName,
+      channelLabel: report.plugin.meta.label ?? report.channel,
       channelStyle: theme.accent,
       accountStyle: theme.heading,
     });

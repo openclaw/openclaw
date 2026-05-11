@@ -56,12 +56,9 @@ describe("runMessageAction core send routing", () => {
     });
 
     expect(result.kind).toBe("send");
-    expect(sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "caption-only text",
-        mediaUrl: "https://example.com/cat.png",
-      }),
-    );
+    expect(sendMedia).toHaveBeenCalledOnce();
+    expect(sendMedia.mock.calls[0]?.[0]?.text).toBe("caption-only text");
+    expect(sendMedia.mock.calls[0]?.[0]?.mediaUrl).toBe("https://example.com/cat.png");
   });
 
   it("does not misclassify send as poll when zero-valued poll params are present", async () => {
@@ -116,11 +113,58 @@ describe("runMessageAction core send routing", () => {
     });
 
     expect(result.kind).toBe("send");
-    expect(sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "hello",
-        mediaUrl: "https://example.com/file.txt",
-      }),
+    expect(sendMedia).toHaveBeenCalledOnce();
+    expect(sendMedia.mock.calls[0]?.[0]?.text).toBe("hello");
+    expect(sendMedia.mock.calls[0]?.[0]?.mediaUrl).toBe("https://example.com/file.txt");
+  });
+
+  it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn(),
+            },
+            messaging: {
+              normalizeTarget: (raw) =>
+                raw === "-1001234567890:topic:42" ? "telegram:-1001234567890:topic:42" : undefined,
+              targetResolver: {
+                looksLikeId: (raw) => raw === "-1001234567890:topic:42",
+              },
+            },
+          }),
+        },
+      ]),
     );
+
+    const result = await runMessageAction({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:test",
+          },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "telegram",
+        target: "-1001234567890:topic:42",
+        message: "topic hello",
+      },
+      dryRun: true,
+    });
+
+    if (result.kind !== "send") {
+      throw new Error(`Expected send result, got ${result.kind}`);
+    }
+    const payload = result.payload as { dryRun?: boolean; to?: string };
+    expect(result.to).toBe("telegram:-1001234567890:topic:42");
+    expect(payload.to).toBe("telegram:-1001234567890:topic:42");
+    expect(payload.dryRun).toBe(true);
   });
 });

@@ -12,6 +12,8 @@ afterEach(() => {
 });
 
 const emptyRegistry = createTestRegistry([]);
+type SlackAdapterPlugin = Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> &
+  Partial<Pick<ChannelPlugin, "approvalCapability" | "outbound">>;
 
 const PLUGIN_TARGETS_CFG = {
   approvals: {
@@ -66,6 +68,38 @@ async function flushPendingDelivery(): Promise<void> {
   await Promise.resolve();
 }
 
+function registerSlackAdapterPlugin(plugin: SlackAdapterPlugin): void {
+  const registry = createTestRegistry([{ pluginId: "slack", plugin, source: "test" }]);
+  setActivePluginRegistry(registry);
+}
+
+function createSlackAdapterPlugin(overrides: Partial<SlackAdapterPlugin>): SlackAdapterPlugin {
+  return {
+    ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
+    ...overrides,
+  };
+}
+
+async function registerPendingApproval(
+  forwarder: ReturnType<typeof createForwarder>["forwarder"],
+  deliver: ReturnType<typeof vi.fn>,
+): Promise<void> {
+  await forwarder.handlePluginApprovalRequested!(makePluginRequest());
+  await flushPendingDelivery();
+  expect(deliver).toHaveBeenCalled();
+  deliver.mockClear();
+}
+
+function makePluginResolved(overrides?: Partial<PluginApprovalResolved>): PluginApprovalResolved {
+  return {
+    id: "plugin-req-1",
+    decision: "allow-once",
+    resolvedBy: "telegram:user123",
+    ts: 2000,
+    ...overrides,
+  };
+}
+
 describe("plugin approval forwarding", () => {
   beforeEach(() => {
     setActivePluginRegistry(emptyRegistry);
@@ -108,6 +142,46 @@ describe("plugin approval forwarding", () => {
                 label: "Allow Always",
                 value: "/approve plugin-req-1 allow-always",
                 style: "primary",
+              },
+              {
+                label: "Deny",
+                value: "/approve plugin-req-1 deny",
+                style: "danger",
+              },
+            ],
+          },
+        ],
+      });
+    });
+
+    it("renders only request-scoped plugin approval decisions", async () => {
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+      const result = await forwarder.handlePluginApprovalRequested!(
+        makePluginRequest({
+          request: {
+            ...makePluginRequest().request,
+            allowedDecisions: ["allow-once", "deny"],
+          },
+        }),
+      );
+      expect(result).toBe(true);
+      await flushPendingDelivery();
+      const deliveryArgs = deliver.mock.calls[0]?.[0] as
+        | { payloads?: Array<{ text?: string; interactive?: unknown }> }
+        | undefined;
+      const payload = deliveryArgs?.payloads?.[0];
+      expect(payload?.text).toContain("Reply with: /approve <id> allow-once|deny");
+      expect(payload?.text).not.toContain("allow-always");
+      expect(payload?.interactive).toEqual({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow Once",
+                value: "/approve plugin-req-1 allow-once",
+                style: "success",
               },
               {
                 label: "Deny",
@@ -176,23 +250,17 @@ describe("plugin approval forwarding", () => {
   describe("channel adapter hooks", () => {
     it("uses buildPluginPendingPayload from channel adapter when available", async () => {
       const mockPayload = { text: "custom adapter payload" };
-      const adapterPlugin: Pick<
-        ChannelPlugin,
-        "id" | "meta" | "capabilities" | "config" | "approvals"
-      > = {
-        ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
-        approvals: {
-          render: {
-            plugin: {
-              buildPendingPayload: vi.fn().mockReturnValue(mockPayload),
+      registerSlackAdapterPlugin(
+        createSlackAdapterPlugin({
+          approvalCapability: {
+            render: {
+              plugin: {
+                buildPendingPayload: vi.fn().mockReturnValue(mockPayload),
+              },
             },
           },
-        },
-      };
-      const registry = createTestRegistry([
-        { pluginId: "slack", plugin: adapterPlugin, source: "test" },
-      ]);
-      setActivePluginRegistry(registry);
+        }),
+      );
 
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
@@ -207,20 +275,14 @@ describe("plugin approval forwarding", () => {
 
     it("calls outbound beforeDeliverPayload before plugin approval delivery", async () => {
       const beforeDeliverPayload = vi.fn();
-      const adapterPlugin: Pick<
-        ChannelPlugin,
-        "id" | "meta" | "capabilities" | "config" | "outbound"
-      > = {
-        ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
-        outbound: {
-          deliveryMode: "direct",
-          beforeDeliverPayload,
-        },
-      };
-      const registry = createTestRegistry([
-        { pluginId: "slack", plugin: adapterPlugin, source: "test" },
-      ]);
-      setActivePluginRegistry(registry);
+      registerSlackAdapterPlugin(
+        createSlackAdapterPlugin({
+          outbound: {
+            deliveryMode: "direct",
+            beforeDeliverPayload,
+          },
+        }),
+      );
 
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
@@ -232,40 +294,24 @@ describe("plugin approval forwarding", () => {
 
     it("uses buildPluginResolvedPayload from channel adapter for resolved messages", async () => {
       const mockPayload = { text: "custom resolved payload" };
-      const adapterPlugin: Pick<
-        ChannelPlugin,
-        "id" | "meta" | "capabilities" | "config" | "approvals"
-      > = {
-        ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
-        approvals: {
-          render: {
-            plugin: {
-              buildResolvedPayload: vi.fn().mockReturnValue(mockPayload),
+      registerSlackAdapterPlugin(
+        createSlackAdapterPlugin({
+          approvalCapability: {
+            render: {
+              plugin: {
+                buildResolvedPayload: vi.fn().mockReturnValue(mockPayload),
+              },
             },
           },
-        },
-      };
-      const registry = createTestRegistry([
-        { pluginId: "slack", plugin: adapterPlugin, source: "test" },
-      ]);
-      setActivePluginRegistry(registry);
+        }),
+      );
 
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
 
-      // First register request so targets are tracked
-      await forwarder.handlePluginApprovalRequested!(makePluginRequest());
-      await flushPendingDelivery();
-      expect(deliver).toHaveBeenCalled();
-      deliver.mockClear();
+      await registerPendingApproval(forwarder, deliver);
 
-      const resolved: PluginApprovalResolved = {
-        id: "plugin-req-1",
-        decision: "allow-once",
-        resolvedBy: "telegram:user123",
-        ts: 2000,
-      };
-      await forwarder.handlePluginApprovalResolved!(resolved);
+      await forwarder.handlePluginApprovalResolved!(makePluginResolved());
       await flushPendingDelivery();
       expect(deliver).toHaveBeenCalled();
       const deliveryArgs = deliver.mock.calls[0]?.[0] as
@@ -280,19 +326,9 @@ describe("plugin approval forwarding", () => {
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
 
-      // First register request so targets are tracked
-      await forwarder.handlePluginApprovalRequested!(makePluginRequest());
-      await flushPendingDelivery();
-      expect(deliver).toHaveBeenCalled();
-      deliver.mockClear();
+      await registerPendingApproval(forwarder, deliver);
 
-      const resolved: PluginApprovalResolved = {
-        id: "plugin-req-1",
-        decision: "allow-once",
-        resolvedBy: "telegram:user123",
-        ts: 2000,
-      };
-      await forwarder.handlePluginApprovalResolved!(resolved);
+      await forwarder.handlePluginApprovalResolved!(makePluginResolved());
       expect(deliver).toHaveBeenCalled();
       const text =
         (deliver.mock.calls[0]?.[0] as { payloads?: Array<{ text?: string }> })?.payloads?.[0]

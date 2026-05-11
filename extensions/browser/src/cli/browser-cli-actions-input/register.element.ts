@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserParentOpts } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
 import {
@@ -71,6 +71,37 @@ export function registerBrowserElementCommands(
           const url = (result as { url?: unknown }).url;
           const suffix = typeof url === "string" && url ? ` on ${url}` : "";
           return `clicked ref ${refValue}${suffix}`;
+        },
+      });
+    });
+
+  browser
+    .command("click-coords")
+    .description("Click viewport coordinates")
+    .argument("<x>", "Viewport x coordinate")
+    .argument("<y>", "Viewport y coordinate")
+    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--double", "Double click", false)
+    .option("--button <left|right|middle>", "Mouse button to use")
+    .option("--delay-ms <ms>", "Delay between mouse down/up", (v: string) => Number(v))
+    .action(async (xRaw: string, yRaw: string, opts, cmd) => {
+      const x = Number(xRaw);
+      const y = Number(yRaw);
+      await runElementAction({
+        cmd,
+        body: {
+          kind: "clickCoords",
+          x,
+          y,
+          targetId: normalizeOptionalString(opts.targetId),
+          doubleClick: Boolean(opts.double),
+          button: normalizeOptionalString(opts.button),
+          delayMs: Number.isFinite(opts.delayMs) ? opts.delayMs : undefined,
+        },
+        successMessage: (result) => {
+          const url = (result as { url?: unknown }).url;
+          const suffix = typeof url === "string" && url ? ` on ${url}` : "";
+          return `clicked ${x},${y}${suffix}`;
         },
       });
     });

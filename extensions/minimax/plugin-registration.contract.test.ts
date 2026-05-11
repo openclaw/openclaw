@@ -1,4 +1,4 @@
-import { describePluginRegistrationContract } from "../../test/helpers/plugins/plugin-registration-contract.js";
+import { describePluginRegistrationContract } from "openclaw/plugin-sdk/plugin-test-contracts";
 
 describePluginRegistrationContract({
   pluginId: "minimax",
@@ -6,7 +6,8 @@ describePluginRegistrationContract({
   speechProviderIds: ["minimax"],
   mediaUnderstandingProviderIds: ["minimax", "minimax-portal"],
   imageGenerationProviderIds: ["minimax", "minimax-portal"],
-  videoGenerationProviderIds: ["minimax"],
+  musicGenerationProviderIds: ["minimax", "minimax-portal"],
+  videoGenerationProviderIds: ["minimax", "minimax-portal"],
   webSearchProviderIds: ["minimax"],
   requireDescribeImages: true,
   requireGenerateImage: true,

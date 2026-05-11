@@ -3,11 +3,13 @@ import {
   _resetMemoryPluginState,
   buildMemoryPromptSection,
   clearMemoryPluginState,
-  getMemoryFlushPlanResolver,
-  getMemoryPromptSectionBuilder,
+  getMemoryCapabilityRegistration,
   getMemoryRuntime,
+  hasMemoryRuntime,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
+  listActiveMemoryPublicArtifacts,
+  registerMemoryCapability,
   registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSupplement,
@@ -41,18 +43,18 @@ function createMemoryFlushPlan(relativePath: string) {
 
 function expectClearedMemoryState() {
   expect(resolveMemoryFlushPlan({})).toBeNull();
-  expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toEqual([]);
-  expect(listMemoryCorpusSupplements()).toEqual([]);
+  expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toStrictEqual(
+    [],
+  );
+  expect(listMemoryCorpusSupplements()).toStrictEqual([]);
   expect(getMemoryRuntime()).toBeUndefined();
 }
 
 function createMemoryStateSnapshot() {
   return {
+    capability: getMemoryCapabilityRegistration(),
     corpusSupplements: listMemoryCorpusSupplements(),
-    promptBuilder: getMemoryPromptSectionBuilder(),
     promptSupplements: listMemoryPromptSupplements(),
-    flushPlanResolver: getMemoryFlushPlanResolver(),
-    runtime: getMemoryRuntime(),
   };
 }
 
@@ -61,16 +63,13 @@ function registerMemoryState(params: {
   relativePath?: string;
   runtime?: ReturnType<typeof createMemoryRuntime>;
 }) {
-  if (params.promptSection) {
-    registerMemoryPromptSection(() => params.promptSection ?? []);
-  }
-  if (params.relativePath) {
-    const relativePath = params.relativePath;
-    registerMemoryFlushPlanResolver(() => createMemoryFlushPlan(relativePath));
-  }
-  if (params.runtime) {
-    registerMemoryRuntime(params.runtime);
-  }
+  registerMemoryCapability("memory-core", {
+    ...(params.promptSection ? { promptBuilder: () => params.promptSection ?? [] } : {}),
+    ...(params.relativePath
+      ? { flushPlanResolver: () => createMemoryFlushPlan(params.relativePath ?? "") }
+      : {}),
+    ...(params.runtime ? { runtime: params.runtime } : {}),
+  });
 }
 
 describe("memory plugin state", () => {
@@ -97,6 +96,114 @@ describe("memory plugin state", () => {
     ]);
   });
 
+  it("adapts deprecated split registration to the unified memory capability", () => {
+    const runtime = createMemoryRuntime();
+    const promptBuilder = () => ["legacy prompt"];
+    const flushPlanResolver = () => createMemoryFlushPlan("memory/legacy.md");
+
+    registerMemoryPromptSection(promptBuilder);
+    registerMemoryFlushPlanResolver(flushPlanResolver);
+    registerMemoryRuntime(runtime);
+
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["legacy prompt"]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/legacy.md");
+    expect(getMemoryRuntime()).toBe(runtime);
+    expect(getMemoryCapabilityRegistration()).toStrictEqual({
+      pluginId: "legacy-memory-v1",
+      capability: {
+        promptBuilder,
+        flushPlanResolver,
+        runtime,
+      },
+    });
+  });
+
+  it("prefers the registered memory capability over earlier legacy split state", async () => {
+    const runtime = createMemoryRuntime();
+    const promptBuilder = () => ["capability prompt"];
+    const flushPlanResolver = () => createMemoryFlushPlan("memory/capability.md");
+
+    registerMemoryPromptSection(() => ["legacy prompt"]);
+    registerMemoryFlushPlanResolver(() => createMemoryFlushPlan("memory/legacy.md"));
+    registerMemoryRuntime({
+      async getMemorySearchManager() {
+        return { manager: null, error: "legacy" };
+      },
+      resolveMemoryBackendConfig() {
+        return { backend: "builtin" as const };
+      },
+    });
+    registerMemoryCapability("memory-core", {
+      promptBuilder,
+      flushPlanResolver,
+      runtime,
+    });
+
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["capability prompt"]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/capability.md");
+    await expect(
+      getMemoryRuntime()?.getMemorySearchManager({
+        cfg: {} as never,
+        agentId: "main",
+      }),
+    ).resolves.toEqual({ manager: null, error: "missing" });
+    expect(hasMemoryRuntime()).toBe(true);
+    expect(getMemoryCapabilityRegistration()).toStrictEqual({
+      pluginId: "memory-core",
+      capability: {
+        promptBuilder,
+        flushPlanResolver,
+        runtime,
+      },
+    });
+  });
+
+  it("lists active public memory artifacts in deterministic order", async () => {
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "daily-note",
+              workspaceDir: "/tmp/workspace-b",
+              relativePath: "memory/2026-04-06.md",
+              absolutePath: "/tmp/workspace-b/memory/2026-04-06.md",
+              agentIds: ["beta"],
+              contentType: "markdown" as const,
+            },
+            {
+              kind: "memory-root",
+              workspaceDir: "/tmp/workspace-a",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/workspace-a/MEMORY.md",
+              agentIds: ["main"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/workspace-a",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/workspace-a/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+      {
+        kind: "daily-note",
+        workspaceDir: "/tmp/workspace-b",
+        relativePath: "memory/2026-04-06.md",
+        absolutePath: "/tmp/workspace-b/memory/2026-04-06.md",
+        agentIds: ["beta"],
+        contentType: "markdown",
+      },
+    ]);
+  });
+
   it("passes citations mode through to the prompt builder", () => {
     registerMemoryPromptSection(({ citationsMode }) => [
       `citations: ${citationsMode ?? "default"}`,
@@ -120,6 +227,14 @@ describe("memory plugin state", () => {
       "alpha",
       "wiki",
     ]);
+  });
+
+  it("ignores malformed prompt builder output", () => {
+    registerMemoryPromptSection(() => ["primary", 1, undefined] as never);
+    registerMemoryPromptSupplement("async-helper", () => Promise.resolve(["async"]) as never);
+    registerMemoryPromptSupplement("valid-helper", () => ["valid", false] as never);
+
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["primary", "valid"]);
   });
 
   it("stores memory corpus supplements", async () => {

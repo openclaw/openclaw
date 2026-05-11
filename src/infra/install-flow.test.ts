@@ -76,11 +76,8 @@ describe("withExtractedArchiveRoot", () => {
     });
 
     expect(withTempDirSpy).toHaveBeenCalledWith("openclaw-plugin-", expect.any(Function));
-    expect(extractSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        archivePath,
-      }),
-    );
+    expect(extractSpy).toHaveBeenCalledOnce();
+    expect(extractSpy.mock.calls[0]?.[0]?.archivePath).toBe(archivePath);
     expect(resolveRootSpy).toHaveBeenCalledWith(extractDir, {
       rootMarkers: ["package.json"],
     });

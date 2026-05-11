@@ -24,7 +24,7 @@ function createReplyDeliveryCore(): DeliverMattermostReplyPayloadParams["core"] 
         resolveChunkMode: vi.fn<() => ChunkMode>(() => "length"),
         resolveTextChunkLimit: vi.fn(
           (
-            _cfg: OpenClawConfig | undefined,
+            _cfg?: OpenClawConfig,
             _provider?: string,
             _accountId?: string | null,
             opts?: { fallbackLimit?: number },
@@ -38,6 +38,99 @@ function createReplyDeliveryCore(): DeliverMattermostReplyPayloadParams["core"] 
 }
 
 describe("deliverMattermostReplyPayload", () => {
+  it("suppresses payloads flagged as reasoning", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const cfg = {} satisfies OpenClawConfig;
+    const core = createReplyDeliveryCore();
+
+    await deliverMattermostReplyPayload({
+      core,
+      cfg,
+      payload: { text: "hidden", isReasoning: true },
+      to: "channel:town-square",
+      accountId: "default",
+      agentId: "agent-1",
+      replyToId: "root-post",
+      textLimit: 4000,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("suppresses reasoning-prefixed payloads even without an explicit flag", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const cfg = {} satisfies OpenClawConfig;
+    const core = createReplyDeliveryCore();
+
+    await deliverMattermostReplyPayload({
+      core,
+      cfg,
+      payload: { text: "  \n Reasoning:\n_hidden_" },
+      to: "channel:town-square",
+      accountId: "default",
+      agentId: "agent-1",
+      replyToId: "root-post",
+      textLimit: 4000,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("suppresses reasoning payloads formatted as a Mattermost blockquote", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const cfg = {} satisfies OpenClawConfig;
+    const core = createReplyDeliveryCore();
+
+    await deliverMattermostReplyPayload({
+      core,
+      cfg,
+      payload: { text: "> Reasoning:\n> _hidden_" },
+      to: "channel:town-square",
+      accountId: "default",
+      agentId: "agent-1",
+      replyToId: "root-post",
+      textLimit: 4000,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress messages that mention Reasoning: mid-text", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const cfg = {} satisfies OpenClawConfig;
+    const core = createReplyDeliveryCore();
+
+    await deliverMattermostReplyPayload({
+      core,
+      cfg,
+      payload: { text: "Intro line\nReasoning: appears in content but is not a prefix" },
+      to: "channel:town-square",
+      accountId: "default",
+      agentId: "agent-1",
+      replyToId: "root-post",
+      textLimit: 4000,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "channel:town-square",
+      "Intro line\nReasoning: appears in content but is not a prefix",
+      {
+        cfg,
+        accountId: "default",
+        replyToId: "root-post",
+      },
+    );
+  });
+
   it("passes agent-scoped mediaLocalRoots when sending media paths", async () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mm-state-"));
@@ -65,17 +158,20 @@ describe("deliverMattermostReplyPayload", () => {
       });
 
       expect(sendMessage).toHaveBeenCalledTimes(1);
-      expect(sendMessage).toHaveBeenCalledWith(
-        "channel:town-square",
-        "caption",
-        expect.objectContaining({
-          cfg,
-          accountId: "default",
-          mediaUrl,
-          replyToId: "root-post",
-          mediaLocalRoots: expect.arrayContaining([path.join(stateDir, `workspace-${agentId}`)]),
-        }),
-      );
+      expect(sendMessage).toHaveBeenCalledWith("channel:town-square", "caption", {
+        cfg,
+        accountId: "default",
+        mediaUrl,
+        replyToId: "root-post",
+        mediaLocalRoots: [
+          path.join(os.tmpdir(), "openclaw"),
+          path.join(stateDir, "media"),
+          path.join(stateDir, "canvas"),
+          path.join(stateDir, "workspace"),
+          path.join(stateDir, "sandboxes"),
+          path.join(stateDir, `workspace-${agentId}`),
+        ],
+      });
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
@@ -106,14 +202,10 @@ describe("deliverMattermostReplyPayload", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith(
-      "channel:town-square",
-      "hello",
-      expect.objectContaining({
-        cfg,
-        accountId: "default",
-        replyToId: "root-post",
-      }),
-    );
+    expect(sendMessage).toHaveBeenCalledWith("channel:town-square", "hello", {
+      cfg,
+      accountId: "default",
+      replyToId: "root-post",
+    });
   });
 });

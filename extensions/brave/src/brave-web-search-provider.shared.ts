@@ -1,10 +1,14 @@
-import { Type } from "@sinclair/typebox";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type BraveConfig = {
+type BraveConfig = {
+  baseUrl?: unknown;
   mode?: string;
 };
 
-export type BraveLlmContextResult = { url: string; title: string; snippets: string[] };
+type BraveLlmContextResult = { url: string; title: string; snippets: string[] };
 export type BraveLlmContextResponse = {
   grounding: { generic?: BraveLlmContextResult[] };
   sources?: { url?: string; hostname?: string; date?: string }[];
@@ -115,7 +119,6 @@ const BRAVE_SEARCH_LANG_ALIASES: Record<string, string> = {
 };
 
 const BRAVE_UI_LANG_LOCALE = /^([a-z]{2})-([a-z]{2})$/i;
-const MAX_BRAVE_SEARCH_COUNT = 10;
 
 function normalizeBraveSearchLang(value: string | undefined): string | undefined {
   if (!value) {
@@ -125,7 +128,8 @@ function normalizeBraveSearchLang(value: string | undefined): string | undefined
   if (!trimmed) {
     return undefined;
   }
-  const canonical = BRAVE_SEARCH_LANG_ALIASES[trimmed.toLowerCase()] ?? trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  const canonical = BRAVE_SEARCH_LANG_ALIASES[lower] ?? lower;
   if (!BRAVE_SEARCH_LANG_CODES.has(canonical)) {
     return undefined;
   }
@@ -157,7 +161,7 @@ function normalizeBraveUiLang(value: string | undefined): string | undefined {
     return undefined;
   }
   const [, language, region] = match;
-  return `${language.toLowerCase()}-${region.toUpperCase()}`;
+  return `${normalizeLowercaseStringOrEmpty(language)}-${region.toUpperCase()}`;
 }
 
 export function resolveBraveConfig(searchConfig?: Record<string, unknown>): BraveConfig {
@@ -174,8 +178,8 @@ export function normalizeBraveLanguageParams(params: { search_lang?: string; ui_
   ui_lang?: string;
   invalidField?: "search_lang" | "ui_lang";
 } {
-  const rawSearchLang = params.search_lang?.trim() || undefined;
-  const rawUiLang = params.ui_lang?.trim() || undefined;
+  const rawSearchLang = normalizeOptionalString(params.search_lang);
+  const rawUiLang = normalizeOptionalString(params.ui_lang);
   let searchLangCandidate = rawSearchLang;
   let uiLangCandidate = rawUiLang;
 
@@ -220,55 +224,4 @@ export function mapBraveLlmContextResults(
     ),
     siteName: resolveSiteName(entry.url) || undefined,
   }));
-}
-
-export function createBraveSchema() {
-  return Type.Object({
-    query: Type.String({ description: "Search query string." }),
-    count: Type.Optional(
-      Type.Number({
-        description: "Number of results to return (1-10).",
-        minimum: 1,
-        maximum: MAX_BRAVE_SEARCH_COUNT,
-      }),
-    ),
-    country: Type.Optional(
-      Type.String({
-        description:
-          "2-letter country code for region-specific results (e.g., 'DE', 'US', 'ALL'). Default: 'US'.",
-      }),
-    ),
-    language: Type.Optional(
-      Type.String({
-        description: "ISO 639-1 language code for results (e.g., 'en', 'de', 'fr').",
-      }),
-    ),
-    freshness: Type.Optional(
-      Type.String({
-        description: "Filter by time: 'day' (24h), 'week', 'month', or 'year'.",
-      }),
-    ),
-    date_after: Type.Optional(
-      Type.String({
-        description: "Only results published after this date (YYYY-MM-DD).",
-      }),
-    ),
-    date_before: Type.Optional(
-      Type.String({
-        description: "Only results published before this date (YYYY-MM-DD).",
-      }),
-    ),
-    search_lang: Type.Optional(
-      Type.String({
-        description:
-          "Brave language code for search results (e.g., 'en', 'de', 'en-gb', 'zh-hans', 'zh-hant', 'pt-br').",
-      }),
-    ),
-    ui_lang: Type.Optional(
-      Type.String({
-        description:
-          "Locale code for UI elements in language-region format (e.g., 'en-US', 'de-DE', 'fr-FR', 'tr-TR'). Must include region subtag.",
-      }),
-    ),
-  });
 }

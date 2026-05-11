@@ -1,21 +1,44 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
+
+const {
   discoverMantleModels,
   generateBearerTokenFromIam,
+  getCachedIamToken,
+  MANTLE_IAM_TOKEN_MARKER,
   mergeImplicitMantleProvider,
   resetIamTokenCacheForTest,
   resetMantleDiscoveryCacheForTest,
-  resolveMantleBearerToken,
   resolveImplicitMantleProvider,
-} from "./api.js";
+  resolveMantleBearerToken,
+  resolveMantleRuntimeBearerToken,
+} = await import("./api.js");
 
-const mocks = vi.hoisted(() => ({
-  getTokenProvider: vi.fn(),
-}));
+function createTokenProviderFactory(tokenProvider: () => Promise<string>) {
+  return vi.fn(() => tokenProvider);
+}
 
-vi.mock("@aws/bedrock-token-generator", () => ({
-  getTokenProvider: mocks.getTokenProvider,
-}));
+type MockWithCalls = {
+  mock: { calls: unknown[][] };
+};
+
+function objectArgAt(
+  mock: MockWithCalls,
+  callIndex: number,
+  argIndex: number,
+): Record<string, unknown> {
+  const value = mock.mock.calls[callIndex]?.[argIndex];
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected call ${callIndex} argument ${argIndex} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function recordField(value: unknown, field: string): Record<string, unknown> {
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${field} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
 
 describe("bedrock mantle discovery", () => {
   const originalEnv = process.env;
@@ -23,12 +46,14 @@ describe("bedrock mantle discovery", () => {
   beforeEach(() => {
     process.env = { ...originalEnv };
     vi.restoreAllMocks();
-    mocks.getTokenProvider.mockReset();
     resetMantleDiscoveryCacheForTest();
     resetIamTokenCacheForTest();
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    resetMantleDiscoveryCacheForTest();
+    resetIamTokenCacheForTest();
     process.env = originalEnv;
   });
 
@@ -62,12 +87,15 @@ describe("bedrock mantle discovery", () => {
 
   it("generates token from IAM credentials when token generation succeeds", async () => {
     const tokenProvider = vi.fn(async () => "bedrock-api-key-generated"); // pragma: allowlist secret
-    mocks.getTokenProvider.mockReturnValue(tokenProvider);
+    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
 
-    const token = await generateBearerTokenFromIam({ region: "us-east-1" });
+    const token = await generateBearerTokenFromIam({
+      region: "us-east-1",
+      tokenProviderFactory,
+    });
 
     expect(token).toBe("bedrock-api-key-generated");
-    expect(mocks.getTokenProvider).toHaveBeenCalledWith({
+    expect(tokenProviderFactory).toHaveBeenCalledWith({
       region: "us-east-1",
       expiresInSeconds: 7200,
     });
@@ -76,12 +104,20 @@ describe("bedrock mantle discovery", () => {
 
   it("caches generated IAM tokens within TTL", async () => {
     const tokenProvider = vi.fn(async () => "bedrock-api-key-cached"); // pragma: allowlist secret
-    mocks.getTokenProvider.mockReturnValue(tokenProvider);
+    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
     let now = 1000;
 
-    const t1 = await generateBearerTokenFromIam({ region: "us-east-1", now: () => now });
-    now += 1800_000; // 30 min — within 1hr cache TTL
-    const t2 = await generateBearerTokenFromIam({ region: "us-east-1", now: () => now });
+    const t1 = await generateBearerTokenFromIam({
+      region: "us-east-1",
+      now: () => now,
+      tokenProviderFactory,
+    });
+    now += 1800_000; // 30 min — within 2hr cache TTL
+    const t2 = await generateBearerTokenFromIam({
+      region: "us-east-1",
+      now: () => now,
+      tokenProviderFactory,
+    });
 
     expect(t1).toEqual(t2);
     expect(tokenProvider).toHaveBeenCalledTimes(1);
@@ -92,18 +128,26 @@ describe("bedrock mantle discovery", () => {
       .fn<() => Promise<string>>()
       .mockResolvedValueOnce("bedrock-api-key-east") // pragma: allowlist secret
       .mockResolvedValueOnce("bedrock-api-key-west"); // pragma: allowlist secret
-    mocks.getTokenProvider.mockReturnValue(tokenProvider);
+    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
 
-    const east = await generateBearerTokenFromIam({ region: "us-east-1", now: () => 1000 });
-    const west = await generateBearerTokenFromIam({ region: "us-west-2", now: () => 2000 });
+    const east = await generateBearerTokenFromIam({
+      region: "us-east-1",
+      now: () => 1000,
+      tokenProviderFactory,
+    });
+    const west = await generateBearerTokenFromIam({
+      region: "us-west-2",
+      now: () => 2000,
+      tokenProviderFactory,
+    });
 
     expect(east).toBe("bedrock-api-key-east");
     expect(west).toBe("bedrock-api-key-west");
-    expect(mocks.getTokenProvider).toHaveBeenNthCalledWith(1, {
+    expect(tokenProviderFactory).toHaveBeenNthCalledWith(1, {
       region: "us-east-1",
       expiresInSeconds: 7200,
     });
-    expect(mocks.getTokenProvider).toHaveBeenNthCalledWith(2, {
+    expect(tokenProviderFactory).toHaveBeenNthCalledWith(2, {
       region: "us-west-2",
       expiresInSeconds: 7200,
     });
@@ -111,11 +155,60 @@ describe("bedrock mantle discovery", () => {
   });
 
   it("returns undefined when IAM token generation fails", async () => {
-    mocks.getTokenProvider.mockImplementation(() => {
+    const tokenProviderFactory = vi.fn(() => {
       throw new Error("no credentials");
     });
 
-    await expect(generateBearerTokenFromIam({ region: "us-east-1" })).resolves.toBeUndefined();
+    await expect(
+      generateBearerTokenFromIam({ region: "us-east-1", tokenProviderFactory }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("skips IAM token generation when plugin discovery is disabled", async () => {
+    const tokenProviderFactory = vi.fn(() => {
+      throw new Error("disabled discovery should not generate a token");
+    });
+
+    await expect(
+      resolveImplicitMantleProvider({
+        env: { AWS_REGION: "us-east-1" } as NodeJS.ProcessEnv,
+        pluginConfig: { discovery: { enabled: false } },
+        tokenProviderFactory,
+      }),
+    ).resolves.toBeNull();
+
+    expect(tokenProviderFactory).not.toHaveBeenCalled();
+  });
+
+  it("getCachedIamToken returns cached token when valid", async () => {
+    const tokenProvider = vi.fn(async () => "bedrock-cached-token"); // pragma: allowlist secret
+    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
+
+    // Generate a token to populate the cache
+    await generateBearerTokenFromIam({ region: "us-east-1", tokenProviderFactory });
+
+    // Sync read should return the cached token
+    expect(getCachedIamToken("us-east-1")).toBe("bedrock-cached-token");
+  });
+
+  it("getCachedIamToken returns undefined when cache is empty", () => {
+    expect(getCachedIamToken("us-east-1")).toBeUndefined();
+  });
+
+  it("getCachedIamToken returns undefined when cache is expired", async () => {
+    const tokenProvider = vi.fn(async () => "bedrock-expired-token"); // pragma: allowlist secret
+    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
+
+    // Generate with a time far in the past so it's already expired
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      now: () => 1000,
+      tokenProviderFactory,
+    });
+
+    // The cache entry exists but expiresAt is 1000 + 3600000 = 3601000
+    // Current Date.now() is way past that, so it should be expired
+    expect(getCachedIamToken("us-east-1")).toBeUndefined();
   });
 
   // ---------------------------------------------------------------------------
@@ -142,29 +235,19 @@ describe("bedrock mantle discovery", () => {
 
     expect(models).toHaveLength(3);
     // Models should be sorted alphabetically by id
-    expect(models[0]).toMatchObject({
-      id: "anthropic.claude-sonnet-4-6",
-      name: "anthropic.claude-sonnet-4-6",
-      reasoning: false,
-      input: ["text"],
-    });
-    expect(models[1]).toMatchObject({
-      id: "mistral.devstral-2-123b",
-      reasoning: false,
-    });
-    expect(models[2]).toMatchObject({
-      id: "openai.gpt-oss-120b",
-      reasoning: true, // GPT-OSS 120B supports reasoning
-    });
+    expect(models[0]?.id).toBe("anthropic.claude-sonnet-4-6");
+    expect(models[0]?.name).toBe("anthropic.claude-sonnet-4-6");
+    expect(models[0]?.reasoning).toBe(false);
+    expect(models[0]?.input).toEqual(["text"]);
+    expect(models[1]?.id).toBe("mistral.devstral-2-123b");
+    expect(models[1]?.reasoning).toBe(false);
+    expect(models[2]?.id).toBe("openai.gpt-oss-120b");
+    expect(models[2]?.reasoning).toBe(true); // GPT-OSS 120B supports reasoning
 
     // Verify correct endpoint and auth header
-    expect(mockFetch).toHaveBeenCalledWith(
-      "https://bedrock-mantle.us-east-1.api.aws/v1/models",
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: "Bearer test-token",
-        }),
-      }),
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://bedrock-mantle.us-east-1.api.aws/v1/models");
+    expect(recordField(objectArgAt(mockFetch, 0, 1).headers, "headers").Authorization).toBe(
+      "Bearer test-token",
     );
   });
 
@@ -209,7 +292,7 @@ describe("bedrock mantle discovery", () => {
       fetchFn: mockFetch as unknown as typeof fetch,
     });
 
-    expect(models).toEqual([]);
+    expect(models).toStrictEqual([]);
   });
 
   it("returns empty array on network error", async () => {
@@ -221,7 +304,7 @@ describe("bedrock mantle discovery", () => {
       fetchFn: mockFetch as unknown as typeof fetch,
     });
 
-    expect(models).toEqual([]);
+    expect(models).toStrictEqual([]);
   });
 
   it("filters out models with empty IDs", async () => {
@@ -344,21 +427,25 @@ describe("bedrock mantle discovery", () => {
       fetchFn: mockFetch as unknown as typeof fetch,
     });
 
-    expect(provider).not.toBeNull();
     expect(provider?.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/v1");
     expect(provider?.api).toBe("openai-completions");
     expect(provider?.auth).toBe("api-key");
     expect(provider?.apiKey).toBe("env:AWS_BEARER_TOKEN_BEDROCK");
-    expect(provider?.models).toHaveLength(1);
+    expect(provider?.models).toHaveLength(2);
+    const opus = provider?.models?.find((model) => model.id === "anthropic.claude-opus-4-7");
+    expect(opus?.api).toBe("anthropic-messages");
+    expect(opus?.reasoning).toBe(false);
+    expect(opus).not.toHaveProperty("baseUrl");
   });
 
   it("returns null when no auth is available", async () => {
-    mocks.getTokenProvider.mockImplementation(() => {
+    const tokenProviderFactory = vi.fn(() => {
       throw new Error("no credentials");
     });
 
     const provider = await resolveImplicitMantleProvider({
       env: {} as NodeJS.ProcessEnv,
+      tokenProviderFactory,
     });
 
     expect(provider).toBeNull();
@@ -366,13 +453,13 @@ describe("bedrock mantle discovery", () => {
 
   it("uses a generated IAM token when no explicit token is set", async () => {
     const tokenProvider = vi.fn(async () => "bedrock-api-key-iam"); // pragma: allowlist secret
+    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
         data: [{ id: "openai.gpt-oss-120b", object: "model" }],
       }),
     });
-    mocks.getTokenProvider.mockReturnValue(tokenProvider);
 
     const provider = await resolveImplicitMantleProvider({
       env: {
@@ -380,19 +467,55 @@ describe("bedrock mantle discovery", () => {
         AWS_REGION: "us-east-1",
       } as NodeJS.ProcessEnv,
       fetchFn: mockFetch as unknown as typeof fetch,
+      tokenProviderFactory,
     });
 
-    expect(provider).not.toBeNull();
-    expect(provider?.apiKey).toBe("bedrock-api-key-iam");
+    expect(provider?.apiKey).toBe(MANTLE_IAM_TOKEN_MARKER);
     expect(tokenProvider).toHaveBeenCalledTimes(1);
-    expect(mockFetch).toHaveBeenCalledWith(
-      "https://bedrock-mantle.us-east-1.api.aws/v1/models",
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: "Bearer bedrock-api-key-iam",
-        }),
-      }),
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://bedrock-mantle.us-east-1.api.aws/v1/models");
+    expect(recordField(objectArgAt(mockFetch, 0, 1).headers, "headers").Authorization).toBe(
+      "Bearer bedrock-api-key-iam",
     );
+  });
+
+  it("resolves Mantle runtime auth from the cached IAM token marker", async () => {
+    const tokenProvider = vi.fn(async () => "bedrock-api-key-runtime"); // pragma: allowlist secret
+    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
+
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      now: () => 1000,
+      tokenProviderFactory,
+    });
+
+    const resolved = await resolveMantleRuntimeBearerToken({
+      apiKey: MANTLE_IAM_TOKEN_MARKER,
+      env: {
+        AWS_REGION: "us-east-1",
+      } as NodeJS.ProcessEnv,
+      now: () => 2000,
+      tokenProviderFactory,
+    });
+    expect(resolved?.apiKey).toBe("bedrock-api-key-runtime");
+    expect(resolved?.expiresAt).toBe(1000 + 7200_000);
+    expect(tokenProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it("generates a fresh Mantle runtime IAM token when the cache is cold", async () => {
+    const tokenProvider = vi.fn(async () => "bedrock-api-key-fresh"); // pragma: allowlist secret
+    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
+
+    const resolved = await resolveMantleRuntimeBearerToken({
+      apiKey: MANTLE_IAM_TOKEN_MARKER,
+      env: {
+        AWS_REGION: "us-east-1",
+      } as NodeJS.ProcessEnv,
+      now: () => 5000,
+      tokenProviderFactory,
+    });
+    expect(resolved?.apiKey).toBe("bedrock-api-key-fresh");
+    expect(resolved?.expiresAt).toBe(5000 + 7200_000);
+    expect(tokenProvider).toHaveBeenCalledTimes(1);
   });
 
   it("returns null for unsupported regions", async () => {
@@ -420,10 +543,8 @@ describe("bedrock mantle discovery", () => {
     });
 
     expect(provider?.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/v1");
-    expect(mockFetch).toHaveBeenCalledWith(
-      "https://bedrock-mantle.us-east-1.api.aws/v1/models",
-      expect.anything(),
-    );
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://bedrock-mantle.us-east-1.api.aws/v1/models");
+    expect(mockFetch.mock.calls[0]?.[1]).toBeDefined();
   });
 
   // ---------------------------------------------------------------------------

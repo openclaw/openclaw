@@ -1,14 +1,20 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicPayloadPolicyToParams,
   composeProviderStreamWrappers,
+  createAnthropicThinkingPrefillPayloadWrapper,
   resolveAnthropicPayloadPolicy,
+  stripTrailingAnthropicAssistantPrefillWhenThinking,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeFastMode,
+  normalizeLowercaseStringOrEmpty,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const log = createSubsystemLogger("anthropic-stream");
 
@@ -27,7 +33,7 @@ const PI_AI_OAUTH_ANTHROPIC_BETAS = [
 type AnthropicServiceTier = "auto" | "standard_only";
 
 function isAnthropic1MModel(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
@@ -46,7 +52,9 @@ function mergeAnthropicBetaHeader(
   betas: string[],
 ): Record<string, string> {
   const merged = { ...headers };
-  const existingKey = Object.keys(merged).find((key) => key.toLowerCase() === "anthropic-beta");
+  const existingKey = Object.keys(merged).find(
+    (key) => normalizeLowercaseStringOrEmpty(key) === "anthropic-beta",
+  );
   const existing = existingKey ? parseHeaderList(merged[existingKey]) : [];
   const values = Array.from(new Set([...existing, ...betas]));
   const key = existingKey ?? "anthropic-beta";
@@ -62,28 +70,11 @@ function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier
   return enabled ? "auto" : "standard_only";
 }
 
-function normalizeFastMode(raw?: string | boolean | null): boolean | undefined {
-  if (typeof raw === "boolean") {
-    return raw;
-  }
-  if (!raw) {
-    return undefined;
-  }
-  const key = raw.toLowerCase();
-  if (["off", "false", "no", "0", "disable", "disabled", "normal"].includes(key)) {
-    return false;
-  }
-  if (["on", "true", "yes", "1", "enable", "enabled", "fast"].includes(key)) {
-    return true;
-  }
-  return undefined;
-}
-
 function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceTier | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   if (normalized === "auto" || normalized === "standard_only") {
     return normalized;
   }
@@ -150,27 +141,7 @@ export function createAnthropicFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
   enabled: boolean,
 ): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  const serviceTier = resolveAnthropicFastServiceTier(enabled);
-  return (model, context, options) => {
-    if (isAnthropicOAuthApiKey(options?.apiKey)) {
-      return underlying(model, context, options);
-    }
-
-    const payloadPolicy = resolveAnthropicPayloadPolicy({
-      provider: readStringValue(model.provider),
-      api: readStringValue(model.api),
-      baseUrl: readStringValue(model.baseUrl),
-      serviceTier,
-    });
-    if (!payloadPolicy.allowsServiceTier) {
-      return underlying(model, context, options);
-    }
-
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) =>
-      applyAnthropicPayloadPolicyToParams(payloadObj, payloadPolicy),
-    );
-  };
+  return createAnthropicServiceTierWrapper(baseStreamFn, resolveAnthropicFastServiceTier(enabled));
 }
 
 export function createAnthropicServiceTierWrapper(
@@ -197,6 +168,16 @@ export function createAnthropicServiceTierWrapper(
       applyAnthropicPayloadPolicyToParams(payloadObj, payloadPolicy),
     );
   };
+}
+
+export function createAnthropicThinkingPrefillWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  return createAnthropicThinkingPrefillPayloadWrapper(baseStreamFn, (stripped) => {
+    log.warn(
+      `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because Anthropic extended thinking requires conversations to end with a user turn`,
+    );
+  });
 }
 
 export function resolveAnthropicFastMode(
@@ -236,7 +217,11 @@ export function wrapAnthropicProviderStream(
     fastMode !== undefined
       ? (streamFn) => createAnthropicFastModeWrapper(streamFn, fastMode)
       : undefined,
+    (streamFn) => createAnthropicThinkingPrefillWrapper(streamFn),
   );
 }
 
-export const __testing = { log };
+export const __testing = {
+  log,
+  stripTrailingAssistantPrefillWhenThinking: stripTrailingAnthropicAssistantPrefillWhenThinking,
+};

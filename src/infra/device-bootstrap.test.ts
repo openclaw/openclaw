@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetLogger, setLoggerOverride } from "../logging.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearDeviceBootstrapTokens,
@@ -40,6 +41,8 @@ async function verifyBootstrapToken(
 
 afterEach(async () => {
   vi.useRealTimers();
+  resetLogger();
+  setLoggerOverride(null);
   await tempDirs.cleanup();
 });
 
@@ -64,14 +67,12 @@ describe("device bootstrap tokens", () => {
         profile: { roles: string[]; scopes: string[] };
       }
     >;
-    expect(parsed[issued.token]).toMatchObject({
-      token: issued.token,
-      ts: Date.now(),
-      issuedAtMs: Date.now(),
-      profile: {
-        roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
-      },
+    expect(parsed[issued.token]?.token).toBe(issued.token);
+    expect(parsed[issued.token]?.ts).toBe(Date.now());
+    expect(parsed[issued.token]?.issuedAtMs).toBe(Date.now());
+    expect(parsed[issued.token]?.profile).toEqual({
+      roles: ["node", "operator"],
+      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
     });
   });
 
@@ -91,11 +92,9 @@ describe("device bootstrap tokens", () => {
         publicKey?: string;
       }
     >;
-    expect(parsed[issued.token]).toMatchObject({
-      token: issued.token,
-      deviceId: "device-123",
-      publicKey: "public-key-123",
-    });
+    expect(parsed[issued.token]?.token).toBe(issued.token);
+    expect(parsed[issued.token]?.deviceId).toBe("device-123");
+    expect(parsed[issued.token]?.publicKey).toBe("public-key-123");
   });
 
   it("loads the issued bootstrap profile for a valid token", async () => {
@@ -187,11 +186,8 @@ describe("device bootstrap tokens", () => {
     const first = await issueDeviceBootstrapToken({ baseDir });
     const second = await issueDeviceBootstrapToken({ baseDir });
 
-    await expect(
-      revokeDeviceBootstrapToken({ baseDir, token: first.token }),
-    ).resolves.toMatchObject({
-      removed: true,
-    });
+    const revoked = await revokeDeviceBootstrapToken({ baseDir, token: first.token });
+    expect(revoked.removed).toBe(true);
 
     await expect(verifyBootstrapToken(baseDir, first.token)).resolves.toEqual({
       ok: false,
@@ -238,11 +234,9 @@ describe("device bootstrap tokens", () => {
       string,
       { token: string; deviceId?: string; publicKey?: string }
     >;
-    expect(parsed["legacy-key"]).toMatchObject({
-      token: issued.token,
-      deviceId: "device-123",
-      publicKey: "public-key-123",
-    });
+    expect(parsed["legacy-key"]?.token).toBe(issued.token);
+    expect(parsed["legacy-key"]?.deviceId).toBe("device-123");
+    expect(parsed["legacy-key"]?.publicKey).toBe("public-key-123");
   });
 
   it("keeps the token when required verification fields are blank", async () => {
@@ -327,6 +321,95 @@ describe("device bootstrap tokens", () => {
         scopes: ["operator.read"],
       }),
     ).resolves.toEqual({ ok: true });
+  });
+
+  it("bounds explicitly issued bootstrap profiles to handoff scopes", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: {
+        roles: ["node", "operator"],
+        scopes: [
+          "node.exec",
+          "operator.admin",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+      },
+    });
+
+    await expect(getDeviceBootstrapTokenProfile({ baseDir, token: issued.token })).resolves.toEqual(
+      {
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      },
+    );
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.admin"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+  });
+
+  it("logs when issued bootstrap profiles strip overbroad scopes", async () => {
+    const baseDir = await createTempDir();
+    const logPath = path.join(baseDir, "bootstrap.log");
+    setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logPath });
+
+    await issueDeviceBootstrapToken({
+      baseDir,
+      profile: {
+        roles: ["node", "operator"],
+        scopes: ["node.exec", "operator.admin", "operator.read"],
+      },
+    });
+
+    const content = await fs.readFile(logPath, "utf8");
+    expect(content).toContain("bootstrap_token_scopes_stripped");
+    expect(content).toContain("node.exec");
+    expect(content).toContain("operator.admin");
+    expect(content).toContain("operator.read");
+  });
+
+  it("bounds redeemed bootstrap profiles to handoff scopes", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: {
+        roles: ["operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      },
+    });
+
+    await expect(
+      redeemDeviceBootstrapTokenProfile({
+        baseDir,
+        token: issued.token,
+        role: "operator",
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+      }),
+    ).resolves.toEqual({ recorded: true, fullyRedeemed: true });
+
+    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
+    const parsed = JSON.parse(raw) as Record<
+      string,
+      { redeemedProfile?: { roles?: string[]; scopes?: string[] } }
+    >;
+    expect(parsed[issued.token]?.redeemedProfile).toEqual({
+      roles: ["operator"],
+      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+    });
   });
 
   it("accepts trimmed bootstrap tokens and binds them", async () => {

@@ -1,4 +1,5 @@
-import type { User } from "@buape/carbon";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { User } from "../internal/discord.js";
 import type { PluralKitMessageInfo } from "../pluralkit.js";
 import { formatDiscordUserTag } from "./format.js";
 
@@ -48,13 +49,13 @@ export function resolveDiscordSenderIdentity(params: {
     return {
       id: memberId,
       name: memberName,
-      tag: pkMember?.name?.trim() || undefined,
+      tag: normalizeOptionalString(pkMember?.name),
       label,
       isPluralKit: true,
       pluralkit: {
         memberId,
         memberName,
-        systemId: pkSystem?.id?.trim() || undefined,
+        systemId: normalizeOptionalString(pkSystem?.id),
         systemName,
       },
     };
@@ -77,12 +78,4 @@ export function resolveDiscordSenderIdentity(params: {
     label: senderLabel,
     isPluralKit: false,
   };
-}
-
-export function resolveDiscordSenderLabel(params: {
-  author: User;
-  member?: DiscordMemberLike | null;
-  pluralkitInfo?: PluralKitMessageInfo | null;
-}): string {
-  return resolveDiscordSenderIdentity(params).label;
 }

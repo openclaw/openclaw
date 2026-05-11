@@ -6,6 +6,7 @@ import {
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -22,7 +23,7 @@ export type PrivateNetworkOptInInput =
   | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
   | {
       dangerouslyAllowPrivateNetwork?: boolean | null;
-      /** Compatibility alias for legacy callers; prefer dangerouslyAllowPrivateNetwork. */
+      /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
       allowPrivateNetwork?: boolean | null;
       network?:
         | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
@@ -57,6 +58,40 @@ export function ssrfPolicyFromDangerouslyAllowPrivateNetwork(
   dangerouslyAllowPrivateNetwork: boolean | null | undefined,
 ): SsrFPolicy | undefined {
   return ssrfPolicyFromPrivateNetworkOptIn(dangerouslyAllowPrivateNetwork);
+}
+
+export function mergeSsrFPolicies(
+  ...policies: Array<SsrFPolicy | undefined>
+): SsrFPolicy | undefined {
+  const merged: SsrFPolicy = {};
+  for (const policy of policies) {
+    if (!policy) {
+      continue;
+    }
+    if (policy.allowPrivateNetwork) {
+      merged.allowPrivateNetwork = true;
+    }
+    if (policy.dangerouslyAllowPrivateNetwork) {
+      merged.dangerouslyAllowPrivateNetwork = true;
+    }
+    if (policy.allowRfc2544BenchmarkRange) {
+      merged.allowRfc2544BenchmarkRange = true;
+    }
+    if (policy.allowIpv6UniqueLocalRange) {
+      merged.allowIpv6UniqueLocalRange = true;
+    }
+    if (policy.allowedHostnames?.length) {
+      merged.allowedHostnames = Array.from(
+        new Set([...(merged.allowedHostnames ?? []), ...policy.allowedHostnames]),
+      );
+    }
+    if (policy.hostnameAllowlist?.length) {
+      merged.hostnameAllowlist = Array.from(
+        new Set([...(merged.hostnameAllowlist ?? []), ...policy.hostnameAllowlist]),
+      );
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 export function hasLegacyFlatAllowPrivateNetworkAlias(value: unknown): boolean {
@@ -251,7 +286,7 @@ export async function assertHttpUrlTargetsPrivateNetwork(
 }
 
 function normalizeHostnameSuffix(value: string): string {
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(value);
   if (!trimmed) {
     return "";
   }
@@ -270,7 +305,7 @@ function isHostnameAllowedBySuffixAllowlist(
   if (allowlist.includes("*")) {
     return true;
   }
-  const normalized = hostname.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(hostname);
   return allowlist.some((entry) => normalized === entry || normalized.endsWith(`.${entry}`));
 }
 

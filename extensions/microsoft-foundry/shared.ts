@@ -1,3 +1,4 @@
+import type { AuthConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
@@ -5,6 +6,10 @@ import {
   type SecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelApi, ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const PROVIDER_ID = "microsoft-foundry";
 export const DEFAULT_API = "openai-completions";
@@ -69,13 +74,13 @@ export type CachedTokenEntry = {
 
 export type FoundryProviderApi = typeof DEFAULT_API | typeof DEFAULT_GPT5_API;
 
-export type FoundryDeploymentConfigInput = {
+type FoundryDeploymentConfigInput = {
   name: string;
   modelName?: string;
   api?: FoundryProviderApi;
 };
 
-export type FoundryModelCapabilities = {
+type FoundryModelCapabilities = {
   modelName: string;
   api: FoundryProviderApi;
   input: Array<"text" | "image">;
@@ -94,24 +99,15 @@ type FoundryModelCompat = {
   maxTokensField: "max_completion_tokens" | "max_tokens";
 };
 
-type FoundryAuthProfileConfig = {
-  provider: string;
-  mode: "api_key" | "oauth" | "token";
-  email?: string;
-};
-
 type FoundryConfigShape = {
-  auth?: {
-    profiles?: Record<string, FoundryAuthProfileConfig>;
-    order?: Record<string, string[]>;
-  };
+  auth?: AuthConfig;
   models?: {
     providers?: Record<string, ModelProviderConfig>;
   };
 };
 
-export function normalizeFoundryModelName(value?: string | null): string | undefined {
-  const trimmed = typeof value === "string" ? value.trim().toLowerCase() : "";
+function normalizeFoundryModelName(value?: string | null): string | undefined {
+  const trimmed = normalizeLowercaseStringOrEmpty(value);
   return trimmed || undefined;
 }
 
@@ -161,7 +157,7 @@ export function isFoundryProviderApi(value?: string | null): value is FoundryPro
 }
 
 export function normalizeFoundryEndpoint(endpoint: string): string {
-  const trimmed = endpoint.trim();
+  const trimmed = normalizeOptionalString(endpoint) ?? "";
   if (!trimmed) {
     return trimmed;
   }
@@ -177,7 +173,7 @@ export function normalizeFoundryEndpoint(endpoint: string): string {
   }
 }
 
-export function buildFoundryV1BaseUrl(endpoint: string): string {
+function buildFoundryV1BaseUrl(endpoint: string): string {
   const base = normalizeFoundryEndpoint(endpoint);
   return base.endsWith("/openai/v1") ? base : `${base}/openai/v1`;
 }
@@ -214,7 +210,7 @@ export function extractFoundryEndpoint(baseUrl: string | null | undefined): stri
   }
 }
 
-export function buildFoundryModelCompat(
+function buildFoundryModelCompat(
   modelId: string,
   modelNameHint?: string | null,
   configuredApi?: ModelApi | null,
@@ -255,15 +251,15 @@ export function resolveConfiguredModelNameHint(
   modelId: string,
   modelNameHint?: string | null,
 ): string | undefined {
-  const trimmedName = typeof modelNameHint === "string" ? modelNameHint.trim() : "";
+  const trimmedName = normalizeOptionalString(modelNameHint) ?? "";
   if (trimmedName) {
     return trimmedName;
   }
-  const trimmedId = modelId.trim();
+  const trimmedId = normalizeOptionalString(modelId) ?? "";
   return trimmedId ? trimmedId : undefined;
 }
 
-export function buildFoundryProviderConfig(
+function buildFoundryProviderConfig(
   endpoint: string,
   modelId: string,
   modelNameHint?: string | null,
@@ -297,17 +293,19 @@ export function buildFoundryProviderConfig(
         deployment.modelName,
         deployment.api,
       );
-      return {
-        id: deployment.name,
-        name: capabilities.modelName,
-        api: capabilities.api,
-        reasoning: false,
-        input: capabilities.input,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-        ...(capabilities.compat ? { compat: capabilities.compat } : {}),
-      };
+      return Object.assign(
+        {
+          id: deployment.name,
+          name: capabilities.modelName,
+          api: capabilities.api,
+          reasoning: false,
+          input: capabilities.input,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128e3,
+          maxTokens: 16384,
+        },
+        capabilities.compat ? { compat: capabilities.compat } : {},
+      );
     }),
   };
 }
@@ -481,7 +479,7 @@ export function resolveFoundryTargetProfileId(config: FoundryConfigShape): strin
   }
   // Prefer the explicitly ordered profile; fall back to the sole entry when there is exactly one.
   return (
-    config.auth?.order?.[PROVIDER_ID]?.find((profileId) => profileId.trim().length > 0) ??
+    config.auth?.order?.[PROVIDER_ID]?.find((profileId) => normalizeOptionalString(profileId)) ??
     (configuredProfileEntries.length === 1 ? configuredProfileEntries[0]?.[0] : undefined)
   );
 }

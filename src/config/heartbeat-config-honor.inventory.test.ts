@@ -12,8 +12,10 @@ const EXPECTED_HEARTBEAT_KEYS = [
   "every",
   "model",
   "prompt",
+  "includeSystemPromptSection",
   "ackMaxChars",
   "suppressToolErrorWarnings",
+  "timeoutSeconds",
   "lightContext",
   "isolatedSession",
   "target",
@@ -38,10 +40,10 @@ describe("heartbeat config-honor inventory", () => {
       rows: HEARTBEAT_CONFIG_HONOR_INVENTORY,
     });
 
-    expect(audit.missingKeys).toEqual([]);
-    expect(audit.extraKeys).toEqual([]);
-    expect(audit.missingSchemaPaths).toEqual([]);
-    expect(audit.missingFiles).toEqual([]);
-    expect(audit.missingProofs).toEqual([]);
+    expect(audit.missingKeys).toStrictEqual([]);
+    expect(audit.extraKeys).toStrictEqual([]);
+    expect(audit.missingSchemaPaths).toStrictEqual([]);
+    expect(audit.missingFiles).toStrictEqual([]);
+    expect(audit.missingProofs).toStrictEqual([]);
   });
 });

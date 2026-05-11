@@ -1,5 +1,10 @@
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  listActiveProcessSessionReferences,
+  type ActiveProcessSessionReference,
+} from "../bash-process-references.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import type { SkillSnapshot } from "../skills.js";
 
@@ -20,11 +25,14 @@ export type EmbeddedCompactionRuntimeContext = {
   senderId?: string;
   provider?: string;
   model?: string;
+  modelFallbacksOverride?: string[];
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
   extraSystemPrompt?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
+  activeProcessSessions?: ActiveProcessSessionReference[];
 };
 
 /**
@@ -85,11 +93,14 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   senderId?: string | null;
   provider?: string | null;
   modelId?: string | null;
+  modelFallbacksOverride?: string[];
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
   extraSystemPrompt?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
+  activeProcessSessions?: ActiveProcessSessionReference[];
 }): EmbeddedCompactionRuntimeContext {
   const resolved = resolveEmbeddedCompactionTarget({
     config: params.config,
@@ -97,6 +108,12 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     modelId: params.modelId,
     authProfileId: params.authProfileId,
   });
+  const processScopeKey = params.sessionKey?.trim();
+  const activeProcessSessions =
+    params.activeProcessSessions ??
+    listActiveProcessSessionReferences({
+      scopeKey: processScopeKey,
+    });
   return {
     sessionKey: params.sessionKey ?? undefined,
     messageChannel: params.messageChannel ?? undefined,
@@ -114,10 +131,13 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     senderId: params.senderId ?? undefined,
     provider: resolved.provider,
     model: resolved.model,
+    modelFallbacksOverride: params.modelFallbacksOverride,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
     bashElevated: params.bashElevated,
     extraSystemPrompt: params.extraSystemPrompt,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     ownerNumbers: params.ownerNumbers,
+    ...(activeProcessSessions.length > 0 ? { activeProcessSessions } : {}),
   };
 }

@@ -1,6 +1,9 @@
 import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import type {
   CompiledConfiguredBinding,
   ConfiguredBindingChannel,
@@ -36,7 +39,7 @@ function matchCompiledBindingConversation(params: {
 }
 
 export function resolveCompiledBindingChannel(raw: string): ConfiguredBindingChannel | null {
-  const normalized = raw.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(raw);
   return normalized ? (normalized as ConfiguredBindingChannel) : null;
 }
 

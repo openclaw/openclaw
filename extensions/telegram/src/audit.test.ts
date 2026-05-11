@@ -6,10 +6,20 @@ const fetchWithTimeoutMock = vi.hoisted(() => vi.fn());
 const resolveTelegramFetchMock = vi.hoisted(() => vi.fn(() => fetchWithTimeoutMock));
 const resolveTelegramApiBaseMock = vi.hoisted(() => vi.fn(() => "https://api.telegram.org"));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/text-utility-runtime", () => ({
   fetchWithTimeout: fetchWithTimeoutMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
   isRecord: (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null,
+  normalizeOptionalString: (value: unknown) => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  },
 }));
 
 function mockGetChatMemberStatus(status: string) {
@@ -46,7 +56,7 @@ describe("telegram audit", () => {
     resolveTelegramApiBaseMock.mockClear();
   });
 
-  it("collects unmentioned numeric group ids and flags wildcard", async () => {
+  it("collects unmentioned numeric group ids and flags wildcard", () => {
     const res = collectTelegramUnmentionedGroupIds({
       "*": { requireMention: false },
       "-1001": { requireMention: false },

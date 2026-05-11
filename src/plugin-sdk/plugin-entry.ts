@@ -1,13 +1,25 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type {
   AnyAgentTool,
+  AgentHarness,
   MediaUnderstandingProviderPlugin,
+  MigrationApplyResult,
+  MigrationDetection,
+  MigrationItem,
+  MigrationPlan,
+  MigrationProviderContext,
+  MigrationProviderPlugin,
+  MigrationSummary,
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
+  OpenClawPluginHttpRouteHandler,
   OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeInvokePolicy,
+  OpenClawPluginNodeInvokePolicyContext,
+  OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginSecurityAuditContext,
@@ -61,28 +73,104 @@ import type {
   ProviderTransportTurnState,
   ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,
-  ProviderRuntimeModel,
+  ProviderThinkingProfile,
   ProviderThinkingPolicyContext,
   ProviderValidateReplayTurnsContext,
   ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
+  UnifiedModelCatalogProviderContext,
+  UnifiedModelCatalogProviderPlugin,
+  OpenClawGatewayDiscoveryAdvertiseContext,
+  OpenClawGatewayDiscoveryService,
   SpeechProviderPlugin,
   PluginCommandContext,
+  PluginCommandResult,
+  PluginAgentEventEmitParams,
+  PluginAgentEventEmitResult,
+  PluginAgentEventSubscriptionRegistration,
+  PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult,
+  PluginControlUiDescriptor,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
+  PluginJsonValue,
+  PluginNextTurnInjection,
+  PluginNextTurnInjectionEnqueueResult,
+  PluginNextTurnInjectionRecord,
+  PluginRunContextGetParams,
+  PluginRunContextPatch,
+  PluginRuntimeLifecycleRegistration,
+  PluginSessionActionContext,
+  PluginSessionActionRegistration,
+  PluginSessionActionResult,
+  PluginSessionAttachmentParams,
+  PluginSessionAttachmentResult,
+  PluginSessionSchedulerJobHandle,
+  PluginSessionSchedulerJobRegistration,
+  PluginSessionTurnScheduleParams,
+  PluginSessionTurnUnscheduleByTagParams,
+  PluginSessionTurnUnscheduleByTagResult,
+  PluginSessionExtensionRegistration,
+  PluginSessionExtensionProjection,
+  PluginToolMetadataRegistration,
+  PluginTrustedToolPolicyRegistration,
 } from "../plugins/types.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
 
 export type {
   AnyAgentTool,
+  AgentHarness,
   MediaUnderstandingProviderPlugin,
+  MigrationApplyResult,
+  MigrationDetection,
+  MigrationItem,
+  MigrationPlan,
+  MigrationProviderContext,
+  MigrationProviderPlugin,
+  MigrationSummary,
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeInvokePolicy,
+  OpenClawPluginNodeInvokePolicyContext,
+  OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginSecurityAuditContext,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   PluginCommandContext,
+  PluginCommandResult,
+  PluginAgentEventEmitParams,
+  PluginAgentEventEmitResult,
+  PluginAgentEventSubscriptionRegistration,
+  PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult,
+  PluginControlUiDescriptor,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
+  PluginJsonValue,
+  PluginNextTurnInjection,
+  PluginNextTurnInjectionEnqueueResult,
+  PluginNextTurnInjectionRecord,
+  PluginRunContextGetParams,
+  PluginRunContextPatch,
+  PluginRuntimeLifecycleRegistration,
+  PluginSessionActionContext,
+  PluginSessionActionRegistration,
+  PluginSessionActionResult,
+  PluginSessionSchedulerJobHandle,
+  PluginSessionSchedulerJobRegistration,
+  PluginSessionAttachmentParams,
+  PluginSessionAttachmentResult,
+  PluginSessionTurnScheduleParams,
+  PluginSessionTurnUnscheduleByTagParams,
+  PluginSessionTurnUnscheduleByTagResult,
+  PluginSessionExtensionRegistration,
+  PluginSessionExtensionProjection,
+  PluginToolMetadataRegistration,
+  PluginTrustedToolPolicyRegistration,
   OpenClawPluginConfigSchema,
+  OpenClawPluginHttpRouteHandler,
   ProviderDiscoveryContext,
   ProviderCatalogContext,
   ProviderCatalogResult,
@@ -117,11 +205,11 @@ export type {
   ProviderPrepareRuntimeAuthContext,
   ProviderSanitizeReplayHistoryContext,
   ProviderResolveUsageAuthContext,
+  ProviderThinkingProfile,
   ProviderResolveDynamicModelContext,
   ProviderResolveTransportTurnStateContext,
   ProviderResolveWebSocketSessionPolicyContext,
   ProviderNormalizeResolvedModelContext,
-  ProviderRuntimeModel,
   RealtimeTranscriptionProviderPlugin,
   ProviderTransportTurnState,
   SpeechProviderPlugin,
@@ -129,6 +217,10 @@ export type {
   ProviderValidateReplayTurnsContext,
   ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
+  UnifiedModelCatalogProviderContext,
+  UnifiedModelCatalogProviderPlugin,
+  OpenClawGatewayDiscoveryAdvertiseContext,
+  OpenClawGatewayDiscoveryService,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   ProviderAuthContext,
@@ -140,15 +232,41 @@ export type {
   OpenClawPluginDefinition,
   PluginLogger,
 };
+export type {
+  PluginConversationBinding,
+  PluginConversationBindingResolvedEvent,
+  PluginConversationBindingRequestParams,
+  PluginConversationBindingRequestResult,
+} from "../plugins/conversation-binding.types.js";
+export type {
+  PluginHookInboundClaimContext,
+  PluginHookInboundClaimEvent,
+  PluginHookInboundClaimResult,
+} from "../plugins/hook-types.js";
+export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+export type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogKind,
+  UnifiedModelCatalogSource,
+} from "../model-catalog/types.js";
 export type { OpenClawConfig };
 
-export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export {
+  buildJsonPluginConfigSchema,
+  buildPluginConfigSchema,
+  emptyPluginConfigSchema,
+} from "../plugins/config-schema.js";
 
 /** Options for a plugin entry that registers providers, tools, commands, or services. */
 type DefinePluginEntryOptions = {
   id: string;
   name: string;
   description: string;
+  /**
+   * @deprecated Declare exclusive plugin kind in `openclaw.plugin.json` via
+   * manifest `kind`. Runtime-entry `kind` remains only as a compatibility
+   * fallback for older plugins.
+   */
   kind?: OpenClawPluginDefinition["kind"];
   configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
   reload?: OpenClawPluginDefinition["reload"];

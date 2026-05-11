@@ -1,17 +1,15 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import {
-  buildCapabilityProviderMaps,
-  normalizeCapabilityProviderId,
-} from "../plugins/provider-registry-shared.js";
+  resolvePluginCapabilityProvider,
+  resolvePluginCapabilityProviders,
+} from "../plugins/capability-provider-runtime.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import type { SpeechProviderId } from "./provider-types.js";
-
-export function normalizeSpeechProviderId(
-  providerId: string | undefined,
-): SpeechProviderId | undefined {
-  return normalizeCapabilityProviderId(providerId);
-}
+export { normalizeSpeechProviderId } from "./provider-registry-core.js";
+import {
+  createSpeechProviderRegistry,
+  type SpeechProviderRegistryResolver,
+} from "./provider-registry-core.js";
 
 function resolveSpeechProviderPluginEntries(cfg?: OpenClawConfig): SpeechProviderPlugin[] {
   return resolvePluginCapabilityProviders({
@@ -20,35 +18,37 @@ function resolveSpeechProviderPluginEntries(cfg?: OpenClawConfig): SpeechProvide
   });
 }
 
-function buildProviderMaps(cfg?: OpenClawConfig): {
-  canonical: Map<string, SpeechProviderPlugin>;
-  aliases: Map<string, SpeechProviderPlugin>;
-} {
-  return buildCapabilityProviderMaps(resolveSpeechProviderPluginEntries(cfg));
+function resolveLoadedSpeechProviderPluginEntries(): SpeechProviderPlugin[] {
+  return (getActiveRuntimePluginRegistry()?.speechProviders ?? []).map((entry) => entry.provider);
 }
 
-export function listSpeechProviders(cfg?: OpenClawConfig): SpeechProviderPlugin[] {
-  return [...buildProviderMaps(cfg).canonical.values()];
-}
+const defaultSpeechProviderRegistryResolver: SpeechProviderRegistryResolver = {
+  getProvider: (providerId, cfg) =>
+    resolvePluginCapabilityProvider({
+      key: "speechProviders",
+      providerId,
+      cfg,
+    }),
+  listProviders: resolveSpeechProviderPluginEntries,
+};
 
-export function getSpeechProvider(
-  providerId: string | undefined,
-  cfg?: OpenClawConfig,
-): SpeechProviderPlugin | undefined {
-  const normalized = normalizeSpeechProviderId(providerId);
-  if (!normalized) {
-    return undefined;
-  }
-  return buildProviderMaps(cfg).aliases.get(normalized);
-}
+const defaultSpeechProviderRegistry = createSpeechProviderRegistry(
+  defaultSpeechProviderRegistryResolver,
+);
 
-export function canonicalizeSpeechProviderId(
-  providerId: string | undefined,
-  cfg?: OpenClawConfig,
-): SpeechProviderId | undefined {
-  const normalized = normalizeSpeechProviderId(providerId);
-  if (!normalized) {
-    return undefined;
-  }
-  return getSpeechProvider(normalized, cfg)?.id ?? normalized;
-}
+const loadedSpeechProviderRegistry = createSpeechProviderRegistry({
+  getProvider: (providerId) =>
+    resolveLoadedSpeechProviderPluginEntries().find((provider) => {
+      if (provider.id === providerId) {
+        return true;
+      }
+      return provider.aliases?.includes(providerId) ?? false;
+    }),
+  listProviders: () => resolveLoadedSpeechProviderPluginEntries(),
+});
+
+export const listSpeechProviders = defaultSpeechProviderRegistry.listSpeechProviders;
+export const listLoadedSpeechProviders = loadedSpeechProviderRegistry.listSpeechProviders;
+export const getSpeechProvider = defaultSpeechProviderRegistry.getSpeechProvider;
+export const canonicalizeSpeechProviderId =
+  defaultSpeechProviderRegistry.canonicalizeSpeechProviderId;

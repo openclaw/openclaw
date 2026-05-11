@@ -1,5 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export function buildGithubCopilotReplayPolicy(modelId?: string) {
-  return (modelId?.toLowerCase() ?? "").includes("claude")
+  return normalizeLowercaseStringOrEmpty(modelId).includes("claude")
     ? {
         dropThinkingBlocks: true,
       }

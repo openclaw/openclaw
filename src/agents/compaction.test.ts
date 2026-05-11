@@ -1,12 +1,18 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, ToolResultMessage } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
-import {
-  estimateMessagesTokens,
-  pruneHistoryForContextShare,
-  splitMessagesByTokenShare,
-} from "./compaction.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import "./test-helpers/pi-coding-agent-token-mock.js";
+
+let estimateMessagesTokens: typeof import("./compaction.js").estimateMessagesTokens;
+let pruneHistoryForContextShare: typeof import("./compaction.js").pruneHistoryForContextShare;
+let splitMessagesByTokenShare: typeof import("./compaction.js").splitMessagesByTokenShare;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ estimateMessagesTokens, pruneHistoryForContextShare, splitMessagesByTokenShare } =
+    await import("./compaction.js"));
+});
 
 function makeMessage(id: number, size: number): AgentMessage {
   return {
@@ -18,6 +24,10 @@ function makeMessage(id: number, size: number): AgentMessage {
 
 function makeMessages(count: number, size: number): AgentMessage[] {
   return Array.from({ length: count }, (_, index) => makeMessage(index + 1, size));
+}
+
+function compareTimestampIds(left: AgentMessage["timestamp"], right: AgentMessage["timestamp"]) {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function makeAssistantToolCall(
@@ -60,6 +70,20 @@ function pruneLargeSimpleHistory() {
   return { messages, pruned, maxContextTokens };
 }
 
+function requireChunkContainingTimestamp(
+  parts: AgentMessage[][],
+  role: AgentMessage["role"],
+  timestamp: number,
+): AgentMessage[] {
+  const chunk = parts.find((candidate) =>
+    candidate.some((message) => message.role === role && message.timestamp === timestamp),
+  );
+  if (!chunk) {
+    throw new Error(`expected ${role} message with timestamp ${timestamp} in a chunk`);
+  }
+  return chunk;
+}
+
 describe("splitMessagesByTokenShare", () => {
   it("splits messages into two non-empty parts", () => {
     const messages = makeMessages(4, 4000);
@@ -88,14 +112,8 @@ describe("splitMessagesByTokenShare", () => {
 
     const parts = splitMessagesByTokenShare(messages, 2);
 
-    const chunkWithToolUse = parts.find((chunk) =>
-      chunk.some((m) => m.role === "assistant" && m.timestamp === 2),
-    );
-    const chunkWithToolResult = parts.find((chunk) =>
-      chunk.some((m) => m.role === "toolResult" && m.timestamp === 3),
-    );
-    expect(chunkWithToolUse).toBeDefined();
-    expect(chunkWithToolResult).toBeDefined();
+    const chunkWithToolUse = requireChunkContainingTimestamp(parts, "assistant", 2);
+    const chunkWithToolResult = requireChunkContainingTimestamp(parts, "toolResult", 3);
     expect(chunkWithToolUse).toBe(chunkWithToolResult);
     expect(parts.flat().length).toBe(messages.length);
   });
@@ -144,14 +162,9 @@ describe("splitMessagesByTokenShare", () => {
 
     const parts = splitMessagesByTokenShare(messages, 2);
 
-    const chunkWithToolUse = parts.find((chunk) =>
-      chunk.some((m) => m.role === "assistant" && m.timestamp === 2),
-    );
-    const chunkWithToolResult = parts.find((chunk) =>
-      chunk.some((m) => m.role === "toolResult" && m.timestamp === 4),
-    );
+    const chunkWithToolUse = requireChunkContainingTimestamp(parts, "assistant", 2);
+    const chunkWithToolResult = requireChunkContainingTimestamp(parts, "toolResult", 4);
 
-    expect(chunkWithToolUse).toBeDefined();
     expect(chunkWithToolUse).toBe(chunkWithToolResult);
   });
 
@@ -251,7 +264,7 @@ describe("pruneHistoryForContextShare", () => {
     expect(pruned.droppedChunks).toBe(0);
     expect(pruned.messages.length).toBe(messages.length);
     expect(pruned.keptTokens).toBe(estimateMessagesTokens(messages));
-    expect(pruned.droppedMessagesList).toEqual([]);
+    expect(pruned.droppedMessagesList).toStrictEqual([]);
   });
 
   it("returns droppedMessagesList containing dropped messages", () => {
@@ -263,8 +276,8 @@ describe("pruneHistoryForContextShare", () => {
     const allIds = [
       ...pruned.droppedMessagesList.map((m) => m.timestamp),
       ...pruned.messages.map((m) => m.timestamp),
-    ].toSorted((a, b) => a - b);
-    const originalIds = messages.map((m) => m.timestamp).toSorted((a, b) => a - b);
+    ].toSorted(compareTimestampIds);
+    const originalIds = messages.map((m) => m.timestamp).toSorted(compareTimestampIds);
     expect(allIds).toEqual(originalIds);
   });
 
@@ -278,7 +291,7 @@ describe("pruneHistoryForContextShare", () => {
     });
 
     expect(pruned.droppedChunks).toBe(0);
-    expect(pruned.droppedMessagesList).toEqual([]);
+    expect(pruned.droppedMessagesList).toStrictEqual([]);
     expect(pruned.messages.length).toBe(1);
   });
 

@@ -1,5 +1,5 @@
 import os from "node:os";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
   __resetContainerCacheForTest,
@@ -17,6 +17,40 @@ import {
   resolveGatewayListenHosts,
   resolveHostName,
 } from "./net.js";
+
+const flyMachineEnvKeys = ["FLY_MACHINE_ID", "FLY_APP_NAME"] as const;
+
+function clearFlyMachineEnvForTest(): () => void {
+  const previousEnv = new Map<(typeof flyMachineEnvKeys)[number], string | undefined>();
+  for (const key of flyMachineEnvKeys) {
+    previousEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+
+  return () => {
+    for (const key of flyMachineEnvKeys) {
+      const value = previousEnv.get(key);
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  };
+}
+
+function useClearedFlyMachineEnv() {
+  let restoreFlyMachineEnv: (() => void) | undefined;
+
+  beforeEach(() => {
+    restoreFlyMachineEnv = clearFlyMachineEnvForTest();
+  });
+
+  afterEach(() => {
+    restoreFlyMachineEnv?.();
+    restoreFlyMachineEnv = undefined;
+  });
+}
 
 describe("resolveHostName", () => {
   it.each([
@@ -290,6 +324,10 @@ describe("resolveClientIp", () => {
 });
 
 describe("resolveGatewayListenHosts", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it.each([
     {
       name: "non-loopback host passthrough",
@@ -312,10 +350,27 @@ describe("resolveGatewayListenHosts", () => {
       expected: ["127.0.0.1"],
     },
   ] as const)("resolves listen hosts: $name", async ({ host, canBindToHost, expected }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const hosts = await resolveGatewayListenHosts(host, {
       canBindToHost,
     });
     expect(hosts).toEqual(expected);
+  });
+
+  it("skips ::1 on Windows even when IPv6 is bindable", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const canBindToHost = vi.fn().mockResolvedValue(true);
+    const hosts = await resolveGatewayListenHosts("127.0.0.1", { canBindToHost });
+    expect(hosts).toEqual(["127.0.0.1"]);
+    expect(canBindToHost).not.toHaveBeenCalled();
+  });
+
+  it("still includes ::1 on non-Windows when IPv6 is bindable", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const canBindToHost = vi.fn().mockResolvedValue(true);
+    const hosts = await resolveGatewayListenHosts("127.0.0.1", { canBindToHost });
+    expect(hosts).toEqual(["127.0.0.1", "::1"]);
+    expect(canBindToHost).toHaveBeenCalledWith("::1");
   });
 });
 
@@ -396,7 +451,7 @@ describe("isPrivateOrLoopbackAddress", () => {
     }
   });
 
-  it("rejects public addresses", () => {
+  it("rejects public IP addresses", () => {
     const rejected = ["1.1.1.1", "8.8.8.8", "172.32.0.1", "203.0.113.10", "2001:4860:4860::8888"];
     for (const ip of rejected) {
       expect(isPrivateOrLoopbackAddress(ip)).toBe(false);
@@ -449,7 +504,7 @@ describe("isPrivateOrLoopbackHost", () => {
     expect(isPrivateOrLoopbackHost("[ff0e::1]")).toBe(false);
   });
 
-  it("rejects public addresses", () => {
+  it("rejects public host addresses", () => {
     expect(isPrivateOrLoopbackHost("1.1.1.1")).toBe(false);
     expect(isPrivateOrLoopbackHost("8.8.8.8")).toBe(false);
     expect(isPrivateOrLoopbackHost("203.0.113.10")).toBe(false);
@@ -461,6 +516,8 @@ describe("isPrivateOrLoopbackHost", () => {
 });
 
 describe("isContainerEnvironment", () => {
+  useClearedFlyMachineEnv();
+
   afterEach(() => {
     __resetContainerCacheForTest();
     vi.restoreAllMocks();
@@ -491,6 +548,18 @@ describe("isContainerEnvironment", () => {
       }
       throw new Error("ENOENT");
     });
+    expect(isContainerEnvironment()).toBe(true);
+  });
+
+  it("returns true on Fly Machines without Docker sentinel files", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
+
+    process.env.FLY_MACHINE_ID = "3d8d5459a03038";
+    process.env.FLY_APP_NAME = "openclaw-test";
     expect(isContainerEnvironment()).toBe(true);
   });
 
@@ -565,6 +634,8 @@ describe("isContainerEnvironment", () => {
 });
 
 describe("resolveGatewayBindHost", () => {
+  useClearedFlyMachineEnv();
+
   afterEach(() => {
     __resetContainerCacheForTest();
     vi.restoreAllMocks();
@@ -604,6 +675,8 @@ describe("resolveGatewayBindHost", () => {
 });
 
 describe("defaultGatewayBindMode", () => {
+  useClearedFlyMachineEnv();
+
   afterEach(() => {
     __resetContainerCacheForTest();
     vi.restoreAllMocks();

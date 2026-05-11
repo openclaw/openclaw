@@ -1,3 +1,4 @@
+import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
@@ -5,6 +6,13 @@ import { normalizeProviderId } from "../agents/provider-id.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
+import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
 
 function resolveStatusModelRefFromRaw(params: {
   cfg: OpenClawConfig;
@@ -17,11 +25,11 @@ function resolveStatusModelRefFromRaw(params: {
   }
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
   if (!trimmed.includes("/")) {
-    const aliasKey = trimmed.toLowerCase();
+    const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
     for (const [modelKey, entry] of Object.entries(configuredModels)) {
       const aliasValue = (entry as { alias?: unknown } | undefined)?.alias;
-      const alias = typeof aliasValue === "string" ? aliasValue.trim() : "";
-      if (!alias || alias.toLowerCase() !== aliasKey) {
+      const alias = normalizeOptionalString(aliasValue) ?? "";
+      if (!alias || normalizeOptionalLowercaseString(alias) !== aliasKey) {
         continue;
       }
       const parsed = parseModelRef(modelKey, params.defaultProvider, {
@@ -124,6 +132,9 @@ function classifySessionKey(key: string, entry?: SessionEntry) {
   if (key === "unknown") {
     return "unknown";
   }
+  if (isCronSessionKey(key)) {
+    return "cron";
+  }
   if (entry?.chatType === "group" || entry?.chatType === "channel") {
     return "group";
   }
@@ -153,8 +164,34 @@ function resolveSessionModelRef(
       runtimeModel: entry?.model,
       overrideProvider: entry?.providerOverride,
       overrideModel: entry?.modelOverride,
+      allowPluginNormalization: false,
     }) ?? resolved
   );
+}
+
+function resolveSessionRuntimeLabel(params: {
+  cfg: OpenClawConfig;
+  entry?: SessionEntry;
+  provider: string;
+  model: string;
+  agentId?: string;
+  sessionKey: string;
+}): string {
+  const runtime = resolveModelAgentRuntimeMetadata({
+    cfg: params.cfg,
+    agentId: params.agentId ?? "",
+    provider: params.provider,
+    model: params.model,
+    sessionKey: params.sessionKey,
+  });
+  const id = normalizeOptionalLowercaseString(runtime.id);
+  const resolvedHarness = id && id !== "pi" && id !== "auto" ? id : undefined;
+  return resolveAgentRuntimeLabel({
+    config: params.cfg,
+    sessionEntry: params.entry,
+    resolvedHarness,
+    fallbackProvider: params.provider,
+  });
 }
 
 function resolveContextTokensForModel(params: {
@@ -186,5 +223,6 @@ export const statusSummaryRuntime = {
   resolveContextTokensForModel,
   classifySessionKey,
   resolveSessionModelRef,
+  resolveSessionRuntimeLabel,
   resolveConfiguredStatusModelRef,
 };

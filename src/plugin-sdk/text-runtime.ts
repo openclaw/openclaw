@@ -1,4 +1,7 @@
-// Public shared text/formatting helpers for plugins that parse or rewrite message text.
+/**
+ * @deprecated Broad public SDK barrel. Prefer focused text/chunking/logging
+ * subpaths and avoid adding new imports here.
+ */
 
 export * from "../logger.js";
 export * from "../logging/diagnostic.js";
@@ -27,6 +30,17 @@ export * from "../utils/chunk-items.js";
 export * from "../utils/fetch-timeout.js";
 export * from "../utils/reaction-level.js";
 export * from "../utils/with-timeout.js";
+export {
+  hasNonEmptyString,
+  localeLowercasePreservingWhitespace,
+  lowercasePreservingWhitespace,
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+  readStringValue,
+} from "../shared/string-coerce.js";
 export {
   CONFIG_DIR,
   clamp,

@@ -6,11 +6,11 @@ import {
   setSetupChannelEnabled,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import {
   clearNextcloudTalkAccountFields,
   nextcloudTalkDmPolicy,
-  nextcloudTalkSetupAdapter,
   normalizeNextcloudTalkBaseUrl,
   setNextcloudTalkAccountConfig,
   validateNextcloudTalkBaseUrl,
@@ -40,7 +40,7 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
     title: "Nextcloud Talk bot setup",
     lines: [
       "1) SSH into your Nextcloud server",
-      '2) Run: ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature reaction',
+      '2) Run: ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature webhook --feature response --feature reaction',
       "3) Copy the shared secret you used in the command",
       "4) Enable the bot in your Nextcloud Talk room settings",
       "Tip: you can also set NEXTCLOUD_TALK_BOT_SECRET in your env.",
@@ -63,7 +63,7 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
       initialValue: hasApiCredentials,
     });
     if (!configureApiCredentials) {
-      return;
+      return undefined;
     }
     return {
       credentialValues: {
@@ -93,7 +93,7 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
           resolvedValue: resolvedAccount.secret || undefined,
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim() || undefined
+              ? normalizeOptionalString(process.env.NEXTCLOUD_TALK_BOT_SECRET)
               : undefined,
         };
       },
@@ -188,5 +188,3 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
   dmPolicy: nextcloudTalkDmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
-
-export { nextcloudTalkSetupAdapter };

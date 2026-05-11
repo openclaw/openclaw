@@ -1,71 +1,39 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildAlibabaVideoGenerationProvider } from "./video-generation-provider.js";
+import {
+  getProviderHttpMocks,
+  installProviderHttpMockCleanup,
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import {
+  expectDashscopeVideoTaskPoll,
+  expectExplicitVideoGenerationCapabilities,
+  expectSuccessfulDashscopeVideoResult,
+  mockSuccessfulDashscopeVideoTask,
+} from "openclaw/plugin-sdk/provider-test-contracts";
+import { beforeAll, describe, expect, it } from "vitest";
 
-const {
-  resolveApiKeyForProviderMock,
-  postJsonRequestMock,
-  fetchWithTimeoutMock,
-  assertOkOrThrowHttpErrorMock,
-  resolveProviderHttpRequestConfigMock,
-} = vi.hoisted(() => ({
-  resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "alibaba-key" })),
-  postJsonRequestMock: vi.fn(),
-  fetchWithTimeoutMock: vi.fn(),
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  resolveProviderHttpRequestConfigMock: vi.fn((params) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders),
-    dispatcherPolicy: undefined,
-  })),
-}));
+const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
 
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
+let buildAlibabaVideoGenerationProvider: typeof import("./video-generation-provider.js").buildAlibabaVideoGenerationProvider;
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  fetchWithTimeout: fetchWithTimeoutMock,
-  postJsonRequest: postJsonRequestMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-}));
+beforeAll(async () => {
+  ({ buildAlibabaVideoGenerationProvider } = await import("./video-generation-provider.js"));
+});
+
+installProviderHttpMockCleanup();
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
 
 describe("alibaba video generation provider", () => {
-  afterEach(() => {
-    resolveApiKeyForProviderMock.mockClear();
-    postJsonRequestMock.mockReset();
-    fetchWithTimeoutMock.mockReset();
-    assertOkOrThrowHttpErrorMock.mockClear();
-    resolveProviderHttpRequestConfigMock.mockClear();
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildAlibabaVideoGenerationProvider());
   });
 
   it("submits async Wan generation, polls task status, and downloads the resulting video", async () => {
-    postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          request_id: "req-1",
-          output: {
-            task_id: "task-1",
-          },
-        }),
-      },
-      release: vi.fn(async () => {}),
-    });
-    fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
-          output: {
-            task_status: "SUCCEEDED",
-            results: [{ video_url: "https://example.com/out.mp4" }],
-          },
-        }),
-        headers: new Headers(),
-      })
-      .mockResolvedValueOnce({
-        arrayBuffer: async () => Buffer.from("mp4-bytes"),
-        headers: new Headers({ "content-type": "video/mp4" }),
-      });
+    mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
 
     const provider = buildAlibabaVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -79,39 +47,22 @@ describe("alibaba video generation provider", () => {
       watermark: false,
     });
 
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
-        body: expect.objectContaining({
-          model: "wan2.6-r2v-flash",
-          input: expect.objectContaining({
-            prompt: "animate this shot",
-            img_url: "https://example.com/ref.png",
-          }),
-          parameters: expect.objectContaining({
-            duration: 6,
-            enable_audio: true,
-            watermark: false,
-          }),
-        }),
-      }),
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    const request = requireRecord(postJsonRequestMock.mock.calls[0]?.[0], "DashScope request");
+    expect(request.url).toBe(
+      "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
     );
-    expect(fetchWithTimeoutMock).toHaveBeenNthCalledWith(
-      1,
-      "https://dashscope-intl.aliyuncs.com/api/v1/tasks/task-1",
-      expect.objectContaining({ method: "GET" }),
-      120000,
-      fetch,
-    );
-    expect(result.videos).toHaveLength(1);
-    expect(result.videos[0]?.mimeType).toBe("video/mp4");
-    expect(result.metadata).toEqual(
-      expect.objectContaining({
-        requestId: "req-1",
-        taskId: "task-1",
-        taskStatus: "SUCCEEDED",
-      }),
-    );
+    const body = requireRecord(request.body, "DashScope request body");
+    expect(body.model).toBe("wan2.6-r2v-flash");
+    const input = requireRecord(body.input, "DashScope request input");
+    expect(input.prompt).toBe("animate this shot");
+    expect(input.img_url).toBe("https://example.com/ref.png");
+    const parameters = requireRecord(body.parameters, "DashScope request parameters");
+    expect(parameters.duration).toBe(6);
+    expect(parameters.enable_audio).toBe(true);
+    expect(parameters.watermark).toBe(false);
+    expectDashscopeVideoTaskPoll(fetchWithTimeoutMock);
+    expectSuccessfulDashscopeVideoResult(result);
   });
 
   it("fails fast when reference inputs are local buffers instead of remote URLs", async () => {

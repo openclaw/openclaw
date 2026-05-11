@@ -3,13 +3,37 @@ import path from "node:path";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+
+vi.mock("../secrets/provider-env-vars.js", () => ({
+  listKnownProviderAuthEnvVarNames: () => ["OPENAI_API_KEY", "GITHUB_TOKEN", "HF_TOKEN"],
+  omitEnvKeysCaseInsensitive: (
+    baseEnv: NodeJS.ProcessEnv,
+    keys: Iterable<string>,
+  ): NodeJS.ProcessEnv => {
+    const denied = new Set<string>();
+    for (const key of keys) {
+      const normalized = key.trim().toUpperCase();
+      if (normalized) {
+        denied.add(normalized);
+      }
+    }
+    const env = { ...baseEnv };
+    for (const key of Object.keys(env)) {
+      if (denied.has(key.toUpperCase())) {
+        delete env[key];
+      }
+    }
+    return env;
+  },
+}));
+
 import {
   buildAcpClientStripKeys,
   resolveAcpClientSpawnEnv,
   resolveAcpClientSpawnInvocation,
   resolvePermissionRequest,
   shouldStripProviderAuthEnvVarsForAcpServer,
-} from "./client.js";
+} from "./client-helpers.js";
 import {
   extractAttachmentsFromPrompt,
   extractTextFromPrompt,
@@ -154,7 +178,7 @@ describe("resolveAcpClientSpawnEnv", () => {
     expect(env.OPENCLAW_SHELL).toBe("acp-client");
   });
 
-  it("preserves provider auth env vars for explicit custom ACP servers", () => {
+  it("preserves provider auth env vars when no strip keys are provided", () => {
     const env = resolveAcpClientSpawnEnv({
       OPENAI_API_KEY: "openai-secret", // pragma: allowlist secret
       GITHUB_TOKEN: "gh-secret", // pragma: allowlist secret
@@ -410,13 +434,6 @@ describe("resolvePermissionRequest", () => {
       rawInput: {
         name: "nodes",
         action: "list",
-      },
-    },
-    {
-      toolName: "whatsapp_login",
-      title: "whatsapp_login: start",
-      rawInput: {
-        name: "whatsapp_login",
       },
     },
   ] as const)(

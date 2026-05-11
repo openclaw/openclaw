@@ -1,6 +1,8 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { WizardPrompter } from "./prompts.js";
 
 /**
@@ -12,8 +14,17 @@ export type ConfigurablePlugin = {
   /** uiHints from the plugin manifest, keyed by config field name. */
   uiHints: Record<string, PluginConfigUiHint>;
   /** JSON schema from the plugin manifest (used for type/enum info). */
-  jsonSchema?: Record<string, unknown>;
+  jsonSchema?: JsonSchemaObject;
 };
+
+type PluginMetadataSnapshotModule = typeof import("../plugins/plugin-metadata-snapshot.js");
+
+let pluginMetadataSnapshotModulePromise: Promise<PluginMetadataSnapshotModule> | undefined;
+
+function loadPluginMetadataSnapshotModule(): Promise<PluginMetadataSnapshotModule> {
+  pluginMetadataSnapshotModulePromise ??= import("../plugins/plugin-metadata-snapshot.js");
+  return pluginMetadataSnapshotModulePromise;
+}
 
 type JsonSchemaProperty = {
   type?: string;
@@ -22,7 +33,7 @@ type JsonSchemaProperty = {
 };
 
 function resolveJsonSchemaProperty(
-  jsonSchema: Record<string, unknown> | undefined,
+  jsonSchema: JsonSchemaObject | undefined,
   fieldKey: string,
 ): JsonSchemaProperty | undefined {
   if (!jsonSchema) {
@@ -128,6 +139,22 @@ export function discoverUnconfiguredPlugins(params: {
       const val = getPath(existing, toPathSegments(key));
       return val === undefined || val === null || val === "";
     });
+  });
+}
+
+async function listEnabledConfigurableManifestPlugins(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+}): Promise<readonly PluginManifestRecord[]> {
+  const { loadPluginMetadataSnapshot } = await loadPluginMetadataSnapshotModule();
+  const snapshot = loadPluginMetadataSnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: process.env,
+  });
+  return snapshot.plugins.filter((plugin) => {
+    const entry = params.config.plugins?.entries?.[plugin.id];
+    return plugin.enabledByDefault || entry?.enabled === true;
   });
 }
 
@@ -241,8 +268,8 @@ async function promptPluginFields(params: {
     });
     const trimmed = input.trim();
     if (trimmed !== currentStr) {
-      // Try to parse as number if schema says number
-      if (schemaProp?.type === "number") {
+      // Coerce numeric text input when the schema expects a JSON number or integer.
+      if (schemaProp?.type === "number" || schemaProp?.type === "integer") {
         if (trimmed === "") {
           setPathCreateStrict(updatedConfig, pathSegments, undefined);
           changed = true;
@@ -289,19 +316,13 @@ export async function setupPluginConfig(params: {
   prompter: WizardPrompter;
   workspaceDir?: string;
 }): Promise<OpenClawConfig> {
-  const { loadPluginManifestRegistry } = await import("../plugins/manifest-registry.js");
-  const registry = loadPluginManifestRegistry({
+  const manifestPlugins = await listEnabledConfigurableManifestPlugins({
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
 
   const unconfigured = discoverUnconfiguredPlugins({
-    manifestPlugins: registry.plugins.filter((p) => {
-      // Only show enabled plugins
-      const entry = params.config.plugins?.entries?.[p.id];
-      // Plugin is discoverable if it's enabled or enabledByDefault and not denied
-      return p.enabledByDefault || entry?.enabled === true;
-    }),
+    manifestPlugins,
     config: params.config,
   });
 
@@ -311,15 +332,22 @@ export async function setupPluginConfig(params: {
 
   const selected = await params.prompter.multiselect({
     message: "Configure plugins (select to set up now, or skip)",
-    options: unconfigured.map((p) => ({
-      value: p.id,
-      label: p.name,
-      hint: `${Object.keys(p.uiHints).length} field${Object.keys(p.uiHints).length === 1 ? "" : "s"}`,
-    })),
+    options: [
+      {
+        value: "__skip__",
+        label: "Skip for now",
+        hint: "Continue without configuring plugins",
+      },
+      ...unconfigured.map((p) => ({
+        value: p.id,
+        label: p.name,
+        hint: `${Object.keys(p.uiHints).length} field${Object.keys(p.uiHints).length === 1 ? "" : "s"}`,
+      })),
+    ],
   });
 
   let config = params.config;
-  for (const pluginId of selected) {
+  for (const pluginId of selected.filter((value) => value !== "__skip__")) {
     const plugin = unconfigured.find((p) => p.id === pluginId);
     if (!plugin) {
       continue;
@@ -344,17 +372,13 @@ export async function configurePluginConfig(params: {
   prompter: WizardPrompter;
   workspaceDir?: string;
 }): Promise<OpenClawConfig> {
-  const { loadPluginManifestRegistry } = await import("../plugins/manifest-registry.js");
-  const registry = loadPluginManifestRegistry({
+  const manifestPlugins = await listEnabledConfigurableManifestPlugins({
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
 
   const configurable = discoverConfigurablePlugins({
-    manifestPlugins: registry.plugins.filter((p) => {
-      const entry = params.config.plugins?.entries?.[p.id];
-      return p.enabledByDefault || entry?.enabled === true;
-    }),
+    manifestPlugins,
   });
 
   if (configurable.length === 0) {
@@ -380,6 +404,7 @@ export async function configurePluginConfig(params: {
       }),
       { value: "__skip__", label: "Back", hint: "Return to section menu" },
     ],
+    searchable: true,
   });
 
   if (selected === "__skip__") {

@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { parseAgentSessionKey } from "./session-key-utils.js";
 
 export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
@@ -7,15 +8,6 @@ function deriveBuiltInLegacySessionChatType(
 ): SessionKeyChatType | undefined {
   if (/^group:[^:]+$/.test(scopedSessionKey)) {
     return "group";
-  }
-  if (/^[0-9]+(?:-[0-9]+)*@g\.us$/.test(scopedSessionKey)) {
-    return "group";
-  }
-  if (/^whatsapp:(?!.*:group:).+@g\.us$/.test(scopedSessionKey)) {
-    return "group";
-  }
-  if (/^discord:(?:[^:]+:)?guild-[^:]+:channel-[^:]+$/.test(scopedSessionKey)) {
-    return "channel";
   }
   return undefined;
 }
@@ -58,7 +50,7 @@ export function deriveSessionChatTypeFromKey(
     (scopedSessionKey: string) => SessionKeyChatType | undefined
   > = [],
 ): SessionKeyChatType {
-  const raw = (sessionKey ?? "").trim().toLowerCase();
+  const raw = normalizeLowercaseStringOrEmpty(sessionKey);
   if (!raw) {
     return "unknown";
   }

@@ -1,6 +1,9 @@
 export type { Command } from "commander";
-export type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
-export { definePluginEntry } from "openclaw/plugin-sdk/core";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+export { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+export { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+export { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
 export {
   buildQaTarget,
   createQaBusThread,
@@ -19,6 +22,7 @@ export {
   setQaChannelRuntime,
 } from "openclaw/plugin-sdk/qa-channel";
 export type {
+  QaBusAttachment,
   QaBusConversation,
   QaBusCreateThreadInput,
   QaBusDeleteMessageInput,
@@ -35,4 +39,4 @@ export type {
   QaBusStateSnapshot,
   QaBusThread,
   QaBusWaitForInput,
-} from "openclaw/plugin-sdk/qa-channel";
+} from "./protocol.js";

@@ -1,6 +1,9 @@
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
+import { readRemoteMediaResponse } from "./attachments.test-helpers.js";
 import { downloadMSTeamsGraphMedia } from "./attachments/graph.js";
+import { resolveRequestUrl } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const GRAPH_HOST = "graph.microsoft.com";
@@ -21,23 +24,6 @@ const saveMediaBufferMock = vi.fn(async () => ({
   size: Buffer.byteLength(PNG_BUFFER),
   contentType: CONTENT_TYPE_IMAGE_PNG,
 }));
-const readRemoteMediaResponse = async (
-  res: Response,
-  params: { maxBytes?: number; filePathHint?: string },
-) => {
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
-  }
-  const buffer = Buffer.from(await res.arrayBuffer());
-  if (typeof params.maxBytes === "number" && buffer.byteLength > params.maxBytes) {
-    throw new Error(`payload exceeds maxBytes ${params.maxBytes}`);
-  }
-  return {
-    buffer,
-    contentType: res.headers.get("content-type") ?? undefined,
-    fileName: params.filePathHint,
-  };
-};
 const fetchRemoteMediaMock = vi.fn(
   async (params: {
     url: string;
@@ -65,7 +51,7 @@ const runtimeStub = {
 
 type DownloadGraphMediaParams = Parameters<typeof downloadMSTeamsGraphMedia>[0];
 type DownloadGraphMediaOverrides = Partial<
-  Omit<DownloadGraphMediaParams, "messageUrl" | "tokenProvider" | "maxBytes">
+  Omit<DownloadGraphMediaParams, "messageUrl" | "tokenProvider">
 >;
 type FetchFn = typeof fetch;
 type LabeledCase = { label: string };
@@ -97,6 +83,7 @@ const createTokenProvider = (
     typeof tokenOrResolver === "function" ? await tokenOrResolver(scope) : tokenOrResolver,
   ),
 });
+const resolvePublicHost = async (): Promise<{ address: string }> => ({ address: "93.184.216.34" });
 const createBufferResponse = (payload: Buffer | string, contentType: string, status = 200) => {
   const raw = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
   return new Response(new Uint8Array(raw), {
@@ -211,6 +198,7 @@ const downloadGraphMediaWithMockOptions = async (
     tokenProvider: createTokenProvider(),
     maxBytes: DEFAULT_MAX_BYTES,
     fetchFn: asFetchFn(fetchMock),
+    resolveFn: resolvePublicHost,
     ...overrides,
   });
   return { fetchMock, media };
@@ -248,7 +236,11 @@ const GRAPH_MEDIA_SUCCESS_CASES: GraphMediaSuccessCase[] = [
 ];
 
 describe("msteams graph attachments", () => {
+  let ssrfMock: { mockRestore: () => void } | undefined;
+
   beforeEach(() => {
+    ssrfMock?.mockRestore();
+    ssrfMock = mockPinnedHostnameResolution();
     detectMimeMock.mockClear();
     fetchRemoteMediaMock.mockClear();
     saveMediaBufferMock.mockClear();
@@ -263,7 +255,7 @@ describe("msteams graph attachments", () => {
     const seen: Array<{ url: string; auth: string }> = [];
     const referenceAttachment = createReferenceAttachment();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = resolveRequestUrl(input);
       const auth = new Headers(init?.headers).get("Authorization") ?? "";
       seen.push({ url, auth });
 
@@ -292,12 +284,15 @@ describe("msteams graph attachments", () => {
       allowHosts: [...DEFAULT_SHAREPOINT_ALLOW_HOSTS, "example.com"],
       authAllowHosts: DEFAULT_SHAREPOINT_ALLOW_HOSTS,
       fetchFn: asFetchFn(fetchMock),
+      resolveFn: resolvePublicHost,
     });
 
     expectAttachmentMediaLength(media.media, 1);
     const redirected = seen.find((entry) => entry.url === escapedUrl);
-    expect(redirected).toBeDefined();
-    expect(redirected?.auth).toBe("");
+    if (!redirected) {
+      throw new Error("expected SharePoint redirect request to be observed");
+    }
+    expect(redirected.auth).toBe("");
   });
 
   it("blocks SharePoint redirects to hosts outside allowHosts", async () => {
@@ -320,8 +315,38 @@ describe("msteams graph attachments", () => {
     );
 
     expectAttachmentMediaLength(media.media, 0);
-    const calledUrls = fetchMock.mock.calls.map((call) => String(call[0]));
-    expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(true);
+    const calledUrls = fetchMock.mock.calls.map((call) => call[0]);
+    expect(calledUrls).toEqual([
+      DEFAULT_MESSAGE_URL,
+      expect.stringContaining(GRAPH_SHARES_URL_PREFIX),
+      `${DEFAULT_MESSAGE_URL}/hostedContents`,
+      expect.stringContaining(GRAPH_SHARES_URL_PREFIX),
+    ]);
     expect(calledUrls).not.toContain(escapedUrl);
+  });
+
+  it("skips inline hosted content when estimated decoded bytes exceed maxBytes", async () => {
+    const oversizedBase64 = "A".repeat(16);
+    const bufferFromSpy = vi.spyOn(Buffer, "from");
+
+    try {
+      const { media } = await downloadGraphMediaWithMockOptions(
+        {
+          hostedContents: [
+            {
+              id: "hosted-oversized",
+              contentType: CONTENT_TYPE_IMAGE_PNG,
+              contentBytes: oversizedBase64,
+            },
+          ],
+        },
+        { maxBytes: 4 },
+      );
+
+      expect(media.media).toStrictEqual([]);
+      expect(bufferFromSpy).not.toHaveBeenCalledWith(oversizedBase64, "base64");
+    } finally {
+      bufferFromSpy.mockRestore();
+    }
   });
 });

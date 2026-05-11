@@ -1,14 +1,15 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   buildOutboundMediaLoadOptions,
   isGifMedia,
   kindFromMime,
   normalizePollInput,
 } from "openclaw/plugin-sdk/media-runtime";
-import type { MockFn } from "openclaw/plugin-sdk/testing";
+import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, vi } from "vitest";
 
-const { botApi, botCtorSpy } = vi.hoisted(() => ({
+const { botApi, botConfigUseSpy, botCtorSpy } = vi.hoisted(() => ({
+  botConfigUseSpy: vi.fn(),
   botApi: {
     deleteMessage: vi.fn(),
     editForumTopic: vi.fn(),
@@ -40,6 +41,10 @@ const { imageMetadata } = vi.hoisted(() => ({
     width: 1200 as number | undefined,
     height: 800 as number | undefined,
   },
+}));
+
+const { probeVideoDimensions } = vi.hoisted(() => ({
+  probeVideoDimensions: vi.fn(),
 }));
 
 const { loadConfig, resolveStorePath } = vi.hoisted(() => ({
@@ -83,13 +88,15 @@ const {
 }));
 
 type TelegramSendTestMocks = {
-  botApi: Record<string, MockFn>;
+  botApi: typeof botApi;
+  botConfigUseSpy: MockFn;
   botCtorSpy: MockFn;
   loadConfig: MockFn;
   resolveStorePath: MockFn;
   loadWebMedia: MockFn;
   maybePersistResolvedTelegramTarget: MockFn;
   imageMetadata: { width: number | undefined; height: number | undefined };
+  probeVideoDimensions: MockFn;
 };
 
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
@@ -102,7 +109,12 @@ vi.mock("grammy", () => ({
     ALL_UPDATE_TYPES: ["message"],
   },
   Bot: class {
-    api = botApi;
+    api = {
+      ...botApi,
+      config: {
+        use: botConfigUseSpy,
+      },
+    };
     catch = vi.fn();
     constructor(
       public token: string,
@@ -124,7 +136,7 @@ vi.mock("grammy", () => ({
   GrammyError: class GrammyError extends Error {
     description = "";
   },
-  InputFile: class {},
+  InputFile: function InputFile() {},
 }));
 
 vi.mock("undici", () => ({
@@ -135,6 +147,16 @@ vi.mock("undici", () => ({
   setGlobalDispatcher: undiciSetGlobalDispatcher,
 }));
 
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
+    "openclaw/plugin-sdk/plugin-config-runtime",
+  );
+  return {
+    ...actual,
+    requireRuntimeConfig: vi.fn((cfg: unknown) => cfg ?? loadConfig()),
+  };
+});
+
 vi.mock("./send.runtime.js", () => ({
   buildOutboundMediaLoadOptions,
   getImageMetadata: vi.fn(async () => ({ ...imageMetadata })),
@@ -143,6 +165,8 @@ vi.mock("./send.runtime.js", () => ({
   loadConfig,
   loadWebMedia,
   normalizePollInput,
+  probeVideoDimensions,
+  requireRuntimeConfig: vi.fn((cfg: unknown) => cfg ?? loadConfig()),
   resolveMarkdownTableMode,
   resolveStorePath,
 }));
@@ -154,12 +178,14 @@ vi.mock("./target-writeback.js", () => ({
 export function getTelegramSendTestMocks(): TelegramSendTestMocks {
   return {
     botApi,
+    botConfigUseSpy,
     botCtorSpy,
     loadConfig,
     resolveStorePath,
     loadWebMedia,
     maybePersistResolvedTelegramTarget,
     imageMetadata,
+    probeVideoDimensions,
   };
 }
 
@@ -168,6 +194,8 @@ export function installTelegramSendTestHooks() {
     loadConfig.mockReturnValue({});
     resolveStorePath.mockReturnValue("/tmp/openclaw-telegram-send-tests.json");
     loadWebMedia.mockReset();
+    probeVideoDimensions.mockReset();
+    probeVideoDimensions.mockResolvedValue(undefined);
     imageMetadata.width = 1200;
     imageMetadata.height = 800;
     maybePersistResolvedTelegramTarget.mockReset();
@@ -178,6 +206,7 @@ export function installTelegramSendTestHooks() {
     undiciEnvHttpProxyAgentCtor.mockClear();
     undiciProxyAgentCtor.mockClear();
     botCtorSpy.mockReset();
+    botConfigUseSpy.mockReset();
     for (const fn of Object.values(botApi)) {
       fn.mockReset();
     }

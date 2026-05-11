@@ -2,9 +2,8 @@ type InstallScanLogger = {
   warn?: (message: string) => void;
 };
 
-export type InstallSafetyOverrides = {
-  dangerouslyForceUnsafeInstall?: boolean;
-};
+export type { InstallSafetyOverrides } from "./install-security-scan.types.js";
+import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 
 export type InstallSecurityScanResult = {
   blocked?: {
@@ -17,7 +16,8 @@ export type PluginInstallRequestKind =
   | "plugin-dir"
   | "plugin-archive"
   | "plugin-file"
-  | "plugin-npm";
+  | "plugin-npm"
+  | "plugin-git";
 
 export type SkillInstallSpecMetadata = {
   id?: string;
@@ -70,6 +70,16 @@ export async function scanPackageInstallSource(
 ): Promise<InstallSecurityScanResult | undefined> {
   const { scanPackageInstallSourceRuntime } = await loadInstallSecurityScanRuntime();
   return await scanPackageInstallSourceRuntime(params);
+}
+
+export async function scanInstalledPackageDependencyTree(params: {
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
+  logger: InstallScanLogger;
+  packageDir: string;
+  pluginId: string;
+}): Promise<InstallSecurityScanResult | undefined> {
+  const { scanInstalledPackageDependencyTreeRuntime } = await loadInstallSecurityScanRuntime();
+  return await scanInstalledPackageDependencyTreeRuntime(params);
 }
 
 export async function scanFileInstallSource(

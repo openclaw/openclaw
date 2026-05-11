@@ -5,7 +5,7 @@ import {
   type GatewayBonjourBeacon,
 } from "../../infra/bonjour-discovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readStringValue } from "../../shared/string-coerce.js";
+import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
 import { pickAutoSshTargetFromDiscovery } from "./discovery.js";
 import {
   extractConfigSummary,
@@ -86,7 +86,7 @@ export async function runGatewayStatusProbePass(params: {
     sshTarget = pickAutoSshTargetFromDiscovery({
       discovery,
       parseSshTarget,
-      sshUser: process.env.USER?.trim() || "",
+      sshUser: normalizeOptionalString(process.env.USER) ?? "",
     });
   }
 
@@ -131,6 +131,7 @@ export async function runGatewayStatusProbePass(params: {
             target.kind === "localLoopback" && target.url.startsWith("wss://")
               ? params.localTlsFingerprint
               : undefined,
+          preauthHandshakeTimeoutMs: params.cfg.gateway?.handshakeTimeoutMs,
           timeoutMs: resolveProbeBudgetMs(params.overallTimeoutMs, target),
         });
         return {

@@ -1,48 +1,82 @@
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import plugin from "./index.js";
 
 describe("opencode provider plugin", () => {
-  it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
+  it("registers image media understanding through the OpenCode plugin", async () => {
+    const { mediaProviders } = await registerProviderPlugin({
+      plugin,
+      id: "opencode",
+      name: "OpenCode Zen Provider",
+    });
 
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "opencode",
-        modelApi: "openai-completions",
-        modelId: "gemini-2.5-pro",
-      } as never),
-    ).toMatchObject({
-      applyAssistantFirstOrderingFix: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: false,
-      sanitizeThoughtSignatures: {
-        allowBase64Only: true,
-        includeCamelCase: true,
-      },
+    const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode");
+    expect(mediaProvider).toBeDefined();
+    expect(mediaProvider?.capabilities).toEqual(["image"]);
+    expect(mediaProvider?.defaultModels).toEqual({ image: "gpt-5-nano" });
+    expect(typeof mediaProvider?.describeImage).toBe("function");
+    expect(typeof mediaProvider?.describeImages).toBe("function");
+  });
+
+  it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
+    await expectPassthroughReplayPolicy({
+      plugin,
+      providerId: "opencode",
+      modelId: "gemini-2.5-pro",
+      sanitizeThoughtSignatures: true,
     });
   });
 
   it("keeps non-Gemini replay policy minimal on passthrough routes", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "opencode",
-        modelApi: "openai-completions",
-        modelId: "claude-opus-4.6",
-      } as never),
-    ).toMatchObject({
-      applyAssistantFirstOrderingFix: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: false,
+    await expectPassthroughReplayPolicy({
+      plugin,
+      providerId: "opencode",
+      modelId: "claude-opus-4.6",
     });
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "opencode",
-        modelApi: "openai-completions",
-        modelId: "claude-opus-4.6",
-      } as never),
-    ).not.toHaveProperty("sanitizeThoughtSignatures");
+  });
+
+  it("exposes Anthropic thinking levels for proxied Claude models", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin,
+      id: "opencode",
+      name: "OpenCode Zen Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "opencode");
+    const resolveThinkingProfile = provider.resolveThinkingProfile;
+    if (!resolveThinkingProfile) {
+      throw new Error("Expected OpenCode provider resolveThinkingProfile");
+    }
+
+    const opus47Profile = resolveThinkingProfile({
+      provider: "opencode",
+      modelId: "claude-opus-4-7",
+    });
+    const opus47LevelIds = opus47Profile?.levels.map((level) => level.id) ?? [];
+    expect(opus47Profile?.defaultLevel).toBe("off");
+    expect(opus47LevelIds).toContain("xhigh");
+    expect(opus47LevelIds).toContain("adaptive");
+    expect(opus47LevelIds).toContain("max");
+    const opus46Profile = resolveThinkingProfile({
+      provider: "opencode",
+      modelId: "claude-opus-4.6",
+    });
+    const opus46LevelIds = opus46Profile?.levels.map((level) => level.id) ?? [];
+    expect(opus46Profile?.defaultLevel).toBe("adaptive");
+    expect(opus46LevelIds).toContain("adaptive");
+    expect(opus46LevelIds).not.toContain("xhigh");
+    expect(opus46LevelIds).not.toContain("max");
+    const sonnet46Profile = resolveThinkingProfile({
+      provider: "opencode",
+      modelId: "claude-sonnet-4-6",
+    });
+    const sonnet46LevelIds = sonnet46Profile?.levels.map((level) => level.id) ?? [];
+    expect(sonnet46Profile?.defaultLevel).toBe("adaptive");
+    expect(sonnet46LevelIds).toContain("adaptive");
+    expect(sonnet46LevelIds).not.toContain("xhigh");
+    expect(sonnet46LevelIds).not.toContain("max");
   });
 });

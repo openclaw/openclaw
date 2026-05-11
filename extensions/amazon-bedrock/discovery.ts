@@ -1,24 +1,140 @@
 import {
-  BedrockClient,
-  ListFoundationModelsCommand,
+  type BedrockClient,
   type ListFoundationModelsCommandOutput,
-  ListInferenceProfilesCommand,
   type ListInferenceProfilesCommandOutput,
 } from "@aws-sdk/client-bedrock";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveAwsSdkEnvVarName } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type {
   BedrockDiscoveryConfig,
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
+import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 
 const log = createSubsystemLogger("bedrock-discovery");
 
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600;
-const DEFAULT_CONTEXT_WINDOW = 32000;
+const DEFAULT_CONTEXT_WINDOW = 32_000;
 const DEFAULT_MAX_TOKENS = 4096;
+
+// ---------------------------------------------------------------------------
+// Known model context windows (Bedrock API does not expose token limits)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bedrock's ListFoundationModels and GetFoundationModel APIs return no token
+ * limit information — only model ID, name, modalities, and lifecycle status.
+ * There is currently no Bedrock API to discover context windows or max output
+ * tokens programmatically.
+ *
+ * This map provides correct context window values for known models so that
+ * session management, compaction thresholds, and context overflow detection
+ * work correctly. If AWS adds token metadata to the API in the future, this
+ * table should become a fallback rather than the primary source.
+ *
+ * Inference profile prefixes (us., eu., ap., global.) are stripped before lookup.
+ *
+ * Sources: https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html
+ *          https://platform.claude.com/docs/en/about-claude/models
+ */
+const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
+  // Anthropic Claude
+  "anthropic.claude-3-7-sonnet-20250219-v1:0": 200_000,
+  "anthropic.claude-opus-4-7": 1_000_000,
+  "anthropic.claude-opus-4-6-v1": 1_000_000,
+  "anthropic.claude-opus-4-6-v1:0": 1_000_000,
+  "anthropic.claude-sonnet-4-6": 1_000_000,
+  "anthropic.claude-sonnet-4-6-v1:0": 1_000_000,
+  "anthropic.claude-sonnet-4-5-20250929-v1:0": 200_000,
+  "anthropic.claude-sonnet-4-20250514-v1:0": 200_000,
+  "anthropic.claude-opus-4-5-20251101-v1:0": 200_000,
+  "anthropic.claude-opus-4-1-20250805-v1:0": 200_000,
+  "anthropic.claude-haiku-4-5-20251001-v1:0": 200_000,
+  "anthropic.claude-3-5-haiku-20241022-v1:0": 200_000,
+  "anthropic.claude-3-haiku-20240307-v1:0": 200_000,
+  // Amazon Nova
+  "amazon.nova-premier-v1:0": 1_000_000,
+  "amazon.nova-pro-v1:0": 300_000,
+  "amazon.nova-lite-v1:0": 300_000,
+  "amazon.nova-micro-v1:0": 128_000,
+  "amazon.nova-2-lite-v1:0": 300_000,
+  // MiniMax
+  "minimax.minimax-m2.5": 1_000_000,
+  "minimax.minimax-m2.1": 1_000_000,
+  "minimax.minimax-m2": 1_000_000,
+  // Meta Llama 4
+  "meta.llama4-maverick-17b-instruct-v1:0": 1_000_000,
+  "meta.llama4-scout-17b-instruct-v1:0": 512_000,
+  // Meta Llama 3
+  "meta.llama3-3-70b-instruct-v1:0": 128_000,
+  "meta.llama3-2-90b-instruct-v1:0": 128_000,
+  "meta.llama3-2-11b-instruct-v1:0": 128_000,
+  "meta.llama3-2-3b-instruct-v1:0": 128_000,
+  "meta.llama3-2-1b-instruct-v1:0": 128_000,
+  "meta.llama3-1-405b-instruct-v1:0": 128_000,
+  "meta.llama3-1-70b-instruct-v1:0": 128_000,
+  "meta.llama3-1-8b-instruct-v1:0": 128_000,
+  // NVIDIA Nemotron
+  "nvidia.nemotron-super-3-120b": 256_000,
+  "nvidia.nemotron-nano-3-30b": 128_000,
+  "nvidia.nemotron-nano-12b-v2": 128_000,
+  "nvidia.nemotron-nano-9b-v2": 128_000,
+  // Mistral
+  "mistral.mistral-large-3-675b-instruct": 128_000,
+  "mistral.mistral-large-2407-v1:0": 128_000,
+  "mistral.mistral-small-2402-v1:0": 32_000,
+  // DeepSeek
+  "deepseek.r1-v1:0": 128_000,
+  "deepseek.v3.2": 128_000,
+  // Cohere
+  "cohere.command-r-plus-v1:0": 128_000,
+  "cohere.command-r-v1:0": 128_000,
+  // AI21
+  "ai21.jamba-1-5-large-v1:0": 256_000,
+  "ai21.jamba-1-5-mini-v1:0": 256_000,
+  // Google Gemma
+  "google.gemma-3-27b-it": 128_000,
+  "google.gemma-3-12b-it": 128_000,
+  "google.gemma-3-4b-it": 128_000,
+  // GLM
+  "zai.glm-5": 128_000,
+  "zai.glm-4.7": 128_000,
+  "zai.glm-4.7-flash": 128_000,
+  // Qwen
+  "qwen.qwen3-coder-next": 256_000,
+  "qwen.qwen3-coder-30b-a3b-v1:0": 256_000,
+  "qwen.qwen3-32b-v1:0": 128_000,
+  "qwen.qwen3-vl-235b-a22b": 128_000,
+};
+
+/**
+ * Resolve the real context window for a Bedrock model ID.
+ * Strips inference profile prefixes (us., eu., ap., global.) before lookup.
+ */
+function resolveKnownContextWindow(modelId: string): number | undefined {
+  const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
+  const candidates = [modelId, stripped];
+  for (const candidate of candidates) {
+    if (KNOWN_CONTEXT_WINDOWS[candidate] !== undefined) {
+      return KNOWN_CONTEXT_WINDOWS[candidate];
+    }
+    const withoutVersionSuffix = candidate.replace(/:0$/, "");
+    if (
+      withoutVersionSuffix !== candidate &&
+      KNOWN_CONTEXT_WINDOWS[withoutVersionSuffix] !== undefined
+    ) {
+      return KNOWN_CONTEXT_WINDOWS[withoutVersionSuffix];
+    }
+  }
+  return undefined;
+}
+
 const DEFAULT_COST = {
   input: 0,
   output: 0,
@@ -31,6 +147,38 @@ type BedrockModelSummary = NonNullable<ListFoundationModelsCommandOutput["modelS
 type InferenceProfileSummary = NonNullable<
   ListInferenceProfilesCommandOutput["inferenceProfileSummaries"]
 >[number];
+
+type BedrockDiscoverySdk = {
+  createClient(region: string): BedrockClient;
+  createListFoundationModelsCommand(): unknown;
+  createListInferenceProfilesCommand(input: { nextToken?: string }): unknown;
+};
+
+async function loadBedrockDiscoverySdk(): Promise<BedrockDiscoverySdk> {
+  const { BedrockClient, ListFoundationModelsCommand, ListInferenceProfilesCommand } =
+    await import("@aws-sdk/client-bedrock");
+  return {
+    createClient: (region) => new BedrockClient({ region }),
+    createListFoundationModelsCommand: () => new ListFoundationModelsCommand({}),
+    createListInferenceProfilesCommand: (input) => new ListInferenceProfilesCommand(input),
+  };
+}
+
+function createInjectedClientDiscoverySdk(): BedrockDiscoverySdk {
+  class ListFoundationModelsCommand {
+    constructor(readonly input: Record<string, unknown> = {}) {}
+  }
+  class ListInferenceProfilesCommand {
+    constructor(readonly input: Record<string, unknown> = {}) {}
+  }
+  return {
+    createClient() {
+      throw new Error("clientFactory is required for injected Bedrock discovery commands");
+    },
+    createListFoundationModelsCommand: () => new ListFoundationModelsCommand({}),
+    createListInferenceProfilesCommand: (input) => new ListInferenceProfilesCommand(input),
+  };
+}
 
 type BedrockDiscoveryCacheEntry = {
   expiresAt: number;
@@ -50,7 +198,9 @@ function normalizeProviderFilter(filter?: string[]): string[] {
     return [];
   }
   const normalized = new Set(
-    filter.map((entry) => entry.trim().toLowerCase()).filter((entry) => entry.length > 0),
+    filter
+      .map((entry) => normalizeOptionalLowercaseString(entry))
+      .filter((entry): entry is string => Boolean(entry)),
   );
   return Array.from(normalized).toSorted();
 }
@@ -66,7 +216,7 @@ function buildCacheKey(params: {
 }
 
 function includesTextModalities(modalities?: Array<string>): boolean {
-  return (modalities ?? []).some((entry) => entry.toLowerCase() === "text");
+  return (modalities ?? []).some((entry) => normalizeOptionalLowercaseString(entry) === "text");
 }
 
 function isActive(summary: BedrockModelSummary): boolean {
@@ -78,7 +228,7 @@ function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image
   const inputs = summary.inputModalities ?? [];
   const mapped = new Set<"text" | "image">();
   for (const modality of inputs) {
-    const lower = modality.toLowerCase();
+    const lower = normalizeOptionalLowercaseString(modality);
     if (lower === "text") {
       mapped.add("text");
     }
@@ -93,7 +243,9 @@ function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image
 }
 
 function inferReasoningSupport(summary: BedrockModelSummary): boolean {
-  const haystack = `${summary.modelId ?? ""} ${summary.modelName ?? ""}`.toLowerCase();
+  const haystack = normalizeLowercaseStringOrEmpty(
+    `${summary.modelId ?? ""} ${summary.modelName ?? ""}`,
+  );
   return haystack.includes("reasoning") || haystack.includes("thinking");
 }
 
@@ -118,7 +270,7 @@ function matchesProviderFilter(summary: BedrockModelSummary, filter: string[]): 
   const providerName =
     summary.providerName ??
     (typeof summary.modelId === "string" ? summary.modelId.split(".")[0] : undefined);
-  const normalized = providerName?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(providerName);
   if (!normalized) {
     return false;
   }
@@ -155,7 +307,7 @@ function toModelDefinition(
     reasoning: inferReasoningSupport(summary),
     input: mapInputModalities(summary),
     cost: DEFAULT_COST,
-    contextWindow: defaults.contextWindow,
+    contextWindow: resolveKnownContextWindow(id) ?? defaults.contextWindow,
     maxTokens: defaults.maxTokens,
   };
 }
@@ -184,7 +336,7 @@ function resolveBaseModelId(profile: InferenceProfileSummary): string | undefine
   }
   if (profile.type === "SYSTEM_DEFINED") {
     const id = profile.inferenceProfileId ?? "";
-    const prefixMatch = /^(?:us|eu|ap|jp|global)\.(.+)$/i.exec(id);
+    const prefixMatch = /^(?:us|eu|ap|apac|au|jp|global)\.(.+)$/i.exec(id);
     if (prefixMatch) {
       return prefixMatch[1];
     }
@@ -199,13 +351,14 @@ function resolveBaseModelId(profile: InferenceProfileSummary): string | undefine
  */
 async function fetchInferenceProfileSummaries(
   client: BedrockClient,
+  createListInferenceProfilesCommand: BedrockDiscoverySdk["createListInferenceProfilesCommand"],
 ): Promise<InferenceProfileSummary[]> {
   try {
     const profiles: InferenceProfileSummary[] = [];
     let nextToken: string | undefined;
     do {
       const response: ListInferenceProfilesCommandOutput = await client.send(
-        new ListInferenceProfilesCommand({ nextToken }),
+        createListInferenceProfilesCommand({ nextToken }) as never,
       );
       for (const summary of response.inferenceProfileSummaries ?? []) {
         profiles.push(summary);
@@ -253,7 +406,9 @@ function resolveInferenceProfiles(
       const models = profile.models ?? [];
       const matchesFilter = models.some((m) => {
         const provider = m.modelArn?.split("/")?.[1]?.split(".")?.[0];
-        return provider ? providerFilter.includes(provider.toLowerCase()) : false;
+        return provider
+          ? providerFilter.includes(normalizeOptionalLowercaseString(provider) ?? "")
+          : false;
       });
       if (!matchesFilter) {
         continue;
@@ -262,7 +417,9 @@ function resolveInferenceProfiles(
 
     // Look up the underlying foundation model to inherit its capabilities.
     const baseModelId = resolveBaseModelId(profile);
-    const baseModel = baseModelId ? foundationModels.get(baseModelId.toLowerCase()) : undefined;
+    const baseModel = baseModelId
+      ? foundationModels.get(normalizeLowercaseStringOrEmpty(baseModelId))
+      : undefined;
 
     discovered.push({
       id: profile.inferenceProfileId,
@@ -270,7 +427,10 @@ function resolveInferenceProfiles(
       reasoning: baseModel?.reasoning ?? false,
       input: baseModel?.input ?? ["text"],
       cost: baseModel?.cost ?? DEFAULT_COST,
-      contextWindow: baseModel?.contextWindow ?? defaults.contextWindow,
+      contextWindow:
+        baseModel?.contextWindow ??
+        resolveKnownContextWindow(baseModelId ?? profile.inferenceProfileId ?? "") ??
+        defaults.contextWindow,
       maxTokens: baseModel?.maxTokens ?? defaults.maxTokens,
     });
   }
@@ -284,14 +444,6 @@ function resolveInferenceProfiles(
 export function resetBedrockDiscoveryCacheForTest(): void {
   discoveryCache.clear();
   hasLoggedBedrockError = false;
-}
-
-export function resolveBedrockConfigApiKey(
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  // When no AWS auth env marker is present, Bedrock should fall back to the
-  // AWS SDK default credential chain instead of persisting a fake apiKey marker.
-  return resolveAwsSdkEnvVarName(env);
 }
 
 export async function discoverBedrockModels(params: {
@@ -326,7 +478,13 @@ export async function discoverBedrockModels(params: {
     }
   }
 
-  const clientFactory = params.clientFactory ?? ((region: string) => new BedrockClient({ region }));
+  const sdk = params.clientFactory
+    ? createInjectedClientDiscoverySdk()
+    : await loadBedrockDiscoverySdk();
+  const clientFactory = params.clientFactory ?? ((region: string) => sdk.createClient(region));
+  if (!params.clientFactory) {
+    await refreshAwsSharedConfigCacheForBedrock();
+  }
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {
@@ -334,10 +492,13 @@ export async function discoverBedrockModels(params: {
     // Both API calls are independent, but we need the foundation model data
     // to resolve inference profile capabilities — so we fetch in parallel,
     // then build the lookup map before processing profiles.
-    const [foundationResponse, profileSummaries] = await Promise.all([
-      client.send(new ListFoundationModelsCommand({})),
-      fetchInferenceProfileSummaries(client),
+    const [rawFoundationResponse, profileSummaries] = await Promise.all([
+      client.send(sdk.createListFoundationModelsCommand() as never),
+      fetchInferenceProfileSummaries(client, (input) =>
+        sdk.createListInferenceProfilesCommand(input),
+      ),
     ]);
+    const foundationResponse = rawFoundationResponse as ListFoundationModelsCommandOutput;
 
     const discovered: ModelDefinitionConfig[] = [];
     const seenIds = new Set<string>();
@@ -353,8 +514,9 @@ export async function discoverBedrockModels(params: {
         maxTokens: defaultMaxTokens,
       });
       discovered.push(def);
-      seenIds.add(def.id.toLowerCase());
-      foundationModels.set(def.id.toLowerCase(), def);
+      const normalizedId = normalizeLowercaseStringOrEmpty(def.id);
+      seenIds.add(normalizedId);
+      foundationModels.set(normalizedId, def);
     }
 
     // Merge inference profiles — inherit capabilities from foundation models.
@@ -365,9 +527,10 @@ export async function discoverBedrockModels(params: {
       foundationModels,
     );
     for (const profile of inferenceProfiles) {
-      if (!seenIds.has(profile.id.toLowerCase())) {
+      const normalizedId = normalizeLowercaseStringOrEmpty(profile.id);
+      if (!seenIds.has(normalizedId)) {
         discovered.push(profile);
-        seenIds.add(profile.id.toLowerCase());
+        seenIds.add(normalizedId);
       }
     }
 
@@ -426,7 +589,7 @@ export async function resolveImplicitBedrockProvider(params: {
     ...params.pluginConfig?.discovery,
   };
   const enabled = discoveryConfig?.enabled;
-  const hasAwsCreds = resolveAwsSdkEnvVarName(env) !== undefined;
+  const hasAwsCreds = resolveBedrockConfigApiKey(env) !== undefined;
   if (enabled === false) {
     return null;
   }
@@ -449,23 +612,5 @@ export async function resolveImplicitBedrockProvider(params: {
     api: "bedrock-converse-stream",
     auth: "aws-sdk",
     models,
-  };
-}
-
-export function mergeImplicitBedrockProvider(params: {
-  existing: ModelProviderConfig | undefined;
-  implicit: ModelProviderConfig;
-}): ModelProviderConfig {
-  const { existing, implicit } = params;
-  if (!existing) {
-    return implicit;
-  }
-  return {
-    ...implicit,
-    ...existing,
-    models:
-      Array.isArray(existing.models) && existing.models.length > 0
-        ? existing.models
-        : implicit.models,
   };
 }

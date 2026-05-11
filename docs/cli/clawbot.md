@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw clawbot` (legacy alias namespace)"
 read_when:
   - You maintain older scripts using `openclaw clawbot ...`
   - You need migration guidance to current commands
-title: "clawbot"
+title: "Clawbot"
 ---
 
 # `openclaw clawbot`
@@ -19,3 +19,7 @@ Current supported alias:
 Prefer modern top-level commands directly:
 
 - `openclaw clawbot qr` -> `openclaw qr`
+
+## Related
+
+- [CLI reference](/cli)

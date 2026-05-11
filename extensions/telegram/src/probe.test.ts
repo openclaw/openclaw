@@ -1,5 +1,6 @@
-import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
-import { afterEach, beforeAll, describe, expect, it, vi, type Mock } from "vitest";
+import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { probeTelegram, resetTelegramProbeFetcherCacheForTests } from "./probe.js";
 
 const resolveTelegramFetch = vi.hoisted(() => vi.fn());
 const makeProxyFetch = vi.hoisted(() => vi.fn());
@@ -13,9 +14,6 @@ vi.mock("./fetch.js", () => ({
 vi.mock("./proxy.js", () => ({
   makeProxyFetch,
 }));
-
-let probeTelegram: typeof import("./probe.js").probeTelegram;
-let resetTelegramProbeFetcherCacheForTests: typeof import("./probe.js").resetTelegramProbeFetcherCacheForTests;
 
 describe("probeTelegram retry logic", () => {
   const token = "test-token";
@@ -35,7 +33,20 @@ describe("probeTelegram retry logic", () => {
       ok: true,
       json: vi.fn().mockResolvedValue({
         ok: true,
-        result: { id: 123, username: "test_bot" },
+        result: {
+          id: 123,
+          is_bot: true,
+          first_name: "Test",
+          username: "test_bot",
+          can_join_groups: true,
+          can_read_all_group_messages: false,
+          can_manage_bots: false,
+          supports_inline_queries: false,
+          can_connect_to_business: false,
+          has_main_web_app: false,
+          has_topics_enabled: false,
+          allows_users_to_create_topics: false,
+        },
       }),
     });
   }
@@ -70,10 +81,6 @@ describe("probeTelegram retry logic", () => {
     } else {
       delete (globalThis as { fetch?: typeof fetch }).fetch;
     }
-  });
-
-  beforeAll(async () => {
-    ({ probeTelegram, resetTelegramProbeFetcherCacheForTests } = await import("./probe.js"));
   });
 
   it.each([
@@ -179,6 +186,32 @@ describe("probeTelegram retry logic", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1); // Should not retry
   });
 
+  it("can skip webhook info when caller only needs bot identity", async () => {
+    const fetchMock = installFetchMock();
+    mockGetMeSuccess(fetchMock);
+
+    const result = await probeTelegram(token, timeoutMs, { includeWebhookInfo: false });
+
+    expect(result.ok).toBe(true);
+    expect(result.webhook).toBeUndefined();
+    expect(result.botInfo).toEqual({
+      id: 123,
+      is_bot: true,
+      first_name: "Test",
+      username: "test_bot",
+      can_join_groups: true,
+      can_read_all_group_messages: false,
+      can_manage_bots: false,
+      supports_inline_queries: false,
+      can_connect_to_business: false,
+      has_main_web_app: false,
+      has_topics_enabled: false,
+      allows_users_to_create_topics: false,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.telegram.org/bottest-token/getMe");
+  });
+
   it("uses resolver-scoped Telegram fetch with probe network options", async () => {
     const fetchMock = installFetchMock();
     mockGetMeSuccess(fetchMock);
@@ -198,7 +231,6 @@ describe("probeTelegram retry logic", () => {
         autoSelectFamily: false,
         dnsResultOrder: "ipv4first",
       },
-      apiRoot: undefined,
     });
   });
 

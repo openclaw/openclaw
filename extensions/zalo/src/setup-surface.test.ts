@@ -1,16 +1,38 @@
-import { describe, expect, it, vi } from "vitest";
+import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-  type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { zaloPlugin } from "./channel.js";
+import { listZaloAccountIds, resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
 import { zaloDmPolicy } from "./setup-core.js";
-import { zaloSetupWizard } from "./setup-surface.js";
+import { zaloSetupAdapter, zaloSetupWizard } from "./setup-surface.js";
 
-const zaloConfigure = createPluginSetupWizardConfigure(zaloPlugin);
+const zaloSetupPlugin = {
+  id: "zalo",
+  meta: {
+    id: "zalo",
+    label: "Zalo",
+    selectionLabel: "Zalo (Bot API)",
+    docsPath: "/channels/zalo",
+    blurb: "Vietnam-focused messaging platform with Bot API.",
+  },
+  capabilities: {
+    chatTypes: ["direct", "group"] as Array<"direct" | "group">,
+  },
+  config: {
+    listAccountIds: (cfg: unknown) => listZaloAccountIds(cfg as never),
+    defaultAccountId: (cfg: unknown) => resolveDefaultZaloAccountId(cfg as never),
+    resolveAccount: adaptScopedAccountAccessor(resolveZaloAccount),
+  },
+  setup: zaloSetupAdapter,
+  setupWizard: zaloSetupWizard,
+} as const;
+
+const zaloConfigure = createPluginSetupWizardConfigure(zaloSetupPlugin);
 
 describe("zalo setup wizard", () => {
   it("configures a polling token flow", async () => {
@@ -38,9 +60,13 @@ describe("zalo setup wizard", () => {
     });
 
     expect(result.accountId).toBe("default");
-    expect(result.cfg.channels?.zalo?.enabled).toBe(true);
-    expect(result.cfg.channels?.zalo?.botToken).toBe("12345689:abc-xyz");
-    expect(result.cfg.channels?.zalo?.webhookUrl).toBeUndefined();
+    const zaloConfig = result.cfg.channels?.zalo;
+    if (!zaloConfig) {
+      throw new Error("expected Zalo config");
+    }
+    expect(zaloConfig.enabled).toBe(true);
+    expect(zaloConfig.botToken).toBe("12345689:abc-xyz");
+    expect(zaloConfig.webhookUrl).toBeUndefined();
   });
 
   it("reads the named-account DM policy instead of the channel root", () => {
@@ -95,11 +121,18 @@ describe("zalo setup wizard", () => {
     });
 
     const next = zaloDmPolicy.setPolicy(cfg, "open");
-    expect(next.channels?.zalo?.dmPolicy).toBe("disabled");
+    const zaloConfig = next.channels?.zalo;
+    if (!zaloConfig) {
+      throw new Error("expected Zalo config");
+    }
+    expect(zaloConfig.dmPolicy).toBe("disabled");
     const workAccount = next.channels?.zalo?.accounts?.work as
       | { dmPolicy?: string; allowFrom?: Array<string | number> }
       | undefined;
-    expect(workAccount?.dmPolicy).toBe("open");
+    if (!workAccount) {
+      throw new Error("expected Zalo work account");
+    }
+    expect(workAccount.dmPolicy).toBe("open");
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
@@ -120,12 +153,19 @@ describe("zalo setup wizard", () => {
       "work",
     );
 
-    expect(next.channels?.zalo?.dmPolicy).toBeUndefined();
+    const zaloConfig = next.channels?.zalo;
+    if (!zaloConfig) {
+      throw new Error("expected Zalo config");
+    }
+    expect(zaloConfig.dmPolicy).toBeUndefined();
     const workAccount = next.channels?.zalo?.accounts?.work as
       | { dmPolicy?: string; allowFrom?: Array<string | number> }
       | undefined;
-    expect(workAccount?.dmPolicy).toBe("open");
-    expect(workAccount?.allowFrom).toEqual(["123456789", "*"]);
+    if (!workAccount) {
+      throw new Error("expected Zalo work account");
+    }
+    expect(workAccount.dmPolicy).toBe("open");
+    expect(workAccount.allowFrom).toEqual(["123456789", "*"]);
   });
 
   it("uses configured defaultAccount for omitted setup configured state", async () => {

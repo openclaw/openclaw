@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 import { danger, defaultRuntime, inheritOptionFromParent } from "./core-api.js";
 
@@ -146,7 +146,7 @@ export function registerBrowserCookiesAndStorageCommands(
               method: "GET",
               path: `/storage/${kind}`,
               query: {
-                key: key?.trim() || undefined,
+                key: normalizeOptionalString(key),
                 targetId,
                 profile,
               },

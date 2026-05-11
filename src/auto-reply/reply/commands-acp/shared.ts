@@ -5,19 +5,21 @@ import type { AcpRuntimeSessionMode } from "../../../acp/runtime/types.js";
 import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandChannel, resolveAcpCommandThreadId } from "./context.js";
-export { resolveAcpInstallCommandHint, resolveConfiguredAcpBackendId } from "./install-hints.js";
 
 export const COMMAND = "/acp";
-export const ACP_SPAWN_USAGE =
+const ACP_SPAWN_USAGE =
   "Usage: /acp spawn [harness-id] [--mode persistent|oneshot] [--thread auto|here|off] [--bind here|off] [--cwd <path>] [--label <label>].";
-export const ACP_STEER_USAGE =
+const ACP_STEER_USAGE =
   "Usage: /acp steer [--session <session-key|session-id|session-label>] <instruction>";
 export const ACP_SET_MODE_USAGE =
   "Usage: /acp set-mode <mode> [session-key|session-id|session-label]";
-export const ACP_SET_USAGE = "Usage: /acp set <key> <value> [session-key|session-id|session-label]";
+const ACP_SET_USAGE = "Usage: /acp set <key> <value> [session-key|session-id|session-label]";
 export const ACP_CWD_USAGE = "Usage: /acp cwd <path> [session-key|session-id|session-label]";
 export const ACP_PERMISSIONS_USAGE =
   "Usage: /acp permissions <profile> [session-key|session-id|session-label]";
@@ -91,7 +93,7 @@ export function stopWithText(text: string): CommandHandlerResult {
 }
 
 export function resolveAcpAction(tokens: string[]): AcpAction {
-  const action = normalizeOptionalString(tokens[0])?.toLowerCase();
+  const action = normalizeOptionalLowercaseString(tokens[0]);
   if (
     action === "spawn" ||
     action === "cancel" ||
@@ -200,7 +202,7 @@ export function parseSpawnInput(
       if (modeOption.error) {
         return { ok: false, error: `${modeOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      const raw = normalizeOptionalString(modeOption.value)?.toLowerCase();
+      const raw = normalizeOptionalLowercaseString(modeOption.value);
       if (raw !== "persistent" && raw !== "oneshot") {
         return {
           ok: false,
@@ -217,7 +219,7 @@ export function parseSpawnInput(
       if (bindOption.error) {
         return { ok: false, error: `${bindOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      const raw = normalizeOptionalString(bindOption.value)?.toLowerCase();
+      const raw = normalizeOptionalLowercaseString(bindOption.value);
       if (raw !== "here" && raw !== "off") {
         return {
           ok: false,
@@ -238,7 +240,7 @@ export function parseSpawnInput(
       if (threadOption.error) {
         return { ok: false, error: `${threadOption.error}. ${ACP_SPAWN_USAGE}` };
       }
-      const raw = normalizeOptionalString(threadOption.value)?.toLowerCase();
+      const raw = normalizeOptionalLowercaseString(threadOption.value);
       if (raw !== "auto" && raw !== "here" && raw !== "off") {
         return {
           ok: false,

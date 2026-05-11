@@ -1,4 +1,6 @@
-export type ExecApprovalResult =
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
+type ExecApprovalResult =
   | {
       kind: "denied";
       raw: string;
@@ -73,7 +75,7 @@ export function formatExecDeniedUserMessage(resultText: string): string | null {
     return null;
   }
 
-  const metadata = parsed.metadata.toLowerCase();
+  const metadata = normalizeLowercaseStringOrEmpty(parsed.metadata);
   if (metadata.includes("approval-timeout")) {
     return "Command did not run: approval timed out.";
   }

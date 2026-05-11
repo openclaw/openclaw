@@ -1,59 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-type RemoteProfileTestDeps = {
-  chromeModule: typeof import("./chrome.js");
-  InvalidBrowserNavigationUrlError: typeof import("./navigation-guard.js").InvalidBrowserNavigationUrlError;
-  pwAiModule: typeof import("./pw-ai-module.js");
-  closePlaywrightBrowserConnection: typeof import("./pw-session.js").closePlaywrightBrowserConnection;
-  createBrowserRouteContext: typeof import("./server-context.js").createBrowserRouteContext;
-  createJsonListFetchMock: typeof import("./server-context.remote-tab-ops.harness.js").createJsonListFetchMock;
-  createRemoteRouteHarness: typeof import("./server-context.remote-tab-ops.harness.js").createRemoteRouteHarness;
-  createSequentialPageLister: typeof import("./server-context.remote-tab-ops.harness.js").createSequentialPageLister;
-  makeState: typeof import("./server-context.remote-tab-ops.harness.js").makeState;
-  originalFetch: typeof import("./server-context.remote-tab-ops.harness.js").originalFetch;
-};
-
-async function loadRemoteProfileTestDeps(): Promise<RemoteProfileTestDeps> {
-  vi.resetModules();
-  await import("./server-context.chrome-test-harness.js");
-  const chromeModule = await import("./chrome.js");
-  const { InvalidBrowserNavigationUrlError } = await import("./navigation-guard.js");
-  const pwAiModule = await import("./pw-ai-module.js");
-  const { closePlaywrightBrowserConnection } = await import("./pw-session.js");
-  const { createBrowserRouteContext } = await import("./server-context.js");
-  const {
-    createJsonListFetchMock,
-    createRemoteRouteHarness,
-    createSequentialPageLister,
-    makeState,
-    originalFetch,
-  } = await import("./server-context.remote-tab-ops.harness.js");
-  return {
-    chromeModule,
-    InvalidBrowserNavigationUrlError,
-    pwAiModule,
-    closePlaywrightBrowserConnection,
-    createBrowserRouteContext,
-    createJsonListFetchMock,
-    createRemoteRouteHarness,
-    createSequentialPageLister,
-    makeState,
-    originalFetch,
-  };
-}
+import { describe, expect, it, vi } from "vitest";
+import { withBrowserFetchPreconnect } from "../../test-fetch.js";
+import {
+  installRemoteProfileTestLifecycle,
+  loadRemoteProfileTestDeps,
+  type RemoteProfileTestDeps,
+} from "./server-context.remote-profile-tab-ops.test-helpers.js";
 
 const deps: RemoteProfileTestDeps = await loadRemoteProfileTestDeps();
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  globalThis.fetch = deps.originalFetch;
-});
-
-afterEach(async () => {
-  await deps.closePlaywrightBrowserConnection().catch(() => {});
-  globalThis.fetch = deps.originalFetch;
-  vi.restoreAllMocks();
-});
+installRemoteProfileTestLifecycle(deps);
 
 describe("browser remote profile fallback and attachOnly behavior", () => {
   it("uses profile-level attachOnly when global attachOnly is false", async () => {
@@ -127,7 +81,7 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
   it("fails closed for remote tab opens in strict mode without Playwright", async () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     const { state, remote, fetchMock } = deps.createRemoteRouteHarness();
-    state.resolved.ssrfPolicy = {};
+    state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
 
     await expect(remote.openTab("https://example.com")).rejects.toBeInstanceOf(
       deps.InvalidBrowserNavigationUrlError,
@@ -173,5 +127,150 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     const opened = await remote.openTab("https://1.example");
     expect(opened.targetId).toBe("T1");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("passes configured remote CDP timeouts when opening tabs through raw CDP", async () => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    const createTargetViaCdp = vi
+      .spyOn(deps.cdpModule, "createTargetViaCdp")
+      .mockResolvedValue({ targetId: "T_REMOTE" });
+    const { state, remote } = deps.createRemoteRouteHarness(
+      vi.fn(
+        deps.createJsonListFetchMock([
+          {
+            id: "T_REMOTE",
+            title: "Remote Tab",
+            url: "https://example.com",
+            webSocketDebuggerUrl: "wss://browserless.example/devtools/page/T_REMOTE",
+            type: "page",
+          },
+        ]),
+      ),
+    );
+    state.resolved.remoteCdpTimeoutMs = 4321;
+    state.resolved.remoteCdpHandshakeTimeoutMs = 8765;
+
+    const opened = await remote.openTab("https://example.com");
+
+    expect(opened.targetId).toBe("T_REMOTE");
+    expect(createTargetViaCdp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
+        url: "https://example.com",
+        timeouts: {
+          httpTimeoutMs: 4321,
+          handshakeTimeoutMs: 8765,
+        },
+      }),
+    );
+  });
+
+  it("uses remote-class tab-open timeouts for attachOnly loopback CDP profiles", async () => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    const createTargetViaCdp = vi
+      .spyOn(deps.cdpModule, "createTargetViaCdp")
+      .mockResolvedValue({ targetId: "T_ATTACH" });
+    const state = deps.makeState("openclaw");
+    state.resolved.remoteCdpTimeoutMs = 2345;
+    state.resolved.remoteCdpHandshakeTimeoutMs = 6789;
+    state.resolved.profiles.openclaw = {
+      cdpPort: 18800,
+      attachOnly: true,
+      color: "#FF4500",
+    };
+    const fetchMock = vi.fn(
+      deps.createJsonListFetchMock([
+        {
+          id: "T_ATTACH",
+          title: "Attach Tab",
+          url: "https://example.com",
+          webSocketDebuggerUrl: "ws://127.0.0.1:18800/devtools/page/T_ATTACH",
+          type: "page",
+        },
+      ]),
+    );
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
+    const ctx = deps.createBrowserRouteContext({ getState: () => state });
+
+    const opened = await ctx.forProfile("openclaw").openTab("https://example.com");
+
+    expect(opened.targetId).toBe("T_ATTACH");
+    expect(createTargetViaCdp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cdpUrl: "http://127.0.0.1:18800",
+        timeouts: {
+          httpTimeoutMs: 2345,
+          handshakeTimeoutMs: 6789,
+        },
+      }),
+    );
+  });
+
+  it("keeps managed loopback tab opens on local CDP defaults", async () => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    const createTargetViaCdp = vi
+      .spyOn(deps.cdpModule, "createTargetViaCdp")
+      .mockResolvedValue({ targetId: "T_LOCAL" });
+    const state = deps.makeState("openclaw");
+    const fetchMock = vi.fn(
+      deps.createJsonListFetchMock([
+        {
+          id: "T_LOCAL",
+          title: "Local Tab",
+          url: "http://127.0.0.1:3000",
+          webSocketDebuggerUrl: "ws://127.0.0.1:18800/devtools/page/T_LOCAL",
+          type: "page",
+        },
+      ]),
+    );
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
+    const ctx = deps.createBrowserRouteContext({ getState: () => state });
+
+    await ctx.forProfile("openclaw").openTab("http://127.0.0.1:3000");
+
+    expect(createTargetViaCdp).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18800",
+      url: "http://127.0.0.1:3000",
+      ssrfPolicy: undefined,
+    });
+  });
+
+  it("uses the remote HTTP timeout for /json/new fallback tab opens", async () => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    vi.spyOn(deps.cdpModule, "createTargetViaCdp").mockRejectedValue(
+      new Error("Target.createTarget unavailable"),
+    );
+    const fetchMock = vi.fn(async (...args: unknown[]) => {
+      const url = String(args[0]);
+      if (url.includes("/json/new")) {
+        const init = args[1] as RequestInit | undefined;
+        expect(init?.method).toBe("PUT");
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("aborted after remote timeout")),
+            { once: true },
+          );
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const { state, remote } = deps.createRemoteRouteHarness(fetchMock);
+    state.resolved.remoteCdpTimeoutMs = 25;
+
+    const startedAt = Date.now();
+    await expect(remote.openTab("https://example.com")).rejects.toThrow(
+      /aborted after remote timeout/,
+    );
+
+    expect(Date.now() - startedAt).toBeLessThan(700);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/json/new"),
+      expect.objectContaining({
+        method: "PUT",
+        signal: expect.any(AbortSignal),
+      }),
+    );
   });
 });

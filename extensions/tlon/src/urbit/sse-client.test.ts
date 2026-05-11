@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { urbitFetch } from "./fetch.js";
 import { UrbitSSEClient } from "./sse-client.js";
 
 // Mock urbitFetch to avoid real network calls
@@ -24,7 +25,6 @@ describe("UrbitSSEClient", () => {
 
   describe("subscribe", () => {
     it("sends subscriptions added after connect", async () => {
-      const { urbitFetch } = await import("./fetch.js");
       const mockUrbitFetch = vi.mocked(urbitFetch);
       mockUrbitFetch.mockResolvedValue({
         response: { ok: true, status: 200 } as unknown as Response,
@@ -49,15 +49,16 @@ describe("UrbitSSEClient", () => {
 
       const body = JSON.parse(callArgs.init?.body as string);
       expect(body).toHaveLength(1);
-      expect(body[0]).toMatchObject({
+      expect(body[0]).toEqual({
+        id: 1,
         action: "subscribe",
+        ship: "example",
         app: "chat",
         path: "/dm/~zod",
       });
     });
 
     it("queues subscriptions before connect", async () => {
-      const { urbitFetch } = await import("./fetch.js");
       const mockUrbitFetch = vi.mocked(urbitFetch);
 
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
@@ -73,7 +74,10 @@ describe("UrbitSSEClient", () => {
       expect(mockUrbitFetch).not.toHaveBeenCalled();
       // But subscription should be queued
       expect(client.subscriptions).toHaveLength(1);
-      expect(client.subscriptions[0]).toMatchObject({
+      expect(client.subscriptions[0]).toEqual({
+        id: 1,
+        action: "subscribe",
+        ship: "example",
         app: "chat",
         path: "/dm/~zod",
       });
@@ -121,7 +125,6 @@ describe("UrbitSSEClient", () => {
     });
 
     it("resets reconnect attempts on successful connect", async () => {
-      const { urbitFetch } = await import("./fetch.js");
       const mockUrbitFetch = vi.mocked(urbitFetch);
 
       // Mock a response that returns a readable stream

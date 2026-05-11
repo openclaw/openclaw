@@ -1,6 +1,7 @@
-import { Type } from "@sinclair/typebox";
+import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { AnyAgentTool, OpenClawPluginToolContext } from "../runtime-api.js";
+import { Type } from "typebox";
 import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
 import { parseZalouserOutboundTarget } from "./session-route.js";
 import {
@@ -17,18 +18,7 @@ type AgentToolResult = {
   details: unknown;
 };
 
-function stringEnum<T extends readonly string[]>(
-  values: T,
-  options: { description?: string } = {},
-) {
-  return Type.Unsafe<T[number]>({
-    type: "string",
-    enum: [...values],
-    ...options,
-  });
-}
-
-export const ZalouserToolSchema = Type.Object(
+const ZalouserToolSchema = Type.Object(
   {
     action: stringEnum(ACTIONS, { description: `Action to perform: ${ACTIONS.join(", ")}` }),
     threadId: Type.Optional(Type.String({ description: "Thread ID for messaging" })),

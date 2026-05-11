@@ -1,31 +1,55 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
-import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.js";
 import {
-  buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
-  resolveLoaderPackageRoot,
-  shouldPreferNativeJiti,
-} from "./sdk-alias.js";
+  createPluginModuleLoaderCache,
+  getCachedPluginModuleLoader,
+  type PluginModuleLoaderCache,
+} from "./plugin-module-loader-cache.js";
+import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.js";
+import { resolvePluginLoaderTryNative, resolveLoaderPackageRoot } from "./sdk-alias.js";
 
 const OPENCLAW_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
     modulePath: fileURLToPath(import.meta.url),
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
-const loadedPublicSurfaceModules = new Map<string, unknown>();
-const publicSurfaceLocations = new Map<
+const publicSurfaceModuleCache = new Map<string, unknown>();
+const sourceArtifactRequire = createRequire(import.meta.url);
+const publicSurfaceLocationCache = new Map<
   string,
   {
     modulePath: string;
     boundaryRoot: string;
-  } | null
+  }
 >();
-const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+
+function isSourceArtifactPath(modulePath: string): boolean {
+  switch (path.extname(modulePath).toLowerCase()) {
+    case ".ts":
+    case ".tsx":
+    case ".mts":
+    case ".cts":
+    case ".mtsx":
+    case ".ctsx":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function canUseSourceArtifactRequire(params: { modulePath: string; tryNative: boolean }): boolean {
+  return (
+    !params.tryNative &&
+    isSourceArtifactPath(params.modulePath) &&
+    typeof sourceArtifactRequire.extensions?.[".ts"] === "function"
+  );
+}
 
 function createResolutionKey(params: { dirName: string; artifactBasename: string }): string {
   const bundledPluginsDir = resolveBundledPluginsDir();
@@ -60,34 +84,36 @@ function resolvePublicSurfaceLocation(params: {
   artifactBasename: string;
 }): { modulePath: string; boundaryRoot: string } | null {
   const key = createResolutionKey(params);
-  if (publicSurfaceLocations.has(key)) {
-    return publicSurfaceLocations.get(key) ?? null;
-  }
-  const resolved = resolvePublicSurfaceLocationUncached(params);
-  publicSurfaceLocations.set(key, resolved);
-  return resolved;
-}
-
-function getJiti(modulePath: string) {
-  const tryNative =
-    shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
-  const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-  const cacheKey = JSON.stringify({
-    tryNative,
-    aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
-  });
-  const cached = jitiLoaders.get(cacheKey);
+  const cached = publicSurfaceLocationCache.get(key);
   if (cached) {
     return cached;
   }
-  const loader = createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
-    tryNative,
-  });
-  jitiLoaders.set(cacheKey, loader);
-  return loader;
+  const resolved = resolvePublicSurfaceLocationUncached(params);
+  if (resolved) {
+    publicSurfaceLocationCache.set(key, resolved);
+  }
+  return resolved;
 }
 
+function getModuleLoader(modulePath: string) {
+  return getCachedPluginModuleLoader({
+    cache: moduleLoaders,
+    modulePath,
+    importerUrl: import.meta.url,
+    preferBuiltDist: true,
+    loaderFilename: import.meta.url,
+  });
+}
+
+function loadPublicSurfaceModule(modulePath: string): unknown {
+  const tryNative = resolvePluginLoaderTryNative(modulePath, { preferBuiltDist: true });
+  if (canUseSourceArtifactRequire({ modulePath, tryNative })) {
+    return sourceArtifactRequire(modulePath);
+  }
+  return getModuleLoader(modulePath)(modulePath);
+}
+
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicArtifactModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
@@ -98,19 +124,17 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  const cached = loadedPublicSurfaceModules.get(location.modulePath);
+  const cached = publicSurfaceModuleCache.get(location.modulePath);
   if (cached) {
     return cached as T;
   }
 
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: location.modulePath,
     rootPath: location.boundaryRoot,
     boundaryLabel:
-      location.boundaryRoot === OPENCLAW_PACKAGE_ROOT
-        ? "OpenClaw package root"
-        : "bundled plugin directory",
-    rejectHardlinks: false,
+      location.boundaryRoot === OPENCLAW_PACKAGE_ROOT ? "OpenClaw package root" : "plugin root",
+    rejectHardlinks: true,
   });
   if (!opened.ok) {
     throw new Error(
@@ -118,22 +142,40 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
       { cause: opened.error },
     );
   }
+  const validatedPath = opened.path;
+  const validatedStat = opened.stat;
   fs.closeSync(opened.fd);
 
+  const currentStat = fs.statSync(validatedPath);
+  if (!sameFileIdentity(validatedStat, currentStat)) {
+    throw new Error(
+      `Bundled plugin public surface changed after validation: ${params.dirName}/${params.artifactBasename}`,
+    );
+  }
+
   const sentinel = {} as T;
-  loadedPublicSurfaceModules.set(location.modulePath, sentinel);
+  publicSurfaceModuleCache.set(location.modulePath, sentinel);
+  publicSurfaceModuleCache.set(validatedPath, sentinel);
   try {
-    const loaded = getJiti(location.modulePath)(location.modulePath) as T;
+    const loaded = loadPublicSurfaceModule(validatedPath) as T;
     Object.assign(sentinel, loaded);
     return sentinel;
   } catch (error) {
-    loadedPublicSurfaceModules.delete(location.modulePath);
+    publicSurfaceModuleCache.delete(location.modulePath);
+    publicSurfaceModuleCache.delete(validatedPath);
     throw error;
   }
 }
 
+export function resolveBundledPluginPublicArtifactPath(params: {
+  dirName: string;
+  artifactBasename: string;
+}): string | null {
+  return resolvePublicSurfaceLocation(params)?.modulePath ?? null;
+}
+
 export function resetBundledPluginPublicArtifactLoaderForTest(): void {
-  loadedPublicSurfaceModules.clear();
-  publicSurfaceLocations.clear();
-  jitiLoaders.clear();
+  publicSurfaceModuleCache.clear();
+  publicSurfaceLocationCache.clear();
+  moduleLoaders.clear();
 }

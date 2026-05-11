@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
 import {
   danger,
@@ -22,6 +22,7 @@ async function normalizeUploadPaths(paths: string[]): Promise<string[]> {
   return result.paths;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Browser request result type is shared between request and success formatter.
 async function runBrowserPostAction<T>(params: {
   parent: BrowserParentOpts;
   profile: string | undefined;

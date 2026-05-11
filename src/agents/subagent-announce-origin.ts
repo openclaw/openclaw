@@ -1,130 +1,42 @@
-export type DeliveryContext = {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-};
+import { resolveRouteTargetForLoadedChannel } from "../channels/plugins/target-parsing-loaded.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
+import type {
+  DeliveryContext,
+  DeliveryContextSessionSource,
+} from "../utils/delivery-context.types.js";
+import { isInternalMessageChannel } from "../utils/message-channel.js";
+export type { DeliveryContext } from "../utils/delivery-context.types.js";
 
-type DeliveryContextSource = {
-  channel?: string;
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
-  origin?: {
-    provider?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  deliveryContext?: DeliveryContext;
-};
-
-function normalizeChannel(raw?: string): string | undefined {
-  const value = raw?.trim().toLowerCase();
-  return value || undefined;
+function stripThreadRouteSuffix(target: string): string {
+  return /^(.*):topic:[^:]+$/u.exec(target)?.[1] ?? target;
 }
 
-function normalizeText(raw?: string): string | undefined {
-  const value = raw?.trim();
-  return value || undefined;
-}
-
-function normalizeThreadId(raw?: string | number): string | number | undefined {
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return Math.trunc(raw);
-  }
-  if (typeof raw === "string") {
-    const value = raw.trim();
-    return value || undefined;
-  }
-  return undefined;
-}
-
-function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
-  if (!context) {
+function normalizeAnnounceRouteTarget(context?: DeliveryContext): string | undefined {
+  const rawTo = normalizeOptionalString(context?.to);
+  if (!rawTo) {
     return undefined;
   }
-  const normalized: DeliveryContext = {
-    channel: normalizeChannel(context.channel),
-    to: normalizeText(context.to),
-    accountId: normalizeText(context.accountId),
-  };
-  const threadId = normalizeThreadId(context.threadId);
-  if (threadId != null) {
-    normalized.threadId = threadId;
+  const channel = normalizeOptionalString(context?.channel);
+  const parsed = channel
+    ? resolveRouteTargetForLoadedChannel({
+        channel,
+        rawTarget: rawTo,
+        fallbackThreadId: context?.threadId,
+      })
+    : null;
+  let route = stripThreadRouteSuffix(parsed?.to ?? rawTo);
+  if (channel && route.toLowerCase().startsWith(`${channel}:`)) {
+    route = route.slice(channel.length + 1);
   }
-  if (
-    !normalized.channel &&
-    !normalized.to &&
-    !normalized.accountId &&
-    normalized.threadId == null
-  ) {
-    return undefined;
+  if (route.startsWith("group:") || route.startsWith("channel:")) {
+    route = route.slice(route.indexOf(":") + 1);
   }
-  return normalized;
-}
-
-function mergeDeliveryContext(
-  primary?: DeliveryContext,
-  fallback?: DeliveryContext,
-): DeliveryContext | undefined {
-  const normalizedPrimary = normalizeDeliveryContext(primary);
-  const normalizedFallback = normalizeDeliveryContext(fallback);
-  if (!normalizedPrimary && !normalizedFallback) {
-    return undefined;
-  }
-  const channelsConflict =
-    normalizedPrimary?.channel &&
-    normalizedFallback?.channel &&
-    normalizedPrimary.channel !== normalizedFallback.channel;
-  return normalizeDeliveryContext({
-    channel: normalizedPrimary?.channel ?? normalizedFallback?.channel,
-    to: channelsConflict
-      ? normalizedPrimary?.to
-      : (normalizedPrimary?.to ?? normalizedFallback?.to),
-    accountId: channelsConflict
-      ? normalizedPrimary?.accountId
-      : (normalizedPrimary?.accountId ?? normalizedFallback?.accountId),
-    threadId: channelsConflict
-      ? normalizedPrimary?.threadId
-      : (normalizedPrimary?.threadId ?? normalizedFallback?.threadId),
-  });
-}
-
-function deliveryContextFromSession(entry?: DeliveryContextSource): DeliveryContext | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  return normalizeDeliveryContext({
-    channel:
-      entry.deliveryContext?.channel ??
-      entry.lastChannel ??
-      entry.channel ??
-      entry.origin?.provider,
-    to: entry.deliveryContext?.to ?? entry.lastTo,
-    accountId: entry.deliveryContext?.accountId ?? entry.lastAccountId ?? entry.origin?.accountId,
-    threadId: entry.deliveryContext?.threadId ?? entry.lastThreadId ?? entry.origin?.threadId,
-  });
-}
-
-function isInternalMessageChannel(raw?: string): boolean {
-  return normalizeChannel(raw) === "webchat";
-}
-
-function normalizeTelegramAnnounceTarget(target: string | undefined): string | undefined {
-  const trimmed = target?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed.startsWith("group:")) {
-    return `telegram:${trimmed.slice("group:".length)}`;
-  }
-  if (!trimmed.startsWith("telegram:")) {
-    return undefined;
-  }
-  const raw = trimmed.slice("telegram:".length);
-  const topicMatch = /^(.*):topic:[^:]+$/u.exec(raw);
-  return `telegram:${topicMatch?.[1] ?? raw}`;
+  return route || undefined;
 }
 
 function shouldStripThreadFromAnnounceEntry(
@@ -138,19 +50,16 @@ function shouldStripThreadFromAnnounceEntry(
   ) {
     return false;
   }
-  const requesterChannel = normalizeChannel(normalizedRequester.channel);
-  if (requesterChannel === "telegram") {
-    const requesterTarget = normalizeTelegramAnnounceTarget(normalizedRequester.to);
-    const entryTarget = normalizeTelegramAnnounceTarget(normalizedEntry?.to);
-    if (requesterTarget && entryTarget) {
-      return requesterTarget !== entryTarget;
-    }
+  const requesterTarget = normalizeAnnounceRouteTarget(normalizedRequester);
+  const entryTarget = normalizeAnnounceRouteTarget(normalizedEntry);
+  if (requesterTarget && entryTarget) {
+    return requesterTarget !== entryTarget;
   }
   return false;
 }
 
 export function resolveAnnounceOrigin(
-  entry?: DeliveryContextSource,
+  entry?: DeliveryContextSessionSource,
   requesterOrigin?: DeliveryContext,
 ): DeliveryContext | undefined {
   const normalizedRequester = normalizeDeliveryContext(requesterOrigin);

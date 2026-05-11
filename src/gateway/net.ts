@@ -1,11 +1,15 @@
-import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
+import type { GatewayBindMode } from "../config/types.gateway.js";
+import {
+  __resetContainerEnvironmentCacheForTest,
+  isContainerEnvironment,
+} from "../infra/container-environment.js";
 import {
   pickMatchingExternalInterfaceAddress,
   readNetworkInterfaces,
 } from "../infra/network-interfaces.js";
-import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import {
   isCanonicalDottedDecimalIPv4,
   isIpInCidr,
@@ -13,6 +17,7 @@ import {
   isPrivateOrLoopbackIpAddress,
   normalizeIpAddress,
 } from "../shared/net/ip.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 /**
  * Pick the primary non-internal IPv4 address (LAN IP).
@@ -26,7 +31,7 @@ export function pickPrimaryLanIPv4(): string | undefined {
 }
 
 export function normalizeHostHeader(hostHeader?: string): string {
-  return (hostHeader ?? "").trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(hostHeader);
 }
 
 export function resolveHostName(hostHeader?: string): string {
@@ -201,82 +206,10 @@ export function resolveRequestClientIp(
   });
 }
 
-export function isLocalGatewayAddress(ip: string | undefined): boolean {
-  if (isLoopbackAddress(ip)) {
-    return true;
-  }
-  if (!ip) {
-    return false;
-  }
-  const normalized = normalizeIp(ip);
-  if (!normalized) {
-    return false;
-  }
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  if (tailnetIPv4 && normalized === tailnetIPv4.toLowerCase()) {
-    return true;
-  }
-  const tailnetIPv6 = pickPrimaryTailnetIPv6();
-  if (tailnetIPv6 && ip.trim().toLowerCase() === tailnetIPv6.toLowerCase()) {
-    return true;
-  }
-  return false;
-}
-
-/**
- * Detect whether the current process is running inside a container
- * (Docker, Podman, or Kubernetes).
- *
- * Uses two reliable heuristics:
- * 1. Presence of well-known container sentinel files such as `/.dockerenv`
- *    (Docker) or `/run/.containerenv` (Podman).
- * 2. Presence of container-related cgroup entries in `/proc/1/cgroup`
- *    (covers Docker, containerd, and Kubernetes pods).
- *
- * The result is cached after the first call so filesystem access
- * happens at most once per process lifetime.
- */
-let _containerCacheResult: boolean | undefined;
-export function isContainerEnvironment(): boolean {
-  if (_containerCacheResult !== undefined) {
-    return _containerCacheResult;
-  }
-  _containerCacheResult = detectContainerEnvironment();
-  return _containerCacheResult;
-}
-
-function detectContainerEnvironment(): boolean {
-  // 1. Check common Docker/Podman container sentinel files.
-  for (const sentinelPath of ["/.dockerenv", "/run/.containerenv", "/var/run/.containerenv"]) {
-    try {
-      fs.accessSync(sentinelPath, fs.constants.F_OK);
-      return true;
-    } catch {
-      // not present — continue
-    }
-  }
-  // 2. /proc/1/cgroup contains docker, containerd, kubepods, or lxc markers.
-  //    Covers both cgroup v1 (/docker/<id>, /kubepods/...) and cgroup v2
-  //    (kubepods.slice, cri-containerd-<id>.scope) path formats.
-  try {
-    const cgroup = fs.readFileSync("/proc/1/cgroup", "utf8");
-    if (
-      /\/docker\/|cri-containerd-[0-9a-f]|containerd\/[0-9a-f]{64}|\/kubepods[/.]|\blxc\b/.test(
-        cgroup,
-      )
-    ) {
-      return true;
-    }
-  } catch {
-    // /proc may not exist (macOS, Windows) — not a container
-  }
-  return false;
-}
-
-/** @internal — test-only helper to reset the cached container detection result. */
-export function __resetContainerCacheForTest(): void {
-  _containerCacheResult = undefined;
-}
+export {
+  isContainerEnvironment,
+  __resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
+};
 
 /**
  * Resolves gateway bind host with fallback strategy.
@@ -291,7 +224,7 @@ export function __resetContainerCacheForTest(): void {
  * @returns The bind address to use (never null)
  */
 export async function resolveGatewayBindHost(
-  bind: import("../config/config.js").GatewayBindMode | undefined,
+  bind: GatewayBindMode | undefined,
   customHost?: string,
 ): Promise<string> {
   const mode = bind ?? "loopback";
@@ -361,9 +294,7 @@ export async function resolveGatewayBindHost(
  * environment as the eventual bind decision. Host-side diagnostics should keep
  * their own explicit defaults instead of inferring from the caller process.
  */
-export function defaultGatewayBindMode(
-  tailscaleMode?: string,
-): import("../config/config.js").GatewayBindMode {
+export function defaultGatewayBindMode(tailscaleMode?: string): GatewayBindMode {
   if (tailscaleMode && tailscaleMode !== "off") {
     return "loopback";
   }
@@ -377,7 +308,7 @@ export function defaultGatewayBindMode(
  * @param host - The host address to test
  * @returns True if we can successfully bind to this address
  */
-export async function canBindToHost(host: string): Promise<boolean> {
+async function canBindToHost(host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const testServer = net.createServer();
     testServer.once("error", () => {
@@ -397,6 +328,12 @@ export async function resolveGatewayListenHosts(
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
   if (bindHost !== "127.0.0.1") {
+    return [bindHost];
+  }
+  // Windows: uv_tcp_bind6 creates a dual-stack socket (no UV_TCP_IPV6ONLY), which
+  // also accepts ::ffff:127.0.0.1 connections. Binding both ::1 and 127.0.0.1 on
+  // the same port causes non-deterministic TCP routing → HTTP requests hang silently.
+  if (process.platform === "win32") {
     return [bindHost];
   }
   const canBind = opts?.canBindToHost ?? canBindToHost;
@@ -483,7 +420,7 @@ function parseHostForAddressChecks(
   if (!host) {
     return null;
   }
-  const normalizedHost = host.trim().toLowerCase();
+  const normalizedHost = normalizeLowercaseStringOrEmpty(host);
   const canonicalHost = normalizedHost.replace(/\.+$/, "");
   if (canonicalHost === "localhost") {
     return { isLocalhost: true, unbracketedHost: canonicalHost };

@@ -29,6 +29,12 @@
   margin: 0;
 }
 
+.chat-text :where(table) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 .chat-text :where(p + p, p + ul, p + ol, p + pre, p + blockquote) {
   margin-top: 0.75em;
 }
@@ -39,6 +45,20 @@
 
 .chat-text :where(li + li) {
   margin-top: 0.25em;
+}
+
+/* Hide default marker only for unordered task lists; ordered lists keep numbers */
+.chat-text :where(ul > .task-list-item),
+.sidebar-markdown :where(ul > .task-list-item),
+.chat-thinking :where(ul > .task-list-item) {
+  list-style: none;
+}
+
+.chat-text :where(.task-list-item-checkbox),
+.sidebar-markdown :where(.task-list-item-checkbox),
+.chat-thinking :where(.task-list-item-checkbox) {
+  margin-right: 0.4em;
+  vertical-align: middle;
 }
 
 .chat-text :where(a) {

@@ -1,4 +1,17 @@
+import { parseThreadSessionSuffix } from "../sessions/session-key-utils.js";
 import { createTestRegistry } from "./channel-plugins.js";
+
+function resolveGenericSessionConversation(params: { rawId: string }) {
+  const parsed = parseThreadSessionSuffix(params.rawId);
+  const id = parsed.baseSessionKey ?? params.rawId;
+  return {
+    id,
+    threadId: parsed.threadId,
+    baseConversationId: id,
+    parentConversationCandidates:
+      parsed.threadId && parsed.baseSessionKey ? [parsed.baseSessionKey] : [],
+  };
+}
 
 function resolveTelegramSessionConversation(params: { kind: "group" | "channel"; rawId: string }) {
   if (params.kind !== "group") {
@@ -49,9 +62,11 @@ export function createSessionConversationTestRegistry() {
           selectionLabel: "Discord",
           docsPath: "/channels/discord",
           blurb: "Discord test stub.",
+          preferSessionLookupForAnnounceTarget: true,
         },
         capabilities: { chatTypes: ["direct", "channel", "thread"] },
         messaging: {
+          resolveSessionConversation: resolveGenericSessionConversation,
           resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
         },
         config: {
@@ -74,6 +89,7 @@ export function createSessionConversationTestRegistry() {
         },
         capabilities: { chatTypes: ["direct", "channel", "thread"] },
         messaging: {
+          resolveSessionConversation: resolveGenericSessionConversation,
           resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
         },
         config: {
@@ -96,6 +112,7 @@ export function createSessionConversationTestRegistry() {
         },
         capabilities: { chatTypes: ["direct", "channel", "thread"] },
         messaging: {
+          resolveSessionConversation: resolveGenericSessionConversation,
           resolveSessionTarget: ({ id }: { id: string }) => `channel:${id}`,
         },
         config: {

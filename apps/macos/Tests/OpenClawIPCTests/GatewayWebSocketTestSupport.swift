@@ -28,6 +28,14 @@ enum GatewayWebSocketTestSupport {
         return obj["id"] as? String
     }
 
+    static func connectRequestParams(from message: URLSessionWebSocketTask.Message) -> [String: Any]? {
+        guard let obj = self.requestFrameObject(from: message) else { return nil }
+        guard (obj["type"] as? String) == "req", (obj["method"] as? String) == "connect" else {
+            return nil
+        }
+        return obj["params"] as? [String: Any]
+    }
+
     static func connectOkData(id: String) -> Data {
         let json = """
         {
@@ -45,6 +53,7 @@ enum GatewayWebSocketTestSupport {
               "stateVersion": { "presence": 0, "health": 0 },
               "uptimeMs": 0
             },
+            "auth": { "role": "operator", "scopes": [] },
             "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": 30000 }
           }
         }
@@ -59,14 +68,13 @@ enum GatewayWebSocketTestSupport {
         canRetryWithDeviceToken: Bool = false,
         recommendedNextStep: String? = nil) -> Data
     {
-        let recommendedNextStepJson: String
-        if let recommendedNextStep {
-            recommendedNextStepJson = """
+        let recommendedNextStepJson = if let recommendedNextStep {
+            """
             ,
                           "recommendedNextStep": "\(recommendedNextStep)"
             """
         } else {
-            recommendedNextStepJson = ""
+            ""
         }
         let json = """
         {
@@ -74,6 +82,7 @@ enum GatewayWebSocketTestSupport {
           "id": "\(id)",
           "ok": false,
           "error": {
+            "code": "INVALID_REQUEST",
             "message": "\(message)",
             "details": {
               "code": "\(detailCode)",

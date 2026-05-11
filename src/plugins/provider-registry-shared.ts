@@ -1,6 +1,7 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+
 export function normalizeCapabilityProviderId(providerId: string | undefined): string | undefined {
-  const trimmed = providerId?.trim().toLowerCase();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalLowercaseString(providerId);
 }
 
 export function buildCapabilityProviderMaps<T extends { id: string; aliases?: readonly string[] }>(

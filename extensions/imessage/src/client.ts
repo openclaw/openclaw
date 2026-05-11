@@ -2,7 +2,8 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
 export type IMessageRpcError = {
@@ -42,7 +43,7 @@ function isTestEnv(): boolean {
   if (process.env.NODE_ENV === "test") {
     return true;
   }
-  const vitest = process.env.VITEST?.trim().toLowerCase();
+  const vitest = normalizeLowercaseStringOrEmpty(process.env.VITEST);
   return Boolean(vitest);
 }
 
@@ -106,6 +107,12 @@ export class IMessageRpcClient {
     child.on("error", (err) => {
       this.failAll(err instanceof Error ? err : new Error(String(err)));
       this.closedResolve?.();
+    });
+
+    // Without this listener, async EPIPE from a dead child crashes the
+    // gateway via uncaughtException. (#75438)
+    child.stdin.on("error", (err) => {
+      this.failAll(err instanceof Error ? err : new Error(String(err)));
     });
 
     child.on("close", (code, signal) => {
@@ -180,7 +187,21 @@ export class IMessageRpcClient {
       });
     });
 
-    this.child.stdin.write(line);
+    // Reject the specific pending request on write error (e.g. EPIPE)
+    // instead of letting it hang until timeout. (#75438)
+    this.child.stdin.write(line, (err) => {
+      if (err) {
+        const key = String(id);
+        const pending = this.pending.get(key);
+        if (pending) {
+          if (pending.timer) {
+            clearTimeout(pending.timer);
+          }
+          this.pending.delete(key);
+          pending.reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+    });
     return await response;
   }
 

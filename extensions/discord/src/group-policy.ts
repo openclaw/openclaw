@@ -4,6 +4,7 @@ import {
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/channel-policy";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAtHashSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
 import type { DiscordConfig } from "./runtime-api.js";
 
@@ -21,7 +22,7 @@ function resolveDiscordGuildEntry(guilds: DiscordConfig["guilds"], groupSpace?: 
   if (!guilds || Object.keys(guilds).length === 0) {
     return null;
   }
-  const space = groupSpace?.trim() ?? "";
+  const space = normalizeOptionalString(groupSpace) ?? "";
   if (space && guilds[space]) {
     return guilds[space];
   }

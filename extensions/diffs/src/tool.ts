@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
-import { Static, Type } from "@sinclair/typebox";
+import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { Static, Type } from "typebox";
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
@@ -33,14 +35,6 @@ const MAX_TITLE_BYTES = 1_024;
 const MAX_PATH_BYTES = 2_048;
 const MAX_LANG_BYTES = 128;
 
-function stringEnum<T extends readonly string[]>(values: T, description: string) {
-  return Type.Unsafe<T[number]>({
-    type: "string",
-    enum: [...values],
-    description,
-  });
-}
-
 const DiffsToolSchema = Type.Object(
   {
     before: Type.Optional(Type.String({ description: "Original text content." })),
@@ -70,17 +64,23 @@ const DiffsToolSchema = Type.Object(
       }),
     ),
     mode: Type.Optional(
-      stringEnum(
-        DIFF_MODES,
-        "Output mode: view, file, image (deprecated alias for file), or both. Default: both.",
-      ),
+      stringEnum(DIFF_MODES, {
+        description:
+          "Output mode: view, file, image (deprecated alias for file), or both. Default: both.",
+      }),
     ),
-    theme: Type.Optional(stringEnum(DIFF_THEMES, "Viewer theme. Default: dark.")),
-    layout: Type.Optional(stringEnum(DIFF_LAYOUTS, "Diff layout. Default: unified.")),
+    theme: Type.Optional(stringEnum(DIFF_THEMES, { description: "Viewer theme. Default: dark." })),
+    layout: Type.Optional(
+      stringEnum(DIFF_LAYOUTS, { description: "Diff layout. Default: unified." }),
+    ),
     fileQuality: Type.Optional(
-      stringEnum(DIFF_IMAGE_QUALITY_PRESETS, "File quality preset: standard, hq, or print."),
+      stringEnum(DIFF_IMAGE_QUALITY_PRESETS, {
+        description: "File quality preset: standard, hq, or print.",
+      }),
     ),
-    fileFormat: Type.Optional(stringEnum(DIFF_OUTPUT_FORMATS, "Rendered file format: png or pdf.")),
+    fileFormat: Type.Optional(
+      stringEnum(DIFF_OUTPUT_FORMATS, { description: "Rendered file format: png or pdf." }),
+    ),
     fileScale: Type.Optional(
       Type.Number({
         description: "Optional rendered-file device scale factor override (1-4).",
@@ -95,20 +95,34 @@ const DiffsToolSchema = Type.Object(
         maximum: 2400,
       }),
     ),
+    /** @deprecated Use fileQuality. */
     imageQuality: Type.Optional(
-      stringEnum(DIFF_IMAGE_QUALITY_PRESETS, "Deprecated alias for fileQuality."),
+      stringEnum(DIFF_IMAGE_QUALITY_PRESETS, {
+        description: "Deprecated alias for fileQuality.",
+        deprecated: true,
+      }),
     ),
-    imageFormat: Type.Optional(stringEnum(DIFF_OUTPUT_FORMATS, "Deprecated alias for fileFormat.")),
+    /** @deprecated Use fileFormat. */
+    imageFormat: Type.Optional(
+      stringEnum(DIFF_OUTPUT_FORMATS, {
+        description: "Deprecated alias for fileFormat.",
+        deprecated: true,
+      }),
+    ),
+    /** @deprecated Use fileScale. */
     imageScale: Type.Optional(
       Type.Number({
         description: "Deprecated alias for fileScale.",
+        deprecated: true,
         minimum: 1,
         maximum: 4,
       }),
     ),
+    /** @deprecated Use fileMaxWidth. */
     imageMaxWidth: Type.Optional(
       Type.Number({
         description: "Deprecated alias for fileMaxWidth.",
+        deprecated: true,
         minimum: 640,
         maximum: 2400,
       }),
@@ -135,7 +149,7 @@ const DiffsToolSchema = Type.Object(
 
 type DiffsToolParams = Static<typeof DiffsToolSchema>;
 type DiffsToolRawParams = DiffsToolParams & {
-  // Keep backward compatibility for direct calls that still pass `format`.
+  /** @deprecated Use fileFormat. */
   format?: DiffOutputFormat;
 };
 
@@ -161,7 +175,7 @@ export function createDiffsTool(params: {
       const theme = normalizeTheme(toolParams.theme, params.defaults.theme);
       const layout = normalizeLayout(toolParams.layout, params.defaults.layout);
       const expandUnchanged = toolParams.expandUnchanged === true;
-      const ttlMs = normalizeTtlMs(toolParams.ttlSeconds);
+      const ttlMs = normalizeTtlMs(toolParams.ttlSeconds ?? params.defaults.ttlSeconds);
       const image = resolveDiffImageRenderOptions({
         defaults: params.defaults,
         fileFormat: normalizeOutputFormat(
@@ -427,20 +441,15 @@ function buildArtifactContext(
   }
 
   const artifactContext = {
-    agentId: normalizeContextString(context.agentId),
-    sessionId: normalizeContextString(context.sessionId),
-    messageChannel: normalizeContextString(context.messageChannel),
-    agentAccountId: normalizeContextString(context.agentAccountId),
+    agentId: normalizeOptionalString(context.agentId),
+    sessionId: normalizeOptionalString(context.sessionId),
+    messageChannel: normalizeOptionalString(context.messageChannel),
+    agentAccountId: normalizeOptionalString(context.agentAccountId),
   };
 
   return Object.values(artifactContext).some((value) => value !== undefined)
     ? artifactContext
     : undefined;
-}
-
-function normalizeContextString(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
 }
 
 function normalizeDiffInput(params: DiffsToolParams): DiffInput {
@@ -469,9 +478,9 @@ function normalizeDiffInput(params: DiffsToolParams): DiffInput {
   }
   assertMaxBytes(before, "before", MAX_BEFORE_AFTER_BYTES);
   assertMaxBytes(after, "after", MAX_BEFORE_AFTER_BYTES);
-  const path = params.path?.trim() || undefined;
-  const lang = params.lang?.trim() || undefined;
-  const title = params.title?.trim() || undefined;
+  const path = normalizeOptionalString(params.path);
+  const lang = normalizeOptionalString(params.lang);
+  const title = normalizeOptionalString(params.title);
   if (path) {
     assertMaxBytes(path, "path", MAX_PATH_BYTES);
   }

@@ -1,4 +1,4 @@
-import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -12,12 +12,138 @@ import {
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
+import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let parseTelegramNativeCommandCallbackData: typeof import("./bot-native-commands.js").parseTelegramNativeCommandCallbackData;
 let resolveTelegramNativeCommandDisableBlockStreaming: typeof import("./bot-native-commands.js").resolveTelegramNativeCommandDisableBlockStreaming;
+
+type CommandBotHarness = ReturnType<typeof createCommandBot>;
+type TelegramInlineKeyboardReplyMarkup = {
+  inline_keyboard?: Array<Array<{ callback_data?: string }>>;
+};
+type PlugCommandHarnessParams = {
+  botHarness?: CommandBotHarness;
+  cfg?: OpenClawConfig;
+  command?: Record<string, unknown>;
+  args?: string;
+  result?: Record<string, unknown>;
+  registerOverrides?: Partial<Parameters<typeof registerTelegramNativeCommands>[0]>;
+};
+
+function primePlugCommand(params: PlugCommandHarnessParams = {}) {
+  pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+    {
+      name: "plug",
+      description: "Plugin command",
+    },
+  ] as never);
+  pluginCommandMocks.matchPluginCommand.mockReturnValue({
+    command: {
+      key: "plug",
+      requireAuth: false,
+      ...params.command,
+    },
+    args: params.args,
+  } as never);
+  pluginCommandMocks.executePluginCommand.mockResolvedValue(
+    (params.result ?? { text: "ok" }) as never,
+  );
+}
+
+function registerPlugCommand(params: PlugCommandHarnessParams = {}) {
+  const botHarness = params.botHarness ?? createCommandBot();
+  primePlugCommand(params);
+  registerTelegramNativeCommands({
+    ...createNativeCommandTestParams(params.cfg ?? {}, {
+      bot: botHarness.bot,
+      ...params.registerOverrides,
+    }),
+  });
+  const handler = botHarness.commandHandlers.get("plug");
+  if (!handler) {
+    throw new Error("expected plug command handler to be registered");
+  }
+  return {
+    ...botHarness,
+    handler,
+  };
+}
+
+function collectCallbackData(replyMarkup: TelegramInlineKeyboardReplyMarkup | undefined): string[] {
+  const callbackData: string[] = [];
+  for (const row of replyMarkup?.inline_keyboard ?? []) {
+    for (const button of row) {
+      if (button.callback_data) {
+        callbackData.push(button.callback_data);
+      }
+    }
+  }
+  return callbackData;
+}
+
+function firstCall(mock: { mock: { calls: Array<Array<unknown>> } }) {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected first mock call");
+  }
+  return call;
+}
+
+function firstCallArg(mock: { mock: { calls: Array<Array<unknown>> } }, argIndex = 0) {
+  const arg = firstCall(mock)[argIndex];
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`expected first mock call arg ${argIndex}`);
+  }
+  return arg as Record<string, unknown>;
+}
+
+function firstDeliverRepliesParams() {
+  return firstCallArg(deliverReplies as unknown as { mock: { calls: Array<Array<unknown>> } });
+}
+
+function firstExecutePluginCommandParams() {
+  return firstCallArg(
+    pluginCommandMocks.executePluginCommand as unknown as {
+      mock: { calls: Array<Array<unknown>> };
+    },
+  );
+}
+
+function replyAt(params: Record<string, unknown>, index = 0) {
+  const replies = params.replies as Array<Record<string, unknown>> | undefined;
+  const reply = replies?.[index];
+  if (!reply) {
+    throw new Error(`expected reply ${index}`);
+  }
+  return reply;
+}
+
+function registerCustomTelegramCommandMenu(
+  customCommands: NonNullable<TelegramAccountConfig["customCommands"]>,
+) {
+  const setMyCommands = vi.fn().mockResolvedValue(undefined);
+  const runtimeLog = vi.fn();
+
+  registerTelegramNativeCommands({
+    ...createNativeCommandTestParams({ commands: { native: false } }),
+    bot: {
+      api: {
+        setMyCommands,
+        sendMessage: vi.fn().mockResolvedValue(undefined),
+      },
+      command: vi.fn(),
+    } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+    runtime: { log: runtimeLog } as unknown as RuntimeEnv,
+    telegramCfg: { customCommands } as TelegramAccountConfig,
+    nativeEnabled: false,
+    nativeSkillsEnabled: false,
+  });
+
+  return { runtimeLog, setMyCommands };
+}
 
 describe("registerTelegramNativeCommands", () => {
   beforeAll(async () => {
@@ -29,6 +155,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   beforeEach(() => {
+    resetTelegramForumFlagCacheForTest();
     resetNativeCommandMenuMocks();
     resetPluginCommandMocks();
   });
@@ -70,30 +197,11 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("truncates Telegram command registration to 100 commands", async () => {
-    const cfg: OpenClawConfig = {
-      commands: { native: false },
-    };
     const customCommands = Array.from({ length: 120 }, (_, index) => ({
       command: `cmd_${index}`,
       description: `Command ${index}`,
     }));
-    const setMyCommands = vi.fn().mockResolvedValue(undefined);
-    const runtimeLog = vi.fn();
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(cfg),
-      bot: {
-        api: {
-          setMyCommands,
-          sendMessage: vi.fn().mockResolvedValue(undefined),
-        },
-        command: vi.fn(),
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-      runtime: { log: runtimeLog } as unknown as RuntimeEnv,
-      telegramCfg: { customCommands } as TelegramAccountConfig,
-      nativeEnabled: false,
-      nativeSkillsEnabled: false,
-    });
+    const { runtimeLog, setMyCommands } = registerCustomTelegramCommandMenu(customCommands);
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
     expect(registeredCommands).toHaveLength(100);
@@ -104,30 +212,11 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("keeps sub-100 commands by shortening long descriptions to fit Telegram payload budget", async () => {
-    const cfg: OpenClawConfig = {
-      commands: { native: false },
-    };
     const customCommands = Array.from({ length: 92 }, (_, index) => ({
       command: `cmd_${index}`,
       description: `Command ${index} ` + "x".repeat(120),
     }));
-    const setMyCommands = vi.fn().mockResolvedValue(undefined);
-    const runtimeLog = vi.fn();
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(cfg),
-      bot: {
-        api: {
-          setMyCommands,
-          sendMessage: vi.fn().mockResolvedValue(undefined),
-        },
-        command: vi.fn(),
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-      runtime: { log: runtimeLog } as unknown as RuntimeEnv,
-      telegramCfg: { customCommands } as TelegramAccountConfig,
-      nativeEnabled: false,
-      nativeSkillsEnabled: false,
-    });
+    const { runtimeLog, setMyCommands } = registerCustomTelegramCommandMenu(customCommands);
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
     expect(registeredCommands).toHaveLength(92);
@@ -157,8 +246,9 @@ describe("registerTelegramNativeCommands", () => {
     });
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
-    expect(registeredCommands.some((entry) => entry.command === "export_session")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "export-session")).toBe(false);
+    const registeredCommandNames = registeredCommands.map((entry) => entry.command);
+    expect(registeredCommandNames).toContain("export_session");
+    expect(registeredCommandNames).not.toContain("export-session");
 
     const registeredHandlers = command.mock.calls.map(([name]) => name);
     expect(registeredHandlers).toContain("export_session");
@@ -193,45 +283,49 @@ describe("registerTelegramNativeCommands", () => {
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
 
     expect(registeredCommands.length).toBeGreaterThan(0);
+    const registeredCommandNames = registeredCommands.map((entry) => entry.command);
     for (const entry of registeredCommands) {
       expect(entry.command.includes("-")).toBe(false);
       expect(TELEGRAM_COMMAND_NAME_PATTERN.test(entry.command)).toBe(true);
     }
 
-    expect(registeredCommands.some((entry) => entry.command === "export_session")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "custom_backup")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "plugin_status")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "plugin-status")).toBe(false);
-    expect(registeredCommands.some((entry) => entry.command === "custom-bad")).toBe(false);
+    expect(registeredCommandNames).toContain("export_session");
+    expect(registeredCommandNames).toContain("custom_backup");
+    expect(registeredCommandNames).toContain("plugin_status");
+    expect(registeredCommandNames).not.toContain("plugin-status");
+    expect(registeredCommandNames).not.toContain("custom-bad");
   });
 
   it("prefixes native command menu callback data so callback handlers can preserve native routing", async () => {
     const { bot, commandHandlers, sendMessage } = createCommandBot();
 
     registerTelegramNativeCommands({
-      ...createNativeCommandTestParams({}, { bot }),
+      ...createNativeCommandTestParams({}, { bot, allowFrom: [200] }),
     });
 
     const handler = commandHandlers.get("fast");
-    expect(handler).toBeTruthy();
-    await handler?.(createPrivateCommandContext());
+    if (!handler) {
+      throw new Error("expected fast command handler to be registered");
+    }
+    await handler(createPrivateCommandContext());
 
     const replyMarkup = sendMessage.mock.calls[0]?.[2]?.reply_markup as
-      | { inline_keyboard?: Array<Array<{ callback_data?: string }>> }
+      | TelegramInlineKeyboardReplyMarkup
       | undefined;
-    const callbackData = replyMarkup?.inline_keyboard
-      ?.flat()
-      .map((button) => button.callback_data)
-      .filter(Boolean);
+    const callbackData = collectCallbackData(replyMarkup);
 
-    expect(callbackData).toEqual(["tgcmd:/fast status", "tgcmd:/fast on", "tgcmd:/fast off"]);
+    expect(callbackData).toEqual([
+      "tgcmd:/fast status",
+      "tgcmd:/fast on",
+      "tgcmd:/fast off",
+      "tgcmd:/fast default",
+    ]);
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast status")).toBe("/fast status");
+    expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast default")).toBe("/fast default");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:fast status")).toBeNull();
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {
-    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
-    const sendMessage = vi.fn().mockResolvedValue(undefined);
     const cfg: OpenClawConfig = {
       agents: {
         list: [{ id: "main", default: true }, { id: "work" }],
@@ -239,48 +333,50 @@ describe("registerTelegramNativeCommands", () => {
       bindings: [{ agentId: "work", match: { channel: "telegram", accountId: "default" } }],
     };
 
-    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
-      {
-        name: "plug",
-        description: "Plugin command",
+    const { handler, sendMessage } = registerPlugCommand({
+      cfg,
+      result: {
+        text: "with media",
+        mediaUrl: "/tmp/workspace-work/render.png",
       },
-    ] as never);
-    pluginCommandMocks.matchPluginCommand.mockReturnValue({
-      command: { key: "plug", requireAuth: false },
-      args: undefined,
-    } as never);
-    pluginCommandMocks.executePluginCommand.mockResolvedValue({
-      text: "with media",
-      mediaUrl: "/tmp/workspace-work/render.png",
-    } as never);
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(cfg, {
-        bot: {
-          api: {
-            setMyCommands: vi.fn().mockResolvedValue(undefined),
-            sendMessage,
-          },
-          command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
-            commandHandlers.set(name, cb);
-          }),
-        } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-      }),
     });
 
-    const handler = commandHandlers.get("plug");
-    expect(handler).toBeTruthy();
-    await handler?.(createPrivateCommandContext());
+    await handler(createPrivateCommandContext());
 
-    const firstDeliverRepliesCall = deliverReplies.mock.calls.at(0) as [unknown] | undefined;
-    expect(firstDeliverRepliesCall?.[0]).toEqual(
-      expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([
-          expect.stringMatching(/[\\/]\.openclaw[\\/]workspace-work$/),
-        ]),
-      }),
+    const deliverParams = firstDeliverRepliesParams();
+    const mediaLocalRoots = deliverParams.mediaLocalRoots as Array<string> | undefined;
+    expect(mediaLocalRoots?.some((root) => /[\\/]\.openclaw[\\/]workspace-work$/.test(root))).toBe(
+      true,
     );
     expect(sendMessage).not.toHaveBeenCalledWith(123, "Command not found.");
+  });
+
+  it("replies to unmatched plugin commands in the originating forum topic", async () => {
+    const { handler, sendMessage } = registerPlugCommand();
+    pluginCommandMocks.matchPluginCommand.mockReturnValue(null as never);
+
+    await handler({
+      match: "",
+      message: {
+        message_id: 2,
+        date: Math.floor(Date.now() / 1000),
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Forum Group",
+          is_forum: true,
+        },
+        message_thread_id: 77,
+        from: { id: 200, username: "bob" },
+      },
+    });
+
+    expect(sendMessage.mock.calls[0]?.[0]).toBe(-1001234567890);
+    expect(sendMessage.mock.calls[0]?.[1]).toBe("Command not found.");
+    expect(
+      (sendMessage.mock.calls[0]?.[2] as { message_thread_id?: number } | undefined)
+        ?.message_thread_id,
+    ).toBe(77);
   });
 
   it("uses nested streaming.block.enabled for native command block-streaming behavior", () => {
@@ -305,142 +401,91 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("uses plugin command metadata to send and edit a Telegram progress placeholder", async () => {
-    const { bot, commandHandlers, sendMessage, deleteMessage } = createCommandBot();
-
-    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
-      {
-        name: "plug",
-        description: "Plugin command",
-      },
-    ] as never);
-    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+    const { handler, sendMessage, deleteMessage } = registerPlugCommand({
+      args: "now",
       command: {
-        key: "plug",
-        requireAuth: false,
         nativeProgressMessages: {
           telegram:
             "Running this command now...\n\nI'll edit this message with the final result when it's ready.",
         },
       },
-      args: "now",
-    } as never);
-    pluginCommandMocks.executePluginCommand.mockResolvedValue({
-      text: "Command completed successfully",
-    } as never);
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams({}, { bot }),
+      result: {
+        text: "Command completed successfully",
+      },
     });
 
-    const handler = commandHandlers.get("plug");
-    expect(handler).toBeTruthy();
-    await handler?.(
+    await handler(
       createPrivateCommandContext({
         match: "now",
       }),
     );
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      100,
-      expect.stringContaining("Running this command now"),
-      undefined,
+    expect(sendMessage.mock.calls[0]?.[0]).toBe(100);
+    expect(String(sendMessage.mock.calls[0]?.[1])).toContain("Running this command now");
+    expect(sendMessage.mock.calls[0]?.[2]).toBeUndefined();
+    const editCall = firstCall(
+      editMessageTelegram as unknown as { mock: { calls: Array<Array<unknown>> } },
     );
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      100,
-      999,
-      expect.stringContaining("Command completed successfully"),
-      expect.objectContaining({
-        accountId: "default",
-      }),
-    );
+    expect(editCall[0]).toBe(100);
+    expect(editCall[1]).toBe(999);
+    expect(String(editCall[2])).toContain("Command completed successfully");
+    expect((editCall[3] as { accountId?: string } | undefined)?.accountId).toBe("default");
     expect(deleteMessage).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
-    expect(emitTelegramMessageSentHooks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatId: "100",
-        content: "Command completed successfully",
-        messageId: 999,
-        success: true,
-      }),
+    const hookParams = firstCallArg(
+      emitTelegramMessageSentHooks as unknown as { mock: { calls: Array<Array<unknown>> } },
     );
+    expect(hookParams.chatId).toBe("100");
+    expect(hookParams.content).toBe("Command completed successfully");
+    expect(hookParams.messageId).toBe(999);
+    expect(hookParams.success).toBe(true);
   });
 
   it("preserves Telegram buttons when editing a metadata-driven progress placeholder", async () => {
-    const { bot, commandHandlers, sendMessage, deleteMessage } = createCommandBot();
-
-    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
-      {
-        name: "plug",
-        description: "Plugin command",
-      },
-    ] as never);
-    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+    const { handler, sendMessage, deleteMessage } = registerPlugCommand({
+      args: "now",
       command: {
-        key: "plug",
-        requireAuth: false,
         nativeProgressMessages: { telegram: "Working on it..." },
       },
-      args: "now",
-    } as never);
-    pluginCommandMocks.executePluginCommand.mockResolvedValue({
-      text: "Choose an option",
-      channelData: {
-        telegram: {
-          buttons: [[{ text: "Approve", callback_data: "approve" }]],
+      result: {
+        text: "Choose an option",
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Approve", callback_data: "approve" }]],
+          },
         },
       },
-    } as never);
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams({}, { bot }),
     });
 
-    const handler = commandHandlers.get("plug");
-    expect(handler).toBeTruthy();
-    await handler?.(createPrivateCommandContext({ match: "now" }));
+    await handler(createPrivateCommandContext({ match: "now" }));
 
     expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      100,
-      999,
-      "Choose an option",
-      expect.objectContaining({
-        buttons: [[{ text: "Approve", callback_data: "approve" }]],
-      }),
+    const editCall = firstCall(
+      editMessageTelegram as unknown as { mock: { calls: Array<Array<unknown>> } },
     );
+    expect(editCall[0]).toBe(100);
+    expect(editCall[1]).toBe(999);
+    expect(editCall[2]).toBe("Choose an option");
+    expect((editCall[3] as { buttons?: unknown } | undefined)?.buttons).toEqual([
+      [{ text: "Approve", callback_data: "approve" }],
+    ]);
     expect(deleteMessage).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("falls back to a normal reply when a metadata-driven progress result is not editable", async () => {
-    const { bot, commandHandlers, sendMessage, deleteMessage } = createCommandBot();
-
-    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
-      {
-        name: "plug",
-        description: "Plugin command",
-      },
-    ] as never);
-    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+    const { handler, sendMessage, deleteMessage } = registerPlugCommand({
+      args: "now",
       command: {
-        key: "plug",
-        requireAuth: false,
         nativeProgressMessages: { telegram: "Working on it..." },
       },
-      args: "now",
-    } as never);
-    pluginCommandMocks.executePluginCommand.mockResolvedValue({
-      text: "rich output",
-      mediaUrl: "/tmp/render.png",
-    } as never);
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams({}, { bot }),
+      result: {
+        text: "rich output",
+        mediaUrl: "/tmp/render.png",
+      },
     });
 
-    const handler = commandHandlers.get("plug");
-    expect(handler).toBeTruthy();
-    await handler?.(
+    await handler(
       createPrivateCommandContext({
         match: "now",
       }),
@@ -449,101 +494,59 @@ describe("registerTelegramNativeCommands", () => {
     expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
     expect(editMessageTelegram).not.toHaveBeenCalled();
     expect(deleteMessage).toHaveBeenCalledWith(100, 999);
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [expect.objectContaining({ mediaUrl: "/tmp/render.png" })],
-      }),
-    );
+    expect(replyAt(firstDeliverRepliesParams()).mediaUrl).toBe("/tmp/render.png");
   });
 
   it("cleans up the progress placeholder before falling back after an edit failure", async () => {
-    const { bot, commandHandlers, sendMessage, deleteMessage } = createCommandBot();
-
-    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
-      {
-        name: "plug",
-        description: "Plugin command",
-      },
-    ] as never);
-    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+    const { handler, sendMessage, deleteMessage } = registerPlugCommand({
+      args: "now",
       command: {
-        key: "plug",
-        requireAuth: false,
         nativeProgressMessages: { telegram: "Working on it..." },
       },
-      args: "now",
-    } as never);
-    pluginCommandMocks.executePluginCommand.mockResolvedValue({
-      text: "Command completed successfully",
-    } as never);
+      result: {
+        text: "Command completed successfully",
+      },
+    });
     editMessageTelegram.mockRejectedValueOnce(new Error("message to edit not found"));
 
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams({}, { bot }),
-    });
-
-    const handler = commandHandlers.get("plug");
-    expect(handler).toBeTruthy();
-    await handler?.(createPrivateCommandContext({ match: "now" }));
+    await handler(createPrivateCommandContext({ match: "now" }));
 
     expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
     expect(editMessageTelegram).toHaveBeenCalledTimes(1);
     expect(deleteMessage).toHaveBeenCalledWith(100, 999);
-    expect(deliverReplies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replies: [expect.objectContaining({ text: "Command completed successfully" })],
-      }),
-    );
+    expect(replyAt(firstDeliverRepliesParams()).text).toBe("Command completed successfully");
   });
 
   it("cleans up the progress placeholder when Telegram suppresses a local exec approval reply", async () => {
-    const { bot, commandHandlers, sendMessage, deleteMessage } = createCommandBot();
-
-    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
-      {
-        name: "plug",
-        description: "Plugin command",
-      },
-    ] as never);
-    pluginCommandMocks.matchPluginCommand.mockReturnValue({
+    const { handler, sendMessage, deleteMessage } = registerPlugCommand({
+      args: "now",
       command: {
-        key: "plug",
-        requireAuth: false,
         nativeProgressMessages: { telegram: "Working on it..." },
       },
-      args: "now",
-    } as never);
-    pluginCommandMocks.executePluginCommand.mockResolvedValue({
-      text: "Approval required.\n\n```txt\n/approve 7f423fdc allow-once\n```",
-      channelData: {
-        execApproval: {
-          approvalId: "7f423fdc-1111-2222-3333-444444444444",
-          approvalSlug: "7f423fdc",
-          allowedDecisions: ["allow-once", "allow-always", "deny"],
+      result: {
+        text: "Approval required.\n\n```txt\n/approve 7f423fdc allow-once\n```",
+        channelData: {
+          execApproval: {
+            approvalId: "7f423fdc-1111-2222-3333-444444444444",
+            approvalSlug: "7f423fdc",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
         },
       },
-    } as never);
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(
-        {
-          channels: {
-            telegram: {
-              execApprovals: {
-                enabled: true,
-                approvers: ["12345"],
-                target: "dm",
-              },
+      cfg: {
+        channels: {
+          telegram: {
+            execApprovals: {
+              enabled: true,
+              approvers: ["12345"],
+              target: "dm",
             },
           },
         },
-        { bot },
-      ),
+      },
     });
 
-    const handler = commandHandlers.get("plug");
-    expect(handler).toBeTruthy();
-    await handler?.(createPrivateCommandContext({ match: "now" }));
+    await handler(createPrivateCommandContext({ match: "now" }));
 
     expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
     expect(deleteMessage).toHaveBeenCalledWith(100, 999);
@@ -552,93 +555,34 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("sends plugin command error replies silently when silentErrorReplies is enabled", async () => {
-    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          silentErrorReplies: true,
+    const { handler } = registerPlugCommand({
+      cfg: {
+        channels: {
+          telegram: {
+            silentErrorReplies: true,
+          },
         },
       },
-    };
-
-    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
-      {
-        name: "plug",
-        description: "Plugin command",
+      result: {
+        text: "plugin failed",
+        isError: true,
       },
-    ] as never);
-    pluginCommandMocks.matchPluginCommand.mockReturnValue({
-      command: { key: "plug", requireAuth: false },
-      args: undefined,
-    } as never);
-    pluginCommandMocks.executePluginCommand.mockResolvedValue({
-      text: "plugin failed",
-      isError: true,
-    } as never);
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(cfg, {
-        bot: {
-          api: {
-            setMyCommands: vi.fn().mockResolvedValue(undefined),
-            sendMessage: vi.fn().mockResolvedValue(undefined),
-          },
-          command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
-            commandHandlers.set(name, cb);
-          }),
-        } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-      }),
-      telegramCfg: { silentErrorReplies: true } as TelegramAccountConfig,
+      registerOverrides: {
+        telegramCfg: { silentErrorReplies: true } as TelegramAccountConfig,
+      },
     });
 
-    const handler = commandHandlers.get("plug");
-    expect(handler).toBeTruthy();
-    await handler?.(createPrivateCommandContext());
+    await handler(createPrivateCommandContext());
 
-    const firstDeliverRepliesCall = deliverReplies.mock.calls.at(0) as [unknown] | undefined;
-    expect(firstDeliverRepliesCall?.[0]).toEqual(
-      expect.objectContaining({
-        silent: true,
-        replies: [expect.objectContaining({ isError: true })],
-      }),
-    );
+    const deliverParams = firstDeliverRepliesParams();
+    expect(deliverParams.silent).toBe(true);
+    expect(replyAt(deliverParams).isError).toBe(true);
   });
 
   it("forwards topic-scoped binding context to Telegram plugin commands", async () => {
-    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+    const { handler } = registerPlugCommand();
 
-    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
-      {
-        name: "plug",
-        description: "Plugin command",
-      },
-    ] as never);
-    pluginCommandMocks.matchPluginCommand.mockReturnValue({
-      command: { key: "plug", requireAuth: false },
-      args: undefined,
-    } as never);
-    pluginCommandMocks.executePluginCommand.mockResolvedValue({ text: "ok" } as never);
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(
-        {},
-        {
-          bot: {
-            api: {
-              setMyCommands: vi.fn().mockResolvedValue(undefined),
-              sendMessage: vi.fn().mockResolvedValue(undefined),
-            },
-            command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
-              commandHandlers.set(name, cb);
-            }),
-          } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-        },
-      ),
-    });
-
-    const handler = commandHandlers.get("plug");
-    expect(handler).toBeTruthy();
-    await handler?.({
+    await handler({
       match: "",
       message: {
         message_id: 2,
@@ -654,54 +598,21 @@ describe("registerTelegramNativeCommands", () => {
       },
     });
 
-    expect(pluginCommandMocks.executePluginCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        accountId: "default",
-        from: "telegram:group:-1001234567890:topic:77",
-        to: "telegram:-1001234567890",
-        messageThreadId: 77,
-      }),
-    );
+    const commandParams = firstExecutePluginCommandParams();
+    expect(commandParams.channel).toBe("telegram");
+    expect(commandParams.accountId).toBe("default");
+    expect(commandParams.from).toBe("telegram:group:-1001234567890:topic:77");
+    expect(commandParams.to).toBe("telegram:-1001234567890");
+    expect(commandParams.messageThreadId).toBe(77);
   });
 
   it("treats Telegram forum #General commands as topic 1 when Telegram omits topic metadata", async () => {
-    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
     const getChat = vi.fn(async () => ({ id: -1001234567890, type: "supergroup", is_forum: true }));
-
-    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
-      {
-        name: "plug",
-        description: "Plugin command",
-      },
-    ] as never);
-    pluginCommandMocks.matchPluginCommand.mockReturnValue({
-      command: { key: "plug", requireAuth: false },
-      args: undefined,
-    } as never);
-    pluginCommandMocks.executePluginCommand.mockResolvedValue({ text: "ok" } as never);
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(
-        {},
-        {
-          bot: {
-            api: {
-              setMyCommands: vi.fn().mockResolvedValue(undefined),
-              sendMessage: vi.fn().mockResolvedValue(undefined),
-              getChat,
-            },
-            command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
-              commandHandlers.set(name, cb);
-            }),
-          } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-        },
-      ),
+    const { handler } = registerPlugCommand({
+      botHarness: createCommandBot({ api: { getChat } }),
     });
 
-    const handler = commandHandlers.get("plug");
-    expect(handler).toBeTruthy();
-    await handler?.({
+    await handler({
       match: "",
       message: {
         message_id: 2,
@@ -716,60 +627,23 @@ describe("registerTelegramNativeCommands", () => {
     });
 
     expect(getChat).toHaveBeenCalledWith(-1001234567890);
-    expect(pluginCommandMocks.executePluginCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        from: "telegram:group:-1001234567890:topic:1",
-        to: "telegram:-1001234567890",
-        messageThreadId: 1,
-      }),
-    );
+    const commandParams = firstExecutePluginCommandParams();
+    expect(commandParams.accountId).toBe("default");
+    expect(commandParams.from).toBe("telegram:group:-1001234567890:topic:1");
+    expect(commandParams.to).toBe("telegram:-1001234567890");
+    expect(commandParams.messageThreadId).toBe(1);
   });
 
   it("forwards direct-message binding context to Telegram plugin commands", async () => {
-    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
+    const { handler } = registerPlugCommand();
 
-    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
-      {
-        name: "plug",
-        description: "Plugin command",
-      },
-    ] as never);
-    pluginCommandMocks.matchPluginCommand.mockReturnValue({
-      command: { key: "plug", requireAuth: false },
-      args: undefined,
-    } as never);
-    pluginCommandMocks.executePluginCommand.mockResolvedValue({ text: "ok" } as never);
+    await handler(createPrivateCommandContext({ chatId: 100, userId: 200 }));
 
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(
-        {},
-        {
-          bot: {
-            api: {
-              setMyCommands: vi.fn().mockResolvedValue(undefined),
-              sendMessage: vi.fn().mockResolvedValue(undefined),
-            },
-            command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
-              commandHandlers.set(name, cb);
-            }),
-          } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-        },
-      ),
-    });
-
-    const handler = commandHandlers.get("plug");
-    expect(handler).toBeTruthy();
-    await handler?.(createPrivateCommandContext({ chatId: 100, userId: 200 }));
-
-    expect(pluginCommandMocks.executePluginCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        accountId: "default",
-        from: "telegram:100",
-        to: "telegram:100",
-        messageThreadId: undefined,
-      }),
-    );
+    const commandParams = firstExecutePluginCommandParams();
+    expect(commandParams.channel).toBe("telegram");
+    expect(commandParams.accountId).toBe("default");
+    expect(commandParams.from).toBe("telegram:100");
+    expect(commandParams.to).toBe("telegram:100");
+    expect(commandParams.messageThreadId).toBeUndefined();
   });
 });

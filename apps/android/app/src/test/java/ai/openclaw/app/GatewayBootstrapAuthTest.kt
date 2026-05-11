@@ -1,9 +1,16 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.DeviceAuthStore
+import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
+import ai.openclaw.app.node.InvokeDispatcher
+import ai.openclaw.app.protocol.OpenClawTalkCommand
+import ai.openclaw.app.voice.TalkModeManager
+import android.Manifest
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -13,6 +20,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.lang.reflect.Field
 import java.util.UUID
@@ -21,14 +29,14 @@ import java.util.UUID
 @Config(sdk = [34])
 class GatewayBootstrapAuthTest {
   @Test
-  fun skipsOperatorSessionWhenOnlyBootstrapAuthExists() {
-    assertFalse(
+  fun connectsOperatorSessionWhenOnlyBootstrapAuthExists() {
+    assertTrue(
       shouldConnectOperatorSession(
         NodeRuntime.GatewayConnectAuth(token = "", bootstrapToken = "bootstrap-1", password = ""),
         storedOperatorToken = "",
       ),
     )
-    assertFalse(
+    assertTrue(
       shouldConnectOperatorSession(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
@@ -73,6 +81,20 @@ class GatewayBootstrapAuthTest {
       )
 
     assertEquals(NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = null), resolved)
+  }
+
+  @Test
+  fun resolveOperatorSessionConnectAuthUsesBootstrapWhenNoStoredOperatorTokenExists() {
+    val resolved =
+      resolveOperatorSessionConnectAuth(
+        auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
+        storedOperatorToken = null,
+      )
+
+    assertEquals(
+      NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
+      resolved,
+    )
   }
 
   @Test
@@ -152,7 +174,7 @@ class GatewayBootstrapAuthTest {
 
       assertEquals("fp-1", prefs.loadGatewayTlsFingerprint(endpoint.stableId))
       assertEquals("setup-bootstrap-token", desiredBootstrapToken(runtime, "nodeSession"))
-      assertNull(desiredBootstrapToken(runtime, "operatorSession"))
+      assertEquals("setup-bootstrap-token", desiredBootstrapToken(runtime, "operatorSession"))
     }
 
   @Test
@@ -178,6 +200,50 @@ class GatewayBootstrapAuthTest {
     assertNull(runtime.pendingGatewayTrust.value)
   }
 
+  @Test
+  fun resetGatewaySetupAuth_clearsStoredGatewayAndDeviceTokens() {
+    val app = RuntimeEnvironment.getApplication()
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.secure.test.${UUID.randomUUID()}",
+        android.content.Context.MODE_PRIVATE,
+      )
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
+    val runtime = NodeRuntime(app, prefs)
+    val deviceId = DeviceIdentityStore(app).loadOrCreate().deviceId
+    val authStore = DeviceAuthStore(prefs)
+    prefs.setGatewayToken("stale-shared-token")
+    prefs.setGatewayBootstrapToken("stale-bootstrap-token")
+    prefs.setGatewayPassword("stale-password")
+    authStore.saveToken(deviceId, "node", "stale-node-token")
+    authStore.saveToken(deviceId, "operator", "stale-operator-token")
+
+    runtime.resetGatewaySetupAuth()
+
+    assertNull(prefs.loadGatewayToken())
+    assertNull(prefs.loadGatewayBootstrapToken())
+    assertNull(prefs.loadGatewayPassword())
+    assertNull(authStore.loadToken(deviceId, "node"))
+    assertNull(authStore.loadToken(deviceId, "operator"))
+  }
+
+  @Test
+  fun talkPttStart_cleansPreparedCaptureWhenBeginFails() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = NodeRuntime(app)
+      val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+
+      val result = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
+
+      assertEquals("UNAVAILABLE", result.error?.code)
+      assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+      assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+      val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+      assertFalse(talkMode.ttsOnAllResponses)
+    }
+
   private fun waitForGatewayTrustPrompt(runtime: NodeRuntime): NodeRuntime.GatewayTrustPrompt {
     repeat(50) {
       runtime.pendingGatewayTrust.value?.let { return it }
@@ -197,13 +263,19 @@ class GatewayBootstrapAuthTest {
     error("Expected status text update")
   }
 
-  private fun desiredBootstrapToken(runtime: NodeRuntime, sessionFieldName: String): String? {
+  private fun desiredBootstrapToken(
+    runtime: NodeRuntime,
+    sessionFieldName: String,
+  ): String? {
     val session = readField<GatewaySession>(runtime, sessionFieldName)
     val desired = readField<Any?>(session, "desired") ?: return null
     return readField(desired, "bootstrapToken")
   }
 
-  private fun <T> readField(target: Any, name: String): T {
+  private fun <T> readField(
+    target: Any,
+    name: String,
+  ): T {
     var type: Class<*>? = target.javaClass
     while (type != null) {
       try {

@@ -1,7 +1,1 @@
-export function normalizeText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
+export { normalizeOptionalString as normalizeText } from "../shared/string-coerce.js";

@@ -1,43 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { searchMessagesMSTeams } from "./graph-messages.js";
+import {
+  CHANNEL_TO,
+  CHAT_ID,
+  type GraphMessagesTestModule,
+  getGraphMessagesMockState,
+  installGraphMessagesMockDefaults,
+  loadGraphMessagesTestModule,
+} from "./graph-messages.test-helpers.js";
 
-const mockState = vi.hoisted(() => ({
-  resolveGraphToken: vi.fn(),
-  fetchGraphJson: vi.fn(),
-  postGraphJson: vi.fn(),
-  postGraphBetaJson: vi.fn(),
-  deleteGraphRequest: vi.fn(),
-  findPreferredDmByUserId: vi.fn(),
-}));
+const mockState = getGraphMessagesMockState();
+installGraphMessagesMockDefaults();
+let searchMessagesMSTeams: GraphMessagesTestModule["searchMessagesMSTeams"];
 
-vi.mock("./graph.js", () => {
-  return {
-    resolveGraphToken: mockState.resolveGraphToken,
-    fetchGraphJson: mockState.fetchGraphJson,
-    postGraphJson: mockState.postGraphJson,
-    postGraphBetaJson: mockState.postGraphBetaJson,
-    deleteGraphRequest: mockState.deleteGraphRequest,
-    escapeOData: vi.fn((value: string) => value.replaceAll("'", "''")),
-  };
+beforeAll(async () => {
+  ({ searchMessagesMSTeams } = await loadGraphMessagesTestModule());
 });
 
-vi.mock("./conversation-store-fs.js", () => ({
-  createMSTeamsConversationStoreFs: () => ({
-    findPreferredDmByUserId: mockState.findPreferredDmByUserId,
-  }),
-}));
-
-const TOKEN = "test-graph-token";
-const CHAT_ID = "19:abc@thread.tacv2";
-const CHANNEL_TO = "team-id-1/channel-id-1";
-
 describe("searchMessagesMSTeams", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
-  });
-
   it("searches chat messages with query string", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       value: [
@@ -192,11 +172,13 @@ describe("searchMessagesMSTeams", () => {
       query: "test",
     });
 
-    expect(mockState.fetchGraphJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        headers: { ConsistencyLevel: "eventual" },
-      }),
-    );
+    expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
+      token: "test-graph-token",
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/messages?$search=${encodeURIComponent(
+        '"test"',
+      )}&$top=25`,
+      headers: { ConsistencyLevel: "eventual" },
+    });
   });
 
   it("returns empty array when no messages match", async () => {
@@ -208,7 +190,7 @@ describe("searchMessagesMSTeams", () => {
       query: "nonexistent",
     });
 
-    expect(result.messages).toEqual([]);
+    expect(result.messages).toStrictEqual([]);
   });
 
   it("resolves user: target through conversation store", async () => {

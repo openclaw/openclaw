@@ -14,15 +14,23 @@ const mocks = vi.hoisted(() => ({
   listGroupsLive: vi.fn(),
   resolveTarget: vi.fn(),
   getChannelPlugin: vi.fn(),
+  getLoadedChannelPlugin: vi.fn(),
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: (...args: unknown[]) => mocks.getLoadedChannelPlugin(...args),
   getChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
   normalizeChannelId: (value: string) => value,
 }));
 
+vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
+  getLoadedChannelPluginForRead: (...args: unknown[]) => mocks.getLoadedChannelPlugin(...args),
+}));
+
 vi.mock("../../plugins/runtime.js", () => ({
+  getActivePluginChannelRegistry: () => null,
+  getActivePluginRegistry: () => null,
   getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
 }));
 
@@ -38,6 +46,10 @@ beforeEach(() => {
   mocks.listGroupsLive.mockReset();
   mocks.resolveTarget.mockReset();
   mocks.getChannelPlugin.mockReset();
+  mocks.getLoadedChannelPlugin.mockReset();
+  mocks.getLoadedChannelPlugin.mockImplementation((...args: unknown[]) =>
+    mocks.getChannelPlugin(...args),
+  );
   mocks.getActivePluginChannelRegistryVersion.mockReset();
   mocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
   resetDirectoryCache();
@@ -81,7 +93,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
     const first = await expectOkResolution({
       cfg,
-      channel: "discord",
+      channel: "richchat",
       input: "support",
     });
     expect(first.target.source).toBe("directory");
@@ -91,7 +103,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
     const second = await expectOkResolution({
       cfg,
-      channel: "discord",
+      channel: "richchat",
       input: "support",
     });
     expect(second.target.to).toBe("123456789");
@@ -102,7 +114,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
   it("skips directory lookup for direct ids", async () => {
     const result = await expectOkResolution({
       cfg,
-      channel: "discord",
+      channel: "richchat",
       input: "123456789",
     });
     expect(result.target.source).toBe("normalized");
@@ -128,7 +140,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
     const result = await expectOkResolution({
       cfg,
-      channel: "mattermost",
+      channel: "workspace",
       input: "dthcxgoxhifn3pwh65cut3ud3w",
     });
     expect(result.target).toEqual({
@@ -137,11 +149,41 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       source: "directory",
       display: undefined,
     });
-    expect(mocks.resolveTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        input: "dthcxgoxhifn3pwh65cut3ud3w",
-      }),
-    );
+    expect(mocks.resolveTarget).toHaveBeenCalledOnce();
+    expect(mocks.resolveTarget.mock.calls[0]?.[0]?.input).toBe("dthcxgoxhifn3pwh65cut3ud3w");
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+  });
+
+  it("uses catalog plugin target grammar for unloaded numeric topic ids", async () => {
+    mocks.getLoadedChannelPlugin.mockReturnValue(undefined);
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        normalizeTarget: (raw: string) =>
+          raw.trim() === "-1001234567890:topic:42"
+            ? "telegram:-1001234567890:topic:42"
+            : raw.trim() || undefined,
+        inferTargetChatType: ({ to }: { to: string }) => (to.includes("-100") ? "group" : "direct"),
+        targetResolver: {
+          looksLikeId: (_raw: string, normalized?: string) =>
+            normalized === "telegram:-1001234567890:topic:42",
+          hint: "<chatId>",
+        },
+      },
+    });
+
+    const result = await expectOkResolution({
+      cfg,
+      channel: "telegram",
+      input: "-1001234567890:topic:42",
+    });
+
+    expect(result.target).toEqual({
+      to: "telegram:-1001234567890:topic:42",
+      kind: "group",
+      display: "telegram:-1001234567890:topic:42",
+      source: "normalized",
+    });
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });
@@ -170,7 +212,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
     const result = await expectOkResolution({
       cfg,
-      channel: "imessage",
+      channel: "localchat",
       input: "+15551234567",
     });
     expect(result.target).toEqual({
@@ -182,11 +224,8 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listPeers).toHaveBeenCalledTimes(1);
     expect(mocks.listPeersLive).toHaveBeenCalledTimes(1);
     expect(mocks.listGroups).not.toHaveBeenCalled();
-    expect(mocks.resolveTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        input: "+15551234567",
-      }),
-    );
+    expect(mocks.resolveTarget).toHaveBeenCalledOnce();
+    expect(mocks.resolveTarget.mock.calls[0]?.[0]?.input).toBe("+15551234567");
   });
 
   it("keeps plugin-owned id casing when resolver returns a normalized target", async () => {
@@ -206,7 +245,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
     const result = await expectOkResolution({
       cfg,
-      channel: "slack",
+      channel: "workspace",
       input: "#C123ABC",
     });
     expect(result.target.to).toBe("channel:C123ABC");
@@ -216,10 +255,10 @@ describe("resolveMessagingTarget (directory fallback)", () => {
   it("defers target display formatting to the plugin when available", () => {
     mocks.getChannelPlugin.mockReturnValue({
       messaging: {
-        formatTargetDisplay: ({ target }: { target: string }) => target.replace(/^telegram:/i, ""),
+        formatTargetDisplay: ({ target }: { target: string }) => target.replace(/^forum:/i, ""),
       },
     });
 
-    expect(formatTargetDisplay({ channel: "telegram", target: "telegram:12345" })).toBe("12345");
+    expect(formatTargetDisplay({ channel: "forum", target: "forum:12345" })).toBe("12345");
   });
 });

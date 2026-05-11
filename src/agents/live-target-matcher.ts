@@ -1,5 +1,10 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
+import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 type ModelTarget = {
@@ -7,6 +12,15 @@ type ModelTarget = {
   provider?: string;
   modelId: string;
 };
+
+const GOOGLE_LIVE_TARGET_PROVIDERS = new Set(["google", "google-gemini-cli", "google-vertex"]);
+
+function normalizeLiveTargetModelId(provider: string, modelId: string): string {
+  const trimmed = modelId.trim();
+  return GOOGLE_LIVE_TARGET_PROVIDERS.has(provider)
+    ? normalizeGooglePreviewModelId(trimmed)
+    : trimmed;
+}
 
 function normalizeCsvSet(values: Set<string> | null): Set<string> | null {
   if (!values) {
@@ -32,14 +46,13 @@ function parseModelTarget(raw: string): ModelTarget | null {
   if (slash === -1) {
     return {
       raw: trimmed,
-      modelId: trimmed.toLowerCase(),
+      modelId: normalizeLowercaseStringOrEmpty(trimmed),
     };
   }
   const provider = normalizeProviderId(trimmed.slice(0, slash));
-  const modelId = trimmed
-    .slice(slash + 1)
-    .trim()
-    .toLowerCase();
+  const modelId = normalizeLowercaseStringOrEmpty(
+    normalizeLiveTargetModelId(provider, trimmed.slice(slash + 1)),
+  );
   if (!provider || !modelId) {
     return null;
   }
@@ -48,38 +61,6 @@ function parseModelTarget(raw: string): ModelTarget | null {
     provider,
     modelId,
   };
-}
-
-function hasSharedOwner(
-  left: string,
-  right: string,
-  params: {
-    config?: OpenClawConfig;
-    workspaceDir?: string;
-    env?: NodeJS.ProcessEnv;
-    ownerCache: Map<string, readonly string[]>;
-  },
-): boolean {
-  const resolveOwners = (provider: string): readonly string[] => {
-    const normalized = normalizeProviderId(provider);
-    const cached = params.ownerCache.get(normalized);
-    if (cached) {
-      return cached;
-    }
-    const owners =
-      resolveOwningPluginIdsForProvider({
-        provider: normalized,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      }) ?? [];
-    params.ownerCache.set(normalized, owners);
-    return owners;
-  };
-
-  const leftOwners = resolveOwners(left);
-  const rightOwners = resolveOwners(right);
-  return leftOwners.some((owner) => rightOwners.includes(owner));
 }
 
 export function createLiveTargetMatcher(params: {
@@ -107,7 +88,7 @@ export function createLiveTargetMatcher(params: {
           return true;
         }
         if (
-          hasSharedOwner(normalizedRequested, normalizedProvider, {
+          liveProvidersShareOwningPlugin(normalizedRequested, normalizedProvider, {
             config: params.config,
             workspaceDir: params.workspaceDir,
             env: params.env,
@@ -124,10 +105,13 @@ export function createLiveTargetMatcher(params: {
         return true;
       }
       const normalizedProvider = normalizeProviderId(provider);
-      const normalizedModelId = modelId.trim().toLowerCase();
+      const normalizedModelId = normalizeOptionalLowercaseString(modelId);
+      if (!normalizedModelId) {
+        return false;
+      }
       const directRef = `${normalizedProvider}/${normalizedModelId}`;
       for (const target of modelTargets) {
-        if (target.raw.toLowerCase() === directRef) {
+        if (normalizeOptionalLowercaseString(target.raw) === directRef) {
           return true;
         }
         if (target.modelId !== normalizedModelId) {
@@ -140,7 +124,7 @@ export function createLiveTargetMatcher(params: {
           return true;
         }
         if (
-          hasSharedOwner(target.provider, normalizedProvider, {
+          liveProvidersShareOwningPlugin(target.provider, normalizedProvider, {
             config: params.config,
             workspaceDir: params.workspaceDir,
             env: params.env,

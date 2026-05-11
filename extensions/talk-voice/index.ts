@@ -1,6 +1,11 @@
-import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveActiveTalkProviderConfig } from "openclaw/plugin-sdk/talk-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 
 function mask(s: string, keep: number = 6): string {
@@ -74,16 +79,16 @@ function findVoice(voices: SpeechVoiceOption[], query: string): SpeechVoiceOptio
   if (!q) {
     return null;
   }
-  const lower = q.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(q);
   const byId = voices.find((v) => v.id === q);
   if (byId) {
     return byId;
   }
-  const exactName = voices.find((v) => (v.name ?? "").trim().toLowerCase() === lower);
+  const exactName = voices.find((v) => normalizeOptionalLowercaseString(v.name) === lower);
   if (exactName) {
     return exactName;
   }
-  const partial = voices.find((v) => (v.name ?? "").trim().toLowerCase().includes(lower));
+  const partial = voices.find((v) => normalizeLowercaseStringOrEmpty(v.name).includes(lower));
   return partial ?? null;
 }
 
@@ -128,9 +133,9 @@ export default definePluginEntry({
         const commandLabel = resolveCommandLabel(ctx.channel);
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
-        const action = (tokens[0] ?? "status").toLowerCase();
+        const action = normalizeLowercaseStringOrEmpty(tokens[0] ?? "status");
 
-        const cfg = api.runtime.config.loadConfig();
+        const cfg = api.runtime.config.current() as OpenClawConfig;
         const active = resolveActiveTalkProviderConfig(cfg.talk);
         if (!active) {
           return {
@@ -219,7 +224,10 @@ export default definePluginEntry({
               ...(providerId === "elevenlabs" ? { voiceId: chosen.id } : {}),
             },
           };
-          await api.runtime.config.writeConfigFile(nextConfig);
+          await api.runtime.config.replaceConfigFile({
+            nextConfig,
+            afterWrite: { mode: "auto" },
+          });
 
           const name = (chosen.name ?? "").trim() || "(unnamed)";
           return { text: `✅ ${providerLabel} Talk voice set to ${name}\n${chosen.id}` };

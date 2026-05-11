@@ -46,7 +46,7 @@ function resolveAllowFromFormatter(params: {
       accountId: params.accountId,
       allowFrom: values,
     })
-      .map((entry) => String(entry).trim())
+      .map((entry) => normalizeOptionalString(entry) ?? "")
       .filter(Boolean);
 }
 
@@ -77,8 +77,10 @@ function isApprovedElevatedSender(params: {
   const senderIdTokens = new Set<string>();
   const senderFromTokens = new Set<string>();
   const senderE164Tokens = new Set<string>();
-
   const senderId = normalizeOptionalString(params.ctx.SenderId);
+  const senderFrom = normalizeOptionalString(params.ctx.From);
+  const senderE164 = normalizeOptionalString(params.ctx.SenderE164);
+
   if (senderId) {
     addFormattedTokens({
       formatAllowFrom: params.formatAllowFrom,
@@ -88,7 +90,6 @@ function isApprovedElevatedSender(params: {
       tokens: senderIdTokens,
     });
   }
-  const senderFrom = normalizeOptionalString(params.ctx.From);
   if (senderFrom) {
     addFormattedTokens({
       formatAllowFrom: params.formatAllowFrom,
@@ -98,7 +99,6 @@ function isApprovedElevatedSender(params: {
       tokens: senderFromTokens,
     });
   }
-  const senderE164 = normalizeOptionalString(params.ctx.SenderE164);
   if (senderE164) {
     addFormattedTokens({
       formatAllowFrom: params.formatAllowFrom,

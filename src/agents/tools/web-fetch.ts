@@ -1,24 +1,28 @@
-import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
-import { SsrFBlockedError, type LookupFn } from "../../infra/net/ssrf.js";
+import { Type } from "typebox";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { isRecord } from "../../utils.js";
-import { resolveWebFetchDefinition } from "../../web-fetch/runtime.js";
+import { extractReadableContent } from "../../web-fetch/content-extractors.runtime.js";
 import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
-import { stringEnum } from "../schema/typebox.js";
+import { stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   extractBasicHtmlContent,
-  extractReadableContent,
   htmlToMarkdown,
   markdownToText,
   truncateText,
   type ExtractMode,
 } from "./web-fetch-utils.js";
-import { fetchWithWebToolsNetworkGuard } from "./web-guarded-fetch.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -30,13 +34,12 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "./web-shared.js";
-
-export { extractReadableContent } from "./web-fetch-utils.js";
+import { resolveWebFetchToolRuntimeContext } from "./web-tool-runtime-context.js";
 
 const EXTRACT_MODES = ["markdown", "text"] as const;
 
-const DEFAULT_FETCH_MAX_CHARS = 50_000;
-const DEFAULT_FETCH_MAX_RESPONSE_BYTES = 2_000_000;
+const DEFAULT_FETCH_MAX_CHARS = 20_000;
+const DEFAULT_FETCH_MAX_RESPONSE_BYTES = 750_000;
 const FETCH_MAX_RESPONSE_BYTES_MIN = 32_000;
 const FETCH_MAX_RESPONSE_BYTES_MAX = 10_000_000;
 const DEFAULT_FETCH_MAX_REDIRECTS = 3;
@@ -68,9 +71,37 @@ type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer 
     ? Fetch
     : undefined
   : undefined;
+type ResolveWebFetchDefinition =
+  (typeof import("../../web-fetch/runtime.js"))["resolveWebFetchDefinition"];
+type WebFetchProviderFallback = ReturnType<ResolveWebFetchDefinition>;
+type WebFetchRuntimeModule = Pick<
+  typeof import("../../web-fetch/runtime.js"),
+  "resolveWebFetchDefinition"
+>;
+type WebGuardedFetchModule = Pick<
+  typeof import("./web-guarded-fetch.js"),
+  "fetchWithWebToolsNetworkGuard"
+>;
+
+const webFetchRuntimeLoader = createLazyImportLoader<WebFetchRuntimeModule>(
+  () => import("../../web-fetch/runtime.js"),
+);
+const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
+  () => import("./web-guarded-fetch.js"),
+);
+
+async function loadWebFetchRuntime(): Promise<WebFetchRuntimeModule> {
+  return await webFetchRuntimeLoader.load();
+}
+
+async function loadWebGuardedFetch(): Promise<
+  WebGuardedFetchModule["fetchWithWebToolsNetworkGuard"]
+> {
+  return (await webGuardedFetchLoader.load()).fetchWithWebToolsNetworkGuard;
+}
 
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
-  return resolveWebProviderConfig<"fetch", NonNullable<WebFetchConfig>>(cfg, "fetch");
+  return resolveWebProviderConfig(cfg, "fetch") as NonNullable<WebFetchConfig> | undefined;
 }
 
 function resolveFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boolean }): boolean {
@@ -85,6 +116,10 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
     return fetch.readability;
   }
   return true;
+}
+
+function resolveFetchUseTrustedEnvProxy(fetch?: WebFetchConfig): boolean {
+  return fetch?.useTrustedEnvProxy === true;
 }
 
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
@@ -126,7 +161,7 @@ function looksLikeHtml(value: string): boolean {
   if (!trimmed) {
     return false;
   }
-  const head = trimmed.slice(0, 256).toLowerCase();
+  const head = normalizeLowercaseStringOrEmpty(trimmed.slice(0, 256));
   return head.startsWith("<!doctype html") || head.startsWith("<html");
 }
 
@@ -140,7 +175,7 @@ function formatWebFetchErrorDetail(params: {
     return "";
   }
   let text = detail;
-  const contentTypeLower = contentType?.toLowerCase();
+  const contentTypeLower = normalizeOptionalLowercaseString(contentType);
   if (contentTypeLower?.includes("text/html") || looksLikeHtml(detail)) {
     const rendered = htmlToMarkdown(detail);
     const withTitle = rendered.title ? `${rendered.title}\n${rendered.text}` : rendered.text;
@@ -242,15 +277,19 @@ type WebFetchRuntimeParams = {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  config?: OpenClawConfig;
+  useTrustedEnvProxy: boolean;
+  ssrfPolicy?: {
+    allowRfc2544BenchmarkRange?: boolean;
+    allowIpv6UniqueLocalRange?: boolean;
+  };
+  providerCacheKey?: string;
   lookupFn?: LookupFn;
-  resolveProviderFallback: () => ReturnType<typeof resolveWebFetchDefinition>;
+  resolveProviderFallback: () => Promise<WebFetchProviderFallback>;
 };
 
 function normalizeProviderFinalUrl(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -336,7 +375,7 @@ async function maybeFetchProviderWebFetchPayload(
     tookMs: number;
   },
 ): Promise<Record<string, unknown> | null> {
-  const providerFallback = params.resolveProviderFallback();
+  const providerFallback = await params.resolveProviderFallback();
   if (!providerFallback) {
     return null;
   }
@@ -358,8 +397,18 @@ async function maybeFetchProviderWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
+  const allowRfc2544BenchmarkRange = params.ssrfPolicy?.allowRfc2544BenchmarkRange === true;
+  const allowIpv6UniqueLocalRange = params.ssrfPolicy?.allowIpv6UniqueLocalRange === true;
+  const useTrustedEnvProxy = params.useTrustedEnvProxy;
+  const ssrfPolicy: SsrFPolicy | undefined =
+    allowRfc2544BenchmarkRange || allowIpv6UniqueLocalRange
+      ? {
+          ...(allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange } : {}),
+          ...(allowIpv6UniqueLocalRange ? { allowIpv6UniqueLocalRange } : {}),
+        }
+      : undefined;
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${params.providerCacheKey ? `:provider:${params.providerCacheKey}` : ""}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -381,11 +430,14 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
   try {
+    const fetchWithWebToolsNetworkGuard = await loadWebGuardedFetch();
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       lookupFn: params.lookupFn,
+      useEnvProxy: useTrustedEnvProxy,
+      policy: ssrfPolicy,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -466,11 +518,12 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           html: body,
           url: finalUrl,
           extractMode: params.extractMode,
+          config: params.config,
         });
         if (readable?.text) {
           text = readable.text;
           title = readable.title;
-          extractor = "readability";
+          extractor = readable.extractor;
         } else {
           let payload: Record<string, unknown> | null = null;
           try {
@@ -496,7 +549,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
             extractor = "raw-html";
           } else {
             const providerLabel =
-              params.resolveProviderFallback()?.provider.label ?? "provider fallback";
+              (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
             throw new Error(
               `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
             );
@@ -564,31 +617,13 @@ export function createWebFetchTool(options?: {
   config?: OpenClawConfig;
   sandboxed?: boolean;
   runtimeWebFetch?: RuntimeWebFetchMetadata;
+  lateBindRuntimeConfig?: boolean;
   lookupFn?: LookupFn;
 }): AnyAgentTool | null {
   const fetch = resolveFetchConfig(options?.config);
   if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
     return null;
   }
-  const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
-  const userAgent =
-    (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
-    DEFAULT_FETCH_USER_AGENT;
-  const maxResponseBytes = resolveFetchMaxResponseBytes(fetch);
-  let providerFallbackResolved = false;
-  let providerFallbackCache: ReturnType<typeof resolveWebFetchDefinition>;
-  const resolveProviderFallback = () => {
-    if (!providerFallbackResolved) {
-      providerFallbackCache = resolveWebFetchDefinition({
-        config: options?.config,
-        sandboxed: options?.sandboxed,
-        runtimeWebFetch: options?.runtimeWebFetch,
-        preferRuntimeProviders: true,
-      });
-      providerFallbackResolved = true;
-    }
-    return providerFallbackCache;
-  };
   return {
     label: "Web Fetch",
     name: "web_fetch",
@@ -596,25 +631,75 @@ export function createWebFetchTool(options?: {
       "Fetch and extract readable content from a URL (HTML → markdown/text). Use for lightweight page access without browser automation.",
     parameters: WebFetchSchema,
     execute: async (_toolCallId, args) => {
+      const { config, preferRuntimeProviders, runtimeWebFetch } = resolveWebFetchToolRuntimeContext(
+        {
+          config: options?.config,
+          lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
+          runtimeWebFetch: options?.runtimeWebFetch,
+        },
+      );
+      const executionFetch = resolveFetchConfig(config);
+      if (!resolveFetchEnabled({ fetch: executionFetch, sandboxed: options?.sandboxed })) {
+        throw new Error("web_fetch is disabled.");
+      }
+      const providerCacheKey =
+        normalizeOptionalLowercaseString(runtimeWebFetch?.selectedProvider) ??
+        normalizeOptionalLowercaseString(runtimeWebFetch?.providerConfigured) ??
+        (executionFetch && "provider" in executionFetch
+          ? normalizeOptionalLowercaseString(executionFetch.provider)
+          : undefined);
+      const readabilityEnabled = resolveFetchReadabilityEnabled(executionFetch);
+      const userAgent =
+        (executionFetch &&
+          "userAgent" in executionFetch &&
+          typeof executionFetch.userAgent === "string" &&
+          executionFetch.userAgent) ||
+        DEFAULT_FETCH_USER_AGENT;
+      const maxResponseBytes = resolveFetchMaxResponseBytes(executionFetch);
+      let providerFallbackResolved = false;
+      let providerFallbackCache: WebFetchProviderFallback;
+      const resolveProviderFallback = async () => {
+        if (!providerFallbackResolved) {
+          const { resolveWebFetchDefinition } = await loadWebFetchRuntime();
+          providerFallbackCache = resolveWebFetchDefinition({
+            config,
+            sandboxed: options?.sandboxed,
+            runtimeWebFetch,
+            preferRuntimeProviders,
+          });
+          providerFallbackResolved = true;
+        }
+        return providerFallbackCache;
+      };
       const params = args as Record<string, unknown>;
       const url = readStringParam(params, "url", { required: true });
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
-      const maxCharsCap = resolveFetchMaxCharsCap(fetch);
+      const maxCharsCap = resolveFetchMaxCharsCap(executionFetch);
       const result = await runWebFetch({
         url,
         extractMode,
         maxChars: resolveMaxChars(
-          maxChars ?? fetch?.maxChars,
+          maxChars ?? executionFetch?.maxChars,
           DEFAULT_FETCH_MAX_CHARS,
           maxCharsCap,
         ),
         maxResponseBytes,
-        maxRedirects: resolveMaxRedirects(fetch?.maxRedirects, DEFAULT_FETCH_MAX_REDIRECTS),
-        timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
-        cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+        maxRedirects: resolveMaxRedirects(
+          executionFetch?.maxRedirects,
+          DEFAULT_FETCH_MAX_REDIRECTS,
+        ),
+        timeoutSeconds: resolveTimeoutSeconds(
+          executionFetch?.timeoutSeconds,
+          DEFAULT_TIMEOUT_SECONDS,
+        ),
+        cacheTtlMs: resolveCacheTtlMs(executionFetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        config,
+        useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(executionFetch),
+        ssrfPolicy: executionFetch?.ssrfPolicy,
+        ...(providerCacheKey ? { providerCacheKey } : {}),
         lookupFn: options?.lookupFn,
         resolveProviderFallback,
       });

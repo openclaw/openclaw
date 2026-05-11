@@ -3,13 +3,14 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
-import { applyXaiModelCompat } from "./api.js";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveXaiCatalogEntry, XAI_BASE_URL } from "./model-definitions.js";
+import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 
 const XAI_MODERN_MODEL_PREFIXES = ["grok-3", "grok-4", "grok-code-fast"] as const;
 
 export function isModernXaiModel(modelId: string): boolean {
-  const lower = modelId.trim().toLowerCase();
+  const lower = normalizeOptionalLowercaseString(modelId) ?? "";
   if (!lower || lower.includes("multi-agent")) {
     return false;
   }
@@ -25,7 +26,7 @@ export function resolveXaiForwardCompatModel(params: {
     return undefined;
   }
 
-  return applyXaiModelCompat(
+  return applyXaiRuntimeModelCompat(
     normalizeModelCompat({
       id: definition.id,
       name: definition.name,

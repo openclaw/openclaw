@@ -1,7 +1,9 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import { modelKey } from "./model-ref-shared.js";
+import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 export type OpenClawPluginToolOptions = {
@@ -13,7 +15,11 @@ export type OpenClawPluginToolOptions = {
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;
+  fsPolicy?: ToolFsPolicy;
+  modelProvider?: string;
+  modelId?: string;
   requesterSenderId?: string | null;
+  requesterAgentIdOverride?: string;
   senderIsOwner?: boolean;
   sessionId?: string;
   sandboxBrowserBridgeUrl?: string;
@@ -26,17 +32,29 @@ export function resolveOpenClawPluginToolInputs(params: {
   options?: OpenClawPluginToolOptions;
   resolvedConfig?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
+  getRuntimeConfig?: () => OpenClawConfig | undefined;
 }) {
-  const { options, resolvedConfig, runtimeConfig } = params;
-  const sessionAgentId = resolveSessionAgentId({
+  const { options, resolvedConfig, runtimeConfig, getRuntimeConfig } = params;
+  const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: options?.agentSessionKey,
     config: resolvedConfig,
+    agentId: options?.requesterAgentIdOverride,
   });
   const inferredWorkspaceDir =
     options?.workspaceDir || !resolvedConfig
       ? undefined
       : resolveAgentWorkspaceDir(resolvedConfig, sessionAgentId);
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir ?? inferredWorkspaceDir);
+  const modelProvider = options?.modelProvider?.trim();
+  const modelId = options?.modelId?.trim();
+  const activeModel =
+    modelProvider || modelId
+      ? {
+          ...(modelProvider ? { provider: modelProvider } : {}),
+          ...(modelId ? { modelId } : {}),
+          ...(modelProvider && modelId ? { modelRef: modelKey(modelProvider, modelId) } : {}),
+        }
+      : undefined;
   const deliveryContext = normalizeDeliveryContext({
     channel: options?.agentChannel,
     to: options?.agentTo,
@@ -48,11 +66,14 @@ export function resolveOpenClawPluginToolInputs(params: {
     context: {
       config: options?.config,
       runtimeConfig,
+      getRuntimeConfig,
+      fsPolicy: options?.fsPolicy,
       workspaceDir,
       agentDir: options?.agentDir,
       agentId: sessionAgentId,
       sessionKey: options?.agentSessionKey,
       sessionId: options?.sessionId,
+      activeModel,
       browser: {
         sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
         allowHostControl: options?.allowHostBrowserControl,

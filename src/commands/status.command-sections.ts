@@ -1,5 +1,11 @@
+import {
+  buildPairingConnectRecoveryTitle,
+  describePairingConnectRequirement,
+  type ConnectPairingRequiredReason,
+} from "../gateway/protocol/connect-error-details.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { TableColumn } from "../terminal/table.js";
 import type { HealthSummary } from "./health.js";
 import type { AgentLocalStatus } from "./status.agent-local.js";
@@ -17,6 +23,22 @@ type SummaryLike = Pick<StatusSummary, "tasks" | "taskAudit" | "heartbeat" | "se
 type MemoryLike = MemoryStatusSnapshot | null;
 type MemoryPluginLike = MemoryPluginStatus;
 type SessionsRecentLike = SessionStatus;
+type EventLoopHealthLike = NonNullable<HealthSummary["eventLoop"]>;
+
+export type StatusMemoryStateResolvers = {
+  resolveMemoryVectorState: (value: NonNullable<MemoryStatusSnapshot["vector"]>) => {
+    state: string;
+    tone: Tone;
+  };
+  resolveMemoryFtsState: (value: NonNullable<MemoryStatusSnapshot["fts"]>) => {
+    state: string;
+    tone: Tone;
+  };
+  resolveMemoryCacheSummary: (value: NonNullable<MemoryStatusSnapshot["cache"]>) => {
+    text: string;
+    tone: Tone;
+  };
+};
 
 type PluginCompatibilityNoticeLike = {
   severity?: "warn" | "info" | null;
@@ -24,6 +46,8 @@ type PluginCompatibilityNoticeLike = {
 
 type PairingRecoveryLike = {
   requestId?: string | null;
+  reason?: ConnectPairingRequiredReason | null;
+  remediationHint?: string | null;
 };
 
 export const statusHealthColumns: TableColumn[] = [
@@ -114,32 +138,23 @@ export function buildStatusLastHeartbeatValue(params: {
     .join(" · ");
 }
 
-export function buildStatusMemoryValue(params: {
-  memory: MemoryLike;
-  memoryPlugin: MemoryPluginLike;
-  ok: (value: string) => string;
-  warn: (value: string) => string;
-  muted: (value: string) => string;
-  resolveMemoryVectorState: (value: NonNullable<MemoryStatusSnapshot["vector"]>) => {
-    state: string;
-    tone: Tone;
-  };
-  resolveMemoryFtsState: (value: NonNullable<MemoryStatusSnapshot["fts"]>) => {
-    state: string;
-    tone: Tone;
-  };
-  resolveMemoryCacheSummary: (value: NonNullable<MemoryStatusSnapshot["cache"]>) => {
-    text: string;
-    tone: Tone;
-  };
-}) {
+export function buildStatusMemoryValue(
+  params: {
+    memory: MemoryLike;
+    memoryPlugin: MemoryPluginLike;
+    ok: (value: string) => string;
+    warn: (value: string) => string;
+    muted: (value: string) => string;
+    memoryUnavailableLabel?: string;
+  } & StatusMemoryStateResolvers,
+) {
   if (!params.memoryPlugin.enabled) {
     const suffix = params.memoryPlugin.reason ? ` (${params.memoryPlugin.reason})` : "";
     return params.muted(`disabled${suffix}`);
   }
   if (!params.memory) {
     const slot = params.memoryPlugin.slot ? `plugin ${params.memoryPlugin.slot}` : "plugin";
-    return params.muted(`enabled (${slot}) · unavailable`);
+    return params.muted(`enabled (${slot}) · ${params.memoryUnavailableLabel ?? "unavailable"}`);
   }
   const parts: string[] = [];
   const dirtySuffix = params.memory.dirty ? ` · ${params.warn("dirty")}` : "";
@@ -153,8 +168,13 @@ export function buildStatusMemoryValue(params: {
   const colorByTone = (tone: Tone, text: string) =>
     tone === "ok" ? params.ok(text) : tone === "warn" ? params.warn(text) : params.muted(text);
   if (params.memory.vector) {
-    const state = params.resolveMemoryVectorState(params.memory.vector);
-    const label = state.state === "disabled" ? "vector off" : `vector ${state.state}`;
+    const vector =
+      params.memory.backend === "builtin" && params.memory.vector.storeAvailable !== undefined
+        ? { ...params.memory.vector, available: params.memory.vector.storeAvailable }
+        : params.memory.vector;
+    const state = params.resolveMemoryVectorState(vector);
+    const prefix = params.memory.backend === "builtin" ? "vector store" : "vector";
+    const label = state.state === "disabled" ? `${prefix} off` : `${prefix} ${state.state}`;
     parts.push(colorByTone(state.tone, label));
   }
   if (params.memory.fts) {
@@ -246,6 +266,20 @@ export function buildStatusHealthRows(params: {
       Detail: `${params.health.durationMs}ms`,
     },
   ];
+  if (params.health.eventLoop) {
+    rows.push({
+      Item: "Event loop",
+      Status: params.health.eventLoop.degraded ? params.warn("WARN") : params.ok("OK"),
+      Detail: formatEventLoopHealthDetail(params.health.eventLoop),
+    });
+  }
+  if (params.health.modelPricing?.state === "degraded") {
+    rows.push({
+      Item: "Model pricing",
+      Status: params.warn("WARN"),
+      Detail: params.health.modelPricing.detail ?? params.health.modelPricing.state,
+    });
+  }
   for (const line of params.formatHealthChannelLines(params.health, { accountMode: "all" })) {
     const colon = line.indexOf(":");
     if (colon === -1) {
@@ -253,7 +287,7 @@ export function buildStatusHealthRows(params: {
     }
     const item = line.slice(0, colon).trim();
     const detail = line.slice(colon + 1).trim();
-    const normalized = detail.toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(detail);
     const status = normalized.startsWith("ok")
       ? params.ok("OK")
       : normalized.startsWith("failed")
@@ -272,6 +306,17 @@ export function buildStatusHealthRows(params: {
   return rows;
 }
 
+export function formatEventLoopHealthDetail(eventLoop: EventLoopHealthLike): string {
+  const parts = [
+    eventLoop.reasons.length > 0 ? `reasons ${eventLoop.reasons.join(",")}` : "healthy",
+    `max ${Math.round(eventLoop.delayMaxMs)}ms`,
+    `p99 ${Math.round(eventLoop.delayP99Ms)}ms`,
+    `util ${eventLoop.utilization}`,
+    `cpu ${eventLoop.cpuCoreRatio}`,
+  ];
+  return parts.join(" · ");
+}
+
 export function buildStatusSessionsRows(params: {
   recent: SessionsRecentLike[];
   verbose?: boolean;
@@ -288,6 +333,7 @@ export function buildStatusSessionsRows(params: {
         Kind: "",
         Age: "",
         Model: "",
+        Runtime: "",
         Tokens: "",
         ...(params.verbose ? { Cache: "" } : {}),
       },
@@ -298,6 +344,7 @@ export function buildStatusSessionsRows(params: {
     Kind: sess.kind,
     Age: sess.updatedAt && sess.age != null ? params.formatTimeAgo(sess.age) : "no activity",
     Model: sess.model ?? "unknown",
+    Runtime: sess.runtime ?? "unknown",
     Tokens: params.formatTokensCompact(sess),
     ...(params.verbose
       ? { Cache: params.formatPromptCacheCompact(sess) || params.muted("—") }
@@ -361,7 +408,17 @@ export function buildStatusPairingRecoveryLines(params: {
     return [];
   }
   return [
-    params.warn("Gateway pairing approval required."),
+    params.warn(buildPairingConnectRecoveryTitle(params.pairingRecovery.reason ?? undefined)),
+    ...(params.pairingRecovery.reason
+      ? [
+          params.muted(
+            `Reason: ${describePairingConnectRequirement(params.pairingRecovery.reason)}.`,
+          ),
+        ]
+      : []),
+    ...(params.pairingRecovery.remediationHint
+      ? [params.muted(`Hint: ${params.pairingRecovery.remediationHint}`)]
+      : []),
     ...(params.pairingRecovery.requestId
       ? [
           params.muted(

@@ -1,23 +1,24 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { DmPolicy, GroupPolicy } from "../../config/types.js";
+import type { DmPolicy, GroupPolicy } from "../../config/types.base.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretInput } from "../../config/types.secrets.js";
 import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-auth-mode.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import { resolveChannelDmAllowFrom, resolveChannelDmPolicy } from "./dm-access.js";
 import {
   moveSingleAccountChannelSectionToDefaultAccount,
   patchScopedAccountConfig,
 } from "./setup-helpers.js";
 import type {
   ChannelSetupDmPolicy,
-  PromptAccountId,
-  PromptAccountIdParams,
-} from "./setup-wizard-types.js";
-import type {
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
   ChannelSetupWizardStatus,
-} from "./setup-wizard.js";
+  PromptAccountId,
+  PromptAccountIdParams,
+} from "./setup-wizard-types.js";
 
 let providerAuthInputPromise:
   | Promise<Pick<typeof import("../../plugins/provider-auth-ref.js"), "promptSecretRefForSetup">>
@@ -49,10 +50,10 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
 
   const entered = await params.prompter.text({
     message: `New ${params.label} account id`,
-    validate: (value) => (value?.trim() ? undefined : "Required"),
+    validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
   });
-  const normalized = normalizeAccountId(String(entered));
-  if (String(entered).trim() !== normalized) {
+  const normalized = normalizeAccountId(entered);
+  if ((normalizeOptionalString(entered) ?? "") !== normalized) {
     await params.prompter.note(
       `Normalized account id to "${normalized}".`,
       `${params.label} account`,
@@ -62,7 +63,7 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
 };
 
 export function addWildcardAllowFrom(allowFrom?: ReadonlyArray<string | number> | null): string[] {
-  const next = (allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
+  const next = normalizeStringEntries(allowFrom ?? []);
   if (!next.includes("*")) {
     next.push("*");
   }
@@ -73,7 +74,7 @@ export function mergeAllowFromEntries(
   current: Array<string | number> | null | undefined,
   additions: Array<string | number>,
 ): string[] {
-  const merged = [...(current ?? []), ...additions].map((v) => String(v).trim()).filter(Boolean);
+  const merged = normalizeStringEntries([...(current ?? []), ...additions]);
   return [...new Set(merged)];
 }
 
@@ -90,7 +91,7 @@ export function parseSetupEntriesWithParser(
   raw: string,
   parseEntry: (entry: string) => ParsedSetupEntry,
 ): { entries: string[]; error?: string } {
-  const parts = splitSetupEntries(String(raw ?? ""));
+  const parts = splitSetupEntries(raw);
   const entries: string[] = [];
   for (const part of parts) {
     const parsed = parseEntry(part);
@@ -143,9 +144,7 @@ export function normalizeAllowFromEntries(
   entries: Array<string | number>,
   normalizeEntry?: (value: string) => string | null | undefined,
 ): string[] {
-  const normalized = entries
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
+  const normalized = normalizeStringEntries(entries)
     .map((entry) => {
       if (entry === "*") {
         return "*";
@@ -153,8 +152,7 @@ export function normalizeAllowFromEntries(
       if (!normalizeEntry) {
         return entry;
       }
-      const value = normalizeEntry(entry);
-      return typeof value === "string" ? value.trim() : "";
+      return normalizeOptionalString(normalizeEntry(entry)) ?? "";
     })
     .filter(Boolean);
   return [...new Set(normalized)];
@@ -568,7 +566,9 @@ export function setCompatChannelDmPolicyWithAllowFrom(params: {
     allowFrom: undefined,
     dm: undefined,
   };
-  const existingAllowFrom = channelConfig.allowFrom ?? channelConfig.dm?.allowFrom;
+  const existingAllowFrom = resolveChannelDmAllowFrom({
+    account: channelConfig as Record<string, unknown>,
+  });
   const allowFrom =
     params.dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
   return patchCompatDmChannelConfig({
@@ -654,13 +654,11 @@ export function createCompatChannelDmPolicy(params: {
         accountId && accountId !== DEFAULT_ACCOUNT_ID
           ? channelConfig.accounts?.[accountId]
           : undefined;
-      return (
-        accountConfig?.dmPolicy ??
-        accountConfig?.dm?.policy ??
-        channelConfig.dmPolicy ??
-        channelConfig.dm?.policy ??
-        "pairing"
-      );
+      return resolveChannelDmPolicy({
+        account: accountConfig as Record<string, unknown> | undefined,
+        parent: channelConfig as Record<string, unknown>,
+        defaultPolicy: "pairing",
+      }) as DmPolicy;
     },
     setPolicy: (cfg, policy, accountId) =>
       accountId && accountId !== DEFAULT_ACCOUNT_ID
@@ -673,44 +671,18 @@ export function createCompatChannelDmPolicy(params: {
               ...(policy === "open"
                 ? {
                     allowFrom: addWildcardAllowFrom(
-                      (
-                        cfg.channels?.[params.channel] as
-                          | {
-                              accounts?: Record<
-                                string,
-                                {
-                                  allowFrom?: Array<string | number>;
-                                  dm?: { allowFrom?: Array<string | number> };
-                                }
-                              >;
-                            }
-                          | undefined
-                      )?.accounts?.[accountId]?.allowFrom ??
-                        (
+                      resolveChannelDmAllowFrom({
+                        account: (
                           cfg.channels?.[params.channel] as
                             | {
-                                allowFrom?: Array<string | number>;
-                                dm?: { allowFrom?: Array<string | number> };
+                                accounts?: Record<string, Record<string, unknown>>;
                               }
                             | undefined
-                        )?.allowFrom ??
-                        (
-                          cfg.channels?.[params.channel] as
-                            | {
-                                accounts?: Record<
-                                  string,
-                                  { dm?: { allowFrom?: Array<string | number> } }
-                                >;
-                              }
-                            | undefined
-                        )?.accounts?.[accountId]?.dm?.allowFrom ??
-                        (
-                          cfg.channels?.[params.channel] as
-                            | {
-                                dm?: { allowFrom?: Array<string | number> };
-                              }
-                            | undefined
-                        )?.dm?.allowFrom,
+                        )?.accounts?.[accountId],
+                        parent: cfg.channels?.[params.channel] as
+                          | Record<string, unknown>
+                          | undefined,
+                      }),
                     ),
                   }
                 : {}),
@@ -989,11 +961,11 @@ export async function promptSingleChannelToken(params: {
   inputPrompt: string;
 }): Promise<{ useEnv: boolean; token: string | null }> {
   const promptToken = async (): Promise<string> =>
-    String(
+    (
       await params.prompter.text({
         message: params.inputPrompt,
         validate: (value) => (value?.trim() ? undefined : "Required"),
-      }),
+      })
     ).trim();
 
   if (params.canUseEnv) {
@@ -1081,7 +1053,7 @@ export async function runSingleChannelSecretStep(params: {
     return {
       cfg: params.applyUseEnv ? await params.applyUseEnv(params.cfg) : params.cfg,
       action: result.action,
-      resolvedValue: params.envValue?.trim() || undefined,
+      resolvedValue: normalizeOptionalString(params.envValue),
     };
   }
 
@@ -1214,14 +1186,14 @@ export async function promptParsedAllowFromForAccount<TConfig extends OpenClawCo
     placeholder: params.placeholder,
     initialValue: existing[0] ? String(existing[0]) : undefined,
     validate: (value) => {
-      const raw = String(value ?? "").trim();
+      const raw = normalizeOptionalString(value) ?? "";
       if (!raw) {
         return "Required";
       }
       return params.parseEntries(raw).error;
     },
   });
-  const parsed = params.parseEntries(String(entry));
+  const parsed = params.parseEntries(entry);
   const unique =
     params.mergeEntries?.({
       existing,
@@ -1380,9 +1352,9 @@ export function createNestedChannelParsedAllowFromPrompt(params: {
     getExistingAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
       params.getExistingAllowFrom?.(cfg) ??
       (
-        (cfg.channels?.[params.channel] as Record<string, unknown> | undefined)?.[params.section] as
-          | { allowFrom?: Array<string | number> }
-          | undefined
+        (cfg.channels?.[params.channel] as Record<string, unknown> | undefined)?.[
+          params.section
+        ] as { allowFrom?: Array<string | number> } | undefined
       )?.allowFrom ??
       [],
     ...(params.mergeEntries ? { mergeEntries: params.mergeEntries } : {}),
@@ -1516,9 +1488,9 @@ export async function promptResolvedAllowFrom(params: {
       message: params.message,
       placeholder: params.placeholder,
       initialValue: params.existing[0] ? String(params.existing[0]) : undefined,
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+      validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
     });
-    const parts = params.parseInputs(String(entry));
+    const parts = params.parseInputs(entry);
     if (!params.token) {
       const ids = parts.map(params.parseId).filter(Boolean) as string[];
       if (ids.length !== parts.length) {

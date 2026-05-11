@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -6,92 +7,106 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 
-async function loadToolsHarness(options?: {
-  resolveToolsMock?: ReturnType<typeof vi.fn>;
-  resolveTools?: () => {
-    agentId: string;
-    profile: string;
-    groups: Array<{
-      id: "core" | "plugin" | "channel";
-      label: string;
-      source: "core" | "plugin" | "channel";
-      pluginId?: string;
-      channelId?: string;
-      tools: Array<{
-        id: string;
-        label: string;
-        description: string;
-        source: "core" | "plugin" | "channel";
-        pluginId?: string;
-        channelId?: string;
-      }>;
-    }>;
-  };
+function makeInventoryEntry(params: {
+  id: string;
+  label: string;
+  description: string;
+  source: "core" | "plugin" | "channel";
+  pluginId?: string;
+  channelId?: string;
 }) {
-  vi.resetModules();
-  vi.doMock("../../agents/agent-scope.js", async () => {
-    const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
-      "../../agents/agent-scope.js",
-    );
-    return {
-      ...actual,
-      resolveSessionAgentId: () => "main",
-    };
-  });
-  const resolveToolsMock =
-    options?.resolveToolsMock ??
-    vi.fn(
-      options?.resolveTools ??
-        (() => ({
-          agentId: "main",
-          profile: "coding",
-          groups: [
-            {
-              id: "core" as const,
-              label: "Built-in tools",
-              source: "core" as const,
-              tools: [
-                {
-                  id: "exec",
-                  label: "Exec",
-                  description: "Run shell commands",
-                  source: "core" as const,
-                },
-              ],
-            },
-            {
-              id: "plugin" as const,
-              label: "Connected tools",
-              source: "plugin" as const,
-              tools: [
-                {
-                  id: "docs_lookup",
-                  label: "Docs Lookup",
-                  description: "Search internal documentation",
-                  source: "plugin" as const,
-                  pluginId: "docs",
-                },
-              ],
-            },
-          ],
-        })),
-    );
-  vi.doMock("../../agents/tools-effective-inventory.js", () => ({
-    resolveEffectiveToolInventory: resolveToolsMock,
-  }));
-  vi.doMock("./agent-runner-utils.js", () => ({
-    buildThreadingToolContext: () => ({
+  return {
+    ...params,
+    rawDescription: params.description,
+  };
+}
+
+function makeDefaultInventory(): EffectiveToolInventoryResult {
+  return {
+    agentId: "main",
+    profile: "coding",
+    groups: [
+      {
+        id: "core",
+        label: "Built-in tools",
+        source: "core",
+        tools: [
+          makeInventoryEntry({
+            id: "exec",
+            label: "Exec",
+            description: "Run shell commands",
+            source: "core",
+          }),
+        ],
+      },
+      {
+        id: "plugin",
+        label: "Connected tools",
+        source: "plugin",
+        tools: [
+          makeInventoryEntry({
+            id: "docs_lookup",
+            label: "Docs Lookup",
+            description: "Search internal documentation",
+            source: "plugin",
+            pluginId: "docs",
+          }),
+        ],
+      },
+    ],
+  };
+}
+
+const toolsTestState = vi.hoisted(() => {
+  const defaultResolveTools = (): EffectiveToolInventoryResult => makeDefaultInventory();
+
+  return {
+    resolveToolsImpl: defaultResolveTools,
+    resolveToolsMock: vi.fn((..._args: unknown[]) => defaultResolveTools()),
+    threadingContext: {
       currentChannelId: "channel-123",
       currentMessageId: "message-456",
-    }),
-  }));
-  vi.doMock("./reply-threading.js", () => ({
-    resolveReplyToMode: () => "all",
-  }));
+    },
+    replyToMode: "all" as const,
+  };
+});
 
-  const { buildCommandTestParams } = await import("./commands.test-harness.js");
-  const { handleToolsCommand } = await import("./commands-info.js");
-  return { buildCommandTestParams, handleToolsCommand, resolveToolsMock };
+vi.mock("../../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+    "../../agents/agent-scope.js",
+  );
+  return {
+    ...actual,
+    resolveSessionAgentId: vi.fn(() => "main"),
+  };
+});
+
+vi.mock("../../agents/tools-effective-inventory.js", () => ({
+  resolveEffectiveToolInventory: (...args: unknown[]) => toolsTestState.resolveToolsMock(...args),
+}));
+
+vi.mock("./agent-runner-utils.js", () => ({
+  buildThreadingToolContext: () => toolsTestState.threadingContext,
+}));
+
+vi.mock("./reply-threading.js", () => ({
+  resolveReplyToMode: () => toolsTestState.replyToMode,
+}));
+
+let buildCommandTestParams: typeof import("./commands.test-harness.js").buildCommandTestParams;
+let handleToolsCommand: typeof import("./commands-info.js").handleToolsCommand;
+
+async function loadToolsHarness(options?: { resolveTools?: () => EffectiveToolInventoryResult }) {
+  toolsTestState.resolveToolsImpl = options?.resolveTools ?? (() => makeDefaultInventory());
+  toolsTestState.resolveToolsMock.mockImplementation((..._args: unknown[]) =>
+    toolsTestState.resolveToolsImpl(),
+  );
+
+  return {
+    buildCommandTestParams,
+    handleToolsCommand,
+    resolveToolsMock: toolsTestState.resolveToolsMock,
+  };
 }
 
 function buildConfig() {
@@ -101,7 +116,26 @@ function buildConfig() {
   } as OpenClawConfig;
 }
 
+function resolveToolsArg(resolveToolsMock: { mock: { calls: unknown[][] } }, index = 0) {
+  const [arg] = resolveToolsMock.mock.calls[index] ?? [];
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`expected resolve tools call ${index + 1}`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 describe("handleToolsCommand", () => {
+  beforeAll(async () => {
+    ({ buildCommandTestParams } = await import("./commands.test-harness.js"));
+    ({ handleToolsCommand } = await import("./commands-info.js"));
+  });
+
+  beforeEach(() => {
+    toolsTestState.resolveToolsMock.mockReset();
+    toolsTestState.resolveToolsImpl = () => makeDefaultInventory();
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
   it("renders a product-facing tool list", async () => {
     const { buildCommandTestParams, handleToolsCommand, resolveToolsMock } =
       await loadToolsHarness();
@@ -134,23 +168,20 @@ describe("handleToolsCommand", () => {
     expect(result?.reply?.text).toContain("Connected tools");
     expect(result?.reply?.text).toContain("docs_lookup (docs)");
     expect(result?.reply?.text).not.toContain("unavailable right now");
-    expect(resolveToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        senderIsOwner: false,
-        senderId: undefined,
-        senderName: "User Name",
-        senderUsername: "user_name",
-        senderE164: "+1000",
-        accountId: "acct-1",
-        currentChannelId: "channel-123",
-        currentThreadTs: "99",
-        currentMessageId: "message-456",
-        groupId: "abc123",
-        groupChannel: "#ops",
-        groupSpace: "workspace-1",
-        replyToMode: "all",
-      }),
-    );
+    const toolsArg = resolveToolsArg(resolveToolsMock);
+    expect(toolsArg.senderIsOwner).toBe(false);
+    expect(toolsArg.senderId).toBeUndefined();
+    expect(toolsArg.senderName).toBe("User Name");
+    expect(toolsArg.senderUsername).toBe("user_name");
+    expect(toolsArg.senderE164).toBe("+1000");
+    expect(toolsArg.accountId).toBe("acct-1");
+    expect(toolsArg.currentChannelId).toBe("channel-123");
+    expect(toolsArg.currentThreadTs).toBe("99");
+    expect(toolsArg.currentMessageId).toBe("message-456");
+    expect(toolsArg.groupId).toBe("abc123");
+    expect(toolsArg.groupChannel).toBe("#ops");
+    expect(toolsArg.groupSpace).toBe("workspace-1");
+    expect(toolsArg.replyToMode).toBe("all");
   });
 
   it("returns usage when arguments are provided", async () => {
@@ -181,7 +212,46 @@ describe("handleToolsCommand", () => {
 
     await handleToolsCommand(params, true);
 
-    expect(resolveToolsMock).toHaveBeenCalledWith(expect.objectContaining({ groupId: undefined }));
+    expect(resolveToolsArg(resolveToolsMock).groupId).toBeUndefined();
+  });
+
+  it("prefers the target session entry for tool inventory group metadata", async () => {
+    const { buildCommandTestParams, handleToolsCommand, resolveToolsMock } =
+      await loadToolsHarness();
+    const params = buildCommandTestParams("/tools", buildConfig(), undefined, {
+      workspaceDir: "/tmp",
+    });
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+      groupId: "wrapper-group",
+      groupChannel: "#wrapper",
+      space: "wrapper-space",
+    };
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        groupId: "target-group",
+        groupChannel: "#target",
+        space: "target-space",
+      },
+    };
+    params.ctx = {
+      ...params.ctx,
+      From: "telegram:group:abc123",
+      Provider: "telegram",
+      Surface: "telegram",
+      GroupChannel: "#ctx",
+      GroupSpace: "ctx-space",
+    };
+
+    await handleToolsCommand(params, true);
+
+    const toolsArg = resolveToolsArg(resolveToolsMock);
+    expect(toolsArg.groupId).toBe("target-group");
+    expect(toolsArg.groupChannel).toBe("#target");
+    expect(toolsArg.groupSpace).toBe("target-space");
   });
 
   it("renders the detailed tool list in verbose mode", async () => {
@@ -274,11 +344,7 @@ describe("handleToolsCommand", () => {
 
     await handleToolsCommand(params, true);
 
-    expect(resolveToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "work",
-      }),
-    );
+    expect(resolveToolsArg(resolveToolsMock).accountId).toBe("work");
   });
 
   it("returns a concise fallback error on effective inventory failures", async () => {
@@ -297,5 +363,45 @@ describe("handleToolsCommand", () => {
       shouldContinue: false,
       reply: { text: "Couldn't load available tools right now. Try again in a moment." },
     });
+  });
+
+  it("uses the canonical target session agent for /tools inventory", async () => {
+    const { resolveSessionAgentId } = await import("../../agents/agent-scope.js");
+    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
+    const { buildCommandTestParams, handleToolsCommand, resolveToolsMock } =
+      await loadToolsHarness();
+    const params = buildCommandTestParams("/tools", buildConfig(), undefined, {
+      workspaceDir: "/tmp",
+    });
+    params.agentId = "main";
+    params.sessionKey = "agent:target:whatsapp:direct:12345";
+
+    const result = await handleToolsCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    const toolsArg = resolveToolsArg(resolveToolsMock);
+    expect(toolsArg.agentId).toBe("target");
+    expect(toolsArg.sessionKey).toBe("agent:target:whatsapp:direct:12345");
+  });
+
+  it("does not forward a stale ambient agentDir for session-bound /tools", async () => {
+    const { resolveSessionAgentId } = await import("../../agents/agent-scope.js");
+    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
+    const { buildCommandTestParams, handleToolsCommand, resolveToolsMock } =
+      await loadToolsHarness();
+    const params = buildCommandTestParams("/tools", buildConfig(), undefined, {
+      workspaceDir: "/tmp",
+    });
+    params.agentId = "main";
+    params.agentDir = "/tmp/agents/main/agent";
+    params.sessionKey = "agent:target:whatsapp:direct:12345";
+
+    const result = await handleToolsCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    const toolsArg = resolveToolsArg(resolveToolsMock);
+    expect(toolsArg.agentId).toBe("target");
+    expect(toolsArg.agentDir).toBeUndefined();
+    expect(toolsArg.sessionKey).toBe("agent:target:whatsapp:direct:12345");
   });
 });

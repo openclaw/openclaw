@@ -1,61 +1,14 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { defaultRuntime } from "../../runtime.js";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { describe, expect, it, vi } from "vitest";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import {
+  createDeferred,
+  createQueueTestRun as createRun,
+  installQueueRuntimeErrorSilencer,
+} from "./queue.test-helpers.js";
 
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-function createRun(params: {
-  prompt: string;
-  messageId?: string;
-  originatingChannel?: FollowupRun["originatingChannel"];
-  originatingTo?: string;
-  originatingAccountId?: string;
-  originatingThreadId?: string | number;
-}): FollowupRun {
-  return {
-    prompt: params.prompt,
-    messageId: params.messageId,
-    enqueuedAt: Date.now(),
-    originatingChannel: params.originatingChannel,
-    originatingTo: params.originatingTo,
-    originatingAccountId: params.originatingAccountId,
-    originatingThreadId: params.originatingThreadId,
-    run: {
-      agentId: "agent",
-      agentDir: "/tmp",
-      sessionId: "sess",
-      sessionFile: "/tmp/session.json",
-      workspaceDir: "/tmp",
-      config: {} as OpenClawConfig,
-      provider: "openai",
-      model: "gpt-test",
-      timeoutMs: 10_000,
-      blockReplyBreak: "text_end",
-    },
-  };
-}
-
-let previousRuntimeError: typeof defaultRuntime.error;
-
-beforeAll(() => {
-  previousRuntimeError = defaultRuntime.error;
-  defaultRuntime.error = (() => {}) as typeof defaultRuntime.error;
-});
-
-afterAll(() => {
-  defaultRuntime.error = previousRuntimeError;
-});
+installQueueRuntimeErrorSilencer();
 
 describe("followup queue drain restart after idle window", () => {
   it("does not retain stale callbacks when scheduleFollowupDrain runs with an empty queue", async () => {
@@ -257,7 +210,7 @@ describe("followup queue drain restart after idle window", () => {
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
 
     const allProcessed = createDeferred<void>();
-    let runFollowupResolve!: () => void;
+    let runFollowupResolve: (() => void) | undefined;
     const runFollowupGate = new Promise<void>((res) => {
       runFollowupResolve = res;
     });
@@ -272,6 +225,9 @@ describe("followup queue drain restart after idle window", () => {
     enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
     scheduleFollowupDrain(key, runFollowup);
     enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
+    if (!runFollowupResolve) {
+      throw new Error("Expected followup run release callback to be initialized");
+    }
     runFollowupResolve();
 
     await allProcessed.promise;

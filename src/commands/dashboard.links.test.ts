@@ -42,6 +42,18 @@ function resetRuntime() {
   runtime.exit.mockClear();
 }
 
+function logMessages(): string[] {
+  return runtime.log.mock.calls.map(([message]) => String(message));
+}
+
+function expectLogWith(text: string): void {
+  expect(logMessages().some((message) => message.includes(text))).toBe(true);
+}
+
+function expectNoLogWith(text: string): void {
+  expect(logMessages().some((message) => message.includes(text))).toBe(false);
+}
+
 function mockSnapshot(token: unknown = "abc") {
   readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/openclaw.json",
@@ -88,12 +100,42 @@ describe("dashboardCommand", () => {
       bind: "loopback",
       customBindHost: undefined,
       basePath: undefined,
+      tlsEnabled: false,
     });
+    // clipboard and browser still get the full authenticated URL
     expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
     expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/#token=abc123");
     expect(runtime.log).toHaveBeenCalledWith(
       "Opened in your browser. Keep that tab to control OpenClaw.",
     );
+  });
+
+  it("never logs the gateway token in the dashboard URL (CVE regression)", async () => {
+    const secretToken = "super-secret-bearer-token";
+    mockSnapshot(secretToken);
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(true);
+
+    await dashboardCommand(runtime);
+
+    // Clipboard and browser should still receive the tokenized URL.
+    expect(copyToClipboardMock).toHaveBeenCalledWith(
+      `http://127.0.0.1:18789/#token=${secretToken}`,
+    );
+    expect(openUrlMock).toHaveBeenCalledWith(`http://127.0.0.1:18789/#token=${secretToken}`);
+
+    // The logged output must never contain the token — it flows into
+    // console-captured log files readable by operator.read-scoped devices.
+    for (const call of runtime.log.mock.calls) {
+      const line = String(call[0]);
+      expect(line).not.toContain(secretToken);
+      expect(line).not.toContain("#token=");
+    }
+
+    // Base URL should be logged without the fragment.
+    expect(runtime.log).toHaveBeenCalledWith("Dashboard URL: http://127.0.0.1:18789/");
+    expect(runtime.log).toHaveBeenCalledWith("Token auto-auth included in browser/clipboard URL.");
   });
 
   it("prints SSH hint when browser cannot open", async () => {
@@ -111,14 +153,83 @@ describe("dashboardCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith("ssh hint");
   });
 
-  it("respects --no-open and skips browser attempts", async () => {
-    mockSnapshot();
+  it("never passes token to SSH hint (CVE regression — SSH path)", async () => {
+    const secretToken = "super-secret-bearer-token";
+    mockSnapshot(secretToken);
+    copyToClipboardMock.mockResolvedValue(false);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: false, reason: "ssh" });
+    formatControlUiSshHintMock.mockReturnValue("ssh hint without token");
+
+    await dashboardCommand(runtime);
+
+    // formatControlUiSshHint must NOT receive the token — the returned
+    // hint string is written to runtime.log, which flows into the same
+    // console-captured log file readable by operator.read-scoped devices.
+    expect(formatControlUiSshHintMock).toHaveBeenCalledWith({ port: 18789, basePath: undefined });
+    const [sshHintOptions] = formatControlUiSshHintMock.mock.calls[0] ?? [];
+    expect(sshHintOptions).not.toHaveProperty("token");
+
+    // Double-check: no logged line contains the secret.
+    for (const call of runtime.log.mock.calls) {
+      const line = String(call[0]);
+      expect(line).not.toContain(secretToken);
+      expect(line).not.toContain("#token=");
+    }
+  });
+
+  it("guides user to manual auth when delivery channels both fail (CVE-safe)", async () => {
+    const secretToken = "super-secret-bearer-token";
+    mockSnapshot(secretToken);
+    copyToClipboardMock.mockResolvedValue(false);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: false, reason: "ssh" });
+    formatControlUiSshHintMock.mockReturnValue("ssh hint without token");
+
+    await dashboardCommand(runtime);
+
+    const allLogs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
+
+    // CVE: token value and fragment marker must not appear in logs.
+    expect(allLogs).not.toContain(secretToken);
+    expect(allLogs).not.toContain("#token=");
+
+    // UX: user must be pointed to where their token lives so they can self-recover.
+    expect(allLogs).toMatch(/OPENCLAW_GATEWAY_TOKEN/);
+    // UX: hint must name the URL fragment key so the user knows the syntax.
+    expect(allLogs).toContain("key `token`");
+  });
+
+  it("respects --no-open and tells user token URL is in clipboard", async () => {
+    mockSnapshot("abc");
     copyToClipboardMock.mockResolvedValue(true);
 
     await dashboardCommand(runtime, { noOpen: true });
 
     expect(detectBrowserOpenSupportMock).not.toHaveBeenCalled();
     expect(openUrlMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Browser launch disabled (--no-open). Token-authenticated URL copied to clipboard.",
+    );
+  });
+
+  it("respects --no-open and falls through to manual-auth hint when clipboard fails (token configured)", async () => {
+    mockSnapshot("abc");
+    copyToClipboardMock.mockResolvedValue(false);
+
+    await dashboardCommand(runtime, { noOpen: true });
+
+    // Redundant fallback hint is suppressed when the manual-auth hint speaks.
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      "Browser launch disabled (--no-open). Use the URL above.",
+    );
+    expectLogWith("OPENCLAW_GATEWAY_TOKEN");
+  });
+
+  it("respects --no-open with plain URL hint when clipboard fails and no token is configured", async () => {
+    mockSnapshot("");
+    copyToClipboardMock.mockResolvedValue(false);
+
+    await dashboardCommand(runtime, { noOpen: true });
+
     expect(runtime.log).toHaveBeenCalledWith(
       "Browser launch disabled (--no-open). Use the URL above.",
     );
@@ -138,15 +249,11 @@ describe("dashboardCommand", () => {
     await dashboardCommand(runtime);
 
     expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Token auto-auth unavailable"),
+    expectLogWith("Token auto-auth unavailable");
+    expectLogWith(
+      "gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).",
     );
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).",
-      ),
-    );
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("missing env var"));
+    expectNoLogWith("missing env var");
   });
 
   it("keeps URL non-tokenized when token SecretRef is unresolved but env fallback exists", async () => {
@@ -165,12 +272,8 @@ describe("dashboardCommand", () => {
 
     expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
     expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Token auto-auth is disabled for SecretRef-managed"),
-    );
-    expect(runtime.log).not.toHaveBeenCalledWith(
-      expect.stringContaining("Token auto-auth unavailable"),
-    );
+    expectLogWith("Token auto-auth is disabled for SecretRef-managed");
+    expectNoLogWith("Token auto-auth unavailable");
   });
 
   it("keeps URL non-tokenized when env-template gateway.auth.token is unresolved", async () => {
@@ -183,13 +286,9 @@ describe("dashboardCommand", () => {
 
     expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
     expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Token auto-auth unavailable: gateway.auth.token SecretRef is unresolved (env:default:CUSTOM_GATEWAY_TOKEN).",
-      ),
+    expectLogWith(
+      "Token auto-auth unavailable: gateway.auth.token SecretRef is unresolved (env:default:CUSTOM_GATEWAY_TOKEN).",
     );
-    expect(runtime.log).not.toHaveBeenCalledWith(
-      expect.stringContaining("Token auto-auth is disabled for SecretRef-managed"),
-    );
+    expectNoLogWith("Token auto-auth is disabled for SecretRef-managed");
   });
 });

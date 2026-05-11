@@ -1,4 +1,4 @@
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   hasEffectivePairedDeviceRole,
   listDevicePairing,
@@ -20,6 +20,7 @@ import {
   type ApnsRelayConfig,
 } from "../infra/push-apns.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const APPROVALS_SCOPE = "operator.approvals";
 const OPERATOR_ROLE = "operator";
@@ -47,7 +48,7 @@ type ApprovalDeliveryState = {
 };
 
 function isIosPlatform(platform: string | undefined): boolean {
-  const normalized = platform?.trim().toLowerCase() ?? "";
+  const normalized = normalizeOptionalLowercaseString(platform) ?? "";
   return normalized.startsWith("ios") || normalized.startsWith("ipados");
 }
 
@@ -138,7 +139,7 @@ async function resolveDeliveryPlan(params: {
 
   let relayConfig: ApnsRelayConfig | undefined;
   if (needsRelay) {
-    const relay = resolveApnsRelayConfigFromEnv(process.env, loadConfig().gateway);
+    const relay = resolveApnsRelayConfigFromEnv(process.env, getRuntimeConfig().gateway);
     if (relay.ok) {
       relayConfig = relay.value;
     } else {

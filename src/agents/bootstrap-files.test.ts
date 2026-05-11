@@ -8,8 +8,10 @@ import {
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import {
+  _resetBootstrapWarningCacheForTest,
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
+  makeBootstrapWarn,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
@@ -58,6 +60,40 @@ function registerMalformedBootstrapFileHook() {
   });
 }
 
+function registerDuplicateBootstrapFileHook() {
+  registerInternalHook("agent:bootstrap", (event) => {
+    const context = event.context as AgentBootstrapHookContext;
+    context.bootstrapFiles = [
+      ...context.bootstrapFiles,
+      {
+        name: "AGENTS.md",
+        path: "AGENTS.md",
+        content: "duplicate relative hook content",
+        missing: false,
+      },
+      {
+        name: "AGENTS.md",
+        path: path.join(context.workspaceDir, ".", "AGENTS.md"),
+        content: "duplicate absolute hook content",
+        missing: false,
+      },
+    ];
+  });
+}
+
+async function createHeartbeatAgentsWorkspace() {
+  const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+  await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
+  await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "repo rules", "utf8");
+  return workspaceDir;
+}
+
+function expectHeartbeatExcludedAndAgentsKept(files: WorkspaceBootstrapFile[]) {
+  const fileNames = files.map((file) => file.name);
+  expect(fileNames).not.toContain("HEARTBEAT.md");
+  expect(fileNames).toContain("AGENTS.md");
+}
+
 describe("resolveBootstrapFilesForRun", () => {
   beforeEach(() => clearInternalHooks());
   afterEach(() => clearInternalHooks());
@@ -68,7 +104,8 @@ describe("resolveBootstrapFilesForRun", () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
-    expect(files.some((file) => file.path === path.join(workspaceDir, "EXTRA.md"))).toBe(true);
+    const filePaths = files.map((file) => file.path);
+    expect(filePaths).toContain(path.join(workspaceDir, "EXTRA.md"));
   });
 
   it("drops malformed hook files with missing/invalid paths", async () => {
@@ -86,6 +123,25 @@ describe("resolveBootstrapFilesForRun", () => {
     ).toBe(true);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
+  });
+
+  it("dedupes hook-injected bootstrap paths relative to the workspace", async () => {
+    registerDuplicateBootstrapFileHook();
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const agentsPath = path.join(workspaceDir, "AGENTS.md");
+    await fs.writeFile(agentsPath, "workspace rules", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    const agentsFiles = files.filter((file) => file.path === agentsPath);
+
+    expect(agentsFiles).toHaveLength(1);
+    expect(agentsFiles[0]?.content).toBe("workspace rules");
+
+    const context = await resolveBootstrapContextForRun({ workspaceDir });
+    const agentsContextFiles = context.contextFiles.filter((file) => file.path === agentsPath);
+    expect(agentsContextFiles).toHaveLength(1);
+    expect(agentsContextFiles[0]?.content).toBe("workspace rules");
   });
 });
 
@@ -105,6 +161,20 @@ describe("resolveBootstrapContextForRun", () => {
     expect(extra?.content).toBe("extra");
   });
 
+  it("keeps BOOTSTRAP.md available in shared injected context for non-attempt consumers", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "ritual", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+
+    const result = await resolveBootstrapContextForRun({ workspaceDir });
+
+    const bootstrapFileNames = result.bootstrapFiles.map((file) => file.name);
+    expect(bootstrapFileNames).toContain("BOOTSTRAP.md");
+    const contextFileNames = new Set(result.contextFiles.map((file) => path.basename(file.path)));
+    expect(contextFileNames.has("BOOTSTRAP.md")).toBe(true);
+    expect(contextFileNames.has("AGENTS.md")).toBe(true);
+  });
+
   it("uses heartbeat-only bootstrap files in lightweight heartbeat mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
@@ -117,7 +187,8 @@ describe("resolveBootstrapContextForRun", () => {
     });
 
     expect(files.length).toBeGreaterThan(0);
-    expect(files.every((file) => file.name === "HEARTBEAT.md")).toBe(true);
+    const nonHeartbeatFiles = files.filter((file) => file.name !== "HEARTBEAT.md");
+    expect(nonHeartbeatFiles).toStrictEqual([]);
   });
 
   it("keeps bootstrap context empty in lightweight cron mode", async () => {
@@ -130,7 +201,70 @@ describe("resolveBootstrapContextForRun", () => {
       runKind: "cron",
     });
 
-    expect(files).toEqual([]);
+    expect(files).toStrictEqual([]);
+  });
+
+  it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat prompt section is disabled", async () => {
+    const workspaceDir = await createHeartbeatAgentsWorkspace();
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            heartbeat: {
+              includeSystemPromptSection: false,
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      },
+    });
+
+    expectHeartbeatExcludedAndAgentsKept(files);
+  });
+
+  it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat cadence is disabled", async () => {
+    const workspaceDir = await createHeartbeatAgentsWorkspace();
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "0m",
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      },
+    });
+
+    expectHeartbeatExcludedAndAgentsKept(files);
+  });
+
+  it("keeps HEARTBEAT.md for actual heartbeat runs even when the prompt section is disabled", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      runKind: "heartbeat",
+      config: {
+        agents: {
+          defaults: {
+            heartbeat: {
+              includeSystemPromptSection: false,
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      },
+    });
+
+    const fileNames = files.map((file) => file.name);
+    expect(fileNames).toContain("HEARTBEAT.md");
   });
 });
 
@@ -291,6 +425,69 @@ describe("hasCompletedBootstrapTurn", () => {
     );
     await fs.symlink(realFile, linkFile);
     expect(await hasCompletedBootstrapTurn(linkFile)).toBe(false);
+  });
+});
+
+describe("makeBootstrapWarn", () => {
+  afterEach(() => {
+    _resetBootstrapWarningCacheForTest();
+  });
+
+  it("deduplicates repeated warnings for the same session and message", () => {
+    const warnings: string[] = [];
+    const warn = makeBootstrapWarn({
+      sessionLabel: "agent:main:test-session",
+      warn: (message) => warnings.push(message),
+    });
+
+    warn?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+    warn?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+
+    expect(warnings).toEqual([
+      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:test-session)",
+    ]);
+  });
+
+  it("keeps warnings distinct across sessions", () => {
+    const warnings: string[] = [];
+    const first = makeBootstrapWarn({
+      sessionLabel: "agent:main:first-session",
+      warn: (message) => warnings.push(message),
+    });
+    const second = makeBootstrapWarn({
+      sessionLabel: "agent:main:second-session",
+      warn: (message) => warnings.push(message),
+    });
+
+    first?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+    second?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+
+    expect(warnings).toEqual([
+      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:first-session)",
+      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:second-session)",
+    ]);
+  });
+
+  it("keeps warnings distinct across workspaces with the same session", () => {
+    const warnings: string[] = [];
+    const first = makeBootstrapWarn({
+      sessionLabel: "agent:main:shared-session",
+      workspaceDir: "/tmp/workspace-a",
+      warn: (message) => warnings.push(message),
+    });
+    const second = makeBootstrapWarn({
+      sessionLabel: "agent:main:shared-session",
+      workspaceDir: "/tmp/workspace-b",
+      warn: (message) => warnings.push(message),
+    });
+
+    first?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+    second?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+
+    expect(warnings).toEqual([
+      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:shared-session)",
+      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:shared-session)",
+    ]);
   });
 });
 

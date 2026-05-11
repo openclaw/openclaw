@@ -1,8 +1,13 @@
 import os from "node:os";
-import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createCanonicalFixtureSkill } from "../skills.test-helpers.js";
+import {
+  restoreMockSkillsHomeEnv,
+  setMockSkillsHomeEnv,
+  type SkillsHomeEnvSnapshot,
+} from "./home-env.test-support.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import type { SkillEntry } from "./types.js";
 import {
@@ -48,6 +53,14 @@ function buildPrompt(
       },
     } satisfies OpenClawConfig,
   });
+}
+
+function requireIncludedCounts(prompt: string): [included: number, total: number] {
+  const match = prompt.match(/included (\d+) of (\d+)/);
+  if (!match) {
+    throw new Error(`expected included count in prompt: ${prompt}`);
+  }
+  return [Number(match[1]), Number(match[2])];
 }
 
 describe("formatSkillsCompact", () => {
@@ -100,6 +113,14 @@ describe("formatSkillsCompact", () => {
 });
 
 describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
+  let envSnapshot: SkillsHomeEnvSnapshot;
+
+  beforeEach(() => {
+    envSnapshot = setMockSkillsHomeEnv("/Users/openclaw-test-user");
+  });
+
+  afterEach(() => restoreMockSkillsHomeEnv(envSnapshot));
+
   it("respects explicit exposure metadata before compact formatting", () => {
     const hidden = makeEntry({ ...makeSkill("hidden"), disableModelInvocation: true });
     hidden.exposure = {
@@ -154,10 +175,9 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).toContain("compact format, descriptions omitted");
     expect(prompt).not.toContain("<description>");
     expect(prompt).toContain("skill-0");
-    const match = prompt.match(/included (\d+) of (\d+)/);
-    expect(match).toBeTruthy();
-    expect(Number(match![1])).toBeLessThan(Number(match![2]));
-    expect(Number(match![1])).toBeGreaterThan(0);
+    const [included, total] = requireIncludedCounts(prompt);
+    expect(included).toBeLessThan(total);
+    expect(included).toBeGreaterThan(0);
   });
 
   it("compact preserves all skills where full format would drop some", () => {
@@ -195,9 +215,8 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     // Budget so small that even one compact skill can't fit
     const prompt = buildPrompt(skills, { maxChars: 10 });
     expect(prompt).not.toContain("only-one");
-    const match = prompt.match(/included (\d+) of (\d+)/);
-    expect(match).toBeTruthy();
-    expect(Number(match![1])).toBe(0);
+    const [included] = requireIncludedCounts(prompt);
+    expect(included).toBe(0);
   });
 
   it("count truncation only: shows included X of Y without compact note", () => {
@@ -258,6 +277,20 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).not.toContain(home);
   });
 
+  it("skills are sorted alphabetically regardless of entry insertion order", () => {
+    // Entries provided in reverse alphabetical order should still produce
+    // an alphabetically sorted prompt (fixes #64167).
+    const entries = ["zoo", "apple", "mango", "banana"].map((n) =>
+      makeEntry(makeSkill(n, `${n} skill`)),
+    );
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries,
+      config: { skills: { limits: { maxSkillsPromptChars: 50_000 } } } satisfies OpenClawConfig,
+    });
+    const nameMatches = [...prompt.matchAll(/<name>(\w+)<\/name>/g)].map((m) => m[1]);
+    expect(nameMatches).toEqual(["apple", "banana", "mango", "zoo"]);
+  });
+
   it("resolvedSkills in snapshot keeps canonical paths, not compacted", () => {
     const home = os.homedir();
     const skills = Array.from({ length: 5 }, (_, i) =>
@@ -269,8 +302,8 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     // Prompt should use compacted paths
     expect(snapshot.prompt).toContain("~/");
     // resolvedSkills should preserve canonical (absolute) paths
-    expect(snapshot.resolvedSkills).toBeDefined();
-    for (const skill of snapshot.resolvedSkills!) {
+    expect(snapshot.resolvedSkills).toHaveLength(5);
+    for (const skill of snapshot.resolvedSkills ?? []) {
       expect(skill.filePath).toContain(home);
       expect(skill.filePath).not.toMatch(/^~\//);
     }

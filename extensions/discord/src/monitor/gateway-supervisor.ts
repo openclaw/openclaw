@@ -2,13 +2,8 @@ import type { EventEmitter } from "node:events";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { getDiscordGatewayEmitter } from "../monitor.gateway.js";
 
-export type DiscordGatewayEventType =
-  | "disallowed-intents"
-  | "fatal"
-  | "other"
-  | "reconnect-exhausted";
+type DiscordGatewayEventType = "disallowed-intents" | "fatal" | "other" | "reconnect-exhausted";
 
 export type DiscordGatewayEvent = {
   type: DiscordGatewayEventType;
@@ -27,6 +22,10 @@ export class DiscordGatewayLifecycleError extends Error {
     this.name = "DiscordGatewayLifecycleError";
     this.eventType = event.type;
   }
+}
+
+export function getDiscordGatewayEmitter(gateway?: unknown): EventEmitter | undefined {
+  return (gateway as { emitter?: EventEmitter } | undefined)?.emitter;
 }
 
 export type DiscordGatewaySupervisor = {

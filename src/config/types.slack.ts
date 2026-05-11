@@ -9,7 +9,7 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
+} from "./types.channel-health.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -36,8 +36,8 @@ export type SlackChannelConfig = {
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
-  /** Allow bot-authored messages to trigger replies (default: false). */
-  allowBots?: boolean;
+  /** Allow bot-authored messages to trigger replies (default: false). Set to "mentions" to only allow bot messages that @mention this bot. */
+  allowBots?: boolean | "mentions";
   /** Allowlist of users that can invoke the bot in this channel. */
   users?: Array<string | number>;
   /** Optional skill filter for this channel. */
@@ -106,11 +106,22 @@ export type SlackThreadConfig = {
   requireExplicitMention?: boolean;
 };
 
+export type SlackSocketModeConfig = {
+  /** Slack SDK pong timeout in milliseconds. Socket Mode only. Default: 15000. */
+  clientPingTimeout?: number;
+  /** Slack SDK server ping timeout in milliseconds. Socket Mode only. */
+  serverPingTimeout?: number;
+  /** Enable Slack SDK ping/pong transport logging. Socket Mode only. */
+  pingPongLoggingEnabled?: boolean;
+};
+
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
   /** Slack connection mode (socket|http). Default: socket. */
   mode?: "socket" | "http";
+  /** Slack SDK Socket Mode transport options. Ignored in HTTP mode. */
+  socketMode?: SlackSocketModeConfig;
   /** Slack signing secret (required for HTTP mode). */
   signingSecret?: string;
   /** Slack Events API webhook path (default: /slack/events). */
@@ -132,8 +143,8 @@ export type SlackAccountConfig = {
   userToken?: string;
   /** If true, restrict user token to read operations only. Default: true. */
   userTokenReadOnly?: boolean;
-  /** Allow bot-authored messages to trigger replies (default: false). */
-  allowBots?: boolean;
+  /** Allow bot-authored messages to trigger replies (default: false). Set to "mentions" to only allow bot messages that @mention this bot. */
+  allowBots?: boolean | "mentions";
   /**
    * Break-glass override: allow mutable identity matching (name/slug) in allowlists.
    * Default behavior is ID-only matching.
@@ -157,6 +168,10 @@ export type SlackAccountConfig = {
   /** Per-DM config overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   textChunkLimit?: number;
+  /** Pass through Slack chat.postMessage link unfurl control. Omitted by default. */
+  unfurlLinks?: boolean;
+  /** Pass through Slack chat.postMessage media unfurl control. Omitted by default. */
+  unfurlMedia?: boolean;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
   streaming?: SlackChannelStreamingConfig;
   mediaMaxMb?: number;
@@ -176,12 +191,12 @@ export type SlackAccountConfig = {
   actions?: SlackActionConfig;
   slashCommand?: SlackSlashCommandConfig;
   /**
-   * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM policy key. Doctor migrates legacy channels.slack.dm.policy here.
    * Legacy key: channels.slack.dm.policy.
    */
   dmPolicy?: DmPolicy;
   /**
-   * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM allowlist. Doctor migrates legacy channels.slack.dm.allowFrom here.
    * Legacy key: channels.slack.dm.allowFrom.
    */
   allowFrom?: Array<string | number>;
@@ -210,9 +225,3 @@ export type SlackConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & SlackAccountConfig;
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    slack?: SlackConfig;
-  }
-}
