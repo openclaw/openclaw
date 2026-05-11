@@ -24,6 +24,7 @@ import type {
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const CODEX_APP_SERVER_AUTH_PROVIDER = "openai-codex";
+const OPENAI_PROVIDER = "openai";
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
@@ -113,7 +114,7 @@ export async function resolveCodexAppServerAuthAccountCacheKey(params: {
     return undefined;
   }
   const credential = store.profiles[profileId];
-  if (!credential || !isCodexAppServerAuthProvider(credential.provider, params.config)) {
+  if (!credential || !isCodexAppServerAuthProfileCredential(credential, params.config)) {
     return undefined;
   }
   if (credential.type === "api_key") {
@@ -304,9 +305,9 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   if (!credential) {
     throw new Error(`Codex app-server auth profile "${profileId}" was not found.`);
   }
-  if (!isCodexAppServerAuthProvider(credential.provider, params.config)) {
+  if (!isCodexAppServerAuthProfileCredential(credential, params.config)) {
     throw new Error(
-      `Codex app-server auth profile "${profileId}" must belong to provider "openai-codex" or a supported alias.`,
+      `Codex app-server auth profile "${profileId}" must be OpenAI Codex auth or an OpenAI API-key backup.`,
     );
   }
   const loginParams = await resolveLoginParamsForCredential(profileId, credential, {
@@ -417,6 +418,26 @@ async function resolveOAuthCredentialForCodexAppServer(
 
 function isCodexAppServerAuthProvider(provider: string, config?: AuthProfileOrderConfig): boolean {
   return resolveProviderIdForAuth(provider, { config }) === CODEX_APP_SERVER_AUTH_PROVIDER;
+}
+
+function isOpenAIApiKeyBackupCredential(
+  credential: AuthProfileCredential,
+  config?: AuthProfileOrderConfig,
+): boolean {
+  return (
+    credential.type === "api_key" &&
+    resolveProviderIdForAuth(credential.provider, { config }) === OPENAI_PROVIDER
+  );
+}
+
+function isCodexAppServerAuthProfileCredential(
+  credential: AuthProfileCredential,
+  config?: AuthProfileOrderConfig,
+): boolean {
+  return (
+    isCodexAppServerAuthProvider(credential.provider, config) ||
+    isOpenAIApiKeyBackupCredential(credential, config)
+  );
 }
 
 function shouldClearOpenAiApiKeyForCodexAuthProfile(params: {

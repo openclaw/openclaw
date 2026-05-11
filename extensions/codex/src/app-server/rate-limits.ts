@@ -93,6 +93,13 @@ export function summarizeCodexAccountRateLimits(
   ];
 }
 
+export function resolveCodexUsageLimitResetAtMs(
+  value: JsonValue | undefined,
+  nowMs = Date.now(),
+): number | undefined {
+  return selectNextRateLimitReset(value, nowMs)?.resetsAtMs;
+}
+
 function isCodexUsageLimitError(
   codexErrorInfo: JsonValue | null | undefined,
   message: string | undefined,

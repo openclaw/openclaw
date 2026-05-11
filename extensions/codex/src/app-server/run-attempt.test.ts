@@ -2177,16 +2177,10 @@ describe("runCodexAppServerAttempt", () => {
     });
     harnessRef.current = harness;
 
-    const runError = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir)).catch(
-      (error: unknown) => error,
-    );
-
-    const error = await runError;
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain(
-      "You've reached your Codex subscription usage limit.",
-    );
-    expect((error as Error).message).toContain("Next reset in");
+    const result = await runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Next reset in");
   });
 
   it("uses a recent Codex rate-limit snapshot when turn/start omits reset details", async () => {
@@ -2214,17 +2208,13 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    const runError = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir)).catch(
-      (error: unknown) => error,
-    );
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await harness.waitForMethod("turn/start");
 
-    const error = await runError;
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain(
-      "You've reached your Codex subscription usage limit.",
-    );
-    expect((error as Error).message).toContain("Next reset in");
+    const result = await run;
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Next reset in");
   });
 
   it("refreshes Codex account rate limits when turn/start omits reset details", async () => {
@@ -2243,18 +2233,14 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    const runError = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir)).catch(
-      (error: unknown) => error,
-    );
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await harness.waitForMethod("account/rateLimits/read");
 
-    const error = await runError;
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain(
-      "You've reached your Codex subscription usage limit.",
-    );
-    expect((error as Error).message).toContain("Next reset in");
-    expect((error as Error).message).not.toContain("Codex did not return a reset time");
+    const result = await run;
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Next reset in");
+    expect(result.promptError).not.toContain("Codex did not return a reset time");
   });
 
   it("cleans up native hook relay state when the Codex turn aborts", async () => {

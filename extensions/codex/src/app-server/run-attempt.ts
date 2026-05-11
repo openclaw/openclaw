@@ -38,7 +38,7 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -107,6 +107,7 @@ import {
 import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
 import {
   formatCodexUsageLimitErrorMessage,
+  resolveCodexUsageLimitResetAtMs,
   shouldRefreshCodexRateLimitsForUsageLimitMessage,
 } from "./rate-limits.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
@@ -1331,8 +1332,9 @@ export async function runCodexAppServerAttempt(
   const turnStartFailureMessages = [
     ...historyMessages,
     {
-      role: "user",
-      content: [{ type: "text", text: promptBuild.prompt }],
+      role: "user" as const,
+      content: promptBuild.prompt,
+      timestamp: Date.now(),
     },
   ];
 
@@ -1417,8 +1419,15 @@ export async function runCodexAppServerAttempt(
     });
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     if (usageLimitError) {
-      throw new Error(usageLimitError, {
-        cause: error,
+      await markCodexAuthProfileBlockedFromRecentRateLimits({
+        params,
+        authProfileId: startupAuthProfileId,
+      });
+      return buildCodexTurnStartFailureResult({
+        params,
+        message: usageLimitError,
+        messagesSnapshot: turnStartFailureMessages,
+        systemPromptReport,
       });
     }
     throw error;
@@ -1668,6 +1677,74 @@ export async function runCodexAppServerAttempt(
     steeringQueue?.cancel();
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   }
+}
+
+async function markCodexAuthProfileBlockedFromRecentRateLimits(params: {
+  params: EmbeddedRunAttemptParams;
+  authProfileId?: string;
+}): Promise<void> {
+  const authProfileId = params.authProfileId?.trim();
+  if (!authProfileId || !params.params.authProfileStore) {
+    return;
+  }
+  const blockedUntil = resolveCodexUsageLimitResetAtMs(readRecentCodexRateLimits());
+  if (!blockedUntil) {
+    return;
+  }
+  try {
+    await markAuthProfileBlockedUntil({
+      store: params.params.authProfileStore,
+      profileId: authProfileId,
+      blockedUntil,
+      source: "codex_rate_limits",
+      agentDir: params.params.agentDir,
+      runId: params.params.runId,
+      modelId: params.params.modelId,
+    });
+  } catch (error) {
+    embeddedAgentLog.debug("failed to mark Codex auth profile blocked from app-server limits", {
+      authProfileId,
+      error: formatErrorMessage(error),
+    });
+  }
+}
+
+function buildCodexTurnStartFailureResult(params: {
+  params: EmbeddedRunAttemptParams;
+  message: string;
+  messagesSnapshot: AgentMessage[];
+  systemPromptReport: ReturnType<typeof buildCodexSystemPromptReport>;
+}): EmbeddedRunAttemptResult {
+  return {
+    aborted: false,
+    externalAbort: false,
+    timedOut: false,
+    idleTimedOut: false,
+    timedOutDuringCompaction: false,
+    timedOutDuringToolExecution: false,
+    promptError: params.message,
+    promptErrorSource: "prompt",
+    sessionIdUsed: params.params.sessionId,
+    messagesSnapshot: params.messagesSnapshot,
+    assistantTexts: [],
+    toolMetas: [],
+    lastAssistant: undefined,
+    didSendViaMessagingTool: false,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
+    cloudCodeAssistFormatError: false,
+    replayMetadata: {
+      hadPotentialSideEffects: false,
+      replaySafe: true,
+    },
+    itemLifecycle: {
+      startedCount: 0,
+      completedCount: 0,
+      activeCount: 0,
+    },
+    systemPromptReport: params.systemPromptReport,
+  };
 }
 
 async function handleDynamicToolCallWithTimeout(params: {
@@ -2271,10 +2348,14 @@ function readCodexErrorPayload(error: unknown): {
     return { message };
   }
   const nestedError = isJsonObject(data.error) ? data.error : data;
+  const rateLimits = nestedError.rateLimits ?? data.rateLimits;
+  if (rateLimits !== undefined) {
+    rememberCodexRateLimits(rateLimits);
+  }
   return {
     message: readString(nestedError, "message") ?? message,
     codexErrorInfo: nestedError.codexErrorInfo,
-    rateLimits: nestedError.rateLimits ?? data.rateLimits,
+    rateLimits,
   };
 }
 

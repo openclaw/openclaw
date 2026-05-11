@@ -58,6 +58,7 @@ export {
   getSoonestCooldownExpiry,
   isProfileInCooldown,
   markAuthProfileCooldown,
+  markAuthProfileBlockedUntil,
   markAuthProfileFailure,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
@@ -71,6 +72,8 @@ export {
 export type {
   ApiKeyCredential,
   AuthCredentialReasonCode,
+  AuthProfileBlockedReason,
+  AuthProfileBlockedSource,
   AuthProfileCredential,
   AuthProfileEligibilityReasonCode,
   AuthProfileFailureReason,

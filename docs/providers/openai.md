@@ -242,7 +242,7 @@ Choose your preferred auth method and follow the setup steps.
 
     | Model ref | Runtime config | Route | Auth |
     |-----------|----------------|-------|------|
-    | `openai/gpt-5.5` | omitted / provider/model `agentRuntime.id: "codex"` | Native Codex app-server harness | Codex sign-in or selected `openai-codex` profile |
+    | `openai/gpt-5.5` | omitted / provider/model `agentRuntime.id: "codex"` | Native Codex app-server harness | Codex sign-in or ordered `openai` auth profile |
     | `openai/gpt-5.5` | provider/model `agentRuntime.id: "pi"` | PI embedded runtime with internal Codex-auth transport | Selected `openai-codex` profile |
     | `openai-codex/gpt-5.5` | repaired by doctor | Legacy route rewritten to `openai/gpt-5.5` | Existing `openai-codex` profile |
 
@@ -269,6 +269,29 @@ Choose your preferred auth method and follow the setup steps.
       agents: {
         defaults: {
           model: { primary: "openai/gpt-5.5" },
+        },
+      },
+    }
+    ```
+
+    With an API-key backup, keep the model on `openai/gpt-5.5` and put the
+    auth order under `openai`. OpenClaw will try the subscription first, then
+    the API key, while staying on the Codex harness:
+
+    ```json5
+    {
+      plugins: { entries: { codex: { enabled: true } } },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+        },
+      },
+      auth: {
+        order: {
+          openai: [
+            "openai-codex:user@example.com",
+            "openai:api-key-backup",
+          ],
         },
       },
     }
@@ -371,11 +394,12 @@ Choose your preferred auth method and follow the setup steps.
 ## Native Codex app-server auth
 
 The native Codex app-server harness uses `openai/*` model refs plus omitted
-runtime config or provider/model `agentRuntime.id: "codex"`, but its auth is still
-account-based. OpenClaw
-selects auth in this order:
+runtime config or provider/model `agentRuntime.id: "codex"`, but its auth is
+still account-based. OpenClaw selects auth in this order:
 
-1. An explicit OpenClaw `openai-codex` auth profile bound to the agent.
+1. Ordered OpenAI auth profiles for the agent, preferably under
+   `auth.order.openai`. Existing `openai-codex:*` profiles and
+   `auth.order.openai-codex` remain valid for older installs.
 2. The app-server's existing account, such as a local Codex CLI ChatGPT sign-in.
 3. For local stdio app-server launches only, `CODEX_API_KEY`, then
    `OPENAI_API_KEY`, when the app-server reports no account and still requires
@@ -387,7 +411,11 @@ or embeddings. Env API-key fallback is only the local stdio no-account path; it
 is not sent to WebSocket app-server connections. When a subscription-style Codex
 profile is selected, OpenClaw also keeps `CODEX_API_KEY` and `OPENAI_API_KEY`
 out of the spawned stdio app-server child and sends the selected credentials
-through the app-server login RPC.
+through the app-server login RPC. When that subscription profile is blocked by a
+Codex usage limit, OpenClaw can rotate to the next ordered `openai:*` API-key
+profile without changing the selected model or dropping out of the Codex
+harness. Once the subscription reset time passes, the subscription profile is
+eligible again.
 
 ## Image generation
 
