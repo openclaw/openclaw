@@ -16,6 +16,10 @@ vi.mock("../../config/sessions/store.js", () => ({
   getSessionEntry: vi.fn().mockReturnValue(undefined),
 }));
 
+vi.mock("../../config/sessions/session-entries.sqlite.js", () => ({
+  readSqliteSessionDeliveryContext: vi.fn().mockReturnValue(undefined),
+}));
+
 vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
   resolveMessageChannelSelection: vi
     .fn()
@@ -36,12 +40,14 @@ vi.mock("../../infra/outbound/targets.runtime.js", () => ({
 const mockedModuleIds = [
   "../../config/sessions/main-session.js",
   "../../config/sessions/store.js",
+  "../../config/sessions/session-entries.sqlite.js",
   "../../infra/outbound/channel-selection.runtime.js",
   "../../infra/outbound/targets.runtime.js",
   "../../infra/outbound/target-id-resolution.js",
   "../../pairing/allow-from-store-read.js",
 ];
 
+import { readSqliteSessionDeliveryContext } from "../../config/sessions/session-entries.sqlite.js";
 import { getSessionEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.runtime.js";
@@ -103,6 +109,8 @@ beforeEach(() => {
   vi.mocked(readChannelAllowFromStoreEntriesSync).mockReturnValue([]);
   vi.mocked(getSessionEntry).mockReset();
   vi.mocked(getSessionEntry).mockReturnValue(undefined);
+  vi.mocked(readSqliteSessionDeliveryContext).mockReset();
+  vi.mocked(readSqliteSessionDeliveryContext).mockReturnValue(undefined);
   vi.mocked(resolveOutboundTarget).mockReset();
   setActivePluginRegistry(
     createTestRegistry([
@@ -264,6 +272,26 @@ describe("resolveDeliveryTarget", () => {
 
     expect(result.channel).toBe("alpha");
     expect(result.to).toBe("room-allowed");
+  });
+
+  it("prefers typed SQLite delivery context over compatibility session fields", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-typed",
+      lastChannel: "alpha",
+      lastTo: "room-stale",
+    });
+    vi.mocked(readSqliteSessionDeliveryContext).mockReturnValue({
+      channel: "alpha",
+      to: "room-typed",
+      accountId: "workspace-1",
+    });
+
+    const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: ["room-typed"] } } });
+    const result = await resolveLastTarget(cfg);
+
+    expect(result.channel).toBe("alpha");
+    expect(result.to).toBe("room-typed");
+    expect(result.accountId).toBe("workspace-1");
   });
 
   it("keeps explicit delivery target unchanged", async () => {

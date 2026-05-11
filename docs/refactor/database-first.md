@@ -485,6 +485,9 @@ Completed consolidation/deletion highlights:
   `deliveryContext` directly, and heartbeat runtime passes the per-agent
   session delivery row instead of relying on compatibility `session_entries`
   shadows for current routing.
+- Cron isolated-agent delivery target resolution also hydrates its current
+  route from the typed per-agent session delivery row before falling back to the
+  compatibility entry payload.
 - Gateway `chat.send` external-route inheritance now reads typed SQLite session
   routing metadata instead of inferring channel/direct/group scope from
   `sessionKey` pieces. Channel-scoped sessions inherit only when the typed
