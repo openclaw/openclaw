@@ -4660,6 +4660,34 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.model).toBe("gpt-5.4-codex");
   });
 
+  it("clamps Codex danger-full-access when OpenClaw sandboxing is active", () => {
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          approvalPolicy: "never",
+          sandbox: "danger-full-access",
+        },
+      },
+    });
+
+    const sandboxed = __testing.restrictCodexAppServerSandboxForOpenClawSandbox(appServer, {
+      enabled: true,
+    } as never);
+    expect(sandboxed).not.toBe(appServer);
+    expect(sandboxed.approvalPolicy).toBe("never");
+    expect(sandboxed.sandbox).toBe("workspace-write");
+
+    expect(__testing.restrictCodexAppServerSandboxForOpenClawSandbox(appServer, null)).toBe(
+      appServer,
+    );
+    expect(
+      __testing.restrictCodexAppServerSandboxForOpenClawSandbox(
+        { ...appServer, sandbox: "read-only" },
+        { enabled: true } as never,
+      ).sandbox,
+    ).toBe("read-only");
+  });
+
   it("passes current Codex service tier request values through app-server resume and turn requests", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

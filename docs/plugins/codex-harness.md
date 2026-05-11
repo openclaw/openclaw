@@ -323,6 +323,9 @@ Local stdio app-server sessions default to the trusted local operator posture:
 `approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
 `sandbox: "danger-full-access"`. If local Codex requirements disallow that
 implicit YOLO posture, OpenClaw selects allowed guardian permissions instead.
+When an OpenClaw sandbox is active for the session, OpenClaw narrows Codex
+`danger-full-access` to Codex `workspace-write` so native Codex code-mode turns
+stay inside the sandboxed workspace.
 
 Use guardian mode when you want Codex native auto-review before sandbox escapes
 or extra permissions:
@@ -482,7 +485,7 @@ Supported `appServer` fields:
 | `turnCompletionIdleTimeoutMs` | `60000`                                                | Quiet window after a turn-scoped Codex app-server request while OpenClaw waits for `turn/completed`. Raise this for slow post-tool or status-only synthesis phases.                                                                  |
 | `mode`                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access`, `never` approval, or the `user` reviewer make the implicit default guardian.                                                |
 | `approvalPolicy`              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start/resume/turn. Guardian defaults prefer `"on-request"` when allowed.                                                                                                                 |
-| `sandbox`                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`.                                                                                           |
+| `sandbox`                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`. When an OpenClaw sandbox is active, `danger-full-access` is narrowed to `"workspace-write"`. |
 | `approvalsReviewer`           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                   |
 | `serviceTier`                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                      |
 
