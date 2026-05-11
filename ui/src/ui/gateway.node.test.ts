@@ -324,6 +324,46 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
+  it("reports generic WebSocket construction failures without retrying", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    class ThrowingWebSocket {
+      static OPEN = 1;
+
+      constructor(_url: string) {
+        throw new TypeError("constructor failed");
+      }
+    }
+    vi.stubGlobal("WebSocket", ThrowingWebSocket);
+
+    const client = new GatewayBrowserClient({
+      url: "ws://gateway.example:18789",
+      token: "shared-auth-token",
+      onClose,
+    });
+
+    expect(() => client.start()).not.toThrow();
+    expect(onClose).toHaveBeenCalledWith({
+      code: 1006,
+      reason: "websocket error",
+      error: expect.objectContaining({
+        code: "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR",
+        message: expect.stringContaining("Could not create the Gateway WebSocket"),
+        details: expect.objectContaining({
+          code: "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR",
+          browserErrorName: "TypeError",
+          browserMessage: "constructor failed",
+        }),
+      }),
+    });
+    expect(wsInstances).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
   it("reports request timing for attributed RPC latency", async () => {
     const onRequestTiming = vi.fn();
     const client = new GatewayBrowserClient({
