@@ -243,6 +243,22 @@ export function isLoopbackIpAddress(raw: string | undefined): boolean {
   return normalized.range() === "loopback";
 }
 
+export function isLinkLocalIpAddress(raw: string | undefined): boolean {
+  const parsed = parseCanonicalIpAddress(raw);
+  if (!parsed) {
+    return false;
+  }
+  const normalized = normalizeIpv4MappedAddress(parsed);
+  if (isIpv4Address(normalized)) {
+    return normalized.range() === "linkLocal";
+  }
+  const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(normalized);
+  if (embeddedIpv4?.range() === "linkLocal") {
+    return true;
+  }
+  return normalized.range() === "linkLocal";
+}
+
 export function isPrivateOrLoopbackIpAddress(raw: string | undefined): boolean {
   const parsed = parseCanonicalIpAddress(raw);
   if (!parsed) {

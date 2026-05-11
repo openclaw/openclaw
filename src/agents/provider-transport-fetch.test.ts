@@ -384,6 +384,45 @@ describe("buildGuardedModelFetch", () => {
     expect(policy?.allowedHostnames).toBeUndefined();
   });
 
+  it.each([
+    {
+      label: "link-local metadata IP",
+      baseUrl: "http://169.254.169.254/v1",
+      requestUrl: "http://169.254.169.254/v1/chat/completions",
+      hostnameAllowlist: ["169.254.169.254"],
+    },
+    {
+      label: "metadata hostname",
+      baseUrl: "http://metadata.google.internal/v1",
+      requestUrl: "http://metadata.google.internal/v1/chat/completions",
+      hostnameAllowlist: ["metadata.google.internal"],
+    },
+  ])("does not add implicit exact-origin trust for $label", async (entry) => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      policy: { endpointClass: "custom" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "custom-metadata",
+      api: "openai-completions",
+      baseUrl: entry.baseUrl,
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher(entry.requestUrl, { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: entry.hostnameAllowlist,
+    });
+    expect(policy?.allowedOrigins).toBeUndefined();
+    expect(policy?.allowedHostnames).toBeUndefined();
+    expect(policy?.allowPrivateNetwork).toBeUndefined();
+  });
+
   it("merges explicit private-network opt-in into the provider-host policies", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: true,

@@ -12,6 +12,7 @@ import {
 } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
+import { isLinkLocalIpAddress } from "../shared/net/ip.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
 import {
@@ -27,6 +28,7 @@ import {
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
 const log = createSubsystemLogger("provider-transport-fetch");
+const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAMES = new Set(["metadata.google.internal"]);
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -409,6 +411,30 @@ function resolveHttpOrigin(value: unknown): string | undefined {
   }
 }
 
+function normalizeProviderOriginHostname(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    const normalized = parsed.hostname.trim().toLowerCase().replace(/\.+$/, "");
+    return normalized || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function canImplicitlyTrustConfiguredBaseUrlOrigin(value: unknown): value is string {
+  const hostname = normalizeProviderOriginHostname(value);
+  if (!hostname) {
+    return false;
+  }
+  return !BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAMES.has(hostname) && !isLinkLocalIpAddress(hostname);
+}
+
 function resolveModelTransportSsrFPolicy(params: {
   model: Model<Api>;
   url: string;
@@ -421,7 +447,9 @@ function resolveModelTransportSsrFPolicy(params: {
   const requestMatchesBaseOrigin =
     typeof baseUrl === "string" && Boolean(baseOrigin) && requestOrigin === baseOrigin;
   const baseUrlOriginPolicy =
-    requestMatchesBaseOrigin && params.trustConfiguredBaseUrlOrigin
+    requestMatchesBaseOrigin &&
+    params.trustConfiguredBaseUrlOrigin &&
+    canImplicitlyTrustConfiguredBaseUrlOrigin(baseUrl)
       ? ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl)
       : undefined;
   // Fake-IP trust is hostname-scoped and orthogonal to exact-origin private-IP trust.

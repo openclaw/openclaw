@@ -328,9 +328,10 @@ wildcard to the visible model catalog:
     If you see a connection error, verify the host, port, and that vLLM started with the OpenAI-compatible server mode.
     For explicit loopback, LAN, or Tailscale endpoints, OpenClaw trusts the
     exact configured `models.providers.vllm.baseUrl` origin for guarded model
-    requests. Set `models.providers.vllm.request.allowPrivateNetwork: true`
-    only when vLLM requests must reach another private origin, and set it to
-    `false` to opt out of exact-origin trust.
+    requests. Metadata/link-local origins remain blocked without explicit
+    opt-in. Set `models.providers.vllm.request.allowPrivateNetwork: true` only
+    when vLLM requests must reach another private origin, and set it to `false`
+    to opt out of exact-origin trust.
 
   </Accordion>
 

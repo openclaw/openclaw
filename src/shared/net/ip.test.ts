@@ -10,6 +10,7 @@ import {
   isIpv4Address,
   isIpv6Address,
   isLegacyIpv4Literal,
+  isLinkLocalIpAddress,
   isLoopbackIpAddress,
   isPrivateOrLoopbackIpAddress,
   isRfc1918Ipv4Address,
@@ -73,6 +74,15 @@ describe("shared ip helpers", () => {
     expect(normalizeIpAddress("  [2001:DB8::1]  ")).toBe("2001:db8::1");
     expect(isLoopbackIpAddress("::ffff:127.0.0.1")).toBe(true);
     expect(isLoopbackIpAddress("198.18.0.1")).toBe(false);
+  });
+
+  it("detects link-local addresses without treating normal private ranges as link-local", () => {
+    expect(isLinkLocalIpAddress("169.254.169.254")).toBe(true);
+    expect(isLinkLocalIpAddress("::ffff:169.254.169.254")).toBe(true);
+    expect(isLinkLocalIpAddress("fe80::1%lo0")).toBe(true);
+    expect(isLinkLocalIpAddress("10.0.0.5")).toBe(false);
+    expect(isLinkLocalIpAddress("127.0.0.1")).toBe(false);
+    expect(isLinkLocalIpAddress("fd00::1")).toBe(false);
   });
 
   it("parses loose legacy IPv4 literals that canonical parsing rejects", () => {
