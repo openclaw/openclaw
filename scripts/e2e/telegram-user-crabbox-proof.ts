@@ -131,7 +131,7 @@ type SessionFile = {
 
 const DEFAULT_SKILL_DIR = "~/.codex/skills/custom/telegram-e2e-bot-to-bot";
 const DEFAULT_CONVEX_ENV_FILE = `${DEFAULT_SKILL_DIR}/convex.local.env`;
-const DEFAULT_USER_DRIVER = `${DEFAULT_SKILL_DIR}/scripts/user-driver.py`;
+const DEFAULT_USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/telegram-user-crabbox";
 const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
 const CREDENTIAL_SCRIPT = fileURLToPath(new URL("./telegram-user-credential.ts", import.meta.url));
@@ -250,7 +250,8 @@ function parseArgs(argv: string[]): Options {
     text: "/status",
     timeoutMs: 90_000,
     ttl: "120m",
-    userDriverScript: DEFAULT_USER_DRIVER,
+    userDriverScript:
+      trimToValue(process.env.OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT) ?? DEFAULT_USER_DRIVER,
   };
   const commandSeparator = argv.indexOf("--");
   if (command === "run" && commandSeparator >= 0) {
@@ -1170,12 +1171,17 @@ async function writeExecutable(filePath: string, content: string) {
   fs.chmodSync(filePath, 0o700);
 }
 
+function requireUserDriverScript(opts: Options) {
+  const userDriverScript = expandHome(opts.userDriverScript);
+  if (!fs.existsSync(userDriverScript)) {
+    throw new Error(`Missing user driver script: ${opts.userDriverScript}`);
+  }
+  return userDriverScript;
+}
+
 async function prepareRemoteState(params: { localRoot: string; opts: Options; root: string }) {
   const stateArchive = path.join(params.localRoot, "remote-state.tgz");
-  const userDriverScript = expandHome(params.opts.userDriverScript);
-  if (!fs.existsSync(userDriverScript)) {
-    throw new Error(`Missing user driver script: ${params.opts.userDriverScript}`);
-  }
+  const userDriverScript = requireUserDriverScript(params.opts);
   await runCommand({
     command: "cp",
     args: [userDriverScript, path.join(params.localRoot, "user-driver.py")],
@@ -1474,6 +1480,7 @@ async function startSession(root: string, opts: Options, outputDir: string) {
     };
   }
 
+  requireUserDriverScript(opts);
   const credential = await leaseCredential({ localRoot, opts, root });
   const sut = opts.sutUsername
     ? { id: "", username: opts.sutUsername }
@@ -1959,6 +1966,7 @@ async function main() {
       return;
     }
 
+    requireUserDriverScript(opts);
     credential = await leaseCredential({ localRoot, opts, root });
     const sut = opts.sutUsername
       ? { id: "", username: opts.sutUsername }

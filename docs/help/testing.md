@@ -340,6 +340,21 @@ telegram-live`) or directly from a pull request comment:
 @Mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
 ```
 
+`Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
+before/after wrapper for PR visual proof. Start it from the Actions UI with
+freeform `instructions`, through `Mantis Scenario` (`scenario_id:
+telegram-desktop-proof`), or from a PR comment:
+
+```text
+@Mantis telegram desktop proof
+```
+
+The Mantis agent reads the PR, decides what Telegram-visible behavior proves the
+change, runs the real-user Crabbox Telegram Desktop proof lane on baseline and
+candidate refs, iterates until the native GIFs are useful, writes a paired
+`motionPreview` manifest, and posts the same 2-column GIF table through the
+Mantis GitHub App when `pr_number` is set.
+
 - `pnpm openclaw qa mantis telegram-desktop-builder`
   - Leases or reuses a Crabbox Linux desktop, installs native Telegram Desktop, configures OpenClaw with a leased Telegram SUT bot token, starts the gateway, and records screenshot/MP4 evidence from the visible VNC desktop.
   - Defaults to `--credential-source convex` so workflows only need the Convex broker secret. Use `--credential-source env` with the same `OPENCLAW_QA_TELEGRAM_*` variables as `pnpm openclaw qa telegram`.
@@ -538,8 +553,8 @@ Think of the suites as "increasing realism" (and increasing flakiness/cost):
 
 Native dependency policy:
 
-- Default test installs skip optional native Discord opus builds. Discord voice receive uses the pure-JS `opusscript` decoder, and `@discordjs/opus` stays in `ignoredBuiltDependencies` so local tests and Testbox lanes do not compile the native addon.
-- Use a dedicated Discord voice performance or live lane if you intentionally need to compare a native opus build. Do not add `@discordjs/opus` back to the default `onlyBuiltDependencies`; that makes unrelated install/test loops compile native code.
+- Default test installs skip optional native Discord opus builds. Discord voice receive uses the pure-JS `opusscript` decoder, and `@discordjs/opus` stays disabled in `allowBuilds` so local tests and Testbox lanes do not compile the native addon.
+- Use a dedicated Discord voice performance or live lane if you intentionally need to compare a native opus build. Do not set `@discordjs/opus` to `true` in the default `allowBuilds`; that makes unrelated install/test loops compile native code.
 
 <AccordionGroup>
   <Accordion title="Projects, shards, and scoped lanes">

@@ -770,11 +770,15 @@ describe("createDiscordGatewayPlugin", () => {
 
     expect(globalFetchMock).toHaveBeenCalledTimes(2);
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(2);
-    expect(
-      (plugin as unknown as { gatewayInfo?: { url?: string; shards?: number } }).gatewayInfo,
-    ).toMatchObject({
+    expect((plugin as unknown as { gatewayInfo?: unknown }).gatewayInfo).toEqual({
       url: "wss://gateway.discord.gg/?v=10",
       shards: 8,
+      session_start_limit: {
+        total: 1000,
+        remaining: 999,
+        reset_after: 120_000,
+        max_concurrency: 16,
+      },
     });
   });
 });

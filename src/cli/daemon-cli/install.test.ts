@@ -31,7 +31,15 @@ const resolveGatewayAuthMock = vi.hoisted(() =>
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 const createInstallPlanFixture = vi.hoisted(() => {
-  return async (params?: { wrapperPath?: string; env?: Record<string, string | undefined> }) => {
+  return async (params?: {
+    wrapperPath?: string;
+    env?: Record<string, string | undefined>;
+  }): Promise<{
+    programArguments: string[];
+    workingDirectory: string;
+    environment: Record<string, string | undefined>;
+    environmentValueSources?: Record<string, string | undefined>;
+  }> => {
     const environment: Record<string, string | undefined> = {};
     if (params?.wrapperPath || params?.env?.OPENCLAW_WRAPPER) {
       environment.OPENCLAW_WRAPPER = params.wrapperPath ?? params.env?.OPENCLAW_WRAPPER;
@@ -48,7 +56,7 @@ const createInstallPlanFixture = vi.hoisted(() => {
 const buildGatewayInstallPlanMock = vi.hoisted(() => vi.fn(createInstallPlanFixture));
 const parsePortMock = vi.hoisted(() => vi.fn(() => null));
 const isGatewayDaemonRuntimeMock = vi.hoisted(() => vi.fn(() => true));
-const installDaemonServiceAndEmitMock = vi.hoisted(() => vi.fn(async () => {}));
+const installDaemonServiceAndEmitMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
 
 const actionState = vi.hoisted(() => ({
   warnings: [] as string[],
@@ -224,6 +232,7 @@ describe("runDaemonInstall", () => {
     installDaemonServiceAndEmitMock.mockReset();
     service.isLoaded.mockReset();
     service.stage.mockReset();
+    service.install.mockReset();
     service.readCommand.mockReset();
     resetRuntimeCapture();
     actionState.warnings.length = 0;
@@ -254,6 +263,7 @@ describe("runDaemonInstall", () => {
     installDaemonServiceAndEmitMock.mockResolvedValue(undefined);
     service.isLoaded.mockResolvedValue(false);
     service.stage.mockResolvedValue(undefined);
+    service.install.mockResolvedValue(undefined);
     service.readCommand.mockResolvedValue(null);
     resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
       NODE_EXTRA_CA_CERTS: undefined,
@@ -294,6 +304,35 @@ describe("runDaemonInstall", () => {
         warning.includes("gateway.auth.token is SecretRef-managed"),
       ),
     ).toBe(true);
+  });
+
+  it("passes service environment value sources through to service install", async () => {
+    buildGatewayInstallPlanMock.mockResolvedValueOnce({
+      programArguments: ["openclaw", "gateway", "run"],
+      workingDirectory: "/tmp",
+      environment: {
+        OPENROUTER_API_KEY: "or-operator-key",
+      },
+      environmentValueSources: {
+        OPENROUTER_API_KEY: "file",
+      },
+    });
+    installDaemonServiceAndEmitMock.mockImplementationOnce(async (params?: unknown) => {
+      await (params as { install: () => Promise<void> }).install();
+    });
+
+    await runDaemonInstall({ json: true });
+
+    expect(service.install).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environment: {
+          OPENROUTER_API_KEY: "or-operator-key",
+        },
+        environmentValueSources: {
+          OPENROUTER_API_KEY: "file",
+        },
+      }),
+    );
   });
 
   it("does not treat env-template gateway.auth.token as plaintext during install", async () => {

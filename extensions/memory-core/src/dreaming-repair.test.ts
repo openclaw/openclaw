@@ -20,6 +20,17 @@ function requireArchiveDir(archiveDir: string | undefined): string {
   return archiveDir;
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let error: unknown;
+  try {
+    await fs.access(targetPath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
+
 afterEach(async () => {
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
@@ -127,10 +138,8 @@ describe("dreaming artifact repair", () => {
     expect(archiveDir).toBe(
       path.join(workspaceDir, ".openclaw-repair", "dreaming", "2026-04-11T21-30-00-000Z"),
     );
-    await expect(fs.access(sessionCorpusDir)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(sessionCorpusDir);
+    await expectPathMissing(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"));
     await expect(fs.readFile(dreamsPath, "utf-8")).resolves.toContain("# Dream Diary");
     const archivedEntries = await fs.readdir(archiveDir);
     expect(archivedEntries).toContainEqual(expect.stringMatching(/^session-corpus\./));

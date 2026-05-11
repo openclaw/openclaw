@@ -190,12 +190,16 @@ describe("agent components", () => {
     });
 
     expect(defer).not.toHaveBeenCalled();
-    expect(ctx).toMatchObject({
+    expect(ctx).toEqual({
       channelId: "group-dm-channel",
+      user: { id: "123456789", username: "Alice", discriminator: "1234" },
+      username: "Alice#1234",
+      userId: "123456789",
+      replyOpts: { ephemeral: true },
       isDirectMessage: false,
       isGroupDm: true,
+      memberRoleIds: [],
       rawGuildId: undefined,
-      userId: "123456789",
     });
   });
 

@@ -53,28 +53,27 @@ describe("codex plugin", () => {
       | [unknown]
       | undefined;
 
-    expect(providerRegistration).toMatchObject({ id: "codex", label: "Codex" });
-    expect(agentHarnessRegistration).toMatchObject({
-      id: "codex",
-      label: "Codex agent harness",
-      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+    expect(providerRegistration.id).toBe("codex");
+    expect(providerRegistration.label).toBe("Codex");
+    expect(agentHarnessRegistration.id).toBe("codex");
+    expect(agentHarnessRegistration.label).toBe("Codex agent harness");
+    expect(agentHarnessRegistration.deliveryDefaults).toEqual({
+      sourceVisibleReplies: "message_tool",
     });
     expect(typeof agentHarnessRegistration.dispose).toBe("function");
-    expect(mediaProviderRegistration).toMatchObject({
-      id: "codex",
-      capabilities: ["image"],
-      defaultModels: { image: "gpt-5.5" },
-    });
+    expect(mediaProviderRegistration?.id).toBe("codex");
+    expect(mediaProviderRegistration?.capabilities).toEqual(["image"]);
+    expect(mediaProviderRegistration?.defaultModels).toEqual({ image: "gpt-5.5" });
     expect(typeof mediaProviderRegistration?.describeImage).toBe("function");
     expect(typeof mediaProviderRegistration?.describeImages).toBe("function");
-    expect(registerCommand.mock.calls[0]?.[0]).toMatchObject({
-      name: "codex",
-      description: "Inspect and control the Codex app-server harness",
-    });
-    expect(registerMigrationProvider.mock.calls[0]?.[0]).toMatchObject({
-      id: "codex",
-      label: "Codex",
-    });
+    const commandRegistration = registerCommand.mock.calls[0]?.[0];
+    expect(commandRegistration?.name).toBe("codex");
+    expect(commandRegistration?.description).toBe(
+      "Inspect and control the Codex app-server harness",
+    );
+    const migrationRegistration = registerMigrationProvider.mock.calls[0]?.[0];
+    expect(migrationRegistration?.id).toBe("codex");
+    expect(migrationRegistration?.label).toBe("Codex");
     expect(inboundClaimRegistration?.[0]).toBe("inbound_claim");
     expect(typeof inboundClaimRegistration?.[1]).toBe("function");
     expect(typeof bindingResolvedRegistration?.[0]).toBe("function");
@@ -112,12 +111,11 @@ describe("codex plugin", () => {
       harness.supports({ provider: "codex", modelId: "gpt-5.4", requestedRuntime: "auto" })
         .supported,
     ).toBe(true);
-    expect(
-      harness.supports({
-        provider: "openai-codex",
-        modelId: "gpt-5.4",
-        requestedRuntime: "auto",
-      }),
-    ).toMatchObject({ supported: false });
+    const unsupported = harness.supports({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      requestedRuntime: "auto",
+    });
+    expect(unsupported.supported).toBe(false);
   });
 });

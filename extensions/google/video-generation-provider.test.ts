@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createGoogleGenAIMock, downloadMock, generateVideosMock, getVideosOperationMock } =
   vi.hoisted(() => {
@@ -54,8 +55,16 @@ function firstGoogleClientHttpOptions(): Record<string, unknown> {
   return recordField(firstObjectArg(createGoogleGenAIMock).httpOptions, "httpOptions");
 }
 
+let ssrfMock: { mockRestore: () => void } | undefined;
+
 describe("google video generation provider", () => {
+  beforeEach(() => {
+    ssrfMock = mockPinnedHostnameResolution();
+  });
+
   afterEach(() => {
+    ssrfMock?.mockRestore();
+    ssrfMock = undefined;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     downloadMock.mockReset();

@@ -370,7 +370,10 @@ describe("runHeartbeatOnce ack handling", () => {
       });
 
       expect(res.status).toBe("skipped");
-      expect(res).toMatchObject({ reason: "whatsapp-not-linked" });
+      if (!("reason" in res)) {
+        throw new Error("expected skipped heartbeat result reason");
+      }
+      expect(res.reason).toBe("whatsapp-not-linked");
       expect(sendWhatsApp).not.toHaveBeenCalled();
     });
   });
@@ -405,11 +408,11 @@ describe("runHeartbeatOnce ack handling", () => {
       });
 
       expect(sendTelegram).toHaveBeenCalledTimes(1);
-      expect(sendTelegram).toHaveBeenCalledWith(
-        TELEGRAM_GROUP,
-        "Hello from heartbeat",
-        expect.objectContaining({ accountId: params.expectedAccountId, verbose: false }),
-      );
+      const [chatId, text, options] = sendTelegram.mock.calls[0] ?? [];
+      expect(chatId).toBe(TELEGRAM_GROUP);
+      expect(text).toBe("Hello from heartbeat");
+      expect(options?.accountId).toBe(params.expectedAccountId);
+      expect(options?.verbose).toBe(false);
     });
   }
 

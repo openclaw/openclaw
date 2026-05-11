@@ -65,11 +65,16 @@ describe("wrapCopilotAnthropicStream", () => {
     );
 
     expect(baseStreamFn).toHaveBeenCalledOnce();
-    expect(baseStreamFn.mock.calls[0]?.[2]).toMatchObject({
+    const options = baseStreamFn.mock.calls[0]?.[2];
+    if (!options?.onPayload) {
+      throw new Error("expected Copilot Anthropic stream options");
+    }
+    expect(options).toEqual({
       headers: {
         ...expectedCopilotHeaders,
         "X-Test": "1",
       },
+      onPayload: options.onPayload,
     });
     expect(payloads[0]?.messages).toEqual([
       {
@@ -142,11 +147,17 @@ describe("wrapCopilotAnthropicStream", () => {
       { headers: { "X-Test": "1" } },
     );
 
-    expect(baseStreamFn.mock.calls[0]?.[2]).toMatchObject({
+    expect(baseStreamFn).toHaveBeenCalledOnce();
+    const options = baseStreamFn.mock.calls[0]?.[2];
+    if (!options?.onPayload) {
+      throw new Error("expected Copilot Responses stream options");
+    }
+    expect(options).toEqual({
       headers: {
         ...expectedCopilotHeaders,
         "X-Test": "1",
       },
+      onPayload: options.onPayload,
     });
     expect(payloads[0]?.input[0]?.id).toBe(reasoningId);
     expect(payloads[0]?.input[1]?.id).toMatch(/^msg_[a-f0-9]{16}$/);

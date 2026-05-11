@@ -782,15 +782,20 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(updateLastRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:slack:direct:u1:thread:500.000",
-        deliveryContext: expect.objectContaining({
-          threadId: "500.000",
-          to: "user:U1",
-        }),
-      }),
-    );
+    expect(updateLastRouteMock).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-store.json",
+      sessionKey: "agent:main:slack:direct:u1:thread:500.000",
+      deliveryContext: {
+        channel: "slack",
+        to: "user:U1",
+        accountId: "default",
+        threadId: "500.000",
+      },
+      ctx: {
+        MessageThreadId: "500.000",
+        SessionKey: "agent:main:slack:direct:u1:thread:500.000",
+      },
+    });
   });
 
   it("keeps default main-scope DM last-route metadata on the main session", async () => {
@@ -816,15 +821,20 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(updateLastRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        deliveryContext: expect.objectContaining({
-          threadId: "600.000",
-          to: "user:U1",
-        }),
-      }),
-    );
+    expect(updateLastRouteMock).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-store.json",
+      sessionKey: "agent:main:main",
+      deliveryContext: {
+        channel: "slack",
+        to: "user:U1",
+        accountId: "default",
+        threadId: "600.000",
+      },
+      ctx: {
+        MessageThreadId: "600.000",
+        SessionKey: "agent:main:main:thread:600.000",
+      },
+    });
   });
 
   it("finalizes fast draft preview text without sending a duplicate normal reply", async () => {

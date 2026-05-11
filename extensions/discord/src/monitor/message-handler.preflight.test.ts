@@ -404,15 +404,21 @@ describe("preflightDiscordMessage", () => {
     });
 
     const preflight = expectPreflightResult(result);
-    expect(preflight.threadBinding).toMatchObject({
+    expect(preflight.threadBinding).toEqual({
+      bindingId: "default:thread-1",
+      targetSessionKey: "agent:main:subagent:child-1",
+      targetKind: "subagent",
       conversation: {
         channel: "discord",
         accountId: "default",
         conversationId: "user:user-1",
       },
+      status: "active",
+      boundAt: 1,
       metadata: {
         pluginBindingOwner: "plugin",
         pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
       },
     });
   });
@@ -1702,10 +1708,25 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
       webhookId: "wh-1",
       webhookToken: "tok-1",
     });
-    expect(binding).toMatchObject({
-      threadId: "thread-1",
-      targetSessionKey: "agent:main:subagent:child-1",
-    });
+    if (!binding) {
+      throw new Error("Expected Discord thread binding");
+    }
+    expect(binding.accountId).toBe("default");
+    expect(binding.channelId).toBe("parent-1");
+    expect(binding.threadId).toBe("thread-1");
+    expect(binding.targetKind).toBe("subagent");
+    expect(binding.targetSessionKey).toBe("agent:main:subagent:child-1");
+    expect(binding.agentId).toBe("main");
+    expect(binding.webhookId).toBe("wh-1");
+    expect(binding.webhookToken).toBe("tok-1");
+    expect(binding.boundBy).toBe("system");
+    expect(binding.idleTimeoutMs).toBe(24 * 60 * 60 * 1000);
+    expect(binding.maxAgeMs).toBe(0);
+    expect(typeof binding.boundAt).toBe("number");
+    expect(binding.boundAt).toBeGreaterThan(0);
+    expect(binding.lastActivityAt).toBe(binding.boundAt);
+    expect(binding.label).toBeUndefined();
+    expect(binding.metadata).toBeUndefined();
 
     manager.unbindThread({
       threadId: "thread-1",

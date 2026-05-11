@@ -97,10 +97,34 @@ export type CodexThreadStartResponse = {
   modelProvider?: string | null;
 };
 
+export type CodexThreadForkParams = CodexThreadStartParams & {
+  threadId: string;
+  baseInstructions?: string;
+  ephemeral?: boolean;
+  threadSource?: string | JsonObject;
+  excludeTurns?: boolean;
+};
+
+export type CodexThreadForkResponse = CodexThreadStartResponse;
+
 export type CodexThreadResumeResponse = {
   thread: CodexThread;
   model: string;
   modelProvider?: string | null;
+};
+
+export type CodexThreadInjectItemsParams = JsonObject & {
+  threadId: string;
+  items: JsonValue[];
+};
+
+export type CodexThreadUnsubscribeParams = JsonObject & {
+  threadId: string;
+};
+
+export type CodexTurnInterruptParams = JsonObject & {
+  threadId: string;
+  turnId: string;
 };
 
 export type CodexTurnStartParams = JsonObject & {
@@ -401,7 +425,11 @@ export declare namespace v2 {
 }
 
 type CodexAppServerRequestParamsOverride = {
+  "thread/fork": CodexThreadForkParams;
+  "thread/inject_items": CodexThreadInjectItemsParams;
   "thread/start": CodexThreadStartParams;
+  "thread/unsubscribe": CodexThreadUnsubscribeParams;
+  "turn/interrupt": CodexTurnInterruptParams;
 };
 
 type CodexAppServerRequestResultMap = {
@@ -422,9 +450,12 @@ type CodexAppServerRequestResultMap = {
   "review/start": JsonValue;
   "skills/list": CodexSkillsListResponse;
   "thread/compact/start": JsonValue;
+  "thread/fork": CodexThreadForkResponse;
+  "thread/inject_items": JsonValue;
   "thread/list": JsonValue;
   "thread/resume": CodexThreadResumeResponse;
   "thread/start": CodexThreadStartResponse;
+  "thread/unsubscribe": JsonValue;
   "turn/interrupt": JsonValue;
   "turn/start": CodexTurnStartResponse;
   "turn/steer": JsonValue;

@@ -389,8 +389,11 @@ describe("google web search provider", () => {
         freshness: "week",
         date_after: "2026-04-01",
       }),
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
+      docs: "https://docs.openclaw.ai/tools/web",
       error: "conflicting_time_filters",
+      message:
+        "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
     });
     expect(mockFetch).not.toHaveBeenCalled();
   });

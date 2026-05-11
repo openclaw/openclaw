@@ -136,10 +136,13 @@ describe("browser.request local control state", () => {
       noSandbox: false,
     });
 
-    await expect(browserRequestStatus()).resolves.toMatchObject({
-      executablePath: "/usr/bin/google-chrome",
-      headless: true,
-      noSandbox: true,
-    });
+    const status = (await browserRequestStatus()) as {
+      executablePath?: unknown;
+      headless?: unknown;
+      noSandbox?: unknown;
+    };
+    expect(status.executablePath).toBe("/usr/bin/google-chrome");
+    expect(status.headless).toBe(true);
+    expect(status.noSandbox).toBe(true);
   });
 });

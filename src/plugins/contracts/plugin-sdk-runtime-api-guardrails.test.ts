@@ -7,6 +7,39 @@ import { bundledPluginFile, getBundledPluginRoots } from "./test-helpers/bundled
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
+function runtimeApiPluginFile(pluginId: string): string {
+  return bundledPluginFile({ rootDir: ROOT_DIR, pluginId, relativePath: "runtime-api.ts" });
+}
+
+const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
+  "acpx",
+  "browser",
+  "canvas",
+  "clickclack",
+  "copilot-proxy",
+  "diffs",
+  "feishu",
+  "google",
+  "line",
+  "lmstudio",
+  "lobster",
+  "mattermost",
+  "memory-core",
+  "ollama",
+  "open-prose",
+  "phone-control",
+  "qa-channel",
+  "qa-lab",
+  "qa-matrix",
+  "qqbot",
+  "tlon",
+  "tokenjuice",
+  "webhooks",
+  "zai",
+  "zalo",
+  "zalouser",
+] as const;
+
 const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "discord", relativePath: "runtime-api.ts" })]: [
     'export { discordMessageActions, handleDiscordAction, isDiscordModerationAction, readDiscordChannelCreateParams, readDiscordChannelEditParams, readDiscordChannelMoveParams, readDiscordModerationCommand, readDiscordParentIdParam, requiredGuildPermissionForModerationAction, type DiscordModerationAction, type DiscordModerationCommand } from "./runtime-api.actions.js";',
@@ -287,11 +320,13 @@ function readExportStatements(path: string): string[] {
 }
 
 describe("runtime api guardrails", () => {
-  it("keeps runtime api surfaces on an explicit export allowlist", () => {
+  it("keeps runtime api surfaces classified and guarded exports pinned", () => {
     const runtimeApiFiles = collectRuntimeApiFiles();
-    expect(runtimeApiFiles).toEqual(
-      expect.arrayContaining(Object.keys(RUNTIME_API_EXPORT_GUARDS).toSorted()),
-    );
+    const expectedRuntimeApiFiles = [
+      ...Object.keys(RUNTIME_API_EXPORT_GUARDS),
+      ...UNGUARDED_RUNTIME_API_PLUGIN_IDS.map(runtimeApiPluginFile),
+    ].toSorted();
+    expect(runtimeApiFiles.toSorted()).toEqual(expectedRuntimeApiFiles);
 
     for (const file of Object.keys(RUNTIME_API_EXPORT_GUARDS).toSorted()) {
       expect(readExportStatements(file), `${file} runtime api exports changed`).toEqual(

@@ -146,48 +146,72 @@ describe.each(storeFactories)("msteams conversation store ($name)", ({ createSto
   it("preserves existing timezone when upsert omits timezone", async () => {
     const store = await createStore();
 
-    await store.upsert("conv-tz", {
-      conversation: { id: "conv-tz" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-      user: { id: "u1" },
-      timezone: "Europe/London",
-    });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-25T20:00:00.000Z"));
+      await store.upsert("conv-tz", {
+        conversation: { id: "conv-tz" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+        user: { id: "u1" },
+        timezone: "Europe/London",
+      });
 
-    await store.upsert("conv-tz", {
-      conversation: { id: "conv-tz" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-      user: { id: "u1" },
-    });
+      vi.setSystemTime(new Date("2026-03-25T20:01:00.000Z"));
+      await store.upsert("conv-tz", {
+        conversation: { id: "conv-tz" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+        user: { id: "u1" },
+      });
 
-    await expect(store.get("conv-tz")).resolves.toMatchObject({
-      timezone: "Europe/London",
-    });
+      await expect(store.get("conv-tz")).resolves.toEqual({
+        conversation: { id: "conv-tz" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+        user: { id: "u1" },
+        timezone: "Europe/London",
+        lastSeenAt: "2026-03-25T20:01:00.000Z",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("preserves graphChatId across upserts that omit it", async () => {
     const store = await createStore();
 
-    await store.upsert("conv-graph", {
-      conversation: { id: "conv-graph", conversationType: "personal" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-      user: { id: "u1" },
-      graphChatId: "19:resolved-chat-id@unq.gbl.spaces",
-    });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-25T20:00:00.000Z"));
+      await store.upsert("conv-graph", {
+        conversation: { id: "conv-graph", conversationType: "personal" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+        user: { id: "u1" },
+        graphChatId: "19:resolved-chat-id@unq.gbl.spaces",
+      });
 
-    // Second upsert without graphChatId (normal activity-based upsert)
-    await store.upsert("conv-graph", {
-      conversation: { id: "conv-graph", conversationType: "personal" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-      user: { id: "u1" },
-    });
+      vi.setSystemTime(new Date("2026-03-25T20:01:00.000Z"));
+      // Second upsert without graphChatId (normal activity-based upsert)
+      await store.upsert("conv-graph", {
+        conversation: { id: "conv-graph", conversationType: "personal" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+        user: { id: "u1" },
+      });
 
-    await expect(store.get("conv-graph")).resolves.toMatchObject({
-      graphChatId: "19:resolved-chat-id@unq.gbl.spaces",
-    });
+      await expect(store.get("conv-graph")).resolves.toEqual({
+        conversation: { id: "conv-graph", conversationType: "personal" },
+        channelId: "msteams",
+        serviceUrl: "https://service.example.com",
+        user: { id: "u1" },
+        graphChatId: "19:resolved-chat-id@unq.gbl.spaces",
+        lastSeenAt: "2026-03-25T20:01:00.000Z",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("prefers the freshest personal conversation for repeated upserts of the same user", async () => {

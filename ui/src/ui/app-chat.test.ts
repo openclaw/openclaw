@@ -287,8 +287,8 @@ describe("refreshChatAvatar", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = createObjectURL;
-        static revokeObjectURL = revokeObjectURL;
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
       },
     );
     const fetchMock = vi.fn((input: string | URL | Request) => {
@@ -331,8 +331,8 @@ describe("refreshChatAvatar", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = createObjectURL;
-        static revokeObjectURL = revokeObjectURL;
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
       },
     );
     const fetchMock = vi.fn((input: string | URL | Request) => {
@@ -383,8 +383,8 @@ describe("refreshChatAvatar", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = createObjectURL;
-        static revokeObjectURL = revokeObjectURL;
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
       },
     );
     const fetchMock = vi.fn((input: string | URL | Request) => {
@@ -489,8 +489,8 @@ describe("refreshChatAvatar", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = createObjectURL;
-        static revokeObjectURL = revokeObjectURL;
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
       },
     );
     const mainRequest = createDeferred<{ avatarUrl?: string }>();
@@ -1388,8 +1388,8 @@ describe("handleSendChat", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = vi.fn(() => "blob:brief");
-        static revokeObjectURL = vi.fn();
+        static override createObjectURL = vi.fn(() => "blob:brief");
+        static override revokeObjectURL = vi.fn();
       },
     );
     const request = vi.fn(async (method: string) => {
@@ -1427,8 +1427,8 @@ describe("handleSendChat", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = vi.fn(() => "blob:queued");
-        static revokeObjectURL = revokeObjectURL;
+        static override createObjectURL = vi.fn(() => "blob:queued");
+        static override revokeObjectURL = revokeObjectURL;
       },
     );
     const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
@@ -1459,6 +1459,43 @@ describe("handleAbortChat", () => {
     await loadChatHelpers();
   });
 
+  it("preserves the draft for connected toolbar aborts", async () => {
+    const request = vi.fn(async () => ({ aborted: true }));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatMessage: "next prompt",
+      sessionKey: "agent:main",
+    });
+
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      runId: "run-main",
+      sessionKey: "agent:main",
+    });
+    expect(host.chatMessage).toBe("next prompt");
+    expect(host.chatRunId).toBe("run-main");
+  });
+
+  it("clears typed stop commands after aborting the active run", async () => {
+    const request = vi.fn(async () => ({ aborted: true }));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatMessage: "/stop",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      runId: "run-main",
+      sessionKey: "agent:main",
+    });
+    expect(host.chatMessage).toBe("");
+  });
+
   it("queues the active run abort while disconnected", async () => {
     const host = makeHost({
       connected: false,
@@ -1471,6 +1508,21 @@ describe("handleAbortChat", () => {
 
     expect(host.pendingAbort).toEqual({ runId: "run-main", sessionKey: "agent:main" });
     expect(host.chatMessage).toBe("");
+    expect(host.chatRunId).toBe("run-main");
+  });
+
+  it("preserves the draft when queueing a toolbar abort while disconnected", async () => {
+    const host = makeHost({
+      connected: false,
+      chatRunId: "run-main",
+      chatMessage: "draft",
+      sessionKey: "agent:main",
+    });
+
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(host.pendingAbort).toEqual({ runId: "run-main", sessionKey: "agent:main" });
+    expect(host.chatMessage).toBe("draft");
     expect(host.chatRunId).toBe("run-main");
   });
 

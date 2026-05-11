@@ -115,9 +115,13 @@ describe("feishu setup wizard", () => {
       runtime: createNonExitingRuntimeEnv(),
     });
 
-    expect(result.cfg.channels?.feishu).toMatchObject({
+    expect(result.cfg.channels?.feishu).toEqual({
       appId: "cli_from_prompt",
       appSecret: "secret_from_prompt",
+      enabled: true,
+      domain: "feishu",
+      connectionMode: "websocket",
+      groupPolicy: "allowlist",
     });
   });
 });

@@ -170,7 +170,9 @@ function expectBufferedPerformanceEvent(
     });
   });
   expect(entry).toBeDefined();
-  expect(entry?.payload).toMatchObject(expectedPayload);
+  for (const [key, expected] of Object.entries(expectedPayload)) {
+    expect(entry?.payload?.[key]).toBe(expected);
+  }
   expect(entry?.payload?.durationMs).toBeTypeOf("number");
   return entry?.payload;
 }
@@ -402,12 +404,13 @@ describe("refreshActiveTab", () => {
     runs.resolve("ok");
     await Promise.resolve();
 
-    expect(host.eventLogBuffer).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "control-ui.cron.runs",
-        }),
-      ]),
-    );
+    expect(
+      host.eventLogBuffer.some(
+        (entry) =>
+          Boolean(entry) &&
+          typeof entry === "object" &&
+          (entry as { event?: unknown }).event === "control-ui.cron.runs",
+      ),
+    ).toBe(false);
   });
 });

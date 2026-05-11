@@ -1,4 +1,4 @@
-import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import {
   classifyAgentHarnessTerminalOutcome,
   embeddedAgentLog,
@@ -345,6 +345,10 @@ export class CodexAppServerEventProjector {
     this.aborted = true;
     this.promptError = "codex app-server attempt timed out";
     this.promptErrorSource = "prompt";
+  }
+
+  markAborted(): void {
+    this.aborted = true;
   }
 
   isCompacting(): boolean {

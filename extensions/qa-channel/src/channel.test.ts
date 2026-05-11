@@ -1,3 +1,4 @@
+import path from "node:path";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
 import {
   createPluginRuntimeMock,
@@ -410,7 +411,9 @@ describe("qa-channel plugin", () => {
         MediaTypes?: string[];
       };
       expect(typeof mediaCtx.MediaPath).toBe("string");
-      expect(mediaCtx.MediaPath).toContain("red-top-blue-bottom");
+      expect(path.basename(mediaCtx.MediaPath ?? "")).toMatch(
+        /^red-top-blue-bottom---[a-f0-9-]{36}\.png$/,
+      );
       expect(mediaCtx.MediaType).toBe("image/png");
       expect(mediaCtx.MediaPaths).toEqual([mediaCtx.MediaPath]);
       expect(mediaCtx.MediaTypes).toEqual(["image/png"]);

@@ -179,10 +179,8 @@ describe("google generative ai helpers", () => {
       capability: "audio",
       transport: "media-understanding",
     });
-    expect(oauthConfig).toMatchObject({
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      allowPrivateNetwork: false,
-    });
+    expect(oauthConfig.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(oauthConfig.allowPrivateNetwork).toBe(false);
     expect(Object.fromEntries(new Headers(oauthConfig.headers).entries())).toEqual({
       authorization: "Bearer oauth-token",
       "content-type": "application/json",
@@ -193,10 +191,8 @@ describe("google generative ai helpers", () => {
       capability: "image",
       transport: "http",
     });
-    expect(apiKeyConfig).toMatchObject({
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      allowPrivateNetwork: false,
-    });
+    expect(apiKeyConfig.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(apiKeyConfig.allowPrivateNetwork).toBe(false);
     expect(Object.fromEntries(new Headers(apiKeyConfig.headers).entries())).toEqual({
       "content-type": "application/json",
       "x-goog-api-key": "api-key-123",

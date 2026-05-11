@@ -489,6 +489,49 @@ describe("emitExecSystemEvent", () => {
     expect(heartbeat.sessionKey).toBe("agent:ops:main");
   });
 
+  it("remaps cron-run event enqueue and wake targets to the drained agent main session", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "agent:ops:cron:nightly:run:run-1",
+      contextKey: "exec:run-cron",
+      mainKey: "primary",
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "agent:ops:primary",
+      contextKey: "exec:run-cron",
+      trusted: false,
+    });
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        coalesceMs: 0,
+        reason: "exec-event",
+        sessionKey: "agent:ops:primary",
+      }),
+    );
+  });
+
+  it("routes global-scope cron-run events to the global queue and preserves the agent wake target", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "agent:ops:cron:nightly:run:run-1:subagent:worker",
+      contextKey: "exec:run-global",
+      sessionScope: "global",
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "global",
+      contextKey: "exec:run-global",
+      trusted: false,
+    });
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "ops",
+        coalesceMs: 0,
+        reason: "exec-event",
+      }),
+    );
+    expect(requestHeartbeatMock.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
+  });
+
   it("keeps wake unscoped for non-agent session keys", () => {
     emitExecSystemEvent("Exec finished", {
       sessionKey: "global",

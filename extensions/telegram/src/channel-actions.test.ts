@@ -47,7 +47,7 @@ describe("telegramMessageActions", () => {
     } as never);
 
     expect(handleTelegramActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         action: "sendMessage",
         to: "123456",
         interactive: {
@@ -59,12 +59,12 @@ describe("telegramMessageActions", () => {
           ],
         },
         accountId: "default",
-      }),
-      expect.anything(),
-      expect.objectContaining({
+      },
+      {},
+      {
         mediaLocalRoots: [],
         sessionKey: "telegram-session",
-      }),
+      },
     );
   });
 

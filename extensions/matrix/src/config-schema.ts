@@ -105,6 +105,7 @@ export const MatrixConfigSchema = z.object({
   initialSyncLimit: z.number().optional(),
   encryption: z.boolean().optional(),
   allowlistOnly: z.boolean().optional(),
+  dangerouslyAllowNameMatching: z.boolean().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
   groupPolicy: GroupPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),

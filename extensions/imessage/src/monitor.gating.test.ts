@@ -123,8 +123,12 @@ describe("imessage monitor gating + envelope builders", () => {
           text: "hello",
         },
       }),
-    ).toMatchObject({
+    ).toEqual({
+      id: 1,
+      sender: "+15550001111",
       destination_caller_id: "+15550002222",
+      is_from_me: true,
+      text: "hello",
     });
   });
 

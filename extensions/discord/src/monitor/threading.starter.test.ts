@@ -111,10 +111,13 @@ describe("resolveDiscordThreadStarter", () => {
       resolveTimestampMs: () => 123,
     });
 
-    expect(result).toMatchObject({
+    expect(requireThreadStarter(result)).toEqual({
       text: "Alert\nDetails",
       author: "Alice",
       authorId: "u1",
+      authorName: "Alice",
+      authorTag: "Alice",
+      memberRoleIds: undefined,
       timestamp: 123,
     });
   });
@@ -144,12 +147,14 @@ describe("resolveDiscordThreadStarter", () => {
       }),
     });
 
-    expect(result).toMatchObject({
+    expect(requireThreadStarter(result)).toEqual({
+      text: "starter content",
       author: "Alice#1234",
       authorId: "u1",
       authorName: "Alice",
       authorTag: "Alice#1234",
       memberRoleIds: ["role-1", "role-2"],
+      timestamp: undefined,
     });
   });
 
