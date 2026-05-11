@@ -57,6 +57,8 @@ const mocks = vi.hoisted(() => ({
   listProfilesForProvider: vi.fn(),
   promoteAuthProfileInOrder: vi.fn(),
   clearAuthProfileCooldown: vi.fn(),
+  resolvePluginSetupProvider: vi.fn(),
+  resolvePluginSetupRegistry: vi.fn(),
 }));
 
 vi.mock("../../agents/auth-profiles/profiles.js", () => ({
@@ -124,6 +126,11 @@ vi.mock("../../agents/workspace.js", () => ({
 
 vi.mock("../../plugins/providers.runtime.js", () => ({
   resolvePluginProviders: mocks.resolvePluginProviders,
+}));
+
+vi.mock("../../plugins/setup-registry.js", () => ({
+  resolvePluginSetupProvider: mocks.resolvePluginSetupProvider,
+  resolvePluginSetupRegistry: mocks.resolvePluginSetupRegistry,
 }));
 
 vi.mock("../../wizard/clack-prompter.js", () => ({
@@ -323,6 +330,14 @@ describe("modelsAuthLoginCommand", () => {
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.resolveDefaultAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.isRemoteEnvironment.mockReturnValue(false);
+    mocks.resolvePluginSetupProvider.mockReturnValue(undefined);
+    mocks.resolvePluginSetupRegistry.mockReturnValue({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
+      diagnostics: [],
+    });
     mocks.loadValidConfigOrThrow.mockImplementation(async () => currentConfig);
     mocks.updateConfig.mockImplementation(
       async (mutator: (cfg: OpenClawConfig) => OpenClawConfig) => {
@@ -448,6 +463,7 @@ describe("modelsAuthLoginCommand", () => {
 
   it("defaults OpenAI login to ChatGPT OAuth when API key is also available", async () => {
     const runtime = createRuntime();
+    const initialConfig = currentConfig;
     const fakeStore = {
       profiles: {
         "openai:api-key-backup": {
@@ -499,6 +515,21 @@ describe("modelsAuthLoginCommand", () => {
     mocks.resolvePluginProviders.mockReturnValue([
       createProvider({
         id: "openai",
+        label: "OpenAI runtime",
+        run: runApiKeyAuth as ProviderPlugin["auth"][number]["run"],
+        auth: [
+          {
+            id: "api-key",
+            label: "OpenAI API Key",
+            kind: "api_key",
+            run: runApiKeyAuth,
+          },
+        ],
+      }),
+    ]);
+    mocks.resolvePluginSetupProvider.mockReturnValue(
+      createProvider({
+        id: "openai",
         label: "OpenAI",
         run: runOauthAuth as ProviderPlugin["auth"][number]["run"],
         auth: [
@@ -516,10 +547,15 @@ describe("modelsAuthLoginCommand", () => {
           },
         ],
       }),
-    ]);
+    );
 
     await modelsAuthLoginCommand({ provider: "openai" }, runtime);
 
+    expect(mocks.resolvePluginSetupProvider).toHaveBeenCalledWith({
+      provider: "openai",
+      config: initialConfig,
+      workspaceDir: "/tmp/openclaw/workspace",
+    });
     expect(runOauthAuth).toHaveBeenCalledOnce();
     expect(runApiKeyAuth).not.toHaveBeenCalled();
     expect(select).not.toHaveBeenCalled();
@@ -542,6 +578,21 @@ describe("modelsAuthLoginCommand", () => {
     mocks.resolvePluginProviders.mockReturnValue([
       createProvider({
         id: "openai",
+        label: "OpenAI runtime",
+        run: runApiKeyAuth as ProviderPlugin["auth"][number]["run"],
+        auth: [
+          {
+            id: "api-key",
+            label: "OpenAI API Key",
+            kind: "api_key",
+            run: runApiKeyAuth,
+          },
+        ],
+      }),
+    ]);
+    mocks.resolvePluginSetupProvider.mockReturnValue(
+      createProvider({
+        id: "openai",
         label: "OpenAI",
         run: runOauthAuth as ProviderPlugin["auth"][number]["run"],
         auth: [
@@ -559,7 +610,7 @@ describe("modelsAuthLoginCommand", () => {
           },
         ],
       }),
-    ]);
+    );
 
     await modelsAuthLoginCommand({ provider: "openai", method: "api-key" }, runtime);
 
