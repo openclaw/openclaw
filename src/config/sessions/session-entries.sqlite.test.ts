@@ -14,7 +14,10 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { loadSqliteSessionEntries } from "./session-entries.sqlite.js";
+import {
+  loadSqliteSessionEntries,
+  readSqliteSessionDeliveryContext,
+} from "./session-entries.sqlite.js";
 import {
   deleteSessionEntry,
   getSessionEntry,
@@ -466,11 +469,30 @@ describe("SQLite session row backend", () => {
       database.db,
       db
         .selectFrom("session_conversations")
-        .select(["session_id", "conversation_id"])
-        .where("session_id", "=", stored?.sessionId ?? "")
-        .orderBy("conversation_id", "asc"),
+        .innerJoin(
+          "conversations",
+          "conversations.conversation_id",
+          "session_conversations.conversation_id",
+        )
+        .select(["conversations.peer_id", "session_conversations.role"])
+        .where("session_conversations.session_id", "=", stored?.sessionId ?? "")
+        .orderBy("conversations.peer_id", "asc"),
     ).rows;
-    expect(links).toHaveLength(2);
+    expect(links).toEqual([
+      { peer_id: "U1", role: "related" },
+      { peer_id: "U2", role: "primary" },
+    ]);
+    expect(
+      readSqliteSessionDeliveryContext({
+        agentId: "ops",
+        env,
+        sessionKey: "discord:main",
+      }),
+    ).toMatchObject({
+      channel: "discord",
+      to: "U2",
+      accountId: "work",
+    });
   });
 
   it("stores group conversation identity in typed agent rows", async () => {

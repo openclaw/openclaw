@@ -1205,7 +1205,7 @@ describe("initSessionState RawBody", () => {
 
   it("uses the default per-agent sessions store when config store is unset", async () => {
     const root = await makeCaseDir("openclaw-session-store-default-");
-    const stateDir = path.dirname(path.dirname(root));
+    const stateDir = root;
     const agentId = "worker1";
     const sessionKey = `agent:${agentId}:telegram:12345`;
     const sessionId = "sess-worker-1";
@@ -1968,47 +1968,6 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
       }
     }
   });
-
-  it("starts a fresh session when a scoped WhatsApp group entry only contains activation state", async () => {
-    const sessionKey =
-      "agent:main:whatsapp:group:120363406150318674@g.us:thread:whatsapp-account-work";
-    const sessionRowsTarget = await createSessionRowsTarget("openclaw-group-activation-backfill-");
-    await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
-      [sessionKey]: {
-        groupActivation: "always",
-      },
-    });
-    const cfg = makeCfg({
-      allowFrom: ["+41796666864"],
-    });
-
-    const result = await initSessionState({
-      ctx: {
-        Body: "hello without mention",
-        RawBody: "hello without mention",
-        CommandBody: "hello without mention",
-        From: "120363406150318674@g.us",
-        To: "+41779241027",
-        ChatType: "group",
-        SessionKey: sessionKey,
-        Provider: "whatsapp",
-        Surface: "whatsapp",
-        SenderName: "Peschiño",
-        SenderE164: "+41796666864",
-        SenderId: "41796666864:0@s.whatsapp.net",
-      },
-      cfg,
-      commandAuthorized: false,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.sessionId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-    );
-    expect(result.sessionEntry.groupActivation).toBe("always");
-    expect(result.sessionEntry.sessionId).toBe(result.sessionId);
-    expect(typeof result.sessionEntry.updatedAt).toBe("number");
-  });
 });
 
 describe("initSessionState reset triggers in Slack channels", () => {
@@ -2552,6 +2511,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       await replaceSessionRowsForFixtureTarget(sessionRowsTarget, {
         [sessionKey]: {
           sessionId: existingSessionId,
+          sessionStartedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
           updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
         },
       });
@@ -3459,25 +3419,6 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.lastTo).toBe("channel:24680");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("discord");
     expect(result.sessionEntry.deliveryContext?.to).toBe("channel:24680");
-  });
-
-  it("uses session key channel hint when first turn is internal webchat", async () => {
-    await createSessionRowsTarget("session-key-channel-hint-");
-    const sessionKey = "agent:main:telegram:group:98765";
-    const cfg = { session: {} } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        Body: "hello",
-        SessionKey: sessionKey,
-        OriginatingChannel: "webchat",
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionEntry.lastChannel).toBe("telegram");
-    expect(result.sessionEntry.deliveryContext?.channel).toBe("telegram");
   });
 
   it("keeps internal route when there is no persisted external fallback", async () => {

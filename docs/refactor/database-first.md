@@ -247,6 +247,10 @@ The branch already has a real shared SQLite base:
   intentionally map to one session without lying in `session_key`. SQLite also
   enforces uniqueness for the natural provider identity so the same
   channel/account/kind/peer/thread tuple cannot fork across conversation ids.
+  Each session has at most one `primary` conversation link; when a shared-main
+  route sees a new direct peer, the prior primary becomes a related
+  conversation and `sessions.primary_conversation_id` points at the current
+  typed delivery target.
 - Transcript events, transcript snapshots, and trajectory runtime events now
   reference the canonical per-agent `sessions` root and cascade on session
   deletion. Transcript identity/idempotency rows continue to cascade from the
@@ -464,6 +468,16 @@ Completed consolidation/deletion highlights:
   `sessions.chat_type`, and `sessions.channel` metadata before falling back to
   `sessionKey` shape. `sessionKey` parsing remains only for explicit thread
   suffixes and old compatibility fallback behavior.
+- Gateway `chat.send` external-route inheritance now reads typed SQLite session
+  routing metadata instead of inferring channel/direct/group scope from
+  `sessionKey` pieces. Channel-scoped sessions inherit only when the typed
+  session channel and chat type match the stored delivery context; shared-main
+  sessions keep their stricter CLI/no-client-metadata rule.
+- Session delivery route preservation now follows typed chat metadata and
+  persisted delivery columns. It no longer extracts channel hints, direct/main
+  markers, or thread shape from `sessionKey`; internal webchat routes only
+  inherit an external target when SQLite already has typed/persisted delivery
+  identity for the session.
 - Runtime session rows no longer carry the old `lastProvider` route alias.
   Helpers and tests use `lastChannel`, `deliveryContext`, and `origin` instead;
   doctor migration is the only place that should translate older route aliases.

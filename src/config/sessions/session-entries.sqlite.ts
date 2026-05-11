@@ -405,6 +405,59 @@ function sessionConversationToRow(params: {
   };
 }
 
+function demoteStalePrimarySessionConversations(
+  database: OpenClawAgentDatabase,
+  db: ReturnType<typeof getNodeSqliteKysely<SessionEntriesDatabase>>,
+  rows: ReadonlyArray<BoundSessionEntryRow>,
+  now: number,
+): void {
+  for (const row of rows) {
+    const primaryConversationId = row.conversations[0]?.conversationId;
+    if (!primaryConversationId) {
+      continue;
+    }
+    const stalePrimaryRows = executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("session_conversations")
+        .select(["conversation_id", "first_seen_at"])
+        .where("session_id", "=", row.session.session_id)
+        .where("role", "=", "primary")
+        .where("conversation_id", "!=", primaryConversationId),
+    ).rows;
+    if (stalePrimaryRows.length === 0) {
+      continue;
+    }
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("session_conversations")
+        .values(
+          stalePrimaryRows.map((stale) => ({
+            session_id: row.session.session_id,
+            conversation_id: stale.conversation_id,
+            role: "related",
+            first_seen_at: stale.first_seen_at,
+            last_seen_at: now,
+          })),
+        )
+        .onConflict((conflict) =>
+          conflict.columns(["session_id", "conversation_id", "role"]).doUpdateSet({
+            last_seen_at: (eb) => eb.ref("excluded.last_seen_at"),
+          }),
+        ),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .deleteFrom("session_conversations")
+        .where("session_id", "=", row.session.session_id)
+        .where("role", "=", "primary")
+        .where("conversation_id", "!=", primaryConversationId),
+    );
+  }
+}
+
 function serializeExpectedSessionEntry(sessionKey: string, entry: SessionEntry): string {
   return serializeSessionEntry(sessionKey, entry);
 }
@@ -477,6 +530,7 @@ function upsertSessionEntries(
         }),
       ),
   );
+  demoteStalePrimarySessionConversations(database, db, rows, now);
   const sessionConversationRows = rows.flatMap((row) =>
     row.conversations.map((conversation, index) =>
       sessionConversationToRow({
@@ -665,7 +719,23 @@ export function readSqliteSessionDeliveryContext(
 ): SqliteSessionDeliveryContext | undefined {
   const database = openOpenClawAgentDatabase(options);
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
+  const primaryRow = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("sessions as s")
+      .innerJoin("conversations as c", "c.conversation_id", "s.primary_conversation_id")
+      .select([
+        "c.channel as channel",
+        "c.account_id as account_id",
+        "c.peer_id as peer_id",
+        "c.thread_id as thread_id",
+      ])
+      .where("s.session_key", "=", options.sessionKey),
+  );
+  if (primaryRow) {
+    return deliveryContextFromTypedRow(primaryRow);
+  }
+  const linkedRow = executeSqliteQueryTakeFirstSync(
     database.db,
     db
       .selectFrom("sessions as s")
@@ -681,8 +751,8 @@ export function readSqliteSessionDeliveryContext(
       .orderBy("sc.role", "asc")
       .orderBy("sc.last_seen_at", "desc"),
   );
-  if (row) {
-    return deliveryContextFromTypedRow(row);
+  if (linkedRow) {
+    return deliveryContextFromTypedRow(linkedRow);
   }
   return deliveryContextFromEntry(readSqliteSessionEntry(options));
 }

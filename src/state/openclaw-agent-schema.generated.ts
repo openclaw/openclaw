@@ -94,6 +94,10 @@ CREATE TABLE IF NOT EXISTS session_conversations (
 CREATE INDEX IF NOT EXISTS idx_agent_session_conversations_conversation
   ON session_conversations(conversation_id, last_seen_at DESC, session_id);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_session_conversations_primary
+  ON session_conversations(session_id)
+  WHERE role = 'primary';
+
 CREATE TABLE IF NOT EXISTS session_entries (
   session_key TEXT NOT NULL PRIMARY KEY,
   session_id TEXT NOT NULL,

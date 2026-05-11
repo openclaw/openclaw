@@ -12,6 +12,10 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
+import {
+  readSqliteSessionRoutingInfo,
+  type SqliteSessionRoutingInfo,
+} from "../../config/sessions/session-entries.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -39,7 +43,6 @@ import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-bi
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   stripInlineDirectiveTagsForDisplay,
@@ -198,20 +201,6 @@ const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too l
 const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
 let chatHistoryPlaceholderEmitCount = 0;
 const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
-const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
-  "main",
-  "direct",
-  "dm",
-  "group",
-  "channel",
-  "cron",
-  "run",
-  "subagent",
-  "acp",
-  "thread",
-  "topic",
-]);
-const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
 type ChatSendDeliveryEntry = {
   deliveryContext?: {
@@ -563,7 +552,7 @@ function resolveChatSendOriginatingRoute(params: {
   entry?: ChatSendDeliveryEntry;
   explicitOrigin?: ChatSendExplicitOrigin;
   hasConnectedClient?: boolean;
-  mainKey?: string;
+  routingInfo?: SqliteSessionRoutingInfo;
   sessionKey: string;
 }): ChatSendOriginatingRoute {
   if (params.explicitOrigin?.originatingChannel && params.explicitOrigin.originatingTo) {
@@ -607,36 +596,22 @@ function resolveChatSendOriginatingRoute(params: {
     };
   }
 
-  const parsedSessionKey = parseAgentSessionKey(params.sessionKey);
-  const sessionScopeParts = (parsedSessionKey?.rest ?? params.sessionKey)
-    .split(":", 3)
-    .filter(Boolean);
-  const sessionScopeHead = sessionScopeParts[0];
-  const sessionChannelHint = normalizeMessageChannel(sessionScopeHead);
-  const normalizedSessionScopeHead = (sessionScopeHead ?? "").trim().toLowerCase();
-  const sessionPeerShapeCandidates = [sessionScopeParts[1], sessionScopeParts[2]]
-    .map((part) => (part ?? "").trim().toLowerCase())
-    .filter(Boolean);
-  const isChannelAgnosticSessionScope = CHANNEL_AGNOSTIC_SESSION_SCOPES.has(
-    normalizedSessionScopeHead,
-  );
-  const isChannelScopedSession = sessionPeerShapeCandidates.some((part) =>
-    CHANNEL_SCOPED_SESSION_SHAPES.has(part),
-  );
-  const hasLegacyChannelPeerShape =
-    !isChannelScopedSession &&
-    typeof sessionScopeParts[1] === "string" &&
-    sessionChannelHint === routeChannelCandidate;
+  const sessionChannel = normalizeMessageChannel(params.routingInfo?.channel);
+  const sessionChatType = params.routingInfo?.chatType?.trim().toLowerCase();
+  const isSharedMainSessionScope = params.routingInfo?.sessionScope === "shared-main";
+  const isChannelScopedSession =
+    !isSharedMainSessionScope &&
+    sessionChannel !== undefined &&
+    sessionChannel !== INTERNAL_MESSAGE_CHANNEL &&
+    sessionChannel === routeChannelCandidate &&
+    (sessionChatType === "direct" || sessionChatType === "group" || sessionChatType === "channel");
   const isFromWebchatClient = isWebchatClient(params.client);
   const isFromGatewayCliClient = isGatewayCliClient(params.client);
   const hasClientMetadata =
     (typeof params.client?.mode === "string" && params.client.mode.trim().length > 0) ||
     (typeof params.client?.id === "string" && params.client.id.trim().length > 0);
-  const configuredMainKey = (params.mainKey ?? "main").trim().toLowerCase();
-  const isConfiguredMainSessionScope =
-    normalizedSessionScopeHead.length > 0 && normalizedSessionScopeHead === configuredMainKey;
   const canInheritConfiguredMainRoute =
-    isConfiguredMainSessionScope &&
+    isSharedMainSessionScope &&
     params.hasConnectedClient &&
     (isFromGatewayCliClient || !hasClientMetadata);
 
@@ -644,11 +619,7 @@ function resolveChatSendOriginatingRoute(params: {
   // sessions are stricter than channel-scoped sessions: only CLI callers, or
   // legacy callers with no client metadata, may inherit the last external route.
   const canInheritDeliverableRoute = Boolean(
-    !isFromWebchatClient &&
-    sessionChannelHint &&
-    sessionChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
-    ((!isChannelAgnosticSessionScope && (isChannelScopedSession || hasLegacyChannelPeerShape)) ||
-      canInheritConfiguredMainRoute),
+    !isFromWebchatClient && (isChannelScopedSession || canInheritConfiguredMainRoute),
   );
   const hasDeliverableRoute =
     canInheritDeliverableRoute &&
@@ -1987,13 +1958,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
     const clientInfo = client?.connect?.client;
+    const routingInfo = readSqliteSessionRoutingInfo({
+      agentId,
+      sessionKey,
+    });
     const originatingRoute = resolveChatSendOriginatingRoute({
       client: clientInfo,
       deliver: p.deliver,
       entry,
       explicitOrigin: explicitOriginResult.value,
       hasConnectedClient: client?.connect !== undefined,
-      mainKey: cfg.session?.mainKey,
+      routingInfo,
       sessionKey,
     });
     const activeChatSendDedupeKey = buildActiveChatSendDedupeKey({

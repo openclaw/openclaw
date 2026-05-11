@@ -60,6 +60,13 @@ const mockState = vi.hoisted(() => ({
   lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
   lastDispatchImageOrder: undefined as string[] | undefined,
   modelCatalog: null as ModelCatalogEntry[] | null,
+  sessionRoutingInfo: null as {
+    sessionScope?: string;
+    chatType?: string;
+    channel?: string;
+    accountId?: string;
+    primaryConversationId?: string;
+  } | null,
   emittedTranscriptUpdates: [] as Array<{
     agentId?: string;
     sessionId?: string;
@@ -133,6 +140,16 @@ vi.mock("../session-utils.js", async () => {
           ? mockState.sessionEntry.canonicalKey
           : rawKey || "main",
     }),
+  };
+});
+
+vi.mock("../../config/sessions/session-entries.sqlite.js", async () => {
+  const original = await vi.importActual<
+    typeof import("../../config/sessions/session-entries.sqlite.js")
+  >("../../config/sessions/session-entries.sqlite.js");
+  return {
+    ...original,
+    readSqliteSessionRoutingInfo: () => mockState.sessionRoutingInfo ?? undefined,
   };
 });
 
@@ -641,6 +658,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.lastDispatchImages = undefined;
     mockState.lastDispatchImageOrder = undefined;
     mockState.modelCatalog = null;
+    mockState.sessionRoutingInfo = null;
     mockState.emittedTranscriptUpdates = [];
     mockState.savedMediaResults = [];
     mockState.saveMediaError = null;
@@ -1228,6 +1246,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       lastAccountId: "default",
       lastThreadId: 42,
     };
+    mockState.sessionRoutingInfo = {
+      sessionScope: "conversation",
+      chatType: "direct",
+      channel: "telegram",
+      accountId: "default",
+    };
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -1282,6 +1306,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       lastTo: "ou_feishu_direct_123",
       lastAccountId: "default",
     };
+    mockState.sessionRoutingInfo = {
+      sessionScope: "conversation",
+      chatType: "direct",
+      channel: "feishu",
+      accountId: "default",
+    };
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -1315,6 +1345,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       lastTo: "telegram:6812765697",
       lastAccountId: "account-a",
     };
+    mockState.sessionRoutingInfo = {
+      sessionScope: "conversation",
+      chatType: "direct",
+      channel: "telegram",
+      accountId: "account-a",
+    };
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -1335,75 +1371,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("chat.send keeps explicit delivery routes for legacy channel-peer sessions", async () => {
-    createTranscriptFixture("openclaw-chat-send-legacy-channel-peer-routing-");
-    mockState.finalText = "ok";
-    mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:6812765697",
-        accountId: "default",
-      },
-      lastChannel: "telegram",
-      lastTo: "telegram:6812765697",
-      lastAccountId: "default",
-    };
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey: "idem-legacy-channel-peer-routing",
-      sessionKey: "agent:main:telegram:6812765697",
-      deliver: true,
-      expectBroadcast: false,
-    });
-
-    expectDispatchContextFields({
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:6812765697",
-      ExplicitDeliverRoute: true,
-      AccountId: "default",
-    });
-  });
-
-  it("chat.send keeps explicit delivery routes for legacy thread sessions", async () => {
-    createTranscriptFixture("openclaw-chat-send-legacy-thread-channel-peer-routing-");
-    mockState.finalText = "ok";
-    mockState.sessionEntry = {
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:6812765697",
-        accountId: "default",
-        threadId: "42",
-      },
-      lastChannel: "telegram",
-      lastTo: "telegram:6812765697",
-      lastAccountId: "default",
-      lastThreadId: "42",
-    };
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey: "idem-legacy-thread-channel-peer-routing",
-      sessionKey: "agent:main:telegram:6812765697:thread:42",
-      deliver: true,
-      expectBroadcast: false,
-    });
-
-    expectDispatchContextFields({
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:6812765697",
-      ExplicitDeliverRoute: true,
-      AccountId: "default",
-      MessageThreadId: "42",
-    });
-  });
-
   it("chat.send does not inherit external delivery context for shared main sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-main-no-cross-route-");
     mockState.finalText = "ok";
@@ -1416,6 +1383,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       lastChannel: "discord",
       lastTo: "discord:1234567890",
       lastAccountId: "default",
+    };
+    mockState.sessionRoutingInfo = {
+      sessionScope: "shared-main",
+      chatType: "direct",
+      channel: "discord",
+      accountId: "default",
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -1448,6 +1421,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       lastChannel: "whatsapp",
       lastTo: "whatsapp:+8613800138000",
       lastAccountId: "default",
+    };
+    mockState.sessionRoutingInfo = {
+      sessionScope: "shared-main",
+      chatType: "direct",
+      channel: "whatsapp",
+      accountId: "default",
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -1487,6 +1466,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       lastChannel: "telegram",
       lastTo: "telegram:200482621",
       lastAccountId: "default",
+    };
+    mockState.sessionRoutingInfo = {
+      sessionScope: "shared-main",
+      chatType: "direct",
+      channel: "telegram",
+      accountId: "default",
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -1530,6 +1515,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       lastTo: "whatsapp:+8613800138000",
       lastAccountId: "default",
     };
+    mockState.sessionRoutingInfo = {
+      sessionScope: "shared-main",
+      chatType: "direct",
+      channel: "whatsapp",
+      accountId: "default",
+    };
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -1567,6 +1558,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         accountId: "default",
       },
       lastTo: "whatsapp:+8613800138000",
+    };
+    mockState.sessionRoutingInfo = {
+      sessionScope: "shared-main",
+      chatType: "direct",
+      channel: "whatsapp",
+      accountId: "default",
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -1606,6 +1603,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         threadId: "42",
       },
       lastTo: "telegram:6812765697",
+    };
+    mockState.sessionRoutingInfo = {
+      sessionScope: "shared-main",
+      chatType: "direct",
+      channel: "telegram",
+      accountId: "default",
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -1650,6 +1653,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       lastTo: "whatsapp:+8613800138000",
       lastAccountId: "default",
     };
+    mockState.sessionRoutingInfo = {
+      sessionScope: "shared-main",
+      chatType: "direct",
+      channel: "whatsapp",
+      accountId: "default",
+    };
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -1684,6 +1693,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       lastChannel: "discord",
       lastTo: "discord:1234567890",
       lastAccountId: "default",
+    };
+    mockState.sessionRoutingInfo = {
+      sessionScope: "conversation",
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -1750,6 +1762,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       lastTo: "+8619800001234",
       lastAccountId: "default",
     };
+    mockState.sessionRoutingInfo = {
+      sessionScope: "conversation",
+      chatType: "direct",
+      channel: "imessage",
+      accountId: "default",
+    };
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -1792,6 +1810,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       lastChannel: "imessage",
       lastTo: "+8619800001234",
       lastAccountId: "default",
+    };
+    mockState.sessionRoutingInfo = {
+      sessionScope: "conversation",
+      chatType: "direct",
+      channel: "imessage",
+      accountId: "default",
     };
     const respond = vi.fn();
     const context = createChatContext();
