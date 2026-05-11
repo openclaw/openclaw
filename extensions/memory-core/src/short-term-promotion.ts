@@ -1491,6 +1491,86 @@ function relocateCandidateRange(
   };
 }
 
+// Markers for managed dreaming blocks that may be embedded in daily memory
+// notes. The chunking pipeline strips these regions before snippet extraction
+// (see `stripManagedDailyDreamingLines` in `dreaming-phases.ts`), so the
+// promotion candidate's stored `snippet` never contains dreaming text. When
+// promotion later re-reads the source file to relocate the range, the same
+// regions must be redacted again or `relocateCandidateRange`'s fuzzy window
+// search can latch onto a window that straddles the human content and the
+// adjacent managed block, leaking dreaming bullets into MEMORY.md (#80613).
+const MANAGED_DREAMING_BLOCK_MARKERS: ReadonlyArray<{
+  heading: string | null;
+  start: string;
+  end: string;
+}> = [
+  {
+    heading: "## Light Sleep",
+    start: "<!-- openclaw:dreaming:light:start -->",
+    end: "<!-- openclaw:dreaming:light:end -->",
+  },
+  {
+    heading: "## REM Sleep",
+    start: "<!-- openclaw:dreaming:rem:start -->",
+    end: "<!-- openclaw:dreaming:rem:end -->",
+  },
+  {
+    heading: null,
+    start: "<!-- openclaw:dreaming:diary:start -->",
+    end: "<!-- openclaw:dreaming:diary:end -->",
+  },
+];
+
+function redactManagedDreamingLines(lines: string[]): string[] {
+  if (lines.length === 0) {
+    return lines;
+  }
+  const sanitized = [...lines];
+  for (const { heading, start, end } of MANAGED_DREAMING_BLOCK_MARKERS) {
+    let cursor = 0;
+    while (cursor < sanitized.length) {
+      const trimmed = sanitized[cursor]?.trim() ?? "";
+      if (trimmed !== start) {
+        cursor += 1;
+        continue;
+      }
+      let endIndex = -1;
+      for (let probe = cursor + 1; probe < sanitized.length; probe += 1) {
+        if (sanitized[probe]?.trim() === end) {
+          endIndex = probe;
+          break;
+        }
+      }
+      // Unterminated managed block: redact through the end of file rather than
+      // leaving a partial window that promotion could still latch onto.
+      if (endIndex === -1) {
+        endIndex = sanitized.length - 1;
+      }
+      // Walk upward to also strip the section heading (e.g., "## Light Sleep")
+      // when it sits directly above the start marker — the same precedence
+      // that the chunk-builder side applies via `findManagedDailyDreamingHeadingIndex`.
+      let strippingFrom = cursor;
+      if (heading) {
+        for (let probe = cursor - 1; probe >= 0; probe -= 1) {
+          const upTrimmed = sanitized[probe]?.trim() ?? "";
+          if (!upTrimmed) {
+            continue;
+          }
+          if (upTrimmed === heading) {
+            strippingFrom = probe;
+          }
+          break;
+        }
+      }
+      for (let probe = strippingFrom; probe <= endIndex; probe += 1) {
+        sanitized[probe] = "";
+      }
+      cursor = endIndex + 1;
+    }
+  }
+  return sanitized;
+}
+
 async function rehydratePromotionCandidate(
   workspaceDir: string,
   candidate: PromotionCandidate,
@@ -1507,7 +1587,7 @@ async function rehydratePromotionCandidate(
       throw err;
     }
 
-    const lines = rawSource.split(/\r?\n/);
+    const lines = redactManagedDreamingLines(rawSource.split(/\r?\n/));
     const relocated = relocateCandidateRange(lines, candidate);
     if (!relocated) {
       continue;
@@ -2018,4 +2098,5 @@ export const __testing = {
   buildClaimHash,
   totalSignalCountForEntry,
   isContaminatedDreamingSnippet,
+  redactManagedDreamingLines,
 };

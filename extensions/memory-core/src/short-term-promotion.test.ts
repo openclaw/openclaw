@@ -1204,6 +1204,103 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("redacts managed dreaming block lines so they cannot leak into rehydration", () => {
+    const lines = [
+      "## Plan switches",
+      "- Plan toggle is `exRule`, not `abConfig`",
+      "",
+      "## Light Sleep",
+      "<!-- openclaw:dreaming:light:start -->",
+      "- Candidate: Plan toggle is `exRule`",
+      "  - confidence: 0.00",
+      "  - status: staged",
+      "<!-- openclaw:dreaming:light:end -->",
+      "",
+      "## REM Sleep",
+      "<!-- openclaw:dreaming:rem:start -->",
+      "- Reflections: stay defensive on cache writes",
+      "<!-- openclaw:dreaming:rem:end -->",
+    ];
+    const sanitized = __testing.redactManagedDreamingLines(lines);
+    expect(sanitized).toHaveLength(lines.length);
+    expect(sanitized[0]).toBe("## Plan switches");
+    expect(sanitized[1]).toBe("- Plan toggle is `exRule`, not `abConfig`");
+    for (const index of [3, 4, 5, 6, 7, 8, 10, 11, 12, 13]) {
+      expect(sanitized[index]).toBe("");
+    }
+    expect(sanitized.join("\n")).not.toMatch(/Candidate:/i);
+    expect(sanitized.join("\n")).not.toMatch(/Reflections:/i);
+    expect(sanitized.join("\n")).not.toMatch(/openclaw:dreaming/i);
+  });
+
+  it("redacts unterminated managed dreaming blocks through end of file", () => {
+    const sanitized = __testing.redactManagedDreamingLines([
+      "## Plan switches",
+      "- Plan toggle is `exRule`",
+      "## Light Sleep",
+      "<!-- openclaw:dreaming:light:start -->",
+      "- Candidate: leak attempt",
+      "  - confidence: 0.5",
+    ]);
+    expect(sanitized.slice(0, 2)).toEqual(["## Plan switches", "- Plan toggle is `exRule`"]);
+    expect(sanitized.slice(2)).toEqual(["", "", "", ""]);
+  });
+
+  it("does not promote dreaming block bullets when the source daily note interleaves them with human content (#80613)", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-12", [
+        "## Plan toggle field",
+        "- Plan switches use exRule, not abConfig",
+        "",
+        "## Light Sleep",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Candidate: Plan toggle field summary",
+        "  - confidence: 0.00",
+        "  - evidence: memory/.dreams/session-corpus/2026-04-12.txt:1-3",
+        "  - recalls: 0",
+        "  - status: staged",
+        "<!-- openclaw:dreaming:light:end -->",
+      ]);
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "plan toggle field",
+        results: [
+          {
+            path: "memory/2026-04-12.md",
+            startLine: 2,
+            endLine: 2,
+            score: 0.94,
+            snippet: "- Plan switches use exRule, not abConfig",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(applied.applied).toBe(1);
+
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).not.toMatch(/Candidate:/i);
+      expect(memoryText).not.toMatch(/confidence:\s*0\.00/i);
+      expect(memoryText).not.toMatch(/status:\s*staged/i);
+      expect(memoryText).not.toMatch(/openclaw:dreaming:light/i);
+      expect(memoryText).toMatch(/exRule/);
+    });
+  });
+
   it("applies promotion candidates to MEMORY.md and marks them promoted", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
