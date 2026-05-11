@@ -167,6 +167,60 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("moves drifted global message-tool visibility back to group-only visibility", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        telegram: {
+          enabled: true,
+        },
+      },
+      messages: {
+        groupChat: {},
+        visibleReplies: "message_tool",
+      },
+    });
+
+    expect(res.config.messages?.visibleReplies).toBeUndefined();
+    expect(res.config.messages?.groupChat).toEqual({
+      visibleReplies: "message_tool",
+    });
+    expect(res.changes).toContain(
+      'Moved drifted messages.visibleReplies "message_tool" → messages.groupChat.visibleReplies so direct chats keep automatic replies.',
+    );
+  });
+
+  it("does not rewrite explicit global message-tool visibility when group rules are explicit", () => {
+    expect(
+      normalizeCompatibilityConfigValues({
+        channels: {
+          discord: {},
+        },
+        messages: {
+          groupChat: {
+            mentionPatterns: ["@openclaw"],
+          },
+          visibleReplies: "message_tool",
+        },
+      }).config.messages,
+    ).toEqual({
+      groupChat: {
+        mentionPatterns: ["@openclaw"],
+      },
+      visibleReplies: "message_tool",
+    });
+
+    expect(
+      normalizeCompatibilityConfigValues({
+        channels: {
+          discord: {},
+        },
+        messages: {
+          visibleReplies: "message_tool",
+        },
+      }).config.messages?.visibleReplies,
+    ).toBe("message_tool");
+  });
+
   it("does not set group visible replies without channels or when already explicit", () => {
     expect(
       normalizeCompatibilityConfigValues({

@@ -22,6 +22,38 @@ function hasConfiguredChannels(cfg: OpenClawConfig): boolean {
   return Object.keys(channels).some((channelId) => channelId !== "defaults");
 }
 
+export function normalizeGlobalVisibleRepliesMessageToolDrift(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const messages = cfg.messages;
+  const groupChat = messages?.groupChat;
+  if (
+    !hasConfiguredChannels(cfg) ||
+    messages?.visibleReplies !== "message_tool" ||
+    !isRecord(groupChat) ||
+    groupChat.visibleReplies !== undefined ||
+    Object.keys(groupChat).length !== 0
+  ) {
+    return cfg;
+  }
+
+  const nextMessages = { ...messages };
+  delete nextMessages.visibleReplies;
+  nextMessages.groupChat = {
+    ...groupChat,
+    visibleReplies: "message_tool",
+  };
+  changes.push(
+    'Moved drifted messages.visibleReplies "message_tool" → messages.groupChat.visibleReplies so direct chats keep automatic replies.',
+  );
+
+  return {
+    ...cfg,
+    messages: nextMessages,
+  };
+}
+
 export function normalizeMissingGroupVisibleRepliesDefault(
   cfg: OpenClawConfig,
   changes: string[],
