@@ -190,4 +190,79 @@ export const RAIN_TOOLS: ToolDef[] = [
         walletAddress: asString(args.walletAddress),
       }),
   },
+
+  // ── V2 Phase A — Slice A.0 helpers + diagnostics ───────────────────────────
+
+  {
+    name: "rain_get_market_address",
+    description:
+      "Resolve a Rain marketId to its on-chain contract address. Use when a V2 endpoint requires marketAddress but you only have marketId.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        marketId: { type: "string", minLength: 1, description: "Rain market id." },
+      },
+      required: ["marketId"],
+      additionalProperties: false,
+    },
+    handler: (client, args) => client.getMarketAddress(asString(args.marketId)),
+  },
+  {
+    name: "rain_resolve_market_id",
+    description:
+      "Resolve a Rain on-chain contract address to its marketId. Reverse of rain_get_market_address.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        address: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description: "Market contract address (0x-prefixed).",
+        },
+      },
+      required: ["address"],
+      additionalProperties: false,
+    },
+    handler: (client, args) => client.resolveMarketId(asString(args.address)),
+  },
+  {
+    name: "rain_get_config",
+    description:
+      "Return the Rain runtime's active configuration: chain, environment, and whether secrets are configured. Never returns secret values.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    handler: (client) => client.getConfig(),
+  },
+  {
+    name: "rain_get_health",
+    description:
+      "Composite Rain runtime health check. Returns ok:true only if both RPC and subgraph are reachable. Use to diagnose connectivity issues.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    handler: (client) => client.getHealth(),
+  },
+  {
+    name: "rain_get_transaction_details",
+    description:
+      "Get details for a specific Rain transaction by hash: block number, timestamp, status, gas used, and on-chain events.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        txHash: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{64}$",
+          description: "Transaction hash (0x-prefixed, 32 bytes).",
+        },
+      },
+      required: ["txHash"],
+      additionalProperties: false,
+    },
+    handler: (client, args) => client.getTransactionDetails(asString(args.txHash)),
+  },
 ];

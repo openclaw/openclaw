@@ -102,6 +102,26 @@ export class RainRuntimeClient {
     return this.post("/api/runtime/rain/build-claim", body);
   }
 
+  async getMarketAddress(marketId: string): Promise<unknown> {
+    return this.get(`/api/runtime/rain/markets/${encodeURIComponent(marketId)}/address`);
+  }
+
+  async resolveMarketId(address: string): Promise<unknown> {
+    return this.get(`/api/runtime/rain/markets/address/${encodeURIComponent(address)}/id`);
+  }
+
+  async getConfig(): Promise<unknown> {
+    return this.get("/api/runtime/rain/config");
+  }
+
+  async getHealth(): Promise<unknown> {
+    return this.get("/api/runtime/rain/health");
+  }
+
+  async getTransactionDetails(txHash: string): Promise<unknown> {
+    return this.get(`/api/runtime/rain/transactions/${encodeURIComponent(txHash)}`);
+  }
+
   private async get(path: string): Promise<unknown> {
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method: "GET",
