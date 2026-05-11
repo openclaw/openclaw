@@ -354,10 +354,11 @@ describe("matrix message actions", () => {
     expect(doRequest).toHaveBeenCalledWith(
       "GET",
       expect.stringContaining(
-        "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24thread-root/m.thread/m.room.message",
+        "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24thread-root/m.thread",
       ),
       expect.objectContaining({ limit: 5 }),
     );
+    expect(String(doRequest.mock.calls[0]?.[1])).not.toContain("/m.room.message");
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$thread-root");
     expect(hydrateEvents).toHaveBeenCalledWith(
       "!room:example.org",
@@ -367,6 +368,152 @@ describe("matrix message actions", () => {
       ]),
     );
     expect(result.messages.map((message) => message.eventId)).toEqual(["$thread-root", "$reply-1"]);
+  });
+
+  it("hydrates encrypted thread relation events before summarizing messages", async () => {
+    const doRequest = vi.fn(async () => ({
+      chunk: [
+        {
+          event_id: "$encrypted-reply",
+          sender: "@bob:example.org",
+          type: "m.room.encrypted",
+          origin_server_ts: 20,
+          content: {},
+        },
+      ],
+      start: "start-token",
+      end: "end-token",
+    }));
+    const threadRoot = {
+      event_id: "$thread-root",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: 10,
+      content: {
+        msgtype: "m.text",
+        body: "thread root",
+      },
+    };
+    const hydrateEvents = vi.fn(async (_roomId: string, events: Array<Record<string, unknown>>) =>
+      events.map((event) =>
+        event.event_id === "$encrypted-reply"
+          ? {
+              event_id: "$encrypted-reply",
+              sender: "@bob:example.org",
+              type: "m.room.message",
+              origin_server_ts: 20,
+              content: {
+                msgtype: "m.text",
+                body: "decrypted thread reply",
+                "m.relates_to": {
+                  rel_type: "m.thread",
+                  event_id: "$thread-root",
+                },
+              },
+            }
+          : event,
+      ),
+    );
+    const client = {
+      doRequest,
+      hydrateEvents,
+      getEvent: vi.fn(async () => threadRoot),
+      stop: vi.fn(),
+    } as unknown as MatrixClient;
+
+    const result = await readMatrixMessages("room:!room:example.org", {
+      client,
+      threadId: "$thread-root",
+      limit: 5,
+    });
+
+    expect(String(doRequest.mock.calls[0]?.[1])).toContain(
+      "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24thread-root/m.thread",
+    );
+    expect(String(doRequest.mock.calls[0]?.[1])).not.toContain("/m.room.message");
+    expect(hydrateEvents).toHaveBeenCalledWith(
+      "!room:example.org",
+      expect.arrayContaining([
+        expect.objectContaining({ event_id: "$thread-root" }),
+        expect.objectContaining({ event_id: "$encrypted-reply", type: "m.room.encrypted" }),
+      ]),
+    );
+    expect(result.messages.map((message) => message.eventId)).toEqual([
+      "$thread-root",
+      "$encrypted-reply",
+    ]);
+    expect(result.messages[1]?.body).toBe("decrypted thread reply");
+  });
+
+  it("keeps poll relation events in thread reads so they can be summarized locally", async () => {
+    const pollResponse = createPollResponseEvent();
+    const doRequest = vi.fn(async () => ({
+      chunk: [pollResponse],
+      start: "start-token",
+      end: "end-token",
+    }));
+    const threadRoot = {
+      event_id: "$thread-root",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: 10,
+      content: {
+        msgtype: "m.text",
+        body: "thread root",
+      },
+    };
+    const pollRoot = createPollStartEvent({
+      includeDisclosedKind: true,
+      maxSelections: 1,
+      answers: [
+        { id: "a1", "m.text": "Apple" },
+        { id: "a2", "m.text": "Strawberry" },
+      ],
+    });
+    const getEvent = vi.fn(async (_roomId: string, eventId: string) => {
+      if (eventId === "$thread-root") {
+        return threadRoot;
+      }
+      if (eventId === "$poll") {
+        return pollRoot;
+      }
+      return null;
+    });
+    const getRelations = vi.fn(async () => ({
+      events: [pollResponse],
+      nextBatch: null,
+      prevBatch: null,
+    }));
+    const client = {
+      doRequest,
+      hydrateEvents: vi.fn(
+        async (_roomId: string, events: Array<Record<string, unknown>>) => events,
+      ),
+      getEvent,
+      getRelations,
+      stop: vi.fn(),
+    } as unknown as MatrixClient;
+
+    const result = await readMatrixMessages("room:!room:example.org", {
+      client,
+      threadId: "$thread-root",
+      limit: 5,
+    });
+
+    expect(String(doRequest.mock.calls[0]?.[1])).not.toContain("/m.room.message");
+    expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$thread-root");
+    expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$poll");
+    expect(getRelations).toHaveBeenCalledWith(
+      "!room:example.org",
+      "$poll",
+      "m.reference",
+      undefined,
+      {
+        from: undefined,
+      },
+    );
+    expect(result.messages.map((message) => message.eventId)).toEqual(["$thread-root", "$poll"]);
+    expect(result.messages[1]?.body).toContain("1. Apple (1 vote)");
   });
 
   it("filters thread replies out of main-room reads", async () => {
