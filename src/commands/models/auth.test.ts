@@ -618,6 +618,40 @@ describe("modelsAuthLoginCommand", () => {
     expect(runApiKeyAuth).toHaveBeenCalledOnce();
   });
 
+  it("rejects unknown explicit OpenAI auth methods instead of falling back to OAuth", async () => {
+    const runtime = createRuntime();
+    const runOauthAuth = vi.fn().mockResolvedValue({ profiles: [] });
+    const runApiKeyAuth = vi.fn().mockResolvedValue({ profiles: [] });
+    mocks.resolvePluginSetupProvider.mockReturnValue(
+      createProvider({
+        id: "openai",
+        label: "OpenAI",
+        run: runOauthAuth as ProviderPlugin["auth"][number]["run"],
+        auth: [
+          {
+            id: "oauth",
+            label: "ChatGPT Login",
+            kind: "oauth",
+            run: runOauthAuth,
+          },
+          {
+            id: "api-key",
+            label: "OpenAI API Key",
+            kind: "api_key",
+            run: runApiKeyAuth,
+          },
+        ],
+      }),
+    );
+
+    await expect(
+      modelsAuthLoginCommand({ provider: "openai", method: "api_key" }, runtime),
+    ).rejects.toThrow("Unknown auth method");
+
+    expect(runOauthAuth).not.toHaveBeenCalled();
+    expect(runApiKeyAuth).not.toHaveBeenCalled();
+  });
+
   it("prompts when a provider exposes multiple non-OAuth login methods", async () => {
     const runtime = createRuntime();
     const runApiKeyAuth = vi.fn().mockResolvedValue({ profiles: [] });

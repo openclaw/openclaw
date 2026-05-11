@@ -244,9 +244,9 @@ async function pickProviderAuthMethod(params: {
   requestedMethod?: string;
   prompter: ReturnType<typeof createClackPrompter>;
 }) {
-  const requestedMethod = pickAuthMethod(params.provider, params.requestedMethod);
-  if (requestedMethod) {
-    return requestedMethod;
+  const rawRequestedMethod = params.requestedMethod?.trim();
+  if (rawRequestedMethod) {
+    return pickAuthMethod(params.provider, rawRequestedMethod);
   }
   const oauthMethod = params.provider.auth.find((method) => method.kind === "oauth");
   if (oauthMethod) {
