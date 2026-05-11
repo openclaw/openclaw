@@ -778,7 +778,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(updateLastRouteMock).toHaveBeenCalledWith({
-      storePath: "/tmp/openclaw-store.json",
       sessionKey: "agent:main:slack:direct:u1:thread:500.000",
       deliveryContext: {
         channel: "slack",
@@ -817,7 +816,6 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(updateLastRouteMock).toHaveBeenCalledWith({
-      storePath: "/tmp/openclaw-store.json",
       sessionKey: "agent:main:main",
       deliveryContext: {
         channel: "slack",

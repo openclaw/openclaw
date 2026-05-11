@@ -30,7 +30,7 @@ import {
 } from "./service.test-harness.js";
 import type { CronJob } from "./types.js";
 
-const { logger, makeStorePath } = setupCronServiceSuite({
+const { logger, makeStoreKey } = setupCronServiceSuite({
   prefix: "openclaw-cron-active-jobs-manual-run-",
   baseTimeIso: "2025-12-13T17:00:00.000Z",
 });
@@ -45,7 +45,7 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
   });
 
   it("marks the job active during a manual run and clears it on success", async () => {
-    const store = await makeStorePath();
+    const store = await makeStoreKey();
     const now = Date.parse("2025-12-13T17:00:00.000Z");
     const futureNext = now + 3_600_000;
 
@@ -67,12 +67,12 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
       },
     ];
 
-    await writeCronStoreSnapshot({ storePath: store.storePath, jobs });
+    await writeCronStoreSnapshot({ storeKey: store.storeKey, jobs });
 
     const entered = createDeferred<void>();
     const release = createDeferred<IsolatedRunResult>();
     const cron = new CronService({
-      storePath: store.storePath,
+      storeKey: store.storeKey,
       cronEnabled: true,
       log: logger,
       enqueueSystemEvent: () => {},
@@ -102,7 +102,7 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
   });
 
   it("clears the active marker even when the inner agent run throws", async () => {
-    const store = await makeStorePath();
+    const store = await makeStoreKey();
     const now = Date.parse("2025-12-13T17:00:00.000Z");
     const futureNext = now + 3_600_000;
 
@@ -124,12 +124,12 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
       },
     ];
 
-    await writeCronStoreSnapshot({ storePath: store.storePath, jobs });
+    await writeCronStoreSnapshot({ storeKey: store.storeKey, jobs });
 
     const entered = createDeferred<void>();
     const release = createDeferred<IsolatedRunResult>();
     const cron = new CronService({
-      storePath: store.storePath,
+      storeKey: store.storeKey,
       cronEnabled: true,
       log: logger,
       enqueueSystemEvent: () => {},
