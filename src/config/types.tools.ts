@@ -302,6 +302,8 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
+  /** Allow exec commands to run when cwd or path components contain symlinks. */
+  allowSymlinkPath?: boolean;
   /** apply_patch subtool configuration. */
   applyPatch?: {
     /** Enable apply_patch for OpenAI models (default: true; set false to disable). */

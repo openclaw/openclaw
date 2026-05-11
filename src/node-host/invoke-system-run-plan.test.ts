@@ -963,4 +963,29 @@ describe("hardenApprovedExecutionPaths", () => {
       },
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "allows symlink path components when allowSymlinkPath is set",
+    () => {
+      const tmp = createFixtureDir("openclaw-symlink-cwd-allow-");
+      const linkDir = path.join(tmp, "link");
+      fs.symlinkSync(tmp, linkDir);
+      const scriptPath = path.join(tmp, "run.sh");
+      fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+      fs.chmodSync(scriptPath, 0o755);
+      const hardened = hardenApprovedExecutionPaths({
+        approvedByAsk: true,
+        argv: ["sh", "./run.sh"],
+        shellCommand: null,
+        cwd: linkDir,
+        allowSymlinkPath: true,
+      });
+      expect(hardened.ok).toBe(true);
+      if (!hardened.ok) {
+        throw new Error("unreachable");
+      }
+      expect(hardened.cwd).toBe(fs.realpathSync(linkDir));
+      expect(hardened.approvedCwdSnapshot).toBeDefined();
+    },
+  );
 });

@@ -24,7 +24,11 @@ import {
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { buildSystemRunApprovalPlan, handleSystemRunInvoke } from "./invoke-system-run.js";
+import {
+  buildSystemRunApprovalPlan,
+  handleSystemRunInvoke,
+  resolveAgentExecConfig,
+} from "./invoke-system-run.js";
 import type {
   ExecEventPayload,
   ExecFinishedEventParams,
@@ -447,7 +451,11 @@ export async function handleInvoke(
         agentId?: unknown;
         sessionKey?: unknown;
       }>(frame.paramsJSON);
-      const prepared = buildSystemRunApprovalPlan(params);
+      const { getRuntimeConfig } = await import("../config/config.js");
+      const cfg = await getRuntimeConfig();
+      const agentExec = resolveAgentExecConfig(cfg, params.agentId);
+      const allowSymlinkPath = agentExec?.allowSymlinkPath ?? cfg.tools?.exec?.allowSymlinkPath;
+      const prepared = buildSystemRunApprovalPlan({ ...params, allowSymlinkPath });
       if (!prepared.ok) {
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
         return;

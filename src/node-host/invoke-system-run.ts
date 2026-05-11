@@ -148,7 +148,7 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
   }
 }
 
-function resolveAgentExecConfig(
+export function resolveAgentExecConfig(
   cfg: OpenClawConfig,
   agentId: string | undefined,
 ): ExecToolConfig | undefined {
@@ -468,11 +468,13 @@ async function evaluateSystemRunPolicyPhase(
     return null;
   }
 
+  const allowSymlinkPath = agentExec?.allowSymlinkPath ?? cfg.tools?.exec?.allowSymlinkPath;
   const hardenedPaths = hardenApprovedExecutionPaths({
     approvedByAsk: policy.approvedByAsk,
     argv: parsed.argv,
     shellCommand: parsed.shellPayload,
     cwd: parsed.cwd,
+    allowSymlinkPath,
   });
   if (!hardenedPaths.ok) {
     await sendSystemRunDenied(opts, parsed.execution, {

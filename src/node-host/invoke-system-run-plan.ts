@@ -1100,7 +1100,10 @@ export function resolveMutableFileOperandSnapshotSync(params: {
   };
 }
 
-function resolveCanonicalApprovalCwdSync(cwd: string):
+function resolveCanonicalApprovalCwdSync(
+  cwd: string,
+  allowSymlinkPath?: boolean,
+):
   | {
       ok: true;
       snapshot: ApprovedCwdSnapshot;
@@ -1128,23 +1131,24 @@ function resolveCanonicalApprovalCwdSync(cwd: string):
       message: "SYSTEM_RUN_DENIED: approval requires cwd to be a directory",
     };
   }
-  if (hasMutableSymlinkPathComponentSync(requestedCwd)) {
+  if (!allowSymlinkPath && hasMutableSymlinkPathComponentSync(requestedCwd)) {
     return {
       ok: false,
       message: "SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink path components)",
     };
   }
-  if (cwdLstat.isSymbolicLink()) {
+  if (!allowSymlinkPath && cwdLstat.isSymbolicLink()) {
     return {
       ok: false,
       message: "SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink cwd)",
     };
   }
-  if (
-    !sameFileIdentity(cwdStat, cwdLstat) ||
-    !sameFileIdentity(cwdStat, cwdRealStat) ||
-    !sameFileIdentity(cwdLstat, cwdRealStat)
-  ) {
+  const identityMismatch = allowSymlinkPath
+    ? !sameFileIdentity(cwdStat, cwdRealStat)
+    : !sameFileIdentity(cwdStat, cwdLstat) ||
+      !sameFileIdentity(cwdStat, cwdRealStat) ||
+      !sameFileIdentity(cwdLstat, cwdRealStat);
+  if (identityMismatch) {
     return {
       ok: false,
       message: "SYSTEM_RUN_DENIED: approval cwd identity mismatch",
@@ -1198,6 +1202,7 @@ export function hardenApprovedExecutionPaths(params: {
   argv: string[];
   shellCommand: string | null;
   cwd: string | undefined;
+  allowSymlinkPath?: boolean;
 }):
   | {
       ok: true;
@@ -1220,7 +1225,7 @@ export function hardenApprovedExecutionPaths(params: {
   let hardenedCwd = params.cwd;
   let approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
   if (hardenedCwd) {
-    const canonicalCwd = resolveCanonicalApprovalCwdSync(hardenedCwd);
+    const canonicalCwd = resolveCanonicalApprovalCwdSync(hardenedCwd, params.allowSymlinkPath);
     if (!canonicalCwd.ok) {
       return canonicalCwd;
     }
@@ -1293,6 +1298,7 @@ export function buildSystemRunApprovalPlan(params: {
   cwd?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
+  allowSymlinkPath?: boolean;
 }): { ok: true; plan: SystemRunApprovalPlan } | { ok: false; message: string } {
   const command = resolveSystemRunCommandRequest({
     command: params.command,
@@ -1315,6 +1321,7 @@ export function buildSystemRunApprovalPlan(params: {
     argv: command.argv,
     shellCommand: command.shellPayload,
     cwd: normalizeNullableString(params.cwd) ?? undefined,
+    allowSymlinkPath: params.allowSymlinkPath,
   });
   if (!hardening.ok) {
     return { ok: false, message: hardening.message };
