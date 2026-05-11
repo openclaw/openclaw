@@ -255,11 +255,13 @@ export async function getStatusSummary(
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
   const paths = new Set<string>();
+  const allSessionsByAgent: SessionStatus[] = [];
   const byAgent = agentList.agents.map((agent) => {
     const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
     paths.add(storePath);
     const store = loadStore(storePath);
     const sessions = buildSessionRows(store, { agentIdOverride: agent.id });
+    allSessionsByAgent.push(...sessions);
     return {
       agentId: agent.id,
       path: storePath,
@@ -268,9 +270,9 @@ export async function getStatusSummary(
     };
   });
 
-  const allSessions = Array.from(paths)
-    .flatMap((storePath) => buildSessionRows(loadStore(storePath)))
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  const allSessions = allSessionsByAgent.toSorted(
+    (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
+  );
   const recent = allSessions.slice(0, 10);
   const totalSessions = allSessions.length;
 

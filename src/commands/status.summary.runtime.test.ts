@@ -201,4 +201,34 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
       model: "claude-sonnet-4-6",
     });
   });
+
+  it("does not manifest-normalize configured model ids on status cold paths", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionModelRef(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "nvidia/nemotron-3-super-120b-a12b" },
+            },
+          },
+        } as never,
+        {},
+      ),
+    ).toEqual({
+      provider: "nvidia",
+      model: "nemotron-3-super-120b-a12b",
+    });
+  });
+
+  it("does not manifest-normalize persisted override models on status cold paths", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+        providerOverride: "nvidia",
+        modelOverride: "nemotron-3-super-120b-a12b",
+      }),
+    ).toEqual({
+      provider: "nvidia",
+      model: "nemotron-3-super-120b-a12b",
+    });
+  });
 });

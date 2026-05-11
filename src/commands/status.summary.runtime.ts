@@ -1,7 +1,11 @@
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
+import {
+  isCliProvider,
+  parseModelRef,
+  resolvePersistedSelectedModelRef,
+} from "../agents/model-selection.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -13,6 +17,27 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
+
+const cliProviderCacheByConfig = new WeakMap<OpenClawConfig, Map<string, boolean>>();
+
+function isCliProviderCachedForStatus(provider: string, config?: OpenClawConfig): boolean {
+  if (!config || typeof config !== "object") {
+    return isCliProvider(provider, config);
+  }
+  const providerKey = normalizeOptionalLowercaseString(provider) ?? provider;
+  let cachedByProvider = cliProviderCacheByConfig.get(config);
+  if (!cachedByProvider) {
+    cachedByProvider = new Map<string, boolean>();
+    cliProviderCacheByConfig.set(config, cachedByProvider);
+  }
+  const cached = cachedByProvider.get(providerKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const resolved = isCliProvider(provider, config);
+  cachedByProvider.set(providerKey, resolved);
+  return resolved;
+}
 
 function resolveStatusModelRefFromRaw(params: {
   cfg: OpenClawConfig;
@@ -34,6 +59,7 @@ function resolveStatusModelRefFromRaw(params: {
       }
       const parsed = parseModelRef(modelKey, params.defaultProvider, {
         allowPluginNormalization: false,
+        allowManifestNormalization: false,
       });
       if (parsed) {
         return parsed;
@@ -43,6 +69,7 @@ function resolveStatusModelRefFromRaw(params: {
   }
   return parseModelRef(trimmed, params.defaultProvider, {
     allowPluginNormalization: false,
+    allowManifestNormalization: false,
   });
 }
 
@@ -165,6 +192,7 @@ function resolveSessionModelRef(
       overrideProvider: entry?.providerOverride,
       overrideModel: entry?.modelOverride,
       allowPluginNormalization: false,
+      allowManifestNormalization: false,
     }) ?? resolved
   );
 }
@@ -191,6 +219,7 @@ function resolveSessionRuntimeLabel(params: {
     sessionEntry: params.entry,
     resolvedHarness,
     fallbackProvider: params.provider,
+    isCliProvider: isCliProviderCachedForStatus,
   });
 }
 

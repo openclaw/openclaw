@@ -200,4 +200,20 @@ describe("getStatusSummary", () => {
 
     expect(summary.sessions.recent[0]?.runtime).toBe("OpenAI Codex");
   });
+
+  it("builds session rows once per store for status summaries", async () => {
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.count).toBe(1);
+    expect(statusSummaryMocks.readSessionStoreReadOnly).toHaveBeenCalledTimes(1);
+    expect(statusSummaryRuntime.resolveSessionModelRef).toHaveBeenCalledTimes(1);
+    expect(statusSummaryRuntime.resolveSessionRuntimeLabel).toHaveBeenCalledTimes(1);
+  });
 });
