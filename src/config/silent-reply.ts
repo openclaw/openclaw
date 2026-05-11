@@ -25,7 +25,6 @@ function resolveSilentReplyConversationContext(params: ResolveSilentReplyParams)
   surfaceRewrite?: SilentReplyRewriteShape;
 } {
   const conversationType = classifySilentReplyConversationType({
-    sessionKey: params.sessionKey,
     surface: params.surface,
     conversationType: params.conversationType,
   });

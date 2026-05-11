@@ -469,6 +469,12 @@ Completed consolidation/deletion highlights:
   `sessions.chat_type`, and `sessions.channel` metadata. `sessionKey` parsing
   remains only for explicit thread/topic suffixes on command targets; group vs
   direct reset classification no longer comes from key shape.
+- Session list/status display classification now uses typed chat metadata and
+  gateway session kind. It no longer treats `:group:` or `:channel:` substrings
+  inside `session_key` as durable group/direct truth.
+- Silent-reply policy selection now uses explicit conversation type or surface
+  metadata only. It no longer guesses direct/group policy from
+  `session_key` substrings.
 - Gateway `chat.send` external-route inheritance now reads typed SQLite session
   routing metadata instead of inferring channel/direct/group scope from
   `sessionKey` pieces. Channel-scoped sessions inherit only when the typed

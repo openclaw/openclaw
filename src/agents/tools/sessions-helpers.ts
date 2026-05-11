@@ -116,9 +116,6 @@ export function classifySessionKind(params: {
   if (params.gatewayKind === "group") {
     return "group";
   }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    return "group";
-  }
   return "other";
 }
 
@@ -138,10 +135,6 @@ export function deriveChannel(params: {
   const lastChannel = normalizeOptionalString(params.lastChannel ?? undefined);
   if (lastChannel) {
     return lastChannel;
-  }
-  const parts = params.key.split(":").filter(Boolean);
-  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
-    return parts[0];
   }
   return "unknown";
 }

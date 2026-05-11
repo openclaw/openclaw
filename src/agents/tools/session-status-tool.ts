@@ -688,10 +688,7 @@ export function createSessionStatusTool(opts?: {
           ? `${providerForCard}/${defaultModelForCard}`
           : defaultModelForCard;
       const isGroup =
-        statusSessionEntry.chatType === "group" ||
-        statusSessionEntry.chatType === "channel" ||
-        resolved.key.includes(":group:") ||
-        resolved.key.includes(":channel:");
+        statusSessionEntry.chatType === "group" || statusSessionEntry.chatType === "channel";
       const taskLine = formatSessionTaskLine({
         relatedSessionKey: resolved.key,
         callerOwnerKey: visibilityRequesterKey,

@@ -145,9 +145,6 @@ function classifySessionKey(key: string, entry?: { chatType?: string | null }): 
   if (entry?.chatType === "group" || entry?.chatType === "channel") {
     return "group";
   }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    return "group";
-  }
   return "direct";
 }
 
