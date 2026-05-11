@@ -473,6 +473,8 @@ describe("startHeartbeatRunner", () => {
               prompt: "Ops prompt",
               directPolicy: "block",
               target: "discord:channel:ops",
+              to: "discord:dm:ops",
+              accountId: "ops-account",
             },
           },
         ]),
@@ -496,6 +498,49 @@ describe("startHeartbeatRunner", () => {
           prompt: "Ops prompt",
           directPolicy: "block",
           target: "last",
+        },
+      },
+    });
+
+    runner.stop();
+  });
+
+  it("keeps non-cron targeted wake destination overrides explicit", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        ...heartbeatConfig([
+          {
+            id: "ops",
+            heartbeat: {
+              every: "15m",
+              target: "discord:channel:ops",
+              to: "discord:dm:ops",
+              accountId: "ops-account",
+            },
+          },
+        ]),
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        source: "hook",
+        intent: "event",
+        reason: "hook:job-123",
+        agentId: "ops",
+        sessionKey: "agent:ops:discord:channel:alerts",
+        heartbeat: { target: "last" },
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "ops",
+        reason: "hook:job-123",
+        sessionKey: "agent:ops:discord:channel:alerts",
+        heartbeat: {
+          every: "15m",
+          target: "last",
+          to: "discord:dm:ops",
+          accountId: "ops-account",
         },
       },
     });

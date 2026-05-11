@@ -652,7 +652,7 @@ describe("Tool Search", () => {
       });
 
     await vi.waitFor(() => expect(target.execute).toHaveBeenCalledTimes(1));
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(settled).toBe(false);
     resolveTool?.();
     const result = await resultPromise;

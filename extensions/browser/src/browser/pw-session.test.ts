@@ -249,14 +249,13 @@ describe("pw-session ensurePageState", () => {
     handlers.get("pageerror")?.[0]?.(new Error("boom"));
 
     expect(state.errors.at(-1)?.message).toBe("boom");
-    expect(state.requests.at(-1)).toMatchObject({
-      method: "GET",
-      url: "https://example.com/api",
-      resourceType: "xhr",
-      status: 500,
-      ok: false,
-      failureText: "net::ERR_FAILED",
-    });
+    const request = state.requests.at(-1);
+    expect(request?.method).toBe("GET");
+    expect(request?.url).toBe("https://example.com/api");
+    expect(request?.resourceType).toBe("xhr");
+    expect(request?.status).toBe(500);
+    expect(request?.ok).toBe(false);
+    expect(request?.failureText).toBe("net::ERR_FAILED");
   });
 
   it("drops state on page close", () => {

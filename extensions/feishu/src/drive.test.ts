@@ -22,19 +22,12 @@ function createFeishuToolRuntime(): PluginRuntime {
 }
 
 async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<"pending">((resolve) => {
-        timer = setTimeout(() => resolve("pending"), 0);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return await Promise.race([
+    promise,
+    new Promise<"pending">((resolve) => {
+      setImmediate(() => resolve("pending"));
+    }),
+  ]);
 }
 
 function createDriveToolApi(params: {

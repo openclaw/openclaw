@@ -1116,7 +1116,7 @@ describe("stuck session diagnostics threshold", () => {
       getDiagnosticStabilitySnapshot({ limit: 10 }).events,
       {
         type: "diagnostic.liveness.warning",
-        level: "warning",
+        level: "info",
         active: 1,
         waiting: 0,
         queued: 0,

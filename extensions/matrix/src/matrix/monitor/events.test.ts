@@ -489,7 +489,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
     await flushTasks();
     expect(logVerboseMessage).toHaveBeenCalledWith(
-      expect.stringContaining("blocked verification sender @alice:example.org"),
+      "matrix: blocked verification sender @alice:example.org (dmPolicy=pairing)",
     );
     expect(sendMessage).not.toHaveBeenCalled();
     expect(onRoomMessage).not.toHaveBeenCalled();
@@ -565,7 +565,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
     await flushTasks();
     expect(logVerboseMessage).toHaveBeenCalledWith(
-      expect.stringContaining("blocked verification sender @alice:example.org"),
+      "matrix: blocked verification sender @alice:example.org (dmPolicy=open, dmEnabled=false)",
     );
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -776,7 +776,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
 
     await flushTasks();
     expect(logVerboseMessage).toHaveBeenCalledWith(
-      expect.stringContaining("blocked verification sender @alice:example.org"),
+      "matrix: blocked verification sender @alice:example.org (dmPolicy=allowlist)",
     );
     expect(sendMessage).not.toHaveBeenCalled();
   });

@@ -65,15 +65,16 @@ function channelStatusTimeoutPayload(step: string, timeoutMs: number): Record<st
   };
 }
 
-async function runChannelStatusHook(params: {
-  accountId: string;
-  channelId: ChannelId;
-  step: "audit" | "probe";
+type TimeoutRaceResult<T> =
+  | { kind: "value"; value: T }
+  | { kind: "error"; error: unknown }
+  | { kind: "timeout" };
+
+async function raceWithTimeout<T>(params: {
   timeoutMs: number;
-  warnings: string[];
-  run: () => Promise<unknown>;
-}): Promise<unknown> {
-  const timeoutMs = Math.max(1, params.timeoutMs);
+  run: () => Promise<T> | T;
+}): Promise<TimeoutRaceResult<T>> {
+  const timeoutMs = params.timeoutMs;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
     timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
@@ -93,6 +94,22 @@ async function runChannelStatusHook(params: {
   if (timer) {
     clearTimeout(timer);
   }
+  return result;
+}
+
+async function runChannelStatusHook(params: {
+  accountId: string;
+  channelId: ChannelId;
+  step: "audit" | "probe";
+  timeoutMs: number;
+  warnings: string[];
+  run: () => Promise<unknown>;
+}): Promise<unknown> {
+  const timeoutMs = Math.max(1, params.timeoutMs);
+  const result = await raceWithTimeout({
+    timeoutMs,
+    run: params.run,
+  });
   if (result.kind === "value") {
     return result.value;
   }
@@ -107,6 +124,46 @@ async function runChannelStatusHook(params: {
     ok: false,
     error: message,
   };
+}
+
+type ChannelStatusSummaryOutcome =
+  | { ok: true; value: unknown }
+  | { ok: false; error: string; timedOut?: boolean };
+
+async function runChannelStatusSummary(params: {
+  channelId: ChannelId;
+  timeoutMs: number;
+  warnings: string[];
+  run: () => unknown;
+}): Promise<ChannelStatusSummaryOutcome> {
+  const timeoutMs = Math.max(1, params.timeoutMs);
+  const result = await raceWithTimeout({
+    timeoutMs,
+    run: params.run,
+  });
+  const warningPrefix = `${params.channelId} summary`;
+  if (result.kind === "value") {
+    return { ok: true, value: result.value };
+  }
+  if (result.kind === "timeout") {
+    const error = `summary timed out after ${timeoutMs}ms`;
+    params.warnings.push(`${warningPrefix} timed out after ${timeoutMs}ms`);
+    return { ok: false, timedOut: true, error };
+  }
+  const message = formatForLog(result.error);
+  params.warnings.push(`${warningPrefix} failed: ${message}`);
+  return { ok: false, error: message };
+}
+
+function channelStatusFailureMessage(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.ok !== false || typeof record.error !== "string" || record.error.length === 0) {
+    return null;
+  }
+  return record.error;
 }
 
 function resolveChannelsStatusTimeoutMs(params: { probe: boolean; timeoutMsRaw: unknown }): number {
@@ -338,6 +395,11 @@ export const channelsHandlers: GatewayRequestHandlers = {
         probe: probeResult,
         audit: auditResult,
       });
+      const hookError =
+        channelStatusFailureMessage(auditResult) ?? channelStatusFailureMessage(probeResult);
+      if (hookError && !snapshot.lastError) {
+        snapshot.lastError = hookError;
+      }
       if (lastProbeAt) {
         snapshot.lastProbeAt = lastProbeAt;
       }
@@ -421,20 +483,30 @@ export const channelsHandlers: GatewayRequestHandlers = {
           await buildChannelAccounts(plugin.id);
         const fallbackAccount =
           resolvedAccounts[defaultAccountId] ?? plugin.config.resolveAccount(cfg, defaultAccountId);
-        const summary = plugin.status?.buildChannelSummary
-          ? await plugin.status.buildChannelSummary({
-              account: fallbackAccount,
-              cfg,
-              defaultAccountId,
-              snapshot:
-                defaultAccount ??
-                ({
-                  accountId: defaultAccountId,
-                } as ChannelAccountSnapshot),
-            })
-          : {
-              configured: defaultAccount?.configured ?? false,
-            };
+        const fallbackSummary = (lastError?: string) => ({
+          configured: defaultAccount?.configured ?? false,
+          ...(lastError ? { lastError } : {}),
+        });
+        let summary: unknown = fallbackSummary();
+        if (plugin.status?.buildChannelSummary) {
+          const summaryResult = await runChannelStatusSummary({
+            channelId: plugin.id,
+            timeoutMs,
+            warnings: statusWarnings,
+            run: () =>
+              plugin.status!.buildChannelSummary!({
+                account: fallbackAccount,
+                cfg,
+                defaultAccountId,
+                snapshot:
+                  defaultAccount ??
+                  ({
+                    accountId: defaultAccountId,
+                  } as ChannelAccountSnapshot),
+              }),
+          });
+          summary = summaryResult.ok ? summaryResult.value : fallbackSummary(summaryResult.error);
+        }
         return { pluginId: plugin.id, summary, accounts, defaultAccountId };
       }),
       limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : plugins.length || 1,

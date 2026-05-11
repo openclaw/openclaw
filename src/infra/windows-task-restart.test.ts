@@ -98,10 +98,12 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(result.tried).toContain(`cmd.exe /d /s /c ${seenCommandArg}`);
     const spawnCall = spawnMock.mock.calls[0];
     expect(spawnCall?.[0]).toBe("cmd.exe");
-    expect(spawnCall?.[1]).toEqual(["/d", "/s", "/c", expect.any(String)]);
-    expect(spawnCall?.[2]?.detached).toBe(true);
-    expect(spawnCall?.[2]?.stdio).toBe("ignore");
-    expect(spawnCall?.[2]?.windowsHide).toBe(true);
+    expect(spawnCall?.[1]).toStrictEqual(["/d", "/s", "/c", seenCommandArg]);
+    expect(spawnCall?.[2]).toStrictEqual({
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
     expect(unref).toHaveBeenCalledOnce();
 
     const scriptPath = [...createdScriptPaths][0];
@@ -179,11 +181,29 @@ describe("relaunchGatewayScheduledTask", () => {
 
     relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      "cmd.exe",
-      ["/d", "/s", "/c", expect.stringMatching(/^".*&.*"$/)],
-      expect.any(Object),
-    );
+    expect(spawnMock).toHaveBeenCalledOnce();
+    const spawnCall = spawnMock.mock.calls[0];
+    if (!spawnCall) {
+      throw new Error("expected restart helper spawn call");
+    }
+    const commandArgs = spawnCall[1];
+    if (!Array.isArray(commandArgs)) {
+      throw new Error("expected cmd.exe argument array");
+    }
+    const commandArg = commandArgs[3];
+    if (typeof commandArg !== "string") {
+      throw new Error("expected quoted restart helper path");
+    }
+    expect(spawnCall[0]).toBe("cmd.exe");
+    expect(commandArgs).toStrictEqual(["/d", "/s", "/c", commandArg]);
+    expect(commandArg.startsWith('"')).toBe(true);
+    expect(commandArg.endsWith('"')).toBe(true);
+    expect(commandArg).toContain("&");
+    expect(spawnCall[2]).toStrictEqual({
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
   });
 
   it("includes startup fallback", () => {

@@ -1,7 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
-const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
+const ensureConfigReadyMock = vi.hoisted(() =>
+  vi.fn(async (_params: { runtime?: unknown; commandPath?: unknown }) => {}),
+);
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
 const findRoutedCommandMock = vi.hoisted(() => vi.fn());
 const runRouteMock = vi.hoisted(() => vi.fn(async () => true));
@@ -86,10 +88,12 @@ describe("tryRouteCli", () => {
   it("does not pass suppressDoctorStdout for routed non-json commands", async () => {
     await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: expect.any(Object),
-      commandPath: ["status"],
-    });
+    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
+    const configReadyCall = ensureConfigReadyMock.mock.calls[0]?.[0] as
+      | { runtime?: unknown; commandPath?: unknown }
+      | undefined;
+    expect(typeof configReadyCall?.runtime).toBe("object");
+    expect(configReadyCall?.commandPath).toEqual(["status"]);
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "channels",
     });
@@ -157,10 +161,12 @@ describe("tryRouteCli", () => {
       ["status"],
       ["node", "openclaw", "--log-level", "debug", "status"],
     );
-    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
-      runtime: expect.any(Object),
-      commandPath: ["status"],
-    });
+    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
+    const configReadyCall = ensureConfigReadyMock.mock.calls[0]?.[0] as
+      | { runtime?: unknown; commandPath?: unknown }
+      | undefined;
+    expect(typeof configReadyCall?.runtime).toBe("object");
+    expect(configReadyCall?.commandPath).toEqual(["status"]);
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "channels",
     });

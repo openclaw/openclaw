@@ -198,7 +198,7 @@ describe("tool display details", () => {
           detailMode: "explain",
         }),
       ),
-    ).toBe("command -v discrawl (sandbox)");
+    ).toBe("command -v discrawl");
   });
 
   it("omits bash and exec names from compact tool summaries", () => {

@@ -207,11 +207,7 @@ function expectSetupSnapshotDoesNotScopeToPlugin(params: {
     workspaceDir: "/tmp/openclaw-workspace",
   });
 
-  expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-    expect.not.objectContaining({
-      onlyPluginIds: [params.pluginId],
-    }),
-  );
+  expect(loadOpenClawPlugins).toHaveBeenCalledTimes(1);
   const firstLoadCall = vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as
     | { onlyPluginIds?: string[] }
     | undefined;

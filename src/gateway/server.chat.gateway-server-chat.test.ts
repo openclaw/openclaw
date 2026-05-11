@@ -961,7 +961,7 @@ describe("gateway server chat", () => {
         await finalPromise;
 
         let assistantMessage: Record<string, unknown> | undefined;
-        for (let attempt = 0; attempt < 50; attempt += 1) {
+        await vi.waitFor(async () => {
           const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
             sessionKey: "main",
           });
@@ -973,15 +973,8 @@ describe("gateway server chat", () => {
               message !== null &&
               (message as { role?: unknown }).role === "assistant",
           );
-          if (assistantMessage) {
-            break;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-
-        if (!assistantMessage) {
-          throw new Error("expected assistant history message");
-        }
+          expect(assistantMessage).toBeDefined();
+        });
         const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
         expect(assistantContent).toHaveLength(2);
         expect(assistantContent[0]).toEqual({ type: "text", text: "Image reply" });

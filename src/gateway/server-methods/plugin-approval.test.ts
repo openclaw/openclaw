@@ -97,6 +97,22 @@ function acceptedApprovalId(source: MockCallSource) {
   return id as string;
 }
 
+function expectPluginApprovalId(value: unknown, label: string): string {
+  expect(value, label).toBeTypeOf("string");
+  if (typeof value !== "string") {
+    throw new Error(`${label} must be a string`);
+  }
+  expect(value.startsWith("plugin:"), label).toBe(true);
+  const uuid = value.slice("plugin:".length);
+  expect(uuid).toHaveLength(36);
+  expect(uuid.split("-").map((part) => part.length)).toEqual([8, 4, 4, 4, 12]);
+  expect(
+    uuid.split("-").every((part) => /^[0-9a-f]+$/.test(part)),
+    label,
+  ).toBe(true);
+  return value;
+}
+
 function broadcastCall(opts: GatewayRequestHandlerOptions, index = 0) {
   const call = mockCall(
     opts.context.broadcast as unknown as MockCallSource,
@@ -336,7 +352,7 @@ describe("createPluginApprovalHandlers", () => {
       );
       await handlers["plugin.approval.request"](opts);
       const result = respond.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
-      expect(result?.id).toEqual(expect.stringMatching(/^plugin:/));
+      expectPluginApprovalId(result?.id, "generated plugin approval id");
     });
 
     it("passes plugin-prefixed IDs directly to manager.create", async () => {
@@ -353,7 +369,7 @@ describe("createPluginApprovalHandlers", () => {
       await handlers["plugin.approval.request"](opts);
 
       expect(createSpy).toHaveBeenCalledTimes(1);
-      expect(createSpy.mock.calls[0]?.[2]).toEqual(expect.stringMatching(/^plugin:/));
+      expectPluginApprovalId(createSpy.mock.calls[0]?.[2], "manager.create approval id");
     });
 
     it("rejects plugin-provided id field", async () => {
@@ -433,13 +449,14 @@ describe("createPluginApprovalHandlers", () => {
       );
       expect(approvals).toHaveLength(1);
       const approval = requireRecord(approvals[0], "approval");
-      expect(approval.id).toEqual(expect.stringMatching(/^plugin:/));
+      const listedApprovalId = expectPluginApprovalId(approval.id, "listed approval id");
       const request = requireRecord(approval.request, "approval request");
       expect(request.title).toBe("Sensitive action");
       expect(request.description).toBe("Desc");
       expect(responseCall(listRespond as unknown as MockCallSource).error).toBeUndefined();
 
       const approvalId = acceptedApprovalId(respond as unknown as MockCallSource);
+      expect(listedApprovalId).toBe(approvalId);
       manager.resolve(approvalId, "allow-once");
       await handlerPromise;
     });

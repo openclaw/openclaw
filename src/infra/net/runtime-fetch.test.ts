@@ -94,18 +94,10 @@ describe("fetchWithRuntimeDispatcher", () => {
       // BodyInit and RuntimeFormData live in separate type namespaces so a double cast is needed.
       const body = init?.body as unknown as RuntimeFormData;
       expect(body).toBeInstanceOf(RuntimeFormData);
-      expect(body.records).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            name: "model",
-            value: "gpt-4o-transcribe",
-          }),
-          expect.objectContaining({
-            name: "file",
-            filename: "clip.ogg",
-          }),
-        ]),
-      );
+      const modelRecord = body.records.find((record) => record.name === "model");
+      expect(modelRecord?.value).toBe("gpt-4o-transcribe");
+      const fileRecord = body.records.find((record) => record.name === "file");
+      expect(fileRecord?.filename).toBe("clip.ogg");
       return new Response("ok", { status: 200 });
     });
 

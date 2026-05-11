@@ -31,10 +31,6 @@ const createStubSttProvider = (): RealtimeTranscriptionProviderPlugin =>
     isConfigured: () => true,
   }) as unknown as RealtimeTranscriptionProviderPlugin;
 
-const flush = async (): Promise<void> => {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-};
-
 const createDeferred = (): {
   promise: Promise<void>;
   resolve: () => void;
@@ -116,7 +112,6 @@ describe("MediaStreamHandler TTS queue", () => {
       finished.push(2);
     });
 
-    await flush();
     expect(started).toEqual([1]);
 
     resolveFirst();
@@ -144,13 +139,11 @@ describe("MediaStreamHandler TTS queue", () => {
       queuedRan = true;
     });
 
-    await flush();
     expect(started).toEqual(["active"]);
 
     handler.clearTtsQueue("stream-1");
     await active;
     await withTimeout(queued);
-    await flush();
 
     expect(queuedRan).toBe(false);
   });
@@ -169,7 +162,6 @@ describe("MediaStreamHandler TTS queue", () => {
       queuedRan = true;
     });
 
-    await flush();
     (
       handler as unknown as {
         clearTtsState(streamSid: string): void;
@@ -222,7 +214,6 @@ describe("MediaStreamHandler security hardening", () => {
           start: { callSid: "CA-talk" },
         }),
       );
-      await flush();
       await vi.waitFor(() => {
         expect(talkEvents.map((event) => event.type)).toContain("session.ready");
       });
@@ -234,8 +225,9 @@ describe("MediaStreamHandler security hardening", () => {
           media: { payload: Buffer.from("hello").toString("base64") },
         }),
       );
-      await flush();
-      expect(Buffer.concat(sentAudio).toString()).toBe("hello");
+      await vi.waitFor(() => {
+        expect(Buffer.concat(sentAudio).toString()).toBe("hello");
+      });
 
       callbacks?.onSpeechStart?.();
       callbacks?.onPartial?.("hel");
@@ -248,7 +240,6 @@ describe("MediaStreamHandler security hardening", () => {
       const activePlayback = handler.queueTts("MZ-talk", async (signal) => {
         await waitForAbort(signal);
       });
-      await flush();
       handler.clearTtsQueue("MZ-talk", "barge-in");
       await activePlayback;
 
@@ -687,7 +678,7 @@ describe("MediaStreamHandler security hardening", () => {
     }
   });
 
-  it("keeps accepted streams alive while STT readiness exceeds the pre-start timeout", async () => {
+  it("defers transcription readiness until STT connect resolves", async () => {
     const sttReady = createDeferred();
     const sttConnectStarted = createDeferred();
     const transcriptionReady = createDeferred();
@@ -713,7 +704,6 @@ describe("MediaStreamHandler security hardening", () => {
         isConfigured: () => true,
       },
       providerConfig: {},
-      preStartTimeoutMs: 40,
       shouldAcceptStream: () => true,
       onConnect: () => {
         events.push("onConnect");
@@ -736,7 +726,6 @@ describe("MediaStreamHandler security hardening", () => {
       );
 
       await withTimeout(sttConnectStarted.promise);
-      await new Promise((resolve) => setTimeout(resolve, 80));
       expect(ws.readyState).toBe(WebSocket.OPEN);
       expect(events).toEqual(["onConnect", "stt-connect-start"]);
 

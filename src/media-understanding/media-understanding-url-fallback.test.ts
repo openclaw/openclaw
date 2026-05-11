@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { MediaAttachmentCache } from "./attachments.js";
 
@@ -60,7 +61,9 @@ describe("media understanding attachment URL fallback", () => {
         });
         // getPath should fall through to getBuffer URL fetch, write a temp file,
         // and return a path to that temp file instead of throwing.
-        expect(result.path).toEqual(expect.stringMatching(/\S/u));
+        expect(path.dirname(result.path)).toBe(resolvePreferredOpenClawTmpDir());
+        expect(path.basename(result.path).startsWith("openclaw-media-")).toBe(true);
+        expect(path.extname(result.path)).toBe(".jpg");
         expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
         const fetchInput = fetchRemoteMediaMock.mock.calls[0]?.[0] as
           | { url?: unknown; fetchImpl?: unknown; maxBytes?: unknown; ssrfPolicy?: unknown }

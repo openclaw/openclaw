@@ -2387,9 +2387,11 @@ describe("prepareSlackMessage sender prefix", () => {
 
     const result = await prepareSenderPrefixMessage(ctx, "<@BOT> /new", "1700000000.0002");
 
-    expect(result).toMatchObject({
-      ctxPayload: { CommandAuthorized: true },
-    });
+    expect(result).not.toBeNull();
+    if (!result) {
+      throw new Error("expected sender prefix message result");
+    }
+    expect(result.ctxPayload?.CommandAuthorized).toBe(true);
   });
 });
 

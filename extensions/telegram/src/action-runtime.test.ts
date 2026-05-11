@@ -375,7 +375,7 @@ describe("handleTelegramAction", () => {
     expect(options.mediaUrl).toBeUndefined();
     expect(result.content).toContainEqual({
       type: "text",
-      text: expect.stringContaining('"ok": true'),
+      text: '{\n  "ok": true,\n  "messageId": "789",\n  "chatId": "123"\n}',
     });
   });
 

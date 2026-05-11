@@ -160,7 +160,7 @@ describe("Zalo reply-once lifecycle", () => {
       expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
       expect(monitor.runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("Zalo webhook failed: Error: post-send failure"),
+        "[acct-zalo-lifecycle] Zalo webhook failed: Error: post-send failure",
       );
     } finally {
       await monitor.stop();

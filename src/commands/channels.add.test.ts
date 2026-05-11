@@ -745,9 +745,7 @@ describe("channelsAddCommand", () => {
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(writtenChannel("telegram").enabled).toBe(true);
     expect(writtenChannel("telegram").botToken).toBe("123456:token");
-    expect(runtime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("Channel telegram does not support non-interactive add"),
-    );
+    expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
@@ -790,9 +788,7 @@ describe("channelsAddCommand", () => {
     expect(getBundledChannelSetupPlugin).toHaveBeenCalledWith("telegram");
     expect(writtenChannel("telegram").enabled).toBe(true);
     expect(writtenChannel("telegram").botToken).toBe("123456:token");
-    expect(runtime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("Channel telegram does not support non-interactive add"),
-    );
+    expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 

@@ -998,6 +998,102 @@ describe("maybeRepairGatewayServiceConfig", () => {
       }
     });
   });
+
+  it("does not duplicate Gateway service config panels for a source-checkout entrypoint with audit findings", async () => {
+    await withEnvAsync({}, async () => {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-doctor-service-config-dedup-"),
+      );
+      try {
+        await fs.mkdir(path.join(root, ".git"), { recursive: true });
+        await fs.mkdir(path.join(root, "src"), { recursive: true });
+        await fs.mkdir(path.join(root, "extensions"), { recursive: true });
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "0.0.0-test" }),
+          "utf8",
+        );
+        const sourceCheckoutEntrypoint = path.join(root, "dist", "index.js");
+        await fs.writeFile(sourceCheckoutEntrypoint, "export {};\n", "utf8");
+        const installEntrypoint = "/usr/local/lib/node_modules/openclaw/dist/index.js";
+        setupGatewayEntrypointRepairScenario({
+          currentEntrypoint: sourceCheckoutEntrypoint,
+          installEntrypoint,
+          installWorkingDirectory: "/tmp",
+        });
+
+        await runRepair({ gateway: {} });
+
+        const gatewayServiceConfigNotes = mocks.note.mock.calls.filter(
+          ([, title]) => title === "Gateway service config",
+        );
+        expect(gatewayServiceConfigNotes).toHaveLength(1);
+        const consolidated = gatewayServiceConfigNotes[0]?.[0] ?? "";
+        expect(consolidated).toContain(
+          "Gateway service entrypoint does not match the current install.",
+        );
+        expect(consolidated).not.toContain("resolves to a source checkout");
+        const forceMatches = consolidated.match(/openclaw gateway install --force/g) ?? [];
+        expect(forceMatches).toHaveLength(0);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("keeps the gateway install force hint when a source-checkout warning is suppressed and repair is declined", async () => {
+    await withEnvAsync({}, async () => {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-doctor-service-config-force-hint-"),
+      );
+      try {
+        await fs.mkdir(path.join(root, ".git"), { recursive: true });
+        await fs.mkdir(path.join(root, "src"), { recursive: true });
+        await fs.mkdir(path.join(root, "extensions"), { recursive: true });
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "0.0.0-test" }),
+          "utf8",
+        );
+        const sourceCheckoutEntrypoint = path.join(root, "dist", "index.js");
+        await fs.writeFile(sourceCheckoutEntrypoint, "export {};\n", "utf8");
+        const installEntrypoint = "/usr/local/lib/node_modules/openclaw/dist/index.js";
+        setupGatewayEntrypointRepairScenario({
+          currentEntrypoint: sourceCheckoutEntrypoint,
+          installEntrypoint,
+          installWorkingDirectory: "/tmp",
+        });
+
+        const declinePrompts = {
+          ...makeDoctorPrompts(),
+          confirmAutoFix: vi.fn().mockResolvedValue(false),
+          confirmAggressiveAutoFix: vi.fn().mockResolvedValue(false),
+          confirmRuntimeRepair: vi.fn().mockResolvedValue(false),
+        };
+        await maybeRepairGatewayServiceConfig(
+          { gateway: {} },
+          "local",
+          makeDoctorIo(),
+          declinePrompts,
+        );
+
+        const gatewayServiceConfigNotes = mocks.note.mock.calls.filter(
+          ([, title]) => title === "Gateway service config",
+        );
+        expect(gatewayServiceConfigNotes).toHaveLength(2);
+        const auditNote = gatewayServiceConfigNotes[0]?.[0] ?? "";
+        expect(auditNote).toContain(
+          "Gateway service entrypoint does not match the current install.",
+        );
+        expect(auditNote).not.toContain("resolves to a source checkout");
+        expect(gatewayServiceConfigNotes[1]?.[0]).toContain("openclaw gateway install --force");
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
 });
 
 describe("maybeScanExtraGatewayServices", () => {

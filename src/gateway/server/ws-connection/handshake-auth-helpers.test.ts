@@ -34,12 +34,12 @@ describe("handshake auth helpers", () => {
       browserRateLimiter,
     });
 
-    expect(resolved).toMatchObject({
-      hasBrowserOriginHeader: true,
-      enforceOriginCheckForAnyClient: true,
-      rateLimitClientIp: `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}https://app.example`,
-      authRateLimiter: browserRateLimiter,
-    });
+    expect(resolved.hasBrowserOriginHeader).toBe(true);
+    expect(resolved.enforceOriginCheckForAnyClient).toBe(true);
+    expect(resolved.rateLimitClientIp).toBe(
+      `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}https://app.example`,
+    );
+    expect(resolved.authRateLimiter).toBe(browserRateLimiter);
   });
 
   it("falls back to the legacy synthetic ip when the browser origin is invalid", () => {

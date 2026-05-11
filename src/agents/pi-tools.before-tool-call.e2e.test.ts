@@ -15,7 +15,7 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
-import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
+import { CRITICAL_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -277,28 +277,23 @@ describe("before_tool_call loop detection behavior", () => {
     }
   });
 
-  it("keeps generic repeated calls warn-only below global breaker", async () => {
+  it("keeps generic repeated calls unblocked below critical threshold", async () => {
     const { tool, params } = createGenericReadRepeatFixture();
 
-    for (let i = 0; i < CRITICAL_THRESHOLD + 5; i += 1) {
+    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
       await expectUnblockedToolExecution(tool, `read-${i}`, params);
     }
   });
 
-  it("blocks generic repeated no-progress calls at global breaker threshold", async () => {
+  it("blocks generic repeated no-progress calls at critical threshold", async () => {
     const { tool, params } = createGenericReadRepeatFixture();
 
-    for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
       await expectUnblockedToolExecution(tool, `read-${i}`, params);
     }
 
-    const result = await tool.execute(
-      `read-${GLOBAL_CIRCUIT_BREAKER_THRESHOLD}`,
-      params,
-      undefined,
-      undefined,
-    );
-    expectToolLoopBlockedResult(result, "global circuit breaker");
+    const result = await tool.execute(`read-${CRITICAL_THRESHOLD}`, params, undefined, undefined);
+    expectToolLoopBlockedResult(result, "identical outcomes");
   });
 
   it("does not carry loop history across run ids", async () => {
@@ -316,27 +311,27 @@ describe("before_tool_call loop detection behavior", () => {
       runId: "heartbeat-2",
     });
 
-    for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
       await expectUnblockedToolExecution(firstRunTool, `old-run-${i}`, params);
     }
 
     await expectUnblockedToolExecution(secondRunTool, "new-run-0", params);
   });
 
-  it("coalesces repeated generic warning events into threshold buckets", async () => {
-    await withToolLoopEvents(
-      async (emitted) => {
-        const { tool, params } = createGenericReadRepeatFixture();
+  it("escalates generic repeat diagnostics from warning to critical", async () => {
+    await withToolLoopEvents(async (emitted) => {
+      const { tool, params } = createGenericReadRepeatFixture();
 
-        for (let i = 0; i < 21; i += 1) {
-          await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
-        }
+      for (let i = 0; i < 21; i += 1) {
+        await tool.execute(`read-bucket-${i}`, params, undefined, undefined);
+      }
 
-        const genericWarns = emitted.filter((evt) => evt.detector === "generic_repeat");
-        expect(genericWarns.map((evt) => evt.count)).toEqual([10, 20]);
-      },
-      (evt) => evt.level === "warning",
-    );
+      const genericEvents = emitted.filter((evt) => evt.detector === "generic_repeat");
+      expect(genericEvents.map((evt) => [evt.level, evt.count])).toEqual([
+        ["warning", 10],
+        ["critical", 20],
+      ]);
+    });
   });
 
   it("emits structured warning diagnostic events for ping-pong loops", async () => {

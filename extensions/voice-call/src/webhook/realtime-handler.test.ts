@@ -824,9 +824,10 @@ describe("RealtimeCallHandler path routing", () => {
         expect(callId).toBe("call-1");
         expect(context).toEqual({});
         await waitForRealtimeTest(() => {
-          expect(sendUserMessage).toHaveBeenCalledWith(
-            expect.stringContaining("I created the smoke test file."),
-          );
+          expect(sendUserMessage).toHaveBeenCalledTimes(1);
+          expect(sendUserMessage.mock.calls[0]).toEqual([
+            "Internal OpenClaw consult result is ready.\nDo not call tools for this internal result.\nSpeak the following answer to the caller now, briefly and naturally:\nI created the smoke test file.",
+          ]);
         });
       } finally {
         vi.useRealTimers();

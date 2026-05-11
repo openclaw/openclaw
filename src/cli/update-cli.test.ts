@@ -1663,9 +1663,11 @@ describe("update-cli", () => {
     );
 
     expect(defaultRuntime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining(
+      [
         "Package updates cannot run from inside the gateway service process.",
-      ),
+        "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+        "Run `openclaw update` from a shell outside the gateway service, or stop the gateway service first and then update.",
+      ].join("\n"),
     );
     expectPackageInstallSpec("openclaw@latest");
   });
@@ -1692,9 +1694,11 @@ describe("update-cli", () => {
     );
 
     expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
+      [
         "Package updates cannot run from inside the gateway service process.",
-      ),
+        "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+        "Run `openclaw update` from a shell outside the gateway service, or stop the gateway service first and then update.",
+      ].join("\n"),
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();
@@ -1736,9 +1740,11 @@ describe("update-cli", () => {
       );
 
       expect(defaultRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining(
+        [
           "Package updates cannot run from inside the gateway service process.",
-        ),
+          "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+          "Run `openclaw update` from a shell outside the gateway service, or stop the gateway service first and then update.",
+        ].join("\n"),
       );
       expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
       expect(serviceStop).not.toHaveBeenCalled();
@@ -1767,9 +1773,11 @@ describe("update-cli", () => {
     );
 
     expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
+      [
         "Package updates cannot run from inside the gateway service process.",
-      ),
+        "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+        "Run `openclaw update` from a shell outside the gateway service, or stop the gateway service first and then update.",
+      ].join("\n"),
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();
@@ -3274,25 +3282,26 @@ describe("update-cli", () => {
       name: "update command invalid timeout",
       run: async () => await updateCommand({ timeout: "invalid" }),
       requireTty: false,
-      expectedError: "timeout",
+      expectedError: "--timeout must be a positive integer (seconds)",
     },
     {
       name: "update status command invalid timeout",
       run: async () => await updateStatusCommand({ timeout: "invalid" }),
       requireTty: false,
-      expectedError: "timeout",
+      expectedError: "--timeout must be a positive integer (seconds)",
     },
     {
       name: "update wizard invalid timeout",
       run: async () => await updateWizardCommand({ timeout: "invalid" }),
       requireTty: true,
-      expectedError: "timeout",
+      expectedError: "--timeout must be a positive integer (seconds)",
     },
     {
       name: "update wizard requires a TTY",
       run: async () => await updateWizardCommand({}),
       requireTty: false,
-      expectedError: "Update wizard requires a TTY",
+      expectedError:
+        "Update wizard requires a TTY. Use `openclaw update --channel <stable|beta|dev>` instead.",
     },
   ] as const)(
     "validates update command invocation errors: $name",
@@ -3303,9 +3312,7 @@ describe("update-cli", () => {
 
       await run();
 
-      expect(defaultRuntime.error, name).toHaveBeenCalledWith(
-        expect.stringContaining(expectedError),
-      );
+      expect(defaultRuntime.error, name).toHaveBeenCalledWith(expectedError);
       expect(defaultRuntime.exit, name).toHaveBeenCalledWith(1);
     },
   );

@@ -155,7 +155,7 @@ describe("healthCommand", () => {
 
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(stripAnsi(runtime.log.mock.calls.flat().join("\n"))).toContain(
-      "Model pricing: degraded (OpenRouter pricing fetch failed: TypeError: fetch failed)",
+      "Model pricing: warning (optional pricing refresh degraded) (OpenRouter pricing fetch failed: TypeError: fetch failed)",
     );
   });
 

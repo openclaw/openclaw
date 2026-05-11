@@ -117,7 +117,12 @@ describe("promptRemoteGatewayConfig", () => {
     expect(next.gateway?.remote?.token).toBe("token-123");
     expect(next.gateway?.remote?.tlsFingerprint).toBe("sha256:abc123");
     expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("Direct remote access defaults to TLS."),
+      [
+        "Direct remote access defaults to TLS.",
+        "Using: wss://gateway.tailnet.ts.net:18789",
+        "TLS pin: sha256:abc123",
+        "If your gateway is loopback-only, choose SSH tunnel and keep ws://127.0.0.1:18789.",
+      ].join("\n"),
       "Direct remote",
     );
   });

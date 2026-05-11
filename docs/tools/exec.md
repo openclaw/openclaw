@@ -46,7 +46,9 @@ Where to execute. `auto` resolves to `sandbox` when a sandbox runtime is active 
 </ParamField>
 
 <ParamField path="security" type="'deny' | 'allowlist' | 'full'">
-Enforcement mode for `gateway` / `node` execution.
+Ignored for normal tool calls. `gateway` / `node` security is controlled by
+`tools.exec.security` and `~/.openclaw/exec-approvals.json`; elevated mode can
+force `security=full` only when the operator explicitly grants elevated access.
 </ParamField>
 
 <ParamField path="ask" type="'off' | 'on-miss' | 'always'">

@@ -152,14 +152,12 @@ describe("retryAsync", () => {
       vi.useRealTimers();
     }
     expect(res).toBe("ok");
-    expect(onRetry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        attempt: 1,
-        maxAttempts: 2,
-        err,
-        label: "telegram",
-      }),
-    );
+    expect(onRetry).toHaveBeenCalledOnce();
+    const retryEvent = onRetry.mock.calls[0]?.[0];
+    expect(retryEvent?.attempt).toBe(1);
+    expect(retryEvent?.maxAttempts).toBe(2);
+    expect(retryEvent?.err).toBe(err);
+    expect(retryEvent?.label).toBe("telegram");
   });
 
   it("retries immediately when the resolved delay is zero", async () => {

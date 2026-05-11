@@ -1295,7 +1295,7 @@ describe("sessions tools", () => {
     expect(details.status).toBe("timeout");
     expect(details.error).toBe("agent run timed out");
     expect(details.sessionKey).toBe(targetKey);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
   });
 

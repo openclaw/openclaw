@@ -626,9 +626,7 @@ describe("discoverOpenClawPlugins", () => {
       discoverOpenClawPlugins({ env: buildDiscoveryEnv(stateDir) }),
     );
 
-    expect(result.diagnostics.map((entry) => entry.message)).not.toContainEqual(
-      expect.stringContaining("pnpm install"),
-    );
+    expect(result.diagnostics.some((entry) => entry.message.includes("pnpm install"))).toBe(false);
   });
 
   it("does not treat repo-level live or test files as plugin entrypoints", () => {

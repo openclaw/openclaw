@@ -44,6 +44,10 @@ vi.mock("../../infra/channel-activity.js", () => ({
 
 import { channelsHandlers } from "./channels.js";
 
+function getSuccessPayload(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  return requireRespondPayload(respond);
+}
+
 function createOptions(
   params: Record<string, unknown>,
   overrides?: Partial<GatewayRequestHandlerOptions>,
@@ -172,6 +176,50 @@ describe("channelsHandlers channels.status", () => {
     expect(probeArgs.cfg).toBe(autoEnabledConfig);
   });
 
+  it("preserves channel account rows when a live probe throws", async () => {
+    const autoEnabledConfig = { autoEnabled: true };
+    const probeAccount = vi.fn(async () => {
+      throw new Error("probe failed");
+    });
+    const respond = vi.fn();
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.buildChannelAccountSnapshot.mockImplementation(async ({ accountId, probe }) => ({
+      accountId,
+      configured: true,
+      probe,
+    }));
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          isEnabled: () => true,
+          isConfigured: async () => true,
+        },
+        status: {
+          probeAccount,
+        },
+      },
+    ]);
+
+    await channelsHandlers["channels.status"](
+      createOptions({ probe: true, timeoutMs: 1000 }, { respond }),
+    );
+
+    const payload = getSuccessPayload(respond);
+    const channelAccounts = requireRecord(payload.channelAccounts);
+    expect(Array.isArray(channelAccounts.whatsapp)).toBe(true);
+    const [whatsappAccount] = channelAccounts.whatsapp as unknown[];
+    const account = requireRecord(whatsappAccount);
+    expect(account.accountId).toBe("default");
+    expect(String(account.lastError)).toContain("probe failed");
+    expect(typeof account.lastProbeAt).toBe("number");
+    const accountProbe = requireRecord(account.probe);
+    expect(accountProbe.ok).toBe(false);
+    expect(String(accountProbe.error)).toContain("probe failed");
+  });
+
   it("returns a partial snapshot when a channel probe exceeds the status budget", async () => {
     vi.useFakeTimers();
     try {
@@ -209,6 +257,49 @@ describe("channelsHandlers channels.status", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("falls back to account-derived channel summaries when summary building fails", async () => {
+    const autoEnabledConfig = { autoEnabled: true };
+    const respond = vi.fn();
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      configured: true,
+    });
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          isEnabled: () => true,
+          isConfigured: async () => true,
+        },
+        status: {
+          buildChannelSummary: async () => {
+            throw new Error("summary failed");
+          },
+        },
+      },
+    ]);
+
+    await channelsHandlers["channels.status"](
+      createOptions({ probe: false, timeoutMs: 1000 }, { respond }),
+    );
+
+    const payload = getSuccessPayload(respond);
+    const channels = requireRecord(payload.channels);
+    const whatsapp = requireRecord(channels.whatsapp);
+    expect(whatsapp.configured).toBe(true);
+    expect(String(whatsapp.lastError)).toContain("summary failed");
+
+    const channelAccounts = requireRecord(payload.channelAccounts);
+    expect(Array.isArray(channelAccounts.whatsapp)).toBe(true);
+    const [whatsappAccount] = channelAccounts.whatsapp as unknown[];
+    const account = requireRecord(whatsappAccount);
+    expect(account.accountId).toBe("default");
+    expect(account.configured).toBe(true);
   });
 
   it("annotates unhealthy channel snapshots and includes event-loop health", async () => {

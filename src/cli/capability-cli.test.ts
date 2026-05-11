@@ -1134,9 +1134,9 @@ describe("capability cli", () => {
         argv: ["capability", "image", "describe", "--file", "photo.jpg", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/No description returned for image/),
-    );
+    expect(runtimeErrorMessages()).toEqual([
+      `Error: No description returned for image: ${path.resolve("photo.jpg")}`,
+    ]);
   });
 
   it("reports missing image understanding configuration for image describe", async () => {
@@ -1630,9 +1630,9 @@ describe("capability cli", () => {
         argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/No transcript returned for audio/),
-    );
+    expect(runtimeErrorMessages()).toEqual([
+      `Error: No transcript returned for audio: ${path.resolve("memo.m4a")}`,
+    ]);
   });
 
   it("reports missing audio transcription configuration for audio transcribe", async () => {
@@ -1666,9 +1666,7 @@ describe("capability cli", () => {
         argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/Audio transcription response missing text/),
-    );
+    expect(runtimeErrorMessages()).toEqual(["Error: Audio transcription response missing text"]);
   });
 
   it("forwards transcription prompt and language hints", async () => {

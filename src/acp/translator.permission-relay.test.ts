@@ -139,6 +139,15 @@ function approvalResolveCalls(request: ReturnType<typeof vi.fn>) {
   return request.mock.calls.filter(([method]) => method === "exec.approval.resolve");
 }
 
+function hasApprovalRelay(agent: AcpGatewayAgent, approvalId: string): boolean {
+  const relayMap = (
+    agent as unknown as {
+      approvalRelays: Map<string, unknown>;
+    }
+  ).approvalRelays;
+  return relayMap.has(approvalId);
+}
+
 function requireRecord(value: unknown): Record<string, unknown> {
   expect(value).toBeTruthy();
   expect(typeof value).toBe("object");
@@ -319,7 +328,9 @@ describe("ACP translator permission relay", () => {
       expect(harness.requestPermission).toHaveBeenCalledTimes(1);
       expect(resolveApproval).toHaveBeenCalledTimes(1);
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(hasApprovalRelay(harness.agent, "approval-retry")).toBe(false);
+    });
 
     await harness.agent.handleGatewayEvent(event);
 

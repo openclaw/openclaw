@@ -719,6 +719,61 @@ describe("anthropic transport stream", () => {
   });
 
   it.each([
+    {
+      name: "empty history",
+      context: { messages: [] } as AnthropicStreamContext,
+    },
+    {
+      name: "blank user content",
+      context: {
+        messages: [
+          {
+            role: "user",
+            content: " \n\t ",
+            timestamp: 0,
+          },
+        ],
+      } as AnthropicStreamContext,
+    },
+  ])(
+    "sends a minimal user fallback when Anthropic message conversion has no content: $name",
+    async ({ context }) => {
+      await runTransportStream(
+        makeAnthropicTransportModel({
+          id: "MiniMax-M2.7",
+          name: "MiniMax M2.7",
+          provider: "minimax",
+          baseUrl: "https://api.minimax.io/anthropic",
+        }),
+        context,
+        {
+          apiKey: "sk-minimax-test",
+        } as AnthropicStreamOptions,
+      );
+
+      const requestPayload = latestAnthropicRequest().payload;
+      expect(requestPayload.model).toBe("MiniMax-M2.7");
+      expect(requestPayload.messages).toEqual([
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: ".",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        },
+      ]);
+      const [[url, fetchOptions]] = guardedFetchMock.mock.calls as unknown as Array<
+        [string, { method?: string }]
+      >;
+      expect(url).toBe("https://api.minimax.io/anthropic/v1/messages");
+      expect(fetchOptions.method).toBe("POST");
+    },
+  );
+
+  it.each([
     ["empty", ""],
     ["whitespace-only", " \n\t "],
     ["invalid-surrogate-only", String.fromCharCode(0xd83d)],

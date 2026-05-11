@@ -109,14 +109,16 @@ describe("config schema", () => {
     expect(gatewayPortSchema?.description).toContain("TCP port used by the gateway listener");
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
-    expect(res.uiHints["channels.defaults.groupPolicy"]?.label).toEqual(
-      expect.stringMatching(/\S/),
-    );
+    const groupPolicyLabel = res.uiHints["channels.defaults.groupPolicy"]?.label;
+    expect(groupPolicyLabel).toBeTypeOf("string");
+    expect(groupPolicyLabel?.trim().length).toBeGreaterThan(0);
     expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
     expect(res.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["models.providers.*.baseUrl"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
-    expect(res.version).toEqual(expect.stringMatching(/\S/));
-    expect(res.generatedAt).toEqual(expect.stringMatching(/\S/));
+    expect(res.version).toBeTypeOf("string");
+    expect(res.version.trim().length).toBeGreaterThan(0);
+    expect(res.generatedAt).toBeTypeOf("string");
+    expect(res.generatedAt.trim().length).toBeGreaterThan(0);
   });
 
   it("includes MCP SSE header schema under mcp.servers entries", () => {

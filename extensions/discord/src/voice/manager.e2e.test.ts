@@ -560,6 +560,76 @@ describe("DiscordVoiceManager", () => {
     expectConnectedStatus(manager, "1002");
   });
 
+  it("rejects joins outside configured allowed voice channels", async () => {
+    const manager = createManager({
+      voice: {
+        enabled: true,
+        mode: "stt-tts",
+        allowedChannels: [{ guildId: "g1", channelId: "1001" }],
+      },
+    });
+
+    const result = await manager.join({ guildId: "g1", channelId: "1002" });
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toBe(
+      "<#1002> is not allowed by channels.discord.voice.allowedChannels.",
+    );
+    expect(joinVoiceChannelMock).not.toHaveBeenCalled();
+  });
+
+  it("allows joins inside configured allowed voice channels", async () => {
+    const manager = createManager({
+      voice: {
+        enabled: true,
+        mode: "stt-tts",
+        allowedChannels: [{ guildId: "g1", channelId: "1001" }],
+      },
+    });
+
+    const result = await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(result.ok).toBe(true);
+    expectConnectedStatus(manager, "1001");
+  });
+
+  it("treats an empty allowed voice channel list as deny-all", async () => {
+    const manager = createManager({
+      voice: {
+        enabled: true,
+        mode: "stt-tts",
+        allowedChannels: [],
+      },
+    });
+
+    const result = await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(result.ok).toBe(false);
+    expect(joinVoiceChannelMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves and rejoins the configured target when Discord moves the bot outside allowed voice channels", async () => {
+    const manager = createManager({
+      voice: {
+        enabled: true,
+        mode: "stt-tts",
+        autoJoin: [{ guildId: "g1", channelId: "1001" }],
+        allowedChannels: [{ guildId: "g1", channelId: "1001" }],
+      },
+    });
+    manager.setBotUserId("bot-user");
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    await manager.handleVoiceStateUpdate({
+      guild_id: "g1",
+      user_id: "bot-user",
+      channel_id: "1002",
+    } as never);
+
+    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+    expectConnectedStatus(manager, "1001");
+  });
+
   it("skips destroying stale tracked voice connections that are already destroyed", async () => {
     const staleConnection = createConnectionMock();
     staleConnection.state.status = "destroyed";
@@ -1423,14 +1493,14 @@ describe("DiscordVoiceManager", () => {
 
     resolveSecond?.({ payloads: [{ text: "second answer" }] });
     resolveThird?.({ payloads: [{ text: "third answer" }] });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expectUserMessageNotIncludes("second answer");
     expectUserMessageNotIncludes("third answer");
 
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
     const firstStream = createAudioResourceMock.mock.calls.at(-1)?.[0] as PassThrough | undefined;
     await vi.waitFor(() => expect(firstStream?.writableEnded).toBe(true));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expectUserMessageNotIncludes("second answer");
 
     const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
@@ -1444,7 +1514,7 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
     const secondStream = createAudioResourceMock.mock.calls.at(-1)?.[0] as PassThrough | undefined;
     await vi.waitFor(() => expect(secondStream?.writableEnded).toBe(true));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expectUserMessageNotIncludes("third answer");
 
     idleHandler?.();
@@ -1512,7 +1582,7 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
     const firstStream = createAudioResourceMock.mock.calls.at(-1)?.[0] as PassThrough | undefined;
     await vi.waitFor(() => expect(firstStream?.writableEnded).toBe(true));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expectUserMessageNotIncludes("second answer");
 
     const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
@@ -2388,11 +2458,11 @@ describe("DiscordVoiceManager", () => {
     emitDecryptFailure(manager);
     emitDecryptFailure(manager);
     emitDecryptFailure(manager);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(connection.daveSetPassthroughMode).toHaveBeenCalledWith(true, 15);
-    expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(connection.daveSetPassthroughMode).toHaveBeenCalledWith(true, 15);
+      expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("resets DAVE receive recovery after realtime audio decodes", async () => {

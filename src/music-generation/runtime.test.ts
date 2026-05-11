@@ -85,6 +85,36 @@ describe("music-generation runtime", () => {
     ]);
   });
 
+  it("uses configured music-generation timeout when call omits timeoutMs", async () => {
+    let seenTimeoutMs: number | undefined;
+    providers = [
+      {
+        id: "music-plugin",
+        capabilities: {},
+        async generateMusic(req: { timeoutMs?: number }) {
+          seenTimeoutMs = req.timeoutMs;
+          return {
+            tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
+            model: "track-v1",
+          };
+        },
+      },
+    ];
+
+    await runGenerateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "music-plugin/track-v1", timeoutMs: 300_000 },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "play a synth line",
+    });
+
+    expect(seenTimeoutMs).toBe(300_000);
+  });
+
   it("does not list providers when explicit config disables auto provider fallback", async () => {
     const provider: MusicGenerationProvider = {
       id: "music-plugin",

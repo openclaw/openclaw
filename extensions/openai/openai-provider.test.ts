@@ -888,10 +888,12 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(mocks.openAIResponsesTransportStreamFn).not.toHaveBeenCalled();
+    const headers = result.options?.headers as Record<string, unknown> | undefined;
     expectFields(result.options?.headers, {
       originator: "openclaw",
-      "User-Agent": expect.stringMatching(/^openclaw\//u),
     });
+    expect(typeof headers?.["User-Agent"]).toBe("string");
+    expect(String(headers?.["User-Agent"]).startsWith("openclaw/")).toBe(true);
     expect(result.payload.store).toBe(false);
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "high" });

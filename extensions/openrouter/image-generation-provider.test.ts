@@ -114,14 +114,15 @@ describe("openrouter image generation provider", () => {
           providers: {
             openrouter: {
               baseUrl: "https://custom.openrouter.test/api/v1",
+              models: [],
             },
           },
         },
-      } as never,
+      },
     });
 
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledOnce();
-    expect(resolveApiKeyForProviderMock.mock.calls[0]?.[0]).toEqual({
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
       provider: "openrouter",
       cfg: {
         models: {
@@ -219,7 +220,7 @@ describe("openrouter image generation provider", () => {
       model: "google/gemini-3.1-flash-image-preview",
       prompt: "turn this into watercolor",
       inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
-      cfg: {} as never,
+      cfg: {},
     });
 
     const body = requireOpenRouterPostBody();

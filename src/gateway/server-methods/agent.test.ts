@@ -3249,7 +3249,7 @@ describe("gateway agent handler chat.abort integration", () => {
 
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-    await new Promise<void>((resolve) => setTimeout(resolve, 15));
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalledTimes(1));
     await pending;
 
     expect(mocks.agentCommand).toHaveBeenCalledTimes(1);

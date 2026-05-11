@@ -21,6 +21,11 @@ type MockWebSocketEventType = "close" | "error" | "message" | "open";
 const wsInstances: MockGoogleLiveWebSocket[] = [];
 const createdSources: MockAudioBufferSource[] = [];
 
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 class MockGoogleLiveWebSocket {
   static OPEN = 1;
 
@@ -296,7 +301,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     ws.emitOpen();
     ws.emitMessage(new Blob([JSON.stringify({ setupComplete: {} })]));
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushMicrotasks();
     expect(ws.sent).toStrictEqual([]);
     expect(onStatus).not.toHaveBeenCalled();
   });
@@ -345,8 +350,9 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       listener({ event: "chat", payload: { runId, state: "final", message: { text: "done" } } });
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(client.request).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId });
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId });
+    });
     expect(onStatus).not.toHaveBeenCalledWith("listening");
   });
 });

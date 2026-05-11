@@ -179,23 +179,13 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function raceWithMacrotask(
-  promise: Promise<unknown>,
-  delayMs: number,
-): Promise<"resolved" | "pending"> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise.then(() => "resolved" as const),
-      new Promise<"pending">((resolve) => {
-        timer = setTimeout(() => resolve("pending"), delayMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+async function raceWithMacrotask(promise: Promise<unknown>): Promise<"resolved" | "pending"> {
+  return await Promise.race([
+    promise.then(() => "resolved" as const),
+    new Promise<"pending">((resolve) => {
+      setImmediate(() => resolve("pending"));
+    }),
+  ]);
 }
 
 describe("refreshChat", () => {
@@ -213,7 +203,7 @@ describe("refreshChat", () => {
     });
 
     const refresh = refreshChat(host);
-    const outcome = await raceWithMacrotask(refresh, 0);
+    const outcome = await raceWithMacrotask(refresh);
 
     expect(outcome).toBe("resolved");
     expect(host.chatLoading).toBe(true);
@@ -255,7 +245,7 @@ describe("refreshChat", () => {
     });
 
     const refresh = refreshChat(host, { awaitHistory: true, scheduleScroll: false });
-    const pendingOutcome = await raceWithMacrotask(refresh, 0);
+    const pendingOutcome = await raceWithMacrotask(refresh);
 
     expect(pendingOutcome).toBe("pending");
     history.resolve({
@@ -565,7 +555,7 @@ describe("refreshChat", () => {
         sessionKey: "main",
       });
 
-      const outcome = await raceWithMacrotask(refreshChat(host), 20);
+      const outcome = await raceWithMacrotask(refreshChat(host));
 
       expect(outcome).toBe("resolved");
       expect(host.chatMessages).toEqual([
@@ -576,9 +566,11 @@ describe("refreshChat", () => {
         "sessions.list",
         "sessions list payload",
       );
+      expect(sessionsListPayload.activeMinutes).toBe(120);
       expect(sessionsListPayload.agentId).toBe("main");
       expect(sessionsListPayload.includeGlobal).toBe(true);
       expect(sessionsListPayload.includeUnknown).toBe(true);
+      expect(sessionsListPayload.limit).toBe(100);
       expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
       const commandsListPayload = findRequestPayload(
         request as unknown as MockCallSource,
@@ -1137,7 +1129,9 @@ describe("handleSendChat", () => {
     expect(payload.sessionKey).toBe("agent:main");
     expect(payload.message).toBe("/btw what changed?");
     expect(payload.deliver).toBe(false);
-    expect(payload.idempotencyKey).toEqual(expect.stringMatching(uuidPattern));
+    const idempotencyKey = payload.idempotencyKey;
+    expect(typeof idempotencyKey).toBe("string");
+    expect(uuidPattern.test(idempotencyKey as string)).toBe(true);
     expect(host.chatQueue).toStrictEqual([]);
     expect(host.chatRunId).toBe("run-main");
     expect(host.chatStream).toBe("Working...");
@@ -1345,11 +1339,19 @@ describe("handleSendChat", () => {
 
     await steerQueuedChatMessage(host, "queued-1");
 
-    expect(request).toHaveBeenCalledWith("chat.send", {
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "steered chat send payload",
+    );
+    const idempotencyKey = payload.idempotencyKey;
+    expect(typeof idempotencyKey).toBe("string");
+    expect(uuidPattern.test(idempotencyKey as string)).toBe(true);
+    expect(payload).toEqual({
       sessionKey: "agent:main:main",
       message: "tighten the plan",
       deliver: false,
-      idempotencyKey: expect.stringMatching(uuidPattern),
+      idempotencyKey,
       attachments: undefined,
     });
     expect(host.chatRunId).toBe("run-1");

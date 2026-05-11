@@ -127,10 +127,10 @@ describe("makeProxyFetch", () => {
     await proxyFetch("https://api.example.com/v1/audio");
 
     expect(proxyAgentSpy).toHaveBeenCalledWith(proxyUrl);
-    expect(undiciFetch).toHaveBeenCalledWith(
-      "https://api.example.com/v1/audio",
-      expect.objectContaining({ dispatcher: getLastAgent() }),
-    );
+    expect(undiciFetch).toHaveBeenCalledOnce();
+    const [input, init] = undiciFetch.mock.calls[0] ?? [];
+    expect(input).toBe("https://api.example.com/v1/audio");
+    expect(init?.dispatcher).toBe(getLastAgent());
   });
 
   it("reuses the same ProxyAgent across calls", async () => {
@@ -301,10 +301,10 @@ describe("resolveProxyFetchFromEnv", () => {
     expect(envAgentSpy).toHaveBeenCalledWith({ httpsProxy: "http://proxy.test:8080" });
 
     await fetchFn("https://api.example.com");
-    expect(undiciFetch).toHaveBeenCalledWith(
-      "https://api.example.com",
-      expect.objectContaining({ dispatcher: EnvHttpProxyAgent.lastCreated }),
-    );
+    expect(undiciFetch).toHaveBeenCalledOnce();
+    const [input, init] = undiciFetch.mock.calls[0] ?? [];
+    expect(input).toBe("https://api.example.com");
+    expect(init?.dispatcher).toBe(EnvHttpProxyAgent.lastCreated);
   });
 
   it("converts global FormData bodies when using proxy env fetch", async () => {
