@@ -914,6 +914,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: add allowlisted native DM draft previews for transient tool progress while keeping final answers on the normal persistent delivery path. (#83622) Thanks @akrimm702.
 - QA-Lab: add a personal-agent share-safe diagnostics artifact scenario so support handoffs keep useful status while omitting raw personal content. Thanks @iFiras-Max1.
 - QA-Lab: add a personal-agent no-fake-progress scenario so completion claims stay tied to local evidence instead of unsupported external progress. (#83824) Thanks @iFiras-Max1.
+- Channels/Slack: add per-channel `ignoreOtherMentions` (default `false`). When set, drop channel messages that mention another user or subteam but not this bot — the inverse of `requireMention`. Useful in busy channels where the bot would otherwise reply to side conversations. Only applies to channels/groups (not DMs) and requires a resolvable bot user id so the bot/non-bot mention split can be detected reliably. Mirrors the existing Discord `ignoreOtherMentions` option. Thanks @hanamizuki.
 
 ### Fixes
 

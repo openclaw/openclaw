@@ -999,6 +999,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
     - `requireMention`
+    - `ignoreOtherMentions`
     - `users` (allowlist)
     - `allowBots`
     - `skills`
@@ -1006,6 +1007,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `tools`, `toolsBySender`
     - `toolsBySender` key format: `channel:`, `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
       (legacy unprefixed keys still map to `id:` only)
+
+    `ignoreOtherMentions` (default `false`): when `true`, drop channel messages that mention another user or subteam but not this bot. This is the inverse of `requireMention`: instead of requiring the bot be mentioned to reply, this drops only messages that explicitly direct attention to someone else. Useful in busy channels where the bot would otherwise reply to side conversations. Only takes effect in channel/group contexts (not DMs or MPIMs). Requires that the bot user id is resolvable (via `auth.test`) so the bot/non-bot mention split can be detected reliably.
 
     `allowBots` is conservative for channels and private channels: bot-authored room messages are accepted only when the sending bot is explicitly listed in that room's `users` allowlist, or when at least one explicit Slack owner ID from `channels.slack.allowFrom` is currently a room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
 

@@ -973,6 +973,85 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
+  // Drop channel messages that mention another user/subteam but not this bot.
+  // Unlike Discord, Slack implicit mentions (thread participation) are very
+  // broad — they fire for every message in a bot-participated thread, so we
+  // intentionally ignore implicit mentions here and gate on the explicit
+  // `wasMentioned` only. Requires native bot user id (not just mention regexes)
+  // so we can reliably distinguish bot-directed <@BOT> pings from other-user
+  // mentions — regex-only detection cannot match native Slack <@U...> IDs.
+  const ignoreOtherMentions = channelConfig?.ignoreOtherMentions ?? false;
+  if (
+    isRoom &&
+    ignoreOtherMentions &&
+    Boolean(ctx.botUserId) &&
+    hasAnyMention &&
+    !wasMentioned &&
+    !shouldBypassMention
+  ) {
+    logInboundDrop({
+      log: logVerbose,
+      channel: "slack",
+      reason: "other-mention",
+      target: senderId,
+    });
+    const pendingText = (message.text ?? "").trim();
+    const historyMediaCandidate = buildSlackHistoryMediaCandidateMessage(message);
+    const fallbackFile = message.files?.length
+      ? `[Slack file: ${formatSlackFileReference(message.files[0])}]`
+      : "";
+    const fallbackSharedMedia =
+      !fallbackFile && historyMediaCandidate ? "[Slack media attachment]" : "";
+    const pendingBody = pendingText || fallbackFile || fallbackSharedMedia;
+    const skippedThreadStarter =
+      historyMediaCandidate && isThreadReply && threadTs
+        ? await resolveSlackThreadStarter({
+            channelId: message.channel,
+            threadTs,
+            client: ctx.app.client,
+          })
+        : null;
+    const timestamp = resolveSlackTimestampMs(message.ts);
+    const senderName = pendingBody ? await resolveSenderName() : undefined;
+    await recordDroppedChannelInboundHistory({
+      input: {
+        id: message.ts ?? `${message.channel}:${Date.now()}`,
+        timestamp,
+        rawText: pendingBody,
+        textForAgent: pendingBody,
+        raw: message,
+      },
+      admission: { kind: "drop", reason: "slack-other-mention", recordHistory: true },
+      preflight: {
+        message: pendingBody
+          ? {
+              rawBody: pendingBody,
+              body: pendingBody,
+              bodyForAgent: pendingBody,
+              senderLabel: senderName,
+              envelopeFrom: senderName,
+            }
+          : undefined,
+        history: {
+          key: historyKey,
+          historyMap: ctx.channelHistories,
+          limit: ctx.historyLimit,
+          recordOnDrop: true,
+          mediaLimit: SLACK_HISTORY_MEDIA_MAX_ATTACHMENTS,
+        },
+        media: () =>
+          resolveSlackHistoryMediaForPendingRecord({
+            ctx,
+            message,
+            isThreadReply,
+            threadStarter: skippedThreadStarter,
+            isBotMessage,
+          }),
+      },
+    });
+    return null;
+  }
+
   if (isRoom && shouldRequireMention && messageIngress.activationAccess.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     const pendingText = (message.text ?? "").trim();
