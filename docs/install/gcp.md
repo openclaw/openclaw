@@ -320,7 +320,7 @@ For the generic Docker flow, see [Docker](/install/docker).
     Reprint a clean dashboard link:
 
     ```bash
-    docker compose run --rm openclaw-cli dashboard --no-open
+    docker compose run --rm --no-deps openclaw-cli dashboard --no-open
     ```
 
     If the UI prompts for shared-secret auth, paste the configured token or

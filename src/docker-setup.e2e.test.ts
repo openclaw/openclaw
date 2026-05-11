@@ -48,6 +48,27 @@ exit 0
   await writeFile(logPath, "");
 }
 
+async function writeClawdockDashboardStub(binDir: string, logPath: string) {
+  const dockerStub = `#!/usr/bin/env bash
+set -euo pipefail
+log="$DOCKER_STUB_LOG"
+echo "$*" >>"$log"
+if [[ "\${1:-}" == "compose" && "$*" == *" dashboard --no-open"* ]]; then
+  echo "http://127.0.0.1:18789/?token=test"
+fi
+exit 0
+`;
+  const openerStub = `#!/usr/bin/env bash
+exit 0
+`;
+
+  await mkdir(binDir, { recursive: true });
+  await writeFile(join(binDir, "docker"), dockerStub, { mode: 0o755 });
+  await writeFile(join(binDir, "open"), openerStub, { mode: 0o755 });
+  await writeFile(join(binDir, "xdg-open"), openerStub, { mode: 0o755 });
+  await writeFile(logPath, "");
+}
+
 async function expectMissingPath(path: string): Promise<void> {
   try {
     await stat(path);
@@ -304,6 +325,37 @@ describe("scripts/docker/setup.sh", () => {
       /\bcompose\b.*\brun\b.*\bopenclaw-cli\b/.test(line),
     );
     expect(prestartCliRunLines).toStrictEqual([]);
+  });
+
+  it("keeps clawdock-dashboard from starting compose dependencies", async () => {
+    const rootDir = await sandboxRootTracker.make("clawdock-dashboard");
+    const binDir = join(rootDir, "bin");
+    const logPath = join(rootDir, "docker-stub.log");
+    await writeFile(join(rootDir, "docker-compose.yml"), "services: {}\n");
+    await writeClawdockDashboardStub(binDir, logPath);
+
+    const result = spawnSync(
+      "bash",
+      ["-lc", 'source "$CLAWDOCK_HELPER"; CLAWDOCK_DIR="$CLAWDOCK_TEST_DIR"; clawdock-dashboard'],
+      {
+        cwd: rootDir,
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          HOME: rootDir,
+          DOCKER_STUB_LOG: logPath,
+          CLAWDOCK_HELPER: join(repoRoot, "scripts", "clawdock", "clawdock-helpers.sh"),
+          CLAWDOCK_TEST_DIR: rootDir,
+        },
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const log = await readFile(logPath, "utf8");
+    expect(log).toContain("run --rm --no-deps openclaw-cli dashboard --no-open");
+    expect(log).not.toContain("run --rm openclaw-cli dashboard --no-open");
   });
 
   it("forces BuildKit for local and sandbox docker builds", async () => {

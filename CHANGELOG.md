@@ -57,6 +57,7 @@ Docs: https://docs.openclaw.ai
 - fix(matrix): gate name-based allowlist resolution [AI]. (#79007) Thanks @pgondhi987.
 - Slack: include the bot's own root/parent message in new thread sessions so in-thread replies reach the agent with the parent text the user is responding to, instead of only `reply_to_id` metadata. Fixes #79338. Thanks @sxxtony.
 - Docker: keep image builds on the source pnpm workspace policy so pnpm 11 can prune production dependencies without a Docker-only workspace rewrite.
+- Docker/ClawDock: fetch dashboard URLs with `docker compose run --no-deps` so the helper cannot start or recreate the gateway while only printing the Control UI link. Fixes #77574.
 - Agents/compaction: restore info-level gateway logs for embedded compaction start, completion, and incomplete outcomes. (#71961) Thanks @rubencu.
 - Telegram: build reply-aware inbound turns through the shared channel context path so agents see the current reply target inline with the current message.
 - Telegram: recover legacy message cache files that mixed JSON-array and line-delimited entries so restarted gateways preserve reply-window context. (#80567)
