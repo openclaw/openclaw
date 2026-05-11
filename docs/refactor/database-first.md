@@ -482,6 +482,9 @@ Completed consolidation/deletion highlights:
   projection (`sessions` + primary `conversations`) for provider, chat type,
   and peer identity. It no longer parses provider, DM, group, or thread shape
   out of `sessionKey`.
+- Cron tool delivery inference now uses explicit delivery or the current typed
+  delivery context only. It no longer decodes channel, peer, account, or thread
+  targets from `agentSessionKey`.
 - Runtime session rows no longer carry the old `lastProvider` route alias.
   Helpers and tests use `lastChannel`, `deliveryContext`, and `origin` instead;
   doctor migration is the only place that should translate older route aliases.
