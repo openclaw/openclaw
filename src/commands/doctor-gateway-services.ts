@@ -486,8 +486,8 @@ export async function maybeRepairGatewayServiceConfig(
   const showSourceCheckoutWarning = sourceCheckoutWarning !== null && !hasEntrypointMismatch;
 
   if (audit.issues.length === 0) {
-    if (showSourceCheckoutWarning) {
-      note(sourceCheckoutWarning!, "Gateway service config");
+    if (sourceCheckoutWarning !== null && !hasEntrypointMismatch) {
+      note(sourceCheckoutWarning, "Gateway service config");
     }
     return;
   }
@@ -496,9 +496,11 @@ export async function maybeRepairGatewayServiceConfig(
   const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
 
   const consolidatedLines: string[] = [];
-  if (showSourceCheckoutWarning) {
-    consolidatedLines.push(sourceCheckoutWarning!);
+  let emittedSourceCheckoutWarning = false;
+  if (sourceCheckoutWarning !== null && showSourceCheckoutWarning) {
+    consolidatedLines.push(sourceCheckoutWarning);
     consolidatedLines.push("");
+    emittedSourceCheckoutWarning = true;
   }
   consolidatedLines.push(
     ...audit.issues.map((issue) =>
@@ -563,7 +565,7 @@ export async function maybeRepairGatewayServiceConfig(
         requiresInteractiveConfirmation: true,
       });
   if (!repair) {
-    if (sourceCheckoutWarning === null) {
+    if (!emittedSourceCheckoutWarning) {
       note(
         "Run `openclaw gateway install --force` when you want to replace the gateway service definition.",
         "Gateway service config",
