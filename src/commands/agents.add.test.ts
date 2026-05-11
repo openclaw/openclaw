@@ -156,7 +156,7 @@ describe("agents add command", () => {
   });
 
   it("copies portable Codex OAuth profiles without inline token material", async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-oauth-copy-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-oauth-copy-"));
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = root;
     try {
