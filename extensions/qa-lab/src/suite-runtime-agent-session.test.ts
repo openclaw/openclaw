@@ -19,14 +19,6 @@ describe("qa suite runtime agent session helpers", () => {
     gatewayCall.mockReset();
   });
 
-  function requireGatewayCall() {
-    const [call] = gatewayCall.mock.calls;
-    if (!call) {
-      throw new Error("expected gateway call");
-    }
-    return call;
-  }
-
   it("creates sessions and trims the returned key", async () => {
     gatewayCall.mockResolvedValueOnce({ key: "  session-1  " });
 
