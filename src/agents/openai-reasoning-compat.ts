@@ -58,3 +58,9 @@ export function mapOpenAIReasoningEffortForModel(params: {
     fallbackMap: resolveOpenAIReasoningEffortMap(params.model, params.fallbackMap),
   });
 }
+
+export function isOpenAIResponsesReasoningItemType(
+  value: unknown,
+): value is "reasoning" | `reasoning.${string}` {
+  return typeof value === "string" && (value === "reasoning" || value.startsWith("reasoning."));
+}

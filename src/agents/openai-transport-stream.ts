@@ -33,7 +33,10 @@ import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
 } from "./openai-completions-string-content.js";
-import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
+import {
+  isOpenAIResponsesReasoningItemType,
+  resolveOpenAIReasoningEffortMap,
+} from "./openai-reasoning-compat.js";
 import {
   isOpenAIGpt54MiniModel,
   normalizeOpenAIReasoningEffort,
@@ -465,7 +468,7 @@ async function processResponsesStream(
       output.responseId = stringifyUnknown((event.response as { id?: string } | undefined)?.id);
     } else if (type === "response.output_item.added") {
       const item = event.item as Record<string, unknown>;
-      if (item.type === "reasoning") {
+      if (isOpenAIResponsesReasoningItemType(item.type)) {
         currentItem = item;
         currentBlock = { type: "thinking", thinking: "" };
         output.content.push(currentBlock);
@@ -488,7 +491,10 @@ async function processResponsesStream(
         stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
       }
     } else if (type === "response.reasoning_summary_text.delta") {
-      if (currentItem?.type === "reasoning" && currentBlock?.type === "thinking") {
+      if (
+        isOpenAIResponsesReasoningItemType(currentItem?.type) &&
+        currentBlock?.type === "thinking"
+      ) {
         currentBlock.thinking = `${stringifyUnknown(currentBlock.thinking)}${stringifyUnknown(event.delta)}`;
         stream.push({
           type: "thinking_delta",
@@ -520,7 +526,7 @@ async function processResponsesStream(
       }
     } else if (type === "response.output_item.done") {
       const item = event.item as Record<string, unknown>;
-      if (item.type === "reasoning" && currentBlock?.type === "thinking") {
+      if (isOpenAIResponsesReasoningItemType(item.type) && currentBlock?.type === "thinking") {
         const summary = Array.isArray(item.summary)
           ? item.summary
               .map((part) => {

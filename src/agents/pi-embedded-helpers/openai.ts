@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { isOpenAIResponsesReasoningItemType } from "../openai-reasoning-compat.js";
 
 type OpenAIThinkingBlock = {
   type?: unknown;
@@ -46,7 +47,7 @@ function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature
   if (!id.startsWith("rs_")) {
     return null;
   }
-  if (type === "reasoning" || type.startsWith("reasoning.")) {
+  if (isOpenAIResponsesReasoningItemType(type)) {
     return { id, type };
   }
   return null;
