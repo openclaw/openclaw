@@ -74,6 +74,7 @@ Skills own workflows; root owns hard policy and routing.
 - Issue/PR final answer: last line is the full GitHub URL.
 - Changelog: PR landings/fixes need one unless pure test/internal. Do not mention missing changelog as a review finding; Codex handles it during fix/landing.
 - PR verification: before merge, post exact local commands, CI/Testbox run IDs, before/after proof when used, and known proof gaps.
+- Issue fixed on `main` with proof: comment proof + commit/PR, then close.
 - After landing or requested close/sweep: search duplicates; comment proof + canonical commit/PR/release before closing.
 - `ship` that fixes an issue: after push, comment proof + commit link, then close the issue.
 - GH comments with backticks, `$`, or shell snippets: use heredoc/body file, not inline double-quoted `--body`.

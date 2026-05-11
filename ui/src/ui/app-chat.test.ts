@@ -1459,6 +1459,43 @@ describe("handleAbortChat", () => {
     await loadChatHelpers();
   });
 
+  it("preserves the draft for connected toolbar aborts", async () => {
+    const request = vi.fn(async () => ({ aborted: true }));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatMessage: "next prompt",
+      sessionKey: "agent:main",
+    });
+
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      runId: "run-main",
+      sessionKey: "agent:main",
+    });
+    expect(host.chatMessage).toBe("next prompt");
+    expect(host.chatRunId).toBe("run-main");
+  });
+
+  it("clears typed stop commands after aborting the active run", async () => {
+    const request = vi.fn(async () => ({ aborted: true }));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatMessage: "/stop",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      runId: "run-main",
+      sessionKey: "agent:main",
+    });
+    expect(host.chatMessage).toBe("");
+  });
+
   it("queues the active run abort while disconnected", async () => {
     const host = makeHost({
       connected: false,
@@ -1471,6 +1508,21 @@ describe("handleAbortChat", () => {
 
     expect(host.pendingAbort).toEqual({ runId: "run-main", sessionKey: "agent:main" });
     expect(host.chatMessage).toBe("");
+    expect(host.chatRunId).toBe("run-main");
+  });
+
+  it("preserves the draft when queueing a toolbar abort while disconnected", async () => {
+    const host = makeHost({
+      connected: false,
+      chatRunId: "run-main",
+      chatMessage: "draft",
+      sessionKey: "agent:main",
+    });
+
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(host.pendingAbort).toEqual({ runId: "run-main", sessionKey: "agent:main" });
+    expect(host.chatMessage).toBe("draft");
     expect(host.chatRunId).toBe("run-main");
   });
 

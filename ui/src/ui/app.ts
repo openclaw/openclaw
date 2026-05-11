@@ -930,8 +930,11 @@ export class OpenClawApp extends LitElement {
     await loadCronInternal(this as unknown as Parameters<typeof loadCronInternal>[0]);
   }
 
-  async handleAbortChat() {
-    await handleAbortChatInternal(this as unknown as Parameters<typeof handleAbortChatInternal>[0]);
+  async handleAbortChat(opts?: Parameters<typeof handleAbortChatInternal>[1]) {
+    await handleAbortChatInternal(
+      this as unknown as Parameters<typeof handleAbortChatInternal>[0],
+      opts,
+    );
   }
 
   handleChatDraftChange(next: string) {

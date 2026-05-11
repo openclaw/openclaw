@@ -129,13 +129,12 @@ describe("telegramPlugin gateway startup", () => {
     const { task } = startTelegramAccount();
 
     await expect(task).resolves.toBeUndefined();
-    expect(monitorTelegramProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        token: "123456:bad-token",
-        accountId: "default",
-        useWebhook: false,
-      }),
-    );
+    const monitorOptions = monitorTelegramProvider.mock.calls.at(-1)?.[0] as
+      | { token?: string; accountId?: string; useWebhook?: boolean }
+      | undefined;
+    expect(monitorOptions?.token).toBe("123456:bad-token");
+    expect(monitorOptions?.accountId).toBe("default");
+    expect(monitorOptions?.useWebhook).toBe(false);
   });
 
   it("uses the getMe request guard for startup probe timeout", async () => {
@@ -192,11 +191,10 @@ describe("telegramPlugin gateway startup", () => {
     const { task } = startTelegramAccount();
 
     await expect(task).resolves.toBeUndefined();
-    expect(monitorTelegramProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        botInfo,
-      }),
-    );
+    const monitorOptions = monitorTelegramProvider.mock.calls.at(-1)?.[0] as
+      | { botInfo?: typeof botInfo }
+      | undefined;
+    expect(monitorOptions?.botInfo).toBe(botInfo);
   });
 
   it("honors higher per-account timeoutSeconds for startup probe", async () => {
@@ -242,7 +240,7 @@ describe("telegramPlugin outbound attachments", () => {
       text: "<b>hi boss</b>",
       formatting: { parseMode: "HTML" },
     });
-    expect(sendMessageTelegram.mock.calls[1]?.[2]).toMatchObject({ textMode: "html" });
+    expect(sendMessageTelegram.mock.calls[1]?.[2]?.textMode).toBe("html");
   });
 
   it("preserves explicit HTML parse mode for payload media captions", async () => {
@@ -262,6 +260,6 @@ describe("telegramPlugin outbound attachments", () => {
       formatting: { parseMode: "HTML" },
     });
 
-    expect(sendMessageTelegram.mock.calls[0]?.[2]).toMatchObject({ textMode: "html" });
+    expect(sendMessageTelegram.mock.calls[0]?.[2]?.textMode).toBe("html");
   });
 });

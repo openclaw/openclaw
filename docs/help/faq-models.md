@@ -144,6 +144,19 @@ troubleshooting, see the main [FAQ](/help/faq).
 
   </Accordion>
 
+  <Accordion title="If two providers expose the same model id, which one does /model use?">
+    `/model provider/model` selects that exact provider route for the session.
+
+    For example, `qianfan/deepseek-v4-flash` and `deepseek/deepseek-v4-flash` are different model refs even though both contain `deepseek-v4-flash`. OpenClaw should not silently switch from one provider to the other just because the bare model id matches.
+
+    A user-selected `/model` ref is also strict for fallback policy. If that selected provider/model is unavailable, the reply fails visibly instead of answering from `agents.defaults.model.fallbacks`. Configured fallback chains still apply to configured defaults, cron job primaries, and auto-selected fallback state.
+
+    If a run that started from a non-session override is allowed to use fallback, OpenClaw tries the requested provider/model first, then configured fallbacks, and only then the configured primary. That prevents duplicate bare model ids from jumping directly back to the default provider.
+
+    See [Models](/concepts/models) and [Model failover](/concepts/model-failover).
+
+  </Accordion>
+
   <Accordion title="Can I use GPT 5.5 for daily tasks and Codex 5.5 for coding?">
     Yes. Treat model choice and runtime choice separately:
 

@@ -231,6 +231,9 @@ describe("engine/tools/remind-logic", () => {
       if (call.job.schedule.kind !== "at") {
         throw new Error("expected at schedule");
       }
+      if (!("deleteAfterRun" in call.job)) {
+        throw new Error("expected one-shot reminder job");
+      }
       expect(call.job.schedule.atMs).toBeGreaterThanOrEqual(before + 5 * 60_000);
       expect(call.job.schedule.atMs).toBeLessThanOrEqual(Date.now() + 5 * 60_000 + 1_000);
       expect(call.job.sessionTarget).toBe("isolated");
