@@ -372,7 +372,12 @@ function createPluginHandler(
       ? (payload) => outbound.sanitizeText!({ text: payload.text ?? "", payload })
       : undefined,
     normalizePayload: outbound?.normalizePayload
-      ? (payload) => outbound.normalizePayload!({ payload })
+      ? (payload) =>
+          outbound.normalizePayload!({
+            payload,
+            cfg: params.cfg,
+            accountId: params.accountId,
+          })
       : undefined,
     sendTextOnlyErrorPayloads: outbound?.sendTextOnlyErrorPayloads === true,
     renderPresentation: outbound?.renderPresentation

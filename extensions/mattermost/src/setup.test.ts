@@ -243,12 +243,10 @@ describe("mattermost setup", () => {
     }
 
     expect(registerHttpRoute).toHaveBeenCalledTimes(1);
-    expect(registerHttpRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: "/api/channels/mattermost/command",
-        auth: "plugin",
-      }),
-    );
+    const [route] = registerHttpRoute.mock.calls[0] ?? [];
+    expect(route?.path).toBe("/api/channels/mattermost/command");
+    expect(route?.auth).toBe("plugin");
+    expect(typeof route?.handler).toBe("function");
   });
 
   it("treats secret-ref tokens plus base url as configured", async () => {

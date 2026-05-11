@@ -25,7 +25,10 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
@@ -240,6 +243,46 @@ function parseSlackExplicitTarget(raw: string) {
   };
 }
 
+function normalizeSlackAcpConversationId(raw: string | undefined | null) {
+  const trimmed = normalizeOptionalString(raw);
+  if (!trimmed) {
+    return null;
+  }
+  const parsed = parseSlackTarget(trimmed, { defaultKind: "channel" });
+  const conversationId = normalizeLowercaseStringOrEmpty(
+    parsed?.id ?? trimmed.replace(/^slack:/i, "").replace(/^(?:channel|group|direct|user):/i, ""),
+  );
+  return conversationId ? { conversationId } : null;
+}
+
+function matchSlackAcpConversation(params: {
+  bindingConversationId: string;
+  conversationId: string;
+  parentConversationId?: string;
+}) {
+  const bindingConversationId = normalizeSlackAcpConversationId(
+    params.bindingConversationId,
+  )?.conversationId;
+  const conversationId = normalizeSlackAcpConversationId(params.conversationId)?.conversationId;
+  const parentConversationId = normalizeSlackAcpConversationId(
+    params.parentConversationId,
+  )?.conversationId;
+  if (!bindingConversationId || !conversationId) {
+    return null;
+  }
+  if (bindingConversationId === conversationId) {
+    return { conversationId, matchPriority: 2 };
+  }
+  if (
+    parentConversationId &&
+    parentConversationId !== conversationId &&
+    bindingConversationId === parentConversationId
+  ) {
+    return { conversationId: parentConversationId, matchPriority: 1 };
+  }
+  return null;
+}
+
 function buildSlackBaseSessionKey(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -378,6 +421,10 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
+  normalizePayload: ({ payload, cfg, accountId }) =>
+    isSlackInteractiveRepliesEnabled({ cfg, accountId })
+      ? compileSlackInteractiveReplies(payload)
+      : payload,
   deliveryCapabilities: {
     durableFinal: {
       text: true,
@@ -515,6 +562,16 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     groups: {
       resolveRequireMention: resolveSlackGroupRequireMention,
       resolveToolPolicy: resolveSlackGroupToolPolicy,
+    },
+    bindings: {
+      compileConfiguredBinding: ({ conversationId }) =>
+        normalizeSlackAcpConversationId(conversationId),
+      matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
+        matchSlackAcpConversation({
+          bindingConversationId: compiledBinding.conversationId,
+          conversationId,
+          parentConversationId,
+        }),
     },
     messaging: {
       targetPrefixes: ["slack"],

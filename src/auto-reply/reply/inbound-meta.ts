@@ -169,7 +169,7 @@ function formatChatWindowStructuredContext(
   entry: NonNullable<TemplateContext["UntrustedStructuredContext"]>[number],
   envelope?: EnvelopeFormatOptions,
 ): string | undefined {
-  if (normalizePromptMetadataString(entry.type) !== "chat_window" || !isRecord(entry.payload)) {
+  if (!isChatWindowStructuredContext(entry)) {
     return undefined;
   }
   const messages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
@@ -185,6 +185,46 @@ function formatChatWindowStructuredContext(
   const order = sanitizeTranscriptField(entry.payload["order"]);
   const qualifiers = ["untrusted", order, relation].filter(Boolean).join(", ");
   return [`${label} (${qualifiers}):`, ...lines].join("\n");
+}
+
+function isChatWindowStructuredContext(
+  entry: NonNullable<TemplateContext["UntrustedStructuredContext"]>[number],
+): entry is NonNullable<TemplateContext["UntrustedStructuredContext"]>[number] & {
+  payload: Record<string, unknown>;
+} {
+  return normalizePromptMetadataString(entry.type) === "chat_window" && isRecord(entry.payload);
+}
+
+function collectChatWindowMessageIds(
+  entries: NonNullable<TemplateContext["UntrustedStructuredContext"]>,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    if (!isChatWindowStructuredContext(entry)) {
+      continue;
+    }
+    const messages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
+    for (const message of messages) {
+      if (!isRecord(message)) {
+        continue;
+      }
+      const id = normalizePromptMetadataString(message["message_id"]);
+      if (id) {
+        ids.add(id);
+      }
+    }
+  }
+  return ids;
+}
+
+function isChatWindowHistoryContext(
+  entry: NonNullable<TemplateContext["UntrustedStructuredContext"]>[number],
+): boolean {
+  if (!isChatWindowStructuredContext(entry)) {
+    return false;
+  }
+  const relation = normalizePromptMetadataString(entry.payload["relation"]);
+  return relation === "before_current_message" || relation === "selected_for_current_message";
 }
 
 function buildLocationContextPayload(ctx: TemplateContext): Record<string, unknown> | undefined {
@@ -343,6 +383,19 @@ export function buildInboundUserContextPrefix(
   const inboundHistory = Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
   const boundedHistory = inboundHistory.slice(-MAX_UNTRUSTED_HISTORY_ENTRIES);
   const replyChainPayload = buildReplyChainPayload(ctx);
+  const structuredContext = Array.isArray(ctx.UntrustedStructuredContext)
+    ? ctx.UntrustedStructuredContext
+    : [];
+  const chatWindowMessageIds = collectChatWindowMessageIds(structuredContext);
+  const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
+  const chatWindowCoversReplyContext =
+    replyChainPayload.length > 0
+      ? replyChainPayload.every((entry) => {
+          const messageId = normalizePromptMetadataString(entry["message_id"]);
+          return messageId ? chatWindowMessageIds.has(messageId) : false;
+        })
+      : Boolean(replyToId && chatWindowMessageIds.has(replyToId));
+  const chatWindowCoversHistory = structuredContext.some(isChatWindowHistoryContext);
 
   // Keep volatile conversation/message identifiers in the user-role block so the system
   // prompt stays byte-stable across task-scoped sessions and reply turns.
@@ -416,14 +469,14 @@ export function buildInboundUserContextPrefix(
   }
 
   const replyToBody = sanitizePromptBody(ctx.ReplyToBody);
-  if (replyChainPayload.length > 0) {
+  if (replyChainPayload.length > 0 && !chatWindowCoversReplyContext) {
     blocks.push(
       formatUntrustedJsonBlock(
         "Reply chain of current user message (untrusted, nearest first):",
         replyChainPayload,
       ),
     );
-  } else if (replyToBody) {
+  } else if (replyToBody && !chatWindowCoversReplyContext) {
     blocks.push(
       formatUntrustedJsonBlock("Reply target of current user message (untrusted, for context):", {
         sender_label: normalizePromptMetadataString(ctx.ReplyToSender),
@@ -454,9 +507,6 @@ export function buildInboundUserContextPrefix(
     blocks.push(formatUntrustedJsonBlock("Location (untrusted metadata):", locationContext));
   }
 
-  const structuredContext = Array.isArray(ctx.UntrustedStructuredContext)
-    ? ctx.UntrustedStructuredContext
-    : [];
   for (const entry of structuredContext) {
     if (!entry || typeof entry !== "object") {
       continue;
@@ -475,7 +525,7 @@ export function buildInboundUserContextPrefix(
     );
   }
 
-  if (boundedHistory.length > 0) {
+  if (boundedHistory.length > 0 && !chatWindowCoversHistory) {
     blocks.push(
       formatUntrustedJsonBlock(
         "Chat history since last reply (untrusted, for context):",

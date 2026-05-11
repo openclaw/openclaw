@@ -235,6 +235,13 @@ async function deliverSlackChannelAnnouncement(params: {
   sessionId: string;
   expectsCompletionMessage: boolean;
   directIdempotencyKey: string;
+  requesterSessionKey?: string;
+  requesterOrigin?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
   completionDirectOrigin?: {
     channel?: string;
     to?: string;
@@ -265,14 +272,14 @@ async function deliverSlackChannelAnnouncement(params: {
   });
 
   return deliverSubagentAnnouncement({
-    requesterSessionKey: "agent:main:slack:channel:C123",
-    targetRequesterSessionKey: "agent:main:slack:channel:C123",
+    requesterSessionKey: params.requesterSessionKey ?? "agent:main:slack:channel:C123",
+    targetRequesterSessionKey: params.requesterSessionKey ?? "agent:main:slack:channel:C123",
     triggerMessage: "child done",
     steerMessage: "child done",
-    requesterOrigin: origin,
-    requesterSessionOrigin: origin,
-    completionDirectOrigin: params.completionDirectOrigin ?? origin,
-    directOrigin: origin,
+    requesterOrigin: params.requesterOrigin ?? origin,
+    requesterSessionOrigin: params.requesterOrigin ?? origin,
+    completionDirectOrigin: params.completionDirectOrigin ?? params.requesterOrigin ?? origin,
+    directOrigin: params.requesterOrigin ?? origin,
     requesterIsSubagent: false,
     expectsCompletionMessage: params.expectsCompletionMessage,
     bestEffortDeliver: true,
@@ -1240,6 +1247,74 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "legacy Discord channel",
+      requesterSessionKey: "agent:main:discord:guild-123:channel-456",
+      origin: { channel: "discord", to: "channel:456", accountId: "acct-1" },
+    },
+    {
+      name: "legacy WhatsApp group",
+      requesterSessionKey: "agent:main:whatsapp:123@g.us",
+      origin: { channel: "whatsapp", to: "123@g.us", accountId: "acct-1" },
+    },
+  ])(
+    "requires message-tool delivery for generated media completions in $name sessions",
+    async ({ requesterSessionKey, origin }) => {
+      const callGateway = createGatewayMock({
+        result: {
+          payloads: [
+            {
+              text: "The track is ready.",
+            },
+          ],
+        },
+      });
+      const sendMessage = createSendMessageMock();
+      const result = await deliverSlackChannelAnnouncement({
+        callGateway,
+        sendMessage,
+        sessionId: "requester-session-legacy-group",
+        isActive: false,
+        expectsCompletionMessage: true,
+        directIdempotencyKey: `announce-legacy-media-message-tool-${origin.channel}`,
+        requesterSessionKey,
+        requesterOrigin: origin,
+        sourceTool: "music_generate",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "music_generation",
+            childSessionKey: "music_generate:task-123",
+            childSessionId: "task-123",
+            announceType: "music generation task",
+            taskLabel: "night-drive synthwave",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+            mediaUrls: ["/tmp/generated-night-drive.mp3"],
+            replyInstruction:
+              "Tell the user the music is ready. If visible source delivery requires the message tool, send it there with the generated media attached.",
+          },
+        ],
+      });
+
+      expectRecordFields(result, {
+        delivered: false,
+        path: "direct",
+        error: "completion agent did not deliver through the message tool",
+      });
+      expectGatewayAgentParams(callGateway, {
+        deliver: false,
+        channel: origin.channel,
+        accountId: "acct-1",
+        to: origin.to,
+        threadId: undefined,
+      });
+      expect(sendMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not fallback for generated media group completions when message tool evidence exists", async () => {
     const callGateway = createGatewayMock({

@@ -182,4 +182,26 @@ describe("buildContextReply", () => {
       await unlink(result.mediaUrl);
     }
   });
+
+  it("does not render context map from an estimated report", async () => {
+    const params = makeParams("/context map", false);
+    const report = params.sessionEntry?.systemPromptReport;
+    if (!report) {
+      throw new Error("missing context report");
+    }
+    params.sessionEntry = {
+      ...params.sessionEntry,
+      systemPromptReport: {
+        ...report,
+        source: "estimate",
+      },
+    } as SessionEntry;
+
+    const result = await buildContextReply(params);
+
+    expect(result.text).toContain("Context treemap unavailable.");
+    expect(result.text).toContain("No actual run context is cached for this session yet.");
+    expect(result.text).not.toContain("Source: estimate");
+    expect(result.mediaUrl).toBeUndefined();
+  });
 });

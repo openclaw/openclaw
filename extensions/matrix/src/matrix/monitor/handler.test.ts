@@ -173,10 +173,27 @@ function expectNoticeSent(mock: unknown) {
   expect(String(message.body)).toContain("channels.matrix.dm.sessionScope");
 }
 
+function expectRuntimeErrorContaining(mock: unknown, text: string) {
+  const matched = mockCalls(mock, "runtime error").some(([message]) =>
+    String(message).includes(text),
+  );
+  expect(matched).toBe(true);
+}
+
 function findMockCall(mock: unknown, label: string, predicate: (call: Array<unknown>) => boolean) {
   const call = mockCalls(mock, label).find(predicate);
   expect(call, label).toBeDefined();
   return call as Array<unknown>;
+}
+
+function expectMatrixEdit(roomId: string, eventId: string, body: string) {
+  const call = findMockCall(
+    editMessageMatrixMock,
+    `edit call for ${eventId}`,
+    ([room, editedEventId, editedBody]) =>
+      room === roomId && editedEventId === eventId && editedBody === body,
+  );
+  expect(call[3], "edit options").toBeDefined();
 }
 
 function expectFinalizedPreviewEdit(eventId: string, text: string) {
@@ -709,7 +726,8 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(hasControlCommand).toHaveBeenCalledWith("/new", expect.anything());
+    expect(callArg(hasControlCommand, 0, 0, "control command")).toBe("/new");
+    expect(callArg(hasControlCommand, 0, 1, "control command")).toBeDefined();
     expect(recordInboundSession).not.toHaveBeenCalled();
     expect(finalizeInboundContext).not.toHaveBeenCalled();
   });
@@ -734,7 +752,8 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(hasControlCommand).toHaveBeenCalledWith("/new", expect.anything());
+    expect(callArg(hasControlCommand, 0, 0, "control command")).toBe("/new");
+    expect(callArg(hasControlCommand, 0, 1, "control command")).toBeDefined();
     const context = requireRecord(
       callArg(finalizeInboundContext, 0, 0, "finalized context"),
       "finalized context",
@@ -1060,7 +1079,8 @@ describe("matrix monitor handler pairing account scope", () => {
         }),
       );
 
-      expect(sendNotice).toHaveBeenCalledWith("!dm:example.org", expect.anything());
+      expect(callArg(sendNotice, 0, 0, "send notice")).toBe("!dm:example.org");
+      expect(callArg(sendNotice, 0, 1, "send notice")).toBeDefined();
       expectNoticeSent(sendNotice);
 
       await handler(
@@ -1114,7 +1134,8 @@ describe("matrix monitor handler pairing account scope", () => {
         }),
       );
 
-      expect(sendNotice).toHaveBeenCalledWith("!dm:example.org", expect.anything());
+      expect(callArg(sendNotice, 0, 0, "send notice")).toBe("!dm:example.org");
+      expect(callArg(sendNotice, 0, 1, "send notice")).toBeDefined();
       expectNoticeSent(sendNotice);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -1166,7 +1187,8 @@ describe("matrix monitor handler pairing account scope", () => {
         }),
       );
 
-      expect(sendNotice).toHaveBeenCalledWith("!dm:example.org", expect.anything());
+      expect(callArg(sendNotice, 0, 0, "send notice")).toBe("!dm:example.org");
+      expect(callArg(sendNotice, 0, 1, "send notice")).toBeDefined();
       expectNoticeSent(sendNotice);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -1208,7 +1230,8 @@ describe("matrix monitor handler pairing account scope", () => {
         }),
       );
 
-      expect(sendNotice).toHaveBeenCalledWith("!dm:example.org", expect.anything());
+      expect(callArg(sendNotice, 0, 0, "send notice")).toBe("!dm:example.org");
+      expect(callArg(sendNotice, 0, 1, "send notice")).toBeDefined();
       expectNoticeSent(sendNotice);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -2373,7 +2396,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       roomId: "!room:example.org",
       eventId: "$release-on-error",
     });
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("matrix handler failed"));
+    expectRuntimeErrorContaining(runtime.error, "matrix handler failed");
   });
 
   it("keeps replay committed when queued final delivery fails after a generic error", async () => {
@@ -2418,9 +2441,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       eventId: "$release-on-final-delivery-error",
     });
     expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("matrix final reply failed"),
-    );
+    expectRuntimeErrorContaining(runtime.error, "matrix final reply failed");
   });
 
   it.each(["tool", "block"] as const)(
@@ -2471,9 +2492,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
         eventId: `$release-on-${kind}-delivery-error`,
       });
       expect(inboundDeduper.releaseEvent).not.toHaveBeenCalled();
-      expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining(`matrix ${kind} reply failed`),
-      );
+      expectRuntimeErrorContaining(runtime.error, `matrix ${kind} reply failed`);
     },
   );
 
@@ -3016,12 +3035,7 @@ describe("matrix monitor handler draft streaming", () => {
     opts.onPartialReply?.({ text: "AlphaBeta" });
     await vi.waitFor(
       () => {
-        expect(editMessageMatrixMock).toHaveBeenCalledWith(
-          "!room:example.org",
-          "$draft1",
-          "AlphaBeta",
-          expect.anything(),
-        );
+        expectMatrixEdit("!room:example.org", "$draft1", "AlphaBeta");
       },
       { interval: 1 },
     );
@@ -3043,12 +3057,7 @@ describe("matrix monitor handler draft streaming", () => {
       { interval: 1 },
     );
     expect(sendSingleTextMessageMatrixMock.mock.calls[0]?.[1]).toBe("Beta");
-    expect(editMessageMatrixMock).toHaveBeenCalledWith(
-      "!room:example.org",
-      "$draft1",
-      "Alpha",
-      expect.anything(),
-    );
+    expectMatrixEdit("!room:example.org", "$draft1", "Alpha");
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
     await finish();
@@ -3143,12 +3152,7 @@ describe("matrix monitor handler draft streaming", () => {
     opts.onPartialReply?.({ text: "Beta" });
 
     await vi.waitFor(() => {
-      expect(editMessageMatrixMock).toHaveBeenCalledWith(
-        "!room:example.org",
-        "$draft1",
-        "Beta",
-        expect.anything(),
-      );
+      expectMatrixEdit("!room:example.org", "$draft1", "Beta");
     });
 
     sendSingleTextMessageMatrixMock.mockClear();
@@ -3159,12 +3163,7 @@ describe("matrix monitor handler draft streaming", () => {
     });
     await deliver({ text: "Alpha" }, { kind: "block" });
 
-    expect(editMessageMatrixMock).toHaveBeenCalledWith(
-      "!room:example.org",
-      "$draft1",
-      "Alpha",
-      expect.anything(),
-    );
+    expectMatrixEdit("!room:example.org", "$draft1", "Alpha");
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
     await vi.waitFor(() => {
@@ -3194,12 +3193,7 @@ describe("matrix monitor handler draft streaming", () => {
     opts.onPartialReply?.({ text: "Beta" });
 
     await vi.waitFor(() => {
-      expect(editMessageMatrixMock).toHaveBeenCalledWith(
-        "!room:example.org",
-        "$draft1",
-        "Beta",
-        expect.anything(),
-      );
+      expectMatrixEdit("!room:example.org", "$draft1", "Beta");
     });
 
     sendSingleTextMessageMatrixMock.mockClear();
@@ -3210,12 +3204,7 @@ describe("matrix monitor handler draft streaming", () => {
     });
     await deliver({ text: "Alpha" }, { kind: "block" });
 
-    expect(editMessageMatrixMock).toHaveBeenCalledWith(
-      "!room:example.org",
-      "$draft1",
-      "Alpha",
-      expect.anything(),
-    );
+    expectMatrixEdit("!room:example.org", "$draft1", "Alpha");
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
     await vi.waitFor(() => {

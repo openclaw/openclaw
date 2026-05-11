@@ -172,13 +172,24 @@ describe("feishu setup wizard status", () => {
 
     expect(status.configured).toBe(true);
     expect(status.statusLines).toEqual(["Feishu: connected as Feishu Main"]);
-    expect(probeFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "main-bot",
+    expect(probeFeishuMock).toHaveBeenCalledWith({
+      accountId: "main-bot",
+      selectionSource: "explicit-default",
+      enabled: true,
+      configured: true,
+      name: undefined,
+      appId: "cli_main",
+      appSecret: "main-app-secret", // pragma: allowlist secret
+      encryptKey: undefined,
+      verificationToken: undefined,
+      domain: "feishu",
+      config: {
+        enabled: true,
         appId: "cli_main",
         appSecret: "main-app-secret", // pragma: allowlist secret
-      }),
-    );
+        connectionMode: "websocket",
+      },
+    });
   });
 
   it("does not fallback to top-level appId when account explicitly sets empty appId", async () => {

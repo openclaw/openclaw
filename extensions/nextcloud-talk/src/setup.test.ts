@@ -73,13 +73,7 @@ describe("nextcloud talk setup", () => {
     });
     expect(
       clearNextcloudTalkAccountFields(cfg, DEFAULT_ACCOUNT_ID, ["botSecret"]),
-    ).not.toMatchObject({
-      channels: {
-        "nextcloud-talk": {
-          botSecret: expect.anything(),
-        },
-      },
-    });
+    ).not.toHaveProperty(["channels", "nextcloud-talk", "botSecret"]);
 
     expect(
       clearNextcloudTalkAccountFields(cfg, "work", ["botSecret", "botSecretFile"]),

@@ -136,7 +136,10 @@ function requireMockCall(mock: unknown, index: number, label: string): unknown[]
 }
 
 function mockMessages(mock: unknown): string[] {
-  return (mock as MockCallReader).mock.calls.map((call) => String(call[0] ?? ""));
+  return (mock as MockCallReader).mock.calls.map((call) => {
+    const message = call[0];
+    return typeof message === "string" ? message : "";
+  });
 }
 
 function expectMockMessageContains(mock: unknown, expected: string): void {
