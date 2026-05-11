@@ -150,18 +150,20 @@ export function createWebOnMessageHandler(params: {
       ) {
         return;
       }
-      ackReaction = await maybeSendAckReaction({
-        cfg,
-        msg,
-        agentId: route.agentId,
-        sessionKey: route.sessionKey,
-        conversationId,
-        verbose: params.verbose,
-        accountId: route.accountId,
-        info: params.replyLogger.info.bind(params.replyLogger),
-        warn: params.replyLogger.warn.bind(params.replyLogger),
-      });
-      ackAlreadySent = ackReaction !== null;
+      if (cfg.messages?.statusReactions?.enabled !== true) {
+        ackReaction = await maybeSendAckReaction({
+          cfg,
+          msg,
+          agentId: route.agentId,
+          sessionKey: route.sessionKey,
+          conversationId,
+          verbose: params.verbose,
+          accountId: route.accountId,
+          info: params.replyLogger.info.bind(params.replyLogger),
+          warn: params.replyLogger.warn.bind(params.replyLogger),
+        });
+        ackAlreadySent = ackReaction !== null;
+      }
       try {
         const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
         // transcribeFirstAudio returns undefined on failure/disabled; store null so

@@ -20,14 +20,17 @@ export type StatusReactionAdapter = {
 
 export type StatusReactionEmojis = {
   queued?: string; // Default: uses initialEmoji param
-  thinking?: string; // Default: "🧠"
-  tool?: string; // Default: "🛠️"
-  coding?: string; // Default: "💻"
-  web?: string; // Default: "🌐"
-  done?: string; // Default: "✅"
-  error?: string; // Default: "❌"
-  stallSoft?: string; // Default: "⏳"
-  stallHard?: string; // Default: "⚠️"
+  thinking?: string; // Default: "🤔"
+  tool?: string; // Default: "🔥"
+  coding?: string; // Default: "👨‍💻"
+  web?: string; // Default: "🌎"
+  deploy?: string; // Default: "🛫"
+  build?: string; // Default: "🏗️"
+  concierge?: string; // Default: "💁"
+  done?: string; // Default: "👍"
+  error?: string; // Default: "😱"
+  stallSoft?: string; // Default: "🥱"
+  stallHard?: string; // Default: "😨"
   compacting?: string; // Default: "✍"
 };
 
@@ -61,7 +64,10 @@ export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
   thinking: "🤔",
   tool: "🔥",
   coding: "👨‍💻",
-  web: "⚡",
+  web: "🌎",
+  deploy: "🛫",
+  build: "🏗️",
+  concierge: "💁",
   done: "👍",
   error: "😱",
   stallSoft: "🥱",
@@ -95,6 +101,46 @@ export const WEB_TOOL_TOKENS: string[] = [
   "browser",
 ];
 
+export const DEPLOY_TOOL_TOKENS: string[] = [
+  "fastlane",
+  "deploy",
+  "upload",
+  "testflight",
+  "ship",
+  "release",
+  "publish",
+  "distribute",
+];
+
+export const BUILD_TOOL_TOKENS: string[] = [
+  "build",
+  "compile",
+  "xcode",
+  "swift",
+  "gradle",
+  "cargo",
+  "make",
+  "cmake",
+  "webpack",
+  "vite",
+  "tsc",
+  "lint",
+];
+
+export const CONCIERGE_TOOL_TOKENS: string[] = [
+  "navigate",
+  "click",
+  "fill",
+  "screenshot",
+  "scroll",
+  "page",
+  "form",
+  "puppeteer",
+  "playwright",
+  "selenium",
+  "chromedp",
+];
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Functions
 // ─────────────────────────────────────────────────────────────────────────────
@@ -112,16 +158,31 @@ export function resolveToolEmoji(
     return emojis.tool;
   }
 
-  const category = WEB_TOOL_TOKENS.some((token) => normalized.includes(token))
-    ? "web"
-    : CODING_TOOL_TOKENS.some((token) => normalized.includes(token))
-      ? "coding"
-      : "tool";
+  const category = DEPLOY_TOOL_TOKENS.some((token) => normalized.includes(token))
+    ? "deploy"
+    : BUILD_TOOL_TOKENS.some((token) => normalized.includes(token))
+      ? "build"
+      : CONCIERGE_TOOL_TOKENS.some((token) => normalized.includes(token))
+        ? "concierge"
+        : WEB_TOOL_TOKENS.some((token) => normalized.includes(token))
+          ? "web"
+          : CODING_TOOL_TOKENS.some((token) => normalized.includes(token))
+            ? "coding"
+            : "tool";
   if (emojiOverrides?.[category] !== undefined) {
     return emojis[category];
   }
   if (Object.hasOwn(TOOL_DISPLAY_CONFIG.tools, normalized)) {
     return resolveToolDisplay({ name: toolName }).emoji;
+  }
+  if (category === "deploy") {
+    return emojis.deploy;
+  }
+  if (category === "build") {
+    return emojis.build;
+  }
+  if (category === "concierge") {
+    return emojis.concierge;
   }
   if (category === "web") {
     return emojis.web;
