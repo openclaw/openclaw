@@ -153,6 +153,11 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin", () => {
     expect(ssrfPolicyFromHttpBaseUrlAllowedOrigin(" http://10.0.0.5:1234/v1 ")).toEqual({
       allowedOrigins: ["http://10.0.0.5:1234"],
     });
+    expect(
+      ssrfPolicyFromHttpBaseUrlAllowedOrigin("https://api.example.com/v1?token=redacted"),
+    ).toEqual({
+      allowedOrigins: ["https://api.example.com"],
+    });
   });
 });
 
@@ -194,6 +199,16 @@ describe("resolveSsrFPolicyForUrl", () => {
     ).toEqual({
       allowedOrigins: ["http://[fd00::1]:11434"],
       allowedHostnames: ["[fd00::1]"],
+    });
+  });
+
+  it("does not trust IPv6 origins when the port differs", () => {
+    expect(
+      resolveSsrFPolicyForUrl(new URL("http://[fd00::1]:11435/v1/chat/completions"), {
+        allowedOrigins: ["http://[fd00::1]:11434"],
+      }),
+    ).toEqual({
+      allowedOrigins: ["http://[fd00::1]:11434"],
     });
   });
 });

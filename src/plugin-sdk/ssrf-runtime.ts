@@ -9,6 +9,7 @@ export {
   isPrivateIpAddress,
   resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
+  resolveSsrFPolicyForUrl,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type LookupFn,
