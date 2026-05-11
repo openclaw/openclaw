@@ -448,13 +448,54 @@ describe("modelsAuthLoginCommand", () => {
 
   it("defaults OpenAI login to ChatGPT OAuth when API key is also available", async () => {
     const runtime = createRuntime();
-    const runOauthAuth = vi.fn().mockResolvedValue({ profiles: [] });
+    const fakeStore = {
+      profiles: {
+        "openai:api-key-backup": {
+          type: "api_key",
+          provider: "openai",
+        },
+        "openai-codex:user@example.com": {
+          type: "oauth",
+          provider: "openai-codex",
+        },
+      },
+      usageStats: {
+        "openai-codex:user@example.com": {
+          disabledUntil: Date.now() + 3_600_000,
+          disabledReason: "rate_limit",
+          errorCount: 1,
+        },
+      },
+    };
+    const runOauthAuth = vi.fn().mockResolvedValue({
+      profiles: [
+        {
+          profileId: "openai-codex:user@example.com",
+          credential: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+            email: "user@example.com",
+          },
+        },
+      ],
+    });
     const runApiKeyAuth = vi.fn().mockResolvedValue({ profiles: [] });
     const select = vi.fn();
     mocks.createClackPrompter.mockReturnValue({
       note: vi.fn(async () => {}),
       select,
     });
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue(fakeStore);
+    mocks.listProfilesForProvider.mockImplementation((_store: unknown, provider: string) =>
+      provider === "openai"
+        ? ["openai:api-key-backup"]
+        : provider === "openai-codex"
+          ? ["openai-codex:user@example.com"]
+          : [],
+    );
     mocks.resolvePluginProviders.mockReturnValue([
       createProvider({
         id: "openai",
@@ -482,6 +523,16 @@ describe("modelsAuthLoginCommand", () => {
     expect(runOauthAuth).toHaveBeenCalledOnce();
     expect(runApiKeyAuth).not.toHaveBeenCalled();
     expect(select).not.toHaveBeenCalled();
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
+      store: fakeStore,
+      profileId: "openai:api-key-backup",
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
+      store: fakeStore,
+      profileId: "openai-codex:user@example.com",
+      agentDir: "/tmp/openclaw/agents/main",
+    });
   });
 
   it("honors --method api-key for OpenAI login", async () => {

@@ -327,7 +327,8 @@ async function runProviderAuthMethod(params: {
   prompter: ReturnType<typeof createClackPrompter>;
   setDefault?: boolean;
 }) {
-  await clearStaleProfileLockouts(params.provider.id, params.agentDir);
+  const selectedProviderId = normalizeProviderId(params.provider.id);
+  await clearStaleProfileLockouts(selectedProviderId, params.agentDir);
 
   const result = await params.method.run({
     config: params.config,
@@ -346,6 +347,14 @@ async function runProviderAuthMethod(params: {
       createVpsAwareHandlers: (runtimeParams) => createVpsAwareOAuthHandlers(runtimeParams),
     },
   });
+  const resultProviderIds = new Set(
+    result.profiles.map((profile) => normalizeProviderId(profile.credential.provider)),
+  );
+  for (const providerId of resultProviderIds) {
+    if (providerId && providerId !== selectedProviderId) {
+      await clearStaleProfileLockouts(providerId, params.agentDir);
+    }
+  }
 
   await persistProviderAuthResult({
     result,
