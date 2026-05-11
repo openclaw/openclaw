@@ -46,14 +46,14 @@ The bundled `fal` image-generation provider defaults to
 | Capability     | Value                      |
 | -------------- | -------------------------- |
 | Max images     | 4 per request              |
-| Edit mode      | Enabled, 1 reference image |
+| Edit mode      | Enabled, up to 14 reference images (GPT Image 2 / NB2), 1 image (Flux) |
 | Size overrides | Supported                  |
 | Aspect ratio   | Supported                  |
 | Resolution     | Supported                  |
 | Output format  | `png` or `jpeg`            |
 
 <Warning>
-The fal image edit endpoint does **not** support `aspectRatio` overrides.
+GPT Image 2 and Nano Banana 2 edit endpoints support `aspectRatio`. The Flux edit endpoint does **not** support `aspectRatio` overrides.
 </Warning>
 
 Use `outputFormat: "png"` when you want PNG output. fal does not declare an

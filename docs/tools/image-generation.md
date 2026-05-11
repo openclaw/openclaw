@@ -90,7 +90,7 @@ backend emits it.
 | ---------- | --------------------------------------- | ---------------------------------- | ----------------------------------------------------- |
 | ComfyUI    | `workflow`                              | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
 | DeepInfra  | `black-forest-labs/FLUX-1-schnell`      | Yes (1 image)                      | `DEEPINFRA_API_KEY`                                   |
-| fal        | `fal-ai/flux/dev`                       | Yes                                | `FAL_KEY`                                             |
+| fal        | `fal-ai/flux/dev`, `fal-ai/gpt-image-2`, `fal-ai/nano-banana-2` | Yes (up to 14 input images) | `FAL_KEY`                                             |
 | Google     | `gemini-3.1-flash-image-preview`        | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
 | LiteLLM    | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
 | MiniMax    | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
@@ -110,7 +110,7 @@ Use `action: "list"` to inspect available providers and models at runtime:
 | Capability            | ComfyUI            | DeepInfra | fal               | Google         | MiniMax               | OpenAI         | Vydra | xAI            |
 | --------------------- | ------------------ | --------- | ----------------- | -------------- | --------------------- | -------------- | ----- | -------------- |
 | Generate (max count)  | Workflow-defined   | 4         | 4                 | 4              | 9                     | 4              | 1     | 4              |
-| Edit / reference      | 1 image (workflow) | 1 image   | 1 image           | Up to 5 images | 1 image (subject ref) | Up to 5 images | -     | Up to 5 images |
+| Edit / reference      | 1 image (workflow) | 1 image   | Up to 14 images (GPT Image 2 / NB2), 1 image (Flux) | Up to 5 images | 1 image (subject ref) | Up to 5 images | -     | Up to 5 images |
 | Size control          | -                  | ✓         | ✓                 | ✓              | -                     | Up to 4K       | -     | -              |
 | Aspect ratio          | -                  | -         | ✓ (generate only) | ✓              | ✓                     | -              | -     | ✓              |
 | Resolution (1K/2K/4K) | -                  | -         | ✓                 | ✓              | -                     | -              | -     | 1K, 2K         |

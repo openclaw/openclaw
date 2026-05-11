@@ -106,7 +106,9 @@ function ensureFalModelPath(model: string | undefined, hasInputImages: boolean):
     }
     return `${trimmed}/edit`;
   }
+  // Preserve any model already ending in /edit or /image-to-image
   if (
+    trimmed.endsWith("/edit") ||
     trimmed.endsWith(`/${DEFAULT_FAL_EDIT_SUBPATH}`) ||
     trimmed.includes("/image-to-image/")
   ) {
