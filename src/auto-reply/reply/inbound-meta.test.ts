@@ -554,9 +554,9 @@ describe("buildInboundUserContextPrefix", () => {
       { timezone: "utc" },
     );
 
-    expect(text).toContain("Current message:\n#34974 Sun 2026-05-10T17:08Z obviyus ->#34971");
+    expect(text).toContain('Current message:\n[Replying to: "selected quote"]\n#34974 obviyus:');
     expect(text).toContain('[Replying to: "selected quote"]');
-    expect(text.trimEnd().endsWith('[Replying to: "selected quote"]')).toBe(true);
+    expect(text.trimEnd().endsWith("#34974 obviyus:")).toBe(true);
     expect(text).not.toContain("Reply chain of current user message");
     expect(text).not.toContain("Reply target of current user message");
   });
@@ -593,9 +593,11 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     expect(text).toContain("#34971 [reply target] bh.ai: quoted status body");
-    expect(text).toContain("Current message:\n#34974 obviyus ->#34971");
+    expect(text).toContain(
+      'Current message:\n[Replying to: "quoted status body"]\n#34974 obviyus:',
+    );
     expect(text).toContain('[Replying to: "quoted status body"]');
-    expect(text.trimEnd().endsWith('[Replying to: "quoted status body"]')).toBe(true);
+    expect(text.trimEnd().endsWith("#34974 obviyus:")).toBe(true);
   });
 
   it("includes sender_id in conversation info", () => {

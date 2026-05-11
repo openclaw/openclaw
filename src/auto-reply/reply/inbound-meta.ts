@@ -290,10 +290,7 @@ function resolveInlineReplyQuote(ctx: TemplateContext): string | undefined {
   return sanitizeTranscriptField(ctx.ReplyToQuoteText) ?? sanitizeTranscriptField(ctx.ReplyToBody);
 }
 
-function formatTelegramCurrentMessageContext(
-  ctx: TemplateContext,
-  envelope?: EnvelopeFormatOptions,
-): string | undefined {
+function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | undefined {
   if (!isTelegramInboundContext(ctx)) {
     return undefined;
   }
@@ -312,19 +309,13 @@ function formatTelegramCurrentMessageContext(
       e164: normalizePromptMetadataString(ctx.SenderE164),
       id: normalizePromptMetadataString(ctx.SenderId),
     }) ?? "unknown sender";
-  const timestamp = formatConversationTimestamp(ctx.Timestamp, envelope);
-  const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
-  const header = [
-    messageId ? `#${messageId}` : undefined,
-    timestamp,
-    sanitizeTranscriptField(sender),
-    replyToId ? `->#${replyToId}` : undefined,
-  ].filter(Boolean);
+  const header = [messageId ? `#${messageId}` : undefined, sanitizeTranscriptField(sender)].filter(
+    Boolean,
+  );
   return [
     "Current message:",
-    header.length > 0 ? header.join(" ") : undefined,
-    "",
     `[Replying to: ${JSON.stringify(quote)}]`,
+    header.length > 0 ? `${header.join(" ")}:` : undefined,
   ]
     .filter((line) => line !== undefined)
     .join("\n");
@@ -446,7 +437,7 @@ export function buildInboundUserContextPrefix(
         })
       : Boolean(replyToId && chatWindowMessageIds.has(replyToId));
   const chatWindowCoversHistory = structuredContext.some(isChatWindowHistoryContext);
-  const currentMessageContext = formatTelegramCurrentMessageContext(ctx, envelope);
+  const currentMessageContext = formatTelegramCurrentMessageContext(ctx);
 
   // Keep volatile conversation/message identifiers in the user-role block so the system
   // prompt stays byte-stable across task-scoped sessions and reply turns.

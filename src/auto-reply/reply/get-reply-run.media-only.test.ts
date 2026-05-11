@@ -1140,12 +1140,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("threads inbound context as current-turn context without changing transcript text", async () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
-      [
-        "Current message:",
-        "#34974 obviyus ->#34971",
-        "",
-        '[Replying to: "quoted status body"]',
-      ].join("\n"),
+      ["Current message:", '[Replying to: "quoted status body"]', "#34974 obviyus:"].join("\n"),
     );
 
     await runPreparedReply(
