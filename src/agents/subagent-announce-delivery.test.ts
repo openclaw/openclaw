@@ -621,6 +621,130 @@ describe("resolveSubagentCompletionOrigin", () => {
       to: "telegram:direct:123",
     });
   });
+
+  it("skips the child binding when requester-session-final owns completion delivery", async () => {
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "acct-1",
+      listBySession: (targetSessionKey: string) => {
+        if (targetSessionKey === "agent:worker:subagent:child") {
+          return [
+            {
+              bindingId: "discord:acct-1:child-thread",
+              targetSessionKey,
+              targetKind: "subagent",
+              conversation: {
+                channel: "discord",
+                accountId: "acct-1",
+                conversationId: "child-thread",
+              },
+              status: "active",
+              boundAt: 1,
+            },
+          ];
+        }
+        if (targetSessionKey === "agent:main:main") {
+          return [
+            {
+              bindingId: "discord:acct-1:requester-thread",
+              targetSessionKey,
+              targetKind: "session",
+              conversation: {
+                channel: "discord",
+                accountId: "acct-1",
+                conversationId: "requester-thread",
+              },
+              status: "active",
+              boundAt: 1,
+            },
+          ];
+        }
+        return [];
+      },
+      resolveByConversation: () => null,
+    });
+
+    const origin = await resolveSubagentCompletionOrigin({
+      childSessionKey: "agent:worker:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: {
+        channel: "discord",
+        accountId: "acct-1",
+        to: "channel:requester-thread",
+      },
+      spawnMode: "session",
+      expectsCompletionMessage: true,
+      completionOwner: "requester-session-final",
+    });
+
+    expect(origin).toEqual({
+      channel: "discord",
+      accountId: "acct-1",
+      to: "channel:requester-thread",
+    });
+  });
+
+  it("skips the child binding when origin-bridge-final owns completion delivery", async () => {
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "acct-1",
+      listBySession: (targetSessionKey: string) => {
+        if (targetSessionKey === "agent:worker:subagent:child") {
+          return [
+            {
+              bindingId: "discord:acct-1:child-thread",
+              targetSessionKey,
+              targetKind: "subagent",
+              conversation: {
+                channel: "discord",
+                accountId: "acct-1",
+                conversationId: "child-thread",
+              },
+              status: "active",
+              boundAt: 1,
+            },
+          ];
+        }
+        if (targetSessionKey === "agent:main:main") {
+          return [
+            {
+              bindingId: "discord:acct-1:origin-thread",
+              targetSessionKey,
+              targetKind: "session",
+              conversation: {
+                channel: "discord",
+                accountId: "acct-1",
+                conversationId: "origin-thread",
+              },
+              status: "active",
+              boundAt: 1,
+            },
+          ];
+        }
+        return [];
+      },
+      resolveByConversation: () => null,
+    });
+
+    const origin = await resolveSubagentCompletionOrigin({
+      childSessionKey: "agent:worker:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: {
+        channel: "discord",
+        accountId: "acct-1",
+        to: "channel:origin-thread",
+      },
+      spawnMode: "session",
+      expectsCompletionMessage: true,
+      completionOwner: "origin-bridge-final",
+    });
+
+    expect(origin).toEqual({
+      channel: "discord",
+      accountId: "acct-1",
+      to: "channel:origin-thread",
+    });
+  });
 });
 
 describe("deliverSubagentAnnouncement active requester steering", () => {

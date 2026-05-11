@@ -1,5 +1,6 @@
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import type { SubagentCompletionOwner } from "./subagent-completion-owner.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
@@ -15,6 +16,7 @@ export type PendingFinalDeliveryPayload = {
   endedAt?: number;
   outcome?: SubagentRunOutcome;
   expectsCompletionMessage?: boolean;
+  completionOwner?: SubagentCompletionOwner;
   spawnMode?: SpawnSubagentMode;
   frozenResultText?: string | null;
   fallbackFrozenResultText?: string | null;
@@ -98,6 +100,7 @@ export type SubagentRunRecord = {
   cleanupHandled?: boolean;
   suppressAnnounceReason?: "steer-restart" | "killed";
   expectsCompletionMessage?: boolean;
+  completionOwner?: SubagentCompletionOwner;
   endedReason?: SubagentLifecycleEndedReason;
   pauseReason?: "sessions_yield";
   wakeOnDescendantSettle?: boolean;

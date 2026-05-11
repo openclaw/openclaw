@@ -341,6 +341,23 @@ describe("sessions_spawn tool", () => {
     expect(spawnContext.inheritedToolAllowlist).toEqual(["sessions_spawn", "read"]);
   });
 
+  it("forwards completionOwner to native subagent spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-subagent-owner", {
+      runtime: "subagent",
+      task: "build feature",
+      completionOwner: "origin-bridge-final",
+    });
+
+    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+    expect(spawnArgs.task).toBe("build feature");
+    expect(spawnArgs.completionOwner).toBe("origin-bridge-final");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
   it("accepts taskName as a stable subagent handle", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -492,6 +509,30 @@ describe("sessions_spawn tool", () => {
 
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects completionOwner for ACP runtime until ACP ownership semantics exist", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-acp-owner", {
+      runtime: "acp",
+      task: "investigate the failing CI run",
+      agentId: "codex",
+      completionOwner: "none",
+    });
+
+    expectDetailFields(result.details, {
+      status: "error",
+      role: "codex",
+    });
+    expect(String(requireRecord(result.details, "details").error)).toContain(
+      'completionOwner is currently supported only for runtime="subagent"',
+    );
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
   it("routes to ACP runtime when runtime=acp", async () => {

@@ -59,7 +59,8 @@ import {
   runSubagentAnnounceDispatch,
   type SubagentAnnounceDeliveryResult,
 } from "./subagent-announce-dispatch.js";
-import type { DeliveryContext } from "./subagent-announce-origin.js";
+import { resolveAnnounceOrigin, type DeliveryContext } from "./subagent-announce-origin.js";
+import type { SubagentCompletionOwner } from "./subagent-completion-owner.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
@@ -451,6 +452,7 @@ export async function resolveSubagentCompletionOrigin(params: {
   childRunId?: string;
   spawnMode?: SpawnSubagentMode;
   expectsCompletionMessage: boolean;
+  completionOwner?: SubagentCompletionOwner;
 }): Promise<DeliveryContext | undefined> {
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const channel = normalizeOptionalLowercaseString(requesterOrigin?.channel);
@@ -470,38 +472,43 @@ export async function resolveSubagentCompletionOrigin(params: {
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
 
   const router = createBoundDeliveryRouter();
-  const requesterRoute = router.resolveDestination({
-    eventKind: "task_completion",
-    targetSessionKey: params.requesterSessionKey,
-    requester: requesterConversation,
-    failClosed: true,
-  });
-  if (requesterRoute.mode === "bound" && requesterRoute.binding) {
+  const resolveBoundOriginForSession = (targetSessionKey: string): DeliveryContext | undefined => {
+    const route = router.resolveDestination({
+      eventKind: "task_completion",
+      targetSessionKey,
+      requester: requesterConversation,
+      failClosed: true,
+    });
+    if (route.mode !== "bound" || !route.binding) {
+      return undefined;
+    }
     return mergeDeliveryContext(
       resolveBoundConversationOrigin({
-        bindingConversation: requesterRoute.binding.conversation,
+        bindingConversation: route.binding.conversation,
         requesterConversation,
         requesterOrigin,
       }),
       requesterOrigin,
     );
+  };
+
+  if (params.completionOwner === "work-thread-final") {
+    const childOrigin = resolveBoundOriginForSession(params.childSessionKey);
+    if (childOrigin) {
+      return childOrigin;
+    }
   }
 
-  const childRoute = router.resolveDestination({
-    eventKind: "task_completion",
-    targetSessionKey: params.childSessionKey,
-    requester: requesterConversation,
-    failClosed: true,
-  });
-  if (childRoute.mode === "bound" && childRoute.binding) {
-    return mergeDeliveryContext(
-      resolveBoundConversationOrigin({
-        bindingConversation: childRoute.binding.conversation,
-        requesterConversation,
-        requesterOrigin,
-      }),
-      requesterOrigin,
-    );
+  const requesterBoundOrigin = resolveBoundOriginForSession(params.requesterSessionKey);
+  if (requesterBoundOrigin) {
+    return requesterBoundOrigin;
+  }
+
+  if (params.completionOwner === undefined) {
+    const childOrigin = resolveBoundOriginForSession(params.childSessionKey);
+    if (childOrigin) {
+      return childOrigin;
+    }
   }
 
   const hookRunner = getGlobalHookRunner();
@@ -517,6 +524,7 @@ export async function resolveSubagentCompletionOrigin(params: {
         childRunId: params.childRunId,
         spawnMode: params.spawnMode,
         expectsCompletionMessage: params.expectsCompletionMessage,
+        completionOwner: params.completionOwner,
       },
       {
         runId: params.childRunId,
@@ -981,6 +989,7 @@ async function sendSubagentAnnounceDirectly(params: {
   sourceChannel?: string;
   sourceTool?: string;
   requesterIsSubagent: boolean;
+  completionOwner?: SubagentCompletionOwner;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
@@ -1356,6 +1365,7 @@ export async function deliverSubagentAnnouncement(params: {
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
+  completionOwner?: SubagentCompletionOwner;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
   signal?: AbortSignal;
@@ -1387,6 +1397,7 @@ export async function deliverSubagentAnnouncement(params: {
         sourceTool: params.sourceTool,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
+        completionOwner: params.completionOwner,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
       }),

@@ -24,6 +24,7 @@ function firstRegisteredSubagentRun(): {
   requesterDisplayKey?: string;
   requesterOrigin?: { channel?: string; accountId?: string; to?: string };
   expectsCompletionMessage?: boolean;
+  completionOwner?: string;
   spawnMode?: string;
 } {
   const call = hoisted.registerSubagentRunMock.mock.calls[0]?.[0] as
@@ -33,6 +34,7 @@ function firstRegisteredSubagentRun(): {
         requesterDisplayKey?: string;
         requesterOrigin?: { channel?: string; accountId?: string; to?: string };
         expectsCompletionMessage?: boolean;
+        completionOwner?: string;
         spawnMode?: string;
       }
     | undefined;
@@ -190,6 +192,55 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     expect(registeredRun?.requesterOrigin?.accountId).toBe("bot-beta");
     expect(registeredRun?.requesterOrigin?.to).toBe(`room:${boundRoom}`);
     expect(registeredRun?.expectsCompletionMessage).toBe(false);
+    expect(registeredRun?.completionOwner).toBe("work-thread-final");
+    expect(registeredRun?.spawnMode).toBe("session");
+  });
+
+  it("supports explicit origin-bridge-final ownership for thread-bound sessions", async () => {
+    hoisted.hookRunner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "subagent_spawning",
+    );
+    hoisted.hookRunner.runSubagentSpawning.mockResolvedValue({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "matrix",
+        accountId: "sut",
+        to: "room:!child:example",
+        threadId: "$child-thread",
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "reply with a marker",
+        thread: true,
+        mode: "session",
+        context: "isolated",
+        completionOwner: "origin-bridge-final",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "matrix",
+        agentAccountId: "sut",
+        agentTo: "room:!parent:example",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = hoisted.callGatewayMock.mock.calls.find(
+      ([call]) => (call as { method?: string }).method === "agent",
+    )?.[0] as { params?: Record<string, unknown> } | undefined;
+    expect(agentCall?.params?.channel).toBe("matrix");
+    expect(agentCall?.params?.to).toBe("room:!child:example");
+    expect(agentCall?.params?.threadId).toBe("$child-thread");
+    expect(agentCall?.params?.deliver).toBe(false);
+
+    const registeredRun = hoisted.registerSubagentRunMock.mock.calls[0]?.[0] as
+      | { expectsCompletionMessage?: boolean; completionOwner?: string; spawnMode?: string }
+      | undefined;
+    expect(registeredRun?.expectsCompletionMessage).toBe(true);
+    expect(registeredRun?.completionOwner).toBe("origin-bridge-final");
     expect(registeredRun?.spawnMode).toBe("session");
   });
 
@@ -281,6 +332,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     expect(agentCall?.params?.deliver).toBe(false);
     const registeredRun = firstRegisteredSubagentRun();
     expect(registeredRun?.expectsCompletionMessage).toBe(true);
+    expect(registeredRun?.completionOwner).toBe("requester-session-final");
     expect(registeredRun?.requesterOrigin?.channel).toBe("matrix");
     expect(registeredRun?.requesterOrigin?.accountId).toBe("sut");
     expect(registeredRun?.requesterOrigin?.to).toBe("room:!parent:example");

@@ -18,6 +18,10 @@ import {
 } from "../inherited-tool-deny.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
+import {
+  normalizeSubagentCompletionOwner,
+  SUBAGENT_COMPLETION_OWNERS,
+} from "../subagent-completion-owner.js";
 import { registerSubagentRun } from "../subagent-registry.js";
 import { resolveSubagentSpawnOwnership } from "../subagent-spawn-ownership.js";
 import {
@@ -184,6 +188,10 @@ function createSessionsSpawnToolSchema(params: {
       : {}),
     mode: optionalStringEnum(spawnModes),
     cleanup: optionalStringEnum(["delete", "keep"] as const),
+    completionOwner: optionalStringEnum(SUBAGENT_COMPLETION_OWNERS, {
+      description:
+        'Native subagent-only. Controls which surface owns the complete final summary for background completion: requester-session-final, work-thread-final, origin-bridge-final, or none. Currently rejected for runtime="acp".',
+    }),
     sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
     context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
       description:
@@ -301,12 +309,21 @@ export function createSessionsSpawnTool(
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const expectsCompletionMessage = params.expectsCompletionMessage !== false;
+      const completionOwner = normalizeSubagentCompletionOwner(params.completionOwner);
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const context =
         params.context === "fork" || params.context === "isolated" ? params.context : undefined;
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
+      if (runtime === "acp" && completionOwner) {
+        return jsonResult({
+          status: "error",
+          error:
+            'completionOwner is currently supported only for runtime="subagent"; ACP completion ownership is not implemented yet.',
+          ...roleContext,
+        });
+      }
       if (runtime === "acp" && !acpAvailable) {
         return jsonResult({
           status: "error",
@@ -444,6 +461,7 @@ export function createSessionsSpawnTool(
               label: label || undefined,
               runTimeoutSeconds,
               expectsCompletionMessage: shouldExpectCompletionMessage,
+              completionOwner,
               spawnMode: trackedSpawnMode,
             });
           } catch (err) {
@@ -479,6 +497,7 @@ export function createSessionsSpawnTool(
           context,
           lightContext,
           expectsCompletionMessage,
+          completionOwner,
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"

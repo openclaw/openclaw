@@ -429,6 +429,17 @@ describe("subagent registry persistence", () => {
           requesterDisplayKey: "main",
           task: "spaced persisted keys",
           cleanup: "keep",
+          expectsCompletionMessage: true,
+          completionOwner: "origin-bridge-final",
+          pendingFinalDeliveryPayload: {
+            requesterSessionKey: " agent:main:main ",
+            requesterDisplayKey: "main",
+            childSessionKey: " agent:main:subagent:spaced-child ",
+            childRunId: "run-spaced",
+            task: "spaced persisted keys",
+            expectsCompletionMessage: true,
+            completionOwner: "origin-bridge-final",
+          },
           createdAt: 1,
           startedAt: 1,
         },
@@ -442,7 +453,9 @@ describe("subagent registry persistence", () => {
       childSessionKey: "agent:main:subagent:spaced-child",
       controllerSessionKey: "agent:main:subagent:controller",
       requesterSessionKey: "agent:main:main",
+      completionOwner: "origin-bridge-final",
     });
+    expect(restoredEntry?.pendingFinalDeliveryPayload?.completionOwner).toBe("origin-bridge-final");
 
     resetSubagentRegistryForTests({ persist: false });
     addSubagentRunForTests(restoredEntry as never);
@@ -469,6 +482,7 @@ describe("subagent registry persistence", () => {
       requesterDisplayKey: "main",
       task: "live spaced keys",
       cleanup: "keep",
+      completionOwner: "none",
     });
 
     const liveRuns = listSubagentRunsForRequester("agent:main:main");
@@ -478,6 +492,7 @@ describe("subagent registry persistence", () => {
       childSessionKey: "agent:main:subagent:live-child",
       controllerSessionKey: "agent:main:subagent:live-controller",
       requesterSessionKey: "agent:main:main",
+      completionOwner: "none",
     });
     expectFields(getSubagentRunByChildSessionKey("agent:main:subagent:live-child"), {
       runId: "run-live",
