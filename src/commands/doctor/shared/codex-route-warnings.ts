@@ -237,15 +237,23 @@ function collectConfigModelRefs(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): C
     collectModelsMap: true,
   });
 
-  for (const [index, agent] of (cfg.agents?.list ?? []).entries()) {
-    const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const [index, agent] of agents.entries()) {
+    const agentRecord = asMutableRecord(agent);
+    if (!agentRecord) {
+      continue;
+    }
+    const id =
+      typeof agentRecord.id === "string" && agentRecord.id.trim()
+        ? agentRecord.id.trim()
+        : String(index);
     collectAgentModelRefs({
       hits,
-      agent,
+      agent: agentRecord,
       path: `agents.list.${id}`,
       runtime: resolveRuntime({
         env,
-        agentRuntime: agent.agentRuntime,
+        agentRuntime: agentRecord.agentRuntime,
         defaultsRuntime,
       }),
     });
@@ -804,9 +812,17 @@ function clearLegacyAgentRuntimePolicy(
 function clearConfigLegacyAgentRuntimePolicies(cfg: OpenClawConfig): string[] {
   const changes: string[] = [];
   clearLegacyAgentRuntimePolicy(asMutableRecord(cfg.agents?.defaults), "agents.defaults", changes);
-  for (const [index, agent] of (cfg.agents?.list ?? []).entries()) {
-    const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
-    clearLegacyAgentRuntimePolicy(agent as MutableRecord, `agents.list.${id}`, changes);
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const [index, agent] of agents.entries()) {
+    const agentRecord = asMutableRecord(agent);
+    if (!agentRecord) {
+      continue;
+    }
+    const id =
+      typeof agentRecord.id === "string" && agentRecord.id.trim()
+        ? agentRecord.id.trim()
+        : String(index);
+    clearLegacyAgentRuntimePolicy(agentRecord, `agents.list.${id}`, changes);
   }
   return changes;
 }
@@ -828,17 +844,25 @@ function rewriteConfigModelRefs(params: {
     rewriteModelsMap: true,
     runtimePolicyChanges,
   });
-  for (const [index, agent] of (nextConfig.agents?.list ?? []).entries()) {
-    const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
+  const agents = Array.isArray(nextConfig.agents?.list) ? nextConfig.agents.list : [];
+  for (const [index, agent] of agents.entries()) {
+    const agentRecord = asMutableRecord(agent);
+    if (!agentRecord) {
+      continue;
+    }
+    const id =
+      typeof agentRecord.id === "string" && agentRecord.id.trim()
+        ? agentRecord.id.trim()
+        : String(index);
     rewriteAgentModelRefs({
       cfg: nextConfig,
       hits,
-      agent: agent as MutableRecord,
+      agent: agentRecord,
       path: `agents.list.${id}`,
       agentId: id,
       currentRuntime: resolveRuntime({
         env: params.env,
-        agentRuntime: agent.agentRuntime,
+        agentRuntime: agentRecord.agentRuntime,
         defaultsRuntime,
       }),
       runtimePolicyChanges,

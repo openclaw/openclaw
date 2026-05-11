@@ -155,7 +155,8 @@ export function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): str
     return [];
   }
   const warnings: string[] = [];
-  for (const [index, agent] of (cfg.agents?.list ?? []).entries()) {
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const [index, agent] of agents.entries()) {
     if (!agent || !isImplicitFallbackClobber(agent.model)) {
       continue;
     }

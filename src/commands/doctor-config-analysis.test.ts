@@ -92,6 +92,17 @@ describe("collectImplicitFallbackClobberWarnings", () => {
     expect(collectImplicitFallbackClobberWarnings(cfg)).toEqual([]);
   });
 
+  it("returns empty when agents.list is malformed", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.4"] } },
+        list: { ops: { id: "ops", model: "openai/gpt-5.3" } },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(collectImplicitFallbackClobberWarnings(cfg)).toEqual([]);
+  });
+
   it("warns for string-form model when defaults fallbacks is non-empty", () => {
     const cfg = buildConfig({
       defaults: { primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.4", "openai/gpt-5.3"] },
