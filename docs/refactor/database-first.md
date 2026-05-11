@@ -325,7 +325,9 @@ The branch already has a real shared SQLite base:
   `payload_json` copy is replay/debug data, not the source for hot display or
   lookup fields.
 - `src/agents/filesystem/virtual-agent-fs.sqlite.ts` implements a SQLite VFS
-  over the agent database `vfs_entries` table.
+  over the agent database `vfs_entries` table. Directory reads, recursive
+  exports, deletes, and renames use indexed `(namespace, path)` prefix ranges
+  instead of scanning a whole namespace or relying on `LIKE` path matching.
 - `src/agents/runtime-worker.entry.ts` creates per-run SQLite VFS, tool artifact,
   run artifact, and scoped cache stores for workers.
 - Workspace bootstrap completion markers now live in typed shared
