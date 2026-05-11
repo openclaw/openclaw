@@ -81,8 +81,8 @@ type AttemptSpawnWorkspaceHoisted = {
   initializeGlobalHookRunnerMock: UnknownMock;
   runContextEngineMaintenanceMock: AsyncContextEngineMaintenanceMock;
   detectAndLoadPromptImagesMock: AsyncUnknownMock;
-  getHistoryLimitFromSessionKeyMock: Mock<
-    (sessionKey: string | undefined, config: unknown) => number | undefined
+  getHistoryLimitForSessionRoutingMock: Mock<
+    (routing: unknown, config: unknown) => number | undefined
   >;
   limitHistoryTurnsMock: Mock<<T>(messages: T, limit: number | undefined) => T>;
   preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][];
@@ -170,8 +170,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     loadedCount: 0,
     skippedCount: 0,
   }));
-  const getHistoryLimitFromSessionKeyMock = vi.fn<
-    (sessionKey: string | undefined, config: unknown) => number | undefined
+  const getHistoryLimitForSessionRoutingMock = vi.fn<
+    (routing: unknown, config: unknown) => number | undefined
   >(() => undefined);
   const limitHistoryTurnsMock = vi.fn<<T>(messages: T, limit: number | undefined) => T>(
     (messages) => messages,
@@ -214,7 +214,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     initializeGlobalHookRunnerMock,
     runContextEngineMaintenanceMock,
     detectAndLoadPromptImagesMock,
-    getHistoryLimitFromSessionKeyMock,
+    getHistoryLimitForSessionRoutingMock,
     limitHistoryTurnsMock,
     preemptiveCompactionCalls,
     systemPromptOverrideTexts,
@@ -706,8 +706,8 @@ vi.mock("../compaction-safety-timeout.js", () => ({
 }));
 
 vi.mock("../history.js", () => ({
-  getHistoryLimitFromSessionKey: (sessionKey: string | undefined, config: unknown) =>
-    hoisted.getHistoryLimitFromSessionKeyMock(sessionKey, config),
+  getHistoryLimitForSessionRouting: (routing: unknown, config: unknown) =>
+    hoisted.getHistoryLimitForSessionRoutingMock(routing, config),
   limitHistoryTurns: (messages: unknown, limit: number | undefined) =>
     hoisted.limitHistoryTurnsMock(messages, limit),
 }));
@@ -921,7 +921,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);
   hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
-  hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
+  hoisted.getHistoryLimitForSessionRoutingMock.mockReset().mockReturnValue(undefined);
   hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);
   hoisted.preemptiveCompactionCalls.length = 0;
   hoisted.systemPromptOverrideTexts.length = 0;

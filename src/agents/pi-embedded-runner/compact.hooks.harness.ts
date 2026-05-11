@@ -615,7 +615,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./history.js", () => ({
-    getHistoryLimitFromSessionKey: vi.fn(() => undefined),
+    getHistoryLimitForSessionRouting: vi.fn(() => undefined),
     limitHistoryTurns: vi.fn((msgs: unknown[]) => msgs.slice(0, 2)),
   }));
 

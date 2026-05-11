@@ -3,6 +3,7 @@ import os from "node:os";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import { readSqliteSessionRoutingInfo } from "../../config/sessions/session-entries.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
@@ -130,7 +131,7 @@ import {
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
-import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
+import { getHistoryLimitForSessionRouting, limitHistoryTurns } from "./history.js";
 import { log } from "./logger.js";
 import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
@@ -1113,9 +1114,15 @@ async function compactEmbeddedPiSessionDirectOnce(
           // "Original" compaction metrics should describe the validated transcript that enters
           // limiting/compaction, not the raw SQLite transcript snapshot.
           const originalMessages = session.messages.slice();
+          const historyLimitRouting = params.sessionKey
+            ? readSqliteSessionRoutingInfo({
+                agentId: sessionAgentId,
+                sessionKey: params.sessionKey,
+              })
+            : undefined;
           const truncated = limitHistoryTurns(
             session.messages,
-            getHistoryLimitFromSessionKey(params.sessionKey, params.config),
+            getHistoryLimitForSessionRouting(historyLimitRouting, params.config),
           );
           // Re-run tool_use/tool_result pairing repair after truncation, since
           // limitHistoryTurns can orphan tool_result blocks by removing the

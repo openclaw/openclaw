@@ -478,6 +478,10 @@ Completed consolidation/deletion highlights:
   markers, or thread shape from `sessionKey`; internal webchat routes only
   inherit an external target when SQLite already has typed/persisted delivery
   identity for the session.
+- Embedded PI history limiting now uses the typed SQLite session routing
+  projection (`sessions` + primary `conversations`) for provider, chat type,
+  and peer identity. It no longer parses provider, DM, group, or thread shape
+  out of `sessionKey`.
 - Runtime session rows no longer carry the old `lastProvider` route alias.
   Helpers and tests use `lastChannel`, `deliveryContext`, and `origin` instead;
   doctor migration is the only place that should translate older route aliases.

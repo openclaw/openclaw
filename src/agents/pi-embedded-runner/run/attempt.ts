@@ -5,6 +5,7 @@ import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { readSqliteSessionRoutingInfo } from "../../../config/sessions/session-entries.sqlite.js";
 import {
   getSessionEntry,
   listSessionEntries,
@@ -204,7 +205,7 @@ import {
   resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
-import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
+import { getHistoryLimitForSessionRouting, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import {
@@ -2503,9 +2504,15 @@ export async function runEmbeddedAttempt(
             heartbeatSummary?.ackMaxChars,
             heartbeatSummary?.prompt,
           );
+          const historyLimitRouting = params.sessionKey
+            ? readSqliteSessionRoutingInfo({
+                agentId: sessionAgentId,
+                sessionKey: params.sessionKey,
+              })
+            : undefined;
           const truncated = limitHistoryTurns(
             heartbeatFiltered,
-            getHistoryLimitFromSessionKey(params.sessionKey, params.config),
+            getHistoryLimitForSessionRouting(historyLimitRouting, params.config),
           );
           // Re-run tool_use/tool_result pairing repair after truncation, since
           // limitHistoryTurns can orphan tool_result blocks by removing the

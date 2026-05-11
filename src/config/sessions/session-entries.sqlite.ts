@@ -48,6 +48,9 @@ export type SqliteSessionRoutingInfo = {
   channel?: string;
   accountId?: string;
   primaryConversationId?: string;
+  conversationKind?: string;
+  conversationPeerId?: string;
+  conversationThreadId?: string;
 };
 
 type SessionEntriesTable = OpenClawAgentKyselyDatabase["session_entries"];
@@ -765,9 +768,19 @@ export function readSqliteSessionRoutingInfo(
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("sessions")
-      .select(["session_scope", "chat_type", "channel", "account_id", "primary_conversation_id"])
-      .where("session_key", "=", options.sessionKey),
+      .selectFrom("sessions as s")
+      .leftJoin("conversations as c", "c.conversation_id", "s.primary_conversation_id")
+      .select([
+        "s.session_scope as session_scope",
+        "s.chat_type as chat_type",
+        "s.channel as channel",
+        "s.account_id as account_id",
+        "s.primary_conversation_id as primary_conversation_id",
+        "c.kind as conversation_kind",
+        "c.peer_id as conversation_peer_id",
+        "c.thread_id as conversation_thread_id",
+      ])
+      .where("s.session_key", "=", options.sessionKey),
   );
   return row
     ? {
@@ -776,6 +789,9 @@ export function readSqliteSessionRoutingInfo(
         channel: optionalString(row.channel),
         accountId: optionalString(row.account_id),
         primaryConversationId: optionalString(row.primary_conversation_id),
+        conversationKind: optionalString(row.conversation_kind),
+        conversationPeerId: optionalString(row.conversation_peer_id),
+        conversationThreadId: optionalThreadId(row.conversation_thread_id),
       }
     : undefined;
 }
