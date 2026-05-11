@@ -47,9 +47,8 @@ export function mountKioskIfRequested(args: MountKioskArgs): MountKioskResult {
     client: HaGatewayClient;
   };
   shell.client = args.client;
-
-  const view = document.createElement("kiosk-wagner-way");
-  shell.appendChild(view);
+  // kiosk-shell renders <kiosk-wagner-way> directly once binding is ready;
+  // no need to append a child element here (light DOM + slots don't mix).
 
   // Hide the existing app shell while the kiosk is mounted so it does not
   // bleed through. The shell's own kiosk-mode body class also drives this

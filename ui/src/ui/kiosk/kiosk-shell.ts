@@ -13,6 +13,7 @@
 
 import { LitElement, html, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
+import "./kiosk-wagner-way.js";
 import {
   HaStateBinding,
   type HaConnectionState,
@@ -73,9 +74,7 @@ export class KioskShell extends LitElement {
     return html`
       <div class="kiosk-shell" data-connection=${this.connection}>
         <header class="kiosk-shell__header">
-          <h1 class="kiosk-shell__title">
-            <slot name="title">Wagner Way</slot>
-          </h1>
+          <h1 class="kiosk-shell__title">Wagner Way</h1>
           <div
             class="kiosk-shell__pill kiosk-shell__pill--${this.connection}"
             role="status"
@@ -87,7 +86,10 @@ export class KioskShell extends LitElement {
         </header>
         <main class="kiosk-shell__body">
           ${this.binding
-            ? html`<slot></slot>`
+            ? html`<kiosk-wagner-way
+                .binding=${this.binding}
+                data-test-id="kiosk-shell-view"
+              ></kiosk-wagner-way>`
             : html`<div class="kiosk-shell__placeholder">Connecting to Home Assistant...</div>`}
         </main>
       </div>
