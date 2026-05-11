@@ -7,22 +7,21 @@ import readline from "node:readline";
 // splitting on newlines. That worked fine for short sessions but produced real
 // memory pressure on long-running ones where transcripts grow to tens or
 // hundreds of MB (see #54296). These helpers replace the whole-file reads with
-// either a forward `readline` stream (bounded to one line of memory at a time)
-// or a tail-only read that scans the last N bytes — both preserve the
-// malformed-line tolerance and "first/last match wins" semantics callers rely
-// on.
+// either a forward `readline` stream or a chunked reverse scan. Both are bounded
+// to a small chunk plus the current line and preserve the malformed-line
+// tolerance and "first/last match wins" semantics callers rely on.
 
-const DEFAULT_TAIL_BYTES = 4 * 1024 * 1024;
-const ABSOLUTE_TAIL_CAP_BYTES = 64 * 1024 * 1024;
-const MIN_TAIL_BYTES = 1024;
+const DEFAULT_REVERSE_CHUNK_BYTES = 64 * 1024;
+const MAX_REVERSE_CHUNK_BYTES = 1024 * 1024;
+const MIN_REVERSE_CHUNK_BYTES = 1024;
 
 export type TranscriptStreamOptions = {
   signal?: AbortSignal;
 };
 
-export type TranscriptTailOptions = {
-  /** Maximum bytes to read from the file tail. Clamped to [1KiB, 64MiB]. */
-  maxBytes?: number;
+export type TranscriptReverseStreamOptions = TranscriptStreamOptions & {
+  /** Bytes read per reverse scan chunk. Clamped to [1KiB, 1MiB]. */
+  chunkBytes?: number;
 };
 
 /**
@@ -68,60 +67,73 @@ export async function* streamSessionTranscriptLines(
 }
 
 /**
- * Read the last `maxBytes` of a transcript file and return its non-empty
- * trimmed lines in reverse (newest-first) order. The first line of the slice
- * is discarded when the slice does not start at the file head, because it can
- * be the suffix of an earlier line split mid-way.
+ * Stream the non-empty, trimmed JSONL lines of a transcript file in reverse
+ * (newest-first) order.
  *
- * Returns `undefined` if the file cannot be opened, `[]` if it exists but is
- * empty, and the trimmed reversed lines otherwise. Callers can return on the
- * first match without buffering the rest of the file.
+ * Returns an empty async iterator if the file cannot be opened, is empty, or is
+ * not a regular file. The implementation splits on newline bytes before UTF-8
+ * decoding so multibyte characters survive arbitrary chunk boundaries.
  */
-export async function readSessionTranscriptTailLines(
+export async function* streamSessionTranscriptLinesReverse(
   filePath: string,
-  options: TranscriptTailOptions = {},
-): Promise<string[] | undefined> {
-  const requestedMaxBytes = Number.isFinite(options.maxBytes)
-    ? Math.max(MIN_TAIL_BYTES, Math.floor(options.maxBytes as number))
-    : DEFAULT_TAIL_BYTES;
-  const cappedMaxBytes = Math.min(requestedMaxBytes, ABSOLUTE_TAIL_CAP_BYTES);
+  options: TranscriptReverseStreamOptions = {},
+): AsyncGenerator<string> {
+  const requestedChunkBytes = Number.isFinite(options.chunkBytes)
+    ? Math.max(MIN_REVERSE_CHUNK_BYTES, Math.floor(options.chunkBytes as number))
+    : DEFAULT_REVERSE_CHUNK_BYTES;
+  const chunkBytes = Math.min(requestedChunkBytes, MAX_REVERSE_CHUNK_BYTES);
 
   let fileHandle: Awaited<ReturnType<typeof fs.promises.open>>;
   try {
     fileHandle = await fs.promises.open(filePath, "r");
   } catch {
-    return undefined;
+    return;
   }
   try {
     const stat = await fileHandle.stat();
-    if (!stat.isFile()) {
-      return undefined;
+    if (!stat.isFile() || stat.size <= 0 || options.signal?.aborted) {
+      return;
     }
-    if (stat.size <= 0) {
-      return [];
-    }
-    const readLength = Math.min(stat.size, cappedMaxBytes);
-    const readStart = Math.max(0, stat.size - readLength);
-    const buffer = await readFileRangeAsync(fileHandle, readStart, readLength);
-    const text = buffer.toString("utf-8");
-    const rawLines = text.split(/\r?\n/);
-    if (readStart > 0 && rawLines.length > 0) {
-      rawLines.shift();
-    }
-    const lines: string[] = [];
-    for (let index = rawLines.length - 1; index >= 0; index -= 1) {
-      const trimmed = rawLines[index].trim();
-      if (!trimmed) {
-        continue;
+
+    let position = stat.size;
+    let carry: Buffer = Buffer.alloc(0);
+    while (position > 0) {
+      if (options.signal?.aborted) {
+        return;
       }
-      lines.push(trimmed);
+      const readLength = Math.min(position, chunkBytes);
+      position -= readLength;
+      const chunk = await readFileRangeAsync(fileHandle, position, readLength);
+      const combined = carry.length > 0 ? Buffer.concat([chunk, carry]) : chunk;
+      let lineEnd = combined.length;
+      for (let index = combined.length - 1; index >= 0; index -= 1) {
+        if (combined[index] !== 0x0a) {
+          continue;
+        }
+        const line = decodeTrimmedLine(combined.subarray(index + 1, lineEnd));
+        if (line) {
+          yield line;
+          if (options.signal?.aborted) {
+            return;
+          }
+        }
+        lineEnd = index;
+      }
+      carry = combined.subarray(0, lineEnd);
     }
-    return lines;
-  } catch {
-    return undefined;
+
+    const firstLine = decodeTrimmedLine(carry);
+    if (firstLine && !options.signal?.aborted) {
+      yield firstLine;
+    }
   } finally {
     await fileHandle.close().catch(() => undefined);
   }
+}
+
+function decodeTrimmedLine(line: Buffer): string {
+  const trimmed = line.toString("utf-8").trim();
+  return trimmed;
 }
 
 async function readFileRangeAsync(

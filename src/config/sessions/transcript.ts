@@ -17,8 +17,8 @@ import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import {
-  readSessionTranscriptTailLines,
   streamSessionTranscriptLines,
+  streamSessionTranscriptLinesReverse,
 } from "./transcript-stream.js";
 import type { SessionEntry } from "./types.js";
 
@@ -147,12 +147,7 @@ export async function readLatestAssistantTextFromSessionTranscript(
     return undefined;
   }
 
-  const tailLines = await readSessionTranscriptTailLines(sessionFile);
-  if (!tailLines) {
-    return undefined;
-  }
-
-  for (const line of tailLines) {
+  for await (const line of streamSessionTranscriptLinesReverse(sessionFile)) {
     try {
       const assistantText = parseAssistantTranscriptText(line);
       if (assistantText) {
@@ -172,12 +167,7 @@ export async function readTailAssistantTextFromSessionTranscript(
     return undefined;
   }
 
-  const tailLines = await readSessionTranscriptTailLines(sessionFile);
-  if (!tailLines) {
-    return undefined;
-  }
-
-  for (const line of tailLines) {
+  for await (const line of streamSessionTranscriptLinesReverse(sessionFile)) {
     try {
       return parseAssistantTranscriptText(line);
     } catch {
@@ -397,12 +387,7 @@ async function findLatestEquivalentAssistantMessageId(
     return undefined;
   }
 
-  const tailLines = await readSessionTranscriptTailLines(transcriptPath);
-  if (!tailLines) {
-    return undefined;
-  }
-
-  for (const line of tailLines) {
+  for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
     try {
       const parsed = JSON.parse(line) as {
         id?: unknown;
