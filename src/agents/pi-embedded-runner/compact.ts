@@ -131,6 +131,7 @@ import {
   rotateTranscriptAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "./compaction-successor-transcript.js";
+import { filterToolsForSystemPrompt } from "./effective-tool-filter.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
@@ -758,7 +759,27 @@ async function compactEmbeddedPiSessionDirectOnce(
       senderIsOwner: params.senderIsOwner,
       warn: (message) => log.warn(message),
     });
-    const effectiveTools = [...tools, ...filteredBundledTools];
+    const effectiveToolsUnfiltered = [...tools, ...filteredBundledTools];
+    const effectiveTools = filterToolsForSystemPrompt({
+      tools: effectiveToolsUnfiltered,
+      config: params.config,
+      sandboxToolPolicy: sandbox?.tools,
+      sessionKey: sandboxSessionKey,
+      modelProvider: model.provider,
+      modelId,
+      messageProvider: resolvedMessageProvider,
+      agentAccountId: params.agentAccountId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      warn: (message) => log.warn(message),
+    });
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
     runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
     const machineName = await getMachineDisplayName();
