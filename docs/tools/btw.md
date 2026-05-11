@@ -40,8 +40,10 @@ The important mental model is:
 For Codex harness sessions, BTW stays inside Codex by forking the active
 app-server thread as an ephemeral side thread. That keeps Codex OAuth and native
 thread behavior intact while still isolating the side answer from the parent
-transcript. The side turn stays tool-free and read-only. Non-Codex runtimes keep
-the older direct one-shot path.
+transcript. Like Codex `/side`, the side thread keeps the current Codex
+permissions and native tool surface, with guardrails that tell the model not to
+treat inherited parent-thread work as active instructions. Non-Codex runtimes
+keep the older direct one-shot path.
 
 ## What it does not do
 
@@ -49,7 +51,6 @@ the older direct one-shot path.
 
 - create a new durable session,
 - continue the unfinished main task,
-- run tools,
 - write BTW question/answer data to transcript history,
 - appear in `chat.history`,
 - survive a reload.

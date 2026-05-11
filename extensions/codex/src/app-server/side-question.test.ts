@@ -116,7 +116,7 @@ function threadResult(threadId: string) {
     model: "gpt-5.5",
     modelProvider: "openai",
     cwd: "/tmp/workspace",
-    approvalPolicy: "never",
+    approvalPolicy: "on-request",
     approvalsReviewer: "user",
     sandbox: { type: "dangerFullAccess" },
   };
@@ -201,6 +201,8 @@ describe("runCodexAppServerSideQuestion", () => {
       cwd: "/tmp/workspace",
       authProfileId: "openai-codex:work",
       model: "gpt-5.5",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
     });
@@ -226,15 +228,15 @@ describe("runCodexAppServerSideQuestion", () => {
       expect.objectContaining({
         threadId: "parent-thread",
         model: "gpt-5.5",
-        approvalPolicy: "never",
-        sandbox: "read-only",
-        dynamicTools: [],
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
         ephemeral: true,
         threadSource: "user",
         persistExtendedHistory: false,
       }),
       expect.any(Object),
     );
+    expect(client.request.mock.calls[0]?.[1]).not.toHaveProperty("dynamicTools");
     expect(client.request.mock.calls[0]?.[1]).not.toHaveProperty("modelProvider");
     expect(client.request).toHaveBeenNthCalledWith(
       2,
@@ -245,17 +247,32 @@ describe("runCodexAppServerSideQuestion", () => {
       }),
       expect.any(Object),
     );
+    const injectedItem = (
+      client.request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1] as {
+        items?: Array<{ content?: Array<{ text?: string }> }>;
+      }
+    )?.items?.[0];
+    const injectedText = injectedItem?.content?.[0]?.text;
+    expect(injectedText).toContain(
+      "External tools may be available according to this thread's current permissions",
+    );
+    expect(injectedText).toContain(
+      "unless the user explicitly asks for that mutation after this boundary",
+    );
     expect(client.request).toHaveBeenCalledWith(
       "turn/start",
       expect.objectContaining({
         threadId: "side-thread",
         input: [{ type: "text", text: "What changed?", text_elements: [] }],
-        approvalPolicy: "never",
-        sandboxPolicy: { type: "readOnly", networkAccess: false },
         model: "gpt-5.5",
       }),
       expect.any(Object),
     );
+    const turnStartParams = client.request.mock.calls.find(
+      ([method]) => method === "turn/start",
+    )?.[1] as Record<string, unknown> | undefined;
+    expect(turnStartParams).not.toHaveProperty("approvalPolicy");
+    expect(turnStartParams).not.toHaveProperty("sandboxPolicy");
     expect(client.request).toHaveBeenLastCalledWith(
       "thread/unsubscribe",
       { threadId: "side-thread" },

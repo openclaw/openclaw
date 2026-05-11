@@ -896,7 +896,7 @@ describe("runBtwSideQuestion", () => {
     expect(messages.some((message) => message.role === "toolResult")).toBe(false);
   });
 
-  it("strips assistant tool calls from BTW context so no-tool side questions stay tool-free", async () => {
+  it("strips assistant tool calls from fallback BTW context so stale calls are not replayed", async () => {
     mockActiveTranscript([
       createUserTranscriptMessage(),
       createAssistantTranscriptMessage(
