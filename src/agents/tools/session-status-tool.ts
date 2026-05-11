@@ -1,9 +1,10 @@
 import { Type } from "typebox";
-import type {
-  ElevatedLevel,
-  ReasoningLevel,
-  ThinkLevel,
-  VerboseLevel,
+import {
+  normalizeReasoningLevel,
+  type ElevatedLevel,
+  type ReasoningLevel,
+  type ThinkLevel,
+  type VerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -69,6 +70,24 @@ const commandsStatusRuntimeLoader = createLazyImportLoader<CommandsStatusRuntime
 
 function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
   return commandsStatusRuntimeLoader.load();
+}
+
+function resolveStatusReasoningLevel(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionEntry: SessionEntry;
+}): ReasoningLevel {
+  const sessionLevel = normalizeReasoningLevel(params.sessionEntry.reasoningLevel);
+  if (sessionLevel) {
+    return sessionLevel;
+  }
+
+  const agentEntry = params.cfg.agents?.list?.find((entry) => entry.id === params.agentId);
+  return (
+    normalizeReasoningLevel(agentEntry?.reasoningDefault) ??
+    normalizeReasoningLevel(params.cfg.agents?.defaults?.reasoningDefault) ??
+    "off"
+  );
 }
 
 function resolveSessionEntry(params: {
@@ -711,7 +730,11 @@ export function createSessionStatusTool(opts?: {
         resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,
         resolvedFastMode: statusSessionEntry.fastMode,
         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
-        resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
+        resolvedReasoningLevel: resolveStatusReasoningLevel({
+          cfg,
+          agentId,
+          sessionEntry: statusSessionEntry,
+        }),
         resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
         resolveDefaultThinkingLevel: async () => {
           const configuredCatalog = buildConfiguredModelCatalog({ cfg });
