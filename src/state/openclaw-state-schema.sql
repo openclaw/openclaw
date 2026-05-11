@@ -6,6 +6,111 @@ CREATE TABLE IF NOT EXISTS kv (
   PRIMARY KEY (scope, key)
 );
 
+CREATE TABLE IF NOT EXISTS device_pairing_pending (
+  request_id TEXT NOT NULL PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  public_key TEXT NOT NULL,
+  display_name TEXT,
+  platform TEXT,
+  device_family TEXT,
+  client_id TEXT,
+  client_mode TEXT,
+  role TEXT,
+  roles_json TEXT,
+  scopes_json TEXT,
+  remote_ip TEXT,
+  silent INTEGER,
+  is_repair INTEGER,
+  ts INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_pairing_pending_device
+  ON device_pairing_pending(device_id, ts DESC);
+
+CREATE TABLE IF NOT EXISTS device_pairing_paired (
+  device_id TEXT NOT NULL PRIMARY KEY,
+  public_key TEXT NOT NULL,
+  display_name TEXT,
+  platform TEXT,
+  device_family TEXT,
+  client_id TEXT,
+  client_mode TEXT,
+  role TEXT,
+  roles_json TEXT,
+  scopes_json TEXT,
+  approved_scopes_json TEXT,
+  remote_ip TEXT,
+  tokens_json TEXT,
+  created_at_ms INTEGER NOT NULL,
+  approved_at_ms INTEGER NOT NULL,
+  last_seen_at_ms INTEGER,
+  last_seen_reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_pairing_paired_approved
+  ON device_pairing_paired(approved_at_ms DESC, device_id);
+
+CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
+  token_key TEXT NOT NULL PRIMARY KEY,
+  token TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  device_id TEXT,
+  public_key TEXT,
+  profile_json TEXT,
+  redeemed_profile_json TEXT,
+  issued_at_ms INTEGER NOT NULL,
+  last_used_at_ms INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_bootstrap_tokens_ts
+  ON device_bootstrap_tokens(ts);
+
+CREATE TABLE IF NOT EXISTS node_pairing_pending (
+  request_id TEXT NOT NULL PRIMARY KEY,
+  node_id TEXT NOT NULL,
+  display_name TEXT,
+  platform TEXT,
+  version TEXT,
+  core_version TEXT,
+  ui_version TEXT,
+  device_family TEXT,
+  model_identifier TEXT,
+  caps_json TEXT,
+  commands_json TEXT,
+  permissions_json TEXT,
+  remote_ip TEXT,
+  silent INTEGER,
+  ts INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_pairing_pending_node
+  ON node_pairing_pending(node_id, ts DESC);
+
+CREATE TABLE IF NOT EXISTS node_pairing_paired (
+  node_id TEXT NOT NULL PRIMARY KEY,
+  token TEXT NOT NULL,
+  display_name TEXT,
+  platform TEXT,
+  version TEXT,
+  core_version TEXT,
+  ui_version TEXT,
+  device_family TEXT,
+  model_identifier TEXT,
+  caps_json TEXT,
+  commands_json TEXT,
+  permissions_json TEXT,
+  remote_ip TEXT,
+  bins_json TEXT,
+  created_at_ms INTEGER NOT NULL,
+  approved_at_ms INTEGER NOT NULL,
+  last_connected_at_ms INTEGER,
+  last_seen_at_ms INTEGER,
+  last_seen_reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_pairing_paired_approved
+  ON node_pairing_paired(approved_at_ms DESC, node_id);
+
 CREATE TABLE IF NOT EXISTS acp_replay_sessions (
   session_id TEXT NOT NULL PRIMARY KEY,
   session_key TEXT NOT NULL,

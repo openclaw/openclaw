@@ -157,6 +157,56 @@ export interface DeliveryQueueEntries {
   updated_at: number;
 }
 
+export interface DeviceBootstrapTokens {
+  device_id: string | null;
+  issued_at_ms: number;
+  last_used_at_ms: number | null;
+  profile_json: string | null;
+  public_key: string | null;
+  redeemed_profile_json: string | null;
+  token: string;
+  token_key: string;
+  ts: number;
+}
+
+export interface DevicePairingPaired {
+  approved_at_ms: number;
+  approved_scopes_json: string | null;
+  client_id: string | null;
+  client_mode: string | null;
+  created_at_ms: number;
+  device_family: string | null;
+  device_id: string;
+  display_name: string | null;
+  last_seen_at_ms: number | null;
+  last_seen_reason: string | null;
+  platform: string | null;
+  public_key: string;
+  remote_ip: string | null;
+  role: string | null;
+  roles_json: string | null;
+  scopes_json: string | null;
+  tokens_json: string | null;
+}
+
+export interface DevicePairingPending {
+  client_id: string | null;
+  client_mode: string | null;
+  device_family: string | null;
+  device_id: string;
+  display_name: string | null;
+  is_repair: number | null;
+  platform: string | null;
+  public_key: string;
+  remote_ip: string | null;
+  request_id: string;
+  role: string | null;
+  roles_json: string | null;
+  scopes_json: string | null;
+  silent: number | null;
+  ts: number;
+}
+
 export interface FlowRuns {
   blocked_summary: string | null;
   blocked_task_id: string | null;
@@ -217,6 +267,46 @@ export interface MigrationSources {
   source_size_bytes: number | null;
   status: string;
   target_table: string;
+}
+
+export interface NodePairingPaired {
+  approved_at_ms: number;
+  bins_json: string | null;
+  caps_json: string | null;
+  commands_json: string | null;
+  core_version: string | null;
+  created_at_ms: number;
+  device_family: string | null;
+  display_name: string | null;
+  last_connected_at_ms: number | null;
+  last_seen_at_ms: number | null;
+  last_seen_reason: string | null;
+  model_identifier: string | null;
+  node_id: string;
+  permissions_json: string | null;
+  platform: string | null;
+  remote_ip: string | null;
+  token: string;
+  ui_version: string | null;
+  version: string | null;
+}
+
+export interface NodePairingPending {
+  caps_json: string | null;
+  commands_json: string | null;
+  core_version: string | null;
+  device_family: string | null;
+  display_name: string | null;
+  model_identifier: string | null;
+  node_id: string;
+  permissions_json: string | null;
+  platform: string | null;
+  remote_ip: string | null;
+  request_id: string;
+  silent: number | null;
+  ts: number;
+  ui_version: string | null;
+  version: string | null;
 }
 
 export interface PluginBlobEntries {
@@ -364,11 +454,16 @@ export interface DB {
   cron_run_logs: CronRunLogs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
+  device_bootstrap_tokens: DeviceBootstrapTokens;
+  device_pairing_paired: DevicePairingPaired;
+  device_pairing_pending: DevicePairingPending;
   flow_runs: FlowRuns;
   kv: Kv;
   media_blobs: MediaBlobs;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
+  node_pairing_paired: NodePairingPaired;
+  node_pairing_pending: NodePairingPending;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
   sandbox_registry_entries: SandboxRegistryEntries;

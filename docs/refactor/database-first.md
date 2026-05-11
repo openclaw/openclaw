@@ -293,7 +293,8 @@ The branch already has a real shared SQLite base:
 - Web push, APNs, Voice Wake, and Voice Wake routing runtime modules now keep
   their SQLite snapshot readers/writers separate from doctor-only legacy JSON
   import helpers.
-- Pairing state, plugin binding approvals, and cron job state now follow the
+- Device/node pairing and bootstrap state now use typed SQLite rows instead of
+  whole JSON blobs in KV. Plugin binding approvals and cron job state follow the
   same split: runtime modules expose SQLite-backed operations and neutral
   snapshot helpers, while doctor imports/removes the old JSON files through
   `src/commands/doctor/legacy/*` modules.
@@ -1142,8 +1143,9 @@ Move these into the global database:
 - Cron job definitions, schedule state, and run history now use shared SQLite;
   doctor imports/removes legacy `jobs.json`, `jobs-state.json`, and
   `cron/runs/*.jsonl` files
-- Device identity/auth/bootstrap, pairing, push, update check, commitments,
-  OpenRouter model cache, installed plugin index, and app-server bindings
+- Device identity/auth, push, update check, commitments, OpenRouter model
+  cache, installed plugin index, and app-server bindings
+- Device/node pairing and bootstrap records now use typed SQLite tables
 - Device-pair notification subscribers and delivered-request markers now use the
   shared SQLite plugin-state table instead of `device-pair-notify.json`.
 - Voice-call call records now use the shared SQLite plugin-state table under the
