@@ -1775,6 +1775,9 @@ export async function runConfigUnset(opts: {
   const runtime = opts.runtime ?? defaultRuntime;
   const cliOptions = opts.cliOptions ?? {};
   try {
+    if (cliOptions.json && !cliOptions.dryRun) {
+      throw new Error("config unset mode error: --json requires --dry-run.");
+    }
     const parsedPath = parseRequiredPath(opts.path);
     const snapshot = await loadValidConfig(runtime);
     // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
@@ -1783,7 +1786,7 @@ export async function runConfigUnset(opts: {
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
     const unsetResult = unsetAtPath(next, parsedPath);
     if (!unsetResult.removed) {
-      if (cliOptions.dryRun && cliOptions.json) {
+      if (cliOptions.json) {
         writeRuntimeJson(runtime, { valid: false, path: opts.path, error: "Config path not found" });
       } else {
         runtime.error(
@@ -1796,6 +1799,27 @@ export async function runConfigUnset(opts: {
       return;
     }
     if (cliOptions.dryRun) {
+      // Validate the post-change config before reporting success
+      const validated = validateConfigObjectRaw(next as OpenClawConfig, {
+        touchedPaths: [parsedPath],
+        validateBundledChannels: true,
+      });
+      if (!validated.ok) {
+        const errors = formatConfigIssueLines(validated.issues, "-", { normalizeRoot: true });
+        if (cliOptions.json) {
+          writeRuntimeJson(runtime, {
+            valid: false,
+            path: opts.path,
+            errors: errors.map((message) => ({ kind: "schema", message })),
+          });
+        } else {
+          for (const line of errors) {
+            runtime.error(danger(line));
+          }
+        }
+        runtime.exit(1);
+        return;
+      }
       if (cliOptions.json) {
         writeRuntimeJson(runtime, { valid: true, path: opts.path, removed: true });
       } else {

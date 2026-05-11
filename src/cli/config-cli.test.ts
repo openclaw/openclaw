@@ -2374,6 +2374,17 @@ describe("config cli", () => {
       const output = JSON.parse(String(mockLog.mock.calls.at(0)?.[0]));
       expect(output).toEqual({ valid: false, path: "tools.nonexistent", error: "Config path not found" });
     });
+
+    it("rejects --json without --dry-run", async () => {
+      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "unset", "tools.alsoAllow", "--json"]),
+      ).rejects.toThrow("config unset mode error: --json requires --dry-run.");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
   });
 
   describe("config file", () => {
