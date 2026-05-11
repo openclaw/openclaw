@@ -307,18 +307,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       throw new Error("expected bootstrap hook");
     }
     expect(contextEngine.bootstrap).toHaveBeenCalledTimes(1);
-    const bootstrapParams = requireFirstCallArg<
-      Parameters<NonNullable<ContextEngine["bootstrap"]>>[0]
-    >(contextEngine.bootstrap, "bootstrap");
+    const bootstrapParams = requireFirstCallArg(contextEngine.bootstrap, "bootstrap") as Parameters<
+      NonNullable<ContextEngine["bootstrap"]>
+    >[0];
     expect(bootstrapParams.sessionId).toBe(sessionId);
     expect(bootstrapParams.sessionKey).toBe("agent:main:session-1");
     expect(bootstrapParams.transcriptScope).toEqual({ agentId: "main", sessionId });
 
     expect(contextEngine.assemble).toHaveBeenCalledTimes(1);
-    const assembleParams = requireFirstCallArg<Parameters<ContextEngine["assemble"]>[0]>(
-      contextEngine.assemble,
-      "assemble",
-    );
+    const assembleParams = requireFirstCallArg(contextEngine.assemble, "assemble") as Parameters<
+      ContextEngine["assemble"]
+    >[0];
     expect(assembleParams.sessionId).toBe(sessionId);
     expect(assembleParams.sessionKey).toBe("agent:main:session-1");
     expect(assembleParams.tokenBudget).toBe(321);
@@ -445,9 +444,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await run;
 
     expect(afterTurn).toHaveBeenCalledTimes(1);
-    const afterTurnCall = requireFirstCallArg<
-      Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]
-    >(afterTurn, "afterTurn");
+    const afterTurnCall = requireFirstCallArg(afterTurn, "afterTurn") as Parameters<
+      NonNullable<ContextEngine["afterTurn"]>
+    >[0];
     expect(afterTurnCall.sessionId).toBe(sessionId);
     expect(afterTurnCall.sessionKey).toBe("agent:main:session-1");
     expect(afterTurnCall.prePromptMessageCount).toBe(0);
