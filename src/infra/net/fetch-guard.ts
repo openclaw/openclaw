@@ -396,6 +396,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
     }
 
     let dispatcher: Dispatcher | null = null;
+    // Resolve inside the redirect loop so exact-origin trust never carries across origins.
     const policyForUrl = resolveSsrFPolicyForUrl(parsedUrl, params.policy);
     try {
       const usesTrustedExplicitProxyMode =

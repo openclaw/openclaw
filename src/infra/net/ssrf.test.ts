@@ -181,6 +181,17 @@ describe("resolveSsrFPolicyForUrl", () => {
     });
   });
 
+  it("normalizes allowed origin case, path, query, and default ports before trusting hosts", () => {
+    expect(
+      resolveSsrFPolicyForUrl(new URL("https://api.example.com:443/v1/chat/completions"), {
+        allowedOrigins: ["https://API.EXAMPLE.com:443/base?debug=1"],
+      }),
+    ).toEqual({
+      allowedOrigins: ["https://API.EXAMPLE.com:443/base?debug=1"],
+      allowedHostnames: ["api.example.com"],
+    });
+  });
+
   it("does not trust the hostname when the port differs", () => {
     expect(
       resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:4321/v1/chat/completions"), {

@@ -5,12 +5,12 @@ import {
 } from "../infra/net/fetch-guard.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import {
+  mergeSsrFPolicies,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { mergeSsrFPolicies } from "../plugin-sdk/ssrf-policy.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
