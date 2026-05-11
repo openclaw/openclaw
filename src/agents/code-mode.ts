@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import type { AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
-import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
+import type { AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
@@ -17,7 +17,6 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
   ToolSearchRuntime,
   type ToolSearchCatalogRef,
-  type ToolSearchCatalogToolExecutor,
   type ToolSearchConfig,
   type ToolSearchToolContext,
 } from "./tool-search.js";
@@ -572,7 +571,6 @@ async function runExec(params: {
     throw new ToolInputError("code mode is disabled.");
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
-  const pendingRequests: PendingBridgeRequest[] = [];
   let source: string;
   try {
     source = await prepareSource({ code: params.code, language: params.language, config });
