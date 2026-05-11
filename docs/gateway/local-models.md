@@ -70,7 +70,7 @@ Best current local stack. Load a large model in LM Studio (for example, a full-s
 **Setup checklist**
 
 - Install LM Studio: [https://lmstudio.ai](https://lmstudio.ai)
-- In LM Studio, download the **largest model build available** (avoid “small”/heavily quantized variants), start the server, confirm `http://127.0.0.1:1234/v1/models` lists it.
+- In LM Studio, download the **largest model build available** (avoid "small"/heavily quantized variants), start the server, confirm `http://127.0.0.1:1234/v1/models` lists it.
 - Replace `my-local-model` with the actual model ID shown in LM Studio.
 - Keep the model loaded; cold-load adds startup latency.
 - Adjust `contextWindow`/`maxTokens` if your LM Studio build differs.
@@ -317,7 +317,7 @@ If the model loads cleanly but full agent turns misbehave, work top-down — con
 ## Troubleshooting
 
 - Gateway can reach the proxy? `curl http://127.0.0.1:1234/v1/models`.
-- LM Studio model unloaded? Reload; cold start is a common “hanging” cause.
+- LM Studio model unloaded? Reload; cold start is a common "hanging" cause.
 - Local server says `terminated`, `ECONNRESET`, or closes the stream mid-turn?
   OpenClaw records a low-cardinality `model.call.error.failureKind` plus the
   OpenClaw process RSS/heap snapshot in diagnostics. For LM Studio/Ollama
@@ -327,6 +327,8 @@ If the model loads cleanly but full agent turns misbehave, work top-down — con
 - Context errors? Lower `contextWindow` or raise your server limit.
 - OpenAI-compatible server returns `messages[].content ... expected a string`?
   Add `compat.requiresStringContent: true` on that model entry.
+- OpenAI-compatible server returns `validation.keys` or says message entries only allow `role` and `content`?
+  Add `compat.strictMessageKeys: true` on that model entry.
 - Direct tiny `/v1/chat/completions` calls work, but `openclaw infer model run --local`
   fails on Gemma or another local model? Check the provider URL, model ref, auth
   marker, and server logs first; local `model run` does not include agent tools.

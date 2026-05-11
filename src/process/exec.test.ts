@@ -100,7 +100,7 @@ describe("runCommandWithTimeout", () => {
     ).toBe(false);
   });
 
-  it("merges custom env with base env and drops undefined values", async () => {
+  it("merges custom env with base env and drops undefined values", () => {
     const resolved = resolveCommandEnv({
       argv: ["node", "script.js"],
       baseEnv: {
@@ -118,7 +118,7 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
   });
 
-  it("suppresses npm fund prompts for npm argv", async () => {
+  it("suppresses npm fund prompts for npm argv", () => {
     const resolved = resolveCommandEnv({
       argv: ["npm", "--version"],
       baseEnv: {},

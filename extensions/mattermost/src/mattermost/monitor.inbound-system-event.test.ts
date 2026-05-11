@@ -128,11 +128,10 @@ vi.mock("./runtime-api.js", async () => {
       readStoreForDmPolicy: vi.fn(async () => []),
       upsertPairingRequest: vi.fn(async () => ({ code: "123456", created: true })),
     })),
-    createChannelReplyPipeline: vi.fn(() => ({
+    createChannelMessageReplyPipeline: vi.fn(() => ({
       onModelSelected: vi.fn(),
       typingCallbacks: {},
     })),
-    readStoreAllowFromForDmPolicy: vi.fn(async () => []),
     registerPluginHttpRoute: mockState.registerPluginHttpRoute,
     resolveChannelMediaMaxBytes: vi.fn(() => 8 * 1024 * 1024),
     warnMissingProviderGroupPolicyFallbackOnce: vi.fn(),

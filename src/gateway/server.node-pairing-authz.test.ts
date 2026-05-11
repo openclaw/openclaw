@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   approveNodePairing,
@@ -136,13 +136,13 @@ async function expectRePairingRequest(params: {
       deviceIdentity: pairedNode.identity,
       commands: params.reconnectCommands,
     });
+    const connectedControlWs = controlWs;
 
-    const deadline = Date.now() + 2_000;
     let lastNodes: Array<{ nodeId: string; connected?: boolean; commands?: string[] }> = [];
-    while (Date.now() < deadline) {
+    await vi.waitFor(async () => {
       const list = await rpcReq<{
         nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
-      }>(controlWs, "node.list", {});
+      }>(connectedControlWs, "node.list", {});
       lastNodes = list.payload?.nodes ?? [];
       const node = lastNodes.find(
         (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
@@ -151,10 +151,10 @@ async function expectRePairingRequest(params: {
         JSON.stringify(node?.commands?.toSorted() ?? []) ===
         JSON.stringify(params.expectedVisibleCommands)
       ) {
-        break;
+        return;
       }
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
+      throw new Error(`node commands not visible yet: ${JSON.stringify(lastNodes)}`);
+    });
 
     expect(
       lastNodes
@@ -255,17 +255,17 @@ describe("gateway node pairing authorization", () => {
   test("requests re-pairing when a paired node reconnects with upgraded commands", async () => {
     await expectRePairingRequest({
       pairedName: "node-command-pin",
-      initialCommands: ["canvas.snapshot"],
-      reconnectCommands: ["canvas.snapshot", "system.run"],
+      initialCommands: ["screen.snapshot"],
+      reconnectCommands: ["screen.snapshot", "system.run"],
       approvalScopes: ["operator.pairing", "operator.write"],
-      expectedVisibleCommands: ["canvas.snapshot"],
+      expectedVisibleCommands: ["screen.snapshot"],
     });
   });
 
   test("requests re-pairing when a commandless paired node reconnects with system.run", async () => {
     await expectRePairingRequest({
       pairedName: "node-command-empty",
-      reconnectCommands: ["canvas.snapshot", "system.run"],
+      reconnectCommands: ["screen.snapshot", "system.run"],
       approvalScopes: ["operator.pairing"],
       expectedVisibleCommands: [],
     });

@@ -91,6 +91,15 @@ function resolvePackageFallbackForBundledDir(params: {
       return candidate;
     }
   }
+  for (const packageBundledDir of packageBundledDirs) {
+    if (packageBundledDir === normalizedBundledDir) {
+      continue;
+    }
+    const builtCandidate = path.join(packageBundledDir, params.dirName, params.artifactBasename);
+    if (fs.existsSync(builtCandidate)) {
+      return builtCandidate;
+    }
+  }
   return resolveBundledPluginSourcePublicSurfacePath({
     sourceRoot: path.join(normalizedRootDir, "extensions"),
     dirName: params.dirName,

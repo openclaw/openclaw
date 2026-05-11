@@ -29,8 +29,13 @@ import {
   type PortListener,
   type PortUsageStatus,
 } from "../../infra/ports.js";
+import {
+  readGatewayRestartHandoffSync,
+  type GatewayRestartHandoff,
+} from "../../infra/restart-handoff.js";
 import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { VERSION } from "../../version.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
 
@@ -80,6 +85,11 @@ type ResolvedGatewayStatus = {
   daemonPort: number;
   cliPort: number;
   probeUrlOverride: string | null;
+};
+
+type CliStatusSummary = {
+  version: string;
+  entrypoint?: string;
 };
 
 const gatewayProbeAuthModuleLoader = createLazyImportLoader(
@@ -233,6 +243,7 @@ function appendProbeNote(
   return [...new Set(values)].join(" ");
 }
 export type DaemonStatus = {
+  cli?: CliStatusSummary;
   logFile?: string;
   service: {
     label: string;
@@ -247,6 +258,7 @@ export type DaemonStatus = {
     } | null;
     runtime?: GatewayServiceRuntime;
     configAudit?: ServiceConfigAudit;
+    restartHandoff?: GatewayRestartHandoff;
   };
   config?: {
     cli: ConfigSummary;
@@ -276,6 +288,10 @@ export type DaemonStatus = {
       scopes?: string[];
       capability?: string;
     };
+    server?: {
+      version?: string | null;
+      connId?: string | null;
+    };
     error?: string;
     url?: string;
     authWarning?: string;
@@ -295,6 +311,14 @@ function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: bool
     return false;
   }
   return true;
+}
+
+function resolveCliStatusSummary(argv: string[] = process.argv): CliStatusSummary {
+  const entrypoint = argv[1]?.trim();
+  return {
+    version: VERSION,
+    ...(entrypoint ? { entrypoint } : {}),
+  };
 }
 
 async function loadDaemonConfigContext(
@@ -437,6 +461,7 @@ export async function gatherDaemonStatus(
     service.isLoaded({ env: serviceEnv }).catch(() => false),
     service.readRuntime(serviceEnv).catch((err) => ({ status: "unknown", detail: String(err) })),
   ]);
+  const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
   const configAudit = command
     ? await loadServiceAuditModule().then(({ auditGatewayServiceConfig }) =>
         auditGatewayServiceConfig({
@@ -547,6 +572,7 @@ export async function gatherDaemonStatus(
   }
 
   return {
+    cli: resolveCliStatusSummary(),
     logFile: resolveConfiguredLogFilePath(cliCfg),
     service: {
       label: service.label,
@@ -556,6 +582,7 @@ export async function gatherDaemonStatus(
       command,
       runtime,
       configAudit,
+      ...(restartHandoff ? { restartHandoff } : {}),
     },
     config: {
       cli: cliConfigSummary,

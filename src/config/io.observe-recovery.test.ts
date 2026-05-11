@@ -66,16 +66,33 @@ describe("config observe recovery", () => {
   }
 
   async function readObserveEvents(auditPath: string): Promise<Record<string, unknown>[]> {
-    const lines = (await fsp.readFile(auditPath, "utf-8")).trim().split("\n").filter(Boolean);
-    return lines
-      .map((line) => JSON.parse(line) as Record<string, unknown>)
-      .filter((line) => line.event === "config.observe");
+    const events: Record<string, unknown>[] = [];
+    for (const line of (await fsp.readFile(auditPath, "utf-8")).trim().split("\n")) {
+      if (!line) {
+        continue;
+      }
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      if (parsed.event === "config.observe") {
+        events.push(parsed);
+      }
+    }
+    return events;
   }
 
   async function listClobberFiles(configPath: string): Promise<string[]> {
     const entries = await fsp.readdir(path.dirname(configPath));
     const prefix = `${path.basename(configPath)}.clobbered.`;
-    return entries.filter((entry) => entry.startsWith(prefix));
+    const clobberFiles: string[] = [];
+    for (const entry of entries) {
+      if (entry.startsWith(prefix)) {
+        clobberFiles.push(entry);
+      }
+    }
+    return clobberFiles;
+  }
+
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    await expect(fsp.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
   }
 
   async function readLastObserveEvent(
@@ -275,6 +292,22 @@ describe("config observe recovery", () => {
     });
   });
 
+  it("hardens async backup restores to owner-only config permissions", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withSuiteHome(async (home) => {
+      const { deps, configPath } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
+      await fsp.chmod(configPath, 0o644);
+
+      await recoverClobberedUpdateChannel({ deps, configPath });
+
+      expect((await fsp.stat(configPath)).mode & 0o777).toBe(0o600);
+    });
+  });
+
   it("auto-restores after a large size drop against last-good config", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath } = makeDeps(home);
@@ -322,7 +355,7 @@ describe("config observe recovery", () => {
 
       expect(recovered.parsed).toEqual(editedConfig);
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(edited.raw);
-      await expect(fsp.stat(auditPath)).rejects.toThrow();
+      await expectPathMissing(auditPath);
     });
   });
 
@@ -433,11 +466,16 @@ describe("config observe recovery", () => {
       const observeEvents = await readObserveEvents(auditPath);
       expect(observeEvents.length).toBeGreaterThan(0);
       expect(observeEvents.at(-1)).toHaveProperty("clobberedPath");
-      const capWarnings = warn.mock.calls.filter(
-        ([message]) =>
-          typeof message === "string" && message.includes("Config clobber snapshot cap reached"),
-      );
-      expect(capWarnings.length).toBeLessThanOrEqual(1);
+      let capWarningCount = 0;
+      for (const [message] of warn.mock.calls) {
+        if (
+          typeof message === "string" &&
+          message.includes("Config clobber snapshot cap reached")
+        ) {
+          capWarningCount += 1;
+        }
+      }
+      expect(capWarningCount).toBeLessThanOrEqual(1);
     });
   });
 
@@ -453,6 +491,22 @@ describe("config observe recovery", () => {
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.backupHash).toBeTypeOf("string");
       expect(observe?.lastKnownGoodIno ?? null).toBeNull();
+    });
+  });
+
+  it("hardens sync backup restores to owner-only config permissions", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withSuiteHome(async (home) => {
+      const { deps, configPath } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      await writeClobberedUpdateChannel(configPath);
+      await fsp.chmod(configPath, 0o644);
+
+      recoverClobberedUpdateChannelSync({ deps, configPath });
+
+      expect((await fsp.stat(configPath)).mode & 0o777).toBe(0o600);
     });
   });
 
@@ -667,7 +721,7 @@ describe("config observe recovery", () => {
       await expect(
         promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
       ).resolves.toBe(false);
-      await expect(fsp.stat(resolveLastKnownGoodConfigPath(configPath))).rejects.toThrow();
+      await expectPathMissing(resolveLastKnownGoodConfigPath(configPath));
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("Config last-known-good promotion skipped"),
       );

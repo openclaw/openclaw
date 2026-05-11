@@ -104,6 +104,21 @@ describe("send", () => {
 
       expect(result.ok).toBe(true);
       expect(result.messageId).toBe("twitch-msg-123");
+      expect(result.receipt).toMatchObject({
+        primaryPlatformMessageId: "twitch-msg-123",
+        platformMessageIds: ["twitch-msg-123"],
+        parts: [
+          {
+            platformMessageId: "twitch-msg-123",
+            kind: "text",
+            raw: {
+              channel: "twitch",
+              conversationId: "testchannel",
+              messageId: "twitch-msg-123",
+            },
+          },
+        ],
+      });
     });
 
     it("should strip markdown when enabled", async () => {
@@ -192,6 +207,8 @@ describe("send", () => {
 
       expect(result.ok).toBe(true);
       expect(result.messageId).toBe("skipped");
+      expect(result.receipt.platformMessageIds).toStrictEqual([]);
+      expect(result.receipt.parts).toStrictEqual([]);
     });
 
     it("should return error when client manager not found", async () => {

@@ -90,6 +90,16 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+function expectVideoGenerateTool(
+  tool: ReturnType<typeof createVideoGenerateTool>,
+): NonNullable<ReturnType<typeof createVideoGenerateTool>> {
+  if (tool === null) {
+    throw new Error("expected video_generate tool");
+  }
+  expect(typeof tool.execute).toBe("function");
+  return tool;
+}
+
 function mockVideoPluginProvider(capabilities: Record<string, unknown> = {}) {
   vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
     {
@@ -170,7 +180,7 @@ describe("createVideoGenerateTool", () => {
   });
 
   it("registers when video-generation config is present", () => {
-    expect(
+    expectVideoGenerateTool(
       createVideoGenerateTool({
         config: asConfig({
           agents: {
@@ -180,7 +190,7 @@ describe("createVideoGenerateTool", () => {
           },
         }),
       }),
-    ).not.toBeNull();
+    );
   });
 
   it("does not load runtime providers while registering an explicitly configured tool", () => {
@@ -190,7 +200,7 @@ describe("createVideoGenerateTool", () => {
         throw new Error("runtime provider list should not run during tool registration");
       });
 
-    expect(
+    expectVideoGenerateTool(
       createVideoGenerateTool({
         config: asConfig({
           agents: {
@@ -200,7 +210,7 @@ describe("createVideoGenerateTool", () => {
           },
         }),
       }),
-    ).not.toBeNull();
+    );
     expect(listProviders).not.toHaveBeenCalled();
   });
 
@@ -309,7 +319,7 @@ describe("createVideoGenerateTool", () => {
         },
       }),
     });
-    expect(tool).not.toBeNull();
+    expect(typeof tool?.execute).toBe("function");
     if (!tool) {
       throw new Error("expected video_generate tool");
     }
@@ -549,8 +559,10 @@ describe("createVideoGenerateTool", () => {
         taskId: "task-123",
       },
     });
-    expect(typeof scheduledWork).toBe("function");
-    await scheduledWork?.();
+    if (!scheduledWork) {
+      throw new Error("expected scheduled video generation work");
+    }
+    await scheduledWork();
     expect(saveSpy).not.toHaveBeenCalled();
     expect(taskExecutorMocks.recordTaskRunProgressByRunId).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -587,7 +599,7 @@ describe("createVideoGenerateTool", () => {
         },
       }),
     });
-    expect(tool).not.toBeNull();
+    expect(typeof tool?.execute).toBe("function");
     if (!tool) {
       throw new Error("expected video_generate tool");
     }
@@ -1073,17 +1085,22 @@ describe("createVideoGenerateTool", () => {
     expect(generateSpy).toHaveBeenCalledWith(expect.objectContaining({ aspectRatio: "adaptive" }));
   });
 
-  it("rejects unsupported aspectRatio values", async () => {
+  it("accepts provider-specific aspectRatio and resolution values and forwards them to the runtime", async () => {
     mockVideoPluginProvider();
+    const generateSpy = mockSavedVideoResult();
     const tool = createVideoPluginTool();
 
-    await expect(
-      tool.execute("call-1", {
-        prompt: "lobster",
+    await tool.execute("call-1", {
+      prompt: "lobster",
+      aspectRatio: "17:9",
+      resolution: "draft-large",
+    });
+
+    expect(generateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
         aspectRatio: "17:9",
+        resolution: "draft-large",
       }),
-    ).rejects.toThrow(
-      "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, or adaptive",
     );
   });
 });

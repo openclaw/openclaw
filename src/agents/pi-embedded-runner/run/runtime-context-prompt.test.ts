@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildCurrentTurnPromptContextPrefix,
   buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
@@ -62,6 +63,19 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("uses current-turn context as prompt-local text", () => {
+    expect(
+      buildCurrentTurnPromptContextPrefix({
+        text: "Conversation info (untrusted metadata):\n```json\n{}\n```",
+      }),
+    ).toBe("Conversation info (untrusted metadata):\n```json\n{}\n```");
+  });
+
+  it("omits empty current-turn context", () => {
+    expect(buildCurrentTurnPromptContextPrefix(undefined)).toBe("");
+    expect(buildCurrentTurnPromptContextPrefix({ text: "   " })).toBe("");
+  });
+
   it("queues runtime context as a hidden next-turn custom message", async () => {
     const sentMessages: Array<{ content: string }> = [];
     const sendCustomMessage = vi.fn(async (message: { content: string }) => {
@@ -74,11 +88,12 @@ describe("runtime context prompt submission", () => {
     });
 
     expect(sendCustomMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         customType: "openclaw.runtime-context",
         content: "secret runtime context",
         display: false,
-      }),
+        details: { source: "openclaw-runtime-context" },
+      },
       { deliverAs: "nextTurn" },
     );
     expect(sentMessages[0]?.content).not.toContain(

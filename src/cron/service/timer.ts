@@ -14,9 +14,15 @@ import {
 } from "../../tasks/detached-task-runtime.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import {
+  createCronRunDiagnosticsFromError,
+  normalizeCronRunDiagnostics,
+  summarizeCronRunDiagnostics,
+} from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
+  CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronDeliveryStatus,
   CronDeliveryTrace,
@@ -41,12 +47,15 @@ import {
 import { locked } from "./locked.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
-import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-policy.js";
+import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 
 export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
 const CRON_TIMEOUT_CLEANUP_GUARD_MS = 20_000;
+const CRON_AGENT_SETUP_WATCHDOG_MS = 60_000;
+const CRON_AGENT_PRE_MODEL_WATCHDOG_MS = 60_000;
+const CRON_AGENT_PRE_MODEL_MIN_WATCHDOG_MS = 1_000;
 
 /**
  * Minimum gap between consecutive fires of the same cron job.  This is a
@@ -110,7 +119,11 @@ export async function executeJobCoreWithTimeout(
 
   const runAbortController = new AbortController();
   let timeoutId: NodeJS.Timeout | undefined;
+  let setupTimeoutId: NodeJS.Timeout | undefined;
+  let preModelTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
+  let modelCallStarted = false;
+  let timeoutReason: string | undefined;
   const timeoutMarker = Symbol("cron-timeout");
   let resolveTimeout: ((value: typeof timeoutMarker) => void) | undefined;
   const timeoutPromise = new Promise<typeof timeoutMarker>((resolve) => {
@@ -119,23 +132,79 @@ export async function executeJobCoreWithTimeout(
 
   const deferTimeoutUntilExecutionStart =
     job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
+  const triggerTimeout = (reason: string) => {
+    if (runAbortController.signal.aborted) {
+      return;
+    }
+    timeoutReason = reason;
+    runAbortController.abort(reason);
+    resolveTimeout?.(timeoutMarker);
+  };
   const startTimeout = () => {
     if (!timeoutId) {
       timeoutId = setTimeout(() => {
-        runAbortController.abort(timeoutErrorMessage());
-        resolveTimeout?.(timeoutMarker);
+        triggerTimeout(timeoutErrorMessage(activeExecution));
       }, jobTimeoutMs);
     }
   };
+  const startSetupTimeout = () => {
+    if (setupTimeoutId) {
+      return;
+    }
+    setupTimeoutId = setTimeout(() => {
+      triggerTimeout(setupTimeoutErrorMessage(activeExecution));
+    }, CRON_AGENT_SETUP_WATCHDOG_MS);
+  };
+  const clearSetupTimeout = () => {
+    if (!setupTimeoutId) {
+      return;
+    }
+    clearTimeout(setupTimeoutId);
+    setupTimeoutId = undefined;
+  };
+  const startPreModelTimeout = () => {
+    if (preModelTimeoutId || modelCallStarted) {
+      return;
+    }
+    preModelTimeoutId = setTimeout(() => {
+      if (!modelCallStarted) {
+        triggerTimeout(preModelTimeoutErrorMessage(activeExecution));
+      }
+    }, resolveCronAgentPreModelWatchdogMs(jobTimeoutMs));
+  };
+  const clearPreModelTimeout = () => {
+    if (!preModelTimeoutId) {
+      return;
+    }
+    clearTimeout(preModelTimeoutId);
+    preModelTimeoutId = undefined;
+  };
+  const noteExecutionProgress = (info?: CronAgentExecutionStarted) => {
+    if (info) {
+      activeExecution = { ...activeExecution, ...info };
+      if (info.phase === "model_call_started" || info.firstModelCallStarted) {
+        modelCallStarted = true;
+        clearPreModelTimeout();
+      }
+    }
+  };
   const onExecutionStarted = (info?: CronAgentExecutionStarted) => {
-    activeExecution = info ?? activeExecution;
+    noteExecutionProgress(info);
+    clearSetupTimeout();
     startTimeout();
+    startPreModelTimeout();
+  };
+  const onExecutionPhase = (info: CronAgentExecutionPhaseUpdate) => {
+    noteExecutionProgress(info);
   };
   const corePromise = executeJobCore(state, job, runAbortController.signal, {
     onExecutionStarted: deferTimeoutUntilExecutionStart ? onExecutionStarted : undefined,
+    onExecutionPhase: deferTimeoutUntilExecutionStart ? onExecutionPhase : undefined,
   });
   if (!deferTimeoutUntilExecutionStart) {
     startTimeout();
+  } else {
+    startSetupTimeout();
   }
   void corePromise.catch((err) => {
     if (runAbortController.signal.aborted) {
@@ -151,11 +220,20 @@ export async function executeJobCoreWithTimeout(
       return first;
     }
     await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
-    return { status: "error", error: timeoutErrorMessage() };
+    const error = timeoutReason ?? timeoutErrorMessage(activeExecution);
+    return {
+      status: "error",
+      error,
+      diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
+        nowMs: state.deps.nowMs,
+      }),
+    };
   } finally {
     if (timeoutId) {
       clearTimeout(timeoutId);
     }
+    clearSetupTimeout();
+    clearPreModelTimeout();
   }
 }
 
@@ -194,8 +272,47 @@ function resolveRunConcurrency(state: CronServiceState): number {
   }
   return Math.max(1, Math.floor(raw));
 }
-function timeoutErrorMessage(): string {
-  return "cron: job execution timed out";
+function timeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
+  const phase = formatCronAgentExecutionPhase(execution);
+  if (!phase) {
+    return "cron: job execution timed out";
+  }
+  return `cron: job execution timed out (last phase: ${phase})`;
+}
+
+function setupTimeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
+  const phase = formatCronAgentExecutionPhase(execution);
+  if (!phase) {
+    return "cron: isolated agent setup timed out before runner start";
+  }
+  return `cron: isolated agent setup timed out before runner start (last phase: ${phase})`;
+}
+
+function preModelTimeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
+  const phase = formatCronAgentExecutionPhase(execution);
+  if (!phase) {
+    return "cron: isolated agent run stalled before first model call";
+  }
+  return `cron: isolated agent run stalled before first model call (last phase: ${phase})`;
+}
+
+function formatCronAgentExecutionPhase(execution?: CronAgentExecutionStarted): string | undefined {
+  return execution?.phase?.replaceAll("_", "-");
+}
+
+function resolveCronAgentPreModelWatchdogMs(jobTimeoutMs: number): number {
+  return Math.max(
+    CRON_AGENT_PRE_MODEL_MIN_WATCHDOG_MS,
+    Math.min(CRON_AGENT_PRE_MODEL_WATCHDOG_MS, Math.floor(jobTimeoutMs / 2)),
+  );
+}
+
+function abortErrorMessage(signal?: AbortSignal): string {
+  const reason = signal?.reason;
+  if (typeof reason === "string" && reason.trim()) {
+    return reason.trim();
+  }
+  return timeoutErrorMessage();
 }
 
 function isAbortError(err: unknown): boolean {
@@ -300,6 +417,10 @@ function isTransientCronError(error: string | undefined, retryOn?: CronRetryOn[]
     return false;
   }
   const keys = retryOn?.length ? retryOn : (Object.keys(TRANSIENT_PATTERNS) as CronRetryOn[]);
+  const classified = resolveFailoverReasonFromError(error);
+  if (classified && keys.includes(classified as CronRetryOn)) {
+    return true;
+  }
   return keys.some((k) => TRANSIENT_PATTERNS[k]?.test(error));
 }
 
@@ -512,6 +633,7 @@ export function applyJobResult(
   result: {
     status: CronRunStatus;
     error?: string;
+    diagnostics?: CronRunOutcome["diagnostics"];
     delivered?: boolean;
     startedAt: number;
     endedAt: number;
@@ -537,10 +659,23 @@ export function applyJobResult(
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
   job.state.lastError = result.error;
+  job.state.lastDiagnostics = normalizeCronRunDiagnostics(result.diagnostics);
+  job.state.lastDiagnosticSummary = summarizeCronRunDiagnostics(job.state.lastDiagnostics);
   job.state.lastErrorReason =
     result.status === "error" && typeof result.error === "string"
       ? (resolveFailoverReasonFromError(result.error) ?? undefined)
       : undefined;
+  if (result.status === "error") {
+    state.deps.log.warn(
+      {
+        jobId: job.id,
+        jobName: job.name,
+        error: result.error,
+        diagnosticsSummary: job.state.lastDiagnosticSummary,
+      },
+      "cron: job run returned error status",
+    );
+  }
   const deliveryState = resolveDeliveryState({ job, delivered: result.delivered });
   job.state.lastDelivered = deliveryState.delivered;
   job.state.lastDeliveryStatus = deliveryState.status;
@@ -717,6 +852,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
       applyJobResult(state, result.job, {
         status: result.status,
         error: result.error,
+        diagnostics: result.diagnostics,
         delivered: result.delivered,
         startedAt: result.startedAt,
         endedAt: result.endedAt,
@@ -738,6 +874,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   const shouldDelete = applyJobResult(state, job, {
     status: result.status,
     error: result.error,
+    diagnostics: result.diagnostics,
     delivered: result.delivered,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
@@ -906,6 +1043,9 @@ export async function onTimer(state: CronServiceState) {
           taskRunId,
           status: "error",
           error: errorText,
+          diagnostics: createCronRunDiagnosticsFromError("cron-setup", errorText, {
+            nowMs: state.deps.nowMs,
+          }),
           startedAt,
           endedAt: state.deps.nowMs(),
         };
@@ -1228,6 +1368,7 @@ async function runStartupCatchupCandidate(
       status: result.status,
       error: result.error,
       summary: result.summary,
+      diagnostics: result.diagnostics,
       delivered: result.delivered,
       sessionId: result.sessionId,
       sessionKey: result.sessionKey,
@@ -1244,6 +1385,9 @@ async function runStartupCatchupCandidate(
       taskRunId,
       status: "error",
       error: normalizeCronRunErrorText(err),
+      diagnostics: createCronRunDiagnosticsFromError("cron-setup", normalizeCronRunErrorText(err), {
+        nowMs: state.deps.nowMs,
+      }),
       startedAt,
       endedAt: state.deps.nowMs(),
     };
@@ -1289,8 +1433,9 @@ async function applyStartupCatchupOutcomes(
 
     // Preserve any new past-due nextRunAtMs values that became due while
     // startup catch-up was running. They should execute on a future tick
-    // instead of being silently advanced.
-    recomputeNextRunsForMaintenance(state);
+    // instead of being silently advanced. Future repair is disabled here so
+    // startup overflow deferrals survive until their staggered catch-up tick.
+    recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
     await persist(state);
   });
 }
@@ -1301,6 +1446,7 @@ export async function executeJobCore(
   abortSignal?: AbortSignal,
   options?: {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   },
 ): Promise<
   CronRunOutcome &
@@ -1312,7 +1458,7 @@ export async function executeJobCore(
 > {
   const resolveAbortError = () => ({
     status: "error" as const,
-    error: timeoutErrorMessage(),
+    error: abortErrorMessage(abortSignal),
   });
   const waitWithAbort = async (ms: number) => {
     if (!abortSignal) {
@@ -1463,6 +1609,7 @@ async function executeDetachedCronJob(
   resolveAbortError: () => { status: "error"; error: string },
   options?: {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   },
 ): Promise<
   CronRunOutcome &
@@ -1473,10 +1620,24 @@ async function executeDetachedCronJob(
     }
 > {
   if (job.payload.kind !== "agentTurn") {
-    return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
+    const error = "isolated job requires payload.kind=agentTurn";
+    return {
+      status: "skipped",
+      error,
+      diagnostics: createCronRunDiagnosticsFromError("cron-preflight", error, {
+        severity: "warn",
+        nowMs: state.deps.nowMs,
+      }),
+    };
   }
   if (abortSignal?.aborted) {
-    return resolveAbortError();
+    const aborted = resolveAbortError();
+    return {
+      ...aborted,
+      diagnostics: createCronRunDiagnosticsFromError("cron-setup", aborted.error, {
+        nowMs: state.deps.nowMs,
+      }),
+    };
   }
 
   const res = await state.deps.runIsolatedAgentJob({
@@ -1484,10 +1645,18 @@ async function executeDetachedCronJob(
     message: job.payload.message,
     abortSignal,
     onExecutionStarted: options?.onExecutionStarted,
+    onExecutionPhase: options?.onExecutionPhase,
   });
 
   if (abortSignal?.aborted) {
-    return { status: "error", error: timeoutErrorMessage() };
+    const error = abortErrorMessage(abortSignal);
+    return {
+      status: "error",
+      error,
+      diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
+        nowMs: state.deps.nowMs,
+      }),
+    };
   }
 
   return {
@@ -1499,6 +1668,7 @@ async function executeDetachedCronJob(
     delivery: res.delivery,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
+    diagnostics: res.diagnostics,
     model: res.model,
     provider: res.provider,
     usage: res.usage,
@@ -1540,6 +1710,7 @@ export async function executeJob(
   const shouldDelete = applyJobResult(state, job, {
     status: coreResult.status,
     error: coreResult.error,
+    diagnostics: coreResult.diagnostics,
     delivered: coreResult.delivered,
     startedAt,
     endedAt,
@@ -1572,6 +1743,7 @@ function emitJobFinished(
     status: result.status,
     error: result.error,
     summary: result.summary,
+    diagnostics: result.diagnostics,
     delivered: result.delivered,
     deliveryStatus: job.state.lastDeliveryStatus,
     deliveryError: job.state.lastDeliveryError,

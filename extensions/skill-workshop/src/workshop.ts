@@ -42,6 +42,7 @@ export async function applyOrStoreProposal(params: {
   store: SkillWorkshopStore;
   config: SkillWorkshopConfig;
   workspaceDir: string;
+  skipAutoApply?: boolean;
   openClawConfig?: OpenClawConfig;
 }): Promise<{
   status: "pending" | "applied" | "quarantined";
@@ -72,7 +73,7 @@ export async function applyOrStoreProposal(params: {
     created: prepared.created,
     openClawConfig: params.openClawConfig,
   });
-  if (params.config.approvalPolicy === "auto") {
+  if (params.config.approvalPolicy === "auto" && !params.skipAutoApply) {
     const applied = await applyProposalToWorkspace({
       proposal: params.proposal,
       maxSkillBytes: params.config.maxSkillBytes,

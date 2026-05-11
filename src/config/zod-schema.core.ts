@@ -194,6 +194,7 @@ const ModelCompatSchema = z
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
+    strictMessageKeys: z.boolean().optional(),
     visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
     supportedReasoningEfforts: z.array(z.string().min(1)).optional(),
     reasoningEffortMap: z.record(z.string().min(1), z.string().min(1)).optional(),
@@ -205,6 +206,8 @@ const ModelCompatSchema = z
         z.literal("openai"),
         z.literal("openrouter"),
         z.literal("deepseek"),
+        z.literal("qwen"),
+        z.literal("qwen-chat-template"),
         z.literal("zai"),
       ])
       .optional(),
@@ -305,6 +308,13 @@ const ConfiguredModelProviderRequestSchema = z
   .strict()
   .optional();
 
+const ModelAgentRuntimePolicySchema = z
+  .object({
+    id: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
 const ModelDefinitionSchema = z
   .object({
     id: z.string().min(1),
@@ -343,6 +353,7 @@ const ModelDefinitionSchema = z
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
+    agentRuntime: ModelAgentRuntimePolicySchema,
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
     metadataSource: z.literal("models-add").optional(),
@@ -363,6 +374,7 @@ const ModelProviderSchema = z
     timeoutSeconds: z.number().int().positive().optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
+    agentRuntime: ModelAgentRuntimePolicySchema,
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
@@ -386,11 +398,25 @@ export const ModelsConfigSchema = z
   .strict()
   .optional();
 
+const VisibleRepliesValueSchema = z.enum(["automatic", "message_tool"]);
+
+export const VisibleRepliesSchema = z
+  .union([VisibleRepliesValueSchema, z.boolean()])
+  .overwrite((value) => {
+    if (value === true) {
+      return "automatic";
+    }
+    if (value === false) {
+      return "message_tool";
+    }
+    return value;
+  });
+
 export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().positive().optional(),
-    visibleReplies: z.enum(["automatic", "message_tool"]).optional(),
+    visibleReplies: VisibleRepliesSchema.optional(),
   })
   .strict()
   .optional();
@@ -617,6 +643,7 @@ export const CliBackendSchema = z
     imageMode: z.union([z.literal("repeat"), z.literal("list")]).optional(),
     imagePathScope: z.union([z.literal("temp"), z.literal("workspace")]).optional(),
     serialize: z.boolean().optional(),
+    reseedFromRawTranscriptWhenUncompacted: z.boolean().optional(),
     reliability: z
       .object({
         outputLimits: CliBackendOutputLimitsSchema,

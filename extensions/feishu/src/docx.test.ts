@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createToolFactoryHarness, type ToolLike } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -61,7 +61,14 @@ type ToolResultWithDetails = {
   details: Record<string, unknown>;
 };
 
+const WORKSPACE_ROOT = path.resolve("/workspace");
+
 describe("feishu_doc image fetch hardening", () => {
+  afterAll(() => {
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
 
@@ -156,7 +163,9 @@ describe("feishu_doc image fetch hardening", () => {
     });
     registerFeishuDocTools(harness.api);
     const tool = harness.resolveTool("feishu_doc", context);
-    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("expected Feishu doc tool");
+    }
     return tool;
   }
 
@@ -199,8 +208,8 @@ describe("feishu_doc image fetch hardening", () => {
     expect(blockDescendantCreateMock).toHaveBeenCalledTimes(1);
     const call = blockDescendantCreateMock.mock.calls[0]?.[0];
     expect(call?.data.children_id).toEqual(["h1", "t1", "h2"]);
-    expect(call?.data.descendants).toBeDefined();
-    expect(call?.data.descendants.length).toBeGreaterThanOrEqual(3);
+    expect(call?.data.descendants).toEqual(expect.arrayContaining(blocks));
+    expect(call?.data.descendants).toHaveLength(3);
 
     expect(result.details.blocks_added).toBe(3);
   });
@@ -505,7 +514,7 @@ describe("feishu_doc image fetch hardening", () => {
     });
 
     const feishuDocTool = resolveFeishuDocTool({
-      workspaceDir: "/workspace",
+      workspaceDir: WORKSPACE_ROOT,
       fsPolicy: { workspaceOnly: true },
     });
 
@@ -518,7 +527,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     expect(loadWebMediaMock).toHaveBeenCalledWith(
       expect.stringContaining("test-local.txt"),
-      expect.objectContaining({ optimizeImages: false, localRoots: ["/workspace"] }),
+      expect.objectContaining({ optimizeImages: false, localRoots: [WORKSPACE_ROOT] }),
     );
   });
 
@@ -559,7 +568,7 @@ describe("feishu_doc image fetch hardening", () => {
     });
 
     const feishuDocTool = resolveFeishuDocTool({
-      workspaceDir: "/workspace",
+      workspaceDir: WORKSPACE_ROOT,
       fsPolicy: { workspaceOnly: true },
     });
 
@@ -572,7 +581,7 @@ describe("feishu_doc image fetch hardening", () => {
 
     expect(loadWebMediaMock).toHaveBeenCalledWith(
       expect.stringContaining("test-local.png"),
-      expect.objectContaining({ optimizeImages: false, localRoots: ["/workspace"] }),
+      expect.objectContaining({ optimizeImages: false, localRoots: [WORKSPACE_ROOT] }),
     );
   });
 
@@ -588,7 +597,7 @@ describe("feishu_doc image fetch hardening", () => {
     });
 
     const feishuDocTool = resolveFeishuDocTool({
-      workspaceDir: "/workspace",
+      workspaceDir: WORKSPACE_ROOT,
       fsPolicy: { workspaceOnly: true },
     });
 
@@ -602,7 +611,7 @@ describe("feishu_doc image fetch hardening", () => {
 
       expect(loadWebMediaMock).toHaveBeenCalledWith(
         expect.stringContaining("absolute-image.png"),
-        expect.objectContaining({ optimizeImages: false, localRoots: ["/workspace"] }),
+        expect.objectContaining({ optimizeImages: false, localRoots: [WORKSPACE_ROOT] }),
       );
     } finally {
       rmSync(fixtureDir, { recursive: true, force: true });

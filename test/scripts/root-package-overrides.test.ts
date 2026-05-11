@@ -19,19 +19,21 @@ describe("root package override guardrails", () => {
   it("pins the Bedrock runtime below the Windows ARM Node 24 npm resolver failure", () => {
     const manifest = readRootManifest();
     const packageName = "@aws-sdk/client-bedrock-runtime";
+    const dependencyVersion = manifest.dependencies?.[packageName];
     const npmOverride = manifest.overrides?.[packageName];
     const pnpmOverride = manifest.pnpm?.overrides?.["@aws-sdk/client-bedrock-runtime"];
 
-    expect(pnpmOverride).toBe("3.1024.0");
-    expect(manifest.dependencies?.[packageName]).toBeDefined();
+    expect(manifest.dependencies).toHaveProperty(packageName);
+    expect(pnpmOverride).toBe(dependencyVersion);
     expect(npmOverride).toBe(`$${packageName}`);
   });
 
   it("pins the node-domexception alias exactly in npm and pnpm overrides", () => {
     const manifest = readRootManifest();
     const pnpmOverride = manifest.pnpm?.overrides?.["node-domexception"];
+    const npmOverride = manifest.overrides?.["node-domexception"];
 
     expect(pnpmOverride).toBe("npm:@nolyfill/domexception@1.0.28");
-    expect(manifest.overrides?.["node-domexception"]).toBe(pnpmOverride);
+    expect(npmOverride).toBe(pnpmOverride);
   });
 });

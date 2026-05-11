@@ -129,7 +129,7 @@ describe("createChildAdapter", () => {
     // on POSIX, detached is true with a no-detach fallback.
     if (process.platform === "win32") {
       expect(spawnArgs.options?.detached).toBe(false);
-      expect(spawnArgs.fallbacks).toEqual([]);
+      expect(spawnArgs.fallbacks).toStrictEqual([]);
     } else {
       expect(spawnArgs.options?.detached).toBe(true);
       expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
@@ -184,6 +184,60 @@ describe("createChildAdapter", () => {
 
     expect(killProcessTreeMock).not.toHaveBeenCalled();
     expect(killMock).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("preserves inherited stdin when no input pipe is requested", async () => {
+    const { child } = createStubChild(5656);
+    child.stdin = null;
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+    });
+
+    const spawnArgs = spawnWithFallbackMock.mock.calls[0]?.[0] as {
+      options?: { stdio?: Array<string> };
+    };
+    expect(spawnArgs.options?.stdio?.[0]).toBe("inherit");
+    expect(adapter.stdin).toBeUndefined();
+  });
+
+  it("reports stdin as non-writable after end or destroy", async () => {
+    const { adapter } = await createAdapterHarness({ pid: 6767 });
+
+    expect(adapter.stdin?.writable).toBe(true);
+    expect(adapter.stdin?.writableEnded).toBe(false);
+
+    adapter.stdin?.end();
+    expect(adapter.stdin?.writable).toBe(false);
+    expect(adapter.stdin?.writableEnded).toBe(true);
+
+    const writeCallback = vi.fn();
+    adapter.stdin?.write("late", writeCallback);
+    expect(writeCallback.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+
+    adapter.stdin?.destroy?.();
+    expect(adapter.stdin?.destroyed).toBe(true);
+    expect(adapter.stdin?.writable).toBe(false);
+  });
+
+  it("reports pipe-closed stdin as ended", async () => {
+    const { child } = createStubChild(3434);
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "process.exit(0)"],
+      stdinMode: "pipe-closed",
+    });
+
+    expect(adapter.stdin?.writable).toBe(false);
+    expect(adapter.stdin?.writableEnded).toBe(true);
   });
 
   it("wait does not settle immediately on SIGKILL", async () => {
@@ -263,7 +317,7 @@ describe("createChildAdapter", () => {
       fallbacks?: Array<{ options?: { detached?: boolean } }>;
     };
     expect(spawnArgs.options?.detached).toBe(false);
-    expect(spawnArgs.fallbacks ?? []).toEqual([]);
+    expect(spawnArgs.fallbacks ?? []).toStrictEqual([]);
   });
 
   it("keeps inherited env when no override env is provided on non-Linux", async () => {
@@ -324,10 +378,12 @@ describe("createChildAdapter", () => {
       "/usr/bin/node",
     ]);
     expect(spawnArgs.argv?.slice(4)).toEqual(["-e", "process.exit(0)"]);
-    expect(spawnArgs.options?.env).toBeDefined();
-    expect(spawnArgs.options?.env?.BASH_ENV).toBeUndefined();
-    expect(spawnArgs.options?.env?.ENV).toBeUndefined();
-    expect(spawnArgs.options?.env?.CDPATH).toBeUndefined();
+    if (!spawnArgs.options?.env) {
+      throw new Error("expected child process env options");
+    }
+    expect(spawnArgs.options.env.BASH_ENV).toBeUndefined();
+    expect(spawnArgs.options.env.ENV).toBeUndefined();
+    expect(spawnArgs.options.env.CDPATH).toBeUndefined();
   });
 
   it("passes explicit env overrides as strings", async () => {

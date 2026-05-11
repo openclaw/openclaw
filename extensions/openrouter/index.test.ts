@@ -2,34 +2,51 @@ import {
   registerProviderPlugin,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
+import {
+  expectPassthroughReplayPolicy,
+  expectUnifiedModelCatalogProviderRegistration,
+} from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it, vi } from "vitest";
 import openrouterPlugin from "./index.js";
 import {
   buildOpenrouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
 } from "./provider-catalog.js";
+import { resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("openrouter provider hooks", () => {
-  it("registers OpenRouter speech alongside model and media providers", async () => {
+  it("registers OpenRouter speech alongside model, media, and catalog providers", async () => {
     const { providers, speechProviders, mediaProviders, imageProviders, videoProviders } =
       await registerProviderPlugin({
         plugin: openrouterPlugin,
         id: "openrouter",
         name: "OpenRouter Provider",
       });
+    const modelCatalogProvider = expectUnifiedModelCatalogProviderRegistration({
+      plugin: openrouterPlugin,
+      pluginId: "openrouter",
+      pluginName: "OpenRouter Provider",
+      provider: "openrouter",
+      kind: "video_generation",
+    });
 
     expect(providers).toEqual([expect.objectContaining({ id: "openrouter" })]);
     expect(speechProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
     expect(mediaProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
     expect(imageProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
     expect(videoProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
+    expect(modelCatalogProvider.liveCatalog).toEqual(expect.any(Function));
   });
 
-  it("includes Kimi K2.6 in the bundled catalog", () => {
-    expect(buildOpenrouterProvider().models?.map((model) => model.id)).toContain(
-      "moonshotai/kimi-k2.6",
+  it("includes current Kimi models in the bundled catalog", () => {
+    expect(buildOpenrouterProvider().models?.map((model) => model.id)).toEqual(
+      expect.arrayContaining(["moonshotai/kimi-k2.6", "moonshotai/kimi-k2.5"]),
     );
+  });
+
+  it("uses the canonical prefixed OpenRouter auto model id", () => {
+    expect(buildOpenrouterProvider().models?.map((model) => model.id)).toContain("openrouter/auto");
+    expect(buildOpenrouterProvider().models?.map((model) => model.id)).not.toContain("auto");
   });
 
   it("does not include retired stealth models in the bundled catalog", () => {
@@ -68,6 +85,53 @@ describe("openrouter provider hooks", () => {
         modelId: "openai/gpt-5.4",
       } as never),
     ).toBe("native");
+  });
+
+  it("advertises xhigh thinking for OpenRouter-routed DeepSeek V4 models", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const expectedV4Levels = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openrouter",
+          modelId: "deepseek/deepseek-v4-pro",
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).toEqual(expectedV4Levels);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openrouter",
+        modelId: "openrouter/deepseek/deepseek-v4-flash",
+      } as never)?.defaultLevel,
+    ).toBe("high");
+    expect(
+      provider.supportsXHighThinking?.({
+        provider: "openrouter",
+        modelId: "openrouter/deepseek/deepseek-v4-pro",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+      } as never),
+    ).toBe(undefined);
+  });
+
+  it("exposes DeepSeek V4 thinking levels through the lightweight policy artifact", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "openrouter",
+        modelId: "openrouter/deepseek/deepseek-v4-pro",
+      })?.levels.map((level) => level.id),
+    ).toContain("xhigh");
+    expect(
+      resolveThinkingProfile({
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+      }),
+    ).toBe(undefined);
   });
 
   it("canonicalizes stale OpenRouter /v1 config and runtime metadata", async () => {
@@ -215,7 +279,7 @@ describe("openrouter provider hooks", () => {
       } as never,
     );
 
-    expect(capturedPayload).toEqual({});
+    expect(capturedPayload).toStrictEqual({});
     expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
@@ -261,7 +325,7 @@ describe("openrouter provider hooks", () => {
 
     expect(capturedPayload).toMatchObject({
       thinking: { type: "enabled" },
-      reasoning_effort: "max",
+      reasoning_effort: "xhigh",
       messages: [
         { role: "user", content: "read file" },
         {
@@ -274,6 +338,50 @@ describe("openrouter provider hooks", () => {
       ],
     });
     expect(baseStreamFn).toHaveBeenCalledOnce();
+  });
+
+  it("keeps OpenRouter DeepSeek V4 reasoning_effort within OpenRouter values", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn = vi.fn(
+      (
+        ...args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>
+      ): ReturnType<import("@mariozechner/pi-agent-core").StreamFn> => {
+        const payload = { messages: [] };
+        void args[2]?.onPayload?.(payload, args[0]);
+        payloads.push(payload);
+        return { async *[Symbol.asyncIterator]() {} } as never;
+      },
+    );
+
+    for (const thinkingLevel of ["minimal", "low", "medium", "high", "xhigh", "max"] as const) {
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "openrouter",
+        modelId: "openrouter/deepseek/deepseek-v4-pro",
+        streamFn: baseStreamFn,
+        thinkingLevel,
+      } as never);
+      void wrapped?.(
+        {
+          provider: "openrouter",
+          api: "openai-completions",
+          id: "openrouter/deepseek/deepseek-v4-pro",
+          baseUrl: "https://openrouter.ai/api/v1",
+          compat: {},
+        } as never,
+        { messages: [] } as never,
+        {},
+      );
+    }
+
+    expect(payloads.map((payload) => payload.reasoning_effort)).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "xhigh",
+    ]);
   });
 
   it("recognizes full OpenRouter DeepSeek V4 refs but skips custom proxy routes", async () => {

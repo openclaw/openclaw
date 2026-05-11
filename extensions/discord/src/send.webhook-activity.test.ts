@@ -64,9 +64,13 @@ describe("sendWebhookMessageDiscord activity", () => {
       threadId: "thread-1",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       messageId: "msg-1",
       channelId: "thread-1",
+      receipt: expect.objectContaining({
+        threadId: "thread-1",
+        platformMessageIds: ["msg-1"],
+      }),
     });
     expect(recordChannelActivityMock).toHaveBeenCalledWith({
       channel: "discord",
@@ -96,7 +100,7 @@ describe("sendWebhookMessageDiscord activity", () => {
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      expect.any(String),
+      "https://discord.com/api/v10/webhooks/wh-1/tok-1?wait=true&thread_id=thread-1",
       expect.objectContaining({
         body: expect.stringContaining('"content":"hello <@123456789012345678>"'),
       }),

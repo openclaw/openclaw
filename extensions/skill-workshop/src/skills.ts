@@ -5,6 +5,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   isPathInside,
   isPathInsideWithRealpath,
+  pathExists,
+  resolvePathWithinRoot,
   resolvePreferredOpenClawTmpDir,
   writeFileFromPathWithinRoot,
 } from "openclaw/plugin-sdk/security-runtime";
@@ -72,21 +74,16 @@ function assertValidSection(section: string): string {
 
 function skillDir(workspaceDir: string, skillName: string): string {
   const safeName = assertValidSkillName(skillName);
-  const ws = path.resolve(workspaceDir);
-  const root = path.resolve(ws, "skills");
-  const dir = path.resolve(root, safeName);
-  if (!isPathInside(root, dir)) {
+  const root = path.resolve(workspaceDir, "skills");
+  const dir = resolvePathWithinRoot({
+    rootDir: root,
+    requestedPath: safeName,
+    scopeLabel: "workspace skills directory",
+  });
+  if (!dir.ok) {
     throw new Error("skill path escapes workspace skills directory");
   }
-  if (fs.existsSync(ws) && fs.existsSync(root)) {
-    if (!isPathInsideWithRealpath(ws, root, { requireRealpath: true })) {
-      throw new Error("workspace skills root resolves outside workspace");
-    }
-    if (fs.existsSync(dir) && !isPathInsideWithRealpath(root, dir, { requireRealpath: true })) {
-      throw new Error("skill path escapes workspace skills directory after symlink resolution");
-    }
-  }
-  return dir;
+  return dir.path;
 }
 
 function skillsRootDir(workspaceDir: string): string {
@@ -106,15 +103,6 @@ function skillPath(workspaceDir: string, skillName: string): string {
     }
   }
   return file;
-}
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fsPromises.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function atomicWriteInsideRoot(params: {
@@ -329,21 +317,25 @@ export async function writeSupportFile(params: {
   }
   assertSkillContentSafe(params.content);
   const root = skillDir(params.workspaceDir, name);
-  const target = path.resolve(root, ...parts);
-  if (!isPathInside(root, target)) {
+  const target = resolvePathWithinRoot({
+    rootDir: root,
+    requestedPath: path.join(...parts),
+    scopeLabel: "skill directory",
+  });
+  if (!target.ok) {
     throw new Error("support file path escapes skill directory");
   }
   if (fs.existsSync(root)) {
-    const realpathCandidate = resolveExistingPathForRealpathCheck(root, target);
+    const realpathCandidate = resolveExistingPathForRealpathCheck(root, target.path);
     if (!isPathInsideWithRealpath(root, realpathCandidate, { requireRealpath: true })) {
       throw new Error("support file path escapes skill directory after symlink resolution");
     }
   }
   await atomicWriteInsideRoot({
     rootDir: skillsRootDir(params.workspaceDir),
-    filePath: target,
+    filePath: target.path,
     content: `${params.content.trimEnd()}\n`,
     scopeLabel: "support file",
   });
-  return target;
+  return target.path;
 }

@@ -16,6 +16,22 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
 
 import { startQaGatewayRpcClient } from "./gateway-rpc-client.js";
 
+function expectRequestResolver(
+  callback: ((value: { ok: boolean }) => void) | null,
+): (value: { ok: boolean }) => void {
+  if (callback === null) {
+    throw new Error("Expected first request resolver callback to be captured");
+  }
+  return callback;
+}
+
+function expectReleaseCallback(callback: (() => void) | null): () => void {
+  if (callback === null) {
+    throw new Error("Expected first request release callback to be captured");
+  }
+  return callback;
+}
+
 describe("startQaGatewayRpcClient", () => {
   beforeEach(() => {
     gatewayRpcMock.reset();
@@ -25,48 +41,48 @@ describe("startQaGatewayRpcClient", () => {
     const originalHome = process.env.OPENCLAW_HOME;
     delete process.env.OPENCLAW_HOME;
 
-    gatewayRpcMock.callGatewayFromCli.mockImplementationOnce(async () => {
-      expect(process.env.OPENCLAW_HOME).toBeUndefined();
-      return { ok: true };
-    });
+    try {
+      gatewayRpcMock.callGatewayFromCli.mockImplementationOnce(async () => {
+        expect(process.env.OPENCLAW_HOME).toBeUndefined();
+        return { ok: true };
+      });
 
-    const client = await startQaGatewayRpcClient({
-      wsUrl: "ws://127.0.0.1:18789",
-      token: "qa-token",
-      logs: () => "qa logs",
-    });
-
-    await expect(
-      client.request("agent.run", { prompt: "hi" }, { expectFinal: true, timeoutMs: 45_000 }),
-    ).resolves.toEqual({ ok: true });
-
-    expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledWith(
-      "agent.run",
-      {
-        url: "ws://127.0.0.1:18789",
+      const client = await startQaGatewayRpcClient({
+        wsUrl: "ws://127.0.0.1:18789",
         token: "qa-token",
-        timeout: "45000",
-        expectFinal: true,
-        json: true,
-        scopes: [
-          "operator.admin",
-          "operator.read",
-          "operator.write",
-          "operator.approvals",
-          "operator.pairing",
-          "operator.talk.secrets",
-        ],
-      },
-      { prompt: "hi" },
-      {
-        clientName: "gateway-client",
-        deviceIdentity: null,
-        expectFinal: true,
-        mode: "backend",
-        progress: false,
-        scopes: ["operator.admin"],
-      },
-    );
+        logs: () => "qa logs",
+      });
+
+      await expect(
+        client.request("agent.run", { prompt: "hi" }, { expectFinal: true, timeoutMs: 45_000 }),
+      ).resolves.toEqual({ ok: true });
+
+      expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledWith(
+        "agent.run",
+        {
+          url: "ws://127.0.0.1:18789",
+          token: "qa-token",
+          timeout: "45000",
+          expectFinal: true,
+          json: true,
+        },
+        { prompt: "hi" },
+        {
+          clientName: "gateway-client",
+          deviceIdentity: null,
+          expectFinal: true,
+          mode: "backend",
+          progress: false,
+          scopes: ["operator.admin"],
+        },
+      );
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = originalHome;
+      }
+    }
 
     expect(process.env.OPENCLAW_HOME).toBe(originalHome);
   });
@@ -153,8 +169,7 @@ describe("startQaGatewayRpcClient", () => {
       },
     );
 
-    expect(resolveFirst).not.toBeNull();
-    resolveFirst!({ ok: true });
+    expectRequestResolver(resolveFirst)({ ok: true });
     await expect(firstRequest).resolves.toEqual({ ok: true });
   });
 
@@ -182,8 +197,7 @@ describe("startQaGatewayRpcClient", () => {
 
     expect(gatewayRpcMock.callGatewayFromCli).toHaveBeenCalledTimes(1);
 
-    expect(releaseFirst).not.toBeNull();
-    releaseFirst!();
+    expectReleaseCallback(releaseFirst)();
 
     await expect(firstRequest).resolves.toEqual({ ok: true });
     await expect(secondRequest).resolves.toEqual({ ok: true });

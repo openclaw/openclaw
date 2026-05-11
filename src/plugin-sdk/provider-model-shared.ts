@@ -3,7 +3,6 @@
 // Keep provider-owned exports out of this subpath so plugin loaders can import it
 // without recursing through provider-specific facades.
 
-import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.models.js";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -30,6 +29,11 @@ import {
 
 export type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
 export type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogKind,
+  UnifiedModelCatalogSource,
+} from "../model-catalog/types.js";
+export type {
   BedrockDiscoveryConfig,
   ModelCompatConfig,
   ModelDefinitionConfig,
@@ -38,12 +42,18 @@ export type {
   ProviderEndpointClass,
   ProviderEndpointResolution,
 } from "../agents/provider-attribution.js";
-export type { ProviderPlugin } from "../plugins/types.js";
+export type {
+  ProviderPlugin,
+  UnifiedModelCatalogProviderContext,
+  UnifiedModelCatalogProviderPlugin,
+} from "../plugins/types.js";
 
 export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 export {
   GPT5_BEHAVIOR_CONTRACT,
+  GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,
   GPT5_FRIENDLY_PROMPT_OVERLAY,
+  GPT5_HEARTBEAT_PROMPT_OVERLAY,
   isGpt5ModelId,
   normalizeGpt5PromptOverlayMode,
   renderGpt5PromptOverlay,
@@ -162,7 +172,11 @@ type ProviderReplayFamilyHooks = Pick<
 >;
 
 type BuildProviderReplayFamilyHooksOptions =
-  | { family: "openai-compatible"; sanitizeToolCallIds?: boolean }
+  | {
+      family: "openai-compatible";
+      sanitizeToolCallIds?: boolean;
+      dropReasoningFromHistory?: boolean;
+    }
   | { family: "anthropic-by-model" }
   | { family: "native-anthropic-by-model" }
   | { family: "google-gemini" }
@@ -177,7 +191,10 @@ export function buildProviderReplayFamilyHooks(
 ): ProviderReplayFamilyHooks {
   switch (options.family) {
     case "openai-compatible": {
-      const policyOptions = { sanitizeToolCallIds: options.sanitizeToolCallIds };
+      const policyOptions = {
+        sanitizeToolCallIds: options.sanitizeToolCallIds,
+        dropReasoningFromHistory: options.dropReasoningFromHistory,
+      };
       return {
         buildReplayPolicy: (ctx: ProviderReplayPolicyContext) =>
           buildOpenAICompatibleReplayPolicy(ctx.modelApi, {

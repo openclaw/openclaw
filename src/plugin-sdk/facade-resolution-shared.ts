@@ -53,6 +53,10 @@ export function resolveBundledFacadeModuleLocation(params: {
   env?: NodeJS.ProcessEnv;
   bundledPluginsDir?: string | null;
 }): FacadeModuleLocationLike | null {
+  const env = params.env ?? process.env;
+  if (areBundledPluginsDisabled(env)) {
+    return null;
+  }
   const preferSource = !params.currentModulePath.includes(`${path.sep}dist${path.sep}`);
   const packageSourceRoot = path.resolve(params.packageRoot, "extensions");
   const publicSurfaceParams = {

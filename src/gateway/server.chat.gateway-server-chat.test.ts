@@ -38,6 +38,10 @@ describe("gateway server chat", () => {
     dispatchInboundMessageMock.mockReset();
   });
 
+  const removeTempDir = async (dir: string): Promise<void> => {
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  };
+
   const buildNoReplyHistoryFixture = (includeMixedAssistant = false) => [
     {
       role: "user",
@@ -109,7 +113,7 @@ describe("gateway server chat", () => {
       return await run(dir);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await removeTempDir(dir);
     }
   };
 
@@ -223,7 +227,7 @@ describe("gateway server chat", () => {
       expect(res.payload?.messageSeq).toBe(1);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -250,7 +254,7 @@ describe("gateway server chat", () => {
       expect(res.payload?.messageSeq).toBe(1);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -325,7 +329,7 @@ describe("gateway server chat", () => {
       }
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -360,7 +364,7 @@ describe("gateway server chat", () => {
       }
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -535,7 +539,7 @@ describe("gateway server chat", () => {
         CHAT_RESPONSE_TIMEOUT_MS,
       );
       expect(imgRes.ok).toBe(true);
-      expect(imgRes.payload?.runId).toBeDefined();
+      expect(imgRes.payload).toEqual(expect.objectContaining({ runId: expect.any(String) }));
       const reqIdOnly = "chat-img-only";
       ws.send(
         JSON.stringify({
@@ -564,7 +568,7 @@ describe("gateway server chat", () => {
         CHAT_RESPONSE_TIMEOUT_MS,
       );
       expect(imgOnlyRes.ok).toBe(true);
-      expect(imgOnlyRes.payload?.runId).toBeDefined();
+      expect(imgOnlyRes.payload).toEqual(expect.objectContaining({ runId: expect.any(String) }));
 
       const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(historyDir);
@@ -606,7 +610,7 @@ describe("gateway server chat", () => {
       if (webchatWs) {
         webchatWs.close();
       }
-      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+      await Promise.all(tempDirs.map((dir) => removeTempDir(dir)));
     }
   });
 
@@ -958,7 +962,9 @@ describe("gateway server chat", () => {
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
 
-        expect(assistantMessage).toBeTruthy();
+        if (!assistantMessage) {
+          throw new Error("expected assistant history message");
+        }
         const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
         expect(assistantContent).toEqual([
           { type: "text", text: "Image reply" },
@@ -1049,7 +1055,7 @@ describe("gateway server chat", () => {
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -1189,7 +1195,7 @@ describe("gateway server chat", () => {
     } finally {
       resolveAgentRun?.();
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -1403,7 +1409,7 @@ describe("gateway server chat", () => {
       }
     } finally {
       webchatWs.close();
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
       testState.sessionStorePath = undefined;
     }
   });

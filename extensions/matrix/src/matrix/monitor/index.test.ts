@@ -475,12 +475,22 @@ describe("monitorMatrixProvider", () => {
     ["off", "off", false],
     ["partial", "partial", true],
     ["quiet", "quiet", true],
+    ["progress", "progress", true],
     [{}, "off", false],
     [{ mode: "off" }, "off", false],
     [{ mode: "partial" }, "partial", true],
     [{ mode: "quiet" }, "quiet", true],
+    [{ mode: "progress" }, "progress", true],
     [{ mode: "partial", preview: { toolProgress: false } }, "partial", false],
     [{ mode: "quiet", preview: { toolProgress: false } }, "quiet", false],
+    [{ mode: "partial", progress: { toolProgress: false } }, "partial", true],
+    [{ mode: "quiet", progress: { toolProgress: false } }, "quiet", true],
+    [{ mode: "progress", progress: { toolProgress: false } }, "progress", false],
+    [
+      { mode: "progress", progress: { toolProgress: false }, preview: { toolProgress: true } },
+      "progress",
+      false,
+    ],
     [{ mode: "off", preview: { toolProgress: true } }, "off", false],
   ] satisfies Array<[MatrixConfig["streaming"], MatrixStreamingMode, boolean]>)(
     "resolves streaming=%j to mode=%s and toolProgress=%s",
@@ -498,7 +508,7 @@ describe("monitorMatrixProvider", () => {
 
     await monitorMatrixProvider({ abortSignal: abortController.signal });
 
-    expect(hoisted.callOrder).toEqual([]);
+    expect(hoisted.callOrder).toStrictEqual([]);
     expect(hoisted.resolveTextChunkLimit).not.toHaveBeenCalled();
     expect(hoisted.createMatrixRoomMessageHandler).not.toHaveBeenCalled();
     expect(hoisted.setActiveMatrixClient).not.toHaveBeenCalled();

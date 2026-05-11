@@ -147,6 +147,30 @@ export type SubagentRecoveryState = {
   wedgedReason?: string;
 };
 
+export type LaneExecutionState =
+  | "active"
+  | "draining"
+  | "suspended"
+  | "resuming"
+  | "circuit_open"
+  | "failed_handoff";
+
+export interface QuotaSuspension {
+  schemaVersion: 1;
+  suspendedAt: number; // epoch ms
+  reason: "quota_exhausted" | "manual" | "circuit_open";
+  failedProvider: string;
+  failedModel: string;
+  /** Recovery briefing text injected into the next attempt when state === "resuming". */
+  summary?: string;
+  /** Opaque pointer to an external snapshot blob (path/key); not the briefing text itself. */
+  snapshotRef?: string;
+  /** Lane that was set to concurrency=0 when this suspension was issued. */
+  laneId?: string;
+  expectedResumeBy?: number; // Reaper TTL (e.g. 30min)
+  state: LaneExecutionState; // State machine check for hot-path
+}
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -165,6 +189,8 @@ export type SessionEntry = {
   heartbeatTaskState?: Record<string, number>;
   /** Plugin-owned session state, grouped by plugin id then extension namespace. */
   pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
+  /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
+  pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
   /** Durable one-shot prompt additions drained before the next agent turn. */
   pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;
@@ -190,8 +216,14 @@ export type SessionEntry = {
   abortedLastRun?: boolean;
   /** Durable guard state for automatic subagent orphan recovery. */
   subagentRecovery?: SubagentRecoveryState;
+  /** Quota cascade protection and state-aware failover status. */
+  quotaSuspension?: QuotaSuspension;
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
+  /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
+  usageFamilyKey?: string;
+  /** Session ids known to belong to this usage lineage, including archived predecessors. */
+  usageFamilySessionIds?: string[];
   /** Timestamp (ms) of the last user/channel interaction that should extend idle lifetime. */
   lastInteractionAt?: number;
   /** Stable first-run start time for subagent sessions, persisted after completion. */
@@ -237,6 +269,9 @@ export type SessionEntry = {
    * Resets only preserve user-driven overrides.
    */
   modelOverrideSource?: "auto" | "user";
+  /** Selected model that produced the current auto fallback override. */
+  modelOverrideFallbackOriginProvider?: string;
+  modelOverrideFallbackOriginModel?: string;
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;
@@ -265,6 +300,18 @@ export type SessionEntry = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  /** Durable marker that final user reply delivery still needs a retry/resume pass. */
+  pendingFinalDelivery?: boolean;
+  pendingFinalDeliveryCreatedAt?: number;
+  pendingFinalDeliveryLastAttemptAt?: number;
+  pendingFinalDeliveryAttemptCount?: number;
+  pendingFinalDeliveryLastError?: string | null;
+  /** Frozen reply text that needs delivery. */
+  pendingFinalDeliveryText?: string | null;
+  /** Original delivery context (channel, recipient, etc). */
+  pendingFinalDeliveryContext?: DeliveryContext;
+  /** Durable send intent backing pending final delivery, when already created. */
+  pendingFinalDeliveryIntentId?: string | null;
   /**
    * Whether totalTokens reflects a fresh context snapshot for the latest run.
    * Undefined means legacy/unknown freshness; false forces consumers to treat

@@ -8,7 +8,10 @@ import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
 } from "../codex-native-web-search-core.js";
-import { flattenCompletionMessagesToStringContent } from "../openai-completions-string-content.js";
+import {
+  flattenCompletionMessagesToStringContent,
+  stripCompletionMessagesToRoleContent,
+} from "../openai-completions-string-content.js";
 import { resolveOpenAIReasoningEffortForModel } from "../openai-reasoning-effort.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
@@ -23,6 +26,19 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
 export { resolveOpenAITextVerbosity };
+
+function resolveOpenAITextVerbosityForModel(
+  model: { api?: unknown; id?: unknown; provider?: unknown },
+  verbosity: OpenAITextVerbosity,
+): OpenAITextVerbosity {
+  const api = normalizeOptionalLowercaseString(model.api);
+  const provider = normalizeOptionalLowercaseString(model.provider);
+  const id = normalizeOptionalLowercaseString(model.id);
+  if (api === "openai-responses" && provider === "openai" && id === "chat-latest") {
+    return "medium";
+  }
+  return verbosity;
+}
 
 function resolveOpenAIRequestCapabilities(model: {
   api?: unknown;
@@ -85,6 +101,25 @@ function shouldFlattenOpenAICompletionMessages(model: {
       ? (model.compat as { requiresStringContent?: unknown })
       : undefined;
   return model.api === "openai-completions" && compat?.requiresStringContent === true;
+}
+
+function shouldStripOpenAICompletionTools(model: { api?: unknown; compat?: unknown }): boolean {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { supportsTools?: unknown })
+      : undefined;
+  return model.api === "openai-completions" && compat?.supportsTools === false;
+}
+
+function shouldStripOpenAICompletionMessageKeys(model: {
+  api?: unknown;
+  compat?: unknown;
+}): boolean {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { strictMessageKeys?: unknown })
+      : undefined;
+  return model.api === "openai-completions" && compat?.strictMessageKeys === true;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -292,6 +327,39 @@ export function createOpenAIStringContentWrapper(baseStreamFn: StreamFn | undefi
   };
 }
 
+export function createOpenAICompletionsStrictMessageKeysWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!shouldStripOpenAICompletionMessageKeys(model)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (!Array.isArray(payloadObj.messages)) {
+        return;
+      }
+      payloadObj.messages = stripCompletionMessagesToRoleContent(payloadObj.messages);
+    });
+  };
+}
+
+export function createOpenAICompletionsToolsCompatWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!shouldStripOpenAICompletionTools(model)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      delete payloadObj.tools;
+      delete payloadObj.tool_choice;
+      delete payloadObj.parallel_tool_calls;
+    });
+  };
+}
+
 export function createOpenAIThinkingLevelWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
@@ -392,7 +460,9 @@ export function createOpenAITextVerbosityWrapper(
     if (model.api !== "openai-responses" && model.api !== "openai-codex-responses") {
       return underlying(model, context, options);
     }
-    const shouldOverrideExistingVerbosity = model.api === "openai-codex-responses";
+    const resolvedVerbosity = resolveOpenAITextVerbosityForModel(model, verbosity);
+    const shouldOverrideExistingVerbosity =
+      model.api === "openai-codex-responses" || resolvedVerbosity !== verbosity;
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
@@ -404,7 +474,7 @@ export function createOpenAITextVerbosityWrapper(
               ? (payloadObj.text as Record<string, unknown>)
               : {};
           if (shouldOverrideExistingVerbosity || existingText.verbosity === undefined) {
-            payloadObj.text = { ...existingText, verbosity };
+            payloadObj.text = { ...existingText, verbosity: resolvedVerbosity };
           }
         }
         return originalOnPayload?.(payload, model);
@@ -467,13 +537,9 @@ export function createCodexNativeWebSearchWrapper(
 export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const typedOptions = options as
-      | (SimpleStreamOptions & { openaiWsWarmup?: boolean })
-      | undefined;
     const mergedOptions = {
       ...options,
       transport: options?.transport ?? "auto",
-      openaiWsWarmup: typedOptions?.openaiWsWarmup ?? true,
     } as SimpleStreamOptions;
     return underlying(model, context, mergedOptions);
   };

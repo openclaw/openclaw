@@ -222,6 +222,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
             agents: {
               defaults: {
                 model: { primary: "openai-codex/gpt-5.4", fallbacks: defaultFallbacks },
+                models: { "openai-codex/gpt-5.4": {} },
               },
             },
           },
@@ -237,7 +238,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
 
       expect(result.status).toBe("error");
       expect(result.error).toBe(
-        "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6",
+        "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6 is not in [openai-codex/gpt-5.4]",
       );
       expect(logWarnMock).not.toHaveBeenCalled();
       expect(runWithModelFallbackMock).not.toHaveBeenCalled();
@@ -266,7 +267,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   describe("CLI session handoff (issue #29774)", () => {
     it("passes the cron abort signal to CLI runs and drops late CLI results", async () => {
       const abortController = new AbortController();
-      let markCliStarted!: () => void;
+      let markCliStarted: (() => void) | undefined;
       const cliStarted = new Promise<void>((resolve) => {
         markCliStarted = resolve;
       });
@@ -274,6 +275,9 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       isCliProviderMock.mockReturnValue(true);
       runCliAgentMock.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
         expect(params.abortSignal).toBe(abortController.signal);
+        if (!markCliStarted) {
+          throw new Error("Expected CLI start marker callback to be initialized");
+        }
         markCliStarted();
         await new Promise<void>((resolve) => {
           params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });

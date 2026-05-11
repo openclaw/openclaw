@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { MediaAttachment, MediaUnderstandingOutput } from "../media-understanding/types.js";
-import { describeImageFile, runMediaUnderstandingFile } from "./runtime.js";
+import {
+  describeImageFile,
+  describeImageFileWithModel,
+  runMediaUnderstandingFile,
+} from "./runtime.js";
 
 const mocks = vi.hoisted(() => {
   const cleanup = vi.fn(async () => {});
@@ -10,6 +14,8 @@ const mocks = vi.hoisted(() => {
     createMediaAttachmentCache: vi.fn(() => ({ cleanup })),
     normalizeMediaAttachments: vi.fn<() => MediaAttachment[]>(() => []),
     normalizeMediaProviderId: vi.fn((provider: string) => provider.trim().toLowerCase()),
+    readLocalFileSafely: vi.fn(async () => ({ buffer: Buffer.from("image") })),
+    describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
     runCapability: vi.fn(),
     cleanup,
   };
@@ -26,12 +32,24 @@ vi.mock("./provider-registry.js", () => ({
   normalizeMediaProviderId: mocks.normalizeMediaProviderId,
 }));
 
+vi.mock("../infra/fs-safe.js", () => ({
+  readLocalFileSafely: mocks.readLocalFileSafely,
+}));
+
+vi.mock("./image-runtime.js", () => ({
+  describeImageWithModel: mocks.describeImageWithModel,
+}));
+
 describe("media-understanding runtime", () => {
   afterEach(() => {
     mocks.buildProviderRegistry.mockReset();
     mocks.createMediaAttachmentCache.mockReset();
     mocks.normalizeMediaAttachments.mockReset();
     mocks.normalizeMediaProviderId.mockReset();
+    mocks.readLocalFileSafely.mockReset();
+    mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("image") });
+    mocks.describeImageWithModel.mockReset();
+    mocks.describeImageWithModel.mockResolvedValue({ text: "generic image ok", model: "vision" });
     mocks.runCapability.mockReset();
     mocks.cleanup.mockReset();
     mocks.cleanup.mockResolvedValue(undefined);
@@ -137,6 +155,9 @@ describe("media-understanding runtime", () => {
   });
 
   it("passes per-request image prompts into media understanding config", async () => {
+    const media = [{ index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" }];
+    const providerRegistry = new Map();
+    const cache = { cleanup: mocks.cleanup };
     const output: MediaUnderstandingOutput = {
       kind: "image.description",
       attachmentIndex: 0,
@@ -144,39 +165,92 @@ describe("media-understanding runtime", () => {
       model: "vision-v1",
       text: "button count ok",
     };
-    mocks.normalizeMediaAttachments.mockReturnValue([
-      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
-    ]);
+    mocks.buildProviderRegistry.mockReturnValue(providerRegistry);
+    mocks.createMediaAttachmentCache.mockReturnValue(cache);
+    mocks.normalizeMediaAttachments.mockReturnValue(media);
     mocks.runCapability.mockResolvedValue({
       outputs: [output],
     });
 
+    const cfg = {
+      tools: {
+        media: {
+          image: {
+            prompt: "default image prompt",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
     await describeImageFile({
       filePath: "/tmp/sample.jpg",
       mime: "image/jpeg",
-      cfg: {
-        tools: {
-          media: {
-            image: {
-              prompt: "default image prompt",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg,
       agentDir: "/tmp/agent",
       prompt: "Count visible buttons",
       timeoutMs: 90_000,
     });
 
-    expect(mocks.runCapability).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          prompt: "Count visible buttons",
-          _requestPromptOverride: "Count visible buttons",
-          timeoutSeconds: 90,
-        }),
-      }),
+    expect(mocks.runCapability).toHaveBeenCalledOnce();
+    expect(mocks.runCapability.mock.calls[0]?.[0]).toEqual({
+      capability: "image",
+      cfg: {
+        tools: {
+          media: {
+            image: {
+              prompt: "Count visible buttons",
+              _requestPromptOverride: "Count visible buttons",
+              timeoutSeconds: 90,
+            },
+          },
+        },
+      },
+      ctx: {
+        MediaPath: "/tmp/sample.jpg",
+        MediaType: "image/jpeg",
+      },
+      attachments: cache,
+      media,
+      agentDir: "/tmp/agent",
+      providerRegistry,
+      config: {
+        prompt: "Count visible buttons",
+        _requestPromptOverride: "Count visible buttons",
+        timeoutSeconds: 90,
+      },
+      activeModel: undefined,
+    });
+  });
+
+  it("uses the generic model-backed image runtime for explicit models without media hooks", async () => {
+    mocks.buildProviderRegistry.mockReturnValue(
+      new Map([["zai", { id: "zai", capabilities: ["image"] }]]),
     );
+
+    await expect(
+      describeImageFileWithModel({
+        filePath: "/tmp/sample.jpg",
+        mime: "image/jpeg",
+        provider: "zai",
+        model: "glm-4.6v",
+        prompt: "Describe it",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toEqual({ text: "generic image ok", model: "vision" });
+
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith({
+      buffer: Buffer.from("image"),
+      fileName: "sample.jpg",
+      mime: "image/jpeg",
+      provider: "zai",
+      model: "glm-4.6v",
+      prompt: "Describe it",
+      maxTokens: undefined,
+      timeoutMs: 30_000,
+      cfg: {},
+      agentDir: "/tmp/agent",
+    });
   });
 
   it("surfaces the underlying provider failure when media understanding fails", async () => {
