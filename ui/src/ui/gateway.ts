@@ -91,6 +91,7 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
     code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
     code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
     code === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH ||
+    code === ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH ||
     code === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
     code === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
     code === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED
