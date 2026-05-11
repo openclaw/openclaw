@@ -55,6 +55,7 @@ function stripKindPrefix(raw: string): string {
 
 function inferPeerKind(params: {
   channel: ChannelId;
+  target: string;
   resolvedTarget?: ResolvedMessagingTarget;
 }): ChatType {
   const resolvedKind = params.resolvedTarget?.kind;
@@ -74,6 +75,27 @@ function inferPeerKind(params: {
     }
     return "group";
   }
+  const plugin = resolveOutboundChannelPlugin(params.channel);
+  const strippedTarget = stripProviderPrefix(params.target, params.channel).trim();
+  const targets = [params.target, strippedTarget].filter(
+    (target, index, values): target is string =>
+      Boolean(target) && values.indexOf(target) === index,
+  );
+  for (const target of targets) {
+    const inferred = plugin?.messaging?.inferTargetChatType?.({ to: target });
+    if (inferred === "direct" || inferred === "group" || inferred === "channel") {
+      return inferred;
+    }
+  }
+  if (targets.some((target) => /^(@|<@!?|user:|dm:|c2c:|users\/)/i.test(target))) {
+    return "direct";
+  }
+  if (targets.some((target) => /^(channel:|conversation:|thread:|channels\/)/i.test(target))) {
+    return "channel";
+  }
+  if (targets.some((target) => /^(#|group:|room:|spaces\/|groups\/|rooms\/)/i.test(target))) {
+    return "group";
+  }
   return "direct";
 }
 
@@ -86,6 +108,7 @@ function resolveFallbackSession(
   }
   const peerKind = inferPeerKind({
     channel: params.channel,
+    target: params.target,
     resolvedTarget: params.resolvedTarget,
   });
   const peerId = stripKindPrefix(trimmed);

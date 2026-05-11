@@ -578,6 +578,16 @@ export function setMinimalOutboundSessionPluginRegistryForTests(): void {
       label: "Board Chat",
       resolveOutboundSessionRoute: resolveBoardChatOutboundSessionRouteForTest,
     }),
+    {
+      ...createChannelTestPluginBase({
+        id: "fallbackchat",
+        label: "Fallback Chat",
+        capabilities: { chatTypes: ["direct", "group", "channel"] },
+      }),
+      messaging: {
+        targetPrefixes: ["fallbackchat"],
+      },
+    },
   ];
   setActivePluginRegistry(
     createTestRegistry(
