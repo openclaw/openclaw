@@ -1,4 +1,3 @@
-import { resolveLoadedSessionThreadInfo } from "../../channels/plugins/session-thread-info-loaded.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
@@ -15,10 +14,6 @@ export {
 } from "./reset-policy.js";
 import type { SessionResetType } from "./reset-policy.js";
 
-export function isThreadSessionKey(sessionKey?: string | null): boolean {
-  return Boolean(resolveLoadedSessionThreadInfo(sessionKey).threadId);
-}
-
 export function resolveSessionResetType(params: {
   sessionKey?: string | null;
   sessionScope?: string | null;
@@ -26,7 +21,8 @@ export function resolveSessionResetType(params: {
   isGroup?: boolean;
   isThread?: boolean;
 }): SessionResetType {
-  if (params.isThread || isThreadSessionKey(params.sessionKey)) {
+  void params.sessionKey;
+  if (params.isThread) {
     return "thread";
   }
   if (params.isGroup) {
@@ -63,7 +59,8 @@ export function resolveThreadFlag(params: {
   if (params.parentSessionKey?.trim()) {
     return true;
   }
-  return isThreadSessionKey(params.sessionKey);
+  void params.sessionKey;
+  return false;
 }
 
 export function resolveChannelResetConfig(params: {

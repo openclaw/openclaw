@@ -27,6 +27,7 @@ const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   loadGatewaySessionRow: vi.fn(),
+  readSqliteSessionRoutingInfo: vi.fn(),
   applySessionEntryWrite: vi.fn(),
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
@@ -82,6 +83,16 @@ vi.mock("../../config/sessions.js", async () => {
       cfg?: { session?: { mainKey?: string } };
       agentId: string;
     }) => `agent:${agentId}:${cfg?.session?.mainKey ?? "main"}`,
+  };
+});
+
+vi.mock("../../config/sessions/session-entries.sqlite.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/session-entries.sqlite.js")
+  >("../../config/sessions/session-entries.sqlite.js");
+  return {
+    ...actual,
+    readSqliteSessionRoutingInfo: mocks.readSqliteSessionRoutingInfo,
   };
 });
 
@@ -295,6 +306,16 @@ function mockMainSessionEntry(entry: Record<string, unknown>, cfg: Record<string
   });
 }
 
+function mockGroupRoutingInfo(groupId: string, channel = "slack") {
+  mocks.readSqliteSessionRoutingInfo.mockReturnValue({
+    sessionScope: "conversation",
+    chatType: "group",
+    channel,
+    conversationKind: "group",
+    conversationPeerId: groupId,
+  });
+}
+
 function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
   return {
     sessionId: "existing-session-id",
@@ -492,6 +513,7 @@ describe("gateway agent handler", () => {
     resetTaskRegistryForTests();
     mocks.loadConfigReturn = {};
     mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
+    mocks.readSqliteSessionRoutingInfo.mockReset().mockReturnValue(undefined);
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
     mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");
@@ -568,6 +590,7 @@ describe("gateway agent handler", () => {
 
   it("keeps stored group metadata when a trusted group session receives caller-supplied selectors", async () => {
     const sessionKey = "agent:main:slack:group:C123";
+    mockGroupRoutingInfo("C123");
     const existingEntry = buildExistingMainStoreEntry({
       channel: "slack",
       groupId: "C123",
@@ -626,6 +649,7 @@ describe("gateway agent handler", () => {
 
   it("persists first-turn group selectors for a trusted new group session", async () => {
     const sessionKey = "agent:main:slack:group:C123";
+    mockGroupRoutingInfo("C123");
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
       entry: undefined,
@@ -3105,11 +3129,31 @@ describe("gateway agent handler", () => {
       sessionKey: string,
       entry: Record<string, unknown>,
       requestGroupId?: string,
+      opts?: {
+        routingGroupId?: string;
+        parentEntry?: Record<string, unknown>;
+      },
     ) {
-      mocks.loadSessionEntry.mockReturnValue({
-        cfg: {},
-        entry: { sessionId: "existing-session-id", updatedAt: Date.now(), ...entry },
-        canonicalKey: sessionKey,
+      if (opts?.routingGroupId) {
+        mockGroupRoutingInfo(opts.routingGroupId);
+      }
+      mocks.loadSessionEntry.mockImplementation((key?: string) => {
+        if (opts?.parentEntry && typeof key === "string" && key === entry.spawnedBy) {
+          return {
+            cfg: {},
+            entry: {
+              sessionId: "parent-session-id",
+              updatedAt: Date.now(),
+              ...opts.parentEntry,
+            },
+            canonicalKey: key,
+          };
+        }
+        return {
+          cfg: {},
+          entry: { sessionId: "existing-session-id", updatedAt: Date.now(), ...entry },
+          canonicalKey: sessionKey,
+        };
       });
       let capturedEntry: Record<string, unknown> | undefined;
       mocks.applySessionEntryWrite.mockImplementation(async (_path, updater) => {
@@ -3135,11 +3179,12 @@ describe("gateway agent handler", () => {
       expect(entry?.groupId).toBeUndefined();
     });
 
-    it("preserves groupId when session key encodes matching group membership", async () => {
+    it("preserves groupId when typed routing metadata matches group membership", async () => {
       const entry = await captureGroupEntryFields(
         "agent:main:slack:group:trusted-group",
         {},
         "trusted-group",
+        { routingGroupId: "trusted-group" },
       );
       expect(entry?.groupId).toBe("trusted-group");
     });
@@ -3154,11 +3199,12 @@ describe("gateway agent handler", () => {
       expect(entry?.groupId).toBeUndefined();
     });
 
-    it("trusts groupId when spawnedBy session key encodes the matching group", async () => {
+    it("trusts groupId inherited from spawnedBy session entry", async () => {
       const entry = await captureGroupEntryFields(
         "agent:main:main",
-        { spawnedBy: "agent:main:slack:group:trusted-group" },
+        { spawnedBy: "agent:main:parent" },
         "trusted-group",
+        { parentEntry: { groupId: "trusted-group" } },
       );
       expect(entry?.groupId).toBe("trusted-group");
     });

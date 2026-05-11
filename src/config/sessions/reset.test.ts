@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
-import { isThreadSessionKey, resolveSessionResetType } from "./reset.js";
+import { resolveSessionResetType, resolveThreadFlag } from "./reset.js";
 
 describe("session reset thread detection", () => {
   beforeEach(() => {
@@ -11,14 +11,14 @@ describe("session reset thread detection", () => {
   it("uses explicit group metadata for conversation ids with embedded :topic:", () => {
     const sessionKey =
       "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user";
-    expect(isThreadSessionKey(sessionKey)).toBe(false);
     expect(resolveSessionResetType({ sessionKey, isGroup: true })).toBe("group");
   });
 
-  it("still treats telegram :topic: suffixes as thread sessions", () => {
+  it("does not infer thread reset type from session key shape", () => {
     const sessionKey = "agent:main:telegram:group:-100123:topic:77";
-    expect(isThreadSessionKey(sessionKey)).toBe(true);
-    expect(resolveSessionResetType({ sessionKey })).toBe("thread");
+    expect(resolveSessionResetType({ sessionKey })).toBe("direct");
+    expect(resolveThreadFlag({ sessionKey })).toBe(false);
+    expect(resolveThreadFlag({ sessionKey, messageThreadId: 77 })).toBe(true);
   });
 
   it("prefers typed session metadata over session-key shape for group resets", () => {

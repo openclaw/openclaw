@@ -14,7 +14,6 @@ import {
   resolvePublicAgentAvatarSource,
 } from "../../agents/identity-avatar.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
-import { resolveTrustedGroupId } from "../../agents/pi-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import {
   normalizeSpawnedRunMetadata,
@@ -72,10 +71,6 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import {
-  parseRawSessionConversationRef,
-  parseThreadSessionSuffix,
-} from "../../sessions/session-key-utils.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -285,29 +280,29 @@ function normalizeTrustedGroupMetadata(value?: {
   };
 }
 
-function resolveSessionKeyGroupId(sessionKey: string): string | undefined {
-  const { baseSessionKey } = parseThreadSessionSuffix(sessionKey);
-  const conversation = parseRawSessionConversationRef(baseSessionKey ?? sessionKey);
-  if (!conversation || (conversation.kind !== "group" && conversation.kind !== "channel")) {
-    return undefined;
-  }
-  return conversation.rawId;
-}
-
 function resolveTrustedGroupMetadata(params: {
-  sessionKey: string;
-  spawnedBy?: string;
+  typedGroupId?: string;
   stored: TrustedGroupMetadata;
   inherited?: TrustedGroupMetadata;
 }): TrustedGroupMetadata {
+  const inheritedMatchesTyped =
+    params.inherited?.groupId &&
+    (!params.typedGroupId || params.inherited.groupId === params.typedGroupId);
+  const trustedGroupId = params.typedGroupId ?? params.inherited?.groupId;
+  const storedMatchesTrusted =
+    params.stored.groupId && trustedGroupId && params.stored.groupId === trustedGroupId;
+  const groupId = storedMatchesTrusted ? params.stored.groupId : trustedGroupId;
+  if (!groupId) {
+    return {};
+  }
   return {
-    groupId:
-      params.stored.groupId ??
-      params.inherited?.groupId ??
-      resolveSessionKeyGroupId(params.sessionKey) ??
-      (params.spawnedBy ? resolveSessionKeyGroupId(params.spawnedBy) : undefined),
-    groupChannel: params.stored.groupChannel ?? params.inherited?.groupChannel,
-    groupSpace: params.stored.groupSpace ?? params.inherited?.groupSpace,
+    groupId,
+    groupChannel:
+      (storedMatchesTrusted ? params.stored.groupChannel : undefined) ??
+      (inheritedMatchesTyped ? params.inherited?.groupChannel : undefined),
+    groupSpace:
+      (storedMatchesTrusted ? params.stored.groupSpace : undefined) ??
+      (inheritedMatchesTyped ? params.inherited?.groupSpace : undefined),
   };
 }
 
@@ -1043,29 +1038,24 @@ export const agentHandlers: GatewayRequestHandlers = {
         }
       }
       const trustedGroup = resolveTrustedGroupMetadata({
-        sessionKey: canonicalKey,
-        spawnedBy: spawnedByValue,
         stored: storedGroup,
         inherited: inheritedGroup,
+        typedGroupId:
+          routingInfo?.chatType === "group" || routingInfo?.chatType === "channel"
+            ? routingInfo.conversationPeerId
+            : undefined,
       });
-      const validatedGroup = trustedGroup.groupId
-        ? resolveTrustedGroupId({
-            groupId: trustedGroup.groupId,
-            sessionKey: canonicalKey,
-            spawnedBy: spawnedByValue,
-          })
-        : undefined;
-      if (validatedGroup?.dropped) {
+      const trustRequestSelectors =
+        Boolean(trustedGroup.groupId) &&
+        requestGroupMatchesTrusted({
+          requestGroupId: normalizedSpawned.groupId,
+          trustedGroupId: trustedGroup.groupId,
+        });
+      if (!trustedGroup.groupId || !trustRequestSelectors) {
         resolvedGroupId = undefined;
         resolvedGroupChannel = undefined;
         resolvedGroupSpace = undefined;
       } else {
-        const trustRequestSelectors =
-          Boolean(trustedGroup.groupId) &&
-          requestGroupMatchesTrusted({
-            requestGroupId: normalizedSpawned.groupId,
-            trustedGroupId: trustedGroup.groupId,
-          });
         resolvedGroupId = trustedGroup.groupId;
         resolvedGroupChannel =
           trustedGroup.groupChannel ??
