@@ -9,7 +9,7 @@ import {
   isAbortRequestText,
   isBtwRequestText,
 } from "openclaw/plugin-sdk/command-primitives-runtime";
-import { resolveTelegramForumThreadId } from "./bot/helpers.js";
+import { resolveTelegramForumThreadId, resolveTelegramMessageThreadId } from "./bot/helpers.js";
 
 type TelegramSequentialKeyContext = {
   chat?: { id?: number };
@@ -97,7 +97,7 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     return "telegram:approval";
   }
   const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
-  const messageThreadId = msg?.message_thread_id;
+  const messageThreadId = resolveTelegramMessageThreadId(msg);
   const isForum =
     msg?.chat?.is_forum ?? (msg?.chat?.type === "supergroup" && msg?.is_topic_message === true);
   const threadId = isGroup

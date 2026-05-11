@@ -78,6 +78,7 @@ import {
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  resolveTelegramMessageThreadId,
   shouldUseTelegramDmThreadSession,
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
@@ -433,7 +434,7 @@ export const registerTelegramHandlers = ({
       runtime.error?.(danger(`telegram debounce flush failed: ${String(err)}`));
       const chatId = items[0]?.msg.chat.id;
       if (chatId != null) {
-        const threadId = items[0]?.msg.message_thread_id;
+        const threadId = resolveTelegramMessageThreadId(items[0]?.msg);
         void bot.api
           .sendMessage(
             chatId,
@@ -1587,7 +1588,7 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      const messageThreadId = callbackMessage.message_thread_id;
+      const messageThreadId = resolveTelegramMessageThreadId(callbackMessage);
       const isForum = await resolveTelegramForumFlag({
         chatId,
         chatType: callbackMessage.chat.type,
@@ -2242,11 +2243,12 @@ export const registerTelegramHandlers = ({
       getChat,
     });
     const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
+    const messageThreadId = resolveTelegramMessageThreadId(normalizedMsg);
     const resolvedThreadId = resolveTelegramForumThreadId({
       isForum,
-      messageThreadId: normalizedMsg.message_thread_id,
+      messageThreadId,
     });
-    const dmThreadId = !isGroup ? normalizedMsg.message_thread_id : undefined;
+    const dmThreadId = !isGroup ? messageThreadId : undefined;
     recordMessageForReplyChain(normalizedMsg, resolvedThreadId ?? dmThreadId);
   };
 
@@ -2368,7 +2370,7 @@ export const registerTelegramHandlers = ({
       chatId: normalizedMsg.chat.id,
       isGroup,
       isForum,
-      messageThreadId: normalizedMsg.message_thread_id,
+      messageThreadId: resolveTelegramMessageThreadId(normalizedMsg),
       senderId: normalizedMsg.from?.id != null ? String(normalizedMsg.from.id) : "",
       senderUsername: normalizedMsg.from?.username ?? "",
       requireConfiguredGroup: false,

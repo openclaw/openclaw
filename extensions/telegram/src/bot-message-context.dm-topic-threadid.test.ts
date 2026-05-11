@@ -77,6 +77,22 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expectRecordedRoute({ to: "telegram:1234", threadId: "42" });
   });
 
+  it("uses direct_messages_topic.topic_id as the DM topic thread id", async () => {
+    const ctx = await buildCtx({
+      message: {
+        chat: { id: 1234, type: "private" },
+        direct_messages_topic: { topic_id: 43 },
+      },
+    });
+
+    if (!ctx?.ctxPayload) {
+      throw new Error("expected Telegram DM topic context payload");
+    }
+    expect(recordInboundSessionMock).toHaveBeenCalled();
+
+    expectRecordedRoute({ to: "telegram:1234", threadId: "43" });
+  });
+
   it("builds Telegram payloads through the shared channel turn context", async () => {
     const { buildChannelTurnContext } = await import("openclaw/plugin-sdk/channel-inbound");
     const buildChannelTurnContextMock = vi.fn(buildChannelTurnContext);

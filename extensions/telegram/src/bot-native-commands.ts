@@ -75,6 +75,7 @@ import {
   resolveTelegramCommandAuthorization,
   resolveTelegramForumFlag,
   resolveTelegramGroupAllowFromContext,
+  resolveTelegramMessageThreadId,
   resolveTelegramThreadSpec,
   shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
@@ -366,7 +367,7 @@ async function resolveTelegramNativeCommandThreadContext(params: {
   const { msg, bot } = params;
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
-  const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+  const messageThreadId = resolveTelegramMessageThreadId(msg);
   const getChat =
     typeof bot.api.getChat === "function"
       ? (bot.api.getChat.bind(bot.api) as TelegramGetChat)
@@ -838,7 +839,7 @@ export const registerTelegramNativeCommands = ({
   } | null> => {
     const { msg, runtimeCfg, isGroup, isForum, resolvedThreadId, senderId, topicAgentId } = params;
     const chatId = msg.chat.id;
-    const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+    const messageThreadId = resolveTelegramMessageThreadId(msg);
     const threadSpec = resolveTelegramThreadSpec({
       isGroup,
       isForum,
