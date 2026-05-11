@@ -1203,6 +1203,89 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("suppresses session identity notices when session_info_update visibility is disabled", async () => {
+    const canonicalSessionKey = "agent:main:main";
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey: canonicalSessionKey,
+      meta: createAcpSessionMeta({
+        identity: {
+          state: "pending",
+          source: "ensure",
+          lastUpdatedAt: Date.now(),
+          acpxRecordId: "rec-main",
+        },
+      }),
+    });
+    bindingServiceMocks.listBySession.mockImplementation((targetSessionKey: string) =>
+      targetSessionKey === canonicalSessionKey
+        ? [
+            {
+              bindingId: "discord:default:thread-1",
+              targetSessionKey: canonicalSessionKey,
+              targetKind: "session",
+              conversation: {
+                channel: "discord",
+                accountId: "default",
+                conversationId: "thread-1",
+              },
+              status: "active",
+              boundAt: 0,
+            },
+          ]
+        : [],
+    );
+    sessionMetaMocks.readAcpSessionEntry.mockImplementation(
+      (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+        params.sessionKey === canonicalSessionKey
+          ? {
+              cfg: params.cfg ?? createAcpTestConfig(),
+              storePath: "/tmp/openclaw-session-store.json",
+              sessionKey: canonicalSessionKey,
+              storeSessionKey: canonicalSessionKey,
+              acp: createAcpSessionMeta({
+                identity: {
+                  state: "resolved",
+                  source: "status",
+                  lastUpdatedAt: Date.now(),
+                  acpxSessionId: "acpx-main",
+                },
+              }),
+            }
+          : null,
+    );
+    managerMocks.runTurn.mockResolvedValue(undefined);
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      cfg: createAcpTestConfig({
+        acp: {
+          enabled: true,
+          stream: {
+            tagVisibility: {
+              session_info_update: false,
+            },
+          },
+        },
+      }),
+      sessionKeyOverride: canonicalSessionKey,
+    });
+
+    expect(bindingServiceMocks.listBySession).toHaveBeenCalledWith(canonicalSessionKey);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("Session ids resolved."),
+      }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("acpx session id: acpx-main"),
+      }),
+    );
+  });
+
   it("does not add a fallback when routed ACP text was already delivered as final", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });

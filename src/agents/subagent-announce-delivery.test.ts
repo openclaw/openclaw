@@ -155,6 +155,8 @@ async function deliverDiscordDirectMessageCompletion(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   sourceTool?: string;
+  isActive?: boolean;
+  queueEmbeddedPiMessageWithOutcome?: QueueEmbeddedPiMessageWithOutcome;
 }) {
   const origin = {
     channel: "discord",
@@ -165,9 +167,12 @@ async function deliverDiscordDirectMessageCompletion(params: {
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: "requester-session-dm",
-      isActive: false,
+      isActive: params.isActive === true,
     }),
     getRuntimeConfig: () => ({}) as never,
+    ...(params.queueEmbeddedPiMessageWithOutcome
+      ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
+      : {}),
   });
 
   return deliverSubagentAnnouncement({
@@ -1109,6 +1114,47 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: undefined,
     });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps Discord completion delivery direct even when the requester session is active", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "requester completion" }],
+      },
+    });
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      queueEmbeddedPiMessageWithOutcome,
+      isActive: true,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "discord completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+    });
   });
 
   it("does not fallback when announce-agent delivered media through the message tool", async () => {
