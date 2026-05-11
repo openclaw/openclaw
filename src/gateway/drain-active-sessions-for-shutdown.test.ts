@@ -141,6 +141,59 @@ describe("drainActiveSessionsForShutdown", () => {
     expect((runSessionEndMock.mock.calls[0][0] as { sessionId?: string }).sessionId).toBe("sess-B");
   });
 
+  it("awaits each session_end handler so the bounded timeout actually races real plugin work", async () => {
+    let resolveHandler: (() => void) | undefined;
+    const handlerLatch = new Promise<void>((resolve) => {
+      resolveHandler = resolve;
+    });
+    runSessionEndMock.mockImplementationOnce(async () => {
+      await handlerLatch;
+    });
+    emitGatewaySessionStartPluginHook({
+      cfg,
+      sessionKey: "agent:main:main",
+      sessionId: "sess-A",
+      storePath: "/tmp/store.json",
+    });
+
+    let drainSettled = false;
+    const drainPromise = drainActiveSessionsForShutdown({ reason: "shutdown" }).then((value) => {
+      drainSettled = true;
+      return value;
+    });
+
+    // Yield twice so the drain can call `runSessionEnd`, then assert that
+    // it is still pending: this is the regression check for the fire-and-
+    // forget bug that the bot flagged on the original PR.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(drainSettled).toBe(false);
+    expect(runSessionEndMock).toHaveBeenCalledTimes(1);
+
+    resolveHandler?.();
+    const result = await drainPromise;
+    expect(result.timedOut).toBe(false);
+    expect(result.emittedSessionIds).toEqual(["sess-A"]);
+  });
+
+  it("returns timedOut=true and surfaces the elapsed budget when a plugin handler hangs", async () => {
+    runSessionEndMock.mockImplementationOnce(() => new Promise<void>(() => undefined));
+    emitGatewaySessionStartPluginHook({
+      cfg,
+      sessionKey: "agent:main:main",
+      sessionId: "sess-A",
+      storePath: "/tmp/store.json",
+    });
+
+    const result = await drainActiveSessionsForShutdown({
+      reason: "shutdown",
+      totalTimeoutMs: 120,
+    });
+
+    expect(result.timedOut).toBe(true);
+    expect(runSessionEndMock).toHaveBeenCalledTimes(1);
+  });
+
   it("still records the session as forgotten when no `session_end` plugins are registered", async () => {
     hasHooksMock.mockImplementation(() => false);
     emitGatewaySessionStartPluginHook({

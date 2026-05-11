@@ -33,6 +33,10 @@ import {
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import {
+  forgetActiveSessionForShutdown,
+  noteActiveSessionForShutdown,
+} from "../../gateway/active-sessions-shutdown-tracker.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -879,6 +883,10 @@ export async function initSessionState(params: {
 
     // If replacing an existing session, fire session_end for the old one
     if (previousSessionEntry?.sessionId && previousSessionEntry.sessionId !== effectiveSessionId) {
+      // The shutdown finalizer must not re-fire session_end for a session
+      // that is being replaced here; forget unconditionally so the next drain
+      // skips this id even when no `session_end` plugin is currently attached.
+      forgetActiveSessionForShutdown(previousSessionEntry.sessionId);
       if (hookRunner.hasHooks("session_end")) {
         const payload = buildSessionEndHookPayload({
           sessionId: previousSessionEntry.sessionId,
@@ -894,6 +902,19 @@ export async function initSessionState(params: {
     }
 
     // Fire session_start for the new session
+    if (effectiveSessionId) {
+      // Track the new session so the shutdown finalizer fires a typed
+      // session_end with reason="shutdown"/"restart" if the gateway stops
+      // while this session is still active (see #57790).
+      noteActiveSessionForShutdown({
+        cfg,
+        sessionKey,
+        sessionId: effectiveSessionId,
+        storePath,
+        sessionFile: sessionEntry?.sessionFile,
+        agentId,
+      });
+    }
     if (hookRunner.hasHooks("session_start")) {
       const payload = buildSessionStartHookPayload({
         sessionId: effectiveSessionId,
