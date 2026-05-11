@@ -221,6 +221,85 @@ export const RAIN_TOOLS: ToolDef[] = [
       }),
   },
   {
+    name: "rain_build_add_liquidity",
+    description:
+      "Build an add-liquidity transaction preview. Deposits base tokens into a market pool in exchange for LP shares. " +
+      "Pass ownerAddress to get a deterministic prerequisiteTxs[] list (same approval pattern as rain_build_buy). " +
+      "Returns rawTx + walletRequest.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        marketContractAddress: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description: "Market contract address (from rain_get_market details.contractAddress).",
+        },
+        liquidityAmountInWei: {
+          type: "string",
+          pattern: "^[1-9][0-9]*$",
+          description:
+            "Amount of base tokens to deposit, in the token's smallest unit. Use details.baseTokenDecimals from rain_get_market to compute.",
+        },
+        ownerAddress: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description:
+            "Agent wallet address. When provided, the server checks ERC-20 allowance and returns an erc20_approve prerequisiteTx if needed.",
+        },
+      },
+      required: ["marketContractAddress", "liquidityAmountInWei"],
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      client.buildAddLiquidity({
+        marketContractAddress: asString(args.marketContractAddress),
+        liquidityAmountInWei: asString(args.liquidityAmountInWei),
+        ownerAddress: args.ownerAddress != null ? asString(args.ownerAddress) : undefined,
+      }),
+  },
+  {
+    name: "rain_get_price_history",
+    description:
+      "Fetch OHLCV candle data for one option of a Rain market. Useful for charting price movement or informing limit-sell price selection.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        marketId: { type: "string", minLength: 1, description: "Rain market id." },
+        optionIndex: { type: "integer", minimum: 0, description: "Zero-based option index." },
+        interval: {
+          type: "string",
+          enum: ["1m", "5m", "15m", "1h", "4h", "1d", "1w"],
+          description: "Candle interval.",
+        },
+        from: {
+          type: "string",
+          description: "Start of range as a string-encoded unix timestamp in seconds (optional).",
+        },
+        to: {
+          type: "string",
+          description: "End of range as a string-encoded unix timestamp in seconds (optional).",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 500,
+          description: "Max candles to return (default: server default, max 500).",
+        },
+      },
+      required: ["marketId", "optionIndex", "interval"],
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      client.getPriceHistory({
+        marketId: asString(args.marketId),
+        optionIndex: asNumber(args.optionIndex),
+        interval: asString(args.interval),
+        from: args.from != null ? asString(args.from) : undefined,
+        to: args.to != null ? asString(args.to) : undefined,
+        limit: args.limit != null ? asNumber(args.limit) : undefined,
+      }),
+  },
+  {
     name: "rain_build_claim",
     description:
       "Build a claim transaction preview. Returns rawTx + walletRequest for the user-approved wallet sign-tx call. No approval prerequisite needed for claims.",

@@ -109,6 +109,39 @@ export class RainRuntimeClient {
     return this.post("/api/runtime/rain/build-sell", body);
   }
 
+  async buildAddLiquidity(body: {
+    marketContractAddress: string;
+    liquidityAmountInWei: string;
+    ownerAddress?: string;
+  }): Promise<unknown> {
+    return this.post("/api/runtime/rain/build-add-liquidity", body);
+  }
+
+  async getPriceHistory(params: {
+    marketId: string;
+    optionIndex: number;
+    interval: string;
+    from?: string;
+    to?: string;
+    limit?: number;
+  }): Promise<unknown> {
+    const qs = new URLSearchParams({
+      marketId: params.marketId,
+      optionIndex: String(params.optionIndex),
+      interval: params.interval,
+    });
+    if (params.from) {
+      qs.set("from", params.from);
+    }
+    if (params.to) {
+      qs.set("to", params.to);
+    }
+    if (params.limit !== undefined) {
+      qs.set("limit", String(params.limit));
+    }
+    return this.get(`/api/runtime/rain/price-history?${qs}`);
+  }
+
   async buildClaim(body: { marketId: string; walletAddress: string }): Promise<unknown> {
     return this.post("/api/runtime/rain/build-claim", body);
   }

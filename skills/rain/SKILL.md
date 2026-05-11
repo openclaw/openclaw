@@ -27,6 +27,8 @@ Core trading tools:
 - `rain_build_buy` — build a buy-option transaction preview (returns `walletRequest` + `prerequisiteTxs[]`)
 - `rain_build_sell` — build a sell-option (limit-order) transaction preview (returns `walletRequest`)
 - `rain_build_claim` — build a claim transaction preview (returns `walletRequest`)
+- `rain_build_add_liquidity` — build an add-liquidity transaction preview (returns `walletRequest` + `prerequisiteTxs[]`)
+- `rain_get_price_history` — OHLCV candle data for one market option
 
 The MCP returns typed responses — call the tools directly. Do not construct
 HTTP requests, do not invent endpoint URLs, do not call any Rain SDK or RPC
@@ -136,6 +138,19 @@ Warn prominently when `details.isDisputed` or `details.isAppealed` is true
 
 Refuse trading after `details.endTime` has passed (current time > endTime).
 
+## Add-liquidity flow (`rain_build_add_liquidity` → wallet sign-tx)
+
+1. Confirm market address, amount (compute using `details.baseTokenDecimals`), and agent wallet address (`ownerAddress`).
+2. Call `rain_build_add_liquidity`. Same approval pattern as buy: check `prerequisiteTxs[]` for an `erc20_approve` entry.
+3. Show preview: market, amount in human terms, base token. Confirm with user.
+4. Execute `prerequisiteTxs` in order, then the main `walletRequest`. Report all tx hashes.
+
+LP shares are redeemable via `rain_build_claim` once the market finalises — there is no separate remove-liquidity action.
+
+## Price history (`rain_get_price_history`)
+
+Use to surface price charts or inform limit-sell price selection. Returns OHLCV candles — `open`, `high`, `low`, `close`, `volume`, `trades` per candle. All numeric fields are serialized as strings (bigint). Available intervals: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`, `1w`.
+
 ## Capabilities NOT in this version
 
 Do not invent endpoints, do not claim these are "almost shipped" or
@@ -143,10 +158,8 @@ Do not invent endpoints, do not claim these are "almost shipped" or
 skill capability yet."
 
 - Creating markets — V2 Phase C (deferred)
-- Adding/removing liquidity — V2 Phase B (add only; remove via claim)
-- Price quotes / slippage estimates — V2 Phase B (advisory only)
-- Price history (candles) — V2 Phase B
-- Real-time market events — V2 Phase B (polling)
+- Price quotes / slippage estimates — V2 Phase C
+- Real-time market events — V2 Phase C (polling)
 - Cancel orders — V2 Phase C
 
 ## Response format for previews
