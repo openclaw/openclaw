@@ -46,6 +46,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       groupHistories: new Map(),
       echoCache: undefined,
       selfChatCache: undefined,
+      isKnownFromMeMessageId: () => false,
       logVerbose: undefined,
     };
     return {
@@ -426,6 +427,41 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.text).toBe("iMessage reaction added: 👍 by +15555550123 on msg target-guid");
     expect(decision.route.sessionKey).toBe("agent:main:main");
     expect(decision.contextKey).toContain("imessage:reaction:added");
+  });
+
+  it("uses the iMessage reply cache to recognize tool-sent messages as bot-authored reaction targets", async () => {
+    const decision = await resolveDecision({
+      message: {
+        guid: "reaction-guid",
+        is_reaction: true,
+        reaction_emoji: "❤️",
+        is_reaction_add: true,
+        reacted_to_guid: "tool-sent-guid",
+        text: "",
+        chat_id: 3,
+        chat_guid: "any;-;+15555550123",
+        chat_identifier: "+15555550123",
+      },
+      messageText: "",
+      bodyText: "",
+      echoCache: { has: () => false },
+      isKnownFromMeMessageId: ({ messageId, accountId, chatId, chatGuid, chatIdentifier }) => {
+        expect({ messageId, accountId, chatId, chatGuid, chatIdentifier }).toEqual({
+          messageId: "tool-sent-guid",
+          accountId: "default",
+          chatId: 3,
+          chatGuid: "any;-;+15555550123",
+          chatIdentifier: "+15555550123",
+        });
+        return true;
+      },
+    });
+
+    expect(decision.kind).toBe("reaction");
+    if (decision.kind !== "reaction") {
+      throw new Error("expected reaction decision");
+    }
+    expect(decision.text).toBe("iMessage reaction added: ❤️ by +15555550123 on msg tool-sent-guid");
   });
 
   it("drops tapbacks on non-bot messages in own notification mode", async () => {

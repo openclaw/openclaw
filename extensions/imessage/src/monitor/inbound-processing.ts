@@ -30,7 +30,10 @@ import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/secur
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
-import { rememberIMessageReplyCache } from "../monitor-reply-cache.js";
+import {
+  isKnownFromMeIMessageMessageId,
+  rememberIMessageReplyCache,
+} from "../monitor-reply-cache.js";
 import {
   formatIMessageChatTarget,
   isAllowedIMessageSender,
@@ -354,6 +357,13 @@ export async function resolveIMessageInboundDecision(params: {
   };
   selfChatCache?: SelfChatCache;
   reactionNotifications?: IMessageReactionNotificationMode;
+  isKnownFromMeMessageId?: (params: {
+    messageId: string;
+    accountId: string;
+    chatId?: number;
+    chatGuid?: string;
+    chatIdentifier?: string;
+  }) => boolean;
   logVerbose?: (msg: string) => void;
 }): Promise<IMessageInboundDecision> {
   const senderRaw = params.message.sender ?? "";
@@ -546,10 +556,9 @@ export async function resolveIMessageInboundDecision(params: {
       return { kind: "drop", reason: "reaction notifications disabled" };
     }
     const targetGuid = reactionContext.targetGuid;
-    const targetIsOwn =
-      Boolean(targetGuid) &&
-      Boolean(
-        params.echoCache &&
+    const targetIsOwn = Boolean(
+      targetGuid &&
+      ((params.echoCache &&
         hasIMessageEchoMatch({
           echoCache: params.echoCache,
           scope: buildIMessageEchoScope({
@@ -560,9 +569,16 @@ export async function resolveIMessageInboundDecision(params: {
             chatIdentifier,
             sender,
           }),
-          messageIds: targetGuid ? [targetGuid] : [],
-        }),
-      );
+          messageIds: [targetGuid],
+        })) ||
+        (params.isKnownFromMeMessageId ?? isKnownFromMeIMessageMessageId)({
+          messageId: targetGuid,
+          accountId: params.accountId,
+          chatId,
+          chatGuid,
+          chatIdentifier,
+        })),
+    );
     if (notificationMode === "own" && !targetIsOwn) {
       return { kind: "drop", reason: "reaction target not sent by agent" };
     }

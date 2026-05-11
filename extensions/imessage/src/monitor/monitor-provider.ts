@@ -468,11 +468,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
 
     if (decision.kind === "reaction") {
-      enqueueSystemEvent(decision.text, {
+      const queued = enqueueSystemEvent(decision.text, {
         sessionKey: decision.route.sessionKey,
         contextKey: decision.contextKey,
         trusted: false,
       });
+      runtime.log?.(
+        `imessage: reaction system event ${queued ? "queued" : "deduped"} session=${decision.route.sessionKey} target=${
+          decision.reaction.targetGuid ?? "unknown"
+        } action=${decision.reaction.action} emoji=${decision.reaction.emoji}`,
+      );
       logVerbose(`imessage: reaction event enqueued: ${decision.text}`);
       return;
     }
