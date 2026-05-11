@@ -97,12 +97,6 @@ export type SlackThreadConfig = {
   /** Maximum number of thread messages to fetch as context when starting a new thread session (default: 20). Set to 0 to disable thread history fetching. */
   initialHistoryLimit?: number;
   /**
-   * When true (default), the parent/root message is retained in the thread history
-   * even when authored by the current bot. This ensures an agent replying in-thread
-   * has the parent message it is responding to.
-   */
-  includeRootMessage?: boolean;
-  /**
    * If true, require explicit @mention even inside threads where the bot has
    * previously participated. By default (false), replying in a thread where
    * the bot is a participant counts as an implicit mention and bypasses

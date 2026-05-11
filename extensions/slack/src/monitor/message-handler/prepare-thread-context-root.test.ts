@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   applySlackThreadHistoryFilterPolicy,
+  ensureSlackThreadHistoryHasBotRoot,
   formatSlackBotStarterThreadLabel,
   isSlackThreadAuthorCurrentBot,
   resolveSlackThreadHistoryFilterPolicy,
-  resolveSlackThreadIncludeRootMessage,
   shouldIncludeBotThreadStarterContext,
 } from "./prepare-thread-context-root.js";
 
@@ -57,72 +57,42 @@ describe("isSlackThreadAuthorCurrentBot", () => {
   });
 });
 
-describe("resolveSlackThreadIncludeRootMessage", () => {
-  it("defaults to true when not specified", () => {
-    expect(resolveSlackThreadIncludeRootMessage({})).toBe(true);
-  });
-
-  it("defaults to true when thread config is empty", () => {
-    expect(resolveSlackThreadIncludeRootMessage({ thread: {} })).toBe(true);
-  });
-
-  it("respects an explicit false", () => {
-    expect(resolveSlackThreadIncludeRootMessage({ thread: { includeRootMessage: false } })).toBe(
-      false,
-    );
-  });
-
-  it("respects an explicit true", () => {
-    expect(resolveSlackThreadIncludeRootMessage({ thread: { includeRootMessage: true } })).toBe(
-      true,
-    );
-  });
-});
-
 describe("resolveSlackThreadHistoryFilterPolicy", () => {
-  it("retains current-bot messages when starting a new session and root inclusion is on", () => {
+  it("retains only the current-bot root when starting a new session with starter text", () => {
     expect(
       resolveSlackThreadHistoryFilterPolicy({
-        isNewThreadSession: true,
-        includeRootMessage: true,
+        includeBotStarterAsRootContext: true,
+        starterTs: "1",
       }),
-    ).toEqual({ retainCurrentBotMessages: true });
-  });
-
-  it("filters current-bot messages when root inclusion is off", () => {
-    expect(
-      resolveSlackThreadHistoryFilterPolicy({
-        isNewThreadSession: true,
-        includeRootMessage: false,
-      }),
-    ).toEqual({ retainCurrentBotMessages: false });
+    ).toEqual({ retainCurrentBotRootTs: "1" });
   });
 
   it("filters current-bot messages on existing sessions", () => {
     expect(
       resolveSlackThreadHistoryFilterPolicy({
-        isNewThreadSession: false,
-        includeRootMessage: true,
+        includeBotStarterAsRootContext: false,
+        starterTs: "1",
       }),
-    ).toEqual({ retainCurrentBotMessages: false });
+    ).toEqual({});
   });
 });
 
 describe("applySlackThreadHistoryFilterPolicy", () => {
   const identity = { botUserId: "U_BOT", botId: "B1" };
 
-  it("keeps every message when policy retains current-bot entries", () => {
+  it("keeps only the current-bot root when policy names the root timestamp", () => {
     const history = [
       { ts: "1", botId: "B1", text: "bot root" },
+      { ts: "1.5", botId: "B1", text: "assistant reply" },
       { ts: "2", userId: "U1", text: "user reply" },
     ];
     const result = applySlackThreadHistoryFilterPolicy({
       history,
-      policy: { retainCurrentBotMessages: true },
+      policy: { retainCurrentBotRootTs: "1" },
       identity,
     });
-    expect(result.kept).toEqual(history);
-    expect(result.omittedCurrentBot).toBe(0);
+    expect(result.kept.map((entry) => entry.ts)).toEqual(["1", "2"]);
+    expect(result.omittedCurrentBot).toBe(1);
   });
 
   it("filters current-bot messages and reports counts when policy excludes them", () => {
@@ -134,7 +104,7 @@ describe("applySlackThreadHistoryFilterPolicy", () => {
     ];
     const result = applySlackThreadHistoryFilterPolicy({
       history,
-      policy: { retainCurrentBotMessages: false },
+      policy: {},
       identity,
     });
     expect(result.kept.map((entry) => entry.ts)).toEqual(["3", "4"]);
@@ -144,7 +114,7 @@ describe("applySlackThreadHistoryFilterPolicy", () => {
   it("returns an empty result for empty history", () => {
     const result = applySlackThreadHistoryFilterPolicy({
       history: [] as Array<{ ts: string; userId?: string; botId?: string }>,
-      policy: { retainCurrentBotMessages: false },
+      policy: {},
       identity,
     });
     expect(result.kept).toEqual([]);
@@ -153,12 +123,11 @@ describe("applySlackThreadHistoryFilterPolicy", () => {
 });
 
 describe("shouldIncludeBotThreadStarterContext", () => {
-  it("includes when starter is bot, session is new, root inclusion is on, and starter has text", () => {
+  it("includes when starter is bot, session is new, and starter has text", () => {
     expect(
       shouldIncludeBotThreadStarterContext({
         starterIsCurrentBot: true,
         isNewThreadSession: true,
-        includeRootMessage: true,
         hasStarterText: true,
       }),
     ).toBe(true);
@@ -169,7 +138,6 @@ describe("shouldIncludeBotThreadStarterContext", () => {
       shouldIncludeBotThreadStarterContext({
         starterIsCurrentBot: false,
         isNewThreadSession: true,
-        includeRootMessage: true,
         hasStarterText: true,
       }),
     ).toBe(false);
@@ -180,18 +148,6 @@ describe("shouldIncludeBotThreadStarterContext", () => {
       shouldIncludeBotThreadStarterContext({
         starterIsCurrentBot: true,
         isNewThreadSession: false,
-        includeRootMessage: true,
-        hasStarterText: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not include when root inclusion is off", () => {
-    expect(
-      shouldIncludeBotThreadStarterContext({
-        starterIsCurrentBot: true,
-        isNewThreadSession: true,
-        includeRootMessage: false,
         hasStarterText: true,
       }),
     ).toBe(false);
@@ -202,10 +158,45 @@ describe("shouldIncludeBotThreadStarterContext", () => {
       shouldIncludeBotThreadStarterContext({
         starterIsCurrentBot: true,
         isNewThreadSession: true,
-        includeRootMessage: true,
         hasStarterText: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("ensureSlackThreadHistoryHasBotRoot", () => {
+  it("keeps the fetched root when history already contains it", () => {
+    const history = [
+      { ts: "1", botId: "B1", text: "bot root" },
+      { ts: "2", userId: "U1", text: "user reply" },
+    ];
+    expect(
+      ensureSlackThreadHistoryHasBotRoot({
+        history,
+        includeBotStarterAsRootContext: true,
+        threadStarter: { ts: "1", botId: "B1", text: "bot root" },
+      }),
+    ).toBe(history);
+  });
+
+  it("prepends the starter root when fetched history omitted it", () => {
+    expect(
+      ensureSlackThreadHistoryHasBotRoot({
+        history: [{ ts: "2", userId: "U1", text: "user reply" }],
+        includeBotStarterAsRootContext: true,
+        threadStarter: { ts: "1", botId: "B1", text: "bot root" },
+      }).map((entry) => entry.text),
+    ).toEqual(["bot root", "user reply"]);
+  });
+
+  it("does not inject when bot starter root context is disabled", () => {
+    expect(
+      ensureSlackThreadHistoryHasBotRoot({
+        history: [{ ts: "2", userId: "U1", text: "user reply" }],
+        includeBotStarterAsRootContext: false,
+        threadStarter: { ts: "1", botId: "B1", text: "bot root" },
+      }).map((entry) => entry.text),
+    ).toEqual(["user reply"]);
   });
 });
 

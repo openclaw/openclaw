@@ -15,10 +15,10 @@ import type { SlackMediaResult } from "../media-types.js";
 import { resolveSlackThreadHistory, type SlackThreadStarter } from "../thread.js";
 import {
   applySlackThreadHistoryFilterPolicy,
+  ensureSlackThreadHistoryHasBotRoot,
   formatSlackBotStarterThreadLabel,
   isSlackThreadAuthorCurrentBot,
   resolveSlackThreadHistoryFilterPolicy,
-  resolveSlackThreadIncludeRootMessage,
   shouldIncludeBotThreadStarterContext,
 } from "./prepare-thread-context-root.js";
 
@@ -117,9 +117,6 @@ export async function resolveSlackThreadContextData(params: {
   };
   const isCurrentBotAuthor = (author: { userId?: string; botId?: string }): boolean =>
     isSlackThreadAuthorCurrentBot({ identity: botIdentity, author });
-  const includeRootMessage = resolveSlackThreadIncludeRootMessage({
-    thread: params.account.config?.thread,
-  });
 
   let threadStarterBody: string | undefined;
   let threadHistoryBody: string | undefined;
@@ -197,7 +194,6 @@ export async function resolveSlackThreadContextData(params: {
   const includeBotStarterAsRootContext = shouldIncludeBotThreadStarterContext({
     starterIsCurrentBot,
     isNewThreadSession,
-    includeRootMessage,
     hasStarterText: Boolean(starter?.text),
   });
 
@@ -218,6 +214,7 @@ export async function resolveSlackThreadContextData(params: {
   const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
 
   if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+    const currentBotRootTs = starter?.ts ?? params.threadTs;
     const threadHistory = await resolveSlackThreadHistory({
       channelId: params.message.channel,
       threadTs: params.threadTs,
@@ -226,16 +223,22 @@ export async function resolveSlackThreadContextData(params: {
       limit: threadInitialHistoryLimit,
     });
 
-    if (threadHistory.length > 0) {
+    const threadHistoryWithBotRoot = ensureSlackThreadHistoryHasBotRoot({
+      history: threadHistory,
+      includeBotStarterAsRootContext,
+      threadStarter: starter ? { ...starter, ts: currentBotRootTs } : null,
+    });
+
+    if (threadHistoryWithBotRoot.length > 0) {
       const historyFilterPolicy = resolveSlackThreadHistoryFilterPolicy({
-        isNewThreadSession,
-        includeRootMessage,
+        includeBotStarterAsRootContext,
+        starterTs: currentBotRootTs,
       });
       const {
         kept: threadHistoryWithoutCurrentBot,
         omittedCurrentBot: omittedCurrentBotHistoryCount,
       } = applySlackThreadHistoryFilterPolicy({
-        history: threadHistory,
+        history: threadHistoryWithBotRoot,
         policy: historyFilterPolicy,
         identity: botIdentity,
       });

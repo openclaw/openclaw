@@ -157,10 +157,6 @@ export const slackChannelConfigUiHints = {
     label: "Slack Thread Initial History Limit",
     help: "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
   },
-  "thread.includeRootMessage": {
-    label: "Slack Thread Include Root Message",
-    help: "When true (default), keep the thread root/parent message in new thread session history even when authored by the current bot, so in-thread replies have the parent message text. Set false to omit the bot's own root from new thread sessions.",
-  },
   "thread.requireExplicitMention": {
     label: "Slack Thread Require Explicit Mention",
     help: "If true, require an explicit @mention even inside threads where the bot has participated. Suppresses implicit thread mention behavior so the bot only responds to explicit @bot mentions in threads (default: false).",
