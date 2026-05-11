@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createMattermostClient,
   createMattermostPost,
+  fetchMattermostPost,
   normalizeMattermostBaseUrl,
   updateMattermostPost,
 } from "./client.js";
@@ -162,6 +163,15 @@ describe("createMattermostClient", () => {
     });
     const result = await client.request<unknown>("/anything", { method: "DELETE" });
     expect(result).toBeUndefined();
+  });
+
+  it("fetchMattermostPost requests the post by id", async () => {
+    const { client, calls } = createTestClient({ body: { id: "post-123", message: "hello" } });
+
+    const result = await fetchMattermostPost(client, "post-123");
+
+    expect(result).toMatchObject({ id: "post-123", message: "hello" });
+    expect(calls[0].url).toBe("http://localhost:8065/api/v4/posts/post-123");
   });
 });
 
