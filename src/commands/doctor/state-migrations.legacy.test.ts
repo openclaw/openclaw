@@ -48,7 +48,7 @@ vi.mock("../../channels/plugins/bundled.js", () => {
   }
 
   return {
-    listBundledChannelLegacySessionSurfaces: vi.fn(() => [
+    listBundledChannelDoctorSessionMigrationSurfaces: vi.fn(() => [
       {
         isLegacyGroupSessionKey: (key: string) => /^group:mobile-/i.test(key.trim()),
         canonicalizeLegacySessionKey: ({ key, agentId }: { key: string; agentId: string }) =>

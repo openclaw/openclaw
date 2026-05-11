@@ -9,7 +9,7 @@ import {
 } from "../../agents/agent-scope.js";
 import type { TranscriptEntry } from "../../agents/transcript/session-transcript-types.js";
 import {
-  listBundledChannelLegacySessionSurfaces,
+  listBundledChannelDoctorSessionMigrationSurfaces,
   listBundledChannelDoctorLegacyStateDetectors,
 } from "../../channels/plugins/bundled.js";
 import type { ChannelDoctorLegacyStateMigrationPlan } from "../../channels/plugins/types.core.js";
@@ -95,7 +95,7 @@ export type LegacyStateDetection = {
 
 let autoMigrateStateDirChecked = false;
 
-type LegacySessionSurface = {
+type DoctorSessionMigrationSurface = {
   isLegacyGroupSessionKey?: (key: string) => boolean;
   canonicalizeLegacySessionKey?: (params: {
     key: string;
@@ -312,11 +312,11 @@ function importLegacyTranscriptFileToSqlite(params: {
   return { imported: events.length, sessionId };
 }
 
-function getLegacySessionSurfaces(): LegacySessionSurface[] {
-  // Legacy migrations run on cold doctor/startup paths. Prefer the narrower
+function getDoctorSessionMigrationSurfaces(): DoctorSessionMigrationSurface[] {
+  // Doctor migrations run on cold doctor/startup paths. Prefer the narrower
   // setup plugin surface here so session-key cleanup does not materialize full
   // bundled channel runtimes.
-  return [...listBundledChannelLegacySessionSurfaces()];
+  return [...listBundledChannelDoctorSessionMigrationSurfaces()];
 }
 
 function isSurfaceGroupKey(key: string): boolean {
@@ -332,7 +332,7 @@ function isLegacyGroupKey(key: string): boolean {
   if (lower.startsWith("group:") || lower.startsWith("channel:")) {
     return true;
   }
-  for (const surface of getLegacySessionSurfaces()) {
+  for (const surface of getDoctorSessionMigrationSurfaces()) {
     if (surface.isLegacyGroupSessionKey?.(trimmed)) {
       return true;
     }
@@ -1593,7 +1593,7 @@ function canonicalizeSessionKeyForAgent(params: {
   // Channel-owned legacy shapes must win before the generic group/channel
   // fallback so plugin-specific legacy group keys can canonicalize to their
   // owning channel instead of the generic `...:unknown:group:...` bucket.
-  for (const surface of getLegacySessionSurfaces()) {
+  for (const surface of getDoctorSessionMigrationSurfaces()) {
     const canonicalized = surface.canonicalizeLegacySessionKey?.({
       key: raw,
       agentId,

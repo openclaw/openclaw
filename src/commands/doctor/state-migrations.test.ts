@@ -59,7 +59,7 @@ vi.mock("../../channels/plugins/bundled.js", async () => {
 
   return {
     ...actual,
-    listBundledChannelLegacySessionSurfaces: vi.fn(() => [
+    listBundledChannelDoctorSessionMigrationSurfaces: vi.fn(() => [
       {
         isLegacyGroupSessionKey: (key: string) => /^group:.+@g\.us$/i.test(key.trim()),
         canonicalizeLegacySessionKey: ({ key, agentId }: { key: string; agentId: string }) =>
@@ -72,7 +72,7 @@ vi.mock("../../channels/plugins/bundled.js", async () => {
       ({ oauthDir }: { oauthDir: string }) => detectWhatsAppLegacyStateMigrations({ oauthDir }),
     ]),
     listBundledChannelSetupPluginsByFeature: vi.fn((feature: string) => {
-      if (feature === "legacySessionSurfaces") {
+      if (feature === "doctorSessionMigrationSurface") {
         return [
           {
             id: "whatsapp",

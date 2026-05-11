@@ -1,6 +1,6 @@
 import { canonicalizeLegacySessionKey, isLegacyGroupSessionKey } from "./src/session-contract.js";
 
-export const whatsappLegacySessionSurface = {
+export const whatsappDoctorSessionMigrationSurface = {
   isLegacyGroupSessionKey,
   canonicalizeLegacySessionKey,
 };

@@ -4,7 +4,7 @@ export default defineBundledChannelSetupEntry({
   importMetaUrl: import.meta.url,
   features: {
     doctorLegacyState: true,
-    legacySessionSurfaces: true,
+    doctorSessionMigrationSurface: true,
   },
   plugin: {
     specifier: "./setup-plugin-api.js",
@@ -14,8 +14,8 @@ export default defineBundledChannelSetupEntry({
     specifier: "./doctor-legacy-state-api.js",
     exportName: "detectWhatsAppLegacyStateMigrations",
   },
-  legacySessionSurface: {
-    specifier: "./legacy-session-surface-api.js",
-    exportName: "whatsappLegacySessionSurface",
+  doctorSessionMigrationSurface: {
+    specifier: "./doctor-session-migration-surface-api.js",
+    exportName: "whatsappDoctorSessionMigrationSurface",
   },
 });

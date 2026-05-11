@@ -69,20 +69,20 @@ type DefineBundledChannelSetupEntryOptions = {
   secrets?: BundledEntryModuleRef;
   runtime?: BundledEntryModuleRef;
   doctorLegacyState?: BundledEntryModuleRef;
-  legacySessionSurface?: BundledEntryModuleRef;
+  doctorSessionMigrationSurface?: BundledEntryModuleRef;
   features?: BundledChannelSetupEntryFeatures;
 };
 
 export type BundledChannelSetupEntryFeatures = {
   doctorLegacyState?: boolean;
-  legacySessionSurfaces?: boolean;
+  doctorSessionMigrationSurface?: boolean;
 };
 
 export type BundledChannelEntryFeatures = {
   accountInspect?: boolean;
 };
 
-export type BundledChannelLegacySessionSurface = {
+export type BundledChannelDoctorSessionMigrationSurface = {
   isLegacyGroupSessionKey?: (key: string) => boolean;
   canonicalizeLegacySessionKey?: (params: {
     key: string;
@@ -131,9 +131,9 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   loadDoctorLegacyStateDetector?: (
     options?: BundledEntryModuleLoadOptions,
   ) => BundledChannelDoctorLegacyStateDetector;
-  loadLegacySessionSurface?: (
+  loadDoctorSessionMigrationSurface?: (
     options?: BundledEntryModuleLoadOptions,
-  ) => BundledChannelLegacySessionSurface;
+  ) => BundledChannelDoctorSessionMigrationSurface;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
   features?: BundledChannelSetupEntryFeatures;
 };
@@ -538,7 +538,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   secrets,
   runtime,
   doctorLegacyState,
-  legacySessionSurface,
+  doctorSessionMigrationSurface,
   features,
 }: DefineBundledChannelSetupEntryOptions): BundledChannelSetupEntryContract<TPlugin> {
   // Bundled setup entries stay on a light path during setup-only/setup-runtime loads.
@@ -561,11 +561,11 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
           options,
         )
     : undefined;
-  const loadLegacySessionSurface = legacySessionSurface
+  const loadDoctorSessionMigrationSurface = doctorSessionMigrationSurface
     ? (options?: BundledEntryModuleLoadOptions) =>
-        loadBundledEntryExportSync<BundledChannelLegacySessionSurface>(
+        loadBundledEntryExportSync<BundledChannelDoctorSessionMigrationSurface>(
           importMetaUrl,
-          legacySessionSurface,
+          doctorSessionMigrationSurface,
           options,
         )
     : undefined;
@@ -584,7 +584,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
         }
       : {}),
     ...(loadDoctorLegacyStateDetector ? { loadDoctorLegacyStateDetector } : {}),
-    ...(loadLegacySessionSurface ? { loadLegacySessionSurface } : {}),
+    ...(loadDoctorSessionMigrationSurface ? { loadDoctorSessionMigrationSurface } : {}),
     ...(setChannelRuntime ? { setChannelRuntime } : {}),
     ...(features ? { features } : {}),
   };

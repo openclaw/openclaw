@@ -737,7 +737,7 @@ describe("bundled channel entry shape guards", () => {
           setupFeatures?: Record<string, boolean>;
         };
       };
-      for (const feature of ["doctorLegacyState", "legacySessionSurfaces"]) {
+      for (const feature of ["doctorLegacyState", "doctorSessionMigrationSurface"]) {
         const usesFeature = setupEntrySource.includes(`${feature}: true`);
         const hasHint = packageJson.openclaw?.setupFeatures?.[feature] === true;
         if (usesFeature !== hasHint) {

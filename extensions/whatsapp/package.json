@@ -34,7 +34,7 @@
     "setupEntry": "./setup-entry.ts",
     "setupFeatures": {
       "doctorLegacyState": true,
-      "legacySessionSurfaces": true
+      "doctorSessionMigrationSurface": true
     },
     "channel": {
       "id": "whatsapp",

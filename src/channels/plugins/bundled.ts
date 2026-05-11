@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
-  BundledChannelLegacySessionSurface,
+  BundledChannelDoctorSessionMigrationSurface,
   BundledChannelDoctorLegacyStateDetector,
   BundledEntryModuleLoadOptions,
 } from "../../plugin-sdk/channel-entry-contract.js";
@@ -55,19 +55,19 @@ type BundledChannelSetupEntryRuntimeContract = {
   loadDoctorLegacyStateDetector?: (
     options?: BundledEntryModuleLoadOptions,
   ) => BundledChannelDoctorLegacyStateDetector;
-  loadLegacySessionSurface?: (
+  loadDoctorSessionMigrationSurface?: (
     options?: BundledEntryModuleLoadOptions,
-  ) => BundledChannelLegacySessionSurface;
+  ) => BundledChannelDoctorSessionMigrationSurface;
   features?: {
     doctorLegacyState?: boolean;
-    legacySessionSurfaces?: boolean;
+    doctorSessionMigrationSurface?: boolean;
   };
 };
 
 type BundledChannelPackageSetupFeature =
   | "configPromotion"
   | "doctorLegacyState"
-  | "legacySessionSurfaces";
+  | "doctorSessionMigrationSurface";
 
 type GeneratedBundledChannelEntry = {
   id: string;
@@ -715,17 +715,17 @@ export function listBundledChannelSetupPluginsByFeature(
   });
 }
 
-export function listBundledChannelLegacySessionSurfaces(
+export function listBundledChannelDoctorSessionMigrationSurfaces(
   options: {
     config?: OpenClawConfig;
   } = {},
-): readonly BundledChannelLegacySessionSurface[] {
+): readonly BundledChannelDoctorSessionMigrationSurface[] {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, "legacySessionSurfaces", {
+  return listBundledChannelPluginIdsForSetupFeature(rootScope, "doctorSessionMigrationSurface", {
     config: options.config,
   }).flatMap((id) => {
     const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, loadContext);
-    const surface = setupEntry?.loadLegacySessionSurface?.();
+    const surface = setupEntry?.loadDoctorSessionMigrationSurface?.();
     if (surface) {
       return [surface];
     }
