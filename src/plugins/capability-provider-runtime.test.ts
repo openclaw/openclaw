@@ -150,6 +150,10 @@ function expectActiveRegistryLookup(pluginIds: string[]) {
   expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({ onlyPluginIds: pluginIds });
 }
 
+function expectInitialRuntimeRegistryLookup() {
+  expect(mocks.resolveRuntimePluginRegistry).toHaveBeenNthCalledWith(1);
+}
+
 function collectActiveRegistryLookups() {
   return mocks.resolveRuntimePluginRegistry.mock.calls
     .map(([options]) => options)
@@ -427,7 +431,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expectResolvedCapabilityProviderIds(providers, ["openai"]);
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expectInitialRuntimeRegistryLookup();
   });
 
   it("targets enabled external capability plugins without bundled fallback capture", () => {
@@ -471,6 +475,62 @@ describe("resolvePluginCapabilityProviders", () => {
       onlyPluginIds: ["external-image"],
     });
     expect(mocks.loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
+  });
+
+  it("merges enabled generation providers missing from the active registry", () => {
+    const active = createEmptyPluginRegistry();
+    active.imageGenerationProviders.push({
+      pluginId: "xai",
+      pluginName: "xai",
+      source: "test",
+      provider: {
+        id: "xai",
+        defaultModel: "grok-2-image",
+        models: ["grok-2-image"],
+        isConfigured: () => true,
+        generateImage: async () => ({ images: [] }),
+      },
+    } as never);
+    const loaded = createEmptyPluginRegistry();
+    loaded.imageGenerationProviders.push({
+      pluginId: "fal",
+      pluginName: "fal",
+      source: "test",
+      provider: {
+        id: "fal",
+        defaultModel: "fal-ai/flux/dev",
+        models: ["fal-ai/flux/dev"],
+        isConfigured: () => true,
+        generateImage: async () => ({ images: [] }),
+      },
+    } as never);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "fal",
+          origin: "bundled",
+          contracts: { imageGenerationProviders: ["fal"] },
+        },
+        {
+          id: "xai",
+          origin: "bundled",
+          contracts: { imageGenerationProviders: ["xai"] },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : loaded,
+    );
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "imageGenerationProviders",
+      cfg: { plugins: { allow: ["fal", "xai"] } } as OpenClawConfig,
+    });
+
+    expectResolvedCapabilityProviderIds(providers, ["xai", "fal"]);
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expectActiveRegistryLookup(["fal", "xai"]);
   });
 
   it("cold-loads enabled external manifest-contract providers missing from startup registry", () => {
@@ -556,7 +616,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expectResolvedCapabilityProviderIds(providers, ["deepgram"]);
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expectInitialRuntimeRegistryLookup();
   });
 
   it("merges configured media-understanding providers missing from the active registry", () => {
@@ -623,7 +683,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
 
     expectResolvedCapabilityProviderIds(providers, ["openai", "deepgram"]);
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expectInitialRuntimeRegistryLookup();
     expectActiveRegistryLookup(["deepgram", "google"]);
   });
 
@@ -658,7 +718,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expectResolvedCapabilityProviderIds(providers, ["microsoft"]);
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expectInitialRuntimeRegistryLookup();
   });
 
   it("keeps active capability providers when cfg has no explicit plugin config", () => {
@@ -697,7 +757,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
 
     expectResolvedCapabilityProviderIds(providers, ["acme"]);
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expectInitialRuntimeRegistryLookup();
     expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalledWith({
       config: expect.anything(),
     });
@@ -762,7 +822,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
 
     expectResolvedCapabilityProviderIds(providers, ["openai", "microsoft"]);
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expectInitialRuntimeRegistryLookup();
     expectActiveRegistryLookup(["microsoft"]);
   });
 
@@ -1332,7 +1392,7 @@ describe("resolvePluginCapabilityProviders", () => {
       config: allowlistCompat,
       pluginIds: ["microsoft"],
     });
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expectInitialRuntimeRegistryLookup();
     expectActiveRegistryLookup(["microsoft"]);
   });
 
@@ -1353,7 +1413,7 @@ describe("resolvePluginCapabilityProviders", () => {
         env: process.env,
       }),
     );
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expectInitialRuntimeRegistryLookup();
     expectActiveRegistryLookup([]);
   });
 
@@ -1596,7 +1656,7 @@ describe("resolvePluginCapabilityProviders", () => {
       config: allowlistCompat,
       pluginIds: ["microsoft"],
     });
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expectInitialRuntimeRegistryLookup();
     expectActiveRegistryLookup(["microsoft"]);
   });
 });

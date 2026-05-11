@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
@@ -10,6 +11,16 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+
+function collectNonEmptyLines(text: string): string[] {
+  const lines: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (line.trim().length > 0) {
+      lines.push(line);
+    }
+  }
+  return lines;
+}
 
 test("lists and patches session store via sessions.* RPC", async () => {
   const { dir, storePath } = await createSessionStoreDir();
@@ -378,9 +389,9 @@ test("lists and patches session store via sessions.* RPC", async () => {
   });
   expect(compacted.ok).toBe(true);
   expect(compacted.payload?.compacted).toBe(true);
-  const compactedLines = (await fs.readFile(path.join(dir, "sess-main.jsonl"), "utf-8"))
-    .split(/\r?\n/)
-    .filter((l) => l.trim().length > 0);
+  const compactedLines = collectNonEmptyLines(
+    await fs.readFile(path.join(dir, "sess-main.jsonl"), "utf-8"),
+  );
   expect(compactedLines).toHaveLength(3);
   const filesAfterCompact = await fs.readdir(dir);
   expect(filesAfterCompact).toContainEqual(expect.stringMatching(/^sess-main\.jsonl\.bak\./));
@@ -462,6 +473,28 @@ test("sessions.list configuredAgentsOnly hides disk-discovered unregistered agen
     "utf-8",
   );
 
+  const readFileSyncSpy = vi.spyOn(fsSync, "readFileSync");
+  const realDiskOnlyStorePath = await fs.realpath(diskOnlyStorePath);
+
+  try {
+    const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+      "sessions.list",
+      { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
+    );
+    expect(configuredOnly.ok).toBe(true);
+    expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
+      "agent:main:main",
+    ]);
+    expect(
+      readFileSyncSpy.mock.calls.some(
+        ([file]) =>
+          typeof file === "string" && fsSync.realpathSync.native(file) === realDiskOnlyStorePath,
+      ),
+    ).toBe(false);
+  } finally {
+    readFileSyncSpy.mockRestore();
+  }
+
   const broad = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
     "sessions.list",
     { includeGlobal: false, includeUnknown: false },
@@ -470,14 +503,5 @@ test("sessions.list configuredAgentsOnly hides disk-discovered unregistered agen
   expect(broad.payload?.sessions.map((session) => session.key)).toEqual([
     "agent:main:main",
     "agent:local:main",
-  ]);
-
-  const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
-    "sessions.list",
-    { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
-  );
-  expect(configuredOnly.ok).toBe(true);
-  expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
-    "agent:main:main",
   ]);
 });

@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   createTextEndBlockReplyHarness,
@@ -220,7 +220,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await emitSuppressedCommentary({ emit, text: "Working..." });
 
     expect(onBlockReply).not.toHaveBeenCalled();
-    expect(subscription.assistantTexts).toEqual([]);
+    expect(subscription.assistantTexts).toStrictEqual([]);
 
     emitOpenAiResponsesTextDeltaAndEnd({
       emit,

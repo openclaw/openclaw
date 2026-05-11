@@ -8,7 +8,7 @@ import {
   ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 import { matrixChannelConfigUiHints } from "./config-ui-hints.js";
 
 const matrixActionSchema = z

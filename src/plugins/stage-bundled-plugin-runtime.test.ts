@@ -331,12 +331,14 @@ describe("stageBundledPluginRuntime", () => {
     ]);
 
     const match = commandsModule.matchPluginCommand("/pair now");
-    expect(match).not.toBeNull();
-    expect(match?.args).toBe("now");
+    expect(match).toEqual(expect.objectContaining({ args: "now" }));
+    if (match === null) {
+      throw new Error("Expected plugin command match");
+    }
     await expect(
       commandsModule.executePluginCommand({
-        command: match!.command,
-        args: match?.args,
+        command: match.command,
+        args: match.args,
       }),
     ).resolves.toEqual({ text: "paired:now" });
   });

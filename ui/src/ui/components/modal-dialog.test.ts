@@ -60,12 +60,26 @@ async function renderModal() {
     container,
   );
   const modal = container.querySelector<OpenClawModalDialog>("openclaw-modal-dialog");
-  expect(modal).not.toBeNull();
-  await modal!.updateComplete;
+  expect(modal).toBeInstanceOf(HTMLElement);
+  if (!modal) {
+    throw new Error("Expected openclaw-modal-dialog");
+  }
+  await modal.updateComplete;
   await nextFrame();
-  const dialog = modal!.shadowRoot?.querySelector("dialog");
-  expect(dialog).not.toBeNull();
-  return { modal: modal!, dialog: dialog! };
+  const dialog = modal.shadowRoot?.querySelector("dialog");
+  expect(dialog).toBeInstanceOf(HTMLDialogElement);
+  if (!(dialog instanceof HTMLDialogElement)) {
+    throw new Error("Expected rendered dialog");
+  }
+  return { modal, dialog };
+}
+
+function expectShadowElement(modal: OpenClawModalDialog, id: string): HTMLElement {
+  const element = modal.shadowRoot?.getElementById(id);
+  if (!(element instanceof HTMLElement)) {
+    throw new Error(`Expected shadow element #${id}`);
+  }
+  return element;
 }
 
 describe("openclaw-modal-dialog", () => {
@@ -95,8 +109,10 @@ describe("openclaw-modal-dialog", () => {
     expect(descriptionId).toBe("openclaw-modal-dialog-description");
     expect(dialog.getRootNode()).toBe(modal.shadowRoot);
     expect(dialog.ownerDocument.querySelector(`#${labelId}`)).toBeNull();
-    expect(modal.shadowRoot?.getElementById(labelId!)?.textContent).toBe("Confirm action");
-    expect(modal.shadowRoot?.getElementById(descriptionId!)?.textContent).toBe(
+    expect(expectShadowElement(modal, "openclaw-modal-dialog-label").textContent).toBe(
+      "Confirm action",
+    );
+    expect(expectShadowElement(modal, "openclaw-modal-dialog-description").textContent).toBe(
       "Review the operation before continuing.",
     );
   });

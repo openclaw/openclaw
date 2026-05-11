@@ -55,9 +55,7 @@ function createStubChildAdapter(options?: {
   );
   const killMock = vi.fn();
   const disposeMock = vi.fn();
-  let adapter!: StubChildAdapter;
-
-  adapter = {
+  const adapter: StubChildAdapter = {
     pid: options?.pid ?? 1234,
     stdin: undefined,
     onStdout: (listener) => {

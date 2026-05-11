@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   abortAgentHarnessRun,
   embeddedAgentLog,
@@ -18,6 +18,12 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+function queueActiveRunMessageForTest(
+  ...args: Parameters<typeof queueAgentHarnessMessage>
+): boolean {
+  return queueAgentHarnessMessage(...args);
+}
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import {
   buildCodexAppInventoryCacheKey,
@@ -28,7 +34,10 @@ import {
   resolveCodexAppServerHomeDir,
 } from "./auth-bridge.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
-import { CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE } from "./dynamic-tools.js";
+import {
+  CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+  createCodexDynamicToolBridge,
+} from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
@@ -280,14 +289,11 @@ function expectResumeRequest(
   requests: Array<{ method: string; params: unknown }>,
   params: Record<string, unknown>,
 ) {
-  expect(requests).toEqual(
-    expect.arrayContaining([
-      {
-        method: "thread/resume",
-        params: expect.objectContaining(params),
-      },
-    ]),
-  );
+  const request = requests.find((entry) => entry.method === "thread/resume");
+  expect(request).toBeDefined();
+  for (const [key, value] of Object.entries(params)) {
+    expect((request?.params as Record<string, unknown> | undefined)?.[key]).toEqual(value);
+  }
 }
 
 function createResumeHarness() {
@@ -547,7 +553,7 @@ describe("runCodexAppServerAttempt", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("defaults Codex dynamic tools to the native-first profile", () => {
+  it("filters Codex-native dynamic tools from app-server tool exposure", () => {
     const tools = [
       "read",
       "write",
@@ -562,7 +568,7 @@ describe("runCodexAppServerAttempt", () => {
       "sessions_spawn",
     ].map((name) => ({ name }));
 
-    expect(__testing.applyCodexDynamicToolProfile(tools, {}).map((tool) => tool.name)).toEqual([
+    expect(__testing.filterCodexDynamicTools(tools, {}).map((tool) => tool.name)).toEqual([
       "web_search",
       "message",
       "heartbeat_respond",
@@ -570,17 +576,16 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
-  it("allows Codex dynamic tool filtering to opt back into OpenClaw compatibility", () => {
+  it("applies additional Codex dynamic tool excludes without exposing Codex-native tools", () => {
     const tools = ["read", "exec", "message", "custom_tool"].map((name) => ({ name }));
 
     expect(
       __testing
-        .applyCodexDynamicToolProfile(tools, {
-          codexDynamicToolsProfile: "openclaw-compat",
+        .filterCodexDynamicTools(tools, {
           codexDynamicToolsExclude: ["custom_tool"],
         })
         .map((tool) => tool.name),
-    ).toEqual(["read", "exec", "message"]);
+    ).toEqual(["message"]);
   });
 
   it("starts Codex threads without duplicate OpenClaw workspace tools by default", async () => {
@@ -593,7 +598,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const dynamicTools = __testing.applyCodexDynamicToolProfile(
+    const dynamicTools = __testing.filterCodexDynamicTools(
       [
         "read",
         "write",
@@ -624,17 +629,55 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(dynamicToolNames).toContain("message");
     expect(dynamicToolNames).toContain("web_search");
-    expect(dynamicToolNames).not.toEqual(
-      expect.arrayContaining([
-        "read",
-        "write",
-        "edit",
-        "apply_patch",
-        "exec",
-        "process",
-        "update_plan",
-      ]),
-    );
+    for (const toolName of [
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "exec",
+      "process",
+      "update_plan",
+    ]) {
+      expect(dynamicToolNames).not.toContain(toolName);
+    }
+  });
+
+  it("does not expose OpenClaw Tool Search controls through Codex dynamic tools", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      tools: {
+        toolSearch: true,
+      },
+    };
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    const tools = await __testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox: null as never,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools,
+      signal: new AbortController().signal,
+      loading: "searchable",
+    });
+    const dynamicToolNames = bridge.specs.map((tool) => tool.name);
+
+    for (const toolName of ["tool_search_code", "tool_search", "tool_describe", "tool_call"]) {
+      expect(dynamicToolNames).not.toContain(toolName);
+    }
   });
 
   it("normalizes Codex dynamic toolsAllow entries before filtering", () => {
@@ -691,18 +734,131 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(message).not.toHaveProperty("namespace");
     expect(message).not.toHaveProperty("deferLoading");
-    expect(webSearch).toEqual(
-      expect.objectContaining({
-        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-        deferLoading: true,
-      }),
+    expect(webSearch?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
+    expect(webSearch?.deferLoading).toBe(true);
+    expect(heartbeat?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
+    expect(heartbeat?.deferLoading).toBe(true);
+  });
+
+  it("returns a run context report without deferred Codex dynamic tool schemas", async () => {
+    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("web_search"),
+    ]);
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
     );
-    expect(heartbeat).toEqual(
-      expect.objectContaining({
-        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-        deferLoading: true,
-      }),
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.toolsAllow = ["message", "web_search"];
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    const report = result.systemPromptReport;
+    expect(report?.source).toBe("run");
+    expect(report?.provider).toBe("codex");
+    expect(report?.model).toBe("gpt-5.4-codex");
+    expect(report?.systemPrompt.chars).toBeGreaterThan(0);
+
+    const message = report?.tools.entries.find((tool) => tool.name === "message");
+    const webSearch = report?.tools.entries.find((tool) => tool.name === "web_search");
+    expect(message?.schemaChars).toBeGreaterThan(0);
+    expect(webSearch?.schemaChars).toBe(0);
+    expect(report?.tools.schemaChars).toBe(message?.schemaChars);
+  });
+
+  it("keeps searchable Codex dynamic tools canonical in mirrored transcript snapshots", async () => {
+    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("wiki_status"),
+    ]);
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
     );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["wiki_status"];
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        codexDynamicToolsLoading: "searchable",
+        appServer: { mode: "yolo" },
+      },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+
+    const toolResult = (await harness.handleServerRequest({
+      id: "request-tool-wiki-status",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-wiki-status-1",
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        tool: "wiki_status",
+        arguments: { topic: "README.md" },
+      },
+    })) as {
+      contentItems?: Array<{ text?: string; type?: string }>;
+      success?: boolean;
+    };
+    expect(toolResult).toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "wiki_status done" }],
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
+    const assistantMessage = result.messagesSnapshot[1];
+    if (assistantMessage?.role !== "assistant") {
+      throw new Error("expected mirrored assistant tool-call message");
+    }
+    expect(assistantMessage.content).toStrictEqual([
+      {
+        type: "toolCall",
+        id: "call-wiki-status-1",
+        name: "wiki_status",
+        arguments: { topic: "README.md" },
+        input: { topic: "README.md" },
+      },
+    ]);
+    const toolResultMessage = result.messagesSnapshot[2];
+    if (toolResultMessage?.role !== "toolResult") {
+      throw new Error("expected mirrored tool-result message");
+    }
+    expect(toolResultMessage.toolCallId).toBe("call-wiki-status-1");
+    expect(toolResultMessage.toolName).toBe("wiki_status");
+    expect(toolResultMessage.isError).toBe(false);
+    expect(toolResultMessage.content).toStrictEqual([
+      {
+        type: "toolResult",
+        id: "call-wiki-status-1",
+        name: "wiki_status",
+        toolName: "wiki_status",
+        toolCallId: "call-wiki-status-1",
+        toolUseId: "call-wiki-status-1",
+        tool_use_id: "call-wiki-status-1",
+        content: "wiki_status done",
+        text: "wiki_status done",
+      },
+    ]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("tool_search");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("function_call_output");
   });
 
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {
@@ -724,6 +880,108 @@ describe("runCodexAppServerAttempt", () => {
       sessionKey: "agent:main:main",
       runSessionKey: undefined,
     });
+  });
+
+  it("keeps explicit dynamic tool timeouts above the default bridge deadline", () => {
+    const timeoutMs = __testing.CODEX_DYNAMIC_TOOL_TIMEOUT_MS + 1_000;
+
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-long",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { prompt: "cat", timeoutMs },
+        },
+        config: undefined,
+      }),
+    ).toBe(timeoutMs);
+  });
+
+  it("uses configured image generation timeouts for Codex dynamic tool calls", () => {
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-generate-default",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { prompt: "cat" },
+        },
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+                timeoutMs: 180_000,
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(180_000);
+  });
+
+  it("uses the media image timeout for Codex image dynamic tool calls", () => {
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-default",
+          namespace: null,
+          tool: "image",
+          arguments: { prompt: "describe", images: ["/tmp/one.jpg"] },
+        },
+        config: {
+          tools: {
+            media: {
+              image: {
+                timeoutSeconds: 180,
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(180_000);
+  });
+
+  it("keeps Codex image dynamic tool calls above the default bridge deadline", () => {
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-default",
+          namespace: null,
+          tool: "image",
+          arguments: { prompt: "describe", images: ["/tmp/one.jpg"] },
+        },
+        config: undefined,
+      }),
+    ).toBe(__testing.CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS);
+  });
+
+  it("caps dynamic tool timeouts at the bridge maximum", () => {
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-too-long",
+          namespace: null,
+          tool: "image_generate",
+          arguments: {
+            prompt: "cat",
+            timeoutMs: __testing.CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + 1_000,
+          },
+        },
+        config: undefined,
+      }),
+    ).toBe(__testing.CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS);
   });
 
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
@@ -824,77 +1082,67 @@ describe("runCodexAppServerAttempt", () => {
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
 
-    await expect(
-      harness.handleServerRequest({
-        id: "request-tool-1",
-        method: "item/tool/call",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-1",
-          namespace: null,
-          tool: "message",
-          arguments: {
-            action: "send",
-            token: "plain-secret-value-12345",
-            text: "hello",
-          },
+    const toolResult = (await harness.handleServerRequest({
+      id: "request-tool-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "message",
+        arguments: {
+          action: "send",
+          token: "plain-secret-value-12345",
+          text: "hello",
         },
-      }),
-    ).resolves.toMatchObject({
-      success: false,
-      contentItems: [
-        {
-          type: "inputText",
-          text: expect.stringMatching(
-            /^(Unknown OpenClaw tool: message|Action send requires a target\.)$/u,
-          ),
-        },
-      ],
-    });
+      },
+    })) as {
+      contentItems?: Array<{ text?: string; type?: string }>;
+      success?: boolean;
+    };
+    expect(toolResult.success).toBe(false);
+    expect(toolResult.contentItems?.[0]?.type).toBe("inputText");
+    expect(toolResult.contentItems?.[0]?.text).toMatch(
+      /^(Unknown OpenClaw tool: message|Action send requires a target\.)$/u,
+    );
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event);
-    expect(agentEvents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          stream: "tool",
-          data: expect.objectContaining({
-            phase: "start",
-            name: "message",
-            toolCallId: "call-1",
-            args: expect.objectContaining({
-              action: "send",
-              token: "plain-…2345",
-              text: "hello",
-            }),
-          }),
-        }),
-        expect.objectContaining({
-          stream: "tool",
-          data: expect.objectContaining({
-            phase: "result",
-            name: "message",
-            toolCallId: "call-1",
-            isError: true,
-            result: expect.objectContaining({ success: false }),
-          }),
-        }),
-      ]),
+    const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event) as Array<{
+      data?: {
+        args?: Record<string, unknown>;
+        isError?: boolean;
+        name?: string;
+        phase?: string;
+        result?: { success?: boolean };
+        toolCallId?: string;
+      };
+      stream?: string;
+    }>;
+    const startEvent = agentEvents.find(
+      (event) => event.stream === "tool" && event.data?.phase === "start",
     );
+    expect(startEvent?.data?.name).toBe("message");
+    expect(startEvent?.data?.toolCallId).toBe("call-1");
+    expect(startEvent?.data?.args?.action).toBe("send");
+    expect(startEvent?.data?.args?.token).toBe("plain-…2345");
+    expect(startEvent?.data?.args?.text).toBe("hello");
+    const resultEvent = agentEvents.find(
+      (event) => event.stream === "tool" && event.data?.phase === "result",
+    );
+    expect(resultEvent?.data?.name).toBe("message");
+    expect(resultEvent?.data?.toolCallId).toBe("call-1");
+    expect(resultEvent?.data?.isError).toBe(true);
+    expect(resultEvent?.data?.result?.success).toBe(false);
     expect(JSON.stringify(agentEvents)).not.toContain("plain-secret-value-12345");
-    expect(globalAgentEvents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          runId: "run-1",
-          sessionKey: "agent:main:session-1",
-          stream: "tool",
-          data: expect.objectContaining({ phase: "start", name: "message" }),
-        }),
-      ]),
+    const globalStartEvent = globalAgentEvents.find(
+      (event) => event.stream === "tool" && event.data.phase === "start",
     );
+    expect(globalStartEvent?.runId).toBe("run-1");
+    expect(globalStartEvent?.sessionKey).toBe("agent:main:session-1");
+    expect(globalStartEvent?.data.name).toBe("message");
   });
 
   it("releases the session when Codex never completes after a dynamic tool response", async () => {
@@ -938,36 +1186,33 @@ describe("runCodexAppServerAttempt", () => {
     });
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
 
-    await expect(
-      handleRequest?.({
-        id: "request-tool-1",
-        method: "item/tool/call",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-1",
-          namespace: null,
-          tool: "message",
-          arguments: { action: "send", text: "already sent" },
-        },
-      }),
-    ).resolves.toMatchObject({
-      success: false,
-      contentItems: [
-        {
-          type: "inputText",
-          text: expect.stringMatching(
-            /^(Unknown OpenClaw tool: message|Action send requires a target\.)$/u,
-          ),
-        },
-      ],
-    });
+    const toolResult = (await handleRequest?.({
+      id: "request-tool-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", text: "already sent" },
+      },
+    })) as {
+      contentItems?: Array<{ text?: string; type?: string }>;
+      success?: boolean;
+    };
+    expect(toolResult.success).toBe(false);
+    expect(toolResult.contentItems?.[0]?.type).toBe("inputText");
+    expect(toolResult.contentItems?.[0]?.text).toMatch(
+      /^(Unknown OpenClaw tool: message|Action send requires a target\.)$/u,
+    );
 
-    await expect(run).resolves.toMatchObject({
-      aborted: true,
-      timedOut: true,
-      promptError: "codex app-server turn idle timed out waiting for turn/completed",
-    });
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
     await vi.waitFor(
       () =>
         expect(request).toHaveBeenCalledWith("turn/interrupt", {
@@ -976,7 +1221,85 @@ describe("runCodexAppServerAttempt", () => {
         }),
       { interval: 1 },
     );
-    expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
+    expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
+  });
+
+  it("does not count account rate-limit updates as turn completion activity", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
+
+    const toolResult = (await handleRequest?.({
+      id: "request-tool-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", text: "already sent" },
+      },
+    })) as { success?: boolean };
+    expect(toolResult.success).toBe(false);
+    await notify(rateLimitsUpdated(Math.ceil(Date.now() / 1000) + 120));
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    const warnCall = warn.mock.calls.find(
+      ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+    );
+    const warnData = warnCall?.[1] as
+      | { lastActivityReason?: string; timeoutMs?: number }
+      | undefined;
+    expect(warnData?.timeoutMs).toBe(5);
+    expect(warnData?.lastActivityReason).toBe("request:item/tool/call:response");
   });
 
   it("keeps waiting when Codex emits a raw assistant item after a dynamic tool response", async () => {
@@ -1025,20 +1348,19 @@ describe("runCodexAppServerAttempt", () => {
     });
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
 
-    await expect(
-      handleRequest?.({
-        id: "request-tool-1",
-        method: "item/tool/call",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-1",
-          namespace: null,
-          tool: "message",
-          arguments: { action: "send", text: "already sent" },
-        },
-      }),
-    ).resolves.toMatchObject({ success: false });
+    const toolResult = (await handleRequest?.({
+      id: "request-tool-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", text: "already sent" },
+      },
+    })) as { success?: boolean };
+    expect(toolResult.success).toBe(false);
     await notify({
       method: "rawResponseItem/completed",
       params: {
@@ -1053,7 +1375,7 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(request).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
+    expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
 
     await notify({
       method: "turn/completed",
@@ -1064,12 +1386,11 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({
-      aborted: false,
-      timedOut: false,
-      promptError: null,
-    });
-    expect(request).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
+    const result = await run;
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+    expect(request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
   });
 
   it("logs raw assistant item context when the terminal watchdog fires", async () => {
@@ -1119,20 +1440,19 @@ describe("runCodexAppServerAttempt", () => {
     });
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
 
-    await expect(
-      handleRequest?.({
-        id: "request-tool-1",
-        method: "item/tool/call",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-1",
-          namespace: null,
-          tool: "message",
-          arguments: { action: "send", text: "already sent" },
-        },
-      }),
-    ).resolves.toMatchObject({ success: false });
+    const toolResult = (await handleRequest?.({
+      id: "request-tool-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", text: "already sent" },
+      },
+    })) as { success?: boolean };
+    expect(toolResult.success).toBe(false);
     await notify({
       method: "rawResponseItem/completed",
       params: {
@@ -1147,29 +1467,42 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({
-      aborted: true,
-      timedOut: true,
-      promptError: "codex app-server turn idle timed out waiting for turn/completed",
-    });
-    expect(warn).toHaveBeenCalledWith(
-      "codex app-server turn idle timed out waiting for terminal event",
-      expect.objectContaining({
-        threadId: "thread-1",
-        turnId: "turn-1",
-        timeoutMs: 5,
-        lastActivityReason: "notification:rawResponseItem/completed",
-        lastNotificationMethod: "rawResponseItem/completed",
-        lastNotificationItemId: "raw-status-1",
-        lastNotificationItemType: "message",
-        lastNotificationItemRole: "assistant",
-        lastAssistantTextPreview: "I'm writing the report now.",
-      }),
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
     );
-    expect(warn).not.toHaveBeenCalledWith(
-      "codex app-server turn idle timed out waiting for completion",
-      expect.anything(),
+    const terminalWarnCall = warn.mock.calls.find(
+      ([message]) => message === "codex app-server turn idle timed out waiting for terminal event",
     );
+    const terminalWarnData = terminalWarnCall?.[1] as
+      | {
+          lastActivityReason?: string;
+          lastAssistantTextPreview?: string;
+          lastNotificationItemId?: string;
+          lastNotificationItemRole?: string;
+          lastNotificationItemType?: string;
+          lastNotificationMethod?: string;
+          threadId?: string;
+          timeoutMs?: number;
+          turnId?: string;
+        }
+      | undefined;
+    expect(terminalWarnData?.threadId).toBe("thread-1");
+    expect(terminalWarnData?.turnId).toBe("turn-1");
+    expect(terminalWarnData?.timeoutMs).toBe(5);
+    expect(terminalWarnData?.lastActivityReason).toBe("notification:rawResponseItem/completed");
+    expect(terminalWarnData?.lastNotificationMethod).toBe("rawResponseItem/completed");
+    expect(terminalWarnData?.lastNotificationItemId).toBe("raw-status-1");
+    expect(terminalWarnData?.lastNotificationItemType).toBe("message");
+    expect(terminalWarnData?.lastNotificationItemRole).toBe("assistant");
+    expect(terminalWarnData?.lastAssistantTextPreview).toBe("I'm writing the report now.");
+    expect(
+      warn.mock.calls.some(
+        ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+      ),
+    ).toBe(false);
   });
 
   it("releases the session when Codex accepts a turn but never sends progress", async () => {
@@ -1183,11 +1516,12 @@ describe("runCodexAppServerAttempt", () => {
     const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 5 });
     await harness.waitForMethod("turn/start");
 
-    await expect(run).resolves.toMatchObject({
-      aborted: true,
-      timedOut: true,
-      promptError: "codex app-server turn idle timed out waiting for turn/completed",
-    });
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
     await vi.waitFor(
       () =>
         expect(harness.request).toHaveBeenCalledWith("turn/interrupt", {
@@ -1196,7 +1530,7 @@ describe("runCodexAppServerAttempt", () => {
         }),
       { interval: 1 },
     );
-    expect(queueAgentHarnessMessage("session-1", "after silent turn")).toBe(false);
+    expect(queueActiveRunMessageForTest("session-1", "after silent turn")).toBe(false);
   });
 
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
@@ -1221,32 +1555,25 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    expect(beforePromptBuild).toHaveBeenCalledWith(
-      {
-        prompt: "hello",
-        messages: [expect.objectContaining({ role: "assistant" })],
-      },
-      expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
-      }),
-    );
-    expect(harness.requests).toEqual(
-      expect.arrayContaining([
-        {
-          method: "thread/start",
-          params: expect.objectContaining({
-            developerInstructions: expect.stringContaining("pre system\n\ncustom codex system"),
-          }),
-        },
-        {
-          method: "turn/start",
-          params: expect.objectContaining({
-            input: [{ type: "text", text: "queued context\n\nhello", text_elements: [] }],
-          }),
-        },
-      ]),
-    );
+    expect(beforePromptBuild).toHaveBeenCalledOnce();
+    const [hookInput, hookContext] = beforePromptBuild.mock.calls[0] as unknown as [
+      { messages?: Array<{ role?: string }>; prompt?: string },
+      { runId?: string; sessionId?: string },
+    ];
+    expect(hookInput.prompt).toBe("hello");
+    expect(hookInput.messages?.[0]?.role).toBe("assistant");
+    expect(hookContext.runId).toBe("run-1");
+    expect(hookContext.sessionId).toBe("session-1");
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
+    expect(threadStartParams?.developerInstructions).toContain("pre system\n\ncustom codex system");
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as
+      | { input?: Array<{ text?: string; text_elements?: unknown[]; type?: string }> }
+      | undefined;
+    expect(turnStartParams?.input).toEqual([
+      { type: "text", text: "queued context\n\nhello", text_elements: [] },
+    ]);
   });
 
   it("projects mirrored history when starting Codex without a native thread binding", async () => {
@@ -1334,27 +1661,30 @@ describe("runCodexAppServerAttempt", () => {
     expect(llmInput).toHaveBeenCalled();
     await new Promise<void>((resolve) => setImmediate(resolve));
 
-    expect(llmInput.mock.calls).toEqual(
-      expect.arrayContaining([
-        [
-          expect.objectContaining({
-            runId: "run-1",
-            sessionId: "session-1",
-            provider: "codex",
-            model: "gpt-5.4-codex",
-            prompt: "hello",
-            imagesCount: 0,
-            historyMessages: [expect.objectContaining({ role: "assistant" })],
-            systemPrompt: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
-          }),
-          expect.objectContaining({
-            runId: "run-1",
-            sessionId: "session-1",
-            sessionKey: "agent:main:session-1",
-          }),
-        ],
-      ]),
-    );
+    const [llmInputPayload, llmInputContext] = llmInput.mock.calls[0] as unknown as [
+      {
+        historyMessages?: Array<{ role?: string }>;
+        imagesCount?: number;
+        model?: string;
+        prompt?: string;
+        provider?: string;
+        runId?: string;
+        sessionId?: string;
+        systemPrompt?: string;
+      },
+      { runId?: string; sessionId?: string; sessionKey?: string },
+    ];
+    expect(llmInputPayload.runId).toBe("run-1");
+    expect(llmInputPayload.sessionId).toBe("session-1");
+    expect(llmInputPayload.provider).toBe("codex");
+    expect(llmInputPayload.model).toBe("gpt-5.4-codex");
+    expect(llmInputPayload.prompt).toBe("hello");
+    expect(llmInputPayload.imagesCount).toBe(0);
+    expect(llmInputPayload.historyMessages?.[0]?.role).toBe("assistant");
+    expect(llmInputPayload.systemPrompt).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(llmInputContext.runId).toBe("run-1");
+    expect(llmInputContext.sessionId).toBe("session-1");
+    expect(llmInputContext.sessionKey).toBe("agent:main:session-1");
 
     await harness.notify({
       method: "item/agentMessage/delta",
@@ -1371,30 +1701,26 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.assistantTexts).toEqual(["hello back"]);
     expect(llmOutput).toHaveBeenCalledTimes(1);
     expect(agentEnd).toHaveBeenCalledTimes(1);
-    const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event);
-    expect(agentEvents).toEqual(
-      expect.arrayContaining([
-        {
-          stream: "lifecycle",
-          data: expect.objectContaining({
-            phase: "start",
-            startedAt: expect.any(Number),
-          }),
-        },
-        {
-          stream: "assistant",
-          data: { text: "hello back" },
-        },
-        {
-          stream: "lifecycle",
-          data: expect.objectContaining({
-            phase: "end",
-            startedAt: expect.any(Number),
-            endedAt: expect.any(Number),
-          }),
-        },
-      ]),
+    const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event) as Array<{
+      data: {
+        endedAt?: number;
+        phase?: string;
+        startedAt?: number;
+        text?: string;
+      };
+      stream: string;
+    }>;
+    const lifecycleStart = agentEvents.find(
+      (event) => event.stream === "lifecycle" && event.data.phase === "start",
     );
+    expect(typeof lifecycleStart?.data.startedAt).toBe("number");
+    const assistantEvent = agentEvents.find((event) => event.stream === "assistant");
+    expect(assistantEvent?.data).toEqual({ text: "hello back" });
+    const lifecycleEnd = agentEvents.find(
+      (event) => event.stream === "lifecycle" && event.data.phase === "end",
+    );
+    expect(typeof lifecycleEnd?.data.startedAt).toBe("number");
+    expect(typeof lifecycleEnd?.data.endedAt).toBe("number");
     const startIndex = agentEvents.findIndex(
       (event) => event.stream === "lifecycle" && event.data.phase === "start",
     );
@@ -1405,54 +1731,48 @@ describe("runCodexAppServerAttempt", () => {
     expect(startIndex).toBeGreaterThanOrEqual(0);
     expect(assistantIndex).toBeGreaterThan(startIndex);
     expect(endIndex).toBeGreaterThan(assistantIndex);
-    expect(globalAgentEvents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          runId: "run-1",
-          sessionKey: "agent:main:session-1",
-          stream: "assistant",
-          data: { text: "hello back" },
-        }),
-        expect.objectContaining({
-          runId: "run-1",
-          sessionKey: "agent:main:session-1",
-          stream: "lifecycle",
-          data: expect.objectContaining({ phase: "end" }),
-        }),
-      ]),
+    const globalAssistantEvent = globalAgentEvents.find((event) => event.stream === "assistant");
+    expect(globalAssistantEvent?.runId).toBe("run-1");
+    expect(globalAssistantEvent?.sessionKey).toBe("agent:main:session-1");
+    expect(globalAssistantEvent?.data).toEqual({ text: "hello back" });
+    const globalEndEvent = globalAgentEvents.find(
+      (event) => event.stream === "lifecycle" && event.data.phase === "end",
     );
+    expect(globalEndEvent?.runId).toBe("run-1");
+    expect(globalEndEvent?.sessionKey).toBe("agent:main:session-1");
 
-    expect(llmOutput).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
-        provider: "codex",
-        model: "gpt-5.4-codex",
-        resolvedRef: "codex/gpt-5.4-codex",
-        harnessId: "codex",
-        assistantTexts: ["hello back"],
-        lastAssistant: expect.objectContaining({
-          role: "assistant",
-        }),
-      }),
-      expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
-      }),
-    );
-    expect(agentEnd).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: true,
-        messages: expect.arrayContaining([
-          expect.objectContaining({ role: "user" }),
-          expect.objectContaining({ role: "assistant" }),
-        ]),
-      }),
-      expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
-      }),
-    );
+    const [llmOutputPayload, llmOutputContext] = llmOutput.mock.calls[0] as unknown as [
+      {
+        assistantTexts?: string[];
+        harnessId?: string;
+        lastAssistant?: { role?: string };
+        model?: string;
+        provider?: string;
+        resolvedRef?: string;
+        runId?: string;
+        sessionId?: string;
+      },
+      { runId?: string; sessionId?: string },
+    ];
+    expect(llmOutputPayload.runId).toBe("run-1");
+    expect(llmOutputPayload.sessionId).toBe("session-1");
+    expect(llmOutputPayload.provider).toBe("codex");
+    expect(llmOutputPayload.model).toBe("gpt-5.4-codex");
+    expect(llmOutputPayload.resolvedRef).toBe("codex/gpt-5.4-codex");
+    expect(llmOutputPayload.harnessId).toBe("codex");
+    expect(llmOutputPayload.assistantTexts).toEqual(["hello back"]);
+    expect(llmOutputPayload.lastAssistant?.role).toBe("assistant");
+    expect(llmOutputContext.runId).toBe("run-1");
+    expect(llmOutputContext.sessionId).toBe("session-1");
+    const [agentEndPayload, agentEndContext] = agentEnd.mock.calls[0] as unknown as [
+      { messages?: Array<{ role?: string }>; success?: boolean },
+      { runId?: string; sessionId?: string },
+    ];
+    expect(agentEndPayload.success).toBe(true);
+    expect(agentEndPayload.messages?.some((message) => message.role === "user")).toBe(true);
+    expect(agentEndPayload.messages?.some((message) => message.role === "assistant")).toBe(true);
+    expect(agentEndContext.runId).toBe("run-1");
+    expect(agentEndContext.sessionId).toBe("session-1");
   });
 
   it("forwards Codex app-server verbose tool summaries and completed output", async () => {
@@ -1532,25 +1852,72 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
-    expect(startRequest?.params).toEqual(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          "features.codex_hooks": true,
-          "hooks.PreToolUse": [
-            expect.objectContaining({
-              hooks: [
-                expect.objectContaining({
-                  type: "command",
-                  timeout: 9,
-                  command: expect.stringContaining("--event pre_tool_use --timeout 4321"),
-                }),
-              ],
-            }),
-          ],
-        }),
-      }),
-    );
+    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(startConfig?.["features.codex_hooks"]).toBe(true);
+    const preToolUseHooks = startConfig?.["hooks.PreToolUse"] as
+      | Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
+      | undefined;
+    const preToolUseCommand = preToolUseHooks?.[0]?.hooks?.[0];
+    expect(preToolUseCommand?.type).toBe("command");
+    expect(preToolUseCommand?.timeout).toBe(9);
+    expect(preToolUseCommand?.command).toContain("--event pre_tool_use --timeout 4321");
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("keeps the native hook relay default floor for short Codex turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const relayFloorMs = 30 * 60_000;
+
+    const startedAtMs = Date.now();
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+    expect(registration).toBeDefined();
+    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeGreaterThanOrEqual(relayFloorMs);
+    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeLessThan(relayFloorMs + 10_000);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("preserves an explicit native hook relay ttl", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const explicitTtlMs = 123_456;
+
+    const startedAtMs = Date.now();
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+        ttlMs: explicitTtlMs,
+      },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+    expect(registration).toBeDefined();
+    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeGreaterThanOrEqual(explicitTtlMs);
+    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeLessThan(explicitTtlMs + 10_000);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
@@ -1569,27 +1936,17 @@ describe("runCodexAppServerAttempt", () => {
     await harness.waitForMethod("turn/start");
 
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
-    expect(startRequest?.params).toEqual(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          "features.codex_hooks": true,
-          "hooks.PreToolUse": expect.any(Array),
-          "hooks.PostToolUse": expect.any(Array),
-          "hooks.Stop": expect.any(Array),
-        }),
-      }),
-    );
-    expect(startRequest?.params).toEqual(
-      expect.objectContaining({
-        config: expect.not.objectContaining({
-          "hooks.PermissionRequest": expect.anything(),
-        }),
-      }),
-    );
+    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(startConfig?.["features.codex_hooks"]).toBe(true);
+    expect(Array.isArray(startConfig?.["hooks.PreToolUse"])).toBe(true);
+    expect(Array.isArray(startConfig?.["hooks.PostToolUse"])).toBe(true);
+    expect(Array.isArray(startConfig?.["hooks.Stop"])).toBe(true);
+    expect(startConfig).not.toHaveProperty("hooks.PermissionRequest");
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
-    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
-      allowedEvents: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
-    });
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.allowedEvents,
+    ).toEqual(["pre_tool_use", "post_tool_use", "before_agent_finalize"]);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
@@ -1615,22 +1972,68 @@ describe("runCodexAppServerAttempt", () => {
     await harness.waitForMethod("turn/start");
 
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
-    expect(startRequest?.params).toEqual(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          "features.codex_hooks": true,
-          "hooks.PermissionRequest": expect.any(Array),
-        }),
-      }),
-    );
+    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(startConfig?.["features.codex_hooks"]).toBe(true);
+    expect(Array.isArray(startConfig?.["hooks.PermissionRequest"])).toBe(true);
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
-    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toMatchObject({
-      allowedEvents: ["permission_request"],
-    });
+    expect(
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)?.allowedEvents,
+    ).toEqual(["permission_request"]);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("keeps native hook relays alive across startup and long Codex turn timeouts", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    const abortController = new AbortController();
+    const attemptTimeoutMs = 45 * 60_000;
+    const startupTimeoutMs = attemptTimeoutMs;
+    const turnStartTimeoutMs = attemptTimeoutMs;
+    const cleanupGraceMs = 5 * 60_000;
+    const expectedRelayTtlMs =
+      attemptTimeoutMs + startupTimeoutMs + turnStartTimeoutMs + cleanupGraceMs;
+    params.timeoutMs = attemptTimeoutMs;
+    params.abortSignal = abortController.signal;
+
+    const startedAtMs = Date.now();
+    const run = runCodexAppServerAttempt(params, {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    let completed = false;
+    let relayId: string | undefined;
+    try {
+      await harness.waitForMethod("turn/start");
+
+      const startRequest = harness.requests.find((request) => request.method === "thread/start");
+      relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+      const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+      expect(registration).toBeDefined();
+      expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeGreaterThanOrEqual(
+        expectedRelayTtlMs,
+      );
+
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      completed = true;
+      await run;
+      expect(
+        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
+      ).toBeUndefined();
+    } finally {
+      if (!completed) {
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" }).catch(() => {});
+        abortController.abort(new Error("test cleanup"));
+        await run.catch(() => {});
+      }
+    }
   });
 
   it("reuses the Codex native hook relay id across runs for the same session", async () => {
@@ -1672,12 +2075,10 @@ describe("runCodexAppServerAttempt", () => {
     );
     const secondRelayId = extractRelayIdFromThreadRequest(resumeRequest?.params);
     expect(secondRelayId).toBe(firstRelayId);
-    expect(
-      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId),
-    ).toMatchObject({
-      runId: "run-2",
-      allowedEvents: ["pre_tool_use"],
-    });
+    const resumedRegistration =
+      nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId);
+    expect(resumedRegistration?.runId).toBe("run-2");
+    expect(resumedRegistration?.allowedEvents).toEqual(["pre_tool_use"]);
 
     await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await secondRun;
@@ -1711,17 +2112,13 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
-    expect(startRequest?.params).toEqual(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          "features.codex_hooks": false,
-          "hooks.PreToolUse": [],
-          "hooks.PostToolUse": [],
-          "hooks.PermissionRequest": [],
-          "hooks.Stop": [],
-        }),
-      }),
-    );
+    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(startConfig?.["features.codex_hooks"]).toBe(false);
+    expect(startConfig?.["hooks.PreToolUse"]).toEqual([]);
+    expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
+    expect(startConfig?.["hooks.PermissionRequest"]).toEqual([]);
+    expect(startConfig?.["hooks.Stop"]).toEqual([]);
   });
 
   it("cleans up native hook relay state when turn/start fails", async () => {
@@ -1749,16 +2146,20 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    let harness!: ReturnType<typeof createStartedThreadHarness>;
-    harness = createStartedThreadHarness(async (method) => {
+    const harnessRef: { current?: ReturnType<typeof createStartedThreadHarness> } = {};
+    const harness = createStartedThreadHarness(async (method) => {
       if (method === "turn/start") {
-        await harness.notify(rateLimitsUpdated(resetsAt));
+        if (!harnessRef.current) {
+          throw new Error("Expected Codex app-server harness to be initialized");
+        }
+        await harnessRef.current.notify(rateLimitsUpdated(resetsAt));
         throw Object.assign(new Error("You've reached your usage limit."), {
           data: { codexErrorInfo: "usageLimitExceeded" },
         });
       }
       return undefined;
     });
+    harnessRef.current = harness;
 
     const runError = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir)).catch(
       (error: unknown) => error,
@@ -1810,6 +2211,36 @@ describe("runCodexAppServerAttempt", () => {
     expect((error as Error).message).toContain("Next reset in");
   });
 
+  it("refreshes Codex account rate limits when turn/start omits reset details", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        throw Object.assign(new Error("You've reached your usage limit."), {
+          data: { codexErrorInfo: "usageLimitExceeded" },
+        });
+      }
+      if (method === "account/rateLimits/read") {
+        return rateLimitsUpdated(resetsAt).params;
+      }
+      return undefined;
+    });
+
+    const runError = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir)).catch(
+      (error: unknown) => error,
+    );
+    await harness.waitForMethod("account/rateLimits/read");
+
+    const error = await runError;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      "You've reached your Codex subscription usage limit.",
+    );
+    expect((error as Error).message).toContain("Next reset in");
+    expect((error as Error).message).not.toContain("Codex did not return a reset time");
+  });
+
   it("cleans up native hook relay state when the Codex turn aborts", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -1827,6 +2258,45 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(result.aborted).toBe(true);
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("refreshes Codex account rate limits when a failed turn omits reset details", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "account/rateLimits/read") {
+        return rateLimitsUpdated(resetsAt).params;
+      }
+      return undefined;
+    });
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "failed",
+          error: {
+            message: "You've reached your usage limit.",
+            codexErrorInfo: "usageLimitExceeded",
+          },
+        },
+      },
+    });
+
+    const result = await run;
+
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Next reset in");
+    expect(result.promptError).not.toContain("Codex did not return a reset time");
+    expect(harness.requests.some((request) => request.method === "account/rateLimits/read")).toBe(
+      true,
+    );
   });
 
   it("fires agent_end with failure metadata when the codex turn fails", async () => {
@@ -1860,35 +2330,29 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(result.promptError).toBe("codex exploded");
     expect(agentEnd).toHaveBeenCalledTimes(1);
-    const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event);
-    expect(agentEvents).toEqual(
-      expect.arrayContaining([
-        {
-          stream: "lifecycle",
-          data: expect.objectContaining({ phase: "start", startedAt: expect.any(Number) }),
-        },
-        {
-          stream: "lifecycle",
-          data: expect.objectContaining({
-            phase: "error",
-            startedAt: expect.any(Number),
-            endedAt: expect.any(Number),
-            error: "codex exploded",
-          }),
-        },
-      ]),
+    const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event) as Array<{
+      data: { endedAt?: number; error?: string; phase?: string; startedAt?: number };
+      stream: string;
+    }>;
+    const startEvent = agentEvents.find(
+      (event) => event.stream === "lifecycle" && event.data.phase === "start",
     );
-    expect(agentEvents.filter((event) => event.stream === "assistant")).toEqual([]);
-    expect(agentEnd).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-        error: "codex exploded",
-      }),
-      expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
-      }),
+    expect(typeof startEvent?.data.startedAt).toBe("number");
+    const errorEvent = agentEvents.find(
+      (event) => event.stream === "lifecycle" && event.data.phase === "error",
     );
+    expect(typeof errorEvent?.data.startedAt).toBe("number");
+    expect(typeof errorEvent?.data.endedAt).toBe("number");
+    expect(errorEvent?.data.error).toBe("codex exploded");
+    expect(agentEvents.some((event) => event.stream === "assistant")).toBe(false);
+    const [agentEndPayload, agentEndContext] = agentEnd.mock.calls[0] as unknown as [
+      { error?: string; success?: boolean },
+      { runId?: string; sessionId?: string },
+    ];
+    expect(agentEndPayload.success).toBe(false);
+    expect(agentEndPayload.error).toBe("codex exploded");
+    expect(agentEndContext.runId).toBe("run-1");
+    expect(agentEndContext.sessionId).toBe("session-1");
   });
 
   it("fires llm_output and agent_end when turn/start fails", async () => {
@@ -1922,29 +2386,33 @@ describe("runCodexAppServerAttempt", () => {
     expect(llmInput).toHaveBeenCalledTimes(1);
     expect(llmOutput).toHaveBeenCalledTimes(1);
     expect(agentEnd).toHaveBeenCalledTimes(1);
-    expect(llmOutput).toHaveBeenCalledWith(
-      expect.objectContaining({
-        assistantTexts: [],
-        model: "gpt-5.4-codex",
-        provider: "codex",
-        resolvedRef: "codex/gpt-5.4-codex",
-        harnessId: "codex",
-        runId: "run-1",
-        sessionId: "session-1",
-      }),
-      expect.any(Object),
-    );
-    expect(agentEnd).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-        error: "turn start exploded",
-        messages: expect.arrayContaining([
-          expect.objectContaining({ role: "assistant" }),
-          expect.objectContaining({ role: "user" }),
-        ]),
-      }),
-      expect.any(Object),
-    );
+    const [llmOutputPayload] = llmOutput.mock.calls[0] as unknown as [
+      {
+        assistantTexts?: string[];
+        harnessId?: string;
+        model?: string;
+        provider?: string;
+        resolvedRef?: string;
+        runId?: string;
+        sessionId?: string;
+      },
+      unknown,
+    ];
+    expect(llmOutputPayload.assistantTexts).toEqual([]);
+    expect(llmOutputPayload.model).toBe("gpt-5.4-codex");
+    expect(llmOutputPayload.provider).toBe("codex");
+    expect(llmOutputPayload.resolvedRef).toBe("codex/gpt-5.4-codex");
+    expect(llmOutputPayload.harnessId).toBe("codex");
+    expect(llmOutputPayload.runId).toBe("run-1");
+    expect(llmOutputPayload.sessionId).toBe("session-1");
+    const [agentEndPayload] = agentEnd.mock.calls[0] as unknown as [
+      { error?: string; messages?: Array<{ role?: string }>; success?: boolean },
+      unknown,
+    ];
+    expect(agentEndPayload.success).toBe(false);
+    expect(agentEndPayload.error).toBe("turn start exploded");
+    expect(agentEndPayload.messages?.some((message) => message.role === "assistant")).toBe(true);
+    expect(agentEndPayload.messages?.some((message) => message.role === "user")).toBe(true);
   });
 
   it("fires agent_end with success false when the codex turn is aborted", async () => {
@@ -1964,12 +2432,8 @@ describe("runCodexAppServerAttempt", () => {
     const result = await run;
     expect(result.aborted).toBe(true);
     expect(agentEnd).toHaveBeenCalledTimes(1);
-    expect(agentEnd).toHaveBeenCalledWith(
-      expect.objectContaining({
-        success: false,
-      }),
-      expect.any(Object),
-    );
+    const [agentEndPayload] = agentEnd.mock.calls[0] as unknown as [{ success?: boolean }, unknown];
+    expect(agentEndPayload.success).toBe(false);
   });
 
   it("forwards queued user input and aborts the active app-server turn", async () => {
@@ -1981,7 +2445,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     await waitForMethod("turn/start");
 
-    expect(queueAgentHarnessMessage("session-1", "more context", { debounceMs: 1 })).toBe(true);
+    expect(queueActiveRunMessageForTest("session-1", "more context", { debounceMs: 1 })).toBe(true);
     await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/steer"), {
       interval: 1,
     });
@@ -1993,32 +2457,29 @@ describe("runCodexAppServerAttempt", () => {
 
     const result = await run;
     expect(result.aborted).toBe(true);
-    expect(requests).toEqual(
-      expect.arrayContaining([
-        {
-          method: "thread/start",
-          params: expect.objectContaining({
-            model: "gpt-5.4-codex",
-            approvalPolicy: "never",
-            sandbox: "danger-full-access",
-            approvalsReviewer: "user",
-            developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
-          }),
-        },
-        {
-          method: "turn/steer",
-          params: {
-            threadId: "thread-1",
-            expectedTurnId: "turn-1",
-            input: [{ type: "text", text: "more context", text_elements: [] }],
-          },
-        },
-        {
-          method: "turn/interrupt",
-          params: { threadId: "thread-1", turnId: "turn-1" },
-        },
-      ]),
-    );
+    const threadStart = requests.find((entry) => entry.method === "thread/start");
+    const threadStartParams = threadStart?.params as
+      | {
+          approvalPolicy?: string;
+          approvalsReviewer?: string;
+          developerInstructions?: string;
+          model?: string;
+          sandbox?: string;
+        }
+      | undefined;
+    expect(threadStartParams?.model).toBe("gpt-5.4-codex");
+    expect(threadStartParams?.approvalPolicy).toBe("never");
+    expect(threadStartParams?.sandbox).toBe("danger-full-access");
+    expect(threadStartParams?.approvalsReviewer).toBe("user");
+    expect(threadStartParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    const steer = requests.find((entry) => entry.method === "turn/steer");
+    expect(steer?.params).toEqual({
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [{ type: "text", text: "more context", text_elements: [] }],
+    });
+    const interrupt = requests.find((entry) => entry.method === "turn/interrupt");
+    expect(interrupt?.params).toEqual({ threadId: "thread-1", turnId: "turn-1" });
   });
 
   it("batches default queued steering before sending turn/steer", async () => {
@@ -2029,8 +2490,8 @@ describe("runCodexAppServerAttempt", () => {
     );
     await waitForMethod("turn/start");
 
-    expect(queueAgentHarnessMessage("session-1", "first", { debounceMs: 5 })).toBe(true);
-    expect(queueAgentHarnessMessage("session-1", "second", { debounceMs: 5 })).toBe(true);
+    expect(queueActiveRunMessageForTest("session-1", "first", { debounceMs: 5 })).toBe(true);
+    expect(queueActiveRunMessageForTest("session-1", "second", { debounceMs: 5 })).toBe(true);
 
     await vi.waitFor(
       () =>
@@ -2062,7 +2523,9 @@ describe("runCodexAppServerAttempt", () => {
     );
     await waitForMethod("turn/start");
 
-    expect(queueAgentHarnessMessage("session-1", "late steer", { debounceMs: 30_000 })).toBe(true);
+    expect(queueActiveRunMessageForTest("session-1", "late steer", { debounceMs: 30_000 })).toBe(
+      true,
+    );
 
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
@@ -2087,12 +2550,12 @@ describe("runCodexAppServerAttempt", () => {
     );
     await waitForMethod("turn/start");
 
-    expect(queueAgentHarnessMessage("session-1", "first", { steeringMode: "one-at-a-time" })).toBe(
-      true,
-    );
-    expect(queueAgentHarnessMessage("session-1", "second", { steeringMode: "one-at-a-time" })).toBe(
-      true,
-    );
+    expect(
+      queueActiveRunMessageForTest("session-1", "first", { steeringMode: "one-at-a-time" }),
+    ).toBe(true);
+    expect(
+      queueActiveRunMessageForTest("session-1", "second", { steeringMode: "one-at-a-time" }),
+    ).toBe(true);
 
     await vi.waitFor(
       () =>
@@ -2192,14 +2655,18 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), { interval: 1 });
-    expect(queueAgentHarnessMessage("session-1", "2")).toBe(true);
+    expect(queueActiveRunMessageForTest("session-1", "2")).toBe(true);
     await expect(response).resolves.toEqual({
       answers: { mode: { answers: ["Deep"] } },
     });
-    expect(request).not.toHaveBeenCalledWith(
-      "turn/steer",
-      expect.objectContaining({ expectedTurnId: "turn-1" }),
-    );
+    const requestCalls = request.mock.calls as unknown as Array<[string, unknown]>;
+    expect(
+      requestCalls.some(
+        ([method, callParams]) =>
+          method === "turn/steer" &&
+          (callParams as { expectedTurnId?: string } | undefined)?.expectedTurnId === "turn-1",
+      ),
+    ).toBe(false);
 
     await notify({
       method: "turn/completed",
@@ -2235,9 +2702,10 @@ describe("runCodexAppServerAttempt", () => {
       await waitForMethod("turn/start");
       abortController.abort("shutdown");
 
-      await expect(run).resolves.toMatchObject({ aborted: true });
+      const result = await run;
+      expect(result.aborted).toBe(true);
       await new Promise((resolve) => setImmediate(resolve));
-      expect(unhandledRejections).toEqual([]);
+      expect(unhandledRejections).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
@@ -2263,19 +2731,14 @@ describe("runCodexAppServerAttempt", () => {
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    expect(requests).toEqual(
-      expect.arrayContaining([
-        {
-          method: "turn/start",
-          params: expect.objectContaining({
-            input: [
-              { type: "text", text: "hello", text_elements: [] },
-              { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" },
-            ],
-          }),
-        },
-      ]),
-    );
+    const turnStart = requests.find((entry) => entry.method === "turn/start");
+    const turnStartParams = turnStart?.params as
+      | { input?: Array<{ text?: string; text_elements?: unknown[]; type?: string; url?: string }> }
+      | undefined;
+    expect(turnStartParams?.input).toEqual([
+      { type: "text", text: "hello", text_elements: [] },
+      { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" },
+    ]);
   });
 
   it("does not drop turn completion notifications emitted while turn/start is in flight", async () => {
@@ -2291,14 +2754,11 @@ describe("runCodexAppServerAttempt", () => {
       return {};
     });
 
-    await expect(
-      runCodexAppServerAttempt(
-        createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-      ),
-    ).resolves.toMatchObject({
-      aborted: false,
-      timedOut: false,
-    });
+    const result = await runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
   });
 
   it("completes when turn/start returns a terminal turn without a follow-up notification", async () => {
@@ -2323,10 +2783,45 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     expect(harness.requests.map((entry) => entry.method)).toContain("turn/start");
-    expect(result).toMatchObject({
-      assistantTexts: ["done from response"],
-      aborted: false,
-      timedOut: false,
+    expect(result.assistantTexts).toEqual(["done from response"]);
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+  });
+
+  it("surfaces Codex-native image generation saved paths as reply media", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [
+            {
+              type: "imageGeneration",
+              id: "ig_123",
+              status: "completed",
+              revisedPrompt: "A tiny blue square",
+              result: "Zm9v",
+              savedPath: "/tmp/codex-home/generated_images/session-1/ig_123.png",
+            },
+          ],
+        },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({
+      assistantTexts: [],
+      toolMediaUrls: ["/tmp/codex-home/generated_images/session-1/ig_123.png"],
     });
   });
 
@@ -2366,11 +2861,10 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({
-      assistantTexts: ["final completion"],
-      aborted: false,
-      timedOut: false,
-    });
+    const result = await run;
+    expect(result.assistantTexts).toEqual(["final completion"]);
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
   });
 
   it("releases completion when a projector callback throws during turn/completed", async () => {
@@ -2421,10 +2915,9 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
     });
-    await expect(run).resolves.toMatchObject({
-      aborted: false,
-      timedOut: false,
-    });
+    const result = await run;
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
   });
 
   it("routes MCP approval elicitations through the native bridge", async () => {
@@ -2490,12 +2983,11 @@ describe("runCodexAppServerAttempt", () => {
       content: { approve: true },
       _meta: null,
     });
-    expect(bridgeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        threadId: "thread-1",
-        turnId: "turn-1",
-      }),
-    );
+    const [bridgeCall] = bridgeSpy.mock.calls[0] as unknown as [
+      { threadId?: string; turnId?: string },
+    ];
+    expect(bridgeCall.threadId).toBe("thread-1");
+    expect(bridgeCall.turnId).toBe("turn-1");
 
     await notify({
       method: "turn/completed",
@@ -2672,41 +3164,31 @@ describe("runCodexAppServerAttempt", () => {
       content: null,
       _meta: null,
     });
-    expect(bridgeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        threadId: "thread-1",
-        turnId: "turn-1",
-        pluginAppPolicyContext: expect.objectContaining({
-          apps: {
-            "google-calendar-app": expect.objectContaining({
-              pluginName: "google-calendar",
-              mcpServerNames: ["google-calendar"],
-            }),
-          },
-        }),
-      }),
-    );
-    expect(request).toHaveBeenCalledWith(
-      "thread/start",
-      expect.objectContaining({
-        approvalPolicy: {
-          granular: expect.objectContaining({
-            mcp_elicitations: true,
-          }),
-        },
-      }),
-    );
-    expect(request).toHaveBeenCalledWith(
-      "turn/start",
-      expect.objectContaining({
-        approvalPolicy: {
-          granular: expect.objectContaining({
-            mcp_elicitations: true,
-          }),
-        },
-      }),
-      expect.anything(),
-    );
+    const [bridgeCall] = bridgeSpy.mock.calls[0] as unknown as [
+      {
+        pluginAppPolicyContext?: {
+          apps?: Record<string, { mcpServerNames?: string[]; pluginName?: string }>;
+        };
+        threadId?: string;
+        turnId?: string;
+      },
+    ];
+    expect(bridgeCall.threadId).toBe("thread-1");
+    expect(bridgeCall.turnId).toBe("turn-1");
+    const calendarPolicy = bridgeCall.pluginAppPolicyContext?.apps?.["google-calendar-app"];
+    expect(calendarPolicy?.pluginName).toBe("google-calendar");
+    expect(calendarPolicy?.mcpServerNames).toEqual(["google-calendar"]);
+    const requestCalls = request.mock.calls as unknown as Array<[string, unknown, unknown?]>;
+    const threadStart = requestCalls.find(([method]) => method === "thread/start");
+    const threadStartParams = threadStart?.[1] as
+      | { approvalPolicy?: { granular?: { mcp_elicitations?: boolean } } }
+      | undefined;
+    expect(threadStartParams?.approvalPolicy?.granular?.mcp_elicitations).toBe(true);
+    const turnStart = requestCalls.find(([method]) => method === "turn/start");
+    const turnStartParams = turnStart?.[1] as
+      | { approvalPolicy?: { granular?: { mcp_elicitations?: boolean } } }
+      | undefined;
+    expect(turnStartParams?.approvalPolicy?.granular?.mcp_elicitations).toBe(true);
 
     await notify({
       method: "turn/completed",
@@ -2853,20 +3335,11 @@ describe("runCodexAppServerAttempt", () => {
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    expect(requests).toEqual(
-      expect.arrayContaining([
-        {
-          method: "thread/start",
-          params: expect.objectContaining({
-            config: expect.objectContaining({
-              apps: expect.objectContaining({
-                "google-calendar-app": expect.objectContaining({ enabled: true }),
-              }),
-            }),
-          }),
-        },
-      ]),
-    );
+    const threadStart = requests.find((entry) => entry.method === "thread/start");
+    const threadStartParams = threadStart?.params as
+      | { config?: { apps?: Record<string, { enabled?: boolean }> } }
+      | undefined;
+    expect(threadStartParams?.config?.apps?.["google-calendar-app"]?.enabled).toBe(true);
     expect(requests.map((entry) => entry.method)).not.toContain("app/list");
   });
 
@@ -3012,20 +3485,11 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     expect(requests.map((entry) => entry.method)).toContain("app/list");
-    expect(requests).toEqual(
-      expect.arrayContaining([
-        {
-          method: "thread/start",
-          params: expect.objectContaining({
-            config: expect.objectContaining({
-              apps: expect.objectContaining({
-                "google-calendar-app": expect.objectContaining({ enabled: true }),
-              }),
-            }),
-          }),
-        },
-      ]),
-    );
+    const threadStart = requests.find((entry) => entry.method === "thread/start");
+    const threadStartParams = threadStart?.params as
+      | { config?: { apps?: Record<string, { enabled?: boolean }> } }
+      | undefined;
+    expect(threadStartParams?.config?.apps?.["google-calendar-app"]?.enabled).toBe(true);
   });
 
   it("times out app-server startup before thread setup can hang forever", async () => {
@@ -3039,7 +3503,7 @@ describe("runCodexAppServerAttempt", () => {
     await expect(runCodexAppServerAttempt(params, { startupTimeoutFloorMs: 1 })).rejects.toThrow(
       "codex app-server startup timed out",
     );
-    expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
+    expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
   });
 
   it("passes the selected auth profile into app-server startup", async () => {
@@ -3101,7 +3565,7 @@ describe("runCodexAppServerAttempt", () => {
     params.timeoutMs = 1;
 
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn/start timed out");
-    expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
+    expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
   });
 
   it("keeps extended history enabled when resuming a bound Codex thread", async () => {
@@ -3239,10 +3703,9 @@ describe("runCodexAppServerAttempt", () => {
       appServer,
     });
 
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      dynamicToolsFingerprint: fingerprint,
-      threadId: "thread-1",
-    });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.dynamicToolsFingerprint).toBe(fingerprint);
+    expect(binding?.threadId).toBe("thread-1");
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
       "thread/start",
@@ -3273,9 +3736,8 @@ describe("runCodexAppServerAttempt", () => {
     ).rejects.toThrow("codex app-server client is closed");
 
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-existing",
-    });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-existing");
   });
 
   it("restarts the app-server once when a shared client closes during startup", async () => {
@@ -3322,7 +3784,8 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({ aborted: false });
+    const result = await run;
+    expect(result.aborted).toBe(false);
     expect(requests).toEqual([["thread/resume"], ["thread/resume", "turn/start"]]);
   });
 
@@ -3370,7 +3833,8 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({ aborted: false });
+    const result = await run;
+    expect(result.aborted).toBe(false);
     expect(requests).toEqual([
       ["thread/resume"],
       ["thread/resume"],
@@ -3396,6 +3860,11 @@ describe("runCodexAppServerAttempt", () => {
       "features.codex_hooks": true,
       "hooks.PreToolUse": [],
     };
+    const expectedConfig = {
+      ...config,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    };
 
     await startOrResumeThread({
       client: { request } as never,
@@ -3414,20 +3883,10 @@ describe("runCodexAppServerAttempt", () => {
       config,
     });
 
-    expect(request.mock.calls).toEqual([
-      [
-        "thread/start",
-        expect.objectContaining({
-          config,
-        }),
-      ],
-      [
-        "thread/resume",
-        expect.objectContaining({
-          config,
-        }),
-      ],
-    ]);
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+    expect(requestCalls[0]?.[1].config).toEqual(expectedConfig);
+    expect(requestCalls[1]?.[1].config).toEqual(expectedConfig);
   });
 
   it("merges native hook relay config with plugin app config when starting a thread", async () => {
@@ -3467,24 +3926,20 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls).toEqual([
-      [
-        "thread/start",
-        expect.objectContaining({
-          config: {
-            "features.codex_hooks": true,
-            hooks: { PreToolUse: [] },
-            ...createPluginAppConfigPatch(),
-          },
-        }),
-      ],
-    ]);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-plugins",
-      pluginAppsFingerprint: "plugin-apps-config-1",
-      pluginAppsInputFingerprint: "plugin-apps-input-1",
-      pluginAppPolicyContext,
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(requestCalls[0]?.[1].config).toEqual({
+      "features.codex_hooks": true,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+      hooks: { PreToolUse: [] },
+      ...createPluginAppConfigPatch(),
     });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-plugins");
+    expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-1");
+    expect(binding?.pluginAppsInputFingerprint).toBe("plugin-apps-input-1");
+    expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
   it("revalidates compatible plugin app bindings without resending app config", async () => {
@@ -3538,23 +3993,19 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(2);
-    expect(request.mock.calls).toEqual([
-      [
-        "thread/start",
-        expect.objectContaining({
-          config: {
-            "features.codex_hooks": true,
-            ...createPluginAppConfigPatch(),
-          },
-        }),
-      ],
-      [
-        "thread/resume",
-        expect.objectContaining({
-          config: { "features.codex_hooks": true },
-        }),
-      ],
-    ]);
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+    expect(requestCalls[0]?.[1].config).toEqual({
+      "features.codex_hooks": true,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+      ...createPluginAppConfigPatch(),
+    });
+    expect(requestCalls[1]?.[1].config).toEqual({
+      "features.codex_hooks": true,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
   });
 
   it("starts a new plugin app thread when full binding revalidation removes an app", async () => {
@@ -3607,27 +4058,23 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls).toEqual([
-      [
-        "thread/start",
-        expect.objectContaining({
-          config: {
-            apps: {
-              _default: {
-                enabled: false,
-                destructive_enabled: false,
-                open_world_enabled: false,
-              },
-            },
-          },
-        }),
-      ],
-    ]);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-revalidated",
-      pluginAppsFingerprint: "plugin-apps-empty",
-      pluginAppPolicyContext: emptyPolicyContext,
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(requestCalls[0]?.[1].config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
     });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-revalidated");
+    expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-empty");
+    expect(binding?.pluginAppPolicyContext).toEqual(emptyPolicyContext);
   });
 
   it("keeps the existing plugin app binding when revalidation fails", async () => {
@@ -3665,15 +4112,17 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    expect(request.mock.calls).toEqual([
-      ["thread/resume", expect.not.objectContaining({ config: expect.anything() })],
-    ]);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-existing",
-      pluginAppsFingerprint: "plugin-apps-config-1",
-      pluginAppsInputFingerprint: "plugin-apps-input-1",
-      pluginAppPolicyContext,
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
+    expect(requestCalls[0]?.[1].config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": true,
     });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-existing");
+    expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-1");
+    expect(binding?.pluginAppsInputFingerprint).toBe("plugin-apps-input-1");
+    expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
   it("rebuilds an empty plugin app binding after app inventory recovers", async () => {
@@ -3717,19 +4166,17 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls).toEqual([
-      [
-        "thread/start",
-        expect.objectContaining({
-          config: createPluginAppConfigPatch(),
-        }),
-      ],
-    ]);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-recovered",
-      pluginAppsFingerprint: "plugin-apps-config-1",
-      pluginAppPolicyContext,
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(requestCalls[0]?.[1].config).toEqual({
+      ...createPluginAppConfigPatch(),
+      "features.code_mode": true,
+      "features.code_mode_only": true,
     });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-recovered");
+    expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-1");
+    expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
   it("keeps an empty plugin app binding when recovery still produces the same config", async () => {
@@ -3781,9 +4228,12 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls).toEqual([
-      ["thread/resume", expect.not.objectContaining({ config: expect.anything() })],
-    ]);
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
+    expect(requestCalls[0]?.[1].config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
   });
 
   it("rebuilds a partial plugin app binding after another plugin recovers", async () => {
@@ -3828,19 +4278,17 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls).toEqual([
-      [
-        "thread/start",
-        expect.objectContaining({
-          config: createTwoPluginAppConfigPatch(),
-        }),
-      ],
-    ]);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-recovered",
-      pluginAppsFingerprint: "plugin-apps-config-2",
-      pluginAppPolicyContext: recoveredPolicyContext,
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(requestCalls[0]?.[1].config).toEqual({
+      ...createTwoPluginAppConfigPatch(),
+      "features.code_mode": true,
+      "features.code_mode_only": true,
     });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-recovered");
+    expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-2");
+    expect(binding?.pluginAppPolicyContext).toEqual(recoveredPolicyContext);
   });
 
   it("rebuilds a partial plugin app binding after another app from the same plugin recovers", async () => {
@@ -3890,19 +4338,17 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls).toEqual([
-      [
-        "thread/start",
-        expect.objectContaining({
-          config: createTwoCalendarAppConfigPatch(),
-        }),
-      ],
-    ]);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-recovered",
-      pluginAppsFingerprint: "plugin-apps-config-calendar-2",
-      pluginAppPolicyContext: recoveredPolicyContext,
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(requestCalls[0]?.[1].config).toEqual({
+      ...createTwoCalendarAppConfigPatch(),
+      "features.code_mode": true,
+      "features.code_mode_only": true,
     });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-recovered");
+    expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-calendar-2");
+    expect(binding?.pluginAppPolicyContext).toEqual(recoveredPolicyContext);
   });
 
   it("starts a new configured thread for legacy bindings missing plugin app metadata", async () => {
@@ -3939,19 +4385,17 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    expect(request.mock.calls).toEqual([
-      [
-        "thread/start",
-        expect.objectContaining({
-          config: createPluginAppConfigPatch(),
-        }),
-      ],
-    ]);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-plugins",
-      pluginAppsFingerprint: "plugin-apps-config-1",
-      pluginAppPolicyContext,
+    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(requestCalls[0]?.[1].config).toEqual({
+      ...createPluginAppConfigPatch(),
+      "features.code_mode": true,
+      "features.code_mode_only": true,
     });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-plugins");
+    expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-1");
+    expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
   it("starts a new Codex thread when dynamic tool schemas change", async () => {
@@ -4011,25 +4455,23 @@ describe("runCodexAppServerAttempt", () => {
       model: "gpt-5.4-codex",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
+      config: expect.objectContaining({
+        "features.codex_hooks": true,
+        "features.code_mode": true,
+        "features.code_mode_only": true,
+      }),
       sandbox: "danger-full-access",
       serviceTier: "priority",
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
-    expect(requests).toEqual(
-      expect.arrayContaining([
-        {
-          method: "turn/start",
-          params: expect.objectContaining({
-            approvalPolicy: "on-request",
-            approvalsReviewer: "guardian_subagent",
-            sandboxPolicy: { type: "dangerFullAccess" },
-            serviceTier: "priority",
-            model: "gpt-5.4-codex",
-          }),
-        },
-      ]),
-    );
+    const turnRequest = requests.find((request) => request.method === "turn/start");
+    const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
+    expect(turnRequestParams?.approvalPolicy).toBe("on-request");
+    expect(turnRequestParams?.approvalsReviewer).toBe("guardian_subagent");
+    expect(turnRequestParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+    expect(turnRequestParams?.serviceTier).toBe("priority");
+    expect(turnRequestParams?.model).toBe("gpt-5.4-codex");
   });
 
   it("passes current Codex service tier request values through app-server resume and turn requests", async () => {
@@ -4052,9 +4494,11 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
-    expect(resumeRequest?.params).toEqual(expect.objectContaining({ serviceTier: "priority" }));
+    const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
+    expect(resumeRequestParams?.serviceTier).toBe("priority");
     const turnRequest = requests.find((request) => request.method === "turn/start");
-    expect(turnRequest?.params).toEqual(expect.objectContaining({ serviceTier: "priority" }));
+    const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
+    expect(turnRequestParams?.serviceTier).toBe("priority");
   });
 
   it("keys plugin app inventory by websocket credentials without exposing them", () => {
@@ -4118,32 +4562,35 @@ describe("runCodexAppServerAttempt", () => {
       model: "gpt-5.4-codex",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
+      config: {
+        "features.code_mode": true,
+        "features.code_mode_only": true,
+      },
       sandbox: "danger-full-access",
       serviceTier: "flex",
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
-    expect(
-      buildTurnStartParams(params, { threadId: "thread-1", cwd: "/tmp/workspace", appServer }),
-    ).toEqual(
-      expect.objectContaining({
-        threadId: "thread-1",
-        cwd: "/tmp/workspace",
+    const turnParams = buildTurnStartParams(params, {
+      threadId: "thread-1",
+      cwd: "/tmp/workspace",
+      appServer,
+    });
+    expect(turnParams.threadId).toBe("thread-1");
+    expect(turnParams.cwd).toBe("/tmp/workspace");
+    expect(turnParams.model).toBe("gpt-5.4-codex");
+    expect(turnParams.approvalPolicy).toBe("on-request");
+    expect(turnParams.approvalsReviewer).toBe("guardian_subagent");
+    expect(turnParams.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+    expect(turnParams.serviceTier).toBe("flex");
+    expect(turnParams.collaborationMode).toEqual({
+      mode: "default",
+      settings: {
         model: "gpt-5.4-codex",
-        approvalPolicy: "on-request",
-        approvalsReviewer: "guardian_subagent",
-        sandboxPolicy: { type: "dangerFullAccess" },
-        serviceTier: "flex",
-        collaborationMode: {
-          mode: "default",
-          settings: {
-            model: "gpt-5.4-codex",
-            reasoning_effort: "medium",
-            developer_instructions: null,
-          },
-        },
-      }),
-    );
+        reasoning_effort: "medium",
+        developer_instructions: null,
+      },
+    });
   });
 
   it("uses turn-scoped collaboration instructions for heartbeat Codex turns", () => {
@@ -4161,7 +4608,7 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
     expect(buildTurnCollaborationMode(params).settings.developer_instructions).toContain(
-      "The purpose of heartbeats is to make you feel magical and proactive.",
+      "Use heartbeats to create useful proactive progress",
     );
     expect(buildTurnCollaborationMode(params).settings.developer_instructions).toContain(
       "If `heartbeat_respond` is not already available and `tool_search` is available",

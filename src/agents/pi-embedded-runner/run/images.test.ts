@@ -267,7 +267,6 @@ describe("loadImageFromRef", () => {
         },
       );
 
-      expect(image).not.toBeNull();
       expect(image?.type).toBe("image");
       expect(image?.data.length).toBeGreaterThan(0);
     } finally {

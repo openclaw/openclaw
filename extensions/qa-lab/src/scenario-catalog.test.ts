@@ -21,26 +21,27 @@ describe("qa scenario catalog", () => {
       "qa/scenarios/media/image-generation-roundtrip.md",
     );
     const scenarioIds = pack.scenarios.map((scenario) => scenario.id);
-    expect(scenarioIds).toEqual(
-      expect.arrayContaining([
-        "image-generation-roundtrip",
-        "character-vibes-gollum",
-        "character-vibes-c3po",
-      ]),
-    );
+    const requiredScenarioIds = [
+      "image-generation-roundtrip",
+      "character-vibes-gollum",
+      "character-vibes-c3po",
+    ].toSorted();
+    expect(
+      scenarioIds.filter((scenarioId) => requiredScenarioIds.includes(scenarioId)).toSorted(),
+    ).toEqual(requiredScenarioIds);
     expect(
       pack.scenarios
         .filter((scenario) => scenario.execution?.kind !== "flow")
         .map((scenario) => scenario.id),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       pack.scenarios.filter((scenario) => (scenario.execution.flow?.steps.length ?? 0) > 0),
-    ).not.toEqual([]);
+    ).not.toStrictEqual([]);
     expect(
       pack.scenarios
         .filter((scenario) => !(scenario.coverage?.primary.length ?? 0))
         .map((scenario) => scenario.id),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(readQaScenarioById("memory-recall").coverage?.primary).toContain("memory.recall");
   });
 
@@ -53,7 +54,7 @@ describe("qa scenario catalog", () => {
     expect(scenarioIds).toContain("subagent-fanout-synthesis");
     expect(
       QA_AGENTIC_PARITY_SCENARIO_IDS.filter((scenarioId) => !scenarioIds.includes(scenarioId)),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("loads scenario-specific execution config from per-scenario markdown", () => {

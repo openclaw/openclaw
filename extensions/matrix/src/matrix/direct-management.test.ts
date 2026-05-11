@@ -47,6 +47,24 @@ describe("inspectMatrixDirectRooms", () => {
     ]);
   });
 
+  it("still surfaces joined strict rooms when an older mapped room is strict", async () => {
+    const client = createClient({
+      getAccountData: vi.fn(async () => ({
+        "@alice:example.org": ["!older:example.org"],
+      })),
+      getJoinedRooms: vi.fn(async () => ["!older:example.org", "!fresh:example.org"]),
+      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
+    });
+
+    const result = await inspectMatrixDirectRooms({
+      client,
+      remoteUserId: "@alice:example.org",
+    });
+
+    expect(result.activeRoomId).toBe("!older:example.org");
+    expect(result.discoveredStrictRoomIds).toEqual(["!fresh:example.org"]);
+  });
+
   it("falls back to discovered strict joined rooms when m.direct is stale", async () => {
     const client = createClient({
       getAccountData: vi.fn(async () => ({
@@ -126,7 +144,7 @@ describe("inspectMatrixDirectRooms", () => {
     });
 
     expect(result.activeRoomId).toBeNull();
-    expect(result.discoveredStrictRoomIds).toEqual([]);
+    expect(result.discoveredStrictRoomIds).toStrictEqual([]);
   });
 });
 
@@ -188,6 +206,37 @@ describe("repairMatrixDirectRooms", () => {
       EventType.Direct,
       expect.objectContaining({
         "@alice:example.org": ["!created:example.org"],
+      }),
+    );
+  });
+
+  it("persists discovered strict rooms alongside an older strict mapped room", async () => {
+    const setAccountData = vi.fn(async () => undefined);
+    const client = createClient({
+      getAccountData: vi.fn(async () => ({
+        "@alice:example.org": ["!older:example.org"],
+      })),
+      getJoinedRooms: vi.fn(async () => ["!older:example.org", "!fresh:example.org"]),
+      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
+      setAccountData,
+    });
+
+    const result = await repairMatrixDirectRooms({
+      client,
+      remoteUserId: "@alice:example.org",
+    });
+
+    expect(result.activeRoomId).toBe("!older:example.org");
+    expect(result.discoveredStrictRoomIds).toEqual(["!fresh:example.org"]);
+    expect(result.changed).toBe(true);
+    expect(result.directContentAfter["@alice:example.org"]).toEqual([
+      "!older:example.org",
+      "!fresh:example.org",
+    ]);
+    expect(setAccountData).toHaveBeenCalledWith(
+      EventType.Direct,
+      expect.objectContaining({
+        "@alice:example.org": ["!older:example.org", "!fresh:example.org"],
       }),
     );
   });
@@ -305,12 +354,15 @@ describe("promoteMatrixDirectRoomCandidate", () => {
 
   it("serializes concurrent m.direct writes so distinct mappings are not lost", async () => {
     let directContent: Record<string, string[]> = {};
-    let releaseFirstWrite!: () => void;
+    let releaseFirstWrite: (() => void) | undefined;
     const firstWriteStarted = new Promise<void>((resolve) => {
       releaseFirstWrite = () => {
         resolve();
       };
     });
+    if (!releaseFirstWrite) {
+      throw new Error("Expected first m.direct write release callback to be initialized");
+    }
     let writeCount = 0;
     const setAccountData = vi.fn(async (_eventType: string, content: Record<string, string[]>) => {
       writeCount += 1;

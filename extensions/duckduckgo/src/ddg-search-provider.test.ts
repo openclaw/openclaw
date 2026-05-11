@@ -46,7 +46,11 @@ describe("duckduckgo web search provider", () => {
     ]);
     expect(provider.requiresCredential).toBe(false);
     expect(provider.credentialPath).toBe("");
-    expect(applied.plugins?.entries?.duckduckgo?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.duckduckgo;
+    if (!pluginEntry) {
+      throw new Error("expected DuckDuckGo plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("maps generic tool arguments into DuckDuckGo search params", async () => {
@@ -204,7 +208,7 @@ describe("duckduckgo web search provider", () => {
     `;
 
     expect(ddgClientTesting.isBotChallenge(challengeHtml)).toBe(true);
-    expect(ddgClientTesting.parseDuckDuckGoHtml(challengeHtml)).toEqual([]);
+    expect(ddgClientTesting.parseDuckDuckGoHtml(challengeHtml)).toStrictEqual([]);
     expect(ddgClientTesting.isBotChallenge(normalHtml)).toBe(false);
     expect(ddgClientTesting.parseDuckDuckGoHtml(normalHtml)).toEqual([
       {

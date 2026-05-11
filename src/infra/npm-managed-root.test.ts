@@ -205,7 +205,7 @@ describe("managed npm root", () => {
         packageName: "@openclaw/feishu",
         dependencySpec: "2026.5.2",
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/JSON|package\.json|not-json/i);
 
     await expect(fs.readFile(manifestPath, "utf8")).resolves.toBe("{not-json");
   });
@@ -389,26 +389,21 @@ describe("managed npm root", () => {
 
     const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
     await expect(repairManagedNpmRootOpenClawPeer({ npmRoot, runCommand })).resolves.toBe(true);
-    expect(runCommand).toHaveBeenCalledWith(
-      [
-        "npm",
-        "uninstall",
-        "--loglevel=error",
-        "--legacy-peer-deps",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-        "--prefix",
-        ".",
-        "openclaw",
-      ],
-      expect.objectContaining({
-        cwd: npmRoot,
-        env: expect.objectContaining({
-          npm_config_legacy_peer_deps: "true",
-        }),
-      }),
-    );
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    const [repairArgs, repairOptions] = runCommand.mock.calls[0];
+    expect(repairArgs).toEqual([
+      "npm",
+      "uninstall",
+      "--loglevel=error",
+      "--legacy-peer-deps",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      "openclaw",
+    ]);
+    expect(repairOptions?.cwd).toBe(npmRoot);
+    expect(repairOptions?.timeoutMs).toBe(300_000);
+    expect(repairOptions?.env?.npm_config_legacy_peer_deps).toBe("true");
 
     const manifest = JSON.parse(await fs.readFile(path.join(npmRoot, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;

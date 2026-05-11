@@ -130,14 +130,17 @@ describe("sessions view", () => {
       ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=showArchived]")
       ?.closest("label");
 
-    expect(activeField?.getAttribute("data-tooltip")).toBe("Updated in the last 120 minutes.");
+    expect(activeField?.textContent).toContain("Updated within");
+    expect(activeField?.getAttribute("data-tooltip")).toBe(
+      "Loads sessions updated in the last 120 minutes.",
+    );
     expect(limitField?.getAttribute("data-tooltip")).toBe("Max sessions to load.");
     expect(globalToggle?.getAttribute("data-tooltip")).toBe("Include global sessions.");
     expect(unknownToggle?.getAttribute("data-tooltip")).toBe("Include unknown sessions.");
     expect(archivedToggle?.getAttribute("data-tooltip")).toBe("Include archived sessions.");
     expect(
       Array.from(filters?.querySelectorAll("[title]") ?? []).map((node) => node.className),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps active and limit together and renders streamlined source toggles", async () => {
@@ -191,7 +194,8 @@ describe("sessions view", () => {
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".sessions-filter-bar")).toBeNull();
 
-    toggle?.click();
+    expect(toggle).toBeInstanceOf(HTMLButtonElement);
+    toggle!.click();
 
     expect(onToggleFiltersCollapsed).toHaveBeenCalledTimes(1);
   });
@@ -410,6 +414,48 @@ describe("sessions view", () => {
     expect(badge?.textContent?.trim()).toBe("cron");
   });
 
+  it("renders live and terminal run status badges", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:live",
+              kind: "direct",
+              updatedAt: 30,
+              hasActiveRun: true,
+              status: "running",
+            },
+            {
+              key: "agent:main:idle",
+              kind: "direct",
+              updatedAt: 20,
+              hasActiveRun: false,
+            },
+            {
+              key: "agent:main:failed",
+              kind: "direct",
+              updatedAt: 10,
+              status: "failed",
+            },
+          ]),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim()),
+    ).toContain("Status");
+    const badges = Array.from(container.querySelectorAll(".session-status-badge"));
+    expect(badges.map((badge) => badge.textContent?.trim())).toEqual(["Live", "Idle", "Failed"]);
+    expect(badges[0]?.classList.contains("session-status-badge--live")).toBe(true);
+    expect(badges[0]?.getAttribute("aria-label")).toBe("Status: Live");
+    expect(badges[2]?.classList.contains("session-status-badge--failed")).toBe(true);
+  });
+
   it("renders and filters the session runtime", async () => {
     const container = document.createElement("div");
     render(
@@ -492,8 +538,9 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const row = container.querySelector("tbody tr.session-data-row");
-    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const row = container.querySelector<HTMLTableRowElement>("tbody tr.session-data-row");
+    expect(row).toBeInstanceOf(HTMLTableRowElement);
+    row!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
     const tokenCell = container.querySelector(".session-token-cell");
@@ -531,7 +578,8 @@ describe("sessions view", () => {
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".session-checkpoint-toggle")).toBeNull();
 
-    trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(trigger).toBeInstanceOf(HTMLButtonElement);
+    trigger!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
   });
 
@@ -623,9 +671,14 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const rows = container.querySelectorAll("tbody tr.session-data-row");
-    const checkbox = rows[0]?.querySelector("input[type=checkbox]");
-    checkbox?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    rows[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const checkbox = rows[0]?.querySelector<HTMLInputElement>("input[type=checkbox]");
+    expect(checkbox).toBeInstanceOf(HTMLInputElement);
+    expect(rows[1]).toBeInstanceOf(HTMLTableRowElement);
+    if (!(checkbox instanceof HTMLInputElement) || !(rows[1] instanceof HTMLTableRowElement)) {
+      throw new Error("Expected checkpoint toggle row controls");
+    }
+    checkbox.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    rows[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onToggleCheckpointDetails).not.toHaveBeenCalled();
   });
@@ -727,8 +780,9 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const headerCheckbox = container.querySelector("thead input[type=checkbox]");
-    headerCheckbox?.dispatchEvent(new Event("change", { bubbles: true }));
+    const headerCheckbox = container.querySelector<HTMLInputElement>("thead input[type=checkbox]");
+    expect(headerCheckbox).toBeInstanceOf(HTMLInputElement);
+    headerCheckbox!.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onDeselectPage).toHaveBeenCalledWith(["page-0"]);
     expect(onDeselectAll).not.toHaveBeenCalled();

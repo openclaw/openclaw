@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { pruneContextMessages } from "./pruner.js";
 import { DEFAULT_CONTEXT_PRUNING_SETTINGS } from "./settings.js";
@@ -390,7 +390,7 @@ describe("pruneContextMessages", () => {
 
     const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
     expect(toolResult.content).toHaveLength(1);
-    expect(toolResult.content[0]).toMatchObject({ type: "text" });
+    expect(toolResult.content[0]?.type).toBe("text");
     const textBlock = toolResult.content[0] as { type: "text"; text: string };
     expect(textBlock.text).toContain("[image removed during context pruning]");
     expect(textBlock.text).toContain(

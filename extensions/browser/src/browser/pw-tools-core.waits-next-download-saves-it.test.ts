@@ -103,6 +103,10 @@ describe("pw-tools-core", () => {
     return { res, outPath };
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+
   function createDownloadEventHarness() {
     const downloadHandlers = new Set<(download: unknown) => void>();
     const on = vi.fn((event: string, handler: (download: unknown) => void) => {
@@ -137,11 +141,15 @@ describe("pw-tools-core", () => {
     const savedPath = params.saveAs.mock.calls[0]?.[0];
     expect(typeof savedPath).toBe("string");
     expect(savedPath).not.toBe(params.targetPath);
-    expect(path.basename(path.dirname(String(savedPath)))).toContain("fs-safe-output");
+    const savedParentName = path.basename(path.dirname(String(savedPath)));
+    expect(
+      savedParentName.includes("fs-safe-output") ||
+        savedParentName === path.basename(path.dirname(params.targetPath)),
+    ).toBe(true);
     expect(path.basename(String(savedPath))).toContain(path.basename(params.targetPath));
     expect(path.basename(String(savedPath))).toMatch(/\.part$/);
     expect(await fs.readFile(params.targetPath, "utf8")).toBe(params.content);
-    await expect(fs.access(String(savedPath))).rejects.toThrow();
+    await expectPathMissing(String(savedPath));
   }
 
   it("waits for the next download and atomically finalizes explicit output paths", async () => {
@@ -253,8 +261,8 @@ describe("pw-tools-core", () => {
         await expect(p).rejects.toThrow(/path alias|outside workspace|directory changed/i);
         expect(parentSwappedBeforeFinalize).toBe(true);
         expect(saveAs).toHaveBeenCalledOnce();
-        await expect(fs.access(outsideTargetPath)).rejects.toThrow();
-        await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
+        await expectPathMissing(outsideTargetPath);
+        await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
       });
     },
   );
@@ -424,7 +432,7 @@ describe("pw-tools-core", () => {
 
         await expect(p).rejects.toThrow(/output directory/i);
         expect(saveAs).not.toHaveBeenCalled();
-        await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
+        await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
       });
     },
   );

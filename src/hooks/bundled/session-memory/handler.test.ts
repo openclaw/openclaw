@@ -193,14 +193,14 @@ function expectMemoryConversation(params: {
   }
 }
 
-async function waitUntil(condition: () => boolean, timeoutMs = 500): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
-    if (Date.now() > deadline) {
-      throw new Error("condition was not met before timeout");
-    }
-    await new Promise((resolve) => setTimeout(resolve, 5));
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
   }
+  throw new Error(`expected path to be missing: ${targetPath}`);
 }
 
 describe("session-memory hook", () => {
@@ -215,7 +215,7 @@ describe("session-memory hook", () => {
 
     // Memory directory should not be created for non-command events
     const memoryDir = path.join(tempDir, "memory");
-    await expect(fs.access(memoryDir)).rejects.toThrow();
+    await expectPathMissing(memoryDir);
   });
 
   it("skips commands other than new", async () => {
@@ -229,7 +229,7 @@ describe("session-memory hook", () => {
 
     // Memory directory should not be created for other commands
     const memoryDir = path.join(tempDir, "memory");
-    await expect(fs.access(memoryDir)).rejects.toThrow();
+    await expectPathMissing(memoryDir);
   });
 
   it("creates memory file with session content on /new command", async () => {
@@ -370,7 +370,7 @@ describe("session-memory hook", () => {
         await handler(event);
         expect(Date.now() - startedAt).toBeLessThan(100);
 
-        await waitUntil(() => generateSlug.mock.calls.length === 1);
+        await vi.waitFor(() => expect(generateSlug).toHaveBeenCalledTimes(1), { interval: 1 });
         resolveSlug?.("slow-reset");
         await flushSessionMemoryWritesForTest();
 
@@ -483,7 +483,7 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Remember this under Navi");
     expect(memoryContent).toContain("assistant: Stored in the bound workspace");
     expect(memoryContent).toContain("- **Session Key**: agent:navi:main");
-    await expect(fs.access(path.join(mainWorkspace, "memory"))).rejects.toThrow();
+    await expectPathMissing(path.join(mainWorkspace, "memory"));
   });
 
   it("filters out non-message entries (tool calls, system)", async () => {
@@ -778,7 +778,7 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("user: Custom agent conversation");
     expect(memoryContent).toContain("assistant: Stored in agent workspace");
     // Verify memory did NOT leak to the default workspace
-    await expect(fs.access(path.join(defaultWorkspace, "memory"))).rejects.toThrow();
+    await expectPathMissing(path.join(defaultWorkspace, "memory"));
   });
 
   it("handles session files with fewer messages than requested", async () => {

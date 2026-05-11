@@ -68,7 +68,7 @@ describe("config footprint guardrails", () => {
     const pluginConfig = asRecord(asRecord(entry.properties).config);
 
     expect(pluginConfig.type).toBe("object");
-    expect(pluginConfig.additionalProperties).toEqual({});
+    expect(pluginConfig.additionalProperties).toStrictEqual({});
     expect(pluginConfig.properties).toBeUndefined();
   });
 
@@ -112,7 +112,7 @@ describe("config footprint guardrails", () => {
         "channels.discord.channels.*.allow",
         "channels.discord.accounts.*.channels.*.allow",
       ].filter((path) => basePaths.has(path)),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps bundled channel private-network config canonical in generated metadata", () => {

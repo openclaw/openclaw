@@ -1,6 +1,6 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { expectDirectoryIds } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   listSlackDirectoryGroupsFromConfig,
@@ -93,7 +93,7 @@ describe("Slack directory contract", () => {
       limit: 2,
     });
     expect(peers).toHaveLength(2);
-    expect(peers.filter((entry) => !entry.id.startsWith("user:u"))).toEqual([]);
+    expect(peers.every((entry) => entry.id.startsWith("user:u"))).toBe(true);
   });
 
   it("resolves current Slack account identity from live auth", async () => {

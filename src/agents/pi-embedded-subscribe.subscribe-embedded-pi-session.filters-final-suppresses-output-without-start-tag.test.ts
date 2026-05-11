@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   createStubSessionHarness,
@@ -101,7 +101,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(streamedText).toBe("Title\nLine one\nLine two");
     expect(streamedText).not.toContain("<");
     expect(streamedText).not.toContain("final>");
-    expect(payloads.filter((payload) => payload.replace)).toEqual([]);
+    expect(payloads.some((payload) => payload.replace)).toBe(false);
   });
 
   it("preserves final content when enforced final tags are split across streamed deltas", () => {

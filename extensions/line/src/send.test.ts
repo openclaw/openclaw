@@ -340,7 +340,7 @@ describe("LINE send helpers", () => {
     ).resolves.toBeUndefined();
 
     expect(logVerboseMock).toHaveBeenCalledWith(
-      expect.stringContaining("line: loading animation failed (non-fatal)"),
+      "line: loading animation failed (non-fatal): Error: unsupported",
     );
   });
 

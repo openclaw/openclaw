@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,7 +23,7 @@ function warningLines(): string[] {
 }
 
 function expectNoMissingDefaultWarning() {
-  expect(warningLines().filter((line) => line.includes("accounts.default is missing"))).toEqual([]);
+  expect(warningLines().some((line) => line.includes("accounts.default is missing"))).toBe(false);
 }
 
 function resolveAccountWithEnv(

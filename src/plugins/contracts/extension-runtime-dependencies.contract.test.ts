@@ -146,12 +146,13 @@ function isTypeOnlyClause(clause: string | undefined): boolean {
   if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
     return false;
   }
-  return trimmed
-    .slice(1, -1)
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .every((part) => part.startsWith("type "));
+  for (const part of trimmed.slice(1, -1).split(",")) {
+    const importName = part.trim();
+    if (importName.length > 0 && !importName.startsWith("type ")) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function collectRuntimeImports(filePath: string): string[] {
@@ -205,7 +206,7 @@ describe("Discord dependency ownership", () => {
     const manifest = readPackageManifest("package.json");
     const discordDependencies = allDependencyNames(manifest).filter(isDiscordPackageDependency);
 
-    expect(discordDependencies).toEqual([]);
+    expect(discordDependencies).toStrictEqual([]);
   });
 
   for (const manifestPath of listPackageManifests(EXTENSION_ROOT)) {
@@ -219,7 +220,7 @@ describe("Discord dependency ownership", () => {
       const manifest = readPackageManifest(manifestPath);
       const discordDependencies = allDependencyNames(manifest).filter(isDiscordPackageDependency);
 
-      expect(discordDependencies).toEqual([]);
+      expect(discordDependencies).toStrictEqual([]);
     });
   }
 });
@@ -259,7 +260,7 @@ describe("extension runtime dependency manifests", () => {
         }
       }
 
-      expect(Object.fromEntries(missing)).toEqual({});
+      expect(Object.fromEntries(missing)).toStrictEqual({});
     });
 
     it(`${extensionDir} does not keep unused direct runtime dependencies`, () => {
@@ -279,7 +280,7 @@ describe("extension runtime dependency manifests", () => {
           !allowedIndirect.has(dependencyName) && !runtimeText.includes(dependencyName),
       );
 
-      expect(unused).toEqual([]);
+      expect(unused).toStrictEqual([]);
     });
   }
 });

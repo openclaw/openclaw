@@ -88,7 +88,7 @@ describe("legacy migrate provider-shaped config", () => {
       changes,
     );
 
-    expect(changes).toEqual([]);
+    expect(changes).toStrictEqual([]);
     expect(migrated.talk).toEqual({
       provider: "elevenlabs",
       providers: {
@@ -219,28 +219,33 @@ describe("legacy migrate provider-shaped config", () => {
       'Moved channels.discord.accounts.primary.tts.enabled → channels.discord.accounts.primary.tts.auto "off".',
       'Moved plugins.entries.voice-call.config.tts.enabled → plugins.entries.voice-call.config.tts.auto "always".',
     ]);
-    expect(res.config).toMatchObject({
-      messages: { tts: { auto: "always" } },
-      agents: {
-        defaults: { tts: { auto: "off" } },
-        list: [{ id: "voice-agent", tts: { auto: "tagged" } }],
-      },
-      channels: {
-        discord: {
-          tts: { auto: "always" },
-          accounts: { primary: { tts: { auto: "off" } } },
-        },
-      },
-      plugins: {
-        entries: {
-          "voice-call": {
-            config: {
-              tts: { auto: "always" },
-            },
-          },
-        },
-      },
+    const migratedConfig = res.config as
+      | {
+          messages?: { tts?: { auto?: unknown } };
+          agents?: {
+            defaults?: { tts?: { auto?: unknown } };
+            list?: Array<{ id?: string; tts?: { auto?: unknown } }>;
+          };
+          channels?: {
+            discord?: {
+              tts?: { auto?: unknown };
+              accounts?: { primary?: { tts?: { auto?: unknown } } };
+            };
+          };
+          plugins?: {
+            entries?: Record<string, { config?: { tts?: { auto?: unknown } } }>;
+          };
+        }
+      | undefined;
+    expect(migratedConfig?.messages?.tts?.auto).toBe("always");
+    expect(migratedConfig?.agents?.defaults?.tts?.auto).toBe("off");
+    expect(migratedConfig?.agents?.list?.[0]).toEqual({
+      id: "voice-agent",
+      tts: { auto: "tagged" },
     });
+    expect(migratedConfig?.channels?.discord?.tts?.auto).toBe("always");
+    expect(migratedConfig?.channels?.discord?.accounts?.primary?.tts?.auto).toBe("off");
+    expect(migratedConfig?.plugins?.entries?.["voice-call"]?.config?.tts?.auto).toBe("always");
   });
 
   it("moves plugins.entries.voice-call.config.tts.<provider> keys into providers", () => {
@@ -340,7 +345,7 @@ describe("legacy migrate provider-shaped config", () => {
       },
     });
 
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
   });
 
@@ -355,6 +360,6 @@ describe("legacy migrate provider-shaped config", () => {
     });
 
     expect(res.config).toBeNull();
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 });

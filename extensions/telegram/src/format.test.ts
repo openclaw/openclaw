@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { markdownToTelegramHtml, splitTelegramHtmlChunks } from "./format.js";
+import {
+  markdownToTelegramChunks,
+  markdownToTelegramHtml,
+  splitTelegramHtmlChunks,
+} from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
   it("handles core markdown-to-telegram conversions", () => {
@@ -95,6 +99,61 @@ describe("markdownToTelegramHtml", () => {
     expect(res).toBe("<tg-spoiler><b>secret</b> text</tg-spoiler>");
   });
 
+  it("preserves spacing between Telegram bullet blocks and following numbered sections", () => {
+    const input = [
+      "2. Main invariants:",
+      "",
+      "  • Raw Log is source of truth.",
+      "  • Autonomy starts only with report/draft.",
+      "3. Cognee is a candidate:",
+      "",
+      "  • bake-off first;",
+      "  • decide keep/adopt/hybrid later.",
+      "4. Project Flow slices:",
+    ].join("\n");
+
+    const res = markdownToTelegramHtml(input, { wrapFileRefs: false });
+
+    expect(res).toContain("report/draft.\n\n3. Cognee");
+    expect(res).toContain("keep/adopt/hybrid later.\n\n4. Project");
+  });
+
+  it("preserves Telegram list boundary spacing in chunked rendering", () => {
+    const input = [
+      "2. Main invariants:",
+      "",
+      "  • Raw Log is source of truth.",
+      "  • Autonomy starts only with report/draft.",
+      "3. Cognee is a candidate:",
+    ].join("\n");
+
+    const res = markdownToTelegramChunks(input, 4096)
+      .map((chunk) => chunk.html)
+      .join("");
+
+    expect(res).toContain("report/draft.\n\n3. Cognee");
+  });
+
+  it("does not insert Telegram list boundary spacing inside fenced code", () => {
+    const input = ["```", "  • literal bullet", "3. literal number", "```"].join("\n");
+
+    const res = markdownToTelegramHtml(input, { wrapFileRefs: false });
+
+    expect(res).toBe("<pre><code>  • literal bullet\n3. literal number\n</code></pre>");
+  });
+
+  it("does not insert Telegram list boundary spacing inside indented code", () => {
+    const input = ["    • literal bullet", "    3. literal number"].join("\n");
+
+    const res = markdownToTelegramHtml(input, { wrapFileRefs: false });
+    const chunks = markdownToTelegramChunks(input, 4096)
+      .map((chunk) => chunk.html)
+      .join("");
+
+    expect(res).toBe("<pre><code>• literal bullet\n3. literal number\n</code></pre>");
+    expect(chunks).toBe(res);
+  });
+
   it("does not treat single pipe as spoiler", () => {
     const res = markdownToTelegramHtml("(￣_￣|) face");
     expect(res).not.toContain("tg-spoiler");
@@ -116,7 +175,7 @@ describe("markdownToTelegramHtml", () => {
   it("splits long multiline html text without breaking balanced tags", () => {
     const chunks = splitTelegramHtmlChunks(`<b>${"A\n".repeat(2500)}</b>`, 4000);
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.filter((chunk) => chunk.length > 4000)).toEqual([]);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
     expect(chunks[0]).toMatch(/^<b>[\s\S]*<\/b>$/);
     expect(chunks[1]).toMatch(/^<b>[\s\S]*<\/b>$/);
   });
@@ -128,7 +187,7 @@ describe("markdownToTelegramHtml", () => {
   it("treats malformed leading ampersands as plain text when chunking html", () => {
     const chunks = splitTelegramHtmlChunks(`&${"A".repeat(5000)}`, 4000);
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.filter((chunk) => chunk.length > 4000)).toEqual([]);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
   });
 
   it("fails loudly when tag overhead leaves no room for text", () => {

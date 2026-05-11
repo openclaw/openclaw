@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
 
 export type AgentRuntimeTransport = "sse" | "websocket" | "auto";
@@ -29,6 +29,7 @@ export type AgentRuntimeFailoverReason =
   | "rate_limit"
   | "overloaded"
   | "billing"
+  | "server_error"
   | "timeout"
   | "model_not_found"
   | "session_expired"

@@ -4,7 +4,7 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["moonshot"],
   "providerEndpoints": [
     {
@@ -33,6 +33,14 @@
     }
   },
   "modelCatalog": {
+    "aliases": {
+      "moonshotai": {
+        "provider": "moonshot"
+      },
+      "moonshot-ai": {
+        "provider": "moonshot"
+      }
+    },
     "providers": {
       "moonshot": {
         "baseUrl": "https://api.moonshot.ai/v1",

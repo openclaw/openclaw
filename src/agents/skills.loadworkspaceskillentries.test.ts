@@ -52,6 +52,26 @@ let envSnapshot: SkillsHomeEnvSnapshot;
 let tempRoot = "";
 let workspaceCaseIndex = 0;
 
+function collectMatching<T>(items: readonly T[], predicate: (item: T) => boolean): T[] {
+  const matches: T[] = [];
+  for (const item of items) {
+    if (predicate(item)) {
+      matches.push(item);
+    }
+  }
+  return matches;
+}
+
+async function expectMissingPath(pathToCheck: string) {
+  let thrown: unknown;
+  try {
+    await fs.lstat(pathToCheck);
+  } catch (error) {
+    thrown = error;
+  }
+  expect((thrown as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
+}
+
 async function createTempWorkspaceDir() {
   const workspaceDir = path.join(tempRoot, `workspace-${++workspaceCaseIndex}`);
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -218,9 +238,7 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("browser-automation");
-    await expect(
-      fs.lstat(path.join(workspaceDir, ".plugin-skills", "browser-automation")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissingPath(path.join(workspaceDir, ".plugin-skills", "browser-automation"));
   });
 
   it("loads frontmatter edge cases in one workspace", async () => {
@@ -362,6 +380,43 @@ describe("loadWorkspaceSkillEntries", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "allows configured skill symlink targets outside their source root",
+    async () => {
+      const workspaceDir = await createTempWorkspaceDir();
+      const skillName = `manager-${++workspaceCaseIndex}`;
+      const targetRoot = path.join(tempRoot, `${skillName}-skills`);
+      const targetSkillDir = path.join(targetRoot, skillName);
+      await writeSkill({
+        dir: targetSkillDir,
+        name: skillName,
+        description: "Manager skill",
+      });
+      const personalSkillsDir = path.join(fakeHome, ".agents", "skills");
+      await fs.mkdir(personalSkillsDir, { recursive: true });
+      const symlinkPath = path.join(personalSkillsDir, skillName);
+      await fs.symlink(targetSkillDir, symlinkPath, "dir");
+      const warn = captureWarningLogger();
+
+      try {
+        const entries = loadTestWorkspaceSkillEntries(workspaceDir, {
+          config: {
+            skills: {
+              load: {
+                allowSymlinkTargets: [targetRoot],
+              },
+            },
+          },
+        });
+
+        expect(entries.map((entry) => entry.skill.name)).toContain(skillName);
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        await fs.unlink(symlinkPath).catch(() => undefined);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "calls out bundled symlink escapes with compact home-relative paths",
     async () => {
       const { workspaceDir, bundledDir, requestedPath } = await createEscapedBundledSkillFixture();
@@ -420,10 +475,8 @@ describe("loadWorkspaceSkillEntries", () => {
         filePath: path.join(skillDir, "SKILL.md"),
       });
 
-      expect(frontmatter).toMatchObject({
-        name: "root-allowed",
-        description: "Readable from filesystem root",
-      });
+      expect(frontmatter?.name).toBe("root-allowed");
+      expect(frontmatter?.description).toBe("Readable from filesystem root");
     },
   );
 
@@ -457,7 +510,8 @@ describe("loadWorkspaceSkillEntries", () => {
       });
 
       const names = loadTestWorkspaceSkillEntries(workspaceDir).map((entry) => entry.skill.name);
-      expect(names).toEqual(expect.arrayContaining(["direct-skill", "grouped-skill"]));
+      expect(names).toContain("direct-skill");
+      expect(names).toContain("grouped-skill");
     });
 
     it("does not count invalid grouped candidates against the loaded skill cap", async () => {
@@ -561,7 +615,9 @@ describe("loadWorkspaceSkillEntries", () => {
         },
       }).map((entry) => entry.skill.name);
 
-      expect(names.filter((name) => name.startsWith("nested-skill-"))).toHaveLength(2);
+      expect(
+        names.reduce((count, name) => count + (name.startsWith("nested-skill-") ? 1 : 0), 0),
+      ).toBe(2);
       expect(
         warn.mock.calls
           .map(([line]) => String(line))
@@ -597,7 +653,10 @@ describe("loadWorkspaceSkillEntries", () => {
         },
       }).map((entry) => entry.skill.name);
 
-      expect(names.filter((name) => name.startsWith("valid-"))).toEqual(["valid-a", "valid-b"]);
+      expect(collectMatching(names, (name) => name.startsWith("valid-"))).toEqual([
+        "valid-a",
+        "valid-b",
+      ]);
     });
   });
 });

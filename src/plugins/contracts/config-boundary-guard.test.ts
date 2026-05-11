@@ -118,13 +118,13 @@ describe("config boundary guard", () => {
       repoRoot,
       "extensions/telegram/src/index.ts",
       [
-        'import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";',
+        'import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
         'import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";',
         'type Loader = typeof import("openclaw/plugin-sdk/runtime-config-snapshot").getRuntimeConfig;',
         'export const load = (cfg: OpenClawConfig) => requireRuntimeConfig(cfg, "telegram");',
       ].join("\n"),
     );
 
-    expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toEqual([]);
+    expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toStrictEqual([]);
   });
 });
