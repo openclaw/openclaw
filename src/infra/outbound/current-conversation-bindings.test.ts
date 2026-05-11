@@ -211,7 +211,7 @@ describe("generic current-conversation bindings", () => {
     });
   });
 
-  it("reloads persisted bindings from typed columns, not the debug JSON copy", async () => {
+  it("persists bindings as typed columns without an opaque record copy", async () => {
     await bindGenericCurrentConversation({
       targetSessionKey: "agent:codex:acp:workspace-dm",
       targetKind: "session",
@@ -237,36 +237,23 @@ describe("generic current-conversation bindings", () => {
           "target_session_key",
           "conversation_kind",
           "conversation_id",
+          "metadata_json",
         ]),
     ).rows;
-    expect(before).toEqual([
-      {
-        target_agent_id: "codex",
-        target_session_id: "workspace-session",
-        target_session_key: "agent:codex:acp:workspace-dm",
-        conversation_kind: "direct",
-        conversation_id: "user:U123",
-      },
-    ]);
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("current_conversation_bindings")
-        .set({
-          record_json: JSON.stringify({
-            bindingId: "generic:wrong",
-            targetSessionKey: "agent:wrong",
-            conversation: {
-              channel: "wrong",
-              accountId: "wrong",
-              conversationId: "wrong",
-            },
-            status: "ended",
-            boundAt: 1,
-          }),
-        })
-        .where("binding_key", "=", "workspace\u241fdefault\u241fdirect\u241f\u241fuser:U123"),
-    );
+    expect(before).toHaveLength(1);
+    expect(before[0]).toMatchObject({
+      target_agent_id: "codex",
+      target_session_id: "workspace-session",
+      target_session_key: "agent:codex:acp:workspace-dm",
+      conversation_kind: "direct",
+      conversation_id: "user:U123",
+    });
+    expect(JSON.parse(before[0]?.metadata_json ?? "{}")).toMatchObject({
+      label: "workspace-dm",
+      targetSessionId: "workspace-session",
+    });
+    const columns = database.db.prepare("PRAGMA table_info(current_conversation_bindings)").all();
+    expect(columns.map((column) => (column as { name: string }).name)).not.toContain("record_json");
 
     __testing.resetCurrentConversationBindingsForTests();
 

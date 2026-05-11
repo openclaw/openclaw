@@ -1035,7 +1035,6 @@ CREATE TABLE IF NOT EXISTS current_conversation_bindings (
   bound_at INTEGER NOT NULL,
   expires_at INTEGER,
   metadata_json TEXT,
-  record_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
 

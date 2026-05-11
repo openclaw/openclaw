@@ -694,22 +694,27 @@ describe("state migrations", () => {
       stateDatabase.db,
       db
         .selectFrom("current_conversation_bindings")
-        .select(["binding_key", "binding_id", "target_session_key", "record_json"]),
+        .select([
+          "binding_key",
+          "binding_id",
+          "target_session_key",
+          "channel",
+          "account_id",
+          "conversation_id",
+          "metadata_json",
+        ]),
     ).rows[0];
 
     expect(row).toMatchObject({
       binding_key: "forum\u241fdefault\u241fdirect\u241f\u241f6098642967",
       binding_id: "generic:forum\u241fdefault\u241fdirect\u241f\u241f6098642967",
       target_session_key: "agent:worker-1:acp:forum-dm",
+      channel: "forum",
+      account_id: "default",
+      conversation_id: "6098642967",
     });
-    expect(JSON.parse(row?.record_json ?? "{}")).toMatchObject({
-      bindingId: "generic:forum\u241fdefault\u241fdirect\u241f\u241f6098642967",
-      targetSessionKey: "agent:worker-1:acp:forum-dm",
-      conversation: {
-        channel: "forum",
-        accountId: "default",
-        conversationId: "6098642967",
-      },
+    expect(JSON.parse(row?.metadata_json ?? "{}")).toMatchObject({
+      label: "forum-dm",
     });
     await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
   });

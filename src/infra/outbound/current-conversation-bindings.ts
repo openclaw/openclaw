@@ -130,7 +130,6 @@ function recordToRow(record: SessionBindingRecord): Insertable<CurrentConversati
     bound_at: normalized.boundAt,
     expires_at: normalized.expiresAt ?? null,
     metadata_json: serializeJson(normalized.metadata),
-    record_json: JSON.stringify(normalized),
     updated_at: Date.now(),
   };
 }
@@ -193,7 +192,6 @@ function upsertBindingRow(record: SessionBindingRecord, env?: NodeJS.ProcessEnv)
             bound_at: (eb) => eb.ref("excluded.bound_at"),
             expires_at: (eb) => eb.ref("excluded.expires_at"),
             metadata_json: (eb) => eb.ref("excluded.metadata_json"),
-            record_json: (eb) => eb.ref("excluded.record_json"),
             updated_at: (eb) => eb.ref("excluded.updated_at"),
           }),
         ),

@@ -300,7 +300,6 @@ export interface CurrentConversationBindings {
   expires_at: number | null;
   metadata_json: string | null;
   parent_conversation_id: string | null;
-  record_json: string;
   status: string;
   target_agent_id: string;
   target_kind: string;

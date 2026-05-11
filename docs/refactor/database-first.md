@@ -271,9 +271,10 @@ The branch already has a real shared SQLite base:
   `subagents/runs.json` file is doctor migration input only.
 - Current conversation bindings now live in typed shared
   `current_conversation_bindings` rows keyed by normalized conversation id, with
-  target agent/session columns and conversation kind stored outside
-  `record_json`. The durable binding key includes the normalized conversation
-  kind so direct/group/channel refs cannot collide. The old
+  target agent/session columns, conversation kind, status, expiry, and metadata
+  stored as relational columns instead of a duplicated opaque binding record.
+  The durable binding key includes the normalized conversation kind so
+  direct/group/channel refs cannot collide. The old
   `bindings/current-conversations.json` file is doctor migration input only.
 - Delivery queue recovery now overlays typed queue columns for channel, target,
   account, session, retry, error, platform-send, and recovery state onto the
@@ -1252,7 +1253,7 @@ task_runs(...)
 task_delivery_state(...)
 flow_runs(...)
 subagent_runs(run_id, child_session_key, requester_session_key, controller_session_key, created_at, ended_at, cleanup_handled, payload_json)
-current_conversation_bindings(binding_key, binding_id, target_agent_id, target_session_id, target_session_key, channel, account_id, conversation_kind, parent_conversation_id, conversation_id, target_kind, status, bound_at, expires_at, metadata_json, record_json, updated_at)
+current_conversation_bindings(binding_key, binding_id, target_agent_id, target_session_id, target_session_key, channel, account_id, conversation_kind, parent_conversation_id, conversation_id, target_kind, status, bound_at, expires_at, metadata_json, updated_at)
 plugin_binding_approvals(plugin_root, channel, account_id, plugin_id, plugin_name, approved_at)
 tui_last_sessions(scope_key, session_key, updated_at)
 plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, expires_at)
