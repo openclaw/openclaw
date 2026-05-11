@@ -1198,6 +1198,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/openai-compatible-embeddings:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/opencode:
     devDependencies:
       '@openclaw/plugin-sdk':

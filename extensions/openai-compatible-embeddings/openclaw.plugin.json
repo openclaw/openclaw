@@ -1,0 +1,15 @@
+{
+  "id": "openai-compatible-embeddings",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "contracts": {
+    "memoryEmbeddingProviders": ["openai-compatible"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

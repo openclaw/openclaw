@@ -176,10 +176,53 @@ parameter, while others ignore it and always return `number[]` vectors.
 `memory-lancedb` therefore omits `encoding_format` on embedding requests and
 accepts either float-array responses or base64-encoded float32 responses.
 
-If you have a raw OpenAI-compatible embeddings endpoint that does not have a
-bundled provider adapter, omit `embedding.provider` (or leave it as `openai`) and
-set `embedding.apiKey` plus `embedding.baseUrl`. This preserves the direct
-OpenAI-compatible client path.
+For self-hosted OpenAI-compatible embedding servers (llama.cpp's
+`llama-server`, Ollama via its `/v1` surface, vLLM, TGI, LocalAI,
+llamafile, or any reverse-proxied internal instance) use the bundled
+`openai-compatible` provider:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "memory-lancedb": {
+        enabled: true,
+        config: {
+          embedding: {
+            provider: "openai-compatible",
+            baseUrl: "http://localhost:8081/v1",
+            model: "text-embedding-bge-m3",
+            apiKey: "${LLAMA_API_TOKEN}",
+            dimensions: 1024,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The `openai-compatible` provider is fully self-contained: it does not
+inherit headers, auth, or fallback URLs from any global
+`models.providers.*` block, and it fails-fast with a clear error when
+`embedding.baseUrl` or `embedding.model` is missing. Use it when your
+operator setup also has cloud providers (real OpenAI, etc.) configured
+for chat models, so an accidentally-removed `baseUrl` line cannot route
+embeddings to the cloud. Omit `apiKey` for servers that do not require
+auth (e.g. a default `ollama serve`).
+
+The `openai-compatible` provider is distinct from the in-process `local`
+provider, which uses `node-llama-cpp` to load a `.gguf` file directly
+into the gateway process. Choose `openai-compatible` when your
+embeddings live behind an HTTP server you run separately (most
+self-hosted setups). Choose `local` when you want the model to live in
+the gateway process itself.
+
+If your vendor's OpenAI-compatible embeddings endpoint differs from the
+local-server family above, omit `embedding.provider` (or leave it as
+`openai`) and set `embedding.apiKey` plus `embedding.baseUrl`. This
+preserves the direct OpenAI-compatible client path through the bundled
+`openai` adapter.
 
 Set `embedding.dimensions` for providers whose model dimensions are not built
 in. For example, ZhiPu `embedding-3` uses `2048` dimensions:
