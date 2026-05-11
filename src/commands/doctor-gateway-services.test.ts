@@ -756,6 +756,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("defers systemd service config rewrites during non-interactive update repairs", async () => {
+    mockProcessPlatform("linux");
     setupGatewayEntrypointRepairScenario({
       currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
       installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
@@ -866,6 +867,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("does not persist or stage embedded service tokens during systemd update repairs", async () => {
+    mockProcessPlatform("linux");
     Object.defineProperty(process.stdin, "isTTY", {
       value: false,
       configurable: true,
