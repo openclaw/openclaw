@@ -1,3 +1,4 @@
+import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
@@ -514,6 +515,14 @@ export async function dispatchCronDelivery(
     });
   const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
     if (!params.job.deleteAfterRun || directCronSessionDeleted) {
+      return;
+    }
+
+    // deleteAfterRun only applies to sessions created for cron runs.
+    // Non-cron sessions (user-owned, meeting, feishu, etc.) must not be deleted.
+    // Mark as handled so repeated finalizers do not retry.
+    if (!isCronSessionKey(params.agentSessionKey)) {
+      directCronSessionDeleted = true;
       return;
     }
     try {
