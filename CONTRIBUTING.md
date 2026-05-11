@@ -103,6 +103,15 @@ We cap at **20 open PRs per author**. If you exceed this, the `r: too-many-prs` 
 
 For coordinated change sets that genuinely need more than 20 PRs, join the **#clawtributors** channel in Discord and talk to maintainers first.
 
+## Pull Request Templates
+
+Use the PR template that matches the size and risk of your change:
+
+- [Quick fix](https://github.com/openclaw/openclaw/compare?template=quick_fix.md) for small bug fixes, documentation fixes, typos, and focused DX cleanup.
+- [Full change](https://github.com/openclaw/openclaw/compare?template=full_change.md) for features, refactors, security-sensitive changes, behavior changes, or broader runtime work.
+
+When opening a PR from a fork, GitHub also accepts `?template=quick_fix.md` or `?template=full_change.md` on the compare URL. Keep the filled template focused; do not remove required proof or security-impact details that apply to your change.
+
 ## Before You PR
 
 - Test locally with your OpenClaw instance

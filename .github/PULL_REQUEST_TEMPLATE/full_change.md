@@ -1,7 +1,3 @@
-## PR Template Options
-
-For small changes, you can use the [quick fix template](https://github.com/openclaw/openclaw/compare?template=quick_fix.md). For broader changes, continue with this full template or use `?template=full_change.md` on the compare URL.
-
 ## Summary
 
 Describe the problem and fix in 2–5 bullets:
@@ -9,7 +5,7 @@ Describe the problem and fix in 2–5 bullets:
 If this PR fixes a plugin beta-release blocker, title it `fix(<plugin-id>): beta blocker - <summary>` and link the matching `Beta blocker: <plugin-name> - <summary>` issue labeled `beta-blocker`. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation.
 
 - Problem:
-- Solution:
+- Why it matters:
 - What changed:
 - What did NOT change (scope boundary):
 
@@ -38,12 +34,6 @@ If this PR fixes a plugin beta-release blocker, title it `fix(<plugin-id>): beta
 - Closes #
 - Related #
 - [ ] This PR fixes a bug or regression
-
-## Motivation
-
-Explain why this change should exist now. Link it to the user pain, failure mode, maintainer need, or product goal. If this is purely mechanical, write `N/A`.
-
--
 
 ## Real behavior proof (required for external PRs)
 
