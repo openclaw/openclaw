@@ -1,7 +1,10 @@
+import os from "node:os";
+import path from "node:path";
 import { definePluginEntry } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { registerCuratorCli } from "./cli.js";
-import { loadUsage } from "./telemetry.js";
+import { resolveConfig } from "./config.js";
+import { curatorRun } from "./run.js";
 
 export default definePluginEntry({
   id: "skill-curator",
@@ -22,21 +25,33 @@ export default definePluginEntry({
       },
     });
 
-    // Hook into prompt build — the curator doesn't inject guidance, but we
-    // could emit telemetry events here if the gateway prompt assembler fires them.
-    api.on("before_prompt_build", async () => {
-      return undefined;
-    });
+    // Hook: after every agent turn ends, check if curator should run.
+    // This covers the trigger logic without needing a separate scheduler.
+    api.on("agent_end", async (_event, ctx) => {
+      try {
+        const workspaceDir = ctx.workspaceDir ?? path.join(os.homedir(), ".openclaw", "workspace");
 
-    // Register periodic scheduler job for curator runs
-    api.registerSessionSchedulerJob({
-      id: "skill-curator-periodic",
-      schedule: { intervalMs: 60 * 60 * 1000 }, // hourly tick; actual gating in run logic
-      async run() {
-        api.logger.debug("skill-curator: periodic tick");
-        // In full implementation, the gateway-side hook calls curatorRun()
-        // after checking idle time. The tick here is a heartbeat for the plugin.
-      },
+        const config = resolveConfig(api.pluginConfig);
+        const result = await curatorRun({ workspaceDir, config, dryRun: false });
+
+        if (result.mutations.length > 0) {
+          api.logger.info(
+            `skill-curator: applied ${result.mutations.length} mutation(s) — ${result.mutations.map((m) => m.name).join(", ")}`,
+          );
+        }
+        if (
+          result.error &&
+          !result.error.includes("first-run") &&
+          !result.error.includes("paused")
+        ) {
+          api.logger.warn(`skill-curator: ${result.error}`);
+        }
+      } catch (err) {
+        // Non-critical — never fail the agent turn over curator issues
+        api.logger.debug(
+          `skill-curator: agent_end hook skipped — ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     });
   },
 });
@@ -51,6 +66,7 @@ export { createSnapshot, rotateSnapshots } from "./snapshot.js";
 export type { SnapshotResult } from "./snapshot.js";
 export {
   curatorRun,
+  curatorRunReview,
   decideRun,
   pauseCurator,
   resumeCurator,

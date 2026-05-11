@@ -1,8 +1,15 @@
 # Skill Curator
 
-The skill curator automatically maintains your workspace `skills/` tree —
-marking stale skills, archiving unused ones, and periodically running an LLM
-review pass to patch drift or consolidate near-duplicates.
+The skill curator maintains your workspace `skills/` tree —
+marking stale skills, archiving unused ones, and (when gateway support is
+available) running an LLM review pass to patch drift or consolidate
+near-duplicates.
+
+> **Status:** Phase A (deterministic transitions, snapshots, pinning, telemetry)
+> is fully functional. Phase B (LLM review pass) requires the
+> `auxiliary.curator` model slot, which is a gateway-level feature (deferred).
+> The `/curator` slash command on Discord/Telegram requires platform
+> slash-command registration (deferred). The CLI works from any shell.
 
 ## Quick Start
 
@@ -13,11 +20,8 @@ openclaw curator run --dry-run
 # Check status
 openclaw curator status
 
-# Run now (background)
+# Run now
 openclaw curator run
-
-# Run synchronously (blocks until done)
-openclaw curator run --sync
 ```
 
 ## How It Works
@@ -95,7 +99,10 @@ Skip: pinned, bundled, hub-installed, and non-agent-created skills.
 
 ### Phase B — LLM Review Pass
 
-Uses a cheap auxiliary model to review agent-created skills and suggest:
+> **Deferred:** Requires the `auxiliary.curator` model slot at the gateway
+> level. Not currently active in automatic runs.
+
+When wired, uses a cheap auxiliary model to review agent-created skills and suggest:
 
 - **keep** — skill is still useful
 - **patch** — fix a specific issue (replace old_text with new_text)
@@ -175,5 +182,5 @@ The skill moves back to `skills/` and is marked `active`.
 
 ### "tar not found"
 
-Snapshots require `tar` on your PATH. If `tar` is unavailable, snapshot
-creation will fail gracefully and the curator will continue without backups.
+Snapshots require `tar` on your PATH. If `tar` is unavailable, the curator
+run will return a snapshot error and stop before applying mutations.

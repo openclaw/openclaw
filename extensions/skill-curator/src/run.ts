@@ -279,3 +279,50 @@ export async function adoptSkill(workspaceDir: string, name: string): Promise<Us
 export async function disownSkill(workspaceDir: string, name: string): Promise<UsageEntry> {
   return setCreatedBy(workspaceDir, name, "user");
 }
+
+// ── Phase B: LLM Review Pass ───────────────────────────────────────────────
+//
+// NOTE: Phase B requires a model-calling function (e.g. gateway-level
+// auxiliary.curator model slot). Without it, only Phase A (deterministic
+// transitions) runs. The LLM review is optional and additive — it never
+// blocks Phase A.
+
+/**
+ * Run the LLM review pass (Phase B).
+ *
+ * Requires a `callModel` function that takes a system prompt and user
+ * prompt string, and returns the model's text response.
+ *
+ * Returns parsed and validated review decisions, or null if the call
+ * fails or returns unparseable output.
+ */
+export async function curatorRunReview(params: {
+  workspaceDir: string;
+  callModel: (systemPrompt: string, userPrompt: string) => Promise<string>;
+}): Promise<{
+  decisions: import("./reviewer.js").ReviewAction[];
+  manifest: import("./reviewer.js").ReviewManifest;
+} | null> {
+  const { buildReviewManifest, parseReviewResponse } = await import("./reviewer.js");
+  const { loadUsage, setState } = await import("./telemetry.js");
+
+  const manifest = await buildReviewManifest(params.workspaceDir);
+  if (manifest.skills.length === 0) {
+    return { decisions: [], manifest };
+  }
+
+  // Build user prompt: list skill names and descriptions
+  const skillList = manifest.skills.map((s, i) => `${i}. ${s.name} — ${s.description}`).join("\n");
+  const userPrompt = `Review these skills and return decisions:\n\n${skillList}`;
+
+  try {
+    const raw = await params.callModel(
+      (await import("./reviewer.js")).CURATOR_SYSTEM_PROMPT,
+      userPrompt,
+    );
+    const response = parseReviewResponse(raw);
+    return { decisions: response.decisions, manifest };
+  } catch {
+    return null; // Model call or parse failure — non-blocking
+  }
+}

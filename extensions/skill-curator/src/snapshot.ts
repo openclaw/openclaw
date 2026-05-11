@@ -52,25 +52,43 @@ function runTar(
  * Create a tar.gz snapshot of <workspaceDir>/skills/ into
  * <workspaceDir>/skills/.curator_backups/<utc-iso>/skills.tar.gz.
  *
- * Returns metadata about the created snapshot.
+ * Excludes .curator_backups and .archive from the tarball to avoid
+ * recursive backup bloat. Returns metadata about the created snapshot.
  */
 export async function createSnapshot(workspaceDir: string): Promise<SnapshotResult> {
   const timestamp = isoFilename();
   const destDir = path.join(backupsDir(workspaceDir), timestamp);
   const archivePath = path.join(destDir, "skills.tar.gz");
+  const manifestPath = path.join(destDir, "manifest.json");
 
   await fs.mkdir(destDir, { recursive: true });
 
   const skillsDir = path.join(workspaceDir, "skills");
 
-  // tar -czf <archive> -C <parent> skills
-  const { code, stderr } = await runTar(path.dirname(skillsDir), ["-czf", archivePath, "skills"]);
+  // tar -czf <archive> -C <parent> --exclude .curator_backups --exclude .archive skills
+  const { code, stderr } = await runTar(path.dirname(skillsDir), [
+    "-czf",
+    archivePath,
+    "--exclude",
+    ".curator_backups",
+    "--exclude",
+    ".archive",
+    "skills",
+  ]);
 
   if (code !== 0) {
     throw new Error(`tar exited with code ${code}: ${stderr}`);
   }
 
   const stat = await fs.stat(archivePath);
+
+  // Write manifest sidecar
+  const manifest = {
+    created_at: new Date().toISOString(),
+    archive_path: archivePath,
+    size_bytes: stat.size,
+  };
+  await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
 
   return {
     archivePath,

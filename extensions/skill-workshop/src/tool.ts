@@ -5,7 +5,7 @@ import { Type } from "typebox";
 import { jsonResult, type OpenClawPluginApi } from "../api.js";
 import type { SkillWorkshopConfig } from "./config.js";
 import {
-  applyProposalToWorkshop,
+  applyProposalToWorkspace,
   normalizeSkillName,
   prepareProposalWrite,
   writeSupportFile,
@@ -16,6 +16,7 @@ import { createStoreForContext, resolveWorkspaceDir } from "./workshop.js";
 // ── Curator integration (lightweight, lazy-imported) ────────────────────────
 
 let _stampAgentCreated: ((wsDir: string, name: string) => Promise<unknown>) | null = null;
+let _incrementPatch: ((wsDir: string, name: string) => Promise<unknown>) | null = null;
 let _curatorLoadUsage:
   | ((wsDir: string) => Promise<{ skills: Record<string, { pinned?: boolean }> }>)
   | null = null;
@@ -25,6 +26,7 @@ async function ensureCuratorModules() {
   try {
     const curatorTelemetry = await import("../../skill-curator/src/telemetry.js");
     _stampAgentCreated = curatorTelemetry.stampAgentCreated;
+    _incrementPatch = curatorTelemetry.incrementPatch;
     _curatorLoadUsage = curatorTelemetry.loadUsage;
   } catch {
     // skill-curator not installed — gracefully skip
@@ -39,6 +41,17 @@ async function stampAgentCreatedIfNew(workspaceDir: string, skillName: string, c
       await _stampAgentCreated(workspaceDir, skillName);
     } catch {
       // non-critical — don't fail skill creation over telemetry stamp
+    }
+  }
+}
+
+async function incrementPatchIfCurator(workspaceDir: string, skillName: string) {
+  await ensureCuratorModules();
+  if (_incrementPatch) {
+    try {
+      await _incrementPatch(workspaceDir, skillName);
+    } catch {
+      // non-critical — don't fail workshop mutation over telemetry
     }
   }
 }
@@ -225,6 +238,8 @@ export function createSkillWorkshopTool(params: {
           });
           // Stamp agent-created marker for new skills
           await stampAgentCreatedIfNew(workspaceDir, proposal.skillName, applied.created);
+          // Increment patch telemetry for all mutations
+          await incrementPatchIfCurator(workspaceDir, proposal.skillName);
           const stored = await store.add(
             {
               ...proposal,
@@ -277,6 +292,8 @@ export function createSkillWorkshopTool(params: {
         });
         // Stamp agent-created marker for new skills applied from queue
         await stampAgentCreatedIfNew(workspaceDir, proposal.skillName, applied.created);
+        // Increment patch telemetry for all mutations
+        await incrementPatchIfCurator(workspaceDir, proposal.skillName);
         const updated = await store.updateStatus(raw.id, "applied");
         return jsonResult({ status: "applied", skillPath: applied.skillPath, proposal: updated });
       }
@@ -303,6 +320,7 @@ export function createSkillWorkshopTool(params: {
         const skillDir = path.join(skillsDir, skillName);
         try {
           await fs.rm(skillDir, { recursive: true, force: true });
+          await incrementPatchIfCurator(workspaceDir, skillName);
           return jsonResult({ status: "deleted", skillName });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

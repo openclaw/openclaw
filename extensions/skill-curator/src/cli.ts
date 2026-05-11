@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/core";
 import { resolveConfig, type CuratorConfig } from "./config.js";
+import { writeRunLog } from "./logs.js";
 import {
   adoptSkill,
   curatorRun,
@@ -138,6 +139,17 @@ export function registerCuratorCli(api: OpenClawPluginApi): void {
             const dryRun = (ctx.options?.["dry-run"] ?? false) as boolean;
 
             const result = await curatorRun({ workspaceDir, config, dryRun });
+
+            // Write run logs if not a dry run
+            let logDir: string | undefined;
+            if (!dryRun) {
+              try {
+                logDir = await writeRunLog(result);
+              } catch {
+                // Non-critical — don't fail the command over log write
+              }
+            }
+
             const lines: string[] = [];
             lines.push(dryRun ? "DRY RUN — no mutations applied" : "Curator run complete");
             lines.push(`Timestamp: ${result.timestamp}`);
@@ -168,6 +180,10 @@ export function registerCuratorCli(api: OpenClawPluginApi): void {
 
             if (result.transitions.length === 0 && !result.error) {
               lines.push("\nNo transitions needed. All skills are up to date.");
+            }
+
+            if (logDir) {
+              lines.push(`\nRun log: ${logDir}`);
             }
 
             return { display: lines.join("\n") };
@@ -274,8 +290,24 @@ export function registerCuratorCli(api: OpenClawPluginApi): void {
               await import("./snapshot.js")
             ).createSnapshot(workspaceDir);
 
-            // Extract tar.gz
+            // Clean current skills/ (preserve .curator_backups and .archive)
+            // so the extracted tree is byte-identical to the snapshot.
             const skillsDir = path.join(workspaceDir, "skills");
+            const keepDirs = new Set([".curator_backups", ".archive"]);
+            try {
+              const entries = await fs.readdir(skillsDir, { withFileTypes: true });
+              for (const entry of entries) {
+                if (keepDirs.has(entry.name)) continue;
+                await fs.rm(path.join(skillsDir, entry.name), {
+                  recursive: true,
+                  force: true,
+                });
+              }
+            } catch {
+              // skills/ may not exist yet — that's fine
+            }
+
+            // Extract tar.gz
             const { spawn } = await import("node:child_process");
             await new Promise<void>((resolve, reject) => {
               const child = spawn("tar", ["-xzf", archivePath, "-C", path.dirname(skillsDir)], {

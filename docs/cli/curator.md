@@ -1,6 +1,10 @@
 # `openclaw curator`
 
-Skill curator CLI — manage skill lifecycle, telemetry, archival, and LLM review.
+Skill curator CLI — manage skill lifecycle, telemetry, and archival.
+LLM review pass requires gateway-level `auxiliary.curator` model slot (deferred).
+
+> **Note:** The `/curator` slash command on Discord/Telegram requires platform
+> slash-command registration (deferred). CLI commands work from any shell.
 
 ## Commands
 
@@ -37,7 +41,7 @@ Output (JSON):
 
 ### `curator run`
 
-Trigger a curator run. By default runs in the background.
+Trigger a curator run (Phase A — deterministic transitions only).
 
 ```bash
 openclaw curator run
@@ -47,12 +51,10 @@ Options:
 
 | Flag        | Description                              |
 | ----------- | ---------------------------------------- |
-| `--sync`    | Block until the run completes            |
 | `--dry-run` | Preview only — no mutations, no lockfile |
 
 ```bash
 openclaw curator run --dry-run
-openclaw curator run --sync
 ```
 
 ---
@@ -146,12 +148,15 @@ Useful for:
 
 ## Slash Command
 
-All verbs are available as `/curator` in CLI, Discord, and Telegram:
+When platform slash-command registration is available, all verbs will be
+exposed as `/curator` in CLI, Discord, and Telegram.
+
+Currently available via CLI:
 
 ```
-/curator status
-/curator run --dry-run
-/curator pin my-skill
+openclaw curator status
+openclaw curator run --dry-run
+openclaw curator pin my-skill
 ```
 
 ---
@@ -160,4 +165,4 @@ All verbs are available as `/curator` in CLI, Discord, and Telegram:
 
 - [Skill Curator Guide](/docs/automation/curator.md) — full lifecycle, pinning UX, troubleshooting
 - [Skill Workshop](/docs/cli/skill-workshop.md) — the tool that creates skills
-- [Config Reference](/docs/config.md) — `curator.*` and `auxiliary.curator.*` config keys
+- [Config Reference](/docs/config.md) — `curator.*` config keys (`auxiliary.curator.*` is a deferred gateway feature)
