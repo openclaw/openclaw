@@ -41,6 +41,11 @@ type SlackBlockLike = {
   title?: unknown;
 };
 
+type SlackBlocksText = {
+  text: string;
+  hasRichText: boolean;
+};
+
 type SlackMediaModule = typeof import("../media.js");
 let slackMediaModulePromise: Promise<SlackMediaModule> | undefined;
 
@@ -220,33 +225,40 @@ function readSlackBlockText(block: unknown): string | undefined {
   }
 }
 
-function resolveSlackBlocksText(blocks: unknown[] | undefined): string | undefined {
+function resolveSlackBlocksText(blocks: unknown[] | undefined): SlackBlocksText | undefined {
   if (!blocks?.length) {
     return undefined;
   }
   const parts: string[] = [];
+  let hasRichText = false;
   for (const block of blocks) {
+    if (block && typeof block === "object" && (block as SlackBlockLike).type === "rich_text") {
+      hasRichText = true;
+    }
     const text = readSlackBlockText(block);
     if (text) {
       parts.push(text);
     }
   }
-  return parts.length > 0 ? parts.join("\n") : undefined;
+  return parts.length > 0 ? { text: parts.join("\n"), hasRichText } : undefined;
 }
 
 function chooseSlackPrimaryText(params: {
   messageText: string | undefined;
-  blocksText: string | undefined;
+  blocksText: SlackBlocksText | undefined;
 }): string | undefined {
   const { messageText, blocksText } = params;
   if (!blocksText) {
     return messageText;
   }
   if (!messageText) {
-    return blocksText;
+    return blocksText.text;
   }
-  return blocksText.length > messageText.length && blocksText.startsWith(messageText)
-    ? blocksText
+  if (blocksText.hasRichText && blocksText.text.length > messageText.length) {
+    return blocksText.text;
+  }
+  return blocksText.text.length > messageText.length && blocksText.text.startsWith(messageText)
+    ? blocksText.text
     : messageText;
 }
 

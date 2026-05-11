@@ -147,6 +147,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
+  const allowTopLevelReplyFallback =
+    effectiveReplyInThread === true &&
+    threadReplyMode &&
+    rootId !== undefined &&
+    sendReplyToMessageId !== undefined &&
+    sendReplyToMessageId !== rootId;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -465,6 +471,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
                 replyInThread: effectiveReplyInThread,
+                allowTopLevelReplyFallback,
                 accountId,
               });
             },
@@ -491,6 +498,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                     text: chunk,
                     replyToMessageId: sendReplyToMessageId,
                     replyInThread: effectiveReplyInThread,
+                    allowTopLevelReplyFallback,
                     accountId,
                   });
                 },
@@ -605,6 +613,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
+                  allowTopLevelReplyFallback,
                   accountId,
                   header: cardHeader,
                   note: cardNote,
@@ -623,6 +632,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
+                  allowTopLevelReplyFallback,
                   accountId,
                 });
               },

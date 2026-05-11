@@ -108,10 +108,12 @@ const getChannelSetupPlugin = vi.hoisted(() => vi.fn((_channel?: unknown) => und
 const listChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
 const listActiveChannelSetupPlugins = vi.hoisted(() => vi.fn((): unknown[] => []));
 const loadChannelSetupPluginRegistrySnapshotForChannel = vi.hoisted(() =>
-  vi.fn<LoadChannelSetupPluginRegistrySnapshotForChannel>((_params) => makePluginRegistry()),
+  vi.fn((_params: Parameters<LoadChannelSetupPluginRegistrySnapshotForChannel>[0]) =>
+    makePluginRegistry(),
+  ),
 );
 const ensureChannelSetupPluginInstalled = vi.hoisted(() =>
-  vi.fn<EnsureChannelSetupPluginInstalled>(async ({ cfg, entry }) => ({
+  vi.fn(async ({ cfg, entry }: Parameters<EnsureChannelSetupPluginInstalled>[0]) => ({
     cfg,
     installed: true,
     pluginId: entry?.pluginId,
@@ -119,16 +121,20 @@ const ensureChannelSetupPluginInstalled = vi.hoisted(() =>
   })),
 );
 const resolveChannelSetupEntries = vi.hoisted(() =>
-  vi.fn<ResolveChannelSetupEntries>((_params) => ({
-    entries: [],
-    installedCatalogEntries: [],
-    installableCatalogEntries: [],
-    installedCatalogById: new Map(),
-    installableCatalogById: new Map(),
-  })),
+  vi.fn(
+    (
+      _params: Parameters<ResolveChannelSetupEntries>[0],
+    ): ReturnType<ResolveChannelSetupEntries> => ({
+      entries: [],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    }),
+  ),
 );
 const collectChannelStatus = vi.hoisted(() =>
-  vi.fn<CollectChannelStatus>(async (_params) => ({
+  vi.fn(async (_params: Parameters<CollectChannelStatus>[0]) => ({
     installedPlugins: [],
     catalogEntries: [],
     installedCatalogEntries: [],

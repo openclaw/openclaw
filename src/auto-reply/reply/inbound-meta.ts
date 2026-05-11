@@ -280,6 +280,51 @@ function buildReplyChainPayload(ctx: TemplateContext): Array<Record<string, unkn
   });
 }
 
+function isTelegramInboundContext(ctx: TemplateContext): boolean {
+  return [ctx.OriginatingChannel, ctx.Surface, ctx.Provider].some(
+    (value) => normalizePromptMetadataString(value) === "telegram",
+  );
+}
+
+function resolveInlineReplyQuote(ctx: TemplateContext): string | undefined {
+  return sanitizeTranscriptField(ctx.ReplyToQuoteText) ?? sanitizeTranscriptField(ctx.ReplyToBody);
+}
+
+function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | undefined {
+  if (!isTelegramInboundContext(ctx)) {
+    return undefined;
+  }
+  const quote = resolveInlineReplyQuote(ctx);
+  if (!quote) {
+    return undefined;
+  }
+  const messageId =
+    normalizePromptMetadataString(ctx.MessageSid) ??
+    normalizePromptMetadataString(ctx.MessageSidFull);
+  const sender =
+    resolveSenderLabel({
+      name: normalizePromptMetadataString(ctx.SenderName),
+      username: normalizePromptMetadataString(ctx.SenderUsername),
+      tag: normalizePromptMetadataString(ctx.SenderTag),
+      e164: normalizePromptMetadataString(ctx.SenderE164),
+      id: normalizePromptMetadataString(ctx.SenderId),
+    }) ?? "unknown sender";
+  const header = [messageId ? `#${messageId}` : undefined, sanitizeTranscriptField(sender)].filter(
+    Boolean,
+  );
+  return [
+    "Current message:",
+    `[Replying to: ${JSON.stringify(quote)}]`,
+    header.length > 0 ? `${header.join(" ")}:` : undefined,
+  ]
+    .filter((line) => line !== undefined)
+    .join("\n");
+}
+
+export function resolveInboundUserContextPromptJoiner(ctx: TemplateContext): " " | undefined {
+  return formatTelegramCurrentMessageContext(ctx) ? " " : undefined;
+}
+
 function formatConversationTimestamp(
   value: unknown,
   envelope?: EnvelopeFormatOptions,
@@ -396,6 +441,7 @@ export function buildInboundUserContextPrefix(
         })
       : Boolean(replyToId && chatWindowMessageIds.has(replyToId));
   const chatWindowCoversHistory = structuredContext.some(isChatWindowHistoryContext);
+  const currentMessageContext = formatTelegramCurrentMessageContext(ctx);
 
   // Keep volatile conversation/message identifiers in the user-role block so the system
   // prompt stays byte-stable across task-scoped sessions and reply turns.
@@ -469,14 +515,14 @@ export function buildInboundUserContextPrefix(
   }
 
   const replyToBody = sanitizePromptBody(ctx.ReplyToBody);
-  if (replyChainPayload.length > 0 && !chatWindowCoversReplyContext) {
+  if (replyChainPayload.length > 0 && !chatWindowCoversReplyContext && !currentMessageContext) {
     blocks.push(
       formatUntrustedJsonBlock(
         "Reply chain of current user message (untrusted, nearest first):",
         replyChainPayload,
       ),
     );
-  } else if (replyToBody && !chatWindowCoversReplyContext) {
+  } else if (replyToBody && !chatWindowCoversReplyContext && !currentMessageContext) {
     blocks.push(
       formatUntrustedJsonBlock("Reply target of current user message (untrusted, for context):", {
         sender_label: normalizePromptMetadataString(ctx.ReplyToSender),
@@ -536,6 +582,10 @@ export function buildInboundUserContextPrefix(
         })),
       ),
     );
+  }
+
+  if (currentMessageContext) {
+    blocks.push(currentMessageContext);
   }
 
   return blocks.filter(Boolean).join("\n\n");

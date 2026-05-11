@@ -1660,32 +1660,25 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
-    expect(payload.UntrustedStructuredContext).toEqual([
-      expect.objectContaining({
-        label: "Conversation context",
-        payload: expect.objectContaining({
-          relation: "selected_for_current_message",
-          messages: expect.arrayContaining([
-            expect.objectContaining({
-              message_id: "100",
-              sender: "Assistant",
-              body: "Earlier deployment answer",
-              is_reply_target: true,
-            }),
-            expect.objectContaining({
-              message_id: "200",
-              sender: "Sam",
-              body: "Lunch after standup?",
-            }),
-            expect.objectContaining({
-              message_id: "201",
-              sender: "Riley",
-              body: "After the incident review.",
-            }),
-          ]),
-        }),
-      }),
-    ]);
+    const [conversationContext] = requireArray(
+      payload.UntrustedStructuredContext,
+      "structured context",
+    );
+    const contextRecord = requireRecord(conversationContext, "conversation context");
+    expect(contextRecord.label).toBe("Conversation context");
+    const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+    expect(contextPayload.relation).toBe("selected_for_current_message");
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+    );
+    const messagesById = new Map(messages.map((message) => [message.message_id, message]));
+    expect(messagesById.get("100")?.sender).toBe("Assistant");
+    expect(messagesById.get("100")?.body).toBe("Earlier deployment answer");
+    expect(messagesById.get("100")?.is_reply_target).toBe(true);
+    expect(messagesById.get("200")?.sender).toBe("Sam");
+    expect(messagesById.get("200")?.body).toBe("Lunch after standup?");
+    expect(messagesById.get("201")?.sender).toBe("Riley");
+    expect(messagesById.get("201")?.body).toBe("After the incident review.");
   });
 
   it("uses quote text when a Telegram partial reply is received", async () => {

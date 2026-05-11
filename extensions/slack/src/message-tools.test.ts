@@ -35,8 +35,22 @@ describe("Slack message tools", () => {
         },
       }),
     ).toMatchObject({
-      actions: expect.arrayContaining(["send", "upload-file", "read"]),
-      capabilities: expect.arrayContaining(["presentation"]),
+      actions: [
+        "send",
+        "react",
+        "reactions",
+        "read",
+        "edit",
+        "delete",
+        "download-file",
+        "upload-file",
+        "pin",
+        "unpin",
+        "list-pins",
+        "member-info",
+        "emoji-list",
+      ],
+      capabilities: ["presentation"],
     });
   });
 
@@ -75,9 +89,21 @@ describe("Slack message tools", () => {
       },
     } as OpenClawConfig;
 
-    expect(listSlackMessageActions(cfg)).toEqual(
-      expect.arrayContaining(["read", "edit", "delete", "download-file", "upload-file"]),
-    );
+    expect(listSlackMessageActions(cfg)).toEqual([
+      "send",
+      "react",
+      "reactions",
+      "read",
+      "edit",
+      "delete",
+      "download-file",
+      "upload-file",
+      "pin",
+      "unpin",
+      "list-pins",
+      "member-info",
+      "emoji-list",
+    ]);
   });
 
   it("honors the selected Slack account during discovery", () => {

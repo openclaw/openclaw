@@ -1,4 +1,4 @@
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -56,9 +56,11 @@ export type RunCliAgentParams = {
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
   onExecutionPhase?: (info: {
-    phase: "model_call_started";
+    phase: "process_spawned" | "model_call_started";
     provider?: string;
     model?: string;
+    backend?: string;
+    source?: string;
     firstModelCallStarted?: boolean;
   }) => void;
   replyOperation?: ReplyOperation;
