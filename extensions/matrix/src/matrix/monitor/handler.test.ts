@@ -367,20 +367,14 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        updateLastRoute: expect.objectContaining({
-          channel: "matrix",
-          to: "room:!dm:example.org",
-          mainDmOwnerPin: undefined,
-        }),
-      }),
-    );
+    expect(recordInboundSession).toHaveBeenCalledTimes(1);
     const inbound = requireRecord(
       callArg(recordInboundSession, 0, 0, "record inbound session"),
       "record inbound session",
     );
     const route = requireRecord(inbound.updateLastRoute, "last route update");
+    expect(route.channel).toBe("matrix");
+    expect(route.to).toBe("room:!dm:example.org");
     expect(route.mainDmOwnerPin).toBeUndefined();
   });
 

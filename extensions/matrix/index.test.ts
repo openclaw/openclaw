@@ -46,7 +46,9 @@ describe("matrix plugin", () => {
     registerMatrixCliMetadata(api);
 
     const registrar = registerCli.mock.calls[0]?.[0];
-    expect(registerCli).toHaveBeenCalledWith(expect.any(Function), {
+    expect(registerCli).toHaveBeenCalledTimes(1);
+    expect(typeof registrar).toBe("function");
+    expect(registerCli.mock.calls[0]?.[1]).toEqual({
       descriptors: [
         {
           name: "matrix",
@@ -95,7 +97,9 @@ describe("matrix plugin", () => {
 
     entry.register(api);
 
-    expect(registerCli).toHaveBeenCalledWith(expect.any(Function), {
+    expect(registerCli).toHaveBeenCalledTimes(1);
+    expect(typeof registerCli.mock.calls[0]?.[0]).toBe("function");
+    expect(registerCli.mock.calls[0]?.[1]).toEqual({
       descriptors: [
         {
           name: "matrix",

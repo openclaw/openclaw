@@ -95,7 +95,7 @@ describe("matrixMessageActions", () => {
     expect(discovery.mediaSourceParams).toEqual({
       "set-profile": ["avatarUrl", "avatarPath"],
     });
-    expect(Object.keys(properties).sort()).toEqual([
+    expect(Object.keys(properties).toSorted()).toEqual([
       "avatarPath",
       "avatarUrl",
       "avatar_path",
