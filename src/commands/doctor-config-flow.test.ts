@@ -1467,9 +1467,11 @@ describe("doctor config flow", () => {
     });
 
     expect(noteImplicitFallbackClobberWarningsMock).toHaveBeenCalledTimes(1);
-    const [[warningParams]] = noteImplicitFallbackClobberWarningsMock.mock
-      .calls as unknown as Array<[{ agents?: unknown }]>;
-    expect(warningParams.agents).toStrictEqual(config.agents);
+    expect(noteImplicitFallbackClobberWarningsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agents: config.agents,
+      }),
+    );
     const doctorWarnings = terminalNoteMock.mock.calls
       .filter(([, title]) => title === "Doctor warnings")
       .map(([message]) => message);
