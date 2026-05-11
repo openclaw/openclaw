@@ -14,10 +14,14 @@ import {
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 
 const DEFAULT_MODEL = "google/lyria-3-clip-preview";
+
+type MusicDispatcherPolicy = NonNullable<
+  Parameters<typeof fetchWithTimeoutGuarded>[4]
+>["dispatcherPolicy"];
 const DEFAULT_TIMEOUT_MS = 120_000;
 const SUPPORTED_MODELS = [DEFAULT_MODEL, "google/lyria-3-pro-preview"] as const;
 // OpenRouter currently returns MP3 regardless of requested format.
@@ -101,7 +105,7 @@ async function streamOpenRouterMusic(params: {
   body: Record<string, unknown>;
   timeoutMs: number;
   allowPrivateNetwork: boolean;
-  dispatcherPolicy?: unknown;
+  dispatcherPolicy?: MusicDispatcherPolicy;
 }): Promise<{ audioBuffer: Buffer; transcriptPieces: string[] }> {
   const url = `${params.baseUrl}/chat/completions`;
 
@@ -114,11 +118,18 @@ async function streamOpenRouterMusic(params: {
     },
     params.timeoutMs,
     fetch,
-    {
-      ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-      ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
-      auditContext: "openrouter-music",
-    },
+    ((): Parameters<typeof fetchWithTimeoutGuarded>[4] => {
+      const opts: Parameters<typeof fetchWithTimeoutGuarded>[4] = {
+        auditContext: "openrouter-music",
+      };
+      if (params.allowPrivateNetwork) {
+        opts.ssrfPolicy = { allowPrivateNetwork: true };
+      }
+      if (params.dispatcherPolicy) {
+        opts.dispatcherPolicy = params.dispatcherPolicy;
+      }
+      return opts;
+    })(),
   );
 
   try {
