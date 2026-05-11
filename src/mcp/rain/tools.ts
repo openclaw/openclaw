@@ -265,4 +265,200 @@ export const RAIN_TOOLS: ToolDef[] = [
     },
     handler: (client, args) => client.getTransactionDetails(asString(args.txHash)),
   },
+
+  // ── V2 Phase A — Slice 3: positions / portfolio / PnL ─────────────────────
+
+  {
+    name: "rain_get_positions",
+    description:
+      "Get all Rain market positions for a wallet. Returns markets the wallet has participated in with option shares, LP liquidity, claim status.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        walletAddress: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description: "Wallet address.",
+        },
+      },
+      required: ["walletAddress"],
+      additionalProperties: false,
+    },
+    handler: (client, args) => client.getPositions(asString(args.walletAddress)),
+  },
+  {
+    name: "rain_get_position_by_market",
+    description:
+      "Get a wallet's position in a specific Rain market: option shares, LP liquidity, claim status.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        marketId: { type: "string", minLength: 1, description: "Rain market id." },
+        walletAddress: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description: "Wallet address.",
+        },
+      },
+      required: ["marketId", "walletAddress"],
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      client.getPositionByMarket(asString(args.marketId), asString(args.walletAddress)),
+  },
+  {
+    name: "rain_get_lp_position",
+    description: "Get a wallet's LP (liquidity provider) position in a specific Rain market.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        marketId: { type: "string", minLength: 1, description: "Rain market id." },
+        walletAddress: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description: "Wallet address.",
+        },
+      },
+      required: ["marketId", "walletAddress"],
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      client.getLpPosition(asString(args.marketId), asString(args.walletAddress)),
+  },
+  {
+    name: "rain_get_portfolio_value",
+    description:
+      "Get the total portfolio value for a wallet across all Rain markets and specified token balances.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        walletAddress: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description: "Wallet address.",
+        },
+        tokenAddresses: {
+          type: "array",
+          items: { type: "string", pattern: "^0x[a-fA-F0-9]{40}$" },
+          minItems: 1,
+          description: "ERC-20 token addresses to include in the balance calculation.",
+        },
+      },
+      required: ["walletAddress", "tokenAddresses"],
+      additionalProperties: false,
+    },
+    handler: (client, args) => {
+      const tokens = (args.tokenAddresses as unknown[]).map((t) => asString(t));
+      return client.getPortfolioValue(asString(args.walletAddress), tokens);
+    },
+  },
+  {
+    name: "rain_get_pnl",
+    description:
+      "Get realized + unrealized PnL for a wallet. Optionally filter to a single market by marketAddress. Note: filter takes marketAddress (on-chain address), not marketId — use rain_get_market_address to convert if needed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        walletAddress: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description: "Wallet address.",
+        },
+        marketAddress: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description:
+            "Optional. Filter PnL to a specific market by its on-chain contract address.",
+        },
+      },
+      required: ["walletAddress"],
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      client.getPnl(asString(args.walletAddress), asOptionalString(args.marketAddress)),
+  },
+
+  // ── V2 Phase A — Slice 4: trade history + transactions + market activity ───
+
+  {
+    name: "rain_get_trade_history",
+    description:
+      "Get trade history for a wallet in a specific Rain market. Both walletAddress AND marketAddress are required.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        walletAddress: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description: "Wallet address.",
+        },
+        marketAddress: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description: "Market on-chain contract address.",
+        },
+      },
+      required: ["walletAddress", "marketAddress"],
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      client.getTradeHistory(asString(args.walletAddress), asString(args.marketAddress)),
+  },
+  {
+    name: "rain_get_transactions",
+    description: "Get paginated transaction history for a wallet across all Rain markets.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        address: { type: "string", pattern: "^0x[a-fA-F0-9]{40}$", description: "Wallet address." },
+        first: {
+          type: "integer",
+          minimum: 1,
+          maximum: 100,
+          description: "Page size (default 20).",
+        },
+        skip: { type: "integer", minimum: 0, description: "Offset for pagination." },
+        orderDirection: {
+          type: "string",
+          enum: ["asc", "desc"],
+          description: "Sort direction (default desc).",
+        },
+      },
+      required: ["address"],
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      client.getTransactions(asString(args.address), {
+        first: asOptionalNumber(args.first),
+        skip: asOptionalNumber(args.skip),
+        orderDirection: asOptionalString(args.orderDirection),
+      }),
+  },
+  {
+    name: "rain_get_market_transactions",
+    description:
+      "Get all transactions for a specific Rain market by its on-chain contract address.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        marketAddress: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description: "Market on-chain contract address.",
+        },
+        first: {
+          type: "integer",
+          minimum: 1,
+          maximum: 100,
+          description: "Page size (default 20).",
+        },
+      },
+      required: ["marketAddress"],
+      additionalProperties: false,
+    },
+    handler: (client, args) =>
+      client.getMarketTransactions(asString(args.marketAddress), {
+        first: asOptionalNumber(args.first),
+      }),
+  },
 ];

@@ -122,6 +122,77 @@ export class RainRuntimeClient {
     return this.get(`/api/runtime/rain/transactions/${encodeURIComponent(txHash)}`);
   }
 
+  // ── Slice 3 — positions / portfolio / PnL ──────────────────────────────────
+
+  async getPositions(walletAddress: string): Promise<unknown> {
+    return this.get(
+      `/api/runtime/rain/positions?walletAddress=${encodeURIComponent(walletAddress)}`,
+    );
+  }
+
+  async getPositionByMarket(marketId: string, walletAddress: string): Promise<unknown> {
+    return this.get(
+      `/api/runtime/rain/positions/${encodeURIComponent(marketId)}?walletAddress=${encodeURIComponent(walletAddress)}`,
+    );
+  }
+
+  async getLpPosition(marketId: string, walletAddress: string): Promise<unknown> {
+    return this.get(
+      `/api/runtime/rain/lp-position/${encodeURIComponent(marketId)}?walletAddress=${encodeURIComponent(walletAddress)}`,
+    );
+  }
+
+  async getPortfolioValue(walletAddress: string, tokenAddresses: string[]): Promise<unknown> {
+    const qs = new URLSearchParams({ walletAddress, tokenAddresses: tokenAddresses.join(",") });
+    return this.get(`/api/runtime/rain/portfolio-value?${qs}`);
+  }
+
+  async getPnl(walletAddress: string, marketAddress?: string): Promise<unknown> {
+    const qs = new URLSearchParams({ walletAddress });
+    if (marketAddress) {
+      qs.set("marketAddress", marketAddress);
+    }
+    return this.get(`/api/runtime/rain/pnl?${qs}`);
+  }
+
+  // ── Slice 4 — trade history + transactions + market activity ───────────────
+
+  async getTradeHistory(walletAddress: string, marketAddress: string): Promise<unknown> {
+    const qs = new URLSearchParams({ walletAddress, marketAddress });
+    return this.get(`/api/runtime/rain/trade-history?${qs}`);
+  }
+
+  async getTransactions(
+    walletAddress: string,
+    params: { first?: number; skip?: number; orderDirection?: string } = {},
+  ): Promise<unknown> {
+    const qs = new URLSearchParams({ address: walletAddress });
+    if (params.first !== undefined) {
+      qs.set("first", String(params.first));
+    }
+    if (params.skip !== undefined) {
+      qs.set("skip", String(params.skip));
+    }
+    if (params.orderDirection) {
+      qs.set("orderDirection", params.orderDirection);
+    }
+    return this.get(`/api/runtime/rain/transactions?${qs}`);
+  }
+
+  async getMarketTransactions(
+    marketAddress: string,
+    params: { first?: number } = {},
+  ): Promise<unknown> {
+    const qs = new URLSearchParams();
+    if (params.first !== undefined) {
+      qs.set("first", String(params.first));
+    }
+    const tail = qs.toString();
+    return this.get(
+      `/api/runtime/rain/market-transactions/${encodeURIComponent(marketAddress)}${tail ? `?${tail}` : ""}`,
+    );
+  }
+
   private async get(path: string): Promise<unknown> {
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method: "GET",
