@@ -15,6 +15,16 @@ import {
   mkdirSafeDir,
 } from "./test-helpers/fs-fixtures.js";
 
+type ExpectedBundlePluginManifest = Omit<
+  BundlePluginManifest,
+  "capabilities" | "hooks" | "settingsFiles" | "skills"
+> & {
+  capabilities: readonly string[];
+  hooks: readonly string[];
+  settingsFiles?: readonly string[];
+  skills: readonly string[];
+};
+
 const tempDirs: string[] = [];
 
 function makeTempDir() {
@@ -235,7 +245,7 @@ describe("bundle manifest parsing", () => {
         name: "Claude Sample",
         description: "Claude fixture",
         version: undefined,
-        bundleFormat: "claude",
+        bundleFormat: "claude" as const,
         skills: ["skill-packs/starter", "commands-pack", "agents-pack", "styles"],
         settingsFiles: ["settings.json"],
         hooks: ["hooks/hooks.json", "hooks-pack"],
@@ -299,7 +309,7 @@ describe("bundle manifest parsing", () => {
         name: undefined,
         description: undefined,
         version: undefined,
-        bundleFormat: "claude",
+        bundleFormat: "claude" as const,
         skills: ["skills", "commands"],
         settingsFiles: ["settings.json"],
         hooks: [],
