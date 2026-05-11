@@ -1,7 +1,13 @@
 import { listAgentEntries, resolveAgentConfig } from "../agents/agent-scope.js";
+import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
@@ -26,6 +32,7 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
     if (!agentId) {
       continue;
     }
+    const resolvedAgentId = normalizeAgentId(agentId);
     const agentConfig = resolveAgentConfig(cfg, agentId);
     const heartbeatConfig = agentConfig?.heartbeat;
     if (!heartbeatConfig) {
@@ -45,20 +52,43 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
     if (isSubagentSessionKey(configuredSession)) {
       continue;
     }
+    if (sessionScope === "global") {
+      continue;
+    }
     const target = normalizeOptionalString(heartbeatConfig.target);
     if (target === "none") {
       continue;
     }
-    const storeAgentId = sessionScope === "global" ? "main" : agentId;
+    const candidateSession = toAgentStoreSessionKey({
+      agentId: resolvedAgentId,
+      requestKey: configuredSession,
+      mainKey: cfg.session?.mainKey,
+    });
+    if (isSubagentSessionKey(candidateSession)) {
+      continue;
+    }
+    const canonicalSession = canonicalizeMainSessionAlias({
+      cfg,
+      agentId: resolvedAgentId,
+      sessionKey: candidateSession,
+    });
+    if (
+      canonicalSession === "global" ||
+      isSubagentSessionKey(canonicalSession) ||
+      resolveAgentIdFromSessionKey(canonicalSession) !== resolvedAgentId
+    ) {
+      continue;
+    }
+    const storeAgentId = resolvedAgentId;
     const storePath = resolveStorePath(cfg.session?.store, { agentId: storeAgentId });
     const store = loadSessionStore(storePath);
-    const entry = store[configuredSession];
+    const entry = store[canonicalSession];
     if (entry) {
       continue;
     }
     warnings.push(
       [
-        `- Agent ${agentId} heartbeat.session pins ${configuredSession} but that session has no entry in ${storePath}.`,
+        `- Agent ${agentId} heartbeat.session pins ${configuredSession} (resolved to ${canonicalSession}) but that session has no entry in ${storePath}.`,
         `  Heartbeats will run but resolve delivery to channel="none"/reason="no-target", so replies are dropped silently.`,
         `  Fix: point heartbeat.session at a session the agent actually owns, set heartbeat.target="none" to suppress delivery, or remove the heartbeat.session field to fall back to the agent main session.`,
       ].join("\n"),

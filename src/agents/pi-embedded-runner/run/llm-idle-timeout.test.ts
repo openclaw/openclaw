@@ -275,6 +275,23 @@ describe("streamWithIdleTimeout", () => {
     await next;
   });
 
+  it("clears the connection timer when stream setup rejects", async () => {
+    vi.useFakeTimers();
+    const setupError = new Error("provider setup failed");
+    const baseFn = vi.fn().mockRejectedValue(setupError);
+    const onIdleTimeout = vi.fn();
+    const wrapped = streamWithIdleTimeout(baseFn, 50, onIdleTimeout);
+
+    const model = {} as Parameters<typeof baseFn>[0];
+    const context = {} as Parameters<typeof baseFn>[1];
+    const options = {} as Parameters<typeof baseFn>[2];
+
+    await expect(wrapped(model, context, options)).rejects.toThrow("provider setup failed");
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(onIdleTimeout).not.toHaveBeenCalled();
+  });
+
   it("resets timer on each chunk", async () => {
     const chunks = [{ text: "a" }, { text: "b" }, { text: "c" }];
     const mockStream = createMockAsyncIterable(chunks);

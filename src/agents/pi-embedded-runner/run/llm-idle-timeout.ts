@@ -272,7 +272,13 @@ export function streamWithIdleTimeout(
     };
 
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.race([Promise.resolve(maybeStream).then(wrapStream), connectTimeoutPromise]);
+      return Promise.race([
+        Promise.resolve(maybeStream).then(wrapStream, (error) => {
+          clearConnectTimer();
+          throw error;
+        }),
+        connectTimeoutPromise,
+      ]);
     }
     clearConnectTimer();
     return wrapStream(maybeStream);
