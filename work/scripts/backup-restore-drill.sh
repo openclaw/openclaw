@@ -12,6 +12,7 @@ CLONED="$(git -C "$DRILL" rev-parse HEAD)"
 for f in \
   "package.json" \
   "pnpm-lock.yaml" \
+  "work/GITHUB_BACKUP_RESTORE.md" \
   "work/scripts/backup-sync-github.sh" \
   "work/scripts/backup-restore-drill.sh"
 do
