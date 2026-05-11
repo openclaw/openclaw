@@ -1757,7 +1757,9 @@ export async function runAgentTurnWithFallback(params: {
                   await params.opts?.onAssistantMessageStart?.();
                 },
                 onReasoningStream:
-                  params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
+                  params.typingSignals.shouldStartOnReasoning ||
+                  params.opts?.onReasoningStream ||
+                  params.followupRun.run.reasoningLevel === "stream"
                     ? async (payload) => {
                         if (params.followupRun.run.silentExpected) {
                           return;
