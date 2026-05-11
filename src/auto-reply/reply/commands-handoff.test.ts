@@ -37,7 +37,7 @@ function buildTelegramParams(
     RawBody: commandBody,
     CommandBody: commandBody,
     BodyForCommands: commandBody,
-  }) as HandleCommandsParams;
+  });
   return {
     ...params,
     provider: "openai-codex",

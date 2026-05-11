@@ -202,12 +202,12 @@ function notifyInterruptedTelegramInflight(params: {
     return;
   }
   for (const record of interrupted.slice(0, 5)) {
+    const options =
+      record.thread?.scope === "forum" && typeof record.thread.id === "number"
+        ? { message_thread_id: record.thread.id }
+        : undefined;
     void params.bot.api
-      .sendMessage(record.chatId, TELEGRAM_INTERRUPTED_NOTICE, {
-        ...(record.thread?.scope === "forum" && typeof record.thread.id === "number"
-          ? { message_thread_id: record.thread.id }
-          : {}),
-      })
+      .sendMessage(record.chatId, TELEGRAM_INTERRUPTED_NOTICE, options)
       .catch((err: unknown) => {
         params.runtime.error?.(
           danger(`telegram reliability interrupted notice failed: ${formatErrorMessage(err)}`),

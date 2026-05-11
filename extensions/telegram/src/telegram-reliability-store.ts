@@ -222,7 +222,7 @@ function pruneStore(store: TelegramInflightStore): TelegramInflightStore {
       const updatedAt = Date.parse(record.updatedAt);
       return Number.isFinite(updatedAt) && now - updatedAt <= TERMINAL_TTL_MS;
     })
-    .sort((a, b) => Date.parse(b[1].updatedAt) - Date.parse(a[1].updatedAt))
+    .toSorted((a, b) => Date.parse(b[1].updatedAt) - Date.parse(a[1].updatedAt))
     .slice(0, MAX_RECORDS);
   return { version: STORE_VERSION, records: Object.fromEntries(entries) };
 }

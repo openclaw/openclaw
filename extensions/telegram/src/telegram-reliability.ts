@@ -8,10 +8,25 @@ export type TelegramReliabilityErrorKind =
 
 export type TelegramTokenRisk = "normal" | "observe" | "handoff" | "high" | "new_session";
 
+function formatReliabilityError(error: unknown): string {
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}`;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error == null) {
+    return "";
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "unknown";
+  }
+}
+
 export function classifyTelegramReliabilityError(error: unknown): TelegramReliabilityErrorKind {
-  const text = String(
-    error instanceof Error ? `${error.name}: ${error.message}` : error ?? "",
-  ).toLowerCase();
+  const text = formatReliabilityError(error).toLowerCase();
   if (/\b(context|token).{0,24}(overflow|limit|too large)|maximum context/.test(text)) {
     return "context_overflow";
   }
