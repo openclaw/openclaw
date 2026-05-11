@@ -65,14 +65,15 @@ function channelStatusTimeoutPayload(step: string, timeoutMs: number): Record<st
   };
 }
 
-async function runChannelStatusHook(params: {
-  accountId: string;
-  channelId: ChannelId;
-  step: "audit" | "probe";
+type TimeoutRaceResult<T> =
+  | { kind: "value"; value: T }
+  | { kind: "error"; error: unknown }
+  | { kind: "timeout" };
+
+async function raceWithTimeout<T>(params: {
   timeoutMs: number;
-  warnings: string[];
-  run: () => Promise<unknown>;
-}): Promise<unknown> {
+  run: () => Promise<T> | T;
+}): Promise<TimeoutRaceResult<T>> {
   const timeoutMs = Math.max(1, params.timeoutMs);
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
@@ -93,6 +94,22 @@ async function runChannelStatusHook(params: {
   if (timer) {
     clearTimeout(timer);
   }
+  return result;
+}
+
+async function runChannelStatusHook(params: {
+  accountId: string;
+  channelId: ChannelId;
+  step: "audit" | "probe";
+  timeoutMs: number;
+  warnings: string[];
+  run: () => Promise<unknown>;
+}): Promise<unknown> {
+  const timeoutMs = Math.max(1, params.timeoutMs);
+  const result = await raceWithTimeout({
+    timeoutMs,
+    run: params.run,
+  });
   if (result.kind === "value") {
     return result.value;
   }
@@ -120,25 +137,10 @@ async function runChannelStatusSummary(params: {
   run: () => unknown;
 }): Promise<ChannelStatusSummaryOutcome> {
   const timeoutMs = Math.max(1, params.timeoutMs);
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
-    timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
-    if (typeof timer === "object" && "unref" in timer) {
-      timer.unref();
-    }
+  const result = await raceWithTimeout({
+    timeoutMs,
+    run: params.run,
   });
-  const result = await Promise.race([
-    Promise.resolve()
-      .then(params.run)
-      .then(
-        (value) => ({ kind: "value" as const, value }),
-        (error) => ({ kind: "error" as const, error }),
-      ),
-    timeout,
-  ]);
-  if (timer) {
-    clearTimeout(timer);
-  }
   const warningPrefix = `${params.channelId} summary`;
   if (result.kind === "value") {
     return { ok: true, value: result.value };

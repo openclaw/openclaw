@@ -28,8 +28,13 @@ function createHost() {
 }
 
 describe("startNodesPolling", () => {
+  let hostForCleanup: ReturnType<typeof createHost> | null = null;
+
   afterEach(() => {
-    stopNodesPolling(createHost() as never);
+    if (hostForCleanup) {
+      stopNodesPolling(hostForCleanup as never);
+      hostForCleanup = null;
+    }
     vi.useRealTimers();
     vi.unstubAllGlobals();
     loadNodesMock.mockReset();
@@ -42,6 +47,7 @@ describe("startNodesPolling", () => {
       setInterval: globalThis.setInterval,
     });
     const host = createHost();
+    hostForCleanup = host;
 
     startNodesPolling(host as never);
     vi.advanceTimersByTime(NODES_ACTIVE_POLL_INTERVAL_MS);
