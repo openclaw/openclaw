@@ -2895,18 +2895,6 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     await harness.waitForMethod("turn/start");
-    await harness.handleServerRequest({
-      id: "request-tool-1",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-1",
-        namespace: null,
-        tool: "message",
-        arguments: { action: "send", text: "already sent" },
-      },
-    });
     await harness.notify({
       method: "rawResponseItem/completed",
       params: {
@@ -2919,7 +2907,7 @@ describe("runCodexAppServerAttempt", () => {
           content: [
             {
               type: "input_text",
-              text: "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>",
+              text: "<turn_aborted>\nThe user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.\n</turn_aborted>",
             },
           ],
         },
@@ -2958,7 +2946,7 @@ describe("runCodexAppServerAttempt", () => {
           content: [
             {
               type: "input_text",
-              text: "What does <turn_aborted> mean?",
+              text: "<turn_aborted>\nWhat does this marker mean?\n</turn_aborted>",
             },
           ],
         },

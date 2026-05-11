@@ -888,7 +888,6 @@ export async function runCodexAppServerAttempt(
   let turnCompletionLastActivityReason = "startup";
   let turnCompletionLastActivityDetails: Record<string, unknown> | undefined;
   let activeAppServerTurnRequests = 0;
-  let sawTurnScopedRequestResponse = false;
 
   const clearTurnCompletionIdleTimer = () => {
     if (turnCompletionIdleTimer) {
@@ -1149,9 +1148,7 @@ export async function runCodexAppServerAttempt(
     // See openclaw/openclaw#67996.
     const isTurnCompletion = notification.method === "turn/completed" && isCurrentTurnNotification;
     const isTurnAbortMarker =
-      isCurrentTurnNotification &&
-      sawTurnScopedRequestResponse &&
-      isCodexTurnAbortMarkerNotification(notification);
+      isCurrentTurnNotification && isCodexTurnAbortMarkerNotification(notification);
     const isTurnTerminal = isTurnCompletion || isTurnAbortMarker;
     try {
       await projector.handleNotification(notification);
@@ -1314,9 +1311,6 @@ export async function runCodexAppServerAttempt(
       return response as JsonValue;
     } finally {
       activeAppServerTurnRequests = Math.max(0, activeAppServerTurnRequests - 1);
-      if (armCompletionWatchOnResponse) {
-        sawTurnScopedRequestResponse = true;
-      }
       touchTurnCompletionActivity(`request:${request.method}:response`, {
         arm: armCompletionWatchOnResponse,
       });
@@ -2356,6 +2350,13 @@ function readNestedTurnId(record: JsonObject): string | undefined {
   return isJsonObject(turn) ? readString(turn, "id") : undefined;
 }
 
+const CODEX_TURN_ABORT_MARKER_START = "<turn_aborted>";
+const CODEX_TURN_ABORT_MARKER_END = "</turn_aborted>";
+const CODEX_INTERRUPTED_USER_GUIDANCE =
+  "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
+const CODEX_INTERRUPTED_DEVELOPER_GUIDANCE =
+  "The previous turn was interrupted on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
+
 function isCodexTurnAbortMarkerNotification(notification: CodexServerNotification): boolean {
   if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
     return false;
@@ -2366,7 +2367,23 @@ function isCodexTurnAbortMarkerNotification(notification: CodexServerNotificatio
     return false;
   }
   const text = extractRawResponseItemText(item).trim();
-  return text.startsWith("<turn_aborted>") && text.includes("</turn_aborted>");
+  const markerBody = readCodexTurnAbortMarkerBody(text);
+  return (
+    markerBody === CODEX_INTERRUPTED_USER_GUIDANCE ||
+    markerBody === CODEX_INTERRUPTED_DEVELOPER_GUIDANCE
+  );
+}
+
+function readCodexTurnAbortMarkerBody(text: string): string | undefined {
+  if (
+    !text.startsWith(CODEX_TURN_ABORT_MARKER_START) ||
+    !text.endsWith(CODEX_TURN_ABORT_MARKER_END)
+  ) {
+    return undefined;
+  }
+  return text
+    .slice(CODEX_TURN_ABORT_MARKER_START.length, -CODEX_TURN_ABORT_MARKER_END.length)
+    .trim();
 }
 
 function extractRawResponseItemText(item: JsonObject): string {
