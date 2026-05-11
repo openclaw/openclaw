@@ -741,7 +741,7 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.sessionKey).toBe("agent:main:main");
     expectInputProvenance(call?.params, "agent:main:subagent:test");
     expect(msg).toContain("final answer: 2");
-    expect(msg).not.toContain("️ Subagent");
+    expect(msg).not.toContain("✅ Subagent");
     // Branch 2 (expectsCompletionMessage) must include SILENT_REPLY_TOKEN guard to prevent duplicates.
     expect(msg).toContain(SILENT_REPLY_TOKEN);
     expect(msg).toContain("already delivered the substance of this result");
