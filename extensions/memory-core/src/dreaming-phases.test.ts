@@ -1487,6 +1487,47 @@ describe("memory-core dreaming phases", () => {
     expect(corpus).not.toContain("Run the qmd sync");
   });
 
+  it("dedupes CJK-only REM candidate truths with punctuation differences", () => {
+    const baseEntry = {
+      key: "memory:cjk-1",
+      path: "memory/2026-04-16.md",
+      startLine: 1,
+      endLine: 1,
+      source: "memory" as const,
+      snippet: "用户偏好使用中文回复。",
+      recallCount: 3,
+      dailyCount: 0,
+      groundedCount: 0,
+      totalScore: 2.7,
+      maxScore: 0.9,
+      firstRecalledAt: "2026-04-16T18:00:00.000Z",
+      lastRecalledAt: "2026-04-16T18:00:00.000Z",
+      queryHashes: ["q1", "q2"],
+      recallDays: ["2026-04-16", "2026-04-17"],
+      conceptTags: ["中文", "偏好"],
+    } satisfies ShortTermRecallEntry;
+
+    const preview = __testing.previewRemDreaming({
+      entries: [
+        baseEntry,
+        {
+          ...baseEntry,
+          key: "memory:cjk-2",
+          startLine: 2,
+          endLine: 2,
+          snippet: "用户偏好使用中文回复",
+          recallCount: 2,
+        },
+      ],
+      limit: 5,
+      minPatternStrength: 0,
+    });
+
+    expect(preview.candidateTruths.map((candidate) => candidate.snippet)).toEqual([
+      "用户偏好使用中文回复。",
+    ]);
+  });
+
   it("ignores chat scaffolding tags when building rem reflections", () => {
     const preview = __testing.previewRemDreaming({
       entries: [

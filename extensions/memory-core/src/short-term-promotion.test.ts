@@ -245,6 +245,35 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("ignores incomplete dreaming snippets when recording short-term recalls", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "action preference",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            source: "memory",
+            startLine: 1,
+            endLine: 4,
+            score: 0.92,
+            snippet: [
+              "- Candidate: Default to action.",
+              "  - confidence: 0.76",
+              "  - status: staged",
+            ].join("\n"),
+          },
+        ],
+      });
+
+      const store = JSON.parse(
+        await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
+      ) as { version?: number; entries?: unknown };
+      expect(store.version).toBe(1);
+      expect(store.entries).toEqual({});
+    });
+  });
+
   it("ignores bullet-prefixed dreaming snippets when recording short-term recalls", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({

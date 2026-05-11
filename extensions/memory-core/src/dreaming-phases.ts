@@ -26,6 +26,7 @@ import {
   runDetachedDreamNarrative,
 } from "./dreaming-narrative.js";
 import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
+import { textSimilarity } from "./memory/mmr.js";
 import {
   filterLiveShortTermRecallEntries,
   readShortTermRecallEntries,
@@ -1344,30 +1345,8 @@ function entryAverageScore(entry: ShortTermRecallEntry): number {
   return signalCount > 0 ? Math.max(0, Math.min(1, entry.totalScore / signalCount)) : 0;
 }
 
-function tokenizeSnippet(snippet: string): Set<string> {
-  return new Set(
-    snippet
-      .toLowerCase()
-      .split(/[^a-z0-9]+/i)
-      .map((token) => token.trim())
-      .filter(Boolean),
-  );
-}
-
 function jaccardSimilarity(left: string, right: string): number {
-  const leftTokens = tokenizeSnippet(left);
-  const rightTokens = tokenizeSnippet(right);
-  if (leftTokens.size === 0 || rightTokens.size === 0) {
-    return left.trim().toLowerCase() === right.trim().toLowerCase() ? 1 : 0;
-  }
-  let intersection = 0;
-  for (const token of leftTokens) {
-    if (rightTokens.has(token)) {
-      intersection += 1;
-    }
-  }
-  const union = new Set([...leftTokens, ...rightTokens]).size;
-  return union > 0 ? intersection / union : 0;
+  return left.trim().toLowerCase() === right.trim().toLowerCase() ? 1 : textSimilarity(left, right);
 }
 
 function dedupeEntries(entries: ShortTermRecallEntry[], threshold: number): ShortTermRecallEntry[] {
