@@ -77,7 +77,7 @@ describe("listPersistedBundledPluginLocationBridges", () => {
     loadPluginManifestRegistryForInstalledIndexMock.mockReset();
   });
 
-  it("keeps persisted bundled relocations clawhub-first for launch", async () => {
+  it("keeps persisted bundled relocations npm-first for launch", async () => {
     readPersistedInstalledPluginIndexMock.mockResolvedValue(
       makeIndex({
         pluginId: "diagnostics-otel",
@@ -115,7 +115,7 @@ describe("listPersistedBundledPluginLocationBridges", () => {
       {
         bundledPluginId: "diagnostics-otel",
         pluginId: "diagnostics-otel",
-        preferredSource: "clawhub",
+        preferredSource: "npm",
         npmSpec: "@openclaw/diagnostics-otel",
         clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
         channelIds: ["diagnostics-otel"],
@@ -154,7 +154,7 @@ describe("listPersistedBundledPluginLocationBridges", () => {
       {
         bundledPluginId: "diagnostics-otel",
         pluginId: "diagnostics-otel",
-        preferredSource: "clawhub",
+        preferredSource: "npm",
         npmSpec: "@openclaw/diagnostics-otel",
         clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
         channelIds: ["diagnostics-otel"],
