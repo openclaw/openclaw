@@ -103,14 +103,14 @@ export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefi
         continue;
       }
       const trimmed = value.trim();
-      if (trimmed === "*" && policy[IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW] === true) {
+      if (trimmed === "*" && policy[IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW]) {
         continue;
       }
       if (trimmed) {
         entries.push(trimmed);
       }
     }
-    if (policy[IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW] === true) {
+    if (policy[IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW]) {
       entries.push(IMPLICIT_CORE_TOOLS_ALLOWLIST_ENTRY);
       entries.push(DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY);
     }
