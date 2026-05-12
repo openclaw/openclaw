@@ -42,6 +42,17 @@ function makeRestrictedCfg(approvers: string[]): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function makeUnrestrictedCfg(): OpenClawConfig {
+  return {
+    channels: {
+      qqbot: {
+        appId: "app",
+        clientSecret: "secret",
+      },
+    },
+  } as OpenClawConfig;
+}
+
 function makeApprovalEvent(overrides: Partial<InteractionEvent> = {}): InteractionEvent {
   return {
     id: "interaction-1",
@@ -102,6 +113,34 @@ describe("createInteractionHandler approval buttons", () => {
     expect(resolveApprovalMock).not.toHaveBeenCalled();
   });
 
+  it("does not authorize from resolved user id when the actor openid is not approved", async () => {
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () => makeRestrictedCfg(["OWNER_OPENID"]),
+    });
+
+    handler(
+      makeApprovalEvent({
+        data: {
+          type: 11,
+          resolved: {
+            button_data: "approve:exec:abc12345:allow-once",
+            user_id: "OWNER_OPENID",
+          },
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+
+    expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+      { appId: "app", clientSecret: "secret" },
+      "interaction-1",
+      0,
+      { content: "You are not authorized to approve this request." },
+    );
+    expect(resolveApprovalMock).not.toHaveBeenCalled();
+  });
+
   it("resolves approval button clicks from configured approvers", async () => {
     const handler = createInteractionHandler(account, runtime, undefined, {
       getActiveCfg: () => makeRestrictedCfg(["OWNER_OPENID"]),
@@ -131,5 +170,37 @@ describe("createInteractionHandler approval buttons", () => {
     await vi.waitFor(() =>
       expect(resolveApprovalMock).toHaveBeenCalledWith("exec:abc12345", "allow-once"),
     );
+  });
+
+  it("allows approval button clicks when exec approvals are not configured", async () => {
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () => makeUnrestrictedCfg(),
+    });
+
+    handler(makeApprovalEvent());
+
+    await vi.waitFor(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith("exec:abc12345", "allow-once"),
+    );
+  });
+
+  it("rejects approval button clicks when active config cannot be loaded", async () => {
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () => {
+        throw new Error("config unavailable");
+      },
+    });
+
+    handler(makeApprovalEvent());
+
+    await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+
+    expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+      { appId: "app", clientSecret: "secret" },
+      "interaction-1",
+      0,
+      { content: "Approval is unavailable." },
+    );
+    expect(resolveApprovalMock).not.toHaveBeenCalled();
   });
 });

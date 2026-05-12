@@ -315,12 +315,10 @@ function authorizeApprovalButtonActor(params: {
 }
 
 function resolveApprovalActorSenderIds(event: InteractionEvent): string[] {
-  const ids = [event.group_member_openid, event.user_openid, event.data?.resolved?.user_id].flatMap(
-    (value) => {
-      const normalized = typeof value === "string" ? value.trim() : "";
-      return normalized ? [normalized] : [];
-    },
-  );
+  const ids = [event.group_member_openid, event.user_openid].flatMap((value) => {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    return normalized ? [normalized] : [];
+  });
   return Array.from(new Set(ids));
 }
 
