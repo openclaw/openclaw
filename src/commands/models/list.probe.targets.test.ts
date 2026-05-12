@@ -307,14 +307,15 @@ describe("buildProbeTargets reason codes", () => {
     await withClearedAnthropicEnv(async () => {
       const plan = await buildAnthropicPlanFromModelCatalogApiKey("ALLCAPS_SAMPLE");
       expect(plan.results).toStrictEqual([]);
-      expect(plan.targets).toHaveLength(1);
-      expect(plan.targets[0]).toEqual(
-        expect.objectContaining({
+      expect(plan.targets).toStrictEqual([
+        {
+          label: "model catalog",
+          mode: "api_key",
+          model: { provider: "anthropic", model: "claude-sonnet-4-6" },
           provider: "anthropic",
           source: "model_catalog",
-          label: "model catalog",
-        }),
-      );
+        },
+      ]);
     });
   });
 
@@ -352,15 +353,15 @@ describe("buildProbeTargets reason codes", () => {
       });
 
       expect(plan.results).toStrictEqual([]);
-      expect(plan.targets).toHaveLength(1);
-      expect(plan.targets[0]).toEqual(
-        expect.objectContaining({
-          provider: "zai",
-          model: { provider: "zai", model: "glm-4.7" },
-          source: "model_catalog",
+      expect(plan.targets).toStrictEqual([
+        {
           label: "model catalog",
-        }),
-      );
+          mode: "api_key",
+          model: { provider: "zai", model: "glm-4.7" },
+          provider: "zai",
+          source: "model_catalog",
+        },
+      ]);
     });
   });
 
