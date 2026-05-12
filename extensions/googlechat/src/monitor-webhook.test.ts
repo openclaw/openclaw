@@ -26,15 +26,21 @@ type ProcessEventFn = (event: GoogleChatEvent, target: WebhookTarget) => Promise
 let createGoogleChatWebhookRequestHandler: typeof import("./monitor-webhook.js").createGoogleChatWebhookRequestHandler;
 let warnAppPrincipalMisconfiguration: typeof import("./monitor-webhook.js").warnAppPrincipalMisconfiguration;
 
-function createRequest(authorization?: string): IncomingMessage {
+function createRequest(options?: {
+  authorization?: string;
+  headers?: Record<string, string>;
+  remoteAddress?: string;
+  url?: string;
+}): IncomingMessage {
   return {
     method: "POST",
-    url: "/googlechat",
+    url: options?.url ?? "/googlechat",
     headers: {
-      authorization: authorization ?? "",
+      authorization: options?.authorization ?? "",
       "content-type": "application/json",
+      ...options?.headers,
     },
-    socket: { remoteAddress: "203.0.113.10" },
+    socket: { remoteAddress: options?.remoteAddress ?? "203.0.113.10" },
   } as IncomingMessage;
 }
 
@@ -94,7 +100,7 @@ async function runWebhookHandler(options?: {
     webhookInFlightLimiter: {} as never,
     processEvent,
   });
-  const req = createRequest(options?.authorization);
+  const req = createRequest({ authorization: options?.authorization });
   const res = createResponse();
   await expect(handler(req, res)).resolves.toBe(true);
   return { processEvent, res };
@@ -151,15 +157,13 @@ describe("googlechat monitor webhook", () => {
       webhookInFlightLimiter: {} as never,
       processEvent: vi.fn(async () => {}),
     });
-    const req = {
-      ...createRequest(),
+    const req = createRequest({
       url: "/googlechat?ignored=1",
       headers: {
-        ...createRequest().headers,
         "x-forwarded-for": "198.51.100.7, 10.0.0.1",
       },
-      socket: { remoteAddress: "10.0.0.1" },
-    } as IncomingMessage;
+      remoteAddress: "10.0.0.1",
+    });
     const res = createResponse();
     withResolvedWebhookRequestPipeline.mockResolvedValue(true);
 
@@ -207,10 +211,7 @@ describe("googlechat monitor webhook", () => {
       webhookInFlightLimiter: {} as never,
       processEvent: vi.fn(async () => {}),
     });
-    const req = {
-      ...createRequest(),
-      socket: { remoteAddress: "10.0.0.1" },
-    } as IncomingMessage;
+    const req = createRequest({ remoteAddress: "10.0.0.1" });
     const res = createResponse();
     withResolvedWebhookRequestPipeline.mockResolvedValue(true);
 
