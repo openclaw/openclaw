@@ -11,9 +11,16 @@ const { installGlobalProxyMock, proxylineStopMock } = vi.hoisted(() => {
     })),
   };
 });
+const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
+const forceResetGlobalDispatcherMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@openclaw/proxyline", () => ({
   installGlobalProxy: installGlobalProxyMock,
+}));
+
+vi.mock("../undici-global-dispatcher.js", () => ({
+  ensureGlobalUndiciEnvProxyDispatcher: ensureGlobalUndiciEnvProxyDispatcherMock,
+  forceResetGlobalDispatcher: forceResetGlobalDispatcherMock,
 }));
 
 vi.mock("../../../logger.js", () => ({
@@ -96,6 +103,8 @@ describe("startProxy", () => {
     _resetActiveManagedProxyStateForTests();
     installGlobalProxyMock.mockClear();
     proxylineStopMock.mockClear();
+    ensureGlobalUndiciEnvProxyDispatcherMock.mockClear();
+    forceResetGlobalDispatcherMock.mockClear();
   });
 
   afterEach(() => {
@@ -258,6 +267,8 @@ describe("startProxy", () => {
     await stopProxy(expectProxyHandle(handle));
 
     expect(proxylineStopMock).toHaveBeenCalledOnce();
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledOnce();
+    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledOnce();
   });
 
   it("restores previous proxy env and stops Proxyline on stop", async () => {
@@ -279,6 +290,8 @@ describe("startProxy", () => {
     expect(process.env["NO_PROXY"]).toBe("corp.example.com");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBeUndefined();
     expect(proxylineStopMock).toHaveBeenCalledOnce();
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledOnce();
+    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledOnce();
   });
 
   it("keeps same-url overlapping handles active until the final stop", async () => {
@@ -292,18 +305,21 @@ describe("startProxy", () => {
     });
 
     expect(installGlobalProxyMock).toHaveBeenCalledOnce();
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledOnce();
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
 
     await stopProxy(secondHandle);
 
     expect(proxylineStopMock).not.toHaveBeenCalled();
+    expect(forceResetGlobalDispatcherMock).not.toHaveBeenCalled();
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
 
     await stopProxy(firstHandle);
 
     expect(proxylineStopMock).toHaveBeenCalledOnce();
+    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledOnce();
     expect(process.env["HTTP_PROXY"]).toBeUndefined();
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBeUndefined();
   });

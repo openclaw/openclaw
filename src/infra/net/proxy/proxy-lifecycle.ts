@@ -18,6 +18,10 @@ export type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMo
 import { logInfo, logWarn } from "../../../logger.js";
 import { isLoopbackIpAddress } from "../../../shared/net/ip.js";
 import {
+  ensureGlobalUndiciEnvProxyDispatcher,
+  forceResetGlobalDispatcher,
+} from "../undici-global-dispatcher.js";
+import {
   getActiveManagedProxyLoopbackMode,
   getActiveManagedProxyUrl,
   registerActiveManagedProxyUrl,
@@ -105,6 +109,7 @@ function restoreInactiveProxyRuntime(snapshot: ProxyEnvSnapshot): void {
   }
   proxylineHandle = null;
   restoreProxyEnv(snapshot);
+  forceResetGlobalDispatcher();
 }
 
 function restoreAfterFailedProxyActivation(restoreSnapshot: ProxyEnvSnapshot): void {
@@ -174,6 +179,7 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
     proxyUrl,
     bypassPolicy: shouldBypassManagedProxyForGatewayLoopback,
   });
+  ensureGlobalUndiciEnvProxyDispatcher();
 }
 
 export async function startProxy(config: ProxyConfig | undefined): Promise<ProxyHandle | null> {
@@ -211,6 +217,7 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
       proxyUrl,
       bypassPolicy: shouldBypassManagedProxyForGatewayLoopback,
     });
+    ensureGlobalUndiciEnvProxyDispatcher();
     registration = registerActiveManagedProxyUrl(new URL(proxyUrl), loopbackMode);
   } catch (err) {
     restoreAfterFailedProxyActivation(lifecycleBaseEnvSnapshot);

@@ -188,3 +188,38 @@ export function resetGlobalUndiciStreamTimeoutsForTests(): void {
   lastAppliedProxyBootstrap = false;
   _globalUndiciStreamTimeoutMs = undefined;
 }
+
+/**
+ * Re-evaluate proxy env changes for root undici imports. Installs
+ * EnvHttpProxyAgent when proxy env is present, and restores a direct Agent
+ * after proxy env is cleared.
+ */
+export function forceResetGlobalDispatcher(): void {
+  lastAppliedTimeoutKey = null;
+  if (!hasEnvHttpProxyAgentConfigured()) {
+    if (!lastAppliedProxyBootstrap) {
+      return;
+    }
+    lastAppliedProxyBootstrap = false;
+    try {
+      const { Agent, setGlobalDispatcher } = loadUndiciGlobalDispatcherDeps();
+      setGlobalDispatcher(new Agent());
+    } catch {
+      // Best-effort reset only.
+    }
+    return;
+  }
+  lastAppliedProxyBootstrap = false;
+  try {
+    const { EnvHttpProxyAgent, setGlobalDispatcher } = loadUndiciGlobalDispatcherDeps();
+    const proxyOptions = resolveEnvHttpProxyAgentOptions();
+    setGlobalDispatcher(
+      new EnvHttpProxyAgent(
+        proxyOptions as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0],
+      ),
+    );
+    lastAppliedProxyBootstrap = true;
+  } catch {
+    // Best-effort reset only.
+  }
+}

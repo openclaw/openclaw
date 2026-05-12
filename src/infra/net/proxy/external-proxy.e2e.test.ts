@@ -501,6 +501,7 @@ describe("SSRF external proxy routing", () => {
     expect(child.stdout).toContain('"body":"from loopback target"');
     expect(seenConnectTargets).toContain(`127.0.0.1:${wsTargetPort}`);
     expect(seenConnectTargets).toContain(`127.0.0.1:${httpsLikeTargetPort}`);
+    expect(seenConnectTargets).toContain(`127.0.0.1:${targetPort}`);
     expect(seenConnectTargets).toContain(`127.0.0.1:${globalFetchTargetPort}`);
     expect(seenConnectTargets).toContain(`http://127.0.0.1:${targetPort}/node-http-metadata`);
     expect(seenConnectTargets).toContain(`http://127.0.0.1:${targetPort}/explicit-agent`);
