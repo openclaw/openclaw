@@ -1,6 +1,10 @@
 import { Buffer } from "node:buffer";
 
-export function stableStringify(value: unknown, seen: WeakSet<object> = new WeakSet()): string {
+export function stableStringify(value: unknown): string {
+  return stringifyStableValue(value, new WeakSet());
+}
+
+function stringifyStableValue(value: unknown, stack: WeakSet<object>): string {
   if (value === null || value === undefined) {
     return String(value);
   }
@@ -13,40 +17,49 @@ export function stableStringify(value: unknown, seen: WeakSet<object> = new Weak
   if (typeof value !== "object") {
     return JSON.stringify(value) ?? "null";
   }
-  if (seen.has(value)) {
+  if (stack.has(value)) {
     return JSON.stringify("[Circular]");
   }
-  seen.add(value);
+
+  stack.add(value);
+  try {
+    return stringifyObjectValue(value, stack);
+  } finally {
+    stack.delete(value);
+  }
+}
+
+function stringifyObjectValue(value: object, stack: WeakSet<object>): string {
   if (value instanceof Error) {
-    return stableStringify(
+    return stringifyStableValue(
       {
         name: value.name,
         message: value.message,
         stack: value.stack,
       },
-      seen,
+      stack,
     );
   }
   if (value instanceof Uint8Array) {
-    return stableStringify(
+    return stringifyStableValue(
       {
         type: "Uint8Array",
         data: Buffer.from(value).toString("base64"),
       },
-      seen,
+      stack,
     );
   }
   if (Array.isArray(value)) {
     const serializedEntries: string[] = [];
     for (const entry of value) {
-      serializedEntries.push(stableStringify(entry, seen));
+      serializedEntries.push(stringifyStableValue(entry, stack));
     }
     return `[${serializedEntries.join(",")}]`;
   }
   const record = value as Record<string, unknown>;
   const serializedFields: string[] = [];
   for (const key of Object.keys(record).toSorted()) {
-    serializedFields.push(`${JSON.stringify(key)}:${stableStringify(record[key], seen)}`);
+    serializedFields.push(`${JSON.stringify(key)}:${stringifyStableValue(record[key], stack)}`);
   }
   return `{${serializedFields.join(",")}}`;
 }
