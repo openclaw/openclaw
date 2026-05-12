@@ -782,6 +782,19 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
         expect(runCommand).not.toHaveBeenCalled();
         expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
+
+        const commandWithArgs = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          security: "allowlist",
+          ask: "on-miss",
+          command: [executablePath, "-cwa", "Write-Output", "hi"],
+        });
+
+        expect(commandWithArgs.runCommand).not.toHaveBeenCalled();
+        expectApprovalRequiredDenied({
+          sendNodeEvent: commandWithArgs.sendNodeEvent,
+          sendInvokeResult: commandWithArgs.sendInvokeResult,
+        });
       },
     });
   });

@@ -163,6 +163,11 @@ describe("resolveInlineCommandMatch", () => {
       expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 4 },
     },
     {
+      name: "extracts the command tail for PowerShell command-with-args",
+      argv: ["pwsh", "-cwa", "Write-Output", "hi"],
+      expected: { command: "Write-Output hi", valueTokenIndex: 2 },
+    },
+    {
       name: "extracts PowerShell slash switch forms before script file binding",
       argv: ["pwsh", "/ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
       expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 2 },

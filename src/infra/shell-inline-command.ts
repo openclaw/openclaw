@@ -13,9 +13,14 @@ function expandPowerShellSwitchPrefixForms(match: string, smallestMatch: string)
 
 export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
   ...expandPowerShellSwitchPrefixForms("command", "c"),
+  ...expandPowerShellSwitchPrefixForms("commandwithargs", "cwa"),
   ...expandPowerShellSwitchPrefixForms("file", "f"),
   ...expandPowerShellSwitchPrefixForms("encodedcommand", "e"),
   ...expandPowerShellSwitchPrefixForms("ec", "e"),
+]);
+
+const POWERSHELL_INLINE_REST_COMMAND_FLAGS = new Set([
+  ...expandPowerShellSwitchPrefixForms("commandwithargs", "cwa"),
 ]);
 
 function expandPowerShellSwitchForms(names: readonly string[]): string[] {
@@ -143,6 +148,7 @@ export function resolveInlineCommandMatch(
   options: {
     allowCombinedC?: boolean;
     isOptionToken?: (token: string) => boolean;
+    restValueFlags?: ReadonlySet<string>;
     stopAtFirstNonOption?: boolean;
     valueOptions?: ReadonlySet<string>;
   } = {},
@@ -160,6 +166,14 @@ export function resolveInlineCommandMatch(
     const comparableToken = options.allowCombinedC ? token : lower;
     if (flags.has(comparableToken)) {
       const valueTokenIndex = i + 1 < argv.length ? i + 1 : null;
+      if (options.restValueFlags?.has(comparableToken)) {
+        const command = argv
+          .slice(i + 1)
+          .map((arg) => arg.trim())
+          .join(" ")
+          .trim();
+        return { command: command ? command : null, valueTokenIndex };
+      }
       const command = argv[i + 1]?.trim();
       return { command: command ? command : null, valueTokenIndex };
     }
@@ -195,6 +209,7 @@ export function resolvePowerShellInlineCommandMatch(argv: string[]): {
 } {
   return resolveInlineCommandMatch(argv, POWERSHELL_INLINE_COMMAND_FLAGS, {
     isOptionToken: isPowerShellOptionToken,
+    restValueFlags: POWERSHELL_INLINE_REST_COMMAND_FLAGS,
     stopAtFirstNonOption: true,
     valueOptions: POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES,
   });

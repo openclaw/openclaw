@@ -83,6 +83,7 @@ describe("system run command helpers", () => {
     { argv: ["pwsh", "-win", "hidden", "/ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
     { argv: ["pwsh", "-if", "XML", "-EncodedCommand", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
     { argv: ["pwsh", "-config", "SomeConfig", "-ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
+    { argv: ["pwsh", "-cwa", "Write-Output", "hi"], expected: "Write-Output hi" },
     { argv: ["busybox", "sh", "-c", "echo hi"], expected: "echo hi" },
     { argv: ["toybox", "ash", "-c", "echo hi"], expected: "echo hi" },
   ])("extractShellCommandFromArgv unwraps %j", ({ argv, expected }) => {
