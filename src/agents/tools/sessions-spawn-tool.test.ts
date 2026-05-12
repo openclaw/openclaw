@@ -612,6 +612,43 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("accepts ACP spawns when inherited allows include OpenClaw command tools", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      inheritedToolAllowlist: [
+        "apply_patch",
+        "edit",
+        "exec",
+        "process",
+        "read",
+        "sessions_spawn",
+        "write",
+      ],
+    });
+
+    const result = await tool.execute("call-acp-inherited-command-allow-compatible", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+    });
+
+    expectDetailFields(result.details, {
+      status: "accepted",
+      childSessionKey: "agent:codex:acp:1",
+    });
+    const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
+    expect(spawnContext.inheritedToolAllowlist).toEqual([
+      "apply_patch",
+      "edit",
+      "exec",
+      "process",
+      "read",
+      "sessions_spawn",
+      "write",
+    ]);
+  });
+
   it("forwards model override to ACP runtime spawns", async () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({

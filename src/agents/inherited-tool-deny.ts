@@ -15,6 +15,15 @@ const ACP_UNSUPPORTED_INHERITED_TOOL_DENY = [
   "write",
 ] as const;
 
+const ACP_REQUIRED_INHERITED_TOOL_ALLOW = [
+  "apply_patch",
+  "edit",
+  "exec",
+  "process",
+  "read",
+  "write",
+] as const;
+
 export function normalizeInheritedToolDenylist(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -64,7 +73,7 @@ export function findAcpUnsupportedInheritedToolAllow(value: unknown): string | u
   if (inheritedToolAllow.length === 0) {
     return undefined;
   }
-  return ACP_UNSUPPORTED_INHERITED_TOOL_DENY.find(
+  return ACP_REQUIRED_INHERITED_TOOL_ALLOW.find(
     (toolName) => !isToolAllowedByPolicyName(toolName, { allow: inheritedToolAllow }),
   );
 }
