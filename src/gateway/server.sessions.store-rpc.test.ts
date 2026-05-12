@@ -64,16 +64,13 @@ test("lists and patches session entries via sessions.* RPC", async () => {
   });
 
   const { ws, hello } = await openClient();
-  expect((hello as { features?: { methods?: string[] } }).features?.methods).toEqual(
-    expect.arrayContaining([
-      "sessions.list",
-      "sessions.preview",
-      "sessions.patch",
-      "sessions.reset",
-      "sessions.delete",
-      "sessions.compact",
-    ]),
-  );
+  const methods = (hello as { features?: { methods?: string[] } }).features?.methods ?? [];
+  expect(methods).toContain("sessions.list");
+  expect(methods).toContain("sessions.preview");
+  expect(methods).toContain("sessions.patch");
+  expect(methods).toContain("sessions.reset");
+  expect(methods).toContain("sessions.delete");
+  expect(methods).toContain("sessions.compact");
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const directContext = {
