@@ -24,7 +24,7 @@ import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../.
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
@@ -759,6 +759,82 @@ function appendMessageToolReadHint(
   return description;
 }
 
+function hasExplicitTargets(params: Record<string, unknown>): boolean {
+  return Array.isArray(params.targets)
+    ? params.targets.some((value) => normalizeOptionalString(value) !== undefined)
+    : false;
+}
+
+function readOptionalMessageToolTarget(params: Record<string, unknown>): string | undefined {
+  return (
+    readStringParam(params, "target") ??
+    readStringParam(params, "to") ??
+    readStringParam(params, "channelId")
+  );
+}
+
+function readMessageToolText(params: Record<string, unknown>): string | undefined {
+  return (
+    readStringParam(params, "message", { allowEmpty: true }) ??
+    readStringParam(params, "text", { allowEmpty: true }) ??
+    readStringParam(params, "content", { allowEmpty: true })
+  );
+}
+
+function resolveSameSessionWebchatSendResult(params: {
+  action: ChannelMessageActionName;
+  args: Record<string, unknown>;
+  currentChannelProvider?: string;
+  currentChannelId?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitTarget?: boolean;
+}): ReturnType<typeof jsonResult> | undefined {
+  if (
+    params.action !== "send" ||
+    params.sourceReplyDeliveryMode !== "message_tool_only" ||
+    normalizeMessageChannel(params.currentChannelProvider) !== INTERNAL_MESSAGE_CHANNEL
+  ) {
+    return undefined;
+  }
+
+  const explicitChannel = normalizeMessageChannel(readStringParam(params.args, "channel"));
+  if (explicitChannel && explicitChannel !== INTERNAL_MESSAGE_CHANNEL) {
+    return undefined;
+  }
+
+  const explicitProvider = normalizeMessageChannel(readStringParam(params.args, "provider"));
+  if (explicitProvider && explicitProvider !== INTERNAL_MESSAGE_CHANNEL) {
+    return undefined;
+  }
+
+  if (hasExplicitTargets(params.args)) {
+    return undefined;
+  }
+
+  const target = readOptionalMessageToolTarget(params.args);
+  if (params.requireExplicitTarget && !target) {
+    return undefined;
+  }
+
+  const currentTarget = normalizeOptionalString(params.currentChannelId);
+  if (target && currentTarget && target !== currentTarget) {
+    return undefined;
+  }
+  if (target && !currentTarget) {
+    return undefined;
+  }
+
+  const message = readMessageToolText(params.args);
+  return jsonResult({
+    ok: true,
+    status: "sent",
+    delivery: "webchat-session",
+    channel: INTERNAL_MESSAGE_CHANNEL,
+    to: target ?? currentTarget ?? "current",
+    ...(message !== undefined ? { message } : {}),
+  });
+}
+
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const loadConfigForTool = options?.getRuntimeConfig ?? getRuntimeConfig;
   const getScopedSecretTargetsForTool =
@@ -839,6 +915,18 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         required: true,
       }) as ChannelMessageActionName;
       const requireExplicitTarget = options?.requireExplicitTarget === true;
+      const sameSessionWebchatResult = resolveSameSessionWebchatSendResult({
+        action,
+        args: params,
+        currentChannelProvider: options?.currentChannelProvider,
+        currentChannelId: options?.currentChannelId,
+        sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+        requireExplicitTarget,
+      });
+      if (sameSessionWebchatResult) {
+        return sameSessionWebchatResult;
+      }
+
       if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
         const explicitTarget =
           (typeof params.target === "string" && params.target.trim().length > 0) ||

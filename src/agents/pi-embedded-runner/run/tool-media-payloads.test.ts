@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
+} from "../../../auto-reply/reply-payload.js";
 import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
 
 describe("mergeAttemptToolMediaPayloads", () => {
@@ -38,5 +42,24 @@ describe("mergeAttemptToolMediaPayloads", () => {
         audioAsVoice: true,
       },
     ]);
+  });
+
+  it("preserves payload metadata when attaching tool media", () => {
+    const payload = markReplyPayloadForSourceSuppressionDelivery({ text: "done" });
+    const [merged] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [payload],
+        toolMediaUrls: ["/tmp/render.png"],
+      }) ?? [];
+    if (!merged) {
+      throw new Error("Expected merged payload");
+    }
+
+    expect(merged).toMatchObject({
+      text: "done",
+      mediaUrls: ["/tmp/render.png"],
+      mediaUrl: "/tmp/render.png",
+    });
+    expect(getReplyPayloadMetadata(merged)?.deliverDespiteSourceReplySuppression).toBe(true);
   });
 });

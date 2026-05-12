@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import {
   buildPayloads,
   expectSinglePayloadText,
@@ -161,6 +162,54 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSinglePayloadText(payloads, "Done.");
+  });
+
+  it("can mark assistant-text payloads for source-suppression delivery", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Actual visible reply from the message tool."],
+      deliverAssistantRepliesDespiteSourceSuppression: true,
+    });
+
+    expectSinglePayloadText(payloads, "Actual visible reply from the message tool.");
+    const [payload] = payloads;
+    if (!payload) {
+      throw new Error("Expected a visible reply payload");
+    }
+    expect(getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
+  it("can prefer multiple assistant text payloads over a generic final answer", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["First message-tool reply.", "Second message-tool reply."],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Sent.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+      preferAssistantTextsOverFinalAnswer: true,
+      deliverAssistantRepliesDespiteSourceSuppression: true,
+    });
+
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "First message-tool reply.",
+      "Second message-tool reply.",
+    ]);
+    expect(
+      payloads.every(
+        (payload) =>
+          getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+      ),
+    ).toBe(true);
   });
 
   it("surfaces concise exec tool errors when verbose mode is off", () => {

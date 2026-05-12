@@ -20,7 +20,11 @@ import type { CommandQueueEnqueueOptions } from "../../process/command-queue.typ
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
-import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isMarkdownCapableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import {
   hasConfiguredModelFallbacks,
   resolveAgentExecutionContract,
@@ -253,6 +257,30 @@ function hasCompletedModelProgressForIdleBreaker(attempt: EmbeddedRunAttemptForR
     hasMessagingToolDeliveryEvidence(attempt) ||
     attempt.itemLifecycle.completedCount > 0
   );
+}
+
+function collectNonEmptyMessagingToolTexts(texts?: readonly string[]): string[] {
+  return (texts ?? []).map((text) => text.trim()).filter(Boolean);
+}
+
+function resolveRenderableWebchatMessagingToolTexts(params: {
+  sourceReplyDeliveryMode?: RunEmbeddedPiAgentParams["sourceReplyDeliveryMode"];
+  messageChannel?: string;
+  messageProvider?: string;
+  didSendViaMessagingTool?: boolean;
+  messagingToolSentTexts?: readonly string[];
+}): string[] {
+  if (
+    params.sourceReplyDeliveryMode !== "message_tool_only" ||
+    params.didSendViaMessagingTool !== true
+  ) {
+    return [];
+  }
+  const sourceChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
+  if (sourceChannel !== INTERNAL_MESSAGE_CHANNEL) {
+    return [];
+  }
+  return collectNonEmptyMessagingToolTexts(params.messagingToolSentTexts);
 }
 
 function createEmptyAuthProfileStore(): AuthProfileStore {
@@ -2476,9 +2504,19 @@ export async function runEmbeddedPiAgent(
           };
           const finalAssistantVisibleText = resolveFinalAssistantVisibleText(sessionLastAssistant);
           const finalAssistantRawText = resolveFinalAssistantRawText(sessionLastAssistant);
+          const webchatMessagingToolReplyTexts = resolveRenderableWebchatMessagingToolTexts({
+            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            messageChannel: params.messageChannel,
+            messageProvider: params.messageProvider,
+            didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            messagingToolSentTexts: attempt.messagingToolSentTexts,
+          });
+          const shouldRenderWebchatMessagingToolReply = webchatMessagingToolReplyTexts.length > 0;
 
           const payloads = buildEmbeddedRunPayloads({
-            assistantTexts: attempt.assistantTexts,
+            assistantTexts: shouldRenderWebchatMessagingToolReply
+              ? webchatMessagingToolReplyTexts
+              : attempt.assistantTexts,
             toolMetas: attempt.toolMetas,
             lastAssistant: attempt.lastAssistant,
             lastToolError: attempt.lastToolError,
@@ -2494,6 +2532,8 @@ export async function runEmbeddedPiAgent(
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            deliverAssistantRepliesDespiteSourceSuppression: shouldRenderWebchatMessagingToolReply,
+            preferAssistantTextsOverFinalAnswer: shouldRenderWebchatMessagingToolReply,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
             heartbeatToolResponse: attempt.heartbeatToolResponse,
           });

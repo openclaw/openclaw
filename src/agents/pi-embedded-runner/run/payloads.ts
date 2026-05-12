@@ -4,6 +4,7 @@ import {
   createHeartbeatToolResponsePayload,
   type HeartbeatToolResponse,
 } from "../../../auto-reply/heartbeat-tool-response.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
@@ -187,6 +188,8 @@ export function buildEmbeddedRunPayloads(params: {
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
+  deliverAssistantRepliesDespiteSourceSuppression?: boolean;
+  preferAssistantTextsOverFinalAnswer?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
 }): Array<{
@@ -214,6 +217,7 @@ export function buildEmbeddedRunPayloads(params: {
     replyToId?: string;
     replyToTag?: boolean;
     replyToCurrent?: boolean;
+    deliverDespiteSourceReplySuppression?: boolean;
   }> = [];
 
   const useMarkdown = params.toolResultFormat === "markdown";
@@ -367,6 +371,7 @@ export function buildEmbeddedRunPayloads(params: {
     ? normalizeReplyTextForComparison(fallbackAnswerSourceText)
     : "";
   const shouldUseCanonicalFinalAnswer =
+    params.preferAssistantTextsOverFinalAnswer !== true &&
     nonEmptyAssistantTexts.length > 1 &&
     fallbackAnswerSourceText.length > 0 &&
     normalizedFallbackAnswerSourceText.length > 0;
@@ -406,6 +411,8 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
+      deliverDespiteSourceReplySuppression:
+        params.deliverAssistantRepliesDespiteSourceSuppression === true,
     });
     hasUserFacingAssistantReply = true;
     if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
@@ -461,6 +468,10 @@ export function buildEmbeddedRunPayloads(params: {
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
   return replyItems
     .map((item) => {
+      const markIfNeeded = <T extends object>(payload: T): T =>
+        item.deliverDespiteSourceReplySuppression
+          ? markReplyPayloadForSourceSuppressionDelivery(payload)
+          : payload;
       const payload = {
         text: normalizeOptionalString(item.text),
         mediaUrls: item.media?.length ? item.media : undefined,
@@ -475,11 +486,11 @@ export function buildEmbeddedRunPayloads(params: {
         const silentText = payload.text;
         payload.text = undefined;
         if (hasOutboundReplyContent(payload)) {
-          return payload;
+          return markIfNeeded(payload);
         }
         payload.text = silentText;
       }
-      return payload;
+      return markIfNeeded(payload);
     })
     .filter((p) => {
       if (!hasOutboundReplyContent(p)) {

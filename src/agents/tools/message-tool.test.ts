@@ -490,6 +490,63 @@ describe("message tool secret scoping", () => {
 });
 
 describe("message tool agent routing", () => {
+  it("treats message-tool-only WebChat sends as same-session visible replies", async () => {
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "webchat",
+      currentChannelId: "webchat-session-1",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    const result = await tool.execute("1", {
+      action: "send",
+      message: "Actual visible reply after tools.",
+    });
+
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      ok: true,
+      status: "sent",
+      delivery: "webchat-session",
+      channel: "webchat",
+      to: "webchat-session-1",
+      message: "Actual visible reply after tools.",
+    });
+  });
+
+  it("keeps explicit external message-tool sends on the outbound path from WebChat", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const tool = createMessageTool({
+      config: {
+        channels: {
+          telegram: {
+            token: "test-token",
+          },
+        },
+      } as never,
+      currentChannelProvider: "webchat",
+      currentChannelId: "webchat-session-1",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      channel: "telegram",
+      target: "telegram:123",
+      message: "Send elsewhere.",
+    });
+
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+    expect(firstRunMessageActionInput()?.params).toMatchObject({
+      channel: "telegram",
+      target: "telegram:123",
+      message: "Send elsewhere.",
+    });
+  });
+
   it("derives agentId from the session key", async () => {
     mockSendResult();
 
