@@ -116,8 +116,7 @@ function isTrustedRetryEndpoint(url: string): boolean {
   try {
     const gatewayUrl = new URL(url, window.location.href);
     const host = gatewayUrl.hostname.trim().toLowerCase();
-    const isLoopbackHost =
-      host === "localhost" || host === "::1" || host === "[::1]" || host === "127.0.0.1";
+    const isLoopbackHost = host === "localhost" || host === "::1" || host === "[::1]";
     const isLoopbackIPv4 = isLoopbackIPv4Host(host);
     if (isLoopbackHost || isLoopbackIPv4) {
       return true;
