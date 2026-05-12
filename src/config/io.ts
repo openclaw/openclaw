@@ -894,14 +894,24 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
   }
 }
 
-function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
+function stampConfigVersion(
+  cfg: OpenClawConfig,
+  explicitSetPaths?: readonly (readonly string[])[],
+): OpenClawConfig {
+  const userTouchedVersion =
+    explicitSetPaths?.some(
+      (p) => p.length === 2 && p[0] === "meta" && p[1] === "lastTouchedVersion",
+    ) ?? false;
+  const userTouchedAt =
+    explicitSetPaths?.some((p) => p.length === 2 && p[0] === "meta" && p[1] === "lastTouchedAt") ??
+    false;
   const now = new Date().toISOString();
   return {
     ...cfg,
     meta: {
       ...cfg.meta,
-      lastTouchedVersion: VERSION,
-      lastTouchedAt: now,
+      ...(userTouchedVersion ? {} : { lastTouchedVersion: VERSION }),
+      ...(userTouchedAt ? {} : { lastTouchedAt: now }),
     },
   };
 }
@@ -2111,7 +2121,7 @@ export function createConfigIO(
     const outputConfig = applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths);
     // Do NOT apply runtime defaults when writing - user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
-    const stampedOutputConfig = stampConfigVersion(outputConfig);
+    const stampedOutputConfig = stampConfigVersion(outputConfig, options.explicitSetPaths);
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
     const nextHash = hashConfigRaw(json);
     const previousHash = resolveConfigSnapshotHash(snapshot);

@@ -1549,4 +1549,133 @@ describe("config io write", () => {
       expect(persisted.logging?.level).toBe("debug");
     });
   });
+
+  it("preserves user-set meta.lastTouchedVersion when explicitSetPaths includes meta.lastTouchedVersion", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const original = {
+        gateway: { mode: "local" },
+      } satisfies ConfigFileSnapshot["config"];
+      const originalRaw = `${JSON.stringify(original, null, 2)}\n`;
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const baseSnapshot = {
+        path: configPath,
+        exists: true,
+        raw: originalRaw,
+        parsed: original,
+        sourceConfig: original,
+        resolved: original,
+        valid: true,
+        runtimeConfig: original,
+        config: original,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } satisfies ConfigFileSnapshot;
+
+      const userVersion = "2099.12.31";
+      const next = {
+        meta: { lastTouchedVersion: userVersion, lastTouchedAt: "2099-01-01T00:00:00.000Z" },
+        gateway: { mode: "local" },
+      } satisfies OpenClawConfig;
+
+      await io.writeConfigFile(next, {
+        baseSnapshot,
+        explicitSetPaths: [["meta", "lastTouchedVersion"]],
+        explicitSetValueSource: next,
+      });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+      expect(persisted.meta?.lastTouchedVersion).toBe(userVersion);
+    });
+  });
+
+  it("preserves user-set meta.lastTouchedAt when explicitSetPaths includes meta.lastTouchedAt", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const original = {
+        gateway: { mode: "local" },
+      } satisfies ConfigFileSnapshot["config"];
+      const originalRaw = `${JSON.stringify(original, null, 2)}\n`;
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const baseSnapshot = {
+        path: configPath,
+        exists: true,
+        raw: originalRaw,
+        parsed: original,
+        sourceConfig: original,
+        resolved: original,
+        valid: true,
+        runtimeConfig: original,
+        config: original,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } satisfies ConfigFileSnapshot;
+
+      const userAt = "2099-01-01T00:00:00.000Z";
+      const next = {
+        meta: { lastTouchedVersion: "2099.12.31", lastTouchedAt: userAt },
+        gateway: { mode: "local" },
+      } satisfies OpenClawConfig;
+
+      await io.writeConfigFile(next, {
+        baseSnapshot,
+        explicitSetPaths: [["meta", "lastTouchedAt"]],
+        explicitSetValueSource: next,
+      });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+      expect(persisted.meta?.lastTouchedAt).toBe(userAt);
+    });
+  });
+
+  it("still stamps meta fields on writes without explicitSetPaths", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const original = {
+        gateway: { mode: "local" },
+      } satisfies ConfigFileSnapshot["config"];
+      const originalRaw = `${JSON.stringify(original, null, 2)}\n`;
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const baseSnapshot = {
+        path: configPath,
+        exists: true,
+        raw: originalRaw,
+        parsed: original,
+        sourceConfig: original,
+        resolved: original,
+        valid: true,
+        runtimeConfig: original,
+        config: original,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } satisfies ConfigFileSnapshot;
+
+      await io.writeConfigFile({ gateway: { mode: "local" } }, { baseSnapshot });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+      expect(typeof persisted.meta?.lastTouchedVersion).toBe("string");
+      expect(typeof persisted.meta?.lastTouchedAt).toBe("string");
+    });
+  });
 });
