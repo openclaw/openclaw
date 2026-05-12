@@ -113,4 +113,23 @@ describe("createInteractionHandler approval buttons", () => {
       expect(resolveApprovalMock).toHaveBeenCalledWith("exec:abc12345", "allow-once"),
     );
   });
+
+  it("uses the direct user openid when a group member openid is unavailable", async () => {
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () => makeRestrictedCfg(["OWNER_OPENID"]),
+    });
+
+    handler(
+      makeApprovalEvent({
+        chat_type: 2,
+        group_openid: undefined,
+        group_member_openid: undefined,
+        user_openid: "OWNER_OPENID",
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith("exec:abc12345", "allow-once"),
+    );
+  });
 });
