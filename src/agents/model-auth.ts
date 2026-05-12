@@ -9,6 +9,7 @@ import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -991,12 +992,9 @@ export async function resolveApiKeyForProvider(params: {
     );
   }
   if (perEntryProfileRef.kind === "matched-failed") {
-    const cause =
-      perEntryProfileRef.error instanceof Error
-        ? perEntryProfileRef.error.message
-        : perEntryProfileRef.error
-          ? String(perEntryProfileRef.error)
-          : "credential resolution returned no key";
+    const cause = perEntryProfileRef.error
+      ? formatErrorMessage(perEntryProfileRef.error)
+      : "credential resolution returned no key";
     throw new Error(
       `Per-entry apiKey "${perEntryProfileRef.profileId}" for provider "${provider}" matched a stored profile but failed to resolve: ${cause}. Fix the referenced profile or set apiKey to a literal bearer token.`,
     );
