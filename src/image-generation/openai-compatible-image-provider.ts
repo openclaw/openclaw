@@ -4,6 +4,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  fetchWithTimeoutGuarded,
   postJsonRequest,
   postMultipartRequest,
   resolveProviderHttpRequestConfig,
@@ -11,7 +12,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parseOpenAiCompatibleImageResponse } from "./image-assets.js";
+import { parseOpenAiCompatibleImageResponseAsync } from "./image-assets.js";
 import type {
   ImageGenerationProvider,
   ImageGenerationProviderCapabilities,
@@ -260,12 +261,45 @@ export function createOpenAiCompatibleImageGenerationProvider(
             ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
             : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
         );
-        const images = parseOpenAiCompatibleImageResponse(await response.json(), {
+        const malformedResponseError =
+          mode === "edit"
+            ? `${options.label} image edit response malformed`
+            : `${options.label} image generation response malformed`;
+        const images = await parseOpenAiCompatibleImageResponseAsync(await response.json(), {
           ...options.response,
-          malformedResponseError:
-            mode === "edit"
-              ? `${options.label} image edit response malformed`
-              : `${options.label} image generation response malformed`,
+          malformedResponseError,
+          downloadUrl: async ({ url }) => {
+            const download = await fetchWithTimeoutGuarded(
+              url,
+              { method: "GET" },
+              timeoutMs,
+              fetch,
+              {
+                ...(req.ssrfPolicy || resolvedAllowPrivateNetwork
+                  ? {
+                      ssrfPolicy: {
+                        ...req.ssrfPolicy,
+                        ...(resolvedAllowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
+                      },
+                    }
+                  : {}),
+                ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
+                auditContext: `${options.id}-image-download`,
+              },
+            );
+            try {
+              await assertOkOrThrowHttpError(
+                download.response,
+                `${options.label} image URL download failed`,
+              );
+              return {
+                buffer: Buffer.from(await download.response.arrayBuffer()),
+                mimeType: download.response.headers.get("content-type") ?? undefined,
+              };
+            } finally {
+              await download.release();
+            }
+          },
         });
         if (images.length === 0) {
           throw new Error(

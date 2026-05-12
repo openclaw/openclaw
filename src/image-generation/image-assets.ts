@@ -16,6 +16,7 @@ export type ImageMimeTypeDetection = {
 
 export type OpenAiCompatibleImageResponseEntry = {
   b64_json?: unknown;
+  url?: unknown;
   mime_type?: unknown;
   revised_prompt?: unknown;
 };
@@ -23,6 +24,17 @@ export type OpenAiCompatibleImageResponseEntry = {
 export type OpenAiCompatibleImageResponsePayload = {
   data?: unknown;
 };
+
+export type OpenAiCompatibleImageUrlDownload = {
+  buffer: Buffer;
+  mimeType?: string;
+};
+
+export type OpenAiCompatibleImageUrlDownloader = (params: {
+  url: string;
+  entry: OpenAiCompatibleImageResponseEntry;
+  index: number;
+}) => Promise<OpenAiCompatibleImageUrlDownload>;
 
 function throwMalformedImageResponse(message: string | undefined): never | undefined {
   if (message) {
@@ -182,6 +194,54 @@ export function generatedImageAssetFromOpenAiCompatibleEntry(
   });
 }
 
+async function generatedImageAssetFromOpenAiCompatibleUrlEntry(
+  entry: OpenAiCompatibleImageResponseEntry,
+  index: number,
+  options: {
+    defaultMimeType?: string;
+    fileNamePrefix?: string;
+    downloadUrl?: OpenAiCompatibleImageUrlDownloader;
+  } = {},
+): Promise<GeneratedImageAsset | undefined> {
+  const url = normalizeOptionalString(entry.url);
+  if (!url || !options.downloadUrl) {
+    return undefined;
+  }
+  const download = await options.downloadUrl({ url, entry, index });
+  const defaultMimeType =
+    normalizeOptionalString(options.defaultMimeType) ?? DEFAULT_IMAGE_MIME_TYPE;
+  const explicitMimeType = normalizeOptionalString(download.mimeType);
+  const detected = sniffImageMimeType(download.buffer, explicitMimeType ?? defaultMimeType);
+  const mimeType = explicitMimeType ?? detected.mimeType;
+  const prefix = normalizeOptionalString(options.fileNamePrefix) ?? DEFAULT_IMAGE_FILE_PREFIX;
+  const image: GeneratedImageAsset = {
+    buffer: download.buffer,
+    mimeType,
+    fileName: `${prefix}-${index + 1}.${detected.extension ?? imageFileExtensionForMimeType(mimeType)}`,
+  };
+  const revisedPrompt = normalizeOptionalString(entry.revised_prompt);
+  if (revisedPrompt) {
+    image.revisedPrompt = revisedPrompt;
+  }
+  return image;
+}
+
+async function generatedImageAssetFromOpenAiCompatibleEntryAsync(
+  entry: OpenAiCompatibleImageResponseEntry,
+  index: number,
+  options: {
+    defaultMimeType?: string;
+    fileNamePrefix?: string;
+    sniffMimeType?: boolean;
+    downloadUrl?: OpenAiCompatibleImageUrlDownloader;
+  } = {},
+): Promise<GeneratedImageAsset | undefined> {
+  return (
+    generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options) ??
+    (await generatedImageAssetFromOpenAiCompatibleUrlEntry(entry, index, options))
+  );
+}
+
 export function parseOpenAiCompatibleImageResponse(
   payload: unknown,
   options: {
@@ -211,6 +271,45 @@ export function parseOpenAiCompatibleImageResponse(
       continue;
     }
     const image = generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options);
+    if (!image) {
+      throwMalformedImageResponse(options.malformedResponseError);
+      continue;
+    }
+    images.push(image);
+  }
+  return images;
+}
+
+export async function parseOpenAiCompatibleImageResponseAsync(
+  payload: unknown,
+  options: {
+    defaultMimeType?: string;
+    fileNamePrefix?: string;
+    malformedResponseError?: string;
+    sniffMimeType?: boolean;
+    downloadUrl?: OpenAiCompatibleImageUrlDownloader;
+  } = {},
+): Promise<GeneratedImageAsset[]> {
+  if (!isRecord(payload)) {
+    throwMalformedImageResponse(options.malformedResponseError);
+    return [];
+  }
+  const data = payload.data;
+  if (data === undefined || data === null) {
+    return [];
+  }
+  if (!Array.isArray(data)) {
+    throwMalformedImageResponse(options.malformedResponseError);
+    return [];
+  }
+
+  const images: GeneratedImageAsset[] = [];
+  for (const [index, entry] of data.entries()) {
+    if (!isRecord(entry)) {
+      throwMalformedImageResponse(options.malformedResponseError);
+      continue;
+    }
+    const image = await generatedImageAssetFromOpenAiCompatibleEntryAsync(entry, index, options);
     if (!image) {
       throwMalformedImageResponse(options.malformedResponseError);
       continue;

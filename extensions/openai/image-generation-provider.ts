@@ -6,7 +6,7 @@ import type {
   ImageGenerationResult,
 } from "openclaw/plugin-sdk/image-generation";
 import {
-  parseOpenAiCompatibleImageResponse,
+  parseOpenAiCompatibleImageResponseAsync,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
@@ -21,6 +21,7 @@ import {
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  fetchWithTimeoutGuarded,
   postJsonRequest,
   postMultipartRequest,
   resolveProviderHttpRequestConfig,
@@ -1011,12 +1012,46 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
 
         const data = await response.json();
         const output = resolveOutputMime(req.outputFormat);
-        const images = parseOpenAiCompatibleImageResponse(data, {
-          defaultMimeType: output.mimeType,
-          malformedResponseError: isEdit
-            ? "OpenAI image edit response malformed"
-            : "OpenAI image generation response malformed",
-        }).map((image, index) =>
+        const images = (
+          await parseOpenAiCompatibleImageResponseAsync(data, {
+            defaultMimeType: output.mimeType,
+            malformedResponseError: isEdit
+              ? "OpenAI image edit response malformed"
+              : "OpenAI image generation response malformed",
+            downloadUrl: async ({ url }) => {
+              const download = await fetchWithTimeoutGuarded(
+                url,
+                { method: "GET" },
+                timeoutMs,
+                fetch,
+                {
+                  ...(req.ssrfPolicy || allowPrivateNetwork
+                    ? {
+                        ssrfPolicy: {
+                          ...req.ssrfPolicy,
+                          ...(allowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
+                        },
+                      }
+                    : {}),
+                  ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
+                  auditContext: "openai-image-download",
+                },
+              );
+              try {
+                await assertOkOrThrowHttpError(
+                  download.response,
+                  "OpenAI image URL download failed",
+                );
+                return {
+                  buffer: Buffer.from(await download.response.arrayBuffer()),
+                  mimeType: download.response.headers.get("content-type") ?? undefined,
+                };
+              } finally {
+                await download.release();
+              }
+            },
+          })
+        ).map((image, index) =>
           Object.assign(image, {
             fileName: `image-${index + 1}.${output.extension}`,
           }),
