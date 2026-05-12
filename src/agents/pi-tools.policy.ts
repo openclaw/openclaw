@@ -30,6 +30,7 @@ import {
 } from "./subagent-capabilities.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import {
+  expandToolGroups,
   mergeAlsoAllowPolicy,
   normalizeToolName,
   resolveToolProfilePolicy,
@@ -60,6 +61,7 @@ const SUBAGENT_TOOL_DENY_LEAF = [
   "sessions_history",
   "sessions_spawn",
 ];
+const NO_MATCHING_TOOL_ALLOWLIST_ENTRY = "__openclaw_no_matching_subagent_tool_allow__";
 
 /**
  * Build the deny list for a sub-agent at a given depth.
@@ -86,6 +88,39 @@ function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
+function mergeConfiguredSubagentAllow(
+  allow: string[] | undefined,
+  alsoAllow: string[] | undefined,
+): string[] | undefined {
+  return allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+}
+
+function intersectToolAllowlists(
+  left: string[] | undefined,
+  right: string[] | undefined,
+): string[] | undefined {
+  if (!right || right.length === 0) {
+    return left;
+  }
+  if (!left || left.length === 0) {
+    return right;
+  }
+  const leftPolicy = { allow: left };
+  const rightPolicy = { allow: right };
+  const result = new Set<string>();
+  for (const entry of expandToolGroups(left)) {
+    if (isToolAllowedByPolicyName(entry, rightPolicy)) {
+      result.add(entry);
+    }
+  }
+  for (const entry of expandToolGroups(right)) {
+    if (isToolAllowedByPolicyName(entry, leftPolicy)) {
+      result.add(entry);
+    }
+  }
+  return result.size > 0 ? [...result] : [NO_MATCHING_TOOL_ALLOWLIST_ENTRY];
+}
+
 export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
   const maxSpawnDepth =
@@ -101,7 +136,7 @@ export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number):
     ...baseDeny.filter((toolName) => !explicitAllow.has(normalizeToolName(toolName))),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
-  const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  const mergedAllow = mergeConfiguredSubagentAllow(allow, alsoAllow);
   return { allow: mergedAllow, deny };
 }
 
@@ -124,6 +159,7 @@ export function resolveSubagentToolPolicyForSession(
   const inheritedToolPolicy = resolveInheritedToolPolicyForSession(cfg, sessionKey, {
     store,
   });
+  const inheritedToolAllow = inheritedToolPolicy?.allow;
   const inheritedToolDeny = inheritedToolPolicy?.deny ?? [];
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
   const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
@@ -137,7 +173,10 @@ export function resolveSubagentToolPolicyForSession(
     ...inheritedToolDeny,
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
-  const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  const mergedAllow = intersectToolAllowlists(
+    mergeConfiguredSubagentAllow(allow, alsoAllow),
+    inheritedToolAllow,
+  );
   return { allow: mergedAllow, deny };
 }
 

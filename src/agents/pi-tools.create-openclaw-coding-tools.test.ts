@@ -485,6 +485,41 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolDenylist, ["pdf"]);
   });
 
+  it("passes inherited allowlist entries to OpenClaw plugin discovery", async () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const agentId = `inherited-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const storeTemplate = path.join(
+      os.tmpdir(),
+      `openclaw-session-store-${agentId}-{agentId}.json`,
+    );
+    await writeSessionStore(storeTemplate, agentId, {
+      [`agent:${agentId}:subagent:limited`]: {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolAllow: ["custom_plugin_tool", "sessions_spawn"],
+      },
+    });
+
+    createOpenClawCodingTools({
+      sessionKey: `agent:${agentId}:subagent:limited`,
+      config: {
+        session: {
+          store: storeTemplate,
+        },
+      },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolAllowlist, [
+      "custom_plugin_tool",
+      "sessions_spawn",
+    ]);
+  });
+
   it("passes effective allow-list-restricted tool surface to spawned sessions", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

@@ -408,6 +408,88 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
   });
 
+  it("applies inherited tool allows from stored subagent sessions", () => {
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-inherited-allow-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:limited": {
+            sessionId: "limited-session",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolAllow: ["sessions_spawn", "memory_search"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const cfg = {
+      ...baseCfg,
+      session: {
+        store: storePath,
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:limited");
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("read", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(false);
+  });
+
+  it("intersects configured subagent allows with inherited tool allows", () => {
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-inherited-allow-intersection-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:limited": {
+            sessionId: "limited-session",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolAllow: ["sessions_spawn", "read"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const cfg = {
+      ...baseCfg,
+      tools: {
+        subagents: {
+          tools: {
+            allow: ["sessions_spawn", "exec"],
+          },
+        },
+      },
+      session: {
+        store: storePath,
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:limited");
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("read", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(false);
+  });
+
   it("applies inherited tool policy from stored ACP sessions without subagent metadata", () => {
     const storePath = path.join(
       os.tmpdir(),

@@ -782,6 +782,7 @@ export function createOpenClawCodingTools(options?: {
     senderPolicy,
     sandboxToolPolicy,
     subagentPolicy,
+    inheritedToolPolicy,
     options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
   ]);
   const pluginToolDenylist = collectExplicitDenylist([

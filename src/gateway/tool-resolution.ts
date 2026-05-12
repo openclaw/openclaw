@@ -176,6 +176,7 @@ export function resolveGatewayScopedTools(params: {
       agentProviderPolicy,
       groupPolicy,
       subagentPolicy,
+      inheritedToolPolicy,
       gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
     ]),
     pluginToolDenylist: explicitDenylist,
