@@ -11,6 +11,7 @@ import {
 } from "./pi-embedded-subscribe.compaction-test-helpers.js";
 import {
   handleCompactionEnd,
+  handleCompactionStart,
   reconcileSessionRowCompactionCountAfterSuccess,
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
@@ -135,16 +136,15 @@ describe("reconcileSessionRowCompactionCountAfterSuccess", () => {
 describe("compaction lifecycle logging", () => {
   it("logs lifecycle events at info level for gateway watch visibility", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-log-"));
-    const storePath = path.join(tmp, "sessions.json");
+    useStateDir(tmp);
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
+    await seedSessionEntry({
+      agentId: TEST_AGENT_ID,
       sessionKey,
       compactionCount: 0,
     });
     const info = vi.fn();
     const ctx = createCompactionContext({
-      storePath,
       sessionKey,
       initialCount: 0,
       info,
@@ -162,39 +162,42 @@ describe("compaction lifecycle logging", () => {
       aborted: false,
     });
 
-    expect(loggedInfoMessageAt(info, 0)).toBe("embedded run auto-compaction start");
-    const startMeta = loggedInfoMetaAt(info, 0);
-    expect(startMeta.event).toBe("embedded_run_compaction_start");
-    expect(startMeta.reason).toBe("threshold");
-    expect(startMeta.runId).toBe("run-test");
-    expect(startMeta.consoleMessage).toBe(
-      "embedded run auto-compaction start: runId=run-test reason=threshold",
+    expect(info).toHaveBeenNthCalledWith(
+      1,
+      "embedded run auto-compaction start",
+      expect.objectContaining({
+        event: "embedded_run_compaction_start",
+        reason: "threshold",
+        runId: "run-test",
+        consoleMessage: "embedded run auto-compaction start: runId=run-test reason=threshold",
+      }),
     );
-
-    expect(loggedInfoMessageAt(info, 1)).toBe("embedded run auto-compaction complete");
-    const endMeta = loggedInfoMetaAt(info, 1);
-    expect(endMeta.event).toBe("embedded_run_compaction_end");
-    expect(endMeta.reason).toBe("threshold");
-    expect(endMeta.runId).toBe("run-test");
-    expect(endMeta.completed).toBe(true);
-    expect(endMeta.compactionCount).toBe(1);
-    expect(endMeta.consoleMessage).toBe(
-      "embedded run auto-compaction complete: runId=run-test reason=threshold compactionCount=1 willRetry=false",
+    expect(info).toHaveBeenNthCalledWith(
+      2,
+      "embedded run auto-compaction complete",
+      expect.objectContaining({
+        event: "embedded_run_compaction_end",
+        reason: "threshold",
+        runId: "run-test",
+        completed: true,
+        compactionCount: 1,
+        consoleMessage:
+          "embedded run auto-compaction complete: runId=run-test reason=threshold compactionCount=1 willRetry=false",
+      }),
     );
   });
 
   it("logs manual compaction as incomplete when no result is produced", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-incomplete-log-"));
-    const storePath = path.join(tmp, "sessions.json");
+    useStateDir(tmp);
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
+    await seedSessionEntry({
+      agentId: TEST_AGENT_ID,
       sessionKey,
       compactionCount: 0,
     });
     const info = vi.fn();
     const ctx = createCompactionContext({
-      storePath,
       sessionKey,
       initialCount: 0,
       info,
@@ -212,39 +215,42 @@ describe("compaction lifecycle logging", () => {
       aborted: false,
     });
 
-    expect(loggedInfoMessageAt(info, 0)).toBe("embedded run manual compaction start");
-    const startMeta = loggedInfoMetaAt(info, 0);
-    expect(startMeta.event).toBe("embedded_run_compaction_start");
-    expect(startMeta.reason).toBe("manual");
-    expect(startMeta.runId).toBe("run-test");
-    expect(startMeta.consoleMessage).toBe(
-      "embedded run manual compaction start: runId=run-test reason=manual",
+    expect(info).toHaveBeenNthCalledWith(
+      1,
+      "embedded run manual compaction start",
+      expect.objectContaining({
+        event: "embedded_run_compaction_start",
+        reason: "manual",
+        runId: "run-test",
+        consoleMessage: "embedded run manual compaction start: runId=run-test reason=manual",
+      }),
     );
-
-    expect(loggedInfoMessageAt(info, 1)).toBe("embedded run manual compaction incomplete");
-    const endMeta = loggedInfoMetaAt(info, 1);
-    expect(endMeta.event).toBe("embedded_run_compaction_end");
-    expect(endMeta.reason).toBe("manual");
-    expect(endMeta.runId).toBe("run-test");
-    expect(endMeta.completed).toBe(false);
-    expect(endMeta.aborted).toBe(false);
-    expect(endMeta.consoleMessage).toBe(
-      "embedded run manual compaction incomplete: runId=run-test reason=manual aborted=false willRetry=false",
+    expect(info).toHaveBeenNthCalledWith(
+      2,
+      "embedded run manual compaction incomplete",
+      expect.objectContaining({
+        event: "embedded_run_compaction_end",
+        reason: "manual",
+        runId: "run-test",
+        completed: false,
+        aborted: false,
+        consoleMessage:
+          "embedded run manual compaction incomplete: runId=run-test reason=manual aborted=false willRetry=false",
+      }),
     );
   });
 
   it("defaults legacy synthetic compaction events to threshold logs", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-legacy-log-"));
-    const storePath = path.join(tmp, "sessions.json");
+    useStateDir(tmp);
     const sessionKey = "main";
-    await seedSessionStore({
-      storePath,
+    await seedSessionEntry({
+      agentId: TEST_AGENT_ID,
       sessionKey,
       compactionCount: 0,
     });
     const info = vi.fn();
     const ctx = createCompactionContext({
-      storePath,
       sessionKey,
       initialCount: 0,
       info,
@@ -260,24 +266,28 @@ describe("compaction lifecycle logging", () => {
       aborted: false,
     });
 
-    expect(loggedInfoMessageAt(info, 0)).toBe("embedded run auto-compaction start");
-    const startMeta = loggedInfoMetaAt(info, 0);
-    expect(startMeta.event).toBe("embedded_run_compaction_start");
-    expect(startMeta.reason).toBe("threshold");
-    expect(startMeta.runId).toBe("run-test");
-    expect(startMeta.consoleMessage).toBe(
-      "embedded run auto-compaction start: runId=run-test reason=threshold",
+    expect(info).toHaveBeenNthCalledWith(
+      1,
+      "embedded run auto-compaction start",
+      expect.objectContaining({
+        event: "embedded_run_compaction_start",
+        reason: "threshold",
+        runId: "run-test",
+        consoleMessage: "embedded run auto-compaction start: runId=run-test reason=threshold",
+      }),
     );
-
-    expect(loggedInfoMessageAt(info, 1)).toBe("embedded run auto-compaction complete");
-    const endMeta = loggedInfoMetaAt(info, 1);
-    expect(endMeta.event).toBe("embedded_run_compaction_end");
-    expect(endMeta.reason).toBe("threshold");
-    expect(endMeta.runId).toBe("run-test");
-    expect(endMeta.completed).toBe(true);
-    expect(endMeta.compactionCount).toBe(1);
-    expect(endMeta.consoleMessage).toBe(
-      "embedded run auto-compaction complete: runId=run-test reason=threshold compactionCount=1 willRetry=false",
+    expect(info).toHaveBeenNthCalledWith(
+      2,
+      "embedded run auto-compaction complete",
+      expect.objectContaining({
+        event: "embedded_run_compaction_end",
+        reason: "threshold",
+        runId: "run-test",
+        completed: true,
+        compactionCount: 1,
+        consoleMessage:
+          "embedded run auto-compaction complete: runId=run-test reason=threshold compactionCount=1 willRetry=false",
+      }),
     );
   });
 });

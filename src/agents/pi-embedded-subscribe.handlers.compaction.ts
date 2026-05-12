@@ -1,29 +1,22 @@
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import type { AgentEvent } from "./agent-core-contract.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
-type SessionCompactionStartEvent = Extract<AgentSessionEvent, { type: "compaction_start" }>;
-type SessionCompactionEndEvent = Extract<AgentSessionEvent, { type: "compaction_end" }>;
-type CompactionReason = SessionCompactionStartEvent["reason"];
+type CompactionReason = "manual" | "threshold" | "overflow";
 
-type CompactionStartEvent =
-  | SessionCompactionStartEvent
-  | {
-      type: "compaction_start";
-      reason?: unknown;
-    };
+type CompactionStartEvent = {
+  type: "compaction_start";
+  reason?: unknown;
+};
 
-type CompactionEndEvent =
-  | SessionCompactionEndEvent
-  | {
-      type: "compaction_end";
-      reason?: unknown;
-      willRetry?: unknown;
-      result?: unknown;
-      aborted?: unknown;
-    };
+type CompactionEndEvent = {
+  type: "compaction_end";
+  reason?: unknown;
+  willRetry?: unknown;
+  result?: unknown;
+  aborted?: unknown;
+};
 
 function normalizeCompactionReason(reason: unknown): CompactionReason {
   return reason === "manual" || reason === "threshold" || reason === "overflow"
@@ -95,6 +88,15 @@ export function handleCompactionEnd(ctx: EmbeddedPiSubscribeContext, evt: Compac
         : undefined;
     ctx.noteCompactionTokensAfter(tokensAfter);
     const observedCompactionCount = ctx.getCompactionCount();
+    ctx.log.info(`embedded run ${kind} complete`, {
+      event: "embedded_run_compaction_end",
+      runId: ctx.params.runId,
+      reason,
+      completed: true,
+      willRetry,
+      compactionCount: observedCompactionCount,
+      consoleMessage: `embedded run ${kind} complete: runId=${ctx.params.runId} reason=${reason} compactionCount=${observedCompactionCount} willRetry=${willRetry}`,
+    });
     void reconcileSessionRowCompactionCountAfterSuccess({
       sessionKey: ctx.params.sessionKey,
       agentId: ctx.params.agentId,
