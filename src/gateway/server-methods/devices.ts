@@ -1,6 +1,7 @@
 import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
+  getPairedDevice,
   getPendingDevicePairing,
   listDevicePairing,
   removePairedDevice,
@@ -131,7 +132,11 @@ function deniesDeviceTokenRoleManagement(
   return normalizedTargetRole !== "operator";
 }
 
-function requestsNonOperatorDeviceRole(pending: { role?: string; roles?: string[] }): boolean {
+function requestsNonOperatorDeviceRole(pending: {
+  role?: string;
+  roles?: string[];
+  tokens?: Record<string, DeviceAuthToken>;
+}): boolean {
   const roles = new Set<string>();
   const role = pending.role?.trim();
   if (role) {
@@ -139,6 +144,12 @@ function requestsNonOperatorDeviceRole(pending: { role?: string; roles?: string[
   }
   for (const entry of pending.roles ?? []) {
     const normalized = entry.trim();
+    if (normalized) {
+      roles.add(normalized);
+    }
+  }
+  for (const token of Object.values(pending.tokens ?? {})) {
+    const normalized = token.role.trim();
     if (normalized) {
       roles.add(normalized);
     }
@@ -339,6 +350,20 @@ export const deviceHandlers: GatewayRequestHandlers = {
         errorShape(ErrorCodes.INVALID_REQUEST, "device pairing removal denied"),
       );
       return;
+    }
+    if (authz.callerDeviceId && !authz.isAdminCaller) {
+      const paired = await getPairedDevice(authz.normalizedTargetDeviceId);
+      if (paired && requestsNonOperatorDeviceRole(paired)) {
+        context.logGateway.warn(
+          `device pairing removal denied device=${deviceId} reason=role-management-requires-admin`,
+        );
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "device pairing removal denied"),
+        );
+        return;
+      }
     }
     const removed = await removePairedDevice(deviceId);
     if (!removed) {

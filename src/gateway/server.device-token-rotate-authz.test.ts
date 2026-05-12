@@ -399,6 +399,65 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
       started.envSnapshot.restore();
     }
   });
+
+  test("rejects self-removal before local node reconnect after node token revocation", async () => {
+    const started = await startServerWithClient("secret");
+    const device = await issueMixedRolePairingScopedDevice("same-device-node-remove-reconnect");
+
+    let pairingWs: WebSocket | undefined;
+    try {
+      await connectOk(started.ws);
+
+      const revoke = await rpcReq<{ revokedAtMs?: number }>(started.ws, "device.token.revoke", {
+        deviceId: device.deviceId,
+        role: "node",
+      });
+      expect(revoke.ok).toBe(true);
+      const pairedAfterRevoke = await getPairedDevice(device.deviceId);
+      const revokedNodeToken = pairedAfterRevoke?.tokens?.node;
+      expect(revokedNodeToken?.revokedAtMs).toBeTypeOf("number");
+
+      pairingWs = await connectPairingScopedOperator({
+        port: started.port,
+        identityPath: device.identityPath,
+        deviceToken: device.pairingToken,
+      });
+
+      const remove = await rpcReq(pairingWs, "device.pair.remove", {
+        deviceId: device.deviceId,
+      });
+      expect(remove.ok).toBe(false);
+      expect(remove.error?.message).toBe("device pairing removal denied");
+
+      await expect(
+        connectGatewayClient({
+          url: `ws://127.0.0.1:${started.port}`,
+          token: "secret",
+          role: "node",
+          clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+          clientDisplayName: "node-token-removal-denied",
+          clientVersion: "1.0.0",
+          platform: "linux",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+          scopes: [],
+          commands: ["system.run"],
+          deviceIdentity: device.identity,
+          timeoutMessage: "timeout waiting for denied removal node reconnect",
+        }),
+      ).rejects.toThrow(
+        "pairing required: device is asking for a higher role than currently approved",
+      );
+
+      const pairedAfterReconnect = await getPairedDevice(device.deviceId);
+      expect(pairedAfterReconnect?.tokens?.node?.token).toBe(revokedNodeToken?.token);
+      expect(pairedAfterReconnect?.tokens?.node?.revokedAtMs).toBe(revokedNodeToken?.revokedAtMs);
+    } finally {
+      pairingWs?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
 });
 
 describe("gateway device.token.rotate/revoke caller scope guard", () => {

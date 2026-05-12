@@ -181,6 +181,40 @@ describe("deviceHandlers", () => {
     );
   });
 
+  it("rejects removing mixed-role devices without admin scope", async () => {
+    getPairedDeviceMock.mockResolvedValue({
+      deviceId: "device-1",
+      role: "operator",
+      roles: ["operator", "node"],
+      tokens: {
+        operator: {
+          token: "operator-token",
+          role: "operator",
+          scopes: ["operator.pairing"],
+          createdAtMs: 100,
+        },
+        node: {
+          token: "node-token",
+          role: "node",
+          scopes: [],
+          createdAtMs: 100,
+          revokedAtMs: 200,
+        },
+      },
+    });
+    const opts = createOptions(
+      "device.pair.remove",
+      { deviceId: "device-1" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+
+    await deviceHandlers["device.pair.remove"](opts);
+
+    expect(removePairedDeviceMock).not.toHaveBeenCalled();
+    expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device pairing removal denied");
+  });
+
   it("disconnects active clients after revoking a device token", async () => {
     revokeDeviceTokenMock.mockResolvedValue({
       ok: true,
