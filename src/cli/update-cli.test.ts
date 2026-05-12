@@ -89,6 +89,7 @@ vi.mock("../config/config.js", () => ({
     }
   },
   readConfigFileSnapshot: vi.fn(),
+  readSourceConfigBestEffort: vi.fn(),
   replaceConfigFile: vi.fn(),
   resolveGatewayPort: vi.fn(() => 18789),
 }));
@@ -265,8 +266,12 @@ vi.mock("../runtime.js", () => ({
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
 const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
-const { ConfigMutationConflictError, readConfigFileSnapshot, replaceConfigFile } =
-  await import("../config/config.js");
+const {
+  ConfigMutationConflictError,
+  readConfigFileSnapshot,
+  readSourceConfigBestEffort,
+  replaceConfigFile,
+} = await import("../config/config.js");
 const { checkUpdateStatus, fetchNpmPackageTargetStatus, fetchNpmTagVersion, resolveNpmChannelTag } =
   await import("../infra/update-check.js");
 const { runCommandWithTimeout } = await import("../process/exec.js");
@@ -540,6 +545,7 @@ describe("update-cli", () => {
     vi.mocked(defaultRuntime.exit).mockImplementation(() => {});
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
+    vi.mocked(readSourceConfigBestEffort).mockResolvedValue(baseSnapshot.config);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
       tag: "latest",
       version: "9999.0.0",
@@ -1496,6 +1502,28 @@ describe("update-cli", () => {
       },
     },
   ] as const)("updateStatusCommand rendering: $name", runUpdateCliScenario);
+
+  it("renders update status when unrelated config validation would fail", async () => {
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      valid: false,
+      config: {} as OpenClawConfig,
+    });
+    vi.mocked(readSourceConfigBestEffort).mockResolvedValue({
+      update: { channel: "dev" },
+    } as OpenClawConfig);
+
+    await updateStatusCommand({ json: true });
+
+    const last = requireValue(
+      vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0],
+      "update status JSON output",
+    );
+    const parsed = last as Record<string, unknown>;
+    const channel = parsed.channel as { value?: unknown; config?: unknown };
+    expect(channel.value).toBe("dev");
+    expect(channel.config).toBe("dev");
+  });
 
   it("parses update status --json as the subcommand option", async () => {
     const program = new Command();

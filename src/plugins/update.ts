@@ -809,11 +809,21 @@ async function repairOpenClawPeerLinksForNpmInstalls(params: {
     }
 
     try {
-      await linkOpenClawPeerDependencies({
+      const warnings: string[] = [];
+      const peerLinkRepair = await linkOpenClawPeerDependencies({
         installedDir: installPath,
         peerDependencies,
-        logger: params.logger,
+        logger: {
+          info: (message) => params.logger.info?.(message),
+          warn: (message) => warnings.push(message),
+        },
       });
+      if (peerLinkRepair.skipped > 0) {
+        params.logger.warn?.(
+          `Could not repair openclaw peer link for "${pluginId}" at ${installPath}: ${warnings.join("; ") || "peer link repair was skipped"}`,
+        );
+        continue;
+      }
       repaired = !installedPackageNeedsOpenClawPeerLinkRepair(installPath) || repaired;
     } catch (err) {
       params.logger.warn?.(
