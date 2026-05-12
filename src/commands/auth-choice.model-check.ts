@@ -77,14 +77,11 @@ export async function warnIfModelConfigLooksOff(
     modelId: ref.model,
     agentId: options?.agentId,
   });
-  const hasProfile = authProviders.some(
-    (provider) => listProfilesForProvider(store, provider).length > 0,
-  );
-  const envKey = authProviders.some((provider) => resolveEnvApiKey(provider));
-  const hasCustomKey = authProviders.some((provider) =>
-    hasUsableCustomProviderApiKey(config, provider),
-  );
-  if (!hasProfile && !envKey && !hasCustomKey) {
+  const hasAuth =
+    authProviders.some((provider) => listProfilesForProvider(store, provider).length > 0) ||
+    authProviders.some((provider) => resolveEnvApiKey(provider)) ||
+    authProviders.some((provider) => hasUsableCustomProviderApiKey(config, provider));
+  if (!hasAuth) {
     warnings.push(
       `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
         {

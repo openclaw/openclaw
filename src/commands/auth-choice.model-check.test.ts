@@ -91,6 +91,8 @@ describe("warnIfModelConfigLooksOff", () => {
     expect(note).not.toHaveBeenCalled();
     expect(listProfilesForProvider).toHaveBeenCalledWith(store, "openai");
     expect(listProfilesForProvider).toHaveBeenCalledWith(store, "openai-codex");
+    expect(resolveEnvApiKey).not.toHaveBeenCalled();
+    expect(hasUsableCustomProviderApiKey).not.toHaveBeenCalled();
   });
 
   it("keeps custom OpenAI-compatible provider auth separate from Codex OAuth profiles", async () => {
