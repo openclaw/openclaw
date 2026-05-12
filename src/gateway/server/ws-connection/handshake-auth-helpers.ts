@@ -303,7 +303,7 @@ function buildUnauthorizedHandshakeContext(params: {
   };
 }
 
-export function resolveDeviceSignaturePayloadVersion(params: {
+export function resolveDeviceSignaturePayload(params: {
   device: {
     id: string;
     signature: string;
@@ -314,7 +314,7 @@ export function resolveDeviceSignaturePayloadVersion(params: {
   scopes: string[];
   signedAtMs: number;
   nonce: string;
-}): "v3" | "v2" | null {
+}): { version: "v3" | "v2"; payload: string } | null {
   const signatureToken = resolveSignatureToken(params.connectParams);
   const basePayload = {
     deviceId: params.device.id,
@@ -332,14 +332,20 @@ export function resolveDeviceSignaturePayloadVersion(params: {
     deviceFamily: params.connectParams.client.deviceFamily,
   });
   if (verifyDeviceSignature(params.device.publicKey, payloadV3, params.device.signature)) {
-    return "v3";
+    return { version: "v3", payload: payloadV3 };
   }
 
   const payloadV2 = buildDeviceAuthPayload(basePayload);
   if (verifyDeviceSignature(params.device.publicKey, payloadV2, params.device.signature)) {
-    return "v2";
+    return { version: "v2", payload: payloadV2 };
   }
   return null;
+}
+
+export function resolveDeviceSignaturePayloadVersion(
+  params: Parameters<typeof resolveDeviceSignaturePayload>[0],
+): "v3" | "v2" | null {
+  return resolveDeviceSignaturePayload(params)?.version ?? null;
 }
 
 function resolveAuthProvidedKind(

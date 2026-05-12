@@ -133,7 +133,7 @@ import {
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
 import {
-  resolveDeviceSignaturePayloadVersion,
+  resolveDeviceSignaturePayload,
   resolveHandshakeBrowserSecurityContext,
   resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
@@ -597,6 +597,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         const deviceRaw = connectParams.device;
         let devicePublicKey: string | null = null;
         let deviceAuthPayloadVersion: "v2" | "v3" | null = null;
+        let deviceBootstrapPublicKeyProof: { payload: string; signature: string } | undefined;
         const hasTokenAuth = Boolean(connectParams.auth?.token);
         const hasPasswordAuth = Boolean(connectParams.auth?.password);
         const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
@@ -808,7 +809,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
           const rejectDeviceSignatureInvalid = () =>
             rejectDeviceAuthInvalid("device-signature", "device signature invalid");
-          const payloadVersion = resolveDeviceSignaturePayloadVersion({
+          const payloadMatch = resolveDeviceSignaturePayload({
             device,
             connectParams,
             role,
@@ -816,11 +817,15 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             signedAtMs: signedAt,
             nonce: providedNonce,
           });
-          if (!payloadVersion) {
+          if (!payloadMatch) {
             rejectDeviceSignatureInvalid();
             return;
           }
-          deviceAuthPayloadVersion = payloadVersion;
+          deviceAuthPayloadVersion = payloadMatch.version;
+          deviceBootstrapPublicKeyProof = {
+            payload: payloadMatch.payload,
+            signature: device.signature,
+          };
           devicePublicKey = normalizeDevicePublicKeyBase64Url(device.publicKey);
           if (!devicePublicKey) {
             rejectDeviceAuthInvalid("device-public-key", "device public key invalid");
@@ -842,14 +847,23 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           hasDeviceIdentity: Boolean(device),
           deviceId: device?.id,
           publicKey: device?.publicKey,
+          publicKeyProof: deviceBootstrapPublicKeyProof,
           role,
           scopes,
           rateLimiter: authRateLimiter,
           clientIp: browserRateLimitClientIp,
-          verifyBootstrapToken: async ({ deviceId, publicKey, token, role, scopes }) =>
+          verifyBootstrapToken: async ({
+            deviceId,
+            publicKey,
+            publicKeyProof,
+            token,
+            role,
+            scopes,
+          }) =>
             await verifyDeviceBootstrapToken({
               deviceId,
               publicKey,
+              publicKeyProof,
               token,
               role,
               scopes,

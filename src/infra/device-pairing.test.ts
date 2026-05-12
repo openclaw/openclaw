@@ -1,8 +1,14 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+  signDevicePayload,
+} from "./device-identity.js";
 import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
@@ -587,6 +593,13 @@ describe("device pairing tokens", () => {
 
   test("rejects bootstrap token replay before pending scope escalation can be approved", async () => {
     const baseDir = await makeDevicePairingDir();
+    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "device.json"));
+    const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+    const proofPayload = `openclaw-device-pairing-test:${identity.deviceId}`;
+    const publicKeyProof = {
+      payload: proofPayload,
+      signature: signDevicePayload(identity.privateKeyPem, proofPayload),
+    };
     const issued = await issueDeviceBootstrapToken({
       baseDir,
       roles: ["operator"],
@@ -596,8 +609,9 @@ describe("device pairing tokens", () => {
     await expect(
       verifyDeviceBootstrapToken({
         token: issued.token,
-        deviceId: "device-1",
-        publicKey: "public-key-1",
+        deviceId: identity.deviceId,
+        publicKey,
+        publicKeyProof,
         role: "operator",
         scopes: ["operator.read"],
         baseDir,
@@ -606,8 +620,8 @@ describe("device pairing tokens", () => {
 
     const first = await requestDevicePairing(
       {
-        deviceId: "device-1",
-        publicKey: "public-key-1",
+        deviceId: identity.deviceId,
+        publicKey,
         role: "operator",
         scopes: ["operator.read"],
       },
@@ -617,8 +631,9 @@ describe("device pairing tokens", () => {
     await expect(
       verifyDeviceBootstrapToken({
         token: issued.token,
-        deviceId: "device-1",
-        publicKey: "public-key-1",
+        deviceId: identity.deviceId,
+        publicKey,
+        publicKeyProof,
         role: "operator",
         scopes: ["operator.admin"],
         baseDir,
@@ -630,7 +645,7 @@ describe("device pairing tokens", () => {
       { callerScopes: ["operator.read"] },
       baseDir,
     );
-    const paired = await getPairedDevice("device-1", baseDir);
+    const paired = await getPairedDevice(identity.deviceId, baseDir);
     expect(paired?.scopes).toEqual(["operator.read"]);
     expect(paired?.approvedScopes).toEqual(["operator.read"]);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);

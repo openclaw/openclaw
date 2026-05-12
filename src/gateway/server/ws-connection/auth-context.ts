@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import type { DeviceBootstrapPublicKeyProof } from "../../../infra/device-bootstrap.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
@@ -151,6 +152,7 @@ export async function resolveConnectAuthDecision(params: {
   hasDeviceIdentity: boolean;
   deviceId?: string;
   publicKey?: string;
+  publicKeyProof?: DeviceBootstrapPublicKeyProof;
   role: string;
   scopes: string[];
   rateLimiter?: AuthRateLimiter;
@@ -158,6 +160,7 @@ export async function resolveConnectAuthDecision(params: {
   verifyBootstrapToken: (params: {
     deviceId: string;
     publicKey: string;
+    publicKeyProof?: DeviceBootstrapPublicKeyProof;
     token: string;
     role: string;
     scopes: string[];
@@ -178,6 +181,7 @@ export async function resolveConnectAuthDecision(params: {
     const tokenCheck = await params.verifyBootstrapToken({
       deviceId: params.deviceId,
       publicKey: params.publicKey,
+      publicKeyProof: params.publicKeyProof,
       token: bootstrapTokenCandidate,
       role: params.role,
       scopes: params.scopes,

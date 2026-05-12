@@ -200,6 +200,36 @@ describe("resolveConnectAuthDecision", () => {
     expect(verifyDeviceToken).not.toHaveBeenCalled();
   });
 
+  it("passes public key proof into bootstrap token verification", async () => {
+    const publicKeyProof = { payload: "challenge-payload", signature: "signature" };
+    const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => ({ ok: true }));
+    const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({ ok: true }));
+    await resolveConnectAuthDecision({
+      state: createBaseState({
+        bootstrapTokenCandidate: "bootstrap-token",
+        deviceTokenCandidate: undefined,
+        deviceTokenCandidateSource: undefined,
+      }),
+      hasDeviceIdentity: true,
+      deviceId: "dev-1",
+      publicKey: "pub-1",
+      publicKeyProof,
+      role: "node",
+      scopes: [],
+      verifyBootstrapToken,
+      verifyDeviceToken,
+    });
+
+    expect(verifyBootstrapToken).toHaveBeenCalledWith({
+      deviceId: "dev-1",
+      publicKey: "pub-1",
+      publicKeyProof,
+      token: "bootstrap-token",
+      role: "node",
+      scopes: [],
+    });
+  });
+
   it("reports invalid bootstrap tokens when no device token fallback is available", async () => {
     const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => ({
       ok: false,
