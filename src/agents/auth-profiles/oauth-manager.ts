@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withFileLock } from "../../infra/file-lock.js";
@@ -267,9 +268,10 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
   }
 
   function refreshFailureCredentialFingerprint(credential: OAuthCredential): string {
-    return JSON.stringify(
+    const serializedCredential = JSON.stringify(
       Object.entries(credential).toSorted(([left], [right]) => left.localeCompare(right)),
     );
+    return createHash("sha256").update(serializedCredential).digest("hex");
   }
 
   function getCachedRefreshFailure(params: {
