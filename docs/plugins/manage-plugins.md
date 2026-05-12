@@ -6,10 +6,15 @@ read_when:
   - You are publishing a plugin package
 title: "Manage plugins"
 sidebarTitle: "Manage plugins"
+doc-schema-version: 1
 ---
 
-Most plugin workflows are a few commands: search, install, restart the Gateway,
-verify, and uninstall when you no longer need the plugin.
+Most plugin workflows are a few commands: list, search, install, restart the
+Gateway, verify, update, or uninstall.
+
+For background and troubleshooting, start with [Plugins](/tools/plugin). For
+every option and edge case, use the [`openclaw plugins`](/cli/plugins) CLI
+reference.
 
 ## List plugins
 
@@ -20,8 +25,8 @@ openclaw plugins list --verbose
 openclaw plugins list --json
 ```
 
-Use `--json` for scripts. It includes registry diagnostics and each plugin's
-static `dependencyStatus` when the plugin package declares `dependencies` or
+Use `--json` for scripts. It includes registry diagnostics and a static
+`dependencyStatus` for plugin packages that declare `dependencies` or
 `optionalDependencies`.
 
 ```bash
@@ -38,27 +43,43 @@ already-running Gateway process imported the plugin runtime.
 ```bash
 # Search ClawHub for plugin packages.
 openclaw plugins search "calendar"
+openclaw plugins search "calendar" --limit 20
 
-# Bare package specs try ClawHub first, then npm fallback.
-openclaw plugins install <package>
-
-# Force one source.
+# Install from ClawHub.
 openclaw plugins install clawhub:<package>
-openclaw plugins install npm:<package>
-
-# Install a specific version or dist-tag.
 openclaw plugins install clawhub:<package>@1.2.3
 openclaw plugins install clawhub:<package>@beta
+
+# Install from npm.
+openclaw plugins install npm:<package>
 openclaw plugins install npm:@scope/openclaw-plugin@1.2.3
-openclaw plugins install npm:@openclaw/codex
+openclaw plugins install npm:@scope/openclaw-plugin@beta
+
+# Install an npm-pack tarball through npm install semantics.
+openclaw plugins install npm-pack:./openclaw-plugin-1.2.3.tgz
 
 # Install from git or a local development checkout.
-openclaw plugins install git:github.com/acme/openclaw-plugin@v1.0.0
+openclaw plugins install git:github.com/<owner>/<repo>@v1.0.0
 openclaw plugins install ./my-plugin
 openclaw plugins install --link ./my-plugin
+
+# Install a Claude-compatible marketplace plugin.
+openclaw plugins marketplace list <source>
+openclaw plugins install <plugin> --marketplace <source>
 ```
 
-After installing plugin code, restart the Gateway that serves your channels:
+Ordinary bare package specs install through npm during the launch cutover:
+
+```bash
+openclaw plugins install <package>
+```
+
+If the bare name matches a bundled plugin id or an official external plugin id,
+OpenClaw uses the built-in catalog before falling back to ordinary npm
+resolution. Use an explicit prefix when the source matters.
+
+After installing plugin code, restart the Gateway that serves your channels and
+verify runtime registration:
 
 ```bash
 openclaw gateway restart
@@ -75,6 +96,7 @@ commands.
 openclaw plugins update <plugin-id>
 openclaw plugins update <npm-package-or-spec>
 openclaw plugins update --all
+openclaw plugins update <plugin-id> --dry-run
 ```
 
 If a plugin was installed from an npm dist-tag such as `@beta`, later
@@ -92,9 +114,7 @@ when it was previously pinned to an exact version or tag.
 When `openclaw update` runs on the beta channel, default-line npm and ClawHub
 plugin records try the matching plugin `@beta` release first. If that beta
 release does not exist, OpenClaw falls back to the recorded default/latest spec.
-For npm plugins, OpenClaw also falls back when the beta package exists but fails
-install validation. Exact versions and explicit tags such as `@rc` or `@beta`
-are preserved.
+Exact versions and explicit tags such as `@rc` or `@beta` are preserved.
 
 ## Uninstall plugins
 
@@ -105,9 +125,9 @@ openclaw plugins uninstall <plugin-id> --keep-files
 openclaw gateway restart
 ```
 
-Uninstall removes the plugin's config entry, plugin index record, allow/deny list
-entries, and linked load paths when applicable. Managed install directories are
-removed unless you pass `--keep-files`.
+Uninstall removes the plugin's config entry, plugin index record, allow/deny
+list entries, and linked load paths when applicable. Managed install
+directories are removed unless you pass `--keep-files`.
 
 In Nix mode (`OPENCLAW_NIX_MODE=1`), plugin install, update, uninstall, enable,
 and disable commands are disabled. Manage those choices in the Nix source for
@@ -137,10 +157,7 @@ Users install from ClawHub with:
 
 ```bash
 openclaw plugins install clawhub:<package>
-openclaw plugins install <package>
 ```
-
-The bare form still checks ClawHub first.
 
 ### Publish to npmjs.com
 
@@ -162,7 +179,7 @@ entrypoint metadata.
 npm publish --access public
 ```
 
-Users install npm-only with:
+Users install npm-only packages with:
 
 ```bash
 openclaw plugins install npm:@acme/openclaw-plugin
@@ -170,23 +187,26 @@ openclaw plugins install npm:@acme/openclaw-plugin@beta
 openclaw plugins install npm:@acme/openclaw-plugin@1.0.0
 ```
 
-If the same package is also available on ClawHub, `npm:` skips ClawHub lookup and
-forces npm resolution.
+If the same package is also available on ClawHub, `npm:` skips ClawHub lookup
+and forces npm resolution.
 
 ## Source choice
 
-- **ClawHub**: use when you want OpenClaw-native discovery, scan summaries,
+- **ClawHub:** use when you want OpenClaw-native discovery, scan summaries,
   versions, and install hints.
-- **npmjs.com**: use when you already ship JavaScript packages or need npm
+- **npmjs.com:** use when you already ship JavaScript packages or need npm
   dist-tags/private registry workflows.
-- **Git**: use when you want to install directly from a branch, tag, or commit.
-- **Local path**: use when you are developing or testing a plugin on the same
+- **Git:** use when you want to install directly from a branch, tag, or commit.
+- **Local path:** use when you are developing or testing a plugin on the same
   machine.
+- **Marketplace:** use when you are installing compatible Claude marketplace
+  plugin entries.
 
 ## Related
 
-- [Plugins](/tools/plugin) - overview and troubleshooting
+- [Plugins](/tools/plugin) - install path and troubleshooting
 - [`openclaw plugins`](/cli/plugins) - full CLI reference
-- [ClawHub](/clawhub/cli) - publish and registry operations
+- [ClawHub publishing](/clawhub/publishing) - publish and registry operations
+- [Community plugins](/plugins/community) - discovery and docs PR policy
 - [Building plugins](/plugins/building-plugins) - create a plugin package
 - [Plugin manifest](/plugins/manifest) - manifest and package metadata
