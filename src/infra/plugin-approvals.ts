@@ -1,4 +1,8 @@
 import type { ExecApprovalDecision } from "./exec-approvals.js";
+import {
+  policyApprovalMetadataLines,
+  type ApprovalMetadataValue,
+} from "./policy-approval-metadata.js";
 
 type PluginApprovalJsonValue =
   | string
@@ -23,6 +27,7 @@ export type PluginApprovalRequestPayload = {
   turnSourceTo?: string | null;
   turnSourceAccountId?: string | null;
   turnSourceThreadId?: string | number | null;
+  metadata?: ApprovalMetadataValue;
 };
 
 export type PluginApprovalRequest = {
@@ -95,6 +100,10 @@ export function buildPluginApprovalRequestMessage(
   }
   if (request.request.agentId) {
     lines.push(`Agent: ${request.request.agentId}`);
+  }
+  const policyMetadata = policyApprovalMetadataLines(request.request.metadata);
+  for (const line of policyMetadata) {
+    lines.push(line);
   }
   lines.push(`ID: ${request.id}`);
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));

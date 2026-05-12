@@ -7,6 +7,7 @@ import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
   resolvePluginApprovalRequestAllowedDecisions,
 } from "../../infra/plugin-approvals.js";
+import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
@@ -74,6 +75,7 @@ export function createPluginApprovalHandlers(
         turnSourceTo?: string | null;
         turnSourceAccountId?: string | null;
         turnSourceThreadId?: string | number | null;
+        metadata?: unknown;
         timeoutMs?: number;
         twoPhase?: boolean;
       };
@@ -85,6 +87,14 @@ export function createPluginApprovalHandlers(
 
       const normalizeTrimmedString = (value?: string | null): string | null =>
         normalizeOptionalString(value) || null;
+      if (p.metadata !== undefined && !isPluginJsonValue(p.metadata)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "metadata must be JSON-compatible"),
+        );
+        return;
+      }
 
       const request: PluginApprovalRequestPayload = {
         pluginId: p.pluginId ?? null,
@@ -107,6 +117,7 @@ export function createPluginApprovalHandlers(
         turnSourceTo: normalizeTrimmedString(p.turnSourceTo),
         turnSourceAccountId: normalizeTrimmedString(p.turnSourceAccountId),
         turnSourceThreadId: p.turnSourceThreadId ?? null,
+        ...(p.metadata !== undefined ? { metadata: p.metadata } : {}),
       };
 
       // Always server-generate the ID — never accept plugin-provided IDs.
