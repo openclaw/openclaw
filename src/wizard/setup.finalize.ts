@@ -420,7 +420,7 @@ export async function finalizeSetupWizard(
           'The first Terminal chat run will send: "Wake up, my friend!"',
           "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
         ].join("\n"),
-        "Start your agent",
+        "Hatch your agent",
       );
     }
 
@@ -440,13 +440,13 @@ export async function finalizeSetupWizard(
     }
 
     const hatchOptions: { value: "tui" | "web" | "later"; label: string }[] = [
-      { value: "tui", label: "Terminal chat (recommended)" },
-      ...(gatewayProbe.ok ? [{ value: "web" as const, label: "Browser Control UI" }] : []),
-      { value: "later", label: "Set up later" },
+      { value: "tui", label: "Hatch in Terminal (recommended)" },
+      ...(gatewayProbe.ok ? [{ value: "web" as const, label: "Hatch in Browser" }] : []),
+      { value: "later", label: "Hatch later" },
     ];
 
     hatchChoice = await prompter.select({
-      message: "Choose your first chat surface",
+      message: "How do you want to hatch your agent?",
       options: hatchOptions,
       initialValue: "tui",
     });

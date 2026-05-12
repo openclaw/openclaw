@@ -7,16 +7,24 @@ import { applyZaiConfig, applyZaiProviderConfig } from "./onboard.js";
 describe("zai onboard", () => {
   it("adds zai provider with correct settings", () => {
     const cfg = applyZaiConfig({});
-    expect(cfg.models?.providers?.zai).toMatchObject({
-      baseUrl: ZAI_GLOBAL_BASE_URL,
-      api: "openai-completions",
-    });
+    expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_GLOBAL_BASE_URL);
+    expect(cfg.models?.providers?.zai?.api).toBe("openai-completions");
     const ids = cfg.models?.providers?.zai?.models?.map((m) => m.id);
-    expect(ids).toContain("glm-5");
-    expect(ids).toContain("glm-5-turbo");
-    expect(ids).toContain("glm-4.7");
-    expect(ids).toContain("glm-4.7-flash");
-    expect(ids).toContain("glm-4.7-flashx");
+    expect(ids).toEqual([
+      "glm-5.1",
+      "glm-5",
+      "glm-5-turbo",
+      "glm-5v-turbo",
+      "glm-4.7",
+      "glm-4.7-flash",
+      "glm-4.7-flashx",
+      "glm-4.6",
+      "glm-4.6v",
+      "glm-4.5",
+      "glm-4.5-air",
+      "glm-4.5-flash",
+      "glm-4.5v",
+    ]);
   });
 
   it("supports CN endpoint for supported coding models", () => {

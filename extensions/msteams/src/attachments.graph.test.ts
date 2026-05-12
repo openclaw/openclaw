@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { readRemoteMediaResponse } from "./attachments.test-helpers.js";
 import { downloadMSTeamsGraphMedia } from "./attachments/graph.js";
-import { resolveRequestUrl } from "./attachments/shared.js";
+import { encodeGraphShareId, resolveRequestUrl } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const GRAPH_HOST = "graph.microsoft.com";
@@ -83,6 +83,7 @@ const createTokenProvider = (
     typeof tokenOrResolver === "function" ? await tokenOrResolver(scope) : tokenOrResolver,
   ),
 });
+const resolvePublicHost = async (): Promise<{ address: string }> => ({ address: "93.184.216.34" });
 const createBufferResponse = (payload: Buffer | string, contentType: string, status = 200) => {
   const raw = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
   return new Response(new Uint8Array(raw), {
@@ -197,6 +198,7 @@ const downloadGraphMediaWithMockOptions = async (
     tokenProvider: createTokenProvider(),
     maxBytes: DEFAULT_MAX_BYTES,
     fetchFn: asFetchFn(fetchMock),
+    resolveFn: resolvePublicHost,
     ...overrides,
   });
   return { fetchMock, media };
@@ -282,6 +284,7 @@ describe("msteams graph attachments", () => {
       allowHosts: [...DEFAULT_SHAREPOINT_ALLOW_HOSTS, "example.com"],
       authAllowHosts: DEFAULT_SHAREPOINT_ALLOW_HOSTS,
       fetchFn: asFetchFn(fetchMock),
+      resolveFn: resolvePublicHost,
     });
 
     expectAttachmentMediaLength(media.media, 1);
@@ -313,11 +316,12 @@ describe("msteams graph attachments", () => {
 
     expectAttachmentMediaLength(media.media, 0);
     const calledUrls = fetchMock.mock.calls.map((call) => call[0]);
+    const expectedSharesUrl = `${GRAPH_SHARES_URL_PREFIX}${encodeGraphShareId(DEFAULT_SHARE_REFERENCE_URL)}/driveItem/content`;
     expect(calledUrls).toEqual([
       DEFAULT_MESSAGE_URL,
-      expect.stringContaining(GRAPH_SHARES_URL_PREFIX),
+      expectedSharesUrl,
       `${DEFAULT_MESSAGE_URL}/hostedContents`,
-      expect.stringContaining(GRAPH_SHARES_URL_PREFIX),
+      expectedSharesUrl,
     ]);
     expect(calledUrls).not.toContain(escapedUrl);
   });

@@ -919,6 +919,28 @@ describe("failover-error", () => {
     ).toBe("billing");
   });
 
+  it("403 OpenRouter API-key budget limit errors return billing", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 403,
+        message: "403 API key budget limit exceeded (monthly limit). Contact your org admin.",
+      }),
+    ).toBe("billing");
+  });
+
+  it("uses model-fallback provider context for OpenRouter API-key budget limit errors", () => {
+    const err = coerceToFailoverError(
+      Object.assign(
+        new Error("403 API key budget limit exceeded (monthly limit). Contact your org admin."),
+        { status: 403 },
+      ),
+      { provider: "openrouter", model: "xiaomi/mimo-v2-pro" },
+    );
+
+    expect(err?.reason).toBe("billing");
+  });
+
   it("401 billing-style message returns billing instead of generic auth", () => {
     expect(
       resolveFailoverReasonFromError({

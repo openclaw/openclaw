@@ -140,7 +140,7 @@ describe("createSlackBoltApp", () => {
     }
   }
 
-  it("uses SocketModeReceiver with OpenClaw-owned reconnects and shared client options", () => {
+  it("uses SocketModeReceiver with native reconnects and shared client options", () => {
     const clientOptions = { teamId: "T1" };
     const { app, receiver } = createSlackBoltApp({
       interop: {
@@ -162,7 +162,7 @@ describe("createSlackBoltApp", () => {
     expect(receiverLogger.warn).toBeTypeOf("function");
     expect(receiverArgs).toEqual({
       appToken: "xapp-test",
-      autoReconnectEnabled: false,
+      autoReconnectEnabled: true,
       clientPingTimeout: 15_000,
       logger: receiverLogger,
       installerOptions: {
@@ -178,6 +178,62 @@ describe("createSlackBoltApp", () => {
       tokenVerificationEnabled: false,
     });
     expect((app as unknown as FakeApp).middleware).toHaveLength(1);
+  });
+
+  it("routes native reconnect start failures through the socket disconnect event", async () => {
+    const startError = new Error("invalid_auth");
+    class FakeSocketModeClient {
+      emitted: unknown[][] = [];
+      clientPingTimeoutMS = 0;
+      numOfConsecutiveReconnectionFailures = 0;
+      logger = { debug: () => undefined };
+      shuttingDown = false;
+      start = async () => {
+        throw startError;
+      };
+
+      delayReconnectAttempt(callback: (this: FakeSocketModeClient) => Promise<unknown>) {
+        return Promise.resolve(callback.call(this));
+      }
+
+      emit(event: string, ...args: unknown[]) {
+        this.emitted.push([event, ...args]);
+      }
+    }
+    class FakeObservedSocketModeReceiver {
+      args: Record<string, unknown>;
+      client = new FakeSocketModeClient();
+
+      constructor(args: Record<string, unknown>) {
+        this.args = args;
+      }
+    }
+    const { receiver } = createSlackBoltApp({
+      interop: {
+        App: FakeApp as never,
+        HTTPReceiver: FakeHTTPReceiver as never,
+        SocketModeReceiver: FakeObservedSocketModeReceiver as never,
+      },
+      slackMode: "socket",
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      slackWebhookPath: "/slack/events",
+      clientOptions: {},
+    });
+
+    const client = (receiver as unknown as FakeObservedSocketModeReceiver).client;
+
+    await expect(client.delayReconnectAttempt(client.start)).resolves.toBeUndefined();
+    await expect(
+      client.delayReconnectAttempt(async () => {
+        throw new Error("transient");
+      }),
+    ).rejects.toThrow("transient");
+    expect(client.emitted).toEqual([
+      ["reconnecting"],
+      ["unable_to_socket_mode_start", startError],
+      ["reconnecting"],
+    ]);
   });
 
   it("passes Socket Mode ping/pong options through Slack's public receiver API", () => {
@@ -206,7 +262,7 @@ describe("createSlackBoltApp", () => {
     expect(receiverLogger.warn).toBeTypeOf("function");
     expect(receiverArgs).toEqual({
       appToken: "xapp-test",
-      autoReconnectEnabled: false,
+      autoReconnectEnabled: true,
       clientPingTimeout: 20_000,
       serverPingTimeout: 45_000,
       pingPongLoggingEnabled: true,
@@ -275,7 +331,7 @@ describe("createSlackBoltApp", () => {
     expect(eagerAuthTestCalls).toBe(0);
   });
 
-  it("suppresses Slack's redundant pong timeout warning while forwarding other SDK warnings", () => {
+  it("suppresses Slack's redundant heartbeat timeout warnings while forwarding other SDK warnings", () => {
     const warnCalls: unknown[][] = [];
     const logger = createSlackSocketModeLogger({
       debug: () => {},
@@ -286,6 +342,7 @@ describe("createSlackBoltApp", () => {
 
     logger.setName("SlackWebSocket:1");
     logger.warn("A pong wasn't received from the server before the timeout of 15000ms!");
+    logger.warn("A ping wasn't received from the server before the timeout of 30000ms!");
     logger.warn("The logLevel given to Socket Mode was ignored as you also gave logger");
     logger.warn("another socket warning");
 
