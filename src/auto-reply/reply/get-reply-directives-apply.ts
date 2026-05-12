@@ -57,6 +57,7 @@ function hasOnlyModelDirective(directives: InlineDirectives): boolean {
     !directives.hasVerboseDirective &&
     !directives.hasTraceDirective &&
     !directives.hasReasoningDirective &&
+    !directives.hasProgressDirective &&
     !directives.hasElevatedDirective &&
     !directives.hasExecDirective &&
     !directives.hasQueueDirective &&
@@ -211,6 +212,7 @@ export async function applyInlineDirectiveOverrides(params: {
     directives.hasVerboseDirective ||
     directives.hasTraceDirective ||
     directives.hasReasoningDirective ||
+    directives.hasProgressDirective ||
     directives.hasElevatedDirective ||
     directives.hasExecDirective ||
     directives.hasModelDirective ||
