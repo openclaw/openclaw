@@ -321,6 +321,7 @@ function buildBuiltinScanFromSummary(summary: {
   critical: number;
   warn: number;
   info: number;
+  truncated: boolean;
   findings: InstallScanFinding[];
 }): BuiltinInstallScan {
   return {
@@ -573,6 +574,7 @@ async function scanManifestDependencyDenylist(params: {
 }
 
 async function scanDirectoryTarget(params: {
+  failOnTruncated?: boolean;
   includeHiddenDirectories?: boolean;
   includeNodeModules?: boolean;
   includeFiles?: string[];
@@ -592,6 +594,11 @@ async function scanDirectoryTarget(params: {
       includeFiles: params.includeFiles,
       maxFiles: params.maxFiles,
     });
+    if (params.failOnTruncated && scanSummary.truncated) {
+      return buildBuiltinScanFromError(
+        `code safety scan reached file limit (${params.maxFiles ?? "configured limit"})`,
+      );
+    }
     const builtinScan = buildBuiltinScanFromSummary(scanSummary);
     if (params.suppressBuiltinWarnings) {
       return builtinScan;
@@ -966,6 +973,7 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
   }
 
   const builtinScan = await scanDirectoryTarget({
+    failOnTruncated: true,
     includeHiddenDirectories: true,
     includeNodeModules: true,
     logger: params.logger,

@@ -138,6 +138,7 @@ type SummaryCase = {
     critical?: number;
     warn?: number;
     info?: number;
+    truncated?: boolean;
     findingCount?: number;
     maxFindings?: number;
     expectedRuleId?: string;
@@ -529,6 +530,7 @@ describe("scanDirectoryWithSummary", () => {
       options: { maxFiles: 2 },
       expected: {
         scannedFiles: 2,
+        truncated: true,
         maxFindings: 2,
       },
     },
@@ -590,6 +592,9 @@ describe("scanDirectoryWithSummary", () => {
         }
         if (testCase.expected.info != null) {
           expect(summary.info).toBe(testCase.expected.info);
+        }
+        if (testCase.expected.truncated != null) {
+          expect(summary.truncated).toBe(testCase.expected.truncated);
         }
         if (testCase.expected.findingCount != null) {
           expect(summary.findings).toHaveLength(testCase.expected.findingCount);

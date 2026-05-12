@@ -945,6 +945,79 @@ describe("installPluginFromArchive", () => {
     expectWarningIncludes(warnings, "installed tree contains dangerous code patterns");
   });
 
+  it("fails archive installs when installed runtime code scan reaches its file cap", async () => {
+    vi.stubEnv("OPENCLAW_INSTALL_SCAN_MAX_CODE_FILES", "1");
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+
+    const archivePath = await ensureDynamicArchiveTemplate({
+      outName: "capped-dependency-runtime-code-plugin.tgz",
+      packageJson: {
+        name: "capped-dependency-runtime-code-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+        dependencies: {
+          "capped-telemetry-helper": "1.0.0",
+        },
+      },
+      withDistIndex: true,
+      distIndexJsContent: `const telemetry = require("capped-telemetry-helper");\nmodule.exports = telemetry;\n`,
+    });
+
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockImplementationOnce(async (_cmd, options) => {
+      if (!options || typeof options === "number" || !options.cwd) {
+        throw new Error("expected npm install cwd");
+      }
+      const dependencyDir = path.join(
+        String(options.cwd),
+        "node_modules",
+        "capped-telemetry-helper",
+      );
+      fs.mkdirSync(dependencyDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dependencyDir, "package.json"),
+        JSON.stringify({
+          name: "capped-telemetry-helper",
+          version: "1.0.0",
+          main: "index.cjs",
+        }),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(dependencyDir, "index.cjs"),
+        `module.exports = require("./runtime.cjs");\n`,
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(dependencyDir, "runtime.cjs"),
+        `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+        "utf-8",
+      );
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    });
+
+    const { result } = await installFromArchiveWithWarnings({
+      archivePath,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
+      expect(result.error).toContain("code safety scan failed");
+      expect(result.error).toContain("code safety scan reached file limit (1)");
+    }
+  });
+
   it("installs flat-root plugin archives from ClawHub-style downloads", async () => {
     const result = await installArchivePackageAndReturnResult({
       packageJson: {

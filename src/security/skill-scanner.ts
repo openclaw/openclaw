@@ -23,6 +23,7 @@ export type SkillScanSummary = {
   critical: number;
   warn: number;
   info: number;
+  truncated: boolean;
   findings: SkillScanFinding[];
 };
 
@@ -69,6 +70,10 @@ const FILE_SCAN_CACHE = new Map<string, FileScanCacheEntry>();
 type CachedDirEntry = {
   name: string;
   kind: "file" | "dir";
+};
+type CollectedScannableFiles = {
+  files: string[];
+  truncated: boolean;
 };
 type DirEntryCacheEntry = {
   mtimeMs: number;
@@ -448,7 +453,7 @@ async function walkDirWithLimit(
   excludeTestFiles: boolean,
   includeHiddenDirectories: boolean,
   includeNodeModules: boolean,
-): Promise<string[]> {
+): Promise<CollectedScannableFiles> {
   const files: string[] = [];
   const stack: string[] = [dirPath];
 
@@ -486,7 +491,7 @@ async function walkDirWithLimit(
     }
   }
 
-  return files;
+  return { files, truncated: files.length >= maxFiles };
 }
 
 async function readDirEntriesWithCache(dirPath: string): Promise<CachedDirEntry[]> {
@@ -567,16 +572,19 @@ async function resolveForcedFiles(params: {
   return out;
 }
 
-async function collectScannableFiles(dirPath: string, opts: Required<SkillScanOptions>) {
+async function collectScannableFiles(
+  dirPath: string,
+  opts: Required<SkillScanOptions>,
+): Promise<CollectedScannableFiles> {
   const forcedFiles = await resolveForcedFiles({
     rootDir: dirPath,
     includeFiles: opts.includeFiles,
   });
   if (forcedFiles.length >= opts.maxFiles) {
-    return forcedFiles.slice(0, opts.maxFiles);
+    return { files: forcedFiles.slice(0, opts.maxFiles), truncated: true };
   }
 
-  const walkedFiles = await walkDirWithLimit(
+  const walked = await walkDirWithLimit(
     dirPath,
     opts.maxFiles,
     opts.excludeTestFiles,
@@ -585,7 +593,7 @@ async function collectScannableFiles(dirPath: string, opts: Required<SkillScanOp
   );
   const seen = new Set(forcedFiles.map((f) => path.resolve(f)));
   const out = [...forcedFiles];
-  for (const walkedFile of walkedFiles) {
+  for (const walkedFile of walked.files) {
     if (out.length >= opts.maxFiles) {
       break;
     }
@@ -596,7 +604,7 @@ async function collectScannableFiles(dirPath: string, opts: Required<SkillScanOp
     out.push(walkedFile);
     seen.add(resolved);
   }
-  return out;
+  return { files: out, truncated: walked.truncated || out.length >= opts.maxFiles };
 }
 
 async function scanFileWithCache(params: {
@@ -666,7 +674,7 @@ export async function scanDirectory(
   opts?: SkillScanOptions,
 ): Promise<SkillScanFinding[]> {
   const scanOptions = normalizeScanOptions(opts);
-  const files = await collectScannableFiles(dirPath, scanOptions);
+  const { files } = await collectScannableFiles(dirPath, scanOptions);
   const allFindings: SkillScanFinding[] = [];
 
   for (const file of files) {
@@ -688,7 +696,7 @@ export async function scanDirectoryWithSummary(
   opts?: SkillScanOptions,
 ): Promise<SkillScanSummary> {
   const scanOptions = normalizeScanOptions(opts);
-  const files = await collectScannableFiles(dirPath, scanOptions);
+  const { files, truncated } = await collectScannableFiles(dirPath, scanOptions);
   const allFindings: SkillScanFinding[] = [];
   let scannedFiles = 0;
   let critical = 0;
@@ -721,6 +729,7 @@ export async function scanDirectoryWithSummary(
     critical,
     warn,
     info,
+    truncated,
     findings: allFindings,
   };
 }
