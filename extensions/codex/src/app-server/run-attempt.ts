@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -56,7 +55,9 @@ import {
 } from "./auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./capabilities.js";
 import {
-  defaultCodexAppServerClientFactory,
+  resetCodexAppServerClientFactoryForTests,
+  resolveCodexAppServerClientFactory,
+  setCodexAppServerClientFactoryForTests,
   type CodexAppServerClientFactory,
 } from "./client-factory.js";
 import {
@@ -178,13 +179,7 @@ type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromp
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
 type CodexWorkspaceBootstrapContext = CodexBootstrapContext & { instructions?: string };
 
-const testClientFactoryStorage = new AsyncLocalStorage<CodexAppServerClientFactory | undefined>();
-const clientFactory = defaultCodexAppServerClientFactory;
 let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
-
-function resolveCodexAppServerClientFactory(): CodexAppServerClientFactory {
-  return testClientFactoryStorage.getStore() ?? clientFactory;
-}
 
 function emitCodexAppServerEvent(
   params: EmbeddedRunAttemptParams,
@@ -3167,9 +3162,9 @@ export const __testing = {
     openClawCodingToolsFactoryForTests = undefined;
   },
   setCodexAppServerClientFactoryForTests(factory: CodexAppServerClientFactory): void {
-    testClientFactoryStorage.enterWith(factory);
+    setCodexAppServerClientFactoryForTests(factory);
   },
   resetCodexAppServerClientFactoryForTests(): void {
-    testClientFactoryStorage.enterWith(undefined);
+    resetCodexAppServerClientFactoryForTests();
   },
 } as const;
