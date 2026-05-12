@@ -74,6 +74,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
 
   it("persists sync data so restart resumes from the saved cursor", async () => {
     const storageRoot = createStorageRoot();
+    const syncResponse = createSyncResponse("s123");
 
     const firstStore = new SqliteBackedMatrixSyncStore(storageRoot);
     expect(firstStore.hasSavedSync()).toBe(false);
@@ -240,14 +241,19 @@ describe("SqliteBackedMatrixSyncStore", () => {
       }),
     );
 
-    expect(parsed).toMatchObject({
+    expect(parsed).toEqual({
+      version: 1,
       savedSync: {
         nextBatch: "legacy-token",
         roomsData: {
           join: {},
+          invite: {},
+          leave: {},
+          knock: {},
         },
         accountData: [],
       },
+      cleanShutdown: false,
     });
   });
 });
