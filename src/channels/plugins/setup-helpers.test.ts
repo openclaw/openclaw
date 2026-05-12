@@ -315,6 +315,7 @@ describe("createPatchedAccountSetupAdapter", () => {
         label: "Setup-only Chat",
       }),
       setup: {
+        applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg,
         singleAccountKeysToMove: externalSingleAccountKeysToMove,
         namedAccountPromotionKeys: externalNamedAccountPromotionKeys,
         resolveSingleAccountPromotionTarget: resolveExternalSingleAccountPromotionTarget,
