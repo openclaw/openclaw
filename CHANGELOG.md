@@ -445,6 +445,7 @@ Docs: https://docs.openclaw.ai
 - Agents/reply context: label replied-to messages as the current user message target in model-visible metadata, so short replies are grounded to their explicit reply target instead of nearby chat history. (#76817) Thanks @obviyus.
 - Doctor/plugins: install configured missing official plugins such as Discord and Brave during doctor/update repair, auto-enable repaired provider plugins, preserve config when a download fails, and stop auto-enable from inventing plugin entries when no manifest declares a configured channel. Fixes #76872. Thanks @jack-stormentswe.
 - TUI: replace the stale-response watchdog notice with plain user-facing copy so stalled replies no longer surface backend or streaming internals. (#77120) Thanks @davemorin.
+- Agents/bundle MCP: normalize parameter-free tool `inputSchema` (empty, `null`, missing, or `{ type: "object" }` without `properties`) when materializing bundle MCP tools, so OpenAI no longer rejects catalog tools with `Invalid schema for function 'X': In context=(), 'required' is required to be supplied and to be an array including every key in properties.`. Fixes #77043. (#77230)
 
 ## 2026.5.2
 
