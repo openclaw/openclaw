@@ -839,44 +839,54 @@ describe("exec approvals shell analysis", () => {
         expected: false,
       },
       {
+        name: "empty script argument after dispatch unwrap",
+        wrapperPrefix: ["env"],
+        scriptArgs: [""],
+        argPattern: "^\x00\x00$",
+        expected: false,
+      },
+      {
         name: "semicolon data argument",
         scriptArgs: ["literal;data"],
         argPattern: "^literal;data\x00$",
         expected: true,
       },
-    ])("preserves PowerShell file argv for $name", ({ scriptArgs, argPattern, expected }) => {
-      const dir = makeTempDir();
-      const pwshPath = path.join(dir, "pwsh");
-      const scriptPath = path.join(dir, "script.ps1");
-      for (const file of [pwshPath, scriptPath]) {
-        fs.writeFileSync(file, "");
-        fs.chmodSync(file, 0o755);
-      }
-      try {
-        const env = makePathEnv(dir);
-        const analysis = analyzeArgvCommand({
-          argv: ["pwsh", "-File", scriptPath, ...scriptArgs],
-          cwd: dir,
-          env,
-        });
-        expect(analysis.ok).toBe(true);
-        const result = evaluateExecAllowlist({
-          analysis,
-          allowlist: [{ pattern: scriptPath, argPattern }],
-          safeBins: new Set(),
-          cwd: dir,
-          env,
-          platform: "win32",
-        });
-        expect(result.allowlistSatisfied).toBe(expected);
-        if (!expected) {
-          expect(result.segmentAllowlistEntries).toEqual([null]);
-          expect(result.segmentSatisfiedBy).toEqual([null]);
+    ])(
+      "preserves PowerShell file argv for $name",
+      ({ wrapperPrefix = [], scriptArgs, argPattern, expected }) => {
+        const dir = makeTempDir();
+        const pwshPath = path.join(dir, "pwsh");
+        const scriptPath = path.join(dir, "script.ps1");
+        for (const file of [pwshPath, scriptPath]) {
+          fs.writeFileSync(file, "");
+          fs.chmodSync(file, 0o755);
         }
-      } finally {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-    });
+        try {
+          const env = makePathEnv(dir);
+          const analysis = analyzeArgvCommand({
+            argv: [...wrapperPrefix, "pwsh", "-File", scriptPath, ...scriptArgs],
+            cwd: dir,
+            env,
+          });
+          expect(analysis.ok).toBe(true);
+          const result = evaluateExecAllowlist({
+            analysis,
+            allowlist: [{ pattern: scriptPath, argPattern }],
+            safeBins: new Set(),
+            cwd: dir,
+            env,
+            platform: "win32",
+          });
+          expect(result.allowlistSatisfied).toBe(expected);
+          if (!expected) {
+            expect(result.segmentAllowlistEntries).toEqual([null]);
+            expect(result.segmentSatisfiedBy).toEqual([null]);
+          }
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    );
 
     it.each([
       { name: "slash encoded-command alias", argv: ["pwsh", "/ec", "ZQBjAGgAbwA="] },

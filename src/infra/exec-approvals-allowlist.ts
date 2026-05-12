@@ -6,7 +6,10 @@ import {
 } from "../shared/string-coerce.js";
 import { isInterpreterLikeAllowlistPattern } from "./command-analysis/inline-eval.js";
 import { detectInlineEvalArgv } from "./command-analysis/risks.js";
-import { isDispatchWrapperExecutable } from "./dispatch-wrapper-resolution.js";
+import {
+  isDispatchWrapperExecutable,
+  unwrapDispatchWrappersForResolution,
+} from "./dispatch-wrapper-resolution.js";
 import {
   analyzeShellCommand,
   isWindowsPlatform,
@@ -444,7 +447,7 @@ function resolvePowerShellFileScriptArgv(params: {
   segment: ExecCommandSegment;
   cwd?: string;
 }): string[] | null {
-  const argv = params.segment.sourceArgv ?? params.segment.argv;
+  const argv = resolveSegmentSourceArgv(params.segment);
   if (!Array.isArray(argv) || argv.length < 3) {
     return null;
   }
@@ -469,6 +472,26 @@ function resolvePowerShellFileScriptArgv(params: {
   const base = params.cwd && params.cwd.trim().length > 0 ? params.cwd : process.cwd();
   const scriptPath = path.isAbsolute(expanded) ? expanded : path.resolve(base, expanded);
   return [scriptPath, ...argv.slice(match.valueTokenIndex + 1)];
+}
+
+function resolveSegmentSourceArgv(segment: ExecCommandSegment): string[] {
+  const sourceArgv = segment.sourceArgv;
+  if (!Array.isArray(sourceArgv) || sourceArgv.length === 0) {
+    return segment.argv;
+  }
+
+  const segmentExecutable = normalizeExecutableToken(segment.argv[0] ?? "");
+  if (!segmentExecutable) {
+    return segment.argv;
+  }
+  if (normalizeExecutableToken(sourceArgv[0] ?? "") === segmentExecutable) {
+    return sourceArgv;
+  }
+
+  const unwrappedSourceArgv = unwrapDispatchWrappersForResolution(sourceArgv);
+  return normalizeExecutableToken(unwrappedSourceArgv[0] ?? "") === segmentExecutable
+    ? unwrappedSourceArgv
+    : segment.argv;
 }
 
 function resolveSegmentAllowlistMatch(params: {
