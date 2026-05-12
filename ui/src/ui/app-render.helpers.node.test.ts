@@ -676,7 +676,23 @@ describe("resolveSessionOptionGroups", () => {
     });
 
     expect(labels).toContain("Spock");
-    expect(labels).toContain("└─ subagent:f4ac7ef1-1234-5678-9abc-def012345678");
+    expect(labels).toContain("└─ f4ac7ef1-1234-5678-9abc-def012345678");
+  });
+
+  it("preserves sibling row order when nesting subagent sessions", () => {
+    const parentKey = "agent:main:main";
+    const newerSubagentKey = "agent:main:subagent:newer";
+    const olderSubagentKey = "agent:main:subagent:older";
+    const labels = labelsForSessionOptions({
+      sessionKey: parentKey,
+      sessions: [
+        row({ key: newerSubagentKey, label: "Newer", spawnedBy: parentKey }),
+        row({ key: olderSubagentKey, label: "Older", spawnedBy: parentKey }),
+        row({ key: parentKey, label: "Spock" }),
+      ],
+    });
+
+    expect(labels).toEqual(["Spock", "└─ Newer", "└─ Older"]);
   });
 });
 

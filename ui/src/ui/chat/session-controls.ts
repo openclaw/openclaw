@@ -731,15 +731,31 @@ export function resolveSessionOptionGroups(
 
   for (const group of groups.values()) {
     const options = group.options;
-    for (let i = options.length - 1; i >= 0; i--) {
-      const parentKey = options[i].parentKey;
-      if (parentKey) {
-        const parentIdx = options.findIndex((o) => o.key === parentKey);
-        if (parentIdx !== -1) {
-          const [child] = options.splice(i, 1);
-          options.splice(parentIdx + 1, 0, child);
+    const optionKeys = new Set(options.map((option) => option.key));
+    const childrenByParent = new Map<string, SessionOptionEntry[]>();
+    for (const option of options) {
+      if (option.parentKey && optionKeys.has(option.parentKey)) {
+        const siblings = childrenByParent.get(option.parentKey);
+        if (siblings) {
+          siblings.push(option);
+        } else {
+          childrenByParent.set(option.parentKey, [option]);
         }
       }
+    }
+    if (childrenByParent.size > 0) {
+      const reordered: SessionOptionEntry[] = [];
+      for (const option of options) {
+        if (option.parentKey && optionKeys.has(option.parentKey)) {
+          continue;
+        }
+        reordered.push(option);
+        const children = childrenByParent.get(option.key);
+        if (children) {
+          reordered.push(...children);
+        }
+      }
+      options.splice(0, options.length, ...reordered);
     }
   }
 
