@@ -211,6 +211,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].tools.alsoAllow": "Agent Tool Allowlist Additions",
   "tools.byProvider": "Tool Policy by Provider",
   "agents.list[].tools.byProvider": "Agent Tool Policy by Provider",
+  "agents.list[].tools.message.crossContext.allowWithinProvider":
+    "Agent Cross-Context Messaging (Same Provider)",
+  "agents.list[].tools.message.crossContext.allowAcrossProviders":
+    "Agent Cross-Context Messaging (Across Providers)",
+  "agents.list[].tools.message.actions.allow": "Agent Message Action Allowlist",
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
   "tools.exec.applyPatch.workspaceOnly": "apply_patch Workspace-Only",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
@@ -254,6 +259,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.exec.pathPrepend": "Exec PATH Prepend",
   "tools.exec.safeBins": "Exec Safe Bins",
   "tools.exec.strictInlineEval": "Require Inline-Eval Approval",
+  "tools.exec.commandHighlighting": "Exec Command Highlighting",
   "tools.exec.safeBinTrustedDirs": "Exec Safe Bin Trusted Dirs",
   "tools.exec.safeBinProfiles": "Exec Safe Bin Profiles",
   approvals: "Approvals",
@@ -284,6 +290,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.message.crossContext.marker.prefix": "Cross-Context Marker Prefix",
   "tools.message.crossContext.marker.suffix": "Cross-Context Marker Suffix",
   "tools.message.broadcast.enabled": "Enable Message Broadcast",
+  "tools.message.actions.allow": "Message Action Allowlist",
   "tools.web.search.enabled": "Enable Web Search Tool",
   "tools.web.search.provider": "Web Search Provider",
   "tools.web.search.maxResults": "Web Search Max Results",

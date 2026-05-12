@@ -45,9 +45,7 @@ import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
 import { registerHostHookFixture, registerTrustedHostHookFixture } from "./host-hook-fixture.js";
 
 async function waitForPluginEventHandlers(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 function requireFirstCommandRegistration(
@@ -78,7 +76,9 @@ function diagnosticSummaries(diagnostics: readonly unknown[]) {
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -2190,6 +2190,63 @@ describe("host-hook fixture plugin contract", () => {
       {
         id: "shared-job",
         pluginId: "restart-fixture",
+        sessionKey: "agent:main:main",
+        kind: "monitor",
+      },
+    ]);
+  });
+
+  it("does not invoke old scheduler cleanup for a preserved newer generation", async () => {
+    const cleanupEvents: string[] = [];
+    const previousFixture = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: previousFixture.registry,
+      config: previousFixture.config,
+      record: createPluginRecord({
+        id: "scheduler-preserve",
+        name: "Scheduler Preserve",
+      }),
+      register(api) {
+        api.registerSessionSchedulerJob({
+          id: "shared-job",
+          sessionKey: "agent:main:main",
+          kind: "monitor",
+          cleanup: ({ reason, jobId }) => {
+            cleanupEvents.push(`${reason}:${jobId}`);
+          },
+        });
+      },
+    });
+
+    const replacementFixture = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: replacementFixture.registry,
+      config: replacementFixture.config,
+      record: createPluginRecord({
+        id: "scheduler-preserve",
+        name: "Scheduler Preserve",
+      }),
+      register(api) {
+        api.registerSessionSchedulerJob({
+          id: "shared-job",
+          sessionKey: "agent:main:main",
+          kind: "monitor",
+        });
+      },
+    });
+
+    await expect(
+      cleanupReplacedPluginHostRegistry({
+        cfg: previousFixture.config,
+        previousRegistry: previousFixture.registry.registry,
+        nextRegistry: replacementFixture.registry.registry,
+      }),
+    ).resolves.toEqual({ cleanupCount: 0, failures: [] });
+    expect(cleanupEvents).toEqual([]);
+    expect(listPluginSessionSchedulerJobs("scheduler-preserve")).toEqual([
+      {
+        id: "shared-job",
+        pluginId: "scheduler-preserve",
         sessionKey: "agent:main:main",
         kind: "monitor",
       },

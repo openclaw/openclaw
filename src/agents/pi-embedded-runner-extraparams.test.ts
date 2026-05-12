@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 
@@ -682,8 +682,11 @@ describe("applyExtraParamsToAgent", () => {
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
+    expect(payloads).toStrictEqual([
+      {
+        thinking: { type: "disabled" },
+      },
+    ]);
   });
 
   it("fills DeepSeek V4 reasoning_content for unowned OpenAI-compatible proxy models", () => {
@@ -759,13 +762,14 @@ describe("applyExtraParamsToAgent", () => {
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]).toEqual({
-      context_management: [{ type: "compaction", compact_threshold: 80000 }],
-      parallel_tool_calls: true,
-      store: true,
-      text: { verbosity: "low" },
-    });
+    expect(payloads).toStrictEqual([
+      {
+        context_management: [{ type: "compaction", compact_threshold: 80000 }],
+        parallel_tool_calls: true,
+        store: true,
+        text: { verbosity: "low" },
+      },
+    ]);
   });
 
   it("keeps OpenAI Responses web_search compatible when thinking is minimal", () => {

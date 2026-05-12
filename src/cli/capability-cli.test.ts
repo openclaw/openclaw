@@ -559,7 +559,9 @@ describe("capability cli", () => {
       [Record<string, unknown>]
     >;
     const params = calls[0]?.[0];
-    expect(params).toBeDefined();
+    if (!params) {
+      throw new Error("Expected simple completion model params");
+    }
     expect(params).not.toHaveProperty("allowBundledStaticCatalogFallback");
   });
 
@@ -1134,9 +1136,9 @@ describe("capability cli", () => {
         argv: ["capability", "image", "describe", "--file", "photo.jpg", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/No description returned for image/),
-    );
+    expect(runtimeErrorMessages()).toEqual([
+      `Error: No description returned for image: ${path.resolve("photo.jpg")}`,
+    ]);
   });
 
   it("reports missing image understanding configuration for image describe", async () => {
@@ -1630,9 +1632,9 @@ describe("capability cli", () => {
         argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/No transcript returned for audio/),
-    );
+    expect(runtimeErrorMessages()).toEqual([
+      `Error: No transcript returned for audio: ${path.resolve("memo.m4a")}`,
+    ]);
   });
 
   it("reports missing audio transcription configuration for audio transcribe", async () => {
@@ -1666,9 +1668,7 @@ describe("capability cli", () => {
         argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/Audio transcription response missing text/),
-    );
+    expect(runtimeErrorMessages()).toEqual(["Error: Audio transcription response missing text"]);
   });
 
   it("forwards transcription prompt and language hints", async () => {
@@ -1872,7 +1872,9 @@ describe("capability cli", () => {
       argv: ["capability", "model", "auth", "logout", "--provider", "openai", "--json"],
     });
 
-    expect(updatedStore).not.toBeNull();
+    if (updatedStore === null) {
+      throw new Error("expected updated auth store");
+    }
     const storeSnapshot = updatedStore as unknown as Record<string, any>;
     expect(storeSnapshot.profiles).toEqual({
       "anthropic:default": { id: "anthropic:default" },

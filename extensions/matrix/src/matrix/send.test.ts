@@ -129,8 +129,9 @@ function makeEncryptedMediaClient() {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -613,7 +614,7 @@ describe("sendMessageMatrix threads", () => {
       accountId: "ops",
     });
 
-    expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(expect.anything(), "matrix", "ops");
+    expect(resolveTextChunkLimitMock).toHaveBeenCalledWith({}, "matrix", "ops");
   });
 
   it("returns ordered event ids for chunked text sends", async () => {

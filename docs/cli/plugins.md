@@ -339,7 +339,7 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
   </Accordion>
   <Accordion title="Beta channel updates">
-    `openclaw plugins update` reuses the tracked plugin spec unless you pass a new spec. `openclaw update` additionally knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first, then fall back to the recorded default/latest spec if no plugin beta release exists. Exact versions and explicit tags stay pinned to that selector.
+    `openclaw plugins update` reuses the tracked plugin spec unless you pass a new spec. `openclaw update` additionally knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first, then fall back to the recorded default/latest spec if no plugin beta release exists. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector.
 
   </Accordion>
   <Accordion title="Version checks and integrity drift">

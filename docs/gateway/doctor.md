@@ -232,7 +232,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="2b. OpenCode provider overrides">
-    If you've added `models.providers.opencode`, `opencode-zen`, or `opencode-go` manually, it overrides the built-in OpenCode catalog from `@mariozechner/pi-ai`. That can force models onto the wrong API or zero out costs. Doctor warns so you can remove the override and restore per-model API routing + costs.
+    If you've added `models.providers.opencode`, `opencode-zen`, or `opencode-go` manually, it overrides the built-in OpenCode catalog from `@earendil-works/pi-ai`. That can force models onto the wrong API or zero out costs. Doctor warns so you can remove the override and restore per-model API routing + costs.
   </Accordion>
   <Accordion title="2c. Browser migration and Chrome MCP readiness">
     If your browser config still points at the removed Chrome extension path, doctor normalizes it to the current host-local Chrome MCP attach model:

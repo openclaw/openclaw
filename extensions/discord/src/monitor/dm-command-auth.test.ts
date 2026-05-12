@@ -27,76 +27,64 @@ describe("resolveDiscordTextCommandAccess", () => {
   };
 
   it("authorizes guild text commands from owner allowlists", async () => {
-    await expect(
-      resolveDiscordTextCommandAccess({
-        accountId: "default",
-        sender,
-        ownerAllowFrom: ["discord:123"],
-        memberAccessConfigured: false,
-        memberAllowed: false,
-        allowNameMatching: false,
-        allowTextCommands: true,
-        hasControlCommand: true,
-      }),
-    ).resolves.toMatchObject({
-      authorized: true,
-      shouldBlockControlCommand: false,
+    const result = await resolveDiscordTextCommandAccess({
+      accountId: "default",
+      sender,
+      ownerAllowFrom: ["discord:123"],
+      memberAccessConfigured: false,
+      memberAllowed: false,
+      allowNameMatching: false,
+      allowTextCommands: true,
+      hasControlCommand: true,
     });
+    expect(result.authorized).toBe(true);
+    expect(result.shouldBlockControlCommand).toBe(false);
   });
 
   it("authorizes guild text commands from member access facts", async () => {
-    await expect(
-      resolveDiscordTextCommandAccess({
-        accountId: "default",
-        sender,
-        ownerAllowFrom: [],
-        memberAccessConfigured: true,
-        memberAllowed: true,
-        allowNameMatching: false,
-        allowTextCommands: true,
-        hasControlCommand: true,
-      }),
-    ).resolves.toMatchObject({
-      authorized: true,
-      shouldBlockControlCommand: false,
+    const result = await resolveDiscordTextCommandAccess({
+      accountId: "default",
+      sender,
+      ownerAllowFrom: [],
+      memberAccessConfigured: true,
+      memberAllowed: true,
+      allowNameMatching: false,
+      allowTextCommands: true,
+      hasControlCommand: true,
     });
+    expect(result.authorized).toBe(true);
+    expect(result.shouldBlockControlCommand).toBe(false);
   });
 
   it("blocks unauthorized guild text control commands", async () => {
-    await expect(
-      resolveDiscordTextCommandAccess({
-        accountId: "default",
-        sender,
-        ownerAllowFrom: ["discord:999"],
-        memberAccessConfigured: true,
-        memberAllowed: false,
-        allowNameMatching: false,
-        allowTextCommands: true,
-        hasControlCommand: true,
-      }),
-    ).resolves.toMatchObject({
-      authorized: false,
-      shouldBlockControlCommand: true,
+    const result = await resolveDiscordTextCommandAccess({
+      accountId: "default",
+      sender,
+      ownerAllowFrom: ["discord:999"],
+      memberAccessConfigured: true,
+      memberAllowed: false,
+      allowNameMatching: false,
+      allowTextCommands: true,
+      hasControlCommand: true,
     });
+    expect(result.authorized).toBe(false);
+    expect(result.shouldBlockControlCommand).toBe(true);
   });
 
   it("preserves configured mode when access groups are disabled", async () => {
-    await expect(
-      resolveDiscordTextCommandAccess({
-        accountId: "default",
-        sender,
-        ownerAllowFrom: [],
-        memberAccessConfigured: false,
-        memberAllowed: false,
-        allowNameMatching: false,
-        cfg: { commands: { useAccessGroups: false } },
-        allowTextCommands: true,
-        hasControlCommand: true,
-      }),
-    ).resolves.toMatchObject({
-      authorized: true,
-      shouldBlockControlCommand: false,
+    const result = await resolveDiscordTextCommandAccess({
+      accountId: "default",
+      sender,
+      ownerAllowFrom: [],
+      memberAccessConfigured: false,
+      memberAllowed: false,
+      allowNameMatching: false,
+      cfg: { commands: { useAccessGroups: false } },
+      allowTextCommands: true,
+      hasControlCommand: true,
     });
+    expect(result.authorized).toBe(true);
+    expect(result.shouldBlockControlCommand).toBe(false);
   });
 });
 

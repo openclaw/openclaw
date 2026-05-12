@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -85,7 +85,9 @@ function captureDiagnosticEvents(): {
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
   const call = mock.mock.calls[index];
-  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`Expected mock call at index ${index}`);
+  }
   return call[0];
 }
 

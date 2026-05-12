@@ -522,11 +522,7 @@ describe("ollama setup", () => {
           prompter,
         }).catch((err: unknown) => err);
 
-        for (let attempts = 0; attempts < 50 && fetchMock.mock.calls.length < 2; attempts += 1) {
-          await vi.advanceTimersByTimeAsync(0);
-          await Promise.resolve();
-        }
-        expect(fetchMock.mock.calls[1]?.[0]).toContain("/api/pull");
+        await vi.waitFor(() => expect(fetchMock.mock.calls[1]?.[0]).toContain("/api/pull"));
 
         await vi.advanceTimersByTimeAsync(300_000);
         const pullError = await pullPromise;
@@ -756,7 +752,10 @@ describe("ollama setup", () => {
     });
 
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Ollama could not be reached at http://127.0.0.1:11435."),
+      [
+        "Ollama could not be reached at http://127.0.0.1:11435.",
+        "Download it at https://ollama.com/download",
+      ].join("\n"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(result).toBe(nextConfig);

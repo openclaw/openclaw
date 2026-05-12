@@ -8,14 +8,6 @@ import { getNostrRuntime } from "./runtime.js";
 const STORE_VERSION = 2;
 const PROFILE_STATE_VERSION = 1;
 
-type _NostrBusStateV1 = {
-  version: 1;
-  /** Unix timestamp (seconds) of the last processed event */
-  lastProcessedAt: number | null;
-  /** Gateway startup timestamp (seconds) - events before this are old */
-  gatewayStartedAt: number | null;
-};
-
 type NostrBusState = {
   version: 2;
   /** Unix timestamp (seconds) of the last processed event */

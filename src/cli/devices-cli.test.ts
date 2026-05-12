@@ -73,6 +73,10 @@ function readRuntimeOutput(): string {
   return runtime.log.mock.calls.map((entry) => readRuntimeCallText(entry)).join("\n");
 }
 
+function readRuntimeErrorOutput(): string {
+  return runtime.error.mock.calls.map((entry) => readRuntimeCallText(entry)).join("\n");
+}
+
 function pendingDevice(overrides: Record<string, unknown> = {}) {
   return {
     requestId: "req-1",
@@ -119,8 +123,6 @@ function mockLocalPairingFallback(message?: string) {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -278,9 +280,7 @@ describe("devices cli approve", () => {
     expect(logOutput).toContain("Device Nine");
     expect(logOutput).toContain("Approved: roles: operator; scopes: operator.read");
     expect(logOutput).toContain("Requested scopes exceed the current approval");
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw devices approve req-abc"),
-    );
+    expect(readRuntimeErrorOutput()).toContain("openclaw devices approve req-abc");
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(hasGatewayMethod("device.pair.approve")).toBe(false);
   });
@@ -343,9 +343,7 @@ describe("devices cli approve", () => {
 
     expectGatewayCall(0, { method: "device.pair.list" });
     expect(hasGatewayMethod("device.pair.approve")).toBe(false);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining(`openclaw devices approve ${expectedRequestId}`),
-    );
+    expect(readRuntimeErrorOutput()).toContain(`openclaw devices approve ${expectedRequestId}`);
   });
 
   it("falls back to device id when selected pending display name is blank", async () => {
@@ -364,9 +362,7 @@ describe("devices cli approve", () => {
 
     const logOutput = runtime.log.mock.calls.map((c) => readRuntimeCallText(c)).join("\n");
     expect(logOutput).toContain("device-9");
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw devices approve req-blank"),
-    );
+    expect(readRuntimeErrorOutput()).toContain("openclaw devices approve req-blank");
     expect(hasGatewayMethod("device.pair.approve")).toBe(false);
   });
 
@@ -538,7 +534,7 @@ describe("devices cli local fallback", () => {
 
     expectGatewayCall(0, { method: "device.pair.list" });
     expect(listDevicePairing).toHaveBeenCalledTimes(1);
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+    expect(readRuntimeOutput()).toContain(fallbackNotice);
   });
 
   it("falls back to local approve when gateway returns pairing required on loopback", async () => {
@@ -560,8 +556,8 @@ describe("devices cli local fallback", () => {
     expect(approveDevicePairing).toHaveBeenCalledWith("req-latest", {
       callerScopes: ["operator.admin"],
     });
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+    expect(readRuntimeOutput()).toContain(fallbackNotice);
+    expect(readRuntimeOutput()).toContain("Approved");
   });
 
   it("falls back to local pairing list when gateway returns a scope upgrade message on loopback", async () => {
@@ -570,7 +566,7 @@ describe("devices cli local fallback", () => {
     await runDevicesCommand(["list"]);
 
     expect(listDevicePairing).toHaveBeenCalledTimes(1);
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+    expect(readRuntimeOutput()).toContain(fallbackNotice);
   });
 
   it("refuses local fallback when the gateway request is absent from local pairing state", async () => {
@@ -584,7 +580,7 @@ describe("devices cli local fallback", () => {
     await expect(runDevicesCommand(["list"])).rejects.toThrow(
       "different OPENCLAW_PROFILE or OPENCLAW_STATE_DIR",
     );
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+    expect(readRuntimeOutput()).not.toContain(fallbackNotice);
   });
 
   it("refuses local approve fallback when the gateway request is absent locally", async () => {
@@ -595,7 +591,7 @@ describe("devices cli local fallback", () => {
     await expect(runDevicesApprove(["req-profile"])).rejects.toThrow(
       "local fallback pairing state does not contain the gateway request",
     );
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+    expect(readRuntimeOutput()).not.toContain(fallbackNotice);
   });
 
   it("refuses local approve fallback before approving a different local request", async () => {
@@ -606,7 +602,7 @@ describe("devices cli local fallback", () => {
       "local fallback pairing state does not contain the gateway request",
     );
     expect(approveDevicePairing).not.toHaveBeenCalled();
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+    expect(readRuntimeOutput()).not.toContain(fallbackNotice);
   });
 
   it("does not use local fallback when an explicit --url is provided", async () => {

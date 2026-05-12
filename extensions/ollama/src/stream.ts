@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type {
   AssistantMessage,
   StopReason,
@@ -8,8 +8,8 @@ import type {
   ToolCall,
   Tool,
   Usage,
-} from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, streamSimple } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawConfig,

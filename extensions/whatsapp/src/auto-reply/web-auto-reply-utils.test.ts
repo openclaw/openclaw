@@ -234,11 +234,11 @@ describe("resolveMentionTargets with @lid mapping", () => {
         authDir,
       );
       expect(mentionTargets.normalizedMentions).toEqual([
-        expect.objectContaining({
+        {
           jid: null,
           lid: "777@lid",
           e164: "+1777",
-        }),
+        },
       ]);
 
       const selfTargets = resolveMentionTargets(
@@ -248,8 +248,11 @@ describe("resolveMentionTargets with @lid mapping", () => {
         }),
         authDir,
       );
-      expect(selfTargets.self.e164).toBe("+1777");
-      expect(selfTargets.self.lid).toBe("777@lid");
+      expect(selfTargets.self).toEqual({
+        jid: null,
+        lid: "777@lid",
+        e164: "+1777",
+      });
     });
   });
 });

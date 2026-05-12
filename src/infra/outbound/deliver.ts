@@ -136,6 +136,7 @@ async function loadChannelBootstrapRuntime() {
 type ChannelHandler = {
   chunker: ChannelOutboundAdapter["chunker"] | null;
   chunkerMode?: "text" | "markdown";
+  chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
   textChunkLimit?: number;
   supportsMedia: boolean;
   sanitizeText?: (payload: ReplyPayload) => string;
@@ -347,6 +348,7 @@ function createPluginHandler(
     quoteAuthor?: string | null;
     threadId?: string | number | null;
     audioAsVoice?: boolean;
+    formatting?: OutboundDeliveryFormattingOptions;
   }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
     ...baseCtx,
     replyToId: overrides && "replyToId" in overrides ? overrides.replyToId : baseCtx.replyToId,
@@ -358,6 +360,10 @@ function createPluginHandler(
       overrides && "quoteAuthor" in overrides ? overrides.quoteAuthor : baseCtx.quoteAuthor,
     threadId: overrides && "threadId" in overrides ? overrides.threadId : baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
+    formatting:
+      overrides && "formatting" in overrides
+        ? { ...baseCtx.formatting, ...overrides.formatting }
+        : baseCtx.formatting,
   });
   const buildTargetRef = (overrides?: {
     threadId?: string | number | null;
@@ -370,6 +376,7 @@ function createPluginHandler(
   return {
     chunker,
     chunkerMode,
+    chunkedTextFormatting: outbound?.chunkedTextFormatting,
     textChunkLimit: outbound?.textChunkLimit,
     supportsMedia: Boolean(messageMedia ?? sendMedia),
     sanitizeText: outbound?.sanitizeText
@@ -1420,6 +1427,7 @@ async function deliverOutboundPayloadsCore(
       overrides,
       chunker: handler.chunker,
       chunkerMode: handler.chunkerMode,
+      chunkedTextFormatting: handler.chunkedTextFormatting,
       textLimit,
       chunkMode,
       formatting: params.formatting,

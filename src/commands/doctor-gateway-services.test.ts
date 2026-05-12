@@ -195,15 +195,18 @@ function createGatewayCommand(entrypoint: string) {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
 function callArg(mock: { mock: { calls: Array<Array<unknown>> } }, index: number, label: string) {
   const call = mock.mock.calls.at(index);
-  expect(call, label).toBeDefined();
-  return call?.[0];
+  if (!call) {
+    throw new Error(`Expected mock call: ${label}`);
+  }
+  return call[0];
 }
 
 function expectCallField(
@@ -507,10 +510,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
     await runRepair({ gateway: {} });
 
     expect(mocks.install).toHaveBeenCalledOnce();
-    const installOptions = mocks.install.mock.calls[0]?.[0];
-    expect(installOptions?.environment).toStrictEqual({});
-    expect(Object.hasOwn(installOptions?.environment ?? {}, "HTTP_PROXY")).toBe(false);
-    expect(Object.hasOwn(installOptions?.environment ?? {}, "HTTPS_PROXY")).toBe(false);
+    const installOptions = requireRecord(callArg(mocks.install, 0, "gateway install"), "install");
+    const environment = requireRecord(installOptions.environment, "install environment");
+    expect(environment).toStrictEqual({});
+    expect(Object.hasOwn(environment, "HTTP_PROXY")).toBe(false);
+    expect(Object.hasOwn(environment, "HTTPS_PROXY")).toBe(false);
   });
 
   it("uses OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
@@ -755,7 +759,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
-  it("stages service config repairs during non-interactive update repairs", async () => {
+  it("defers systemd service config rewrites during non-interactive update repairs", async () => {
+    mockProcessPlatform("linux");
     setupGatewayEntrypointRepairScenario({
       currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
       installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
@@ -771,6 +776,29 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "Gateway service entrypoint does not match the current install.",
       "Gateway service config",
     );
+    expectNoteContaining("left the live systemd unit unchanged", "Gateway service config");
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
+  it("keeps staging non-systemd service config repairs during non-interactive update repairs", async () => {
+    mockProcessPlatform("darwin");
+    setupGatewayEntrypointRepairScenario({
+      currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
+      installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
+      installWorkingDirectory: "/tmp",
+    });
+
+    await runNonInteractiveRepair({
+      cfg: { gateway: {} },
+      updateInProgress: true,
+    });
+
+    expectNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
+      "Gateway service config",
+    );
+    expectNoNoteContaining("left the live systemd unit unchanged", "Gateway service config");
     expect(mocks.stage).toHaveBeenCalledTimes(1);
     expect(mocks.install).not.toHaveBeenCalled();
   });
@@ -842,7 +870,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
     );
   });
 
-  it("does not persist embedded service tokens during non-interactive update repairs", async () => {
+  it("does not persist or stage embedded service tokens during systemd update repairs", async () => {
+    mockProcessPlatform("linux");
     Object.defineProperty(process.stdin, "isTTY", {
       value: false,
       configurable: true,
@@ -874,7 +903,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
         );
 
         expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-        expect(mocks.stage).toHaveBeenCalledTimes(1);
+        expectNoteContaining("left the live systemd unit unchanged", "Gateway service config");
+        expect(mocks.stage).not.toHaveBeenCalled();
         expect(mocks.install).not.toHaveBeenCalled();
       },
     );
@@ -967,6 +997,102 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
         expectNoteContaining("resolves to a source checkout", "Gateway service config");
         expect(mocks.install).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("does not duplicate Gateway service config panels for a source-checkout entrypoint with audit findings", async () => {
+    await withEnvAsync({}, async () => {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-doctor-service-config-dedup-"),
+      );
+      try {
+        await fs.mkdir(path.join(root, ".git"), { recursive: true });
+        await fs.mkdir(path.join(root, "src"), { recursive: true });
+        await fs.mkdir(path.join(root, "extensions"), { recursive: true });
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "0.0.0-test" }),
+          "utf8",
+        );
+        const sourceCheckoutEntrypoint = path.join(root, "dist", "index.js");
+        await fs.writeFile(sourceCheckoutEntrypoint, "export {};\n", "utf8");
+        const installEntrypoint = "/usr/local/lib/node_modules/openclaw/dist/index.js";
+        setupGatewayEntrypointRepairScenario({
+          currentEntrypoint: sourceCheckoutEntrypoint,
+          installEntrypoint,
+          installWorkingDirectory: "/tmp",
+        });
+
+        await runRepair({ gateway: {} });
+
+        const gatewayServiceConfigNotes = mocks.note.mock.calls.filter(
+          ([, title]) => title === "Gateway service config",
+        );
+        expect(gatewayServiceConfigNotes).toHaveLength(1);
+        const consolidated = gatewayServiceConfigNotes[0]?.[0] ?? "";
+        expect(consolidated).toContain(
+          "Gateway service entrypoint does not match the current install.",
+        );
+        expect(consolidated).not.toContain("resolves to a source checkout");
+        const forceMatches = consolidated.match(/openclaw gateway install --force/g) ?? [];
+        expect(forceMatches).toHaveLength(0);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("keeps the gateway install force hint when a source-checkout warning is suppressed and repair is declined", async () => {
+    await withEnvAsync({}, async () => {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-doctor-service-config-force-hint-"),
+      );
+      try {
+        await fs.mkdir(path.join(root, ".git"), { recursive: true });
+        await fs.mkdir(path.join(root, "src"), { recursive: true });
+        await fs.mkdir(path.join(root, "extensions"), { recursive: true });
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "0.0.0-test" }),
+          "utf8",
+        );
+        const sourceCheckoutEntrypoint = path.join(root, "dist", "index.js");
+        await fs.writeFile(sourceCheckoutEntrypoint, "export {};\n", "utf8");
+        const installEntrypoint = "/usr/local/lib/node_modules/openclaw/dist/index.js";
+        setupGatewayEntrypointRepairScenario({
+          currentEntrypoint: sourceCheckoutEntrypoint,
+          installEntrypoint,
+          installWorkingDirectory: "/tmp",
+        });
+
+        const declinePrompts = {
+          ...makeDoctorPrompts(),
+          confirmAutoFix: vi.fn().mockResolvedValue(false),
+          confirmAggressiveAutoFix: vi.fn().mockResolvedValue(false),
+          confirmRuntimeRepair: vi.fn().mockResolvedValue(false),
+        };
+        await maybeRepairGatewayServiceConfig(
+          { gateway: {} },
+          "local",
+          makeDoctorIo(),
+          declinePrompts,
+        );
+
+        const gatewayServiceConfigNotes = mocks.note.mock.calls.filter(
+          ([, title]) => title === "Gateway service config",
+        );
+        expect(gatewayServiceConfigNotes).toHaveLength(2);
+        const auditNote = gatewayServiceConfigNotes[0]?.[0] ?? "";
+        expect(auditNote).toContain(
+          "Gateway service entrypoint does not match the current install.",
+        );
+        expect(auditNote).not.toContain("resolves to a source checkout");
+        expect(gatewayServiceConfigNotes[1]?.[0]).toContain("openclaw gateway install --force");
       } finally {
         await fs.rm(root, { recursive: true, force: true });
       }

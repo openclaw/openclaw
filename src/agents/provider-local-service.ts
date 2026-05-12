@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 

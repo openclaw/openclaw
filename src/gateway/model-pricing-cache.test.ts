@@ -163,20 +163,20 @@ describe("model-pricing-cache", () => {
       modelKey(ref.provider, ref.model),
     );
 
-    expect(refs).toEqual(
-      expect.arrayContaining([
-        "openai/gpt-5.4",
-        "anthropic/claude-sonnet-4-6",
-        "google/gemini-3.1-pro-preview",
-        "anthropic/claude-opus-4-6",
-        "xai/grok-4",
-        "openrouter/anthropic/claude-opus-4-6",
-        "openrouter/auto",
-        "zai/glm-5",
-        "anthropic/claude-haiku-4-5",
-        "google/gemini-2.5-pro",
-      ]),
-    );
+    for (const expectedRef of [
+      "openai/gpt-5.4",
+      "anthropic/claude-sonnet-4-6",
+      "google/gemini-3.1-pro-preview",
+      "anthropic/claude-opus-4-6",
+      "xai/grok-4",
+      "openrouter/anthropic/claude-opus-4-6",
+      "openrouter/auto",
+      "zai/glm-5",
+      "anthropic/claude-haiku-4-5",
+      "google/gemini-2.5-pro",
+    ]) {
+      expect(refs).toContain(expectedRef);
+    }
     expect(new Set(refs).size).toBe(refs.length);
   });
 
@@ -428,16 +428,12 @@ describe("model-pricing-cache", () => {
 
     await refreshGatewayModelPricingCache({ config, fetchImpl: failingFetch });
 
-    expect(getGatewayModelPricingHealth()).toMatchObject({
-      state: "degraded",
-      sources: [
-        {
-          source: "openrouter",
-          state: "degraded",
-          detail: expect.stringContaining("OpenRouter pricing fetch failed"),
-        },
-      ],
-    });
+    const failedHealth = getGatewayModelPricingHealth();
+    expect(failedHealth.state).toBe("degraded");
+    expect(failedHealth.sources).toHaveLength(1);
+    expect(failedHealth.sources[0]?.source).toBe("openrouter");
+    expect(failedHealth.sources[0]?.state).toBe("degraded");
+    expect(failedHealth.sources[0]?.detail).toContain("OpenRouter pricing fetch failed");
 
     const successfulFetch = withFetchPreconnect(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -508,16 +504,14 @@ describe("model-pricing-cache", () => {
       failManifestRead = true;
       await vi.runOnlyPendingTimersAsync();
 
-      expect(getGatewayModelPricingHealth()).toMatchObject({
-        state: "degraded",
-        sources: [
-          {
-            source: "refresh",
-            state: "degraded",
-            detail: "pricing refresh failed: Error: manifest metadata failed",
-          },
-        ],
-      });
+      const failedHealth = getGatewayModelPricingHealth();
+      expect(failedHealth.state).toBe("degraded");
+      expect(failedHealth.sources).toHaveLength(1);
+      expect(failedHealth.sources[0]?.source).toBe("refresh");
+      expect(failedHealth.sources[0]?.state).toBe("degraded");
+      expect(failedHealth.sources[0]?.detail).toBe(
+        "pricing refresh failed: Error: manifest metadata failed",
+      );
 
       failManifestRead = false;
       await refreshGatewayModelPricingCache({
@@ -1122,16 +1116,20 @@ describe("model-pricing-cache", () => {
 
     await refreshGatewayModelPricingCache({ config, fetchImpl });
 
-    expect(warnings).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining(
+    expect(
+      warnings.some((message) =>
+        message.includes(
           "OpenRouter pricing fetch failed (timeout 60s): TimeoutError: The operation was aborted due to timeout",
         ),
-        expect.stringContaining(
+      ),
+    ).toBe(true);
+    expect(
+      warnings.some((message) =>
+        message.includes(
           "LiteLLM pricing fetch failed (timeout 60s): TimeoutError: The operation was aborted due to timeout",
         ),
-      ]),
-    );
+      ),
+    ).toBe(true);
   });
 
   it("treats oversized LiteLLM catalog responses as source failures", async () => {

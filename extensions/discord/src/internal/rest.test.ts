@@ -2,8 +2,38 @@ import { createServer, type Server } from "node:http";
 import { fetch as undiciFetch } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serializeRequestBody } from "./rest-body.js";
-import { RequestClient } from "./rest.js";
+import { DiscordError, RateLimitError, RequestClient } from "./rest.js";
 import { createDeferred, createJsonResponse } from "./test-builders.test-support.js";
+
+async function expectRateLimitError(
+  promise: Promise<unknown>,
+  expected: { discordCode?: number; retryAfter: number },
+) {
+  let error: unknown;
+  try {
+    await promise;
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(RateLimitError);
+  const rateLimit = error as RateLimitError;
+  expect(rateLimit.name).toBe("RateLimitError");
+  expect(rateLimit.retryAfter).toBe(expected.retryAfter);
+  if (expected.discordCode !== undefined) {
+    expect(rateLimit.discordCode).toBe(expected.discordCode);
+  }
+}
+
+async function expectDiscordErrorStatus(promise: Promise<unknown>, status: number) {
+  let error: unknown;
+  try {
+    await promise;
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(DiscordError);
+  expect((error as DiscordError).status).toBe(status);
+}
 
 describe("RequestClient", () => {
   afterEach(() => {
@@ -377,10 +407,7 @@ describe("RequestClient", () => {
       scheduler: { maxRateLimitRetries: 0 },
     });
 
-    await expect(client.get("/channels/c1/messages")).rejects.toMatchObject({
-      name: "RateLimitError",
-      retryAfter: 0.1,
-    });
+    await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 0.1 });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(client.queueSize).toBe(0);
   });
@@ -412,10 +439,7 @@ describe("RequestClient", () => {
       ),
     );
 
-    await expect(request).rejects.toMatchObject({
-      name: "RateLimitError",
-      retryAfter: 0,
-    });
+    await expectRateLimitError(request, { retryAfter: 0 });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(client.queueSize).toBe(0);
   });
@@ -471,8 +495,7 @@ describe("RequestClient", () => {
         ),
     });
 
-    await expect(client.post("/applications/app/commands", { body: {} })).rejects.toMatchObject({
-      name: "RateLimitError",
+    await expectRateLimitError(client.post("/applications/app/commands", { body: {} }), {
       discordCode: 30034,
       retryAfter: 60,
     });
@@ -490,10 +513,7 @@ describe("RequestClient", () => {
         }),
     });
 
-    await expect(client.get("/channels/c1/messages")).rejects.toMatchObject({
-      name: "RateLimitError",
-      retryAfter: 5,
-    });
+    await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 5 });
   });
 
   it("falls back to Retry-After when the rate limit body value is malformed", async () => {
@@ -509,10 +529,7 @@ describe("RequestClient", () => {
         ),
     });
 
-    await expect(client.get("/channels/c1/messages")).rejects.toMatchObject({
-      name: "RateLimitError",
-      retryAfter: 7,
-    });
+    await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 7 });
   });
 
   it("tracks invalid requests and exposes bucket scheduler metrics", async () => {
@@ -528,7 +545,7 @@ describe("RequestClient", () => {
         ),
     });
 
-    await expect(client.get("/channels/c1/messages")).rejects.toMatchObject({ status: 403 });
+    await expectDiscordErrorStatus(client.get("/channels/c1/messages"), 403);
 
     const metrics = client.getSchedulerMetrics();
     expect(metrics.invalidRequestCount).toBe(1);

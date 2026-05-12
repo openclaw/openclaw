@@ -1,4 +1,4 @@
-import { streamSimple } from "@mariozechner/pi-ai";
+import { streamSimple } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../context-engine-capabilities.js", () => ({
@@ -74,8 +74,9 @@ async function invokeWrappedTestStream(
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 

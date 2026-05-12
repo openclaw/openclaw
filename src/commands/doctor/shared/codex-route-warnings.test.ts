@@ -65,10 +65,13 @@ describe("collectCodexRouteWarnings", () => {
       } as OpenClawConfig,
     });
 
-    expect(warnings).toEqual([expect.stringContaining("Legacy `openai-codex/*`")]);
-    expect(warnings[0]).toContain("agents.defaults.model");
-    expect(warnings[0]).toContain("openai/gpt-5.5");
-    expect(warnings[0]).not.toContain("agentRuntime.id");
+    expect(warnings).toStrictEqual([
+      [
+        "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        "- agents.defaults.model: openai-codex/gpt-5.5 should become openai/gpt-5.5.",
+        "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
+      ].join("\n"),
+    ]);
   });
 
   it("still warns when the native Codex runtime is selected with a legacy model ref", () => {
@@ -85,8 +88,13 @@ describe("collectCodexRouteWarnings", () => {
       } as OpenClawConfig,
     });
 
-    expect(warnings).toEqual([expect.stringContaining("openai/gpt-5.5")]);
-    expect(warnings[0]).toContain('runtime is "codex"');
+    expect(warnings).toStrictEqual([
+      [
+        "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        '- agents.defaults.model: openai-codex/gpt-5.5 should become openai/gpt-5.5; current runtime is "codex".',
+        "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
+      ].join("\n"),
+    ]);
   });
 
   it("still warns when OPENCLAW_AGENT_RUNTIME selects native Codex with a legacy model ref", () => {
@@ -103,7 +111,13 @@ describe("collectCodexRouteWarnings", () => {
       },
     });
 
-    expect(warnings).toEqual([expect.stringContaining('runtime is "codex"')]);
+    expect(warnings).toStrictEqual([
+      [
+        "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        '- agents.defaults.model: openai-codex/gpt-5.5 should become openai/gpt-5.5; current runtime is "codex".',
+        "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
+      ].join("\n"),
+    ]);
   });
 
   it("does not warn for canonical OpenAI refs", () => {
@@ -193,8 +207,25 @@ describe("collectCodexRouteWarnings", () => {
     });
 
     expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toEqual([
-      expect.stringContaining("Repaired Codex model routes"),
+    expect(result.changes).toStrictEqual([
+      [
+        "Repaired Codex model routes:",
+        "- agents.defaults.model.primary: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
+        "- agents.defaults.model.fallbacks.0: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
+        "- agents.defaults.heartbeat.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
+        "- agents.defaults.subagents.model.primary: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
+        "- agents.defaults.subagents.model.fallbacks.0: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
+        "- agents.defaults.compaction.model: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
+        "- agents.defaults.compaction.memoryFlush.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
+        "- agents.defaults.models.openai-codex/gpt-5.5: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
+        "- agents.list.worker.model: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
+        "- channels.modelByChannel.telegram.default: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
+        "- hooks.mappings.0.model: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
+        "- hooks.gmail.model: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
+        "- tools.subagents.model.primary: openai-codex/gpt-5.4 -> openai/gpt-5.4.",
+        "- tools.subagents.model.fallbacks.0: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
+        "- messages.tts.summaryModel: openai-codex/gpt-5.4-mini -> openai/gpt-5.4-mini.",
+      ].join("\n"),
       'Set agents.defaults.models.openai/gpt-5.5.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
       'Set agents.defaults.models.openai/gpt-5.4.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
       'Set agents.list.worker.models.openai/gpt-5.4.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
@@ -451,10 +482,12 @@ describe("collectCodexRouteWarnings", () => {
       }).runtime,
     ).toBe("pi");
     expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toEqual([
-      expect.stringContaining(
-        "agents.defaults.heartbeat.model: openai-codex/gpt-5.4 should become openai/gpt-5.4",
-      ),
+    expect(result.warnings).toStrictEqual([
+      [
+        "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        "- agents.defaults.heartbeat.model: openai-codex/gpt-5.4 should become openai/gpt-5.4.",
+        "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
+      ].join("\n"),
     ]);
   });
 
@@ -542,10 +575,12 @@ describe("collectCodexRouteWarnings", () => {
       }).runtime,
     ).toBe("pi");
     expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toEqual([
-      expect.stringContaining(
-        "hooks.gmail.model: openai-codex/gpt-5.4 should become openai/gpt-5.4",
-      ),
+    expect(result.warnings).toStrictEqual([
+      [
+        "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
+        "- hooks.gmail.model: openai-codex/gpt-5.4 should become openai/gpt-5.4.",
+        "- Run `openclaw doctor --fix`: it rewrites configured model refs and stale sessions to `openai/*`, moves Codex intent to provider/model runtime policy, and clears old whole-agent runtime pins.",
+      ].join("\n"),
     ]);
   });
 

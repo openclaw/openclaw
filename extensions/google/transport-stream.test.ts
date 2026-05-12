@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
@@ -398,13 +398,19 @@ describe("google transport stream", () => {
 
     expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
     expect(guardedFetchMock).toHaveBeenCalledTimes(2);
-    const firstBody = JSON.parse(guardedFetchMock.mock.calls[0]?.[1]?.body as string);
-    const retryBody = JSON.parse(guardedFetchMock.mock.calls[1]?.[1]?.body as string);
-    expect(firstBody.generationConfig.thinkingConfig).toEqual({
+    const firstBody = parseRequestJsonBody(
+      requireRequestInit(requireMockCall(guardedFetchMock, 0, "guarded fetch"), "guarded fetch"),
+    );
+    const retryBody = parseRequestJsonBody(
+      requireRequestInit(requireMockCall(guardedFetchMock, 1, "guarded fetch"), "guarded fetch"),
+    );
+    const firstGenerationConfig = requireGenerationConfig(firstBody);
+    const retryGenerationConfig = requireGenerationConfig(retryBody);
+    expect(firstGenerationConfig.thinkingConfig).toEqual({
       includeThoughts: true,
       thinkingLevel: "HIGH",
     });
-    expect(retryBody.generationConfig.thinkingConfig).toEqual({
+    expect(retryGenerationConfig.thinkingConfig).toEqual({
       thinkingLevel: "LOW",
     });
     expect(retryBody.tools).toEqual(firstBody.tools);

@@ -289,6 +289,8 @@ export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) =>
   }
 }).optional();
 
+const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
+
 const TrimmedOptionalConfigStringSchema = z
   .string()
   .transform((value) => {
@@ -469,6 +471,7 @@ const ToolExecBaseShape = {
   pathPrepend: z.array(z.string()).optional(),
   safeBins: z.array(z.string()).optional(),
   strictInlineEval: z.boolean().optional(),
+  commandHighlighting: z.boolean().optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),
   safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
   backgroundMs: z.number().int().positive().optional(),
@@ -620,7 +623,42 @@ const CommonToolPolicyFields = {
   alsoAllow: z.array(z.string()).optional(),
   deny: z.array(z.string()).optional(),
   byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
+  toolsBySender: ToolPolicyBySenderSchema,
 };
+
+const MessageToolConfigSchema = z
+  .object({
+    allowCrossContextSend: z.boolean().optional(),
+    crossContext: z
+      .object({
+        allowWithinProvider: z.boolean().optional(),
+        allowAcrossProviders: z.boolean().optional(),
+        marker: z
+          .object({
+            enabled: z.boolean().optional(),
+            prefix: z.string().optional(),
+            suffix: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    actions: z
+      .object({
+        allow: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+    broadcast: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
 
 const AgentToolsSchema = z
   .object({
@@ -635,6 +673,7 @@ const AgentToolsSchema = z
     exec: AgentToolExecSchema,
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
+    message: MessageToolConfigSchema,
     sandbox: z
       .object({
         tools: ToolPolicySchema,
@@ -939,33 +978,7 @@ export const ToolsSchema = z
       .optional(),
     loopDetection: ToolLoopDetectionSchema,
     toolSearch: ToolSearchSchema,
-    message: z
-      .object({
-        allowCrossContextSend: z.boolean().optional(),
-        crossContext: z
-          .object({
-            allowWithinProvider: z.boolean().optional(),
-            allowAcrossProviders: z.boolean().optional(),
-            marker: z
-              .object({
-                enabled: z.boolean().optional(),
-                prefix: z.string().optional(),
-                suffix: z.string().optional(),
-              })
-              .strict()
-              .optional(),
-          })
-          .strict()
-          .optional(),
-        broadcast: z
-          .object({
-            enabled: z.boolean().optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
+    message: MessageToolConfigSchema,
     agentToAgent: z
       .object({
         enabled: z.boolean().optional(),

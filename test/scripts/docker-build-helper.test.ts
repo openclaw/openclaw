@@ -1,4 +1,7 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const HELPER_PATH = "scripts/lib/docker-build.sh";
@@ -149,6 +152,7 @@ describe("docker build helper", () => {
     expect(runner).toContain('run_agent_turn_bg "image write"');
     expect(runner).toContain('run_agent_turn_logged "read proof copy"');
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL");
+    expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_MODEL");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-300");
@@ -223,6 +227,50 @@ describe("docker build helper", () => {
     expect(updateChannel).toContain("assert-config-channel dev");
     expect(updateChannelAssertions).toContain("expected persisted update.channel ${channel}");
     expect(pluginsAssertions).toContain("expected modern installRecords in installed plugin index");
+  });
+
+  it("prepares pnpm workspace package fixtures without package dependencies", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-update-channel-fixture-"));
+    try {
+      mkdirSync(join(root, "patches"));
+      writeFileSync(
+        join(root, "package.json"),
+        `${JSON.stringify({ name: "openclaw", version: "2026.5.6", scripts: {} }, null, 2)}\n`,
+        "utf8",
+      );
+      writeFileSync(
+        join(root, "pnpm-workspace.yaml"),
+        [
+          "packages:",
+          "  - .",
+          "",
+          "patchedDependencies:",
+          '  "kept@1.0.0": "patches/kept.patch"',
+          "allowBuilds:",
+          "  esbuild: true",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      writeFileSync(join(root, "patches", "kept.patch"), "", "utf8");
+
+      execFileSync(process.execPath, [
+        UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH,
+        "prepare-git-fixture",
+        root,
+      ]);
+
+      const workspace = readFileSync(join(root, "pnpm-workspace.yaml"), "utf8");
+      const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+        pnpm?: unknown;
+      };
+      expect(workspace).toContain('  "kept@1.0.0": "patches/kept.patch"');
+      expect(workspace).toContain("allowUnusedPatches: true");
+      expect(workspace).toContain("allowBuilds:");
+      expect(manifest.pnpm).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("keeps bundled plugin install/uninstall sweep chunkable", () => {

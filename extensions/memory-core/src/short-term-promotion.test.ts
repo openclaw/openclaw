@@ -87,6 +87,10 @@ describe("short-term promotion", () => {
     return candidate.promotedAt;
   }
 
+  async function expectEnoent(promise: Promise<unknown>): Promise<void> {
+    await expect(promise).rejects.toHaveProperty("code", "ENOENT");
+  }
+
   it("detects short-term daily memory paths", () => {
     expect(isShortTermMemoryPath("memory/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("2026-04-03.md")).toBe(true);
@@ -190,11 +194,7 @@ describe("short-term promotion", () => {
         ],
       });
 
-      await expect(
-        fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"));
     });
   });
 
@@ -215,11 +215,7 @@ describe("short-term promotion", () => {
         ],
       });
 
-      await expect(
-        fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"));
     });
   });
 
@@ -241,12 +237,11 @@ describe("short-term promotion", () => {
         ],
       });
 
-      expect(
-        JSON.parse(await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8")),
-      ).toMatchObject({
-        version: 1,
-        entries: {},
-      });
+      const store = JSON.parse(
+        await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
+      ) as { version?: number; entries?: unknown };
+      expect(store.version).toBe(1);
+      expect(store.entries).toEqual({});
     });
   });
 
@@ -273,12 +268,11 @@ describe("short-term promotion", () => {
         ],
       });
 
-      expect(
-        JSON.parse(await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8")),
-      ).toMatchObject({
-        version: 1,
-        entries: {},
-      });
+      const store = JSON.parse(
+        await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
+      ) as { version?: number; entries?: unknown };
+      expect(store.version).toBe(1);
+      expect(store.entries).toEqual({});
     });
   });
 
@@ -490,11 +484,9 @@ describe("short-term promotion", () => {
       });
 
       expect(ranked).toHaveLength(1);
-      expect(ranked[0]).toMatchObject({
-        recallCount: 0,
-        dailyCount: 3,
-        uniqueQueries: 3,
-      });
+      expect(ranked[0]?.recallCount).toBe(0);
+      expect(ranked[0]?.dailyCount).toBe(3);
+      expect(ranked[0]?.uniqueQueries).toBe(3);
       expect(ranked[0]?.recallDays).toEqual(queryDays);
       expect(ranked[0]?.score).toBeGreaterThanOrEqual(0.75);
     });
@@ -803,10 +795,8 @@ describe("short-term promotion", () => {
       const phaseStore = JSON.parse(await fs.readFile(phaseStorePath, "utf-8")) as {
         entries: Record<string, { lightHits: number; remHits: number }>;
       };
-      expect(phaseStore.entries[boostedKey]).toMatchObject({
-        lightHits: 1,
-        remHits: 1,
-      });
+      expect(phaseStore.entries[boostedKey]?.lightHits).toBe(1);
+      expect(phaseStore.entries[boostedKey]?.remHits).toBe(1);
     });
   });
 
@@ -1167,11 +1157,7 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
-      await expect(
-        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
     });
   });
 
@@ -1214,11 +1200,7 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
-      await expect(
-        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
     });
   });
 
@@ -1526,9 +1508,7 @@ describe("short-term promotion", () => {
       });
 
       expect(applied.applied).toBe(0);
-      await expect(fs.access(path.join(workspaceDir, "MEMORY.md"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectEnoent(fs.access(path.join(workspaceDir, "MEMORY.md")));
     });
   });
 
@@ -1651,10 +1631,12 @@ describe("short-term promotion", () => {
 
       expect(repair.changed).toBe(true);
       expect(repair.rewroteStore).toBe(true);
-      expect(JSON.parse(await fs.readFile(storePath, "utf-8"))).toMatchObject({
-        version: 1,
-        entries: {},
-      });
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+        version?: number;
+        entries?: unknown;
+      };
+      expect(store.version).toBe(1);
+      expect(store.entries).toEqual({});
     });
   });
 
@@ -1851,5 +1833,129 @@ describe("short-term promotion", () => {
       "障害",
       "対応",
     ]);
+  });
+
+  describe("MEMORY.md budget compaction (#73691)", () => {
+    it("drops the oldest promoted section before write when memoryFileMaxChars would be exceeded", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        // Source daily note that the candidate references (rehydrate reads it).
+        await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+          "Notes",
+          "",
+          "Rotate the staging Postgres credentials before next deploy.",
+        ]);
+
+        // Seed an oversized MEMORY.md with two pre-existing promotion sections.
+        const memoryPath = path.join(workspaceDir, "MEMORY.md");
+        const filler = "x".repeat(600);
+        const seeded = [
+          "# Long-Term Memory",
+          "",
+          "## Promoted From Short-Term Memory (2026-04-10)",
+          "<!-- openclaw-memory-promotion:legacy-old -->",
+          `- ${filler}`,
+          "",
+          "## Promoted From Short-Term Memory (2026-04-20)",
+          "<!-- openclaw-memory-promotion:legacy-newer -->",
+          `- ${filler}`,
+          "",
+        ].join("\n");
+        await fs.writeFile(memoryPath, seeded, "utf-8");
+
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "rotate creds",
+          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+          results: [
+            {
+              path: "memory/2026-04-29.md",
+              startLine: 3,
+              endLine: 3,
+              score: 0.96,
+              snippet: "Rotate the staging Postgres credentials before next deploy.",
+              source: "memory",
+            },
+          ],
+        });
+
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+        });
+
+        const applied = await applyShortTermPromotions({
+          workspaceDir,
+          candidates: ranked,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+          memoryFileMaxChars: 1_400,
+        });
+
+        expect(applied.applied).toBe(1);
+        expect(applied.compactedSections).toBeGreaterThan(0);
+        expect(applied.compactedDates).toContain("2026-04-10");
+
+        const memoryText = await fs.readFile(memoryPath, "utf-8");
+        expect(memoryText).not.toContain("(2026-04-10)");
+        expect(memoryText).not.toContain("legacy-old");
+        // Newer pre-existing section + the freshly-written one survive.
+        expect(memoryText).toContain("Rotate the staging Postgres credentials");
+      });
+    });
+
+    it("leaves MEMORY.md untouched when total stays within memoryFileMaxChars", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+          "Notes",
+          "",
+          "A short snippet that fits comfortably.",
+        ]);
+
+        const memoryPath = path.join(workspaceDir, "MEMORY.md");
+        const seeded = "# Long-Term Memory\n\nSome small existing content.\n";
+        await fs.writeFile(memoryPath, seeded, "utf-8");
+
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "tiny note",
+          nowMs: Date.parse("2026-04-29T10:00:00.000Z"),
+          results: [
+            {
+              path: "memory/2026-04-29.md",
+              startLine: 3,
+              endLine: 3,
+              score: 0.92,
+              snippet: "A short snippet that fits comfortably.",
+              source: "memory",
+            },
+          ],
+        });
+
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+        });
+
+        const applied = await applyShortTermPromotions({
+          workspaceDir,
+          candidates: ranked,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+          memoryFileMaxChars: 10_000,
+        });
+
+        expect(applied.compactedSections).toBe(0);
+        expect(applied.compactedDates).toEqual([]);
+        const memoryText = await fs.readFile(memoryPath, "utf-8");
+        expect(memoryText).toContain("Some small existing content.");
+      });
+    });
   });
 });

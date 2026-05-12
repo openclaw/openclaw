@@ -11,6 +11,7 @@ export type OutboundMessageSendOverrides = ReplyToOverride & {
   threadId?: string | number | null;
   audioAsVoice?: boolean;
   forceDocument?: boolean;
+  formatting?: OutboundDeliveryFormattingOptions;
 };
 
 export type OutboundMessageUnit =
@@ -41,6 +42,15 @@ function withPlannedReplyTo(
   return consumeReplyTo ? consumeReplyTo({ ...overrides }) : { ...overrides };
 }
 
+function withChunkedTextFormatting(
+  overrides: OutboundMessageSendOverrides,
+  formatting?: OutboundDeliveryFormattingOptions,
+): OutboundMessageSendOverrides {
+  return formatting
+    ? { ...overrides, formatting: { ...overrides.formatting, ...formatting } }
+    : overrides;
+}
+
 function chunkTextForPlan(params: {
   text: string;
   limit: number;
@@ -57,6 +67,7 @@ export function planOutboundTextMessageUnits(params: {
   overrides: OutboundMessageSendOverrides;
   chunker?: OutboundMessageChunker | null;
   chunkerMode?: "text" | "markdown";
+  chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
   textLimit?: number;
   chunkMode?: ChunkMode;
   formatting?: OutboundDeliveryFormattingOptions;
@@ -67,6 +78,13 @@ export function planOutboundTextMessageUnits(params: {
     text,
     overrides: withPlannedReplyTo(params.overrides, params.consumeReplyTo),
   });
+  const planChunkedTextUnit = (text: string): OutboundMessageUnit => {
+    const unit = planTextUnit(text);
+    return {
+      ...unit,
+      overrides: withChunkedTextFormatting(unit.overrides, params.chunkedTextFormatting),
+    };
+  };
 
   if (!params.chunker || params.textLimit === undefined) {
     return [planTextUnit(params.text)];
@@ -94,7 +112,7 @@ export function planOutboundTextMessageUnits(params: {
         chunks.push(blockChunk);
       }
       for (const chunk of chunks) {
-        units.push(planTextUnit(chunk));
+        units.push(planChunkedTextUnit(chunk));
       }
     }
     return units;
@@ -105,7 +123,7 @@ export function planOutboundTextMessageUnits(params: {
     limit: params.textLimit,
     chunker: params.chunker,
     formatting: params.formatting,
-  }).map(planTextUnit);
+  }).map(planChunkedTextUnit);
 }
 
 export function planOutboundMediaMessageUnits(params: {
