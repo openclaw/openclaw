@@ -23,12 +23,9 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolveConfigDir } from "../utils.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
 
-const resolveMediaDir = (env: NodeJS.ProcessEnv = process.env) =>
-  path.join(resolveConfigDir(env), "media");
 const resolveMediaMaterializationRoot = () => path.join(resolvePreferredOpenClawTmpDir(), "media");
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5MB default
 const MAX_BYTES = MEDIA_MAX_BYTES;
@@ -262,10 +259,6 @@ export function extractOriginalFilename(filePath: string): string {
   }
 
   return basename; // Fallback: use as-is
-}
-
-export function getMediaDir() {
-  return resolveMediaDir();
 }
 
 export function getMediaMaterializationDir() {

@@ -1,4 +1,3 @@
-import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -13,10 +12,7 @@ export type RecordTrajectoryRuntimeEventOptions = OpenClawAgentDatabaseOptions &
   createdAt?: number;
 };
 
-type TrajectoryRuntimeEventsTable = OpenClawAgentKyselyDatabase["trajectory_runtime_events"];
 type TrajectoryRuntimeDatabase = Pick<OpenClawAgentKyselyDatabase, "trajectory_runtime_events">;
-
-type TrajectoryRuntimeEventSqlRow = Pick<Selectable<TrajectoryRuntimeEventsTable>, "event_json">;
 
 function normalizeRunId(value: string | undefined): string | null {
   const trimmed = value?.trim();

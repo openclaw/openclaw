@@ -62,7 +62,9 @@ function parseJsonValue<T>(raw: string | null): T | undefined {
 
 function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
   const syncMode = parseOptionalTaskFlowSyncMode(row.sync_mode);
-  if (syncMode) return syncMode;
+  if (syncMode) {
+    return syncMode;
+  }
   return row.shape === "single_task" ? "task_mirrored" : "managed";
 }
 
@@ -148,7 +150,7 @@ function selectFlowRows(db: DatabaseSync): FlowRegistryRow[] {
     ])
     .orderBy("created_at", "asc")
     .orderBy("flow_id", "asc");
-  return executeSqliteQuerySync<FlowRegistryRow>(db, query).rows;
+  return executeSqliteQuerySync(db, query).rows;
 }
 
 function upsertFlowRow(db: DatabaseSync, row: Insertable<FlowRunsTable>): void {
@@ -310,7 +312,13 @@ export function loadTaskFlowRegistryStateFromSqlite(): TaskFlowRegistryStoreSnap
 
 export function saveTaskFlowRegistryStateToSqlite(snapshot: TaskFlowRegistryStoreSnapshot) {
   withWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(db, getFlowRegistryKysely(db).deleteFrom("flow_runs"));
+    const kysely = getFlowRegistryKysely(db);
+    const flowIds = [...snapshot.flows.keys()];
+    if (flowIds.length === 0) {
+      executeSqliteQuerySync(db, kysely.deleteFrom("flow_runs"));
+      return;
+    }
+    executeSqliteQuerySync(db, kysely.deleteFrom("flow_runs").where("flow_id", "not in", flowIds));
     for (const flow of snapshot.flows.values()) {
       upsertFlowRow(db, bindFlowRecord(flow));
     }
@@ -332,7 +340,7 @@ export function deleteTaskFlowRegistryRecordFromSqlite(flowId: string) {
   });
 }
 
-export function closeTaskFlowRegistrySqliteStore() {
+export function closeTaskFlowRegistryDatabase() {
   cachedDatabase = null;
 }
 

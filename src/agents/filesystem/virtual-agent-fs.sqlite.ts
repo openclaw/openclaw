@@ -127,6 +127,7 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
           .where("path", "=", normalizeVfsPath(filePath)),
       ) ?? null
     );
+    return row ? virtualAgentFsRowFromDb(row) : null;
   }
 
   #allRows(): VirtualAgentFsRow[] {
@@ -193,7 +194,7 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
 
   readFile(filePath: string): Buffer {
     const row = this.#selectRow(filePath);
-    if (!row || row.kind !== "file") {
+    if (!row || parseVirtualAgentFsEntryKind(row.kind) !== "file") {
       throw new Error(`VFS file not found: ${normalizeVfsPath(filePath)}`);
     }
     return Buffer.from(row.content_blob ?? Buffer.alloc(0));

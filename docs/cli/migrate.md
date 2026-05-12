@@ -220,7 +220,7 @@ For migrated source-installed curated plugins, apply writes:
 
 - `plugins.entries.codex.enabled: true`
 - `plugins.entries.codex.config.codexPlugins.enabled: true`
-- `plugins.entries.codex.config.codexPlugins.allow_destructive_actions: true`
+- `plugins.entries.codex.config.codexPlugins.allow_destructive_actions: false`
 - one explicit plugin entry with `marketplaceName: "openai-curated"` and
   `pluginName` for each selected plugin
 
