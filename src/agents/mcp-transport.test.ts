@@ -34,12 +34,24 @@ function redirectResponse(location: string, status = 302): Response {
   });
 }
 
+function redirectWithoutLocationResponse(status = 302): Response {
+  return new Response(null, { status });
+}
+
 function latestStreamableTransportOptions(): StreamableTransportOptions {
   const options = streamableTransportConstructorMock.mock.calls.at(-1)?.[1];
   if (!options || typeof options !== "object") {
     throw new Error("Expected streamable HTTP transport options");
   }
   return options as StreamableTransportOptions;
+}
+
+function latestStreamableFetch() {
+  const fetch = latestStreamableTransportOptions().fetch;
+  if (typeof fetch !== "function") {
+    throw new Error("Expected streamable HTTP transport fetch");
+  }
+  return fetch;
 }
 
 describe("resolveMcpTransport", () => {
@@ -152,5 +164,53 @@ describe("resolveMcpTransport", () => {
 
     const redirectedHeaders = new Headers(runtimeFetchMock.mock.calls[1]?.[1]?.headers);
     expect(redirectedHeaders.get("content-type")).toBeNull();
+  });
+
+  it("rejects streamable HTTP redirect loops", async () => {
+    runtimeFetchMock.mockResolvedValueOnce(redirectResponse("https://mcp.example.com/mcp"));
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+    });
+
+    await expect(latestStreamableFetch()("https://mcp.example.com/mcp")).rejects.toThrow(
+      "Redirect loop detected",
+    );
+
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects streamable HTTP redirect chains beyond the limit", async () => {
+    for (let index = 0; index <= 20; index += 1) {
+      runtimeFetchMock.mockResolvedValueOnce(
+        redirectResponse(`https://mcp.example.com/redirect-${index}`),
+      );
+    }
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+    });
+
+    await expect(latestStreamableFetch()("https://mcp.example.com/mcp")).rejects.toThrow(
+      "Too many redirects (limit: 20)",
+    );
+
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(21);
+  });
+
+  it("returns streamable HTTP redirect responses that do not include a location", async () => {
+    const response = redirectWithoutLocationResponse();
+    runtimeFetchMock.mockResolvedValueOnce(response);
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+    });
+
+    await expect(latestStreamableFetch()("https://mcp.example.com/mcp")).resolves.toBe(response);
+
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
   });
 });
