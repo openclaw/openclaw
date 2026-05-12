@@ -55,6 +55,8 @@ describe("session cost usage", () => {
     input: number;
     output: number;
     totalTokens?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
     cost?: number;
     provider?: string;
     model?: string;
@@ -67,7 +69,11 @@ describe("session cost usage", () => {
     usage: {
       input: params.input,
       output: params.output,
-      totalTokens: params.totalTokens ?? params.input + params.output,
+      cacheRead: params.cacheRead ?? 0,
+      cacheWrite: params.cacheWrite ?? 0,
+      totalTokens:
+        params.totalTokens ??
+        params.input + params.output + (params.cacheRead ?? 0) + (params.cacheWrite ?? 0),
       ...(params.cost === undefined ? {} : { cost: { total: params.cost } }),
     },
     message: {
@@ -78,7 +84,11 @@ describe("session cost usage", () => {
       usage: {
         input: params.input,
         output: params.output,
-        totalTokens: params.totalTokens ?? params.input + params.output,
+        cacheRead: params.cacheRead ?? 0,
+        cacheWrite: params.cacheWrite ?? 0,
+        totalTokens:
+          params.totalTokens ??
+          params.input + params.output + (params.cacheRead ?? 0) + (params.cacheWrite ?? 0),
         ...(params.cost === undefined ? {} : { cost: { total: params.cost } }),
       },
     },
@@ -262,6 +272,71 @@ describe("session cost usage", () => {
         sessionId: "sess-worker",
       });
       expect(summary?.totalTokens).toBe(11);
+    });
+  });
+
+  it("captures UTC quarter-hour token usage buckets from SQLite transcript events", async () => {
+    const root = await makeRoot("token-quarter");
+    await withStateDir(root, async () => {
+      writeTranscript({
+        sessionId: "sess-token-quarter",
+        events: [
+          assistantUsage({
+            timestamp: "2026-03-15T06:30:00.000Z",
+            input: 5,
+            output: 7,
+            cacheRead: 3,
+            cacheWrite: 2,
+            totalTokens: 25,
+            cost: 0.025,
+          }),
+          assistantUsage({
+            timestamp: "2026-03-15T06:35:00.000Z",
+            input: 1,
+            output: 2,
+            cacheRead: 3,
+            cacheWrite: 4,
+            totalTokens: 10,
+            cost: 0.01,
+          }),
+          assistantUsage({
+            timestamp: "2026-03-15T23:59:00.000Z",
+            input: 2,
+            output: 3,
+            totalTokens: 9,
+            cost: 0.009,
+          }),
+        ],
+      });
+
+      const summary = await loadSessionCostSummary({
+        agentId: "main",
+        sessionId: "sess-token-quarter",
+      });
+      const tokenBuckets = summary?.utcQuarterHourTokenUsage;
+      expect(tokenBuckets).toHaveLength(2);
+
+      const sorted = [...(tokenBuckets ?? [])].toSorted((a, b) => a.quarterIndex - b.quarterIndex);
+      expect(sorted[0]).toMatchObject({
+        date: "2026-03-15",
+        quarterIndex: 26,
+        input: 6,
+        output: 9,
+        cacheRead: 6,
+        cacheWrite: 6,
+        totalTokens: 35,
+      });
+      expect(sorted[0]?.totalCost).toBeCloseTo(0.035, 6);
+      expect(sorted[1]).toMatchObject({
+        date: "2026-03-15",
+        quarterIndex: 95,
+        input: 2,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 9,
+      });
+      expect(sorted[1]?.totalCost).toBeCloseTo(0.009, 6);
     });
   });
 
