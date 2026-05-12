@@ -114,25 +114,23 @@ describe("agent-runner-utils", () => {
       authProfile,
     });
 
-    expect(resolved).toMatchObject({
-      workspaceDir: run.workspaceDir,
-      agentDir: run.agentDir,
-      config: run.config,
-      skillsSnapshot: run.skillsSnapshot,
-      ownerNumbers: run.ownerNumbers,
-      enforceFinalTag: true,
-      provider: "openai",
-      model: "gpt-4.1-mini",
-      authProfileId: "profile-openai",
-      authProfileIdSource: "user",
-      thinkLevel: run.thinkLevel,
-      verboseLevel: run.verboseLevel,
-      reasoningLevel: run.reasoningLevel,
-      execOverrides: run.execOverrides,
-      bashElevated: run.bashElevated,
-      timeoutMs: run.timeoutMs,
-      runId: "run-1",
-    });
+    expect(resolved.workspaceDir).toBe(run.workspaceDir);
+    expect(resolved.agentDir).toBe(run.agentDir);
+    expect(resolved.config).toBe(run.config);
+    expect(resolved.skillsSnapshot).toBe(run.skillsSnapshot);
+    expect(resolved.ownerNumbers).toBe(run.ownerNumbers);
+    expect(resolved.enforceFinalTag).toBe(true);
+    expect(resolved.provider).toBe("openai");
+    expect(resolved.model).toBe("gpt-4.1-mini");
+    expect(resolved.authProfileId).toBe("profile-openai");
+    expect(resolved.authProfileIdSource).toBe("user");
+    expect(resolved.thinkLevel).toBe(run.thinkLevel);
+    expect(resolved.verboseLevel).toBe(run.verboseLevel);
+    expect(resolved.reasoningLevel).toBe(run.reasoningLevel);
+    expect(resolved.execOverrides).toBe(run.execOverrides);
+    expect(resolved.bashElevated).toBe(run.bashElevated);
+    expect(resolved.timeoutMs).toBe(run.timeoutMs);
+    expect(resolved.runId).toBe("run-1");
   });
 
   it("does not force final-tag enforcement for minimax providers", () => {
