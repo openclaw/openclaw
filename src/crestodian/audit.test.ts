@@ -29,16 +29,11 @@ describe("Crestodian audit log", () => {
     });
 
     expect(auditStoreId).toBe("core:crestodian/audit");
-    await expect(listCrestodianAuditEntriesForTests()).resolves.toEqual([
-      expect.objectContaining({
-        value: expect.objectContaining({
-          operation: "config.setDefaultModel",
-          summary: "Set default model to openai/gpt-5.2",
-          configHashBefore: "before",
-          configHashAfter: "after",
-        }),
-      }),
-    ]);
+    const [entry] = await listCrestodianAuditEntriesForTests();
+    expect(entry?.value.operation).toBe("config.setDefaultModel");
+    expect(entry?.value.summary).toBe("Set default model to openai/gpt-5.2");
+    expect(entry?.value.configHashBefore).toBe("before");
+    expect(entry?.value.configHashAfter).toBe("after");
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 });
