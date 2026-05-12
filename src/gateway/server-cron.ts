@@ -8,6 +8,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLogToSqlite, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
