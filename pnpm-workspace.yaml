@@ -82,7 +82,7 @@ allowBuilds:
   sharp: true
   tree-sitter-bash: false
   openclaw: true
-  sqlite3: false
+  sqlite3: true
 
 packageExtensions:
   "@earendil-works/pi-coding-agent":

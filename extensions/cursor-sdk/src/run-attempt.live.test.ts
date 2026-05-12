@@ -61,7 +61,7 @@ describe.skipIf(!CURSOR_API_KEY)("Cursor SDK live integration", () => {
       console.log(`Assistant text: ${text.trim().slice(0, 500)}`);
       console.log("--- End live proof ---");
 
-      expect(result.status).toBe("completed");
+      expect(result.status).toBe("finished");
       expect(text.trim().length).toBeGreaterThan(0);
 
       await agent[Symbol.asyncDispose]();
