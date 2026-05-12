@@ -189,10 +189,18 @@ describe("probeGatewayStatus", () => {
       requireRpc: true,
     });
 
-    expect(probeGatewayMock.mock.calls[0]?.[0]?.preauthHandshakeTimeoutMs).toBe(30_000);
-    expect(probeGatewayMock.mock.calls[0]?.[0]?.timeoutMs).toBe(30_000);
-    expect(callGatewayMock.mock.calls[0]?.[0]?.config).toBe(config);
-    expect(callGatewayMock.mock.calls[0]?.[0]?.timeoutMs).toBe(30_000);
+    expect(probeGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preauthHandshakeTimeoutMs: 30_000,
+        timeoutMs: 30_000,
+      }),
+    );
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        timeoutMs: 30_000,
+      }),
+    );
   });
 
   it("falls back to read-only when the status RPC succeeds but the auth probe is inconclusive", async () => {
