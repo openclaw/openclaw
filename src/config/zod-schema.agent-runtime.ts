@@ -947,6 +947,7 @@ export const AgentEntrySchema = z
           ])
           .optional(),
         thinking: z.string().optional(),
+        taskDeliveryMode: z.enum(["system", "system_and_transcript"]).optional(),
         requireAgentId: z.boolean().optional(),
       })
       .strict()

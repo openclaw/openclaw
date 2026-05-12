@@ -25,13 +25,13 @@ describe("buildSubagentInitialUserMessage", () => {
     expect(msg).toContain("persistent and remains available");
   });
 
-  it("can include an opt-in visible task envelope", () => {
+  it("can include the task in the transcript when requested", () => {
     const msg = buildSubagentInitialUserMessage({
       childDepth: 1,
       maxSpawnDepth: 2,
       persistentSession: false,
       task: "UNIQUE_VISIBLE_SUBAGENT_TASK_TOKEN\n  preserve indentation",
-      visibleTaskEnvelope: true,
+      taskDeliveryMode: "system_and_transcript",
     });
 
     expect(msg).toContain("[Subagent Task]");

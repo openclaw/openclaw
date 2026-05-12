@@ -543,6 +543,8 @@ export type PluginHookSubagentTargetKind = "subagent" | "acp";
 type PluginHookSubagentSpawnBase = {
   childSessionKey: string;
   agentId: string;
+  taskName?: string;
+  taskDeliveryMode?: "system" | "system_and_transcript";
   label?: string;
   mode: "run" | "session";
   requester?: {

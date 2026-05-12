@@ -319,7 +319,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         "model",
         "thinking",
         "runTimeoutSeconds",
-        "visibleTaskEnvelope",
+        "taskDeliveryMode",
         "cleanup",
       ],
     },

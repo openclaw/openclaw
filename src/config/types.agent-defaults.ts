@@ -20,6 +20,7 @@ export type AgentContextInjection = "always" | "continuation-skip" | "never";
 export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 export type SubagentDelegationMode = "suggest" | "prefer";
+export type SubagentTaskDeliveryMode = "system" | "system_and_transcript";
 
 export type Gpt5PromptOverlayConfig = {
   /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
@@ -441,6 +442,8 @@ export type AgentDefaultsConfig = {
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
     runTimeoutSeconds?: number;
+    /** Default task delivery mode for spawned sub-agents. Default: "system". */
+    taskDeliveryMode?: SubagentTaskDeliveryMode;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 120000). */
     announceTimeoutMs?: number;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */

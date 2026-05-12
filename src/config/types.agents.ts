@@ -5,6 +5,7 @@ import type {
   AgentModelEntryConfig,
   EmbeddedPiExecutionContract,
   SubagentDelegationMode,
+  SubagentTaskDeliveryMode,
 } from "./types.agent-defaults.js";
 import type {
   AgentEmbeddedHarnessConfig,
@@ -123,6 +124,8 @@ export type AgentConfig = {
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
+    /** Per-agent default task delivery mode for spawned sub-agents. */
+    taskDeliveryMode?: SubagentTaskDeliveryMode;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };

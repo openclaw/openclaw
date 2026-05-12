@@ -44,7 +44,7 @@ export function describeSessionsSpawnTool(options?: {
       : '`mode="run"` is one-shot background work.',
     "Subagents inherit the parent workspace directory automatically.",
     'For native subagents only, set `context="fork"` when the child needs the current transcript context; otherwise omit it or use `context="isolated"`.',
-    "For native subagents only, set `visibleTaskEnvelope: true` when the child transcript must visibly include the delegated task for auditability.",
+    'For native subagents only, set `taskDeliveryMode="system_and_transcript"` when the child transcript must visibly include the delegated task for auditability.',
     "Use this when the work should happen in a fresh child session instead of the current one.",
   ];
   if (options?.acpAvailable === false) {

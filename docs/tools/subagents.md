@@ -144,6 +144,7 @@ session to confirm the effective tool list.
 - **Model:** inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
 - **Thinking:** inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
 - **Run timeout:** if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
+- **Task delivery:** `sessions_spawn.taskDeliveryMode` wins; otherwise OpenClaw uses `agents.list[].subagents.taskDeliveryMode`, then `agents.defaults.subagents.taskDeliveryMode`, then `"system"`.
 
 ### Delegation prompt mode
 
@@ -220,8 +221,8 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
 <ParamField path="context" type='"isolated" | "fork"' default="isolated">
   `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`.
 </ParamField>
-<ParamField path="visibleTaskEnvelope" type="boolean" default="false">
-  Native sub-agents only. When `true`, the child receives the delegated task in the visible first user message as `[Subagent Task]`; by default, the task remains in hidden runtime context to keep transcripts smaller.
+<ParamField path="taskDeliveryMode" type='"system" | "system_and_transcript"' default='"system"'>
+  Native sub-agents only. `"system"` keeps the delegated task in hidden runtime context. `"system_and_transcript"` also includes it in the child session's first user message as `[Subagent Task]`, so the child transcript remains auditable.
 </ParamField>
 
 <Warning>
@@ -386,6 +387,7 @@ worker sub-sub-agents.
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn when omitted (0 = no timeout)
+        taskDeliveryMode: "system", // or "system_and_transcript" for auditable child transcripts
         announceTimeoutMs: 120000, // per-call gateway announce timeout
       },
     },

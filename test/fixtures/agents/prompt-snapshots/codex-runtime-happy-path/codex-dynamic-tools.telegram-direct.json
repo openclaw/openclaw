@@ -921,7 +921,7 @@
   },
   {
     "deferLoading": true,
-    "description": "Spawn a clean isolated session by default with the native subagent runtime. `mode=\"run\"` is one-shot background work. Subagents inherit the parent workspace directory automatically. For native subagents only, set `context=\"fork\"` when the child needs the current transcript context; otherwise omit it or use `context=\"isolated\"`. For native subagents only, set `visibleTaskEnvelope: true` when the child transcript must visibly include the delegated task for auditability. Use this when the work should happen in a fresh child session instead of the current one.",
+    "description": "Spawn a clean isolated session by default with the native subagent runtime. `mode=\"run\"` is one-shot background work. Subagents inherit the parent workspace directory automatically. For native subagents only, set `context=\"fork\"` when the child needs the current transcript context; otherwise omit it or use `context=\"isolated\"`. For native subagents only, set `taskDeliveryMode=\"system_and_transcript\"` when the child transcript must visibly include the delegated task for auditability. Use this when the work should happen in a fresh child session instead of the current one.",
     "inputSchema": {
       "properties": {
         "agentId": {
@@ -1010,9 +1010,10 @@
           "minimum": 0,
           "type": "number"
         },
-        "visibleTaskEnvelope": {
-          "description": "Native subagent only. When true, also include the delegated task in the child session's first visible user message for auditability. Omit or false keeps the token-saving system-prompt-only default.",
-          "type": "boolean"
+        "taskDeliveryMode": {
+          "description": "Native subagent only. \"system\" keeps the task in hidden runtime context only. \"system_and_transcript\" also includes the delegated task in the child session first user message for auditability.",
+          "enum": ["system", "system_and_transcript"],
+          "type": "string"
         }
       },
       "required": ["task"],

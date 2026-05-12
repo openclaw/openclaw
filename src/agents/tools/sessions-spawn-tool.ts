@@ -16,6 +16,7 @@ import { registerSubagentRun } from "../subagent-registry.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
+  SUBAGENT_TASK_DELIVERY_MODES,
   spawnSubagentDirect,
 } from "../subagent-spawn.js";
 import { normalizeSubagentTaskName } from "../subagent-task-name.js";
@@ -193,12 +194,10 @@ function createSessionsSpawnToolSchema(params: {
           "When true, spawned subagent runs use lightweight bootstrap context. Only applies to runtime='subagent'.",
       }),
     ),
-    visibleTaskEnvelope: Type.Optional(
-      Type.Boolean({
-        description:
-          "Native subagent only. When true, also include the delegated task in the child session's first visible user message for auditability. Omit or false keeps the token-saving system-prompt-only default.",
-      }),
-    ),
+    taskDeliveryMode: optionalStringEnum(SUBAGENT_TASK_DELIVERY_MODES, {
+      description:
+        'Native subagent only. "system" keeps the task in hidden runtime context only. "system_and_transcript" also includes the delegated task in the child session first user message for auditability.',
+    }),
 
     // Inline attachments (snapshot-by-value).
     // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
@@ -310,7 +309,10 @@ export function createSessionsSpawnTool(
         params.context === "fork" || params.context === "isolated" ? params.context : undefined;
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
-      const visibleTaskEnvelope = params.visibleTaskEnvelope === true;
+      const taskDeliveryMode =
+        params.taskDeliveryMode === "system" || params.taskDeliveryMode === "system_and_transcript"
+          ? params.taskDeliveryMode
+          : undefined;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
       if (runtime === "acp" && !acpAvailable) {
         return jsonResult({
@@ -322,8 +324,8 @@ export function createSessionsSpawnTool(
       if (runtime === "acp" && lightContext) {
         throw new Error("lightContext is only supported for runtime='subagent'.");
       }
-      if (runtime === "acp" && visibleTaskEnvelope) {
-        throw new Error("visibleTaskEnvelope is only supported for runtime='subagent'.");
+      if (runtime === "acp" && taskDeliveryMode) {
+        throw new Error("taskDeliveryMode is only supported for runtime='subagent'.");
       }
       if (runtime === "acp" && context === "fork") {
         throw new Error('context="fork" is only supported for runtime="subagent".');
@@ -468,7 +470,7 @@ export function createSessionsSpawnTool(
           sandbox,
           context,
           lightContext,
-          visibleTaskEnvelope,
+          taskDeliveryMode,
           expectsCompletionMessage,
           attachments,
           attachMountPath:

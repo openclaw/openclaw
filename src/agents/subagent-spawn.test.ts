@@ -404,7 +404,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(params.extraSystemPrompt).toBe("system-prompt");
   });
 
-  it("includes the task in the initial user message when visibleTaskEnvelope is enabled", async () => {
+  it("includes the task in the initial user message when transcript delivery is enabled", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     hoisted.callGatewayMock.mockImplementation(
       async (request: { method?: string; params?: unknown }) => {
@@ -424,7 +424,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       {
         task,
-        visibleTaskEnvelope: true,
+        taskDeliveryMode: "system_and_transcript",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -440,6 +440,75 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(params.message).toContain("  keep indentation");
     expect(params.message).not.toContain("**Your Role**");
     expect(params.extraSystemPrompt).toBe("system-prompt");
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskDeliveryMode: "system_and_transcript",
+      }),
+    );
+  });
+
+  it("uses target-agent taskDeliveryMode config when the call omits an override", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          subagents: {
+            taskDeliveryMode: "system",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/workspace-main",
+            subagents: {
+              allowAgents: ["reviewer"],
+            },
+          },
+          {
+            id: "reviewer",
+            workspace: "/tmp/workspace-reviewer",
+            subagents: {
+              taskDeliveryMode: "system_and_transcript",
+            },
+          },
+        ],
+      },
+    });
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: unknown }) => {
+        calls.push(request);
+        if (request.method === "agent") {
+          return { runId: "run-config-task-delivery", status: "accepted", acceptedAt: 1000 };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+
+    const task = "UNIQUE_CONFIGURED_TASK_DELIVERY_TOKEN";
+    const result = await spawnSubagentDirect(
+      {
+        task,
+        agentId: "reviewer",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    const agentCall = calls.find((call) => call.method === "agent");
+    const params = agentCall?.params as { message?: string };
+    expect(params.message).toContain("UNIQUE_CONFIGURED_TASK_DELIVERY_TOKEN");
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskDeliveryMode: "system_and_transcript",
+      }),
+    );
   });
 
   it("returns an error when the initial child session patch is rejected", async () => {

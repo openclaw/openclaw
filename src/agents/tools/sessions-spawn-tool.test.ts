@@ -14,6 +14,7 @@ const hoisted = vi.hoisted(() => {
 vi.mock("../subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_CONTEXT_MODES: ["isolated", "fork"],
   SUBAGENT_SPAWN_MODES: ["run", "session"],
+  SUBAGENT_TASK_DELIVERY_MODES: ["system", "system_and_transcript"],
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
 }));
 
@@ -446,20 +447,20 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.lightContext).toBe(true);
   });
 
-  it("passes visibleTaskEnvelope through to subagent spawns", async () => {
+  it("passes taskDeliveryMode through to subagent spawns", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
     await tool.execute("call-visible-task", {
       task: "summarize this",
-      visibleTaskEnvelope: true,
+      taskDeliveryMode: "system_and_transcript",
     });
 
     expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({
         task: "summarize this",
-        visibleTaskEnvelope: true,
+        taskDeliveryMode: "system_and_transcript",
       }),
       expect.any(Object),
     );
@@ -483,7 +484,7 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
-  it('rejects visibleTaskEnvelope when runtime is not "subagent"', async () => {
+  it('rejects taskDeliveryMode when runtime is not "subagent"', async () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -493,9 +494,9 @@ describe("sessions_spawn tool", () => {
       tool.execute("call-visible-task-acp", {
         runtime: "acp",
         task: "summarize this",
-        visibleTaskEnvelope: true,
+        taskDeliveryMode: "system_and_transcript",
       }),
-    ).rejects.toThrow("visibleTaskEnvelope is only supported for runtime='subagent'.");
+    ).rejects.toThrow("taskDeliveryMode is only supported for runtime='subagent'.");
 
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();

@@ -72,17 +72,20 @@ import {
   type SpawnSubagentContextMode,
   type SpawnSubagentMode,
   type SpawnSubagentSandboxMode,
+  type SpawnSubagentTaskDeliveryMode,
 } from "./subagent-spawn.types.js";
 
 export {
   SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
   SUBAGENT_SPAWN_SANDBOX_MODES,
+  SUBAGENT_TASK_DELIVERY_MODES,
 } from "./subagent-spawn.types.js";
 export type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
   SpawnSubagentSandboxMode,
+  SpawnSubagentTaskDeliveryMode,
 } from "./subagent-spawn.types.js";
 
 export { decodeStrictBase64 };
@@ -128,7 +131,7 @@ export type SpawnSubagentParams = {
   sandbox?: SpawnSubagentSandboxMode;
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
-  visibleTaskEnvelope?: boolean;
+  taskDeliveryMode?: SpawnSubagentTaskDeliveryMode;
   expectsCompletionMessage?: boolean;
   attachments?: Array<{
     name: string;
@@ -600,6 +603,8 @@ async function ensureThreadBindingForSubagentSpawn(params: {
   hookRunner: SubagentLifecycleHookRunner | null;
   childSessionKey: string;
   agentId: string;
+  taskName?: string;
+  taskDeliveryMode: SpawnSubagentTaskDeliveryMode;
   label?: string;
   mode: SpawnSubagentMode;
   requesterSessionKey?: string;
@@ -624,6 +629,8 @@ async function ensureThreadBindingForSubagentSpawn(params: {
       {
         childSessionKey: params.childSessionKey,
         agentId: params.agentId,
+        taskName: params.taskName,
+        taskDeliveryMode: params.taskDeliveryMode,
         label: params.label,
         mode: params.mode,
         requester: params.requester,
@@ -671,6 +678,23 @@ function hasRoutableDeliveryOrigin(
   origin?: DeliveryContext,
 ): origin is DeliveryContext & { channel: string; to: string } {
   return Boolean(origin?.channel && origin.to);
+}
+
+function resolveSubagentTaskDeliveryMode(params: {
+  requested?: SpawnSubagentTaskDeliveryMode;
+  targetAgentConfig?: { subagents?: { taskDeliveryMode?: string } };
+  cfg: OpenClawConfig;
+}): SpawnSubagentTaskDeliveryMode {
+  if (params.requested === "system_and_transcript") {
+    return "system_and_transcript";
+  }
+  if (params.requested === "system") {
+    return "system";
+  }
+  const configured =
+    params.targetAgentConfig?.subagents?.taskDeliveryMode ??
+    params.cfg.agents?.defaults?.subagents?.taskDeliveryMode;
+  return configured === "system_and_transcript" ? "system_and_transcript" : "system";
 }
 
 export async function spawnSubagentDirect(
@@ -858,6 +882,11 @@ export async function spawnSubagentDirect(
   });
   const targetAgentDir = resolveAgentDir(cfg, targetAgentId);
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
+  const taskDeliveryMode = resolveSubagentTaskDeliveryMode({
+    requested: params.taskDeliveryMode,
+    targetAgentConfig,
+    cfg,
+  });
   const plan = resolveSubagentModelAndThinkingPlan({
     cfg,
     targetAgentId,
@@ -959,6 +988,8 @@ export async function spawnSubagentDirect(
       hookRunner,
       childSessionKey,
       agentId: targetAgentId,
+      taskName,
+      taskDeliveryMode,
       label: label || undefined,
       mode: spawnMode,
       requesterSessionKey: requesterInternalKey,
@@ -1051,7 +1082,7 @@ export async function spawnSubagentDirect(
     maxSpawnDepth,
     persistentSession: spawnMode === "session",
     task,
-    visibleTaskEnvelope: params.visibleTaskEnvelope,
+    taskDeliveryMode,
   });
 
   const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
@@ -1231,6 +1262,7 @@ export async function spawnSubagentDirect(
       requesterDisplayKey,
       task,
       taskName,
+      taskDeliveryMode,
       cleanup,
       label: label || undefined,
       model: resolvedModel,
@@ -1280,6 +1312,8 @@ export async function spawnSubagentDirect(
           runId: childRunId,
           childSessionKey,
           agentId: targetAgentId,
+          taskName,
+          taskDeliveryMode,
           label: label || undefined,
           requester: {
             channel: requesterOrigin?.channel,

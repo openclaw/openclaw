@@ -1,9 +1,11 @@
+import type { SpawnSubagentTaskDeliveryMode } from "./subagent-spawn.types.js";
+
 /**
  * First user turn for a native `sessions_spawn` / subagent run.
  *
  * By default, keep the full task out of this message: `buildSubagentSystemPrompt`
  * already places it under **Your Role**, and repeating it here doubles
- * first-request input tokens (#72019). `visibleTaskEnvelope` opts into that
+ * first-request input tokens (#72019). `system_and_transcript` opts into that
  * duplication only when callers need transcript-auditable task delivery.
  */
 export function buildSubagentInitialUserMessage(params: {
@@ -12,7 +14,7 @@ export function buildSubagentInitialUserMessage(params: {
   /** When true, this subagent uses a persistent session for follow-up messages. */
   persistentSession: boolean;
   task?: string;
-  visibleTaskEnvelope?: boolean;
+  taskDeliveryMode?: SpawnSubagentTaskDeliveryMode;
 }): string {
   const lines = [
     `[Subagent Context] You are running as a subagent (depth ${params.childDepth}/${params.maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
@@ -22,7 +24,7 @@ export function buildSubagentInitialUserMessage(params: {
       "[Subagent Context] This subagent session is persistent and remains available for thread follow-up messages.",
     );
   }
-  const taskBody = params.visibleTaskEnvelope === true ? params.task?.trim() : "";
+  const taskBody = params.taskDeliveryMode === "system_and_transcript" ? params.task?.trim() : "";
   if (taskBody) {
     lines.push("[Subagent Task]", taskBody, "Begin. Execute the assigned task to completion.");
   } else {

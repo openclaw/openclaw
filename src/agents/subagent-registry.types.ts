@@ -1,7 +1,7 @@
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+import type { SpawnSubagentMode, SpawnSubagentTaskDeliveryMode } from "./subagent-spawn.types.js";
 
 export type PendingFinalDeliveryPayload = {
   requesterSessionKey: string;
@@ -30,6 +30,7 @@ export type SubagentRunRecord = {
   requesterDisplayKey: string;
   task: string;
   taskName?: string;
+  taskDeliveryMode?: SpawnSubagentTaskDeliveryMode;
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;

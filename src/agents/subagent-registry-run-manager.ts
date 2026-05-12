@@ -28,6 +28,7 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SpawnSubagentTaskDeliveryMode } from "./subagent-spawn.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 const RECOVERABLE_WAIT_RETRY_DELAY_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 25 : 5_000;
@@ -89,6 +90,7 @@ export type RegisterSubagentRunParams = {
   requesterDisplayKey: string;
   task: string;
   taskName?: string;
+  taskDeliveryMode?: SpawnSubagentTaskDeliveryMode;
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
@@ -401,6 +403,7 @@ export function createSubagentRunManager(params: {
       requesterDisplayKey: registerParams.requesterDisplayKey,
       task: registerParams.task,
       taskName: registerParams.taskName,
+      taskDeliveryMode: registerParams.taskDeliveryMode ?? "system",
       cleanup: registerParams.cleanup,
       expectsCompletionMessage: registerParams.expectsCompletionMessage,
       spawnMode,
