@@ -524,6 +524,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Doctor/systemd: track generated gateway unit provenance and make update-mode repairs auto-stage only untouched OpenClaw-generated units, writing `.suggested` units with review/apply commands for operator-modified or legacy units. Fixes #80508.
 - Models/auth: keep `agents.defaults.model` when `openclaw models auth login` runs without `--set-default`, so provider onboarding patches add models without silently switching the primary. Fixes #78162. (#78241) Thanks @neeravmakwana.
 - Control UI/chat: localize the remaining chat welcome, composer, run-control, session/model/thinking selector, and zh-CN Skills labels through the Control UI i18n pipeline so non-English browser locales no longer see those chat controls in English. Fixes #79937. Thanks @BunsDev.
 - Control UI: surface browser-blocked WebSocket security failures with wss:// and loopback dashboard guidance instead of leaving the connection on a dead security error. Thanks @BunsDev.

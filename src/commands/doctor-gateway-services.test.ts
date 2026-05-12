@@ -42,6 +42,11 @@ const mocks = vi.hoisted(() => ({
   renderSystemNodeWarning: vi.fn().mockReturnValue(undefined),
   resolveSystemNodeInfo: vi.fn().mockResolvedValue(null),
   isSystemdUnitActive: vi.fn().mockResolvedValue(false),
+  readSystemdUnitUpdateStatus: vi.fn().mockResolvedValue({ status: "unchanged" }),
+  writeSuggestedSystemdUnit: vi.fn().mockResolvedValue({
+    unitPath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+    suggestedPath: "/home/test/.config/systemd/user/openclaw-gateway.service.suggested",
+  }),
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
   note: vi.fn(),
 }));
@@ -93,7 +98,9 @@ vi.mock("../daemon/service.js", () => ({
 
 vi.mock("../daemon/systemd.js", () => ({
   isSystemdUnitActive: mocks.isSystemdUnitActive,
+  readSystemdUnitUpdateStatus: mocks.readSystemdUnitUpdateStatus,
   uninstallLegacySystemdUnits: mocks.uninstallLegacySystemdUnits,
+  writeSuggestedSystemdUnit: mocks.writeSuggestedSystemdUnit,
 }));
 
 vi.mock("../terminal/note.js", () => ({
@@ -326,6 +333,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.resolveSystemNodeInfo.mockResolvedValue(null);
     mocks.isSystemdUnitActive.mockResolvedValue(false);
+    mocks.readSystemdUnitUpdateStatus.mockResolvedValue({ status: "unchanged" });
+    mocks.writeSuggestedSystemdUnit.mockResolvedValue({
+      unitPath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+      suggestedPath: "/home/test/.config/systemd/user/openclaw-gateway.service.suggested",
+    });
     mocks.resolveGatewayAuthTokenForService.mockImplementation(async (cfg: OpenClawConfig, env) => {
       const configToken =
         typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : undefined;
@@ -759,13 +771,18 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
-  it("defers systemd service config rewrites during non-interactive update repairs", async () => {
+  it("writes suggested units for legacy systemd service config repairs during update repairs", async () => {
     mockProcessPlatform("linux");
     setupGatewayEntrypointRepairScenario({
       currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
       installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
       installWorkingDirectory: "/tmp",
     });
+    mocks.readCommand.mockResolvedValue({
+      ...createGatewayCommand("/Users/test/Library/npm/node_modules/openclaw/dist/entry.js"),
+      sourcePath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+    });
+    mocks.readSystemdUnitUpdateStatus.mockResolvedValue({ status: "missing-provenance" });
 
     await runNonInteractiveRepair({
       cfg: { gateway: {} },
@@ -777,6 +794,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "Gateway service config",
     );
     expectNoteContaining("left the live systemd unit unchanged", "Gateway service config");
+    expect(mocks.writeSuggestedSystemdUnit).toHaveBeenCalledTimes(1);
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).not.toHaveBeenCalled();
   });
@@ -801,6 +819,155 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expectNoNoteContaining("left the live systemd unit unchanged", "Gateway service config");
     expect(mocks.stage).toHaveBeenCalledTimes(1);
     expect(mocks.install).not.toHaveBeenCalled();
+  });
+
+  it("auto-stages update repairs for unchanged generated systemd units", async () => {
+    mockProcessPlatform("linux");
+    const command = {
+      ...createGatewayCommand("/opt/openclaw/dist/entry.js"),
+      sourcePath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+    };
+    mocks.readCommand.mockResolvedValue(command);
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: testServiceAuditCodes.gatewayPortMismatch,
+          message: "Gateway service port is outdated.",
+          detail: "1234 -> 18789",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      ...createGatewayCommand("/opt/openclaw/dist/index.js"),
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    mocks.readSystemdUnitUpdateStatus.mockResolvedValue({
+      status: "unchanged",
+      provenance: {
+        schemaVersion: 1,
+        unitPath: command.sourcePath,
+        unitName: "openclaw-gateway.service",
+        sha256: "old",
+        openClawVersion: "2026.5.1",
+        generatedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+
+    await runNonInteractiveRepair({
+      cfg: { gateway: {} },
+      updateInProgress: true,
+    });
+
+    expect(mocks.readSystemdUnitUpdateStatus).toHaveBeenCalledWith({
+      env: process.env,
+      unitPath: command.sourcePath,
+    });
+    expect(mocks.stage).toHaveBeenCalledTimes(1);
+    expect(mocks.writeSuggestedSystemdUnit).not.toHaveBeenCalled();
+  });
+
+  it("writes a suggested unit instead of staging legacy systemd units without provenance", async () => {
+    mockProcessPlatform("linux");
+    const command = {
+      ...createGatewayCommand("/opt/openclaw/dist/entry.js"),
+      sourcePath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+    };
+    mocks.readCommand.mockResolvedValue(command);
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: testServiceAuditCodes.gatewayPortMismatch,
+          message: "Gateway service port is outdated.",
+          detail: "1234 -> 18789",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      ...createGatewayCommand("/opt/openclaw/dist/index.js"),
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    mocks.readSystemdUnitUpdateStatus.mockResolvedValue({ status: "missing-provenance" });
+    mocks.writeSuggestedSystemdUnit.mockResolvedValue({
+      unitPath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+      suggestedPath: "/home/test/.config/systemd/user/openclaw-gateway.service.suggested",
+      environmentFilePath: "/home/test/.openclaw/gateway.systemd.env",
+      suggestedEnvironmentFilePath: "/home/test/.openclaw/gateway.systemd.env.suggested",
+    });
+
+    await runNonInteractiveRepair({
+      cfg: { gateway: {} },
+      updateInProgress: true,
+    });
+
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.writeSuggestedSystemdUnit).toHaveBeenCalledTimes(1);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("has no OpenClaw generated-unit provenance"),
+      "Gateway service config",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("diff -u '/home/test/.config/systemd/user/openclaw-gateway.service'"),
+      "Gateway service config",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("cp '/home/test/.openclaw/gateway.systemd.env.suggested'"),
+      "Gateway service config",
+    );
+  });
+
+  it("writes a suggested unit instead of staging operator-modified systemd units", async () => {
+    mockProcessPlatform("linux");
+    const command = {
+      ...createGatewayCommand("/opt/openclaw/dist/entry.js"),
+      sourcePath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+    };
+    mocks.readCommand.mockResolvedValue(command);
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: testServiceAuditCodes.gatewayPortMismatch,
+          message: "Gateway service port is outdated.",
+          detail: "1234 -> 18789",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      ...createGatewayCommand("/opt/openclaw/dist/index.js"),
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    mocks.readSystemdUnitUpdateStatus.mockResolvedValue({
+      status: "modified",
+      liveSha256: "live",
+      provenance: {
+        schemaVersion: 1,
+        unitPath: command.sourcePath,
+        unitName: "openclaw-gateway.service",
+        sha256: "generated",
+        openClawVersion: "2026.5.1",
+        generatedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+
+    await runNonInteractiveRepair({
+      cfg: { gateway: {} },
+      updateInProgress: true,
+    });
+
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.writeSuggestedSystemdUnit).toHaveBeenCalledTimes(1);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway systemd unit has operator edits"),
+      "Gateway service config",
+    );
   });
 
   it("treats SecretRef-managed gateway token as non-persisted service state", async () => {
@@ -846,9 +1013,18 @@ describe("maybeRepairGatewayServiceConfig", () => {
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
       },
       async () => {
         setupGatewayTokenRepairScenario();
+        mocks.readCommand.mockResolvedValue({
+          programArguments: gatewayProgramArguments,
+          environment: {
+            OPENCLAW_GATEWAY_TOKEN: "stale-token",
+          },
+          sourcePath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+        });
+        mocks.readSystemdUnitUpdateStatus.mockResolvedValue({ status: "missing-provenance" });
 
         const cfg: OpenClawConfig = {
           gateway: {},
@@ -870,7 +1046,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     );
   });
 
-  it("does not persist or stage embedded service tokens during systemd update repairs", async () => {
+  it("does not persist embedded service tokens during systemd update repairs", async () => {
     mockProcessPlatform("linux");
     Object.defineProperty(process.stdin, "isTTY", {
       value: false,
@@ -903,8 +1079,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         );
 
         expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-        expectNoteContaining("left the live systemd unit unchanged", "Gateway service config");
-        expect(mocks.stage).not.toHaveBeenCalled();
+        expect(mocks.stage).toHaveBeenCalledTimes(1);
         expect(mocks.install).not.toHaveBeenCalled();
       },
     );
