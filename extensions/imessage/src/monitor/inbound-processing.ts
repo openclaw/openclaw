@@ -186,6 +186,9 @@ function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
   groupAllowFrom: string[];
   allowFrom: string[];
 }): string[] {
+  if (params.groupAllowFrom.length > 0) {
+    return params.groupAllowFrom;
+  }
   const legacyChatTargets = params.allowFrom.filter((entry) =>
     isIMessageConversationAllowTarget(entry),
   );

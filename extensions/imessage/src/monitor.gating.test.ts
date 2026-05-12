@@ -540,6 +540,30 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
+  it("does not merge legacy conversation allowFrom entries when groupAllowFrom is configured", async () => {
+    const cfg = baseCfg();
+    cfg.channels ??= {};
+    cfg.channels.imessage ??= {};
+    cfg.channels.imessage.groupPolicy = "allowlist";
+
+    const { decision } = await resolveDispatchDecision({
+      cfg,
+      message: {
+        id: 37,
+        chat_id: 101,
+        sender: "+15550003333",
+        is_from_me: false,
+        text: "@openclaw ok",
+        is_group: true,
+      },
+      allowFrom: ["chat_id:101"],
+      groupAllowFrom: ["+15550004444"],
+      groupPolicy: "allowlist",
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "not in groupAllowFrom" });
+  });
+
   it("does not authorize group control commands from conversation allowlist entries", async () => {
     const cfg = baseCfg();
     cfg.channels ??= {};
