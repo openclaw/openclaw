@@ -8,6 +8,7 @@ import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-events.js";
+import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createSourceDeliveryPlan,
   resolveSourceDeliveryOutcome,
@@ -20,7 +21,6 @@ import {
   logMessageQueued,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
-import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -1191,17 +1191,20 @@ export async function runCronIsolatedAgentTurn(params: {
   const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
 
   const turnStartedAtMs = Date.now();
-  logMessageQueued({
-    sessionId: prepared.context.runSessionId,
-    sessionKey: prepared.context.runSessionKey,
-    channel: "cron",
-    source: "cron-isolated",
-  });
-  logSessionStateChange({
-    sessionId: prepared.context.runSessionId,
-    sessionKey: prepared.context.runSessionKey,
-    state: "processing",
-  });
+  const diagnosticsEnabled = isDiagnosticsEnabled(params.cfg);
+  if (diagnosticsEnabled) {
+    logMessageQueued({
+      sessionId: prepared.context.runSessionId,
+      sessionKey: prepared.context.runSessionKey,
+      channel: "cron",
+      source: "cron-isolated",
+    });
+    logSessionStateChange({
+      sessionId: prepared.context.runSessionId,
+      sessionKey: prepared.context.runSessionKey,
+      state: "processing",
+    });
+  }
 
   let outcome: "completed" | "error" = "completed";
   let outcomeError: string | undefined;
@@ -1276,19 +1279,21 @@ export async function runCronIsolatedAgentTurn(params: {
       ),
     });
   } finally {
-    logSessionStateChange({
-      sessionId: prepared.context.runSessionId,
-      sessionKey: prepared.context.runSessionKey,
-      state: "idle",
-    });
-    logMessageProcessed({
-      channel: "cron",
-      sessionId: prepared.context.runSessionId,
-      sessionKey: prepared.context.runSessionKey,
-      durationMs: Date.now() - turnStartedAtMs,
-      outcome,
-      error: outcomeError,
-    });
+    if (diagnosticsEnabled) {
+      logSessionStateChange({
+        sessionId: prepared.context.runSessionId,
+        sessionKey: prepared.context.runSessionKey,
+        state: "idle",
+      });
+      logMessageProcessed({
+        channel: "cron",
+        sessionId: prepared.context.runSessionId,
+        sessionKey: prepared.context.runSessionKey,
+        durationMs: Date.now() - turnStartedAtMs,
+        outcome,
+        error: outcomeError,
+      });
+    }
     // Release runtime references after the run completes (success or failure).
     // The session entry has already been persisted to disk by this point,
     // so the in-memory store and run context can be safely dropped.

@@ -101,4 +101,29 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     expect(orderedTypes[orderedTypes.length - 1]).toBe("message.processed");
     expect(orderedTypes).toContain("session.state");
   });
+
+  it("emits no lifecycle events when diagnostics.enabled is false", async () => {
+    const events: EventRecord[] = [];
+    const unsubscribe = onDiagnosticEvent((evt) => {
+      const e = evt as EventRecord;
+      if (
+        e.type === "message.queued" ||
+        e.type === "session.state" ||
+        e.type === "message.processed"
+      ) {
+        events.push(e);
+      }
+    });
+
+    try {
+      const params = makeParams();
+      params.cfg = { diagnostics: { enabled: false } } as never;
+      const result = await runCronIsolatedAgentTurn(params);
+      expect(result.status).toBe("ok");
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toEqual([]);
+  });
 });
