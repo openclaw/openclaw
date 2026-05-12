@@ -5,6 +5,7 @@ import {
   summarizeCodexAccountRateLimits,
   summarizeCodexRateLimits,
 } from "./app-server/rate-limits.js";
+import type { CodexAccountAuthOverview } from "./command-account.js";
 import type { SafeValue } from "./command-rpc.js";
 
 type CodexStatusProbes = {
@@ -107,6 +108,9 @@ export function formatAccount(
   limits: SafeValue<JsonValue | undefined>,
   authOverview?: CodexAccountAuthOverview,
 ): string {
+  if (authOverview) {
+    return formatAccountAuthOverview(authOverview);
+  }
   const formattedLimits = limits.ok
     ? formatCodexRateLimitDetails(limits.value)
     : formatCodexDisplayText(limits.error);
@@ -119,6 +123,26 @@ export function formatAccount(
     `Account: ${account.ok ? formatCodexAccountSummary(account.value) : formatCodexDisplayText(account.error)}`,
     rateLimitBlock,
   ].join("\n\n");
+}
+
+function formatAccountAuthOverview(overview: CodexAccountAuthOverview): string {
+  const lines = [overview.headline];
+  if (overview.reason) {
+    lines.push(`Reason: ${overview.reason}`);
+  }
+  if (overview.usage) {
+    lines.push(`Usage: ${overview.usage}`);
+  }
+  if (overview.rows.length > 0) {
+    lines.push("", overview.orderTitle);
+    for (const [index, row] of overview.rows.entries()) {
+      lines.push(`  ${index + 1}. ${row.label} - ${row.kind} - ${row.status}`);
+      if (row.usage) {
+        lines.push(`     Usage: ${row.usage}`);
+      }
+    }
+  }
+  return lines.map(formatCodexAccountLine).join("\n");
 }
 
 export function formatComputerUseStatus(status: CodexComputerUseStatus): string {
@@ -223,13 +247,7 @@ function escapeCodexChatTextPreservingAt(value: string): string {
 }
 
 function formatCodexAccountLine(value: string): string {
-  if (value === "") {
-    return "";
-  }
-  const safe = sanitizeCodexTextForDisplay(value).trimEnd();
-  if (!safe.trim()) {
-    return "";
-  }
+  const safe = formatCodexTextForDisplay(value);
   const emailPattern = /[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+/gu;
   let formatted = "";
   let lastIndex = 0;
