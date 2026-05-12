@@ -1338,6 +1338,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           });
           if (reconciliation.pendingPairing?.created) {
             const requestContext = buildRequestContext();
+            const resolvedAt = Date.now();
+            for (const superseded of reconciliation.pendingPairing.superseded ?? []) {
+              requestContext.broadcast(
+                "node.pair.resolved",
+                {
+                  requestId: superseded.requestId,
+                  nodeId: superseded.nodeId,
+                  decision: "rejected",
+                  ts: resolvedAt,
+                },
+                { dropIfSlow: true },
+              );
+            }
             requestContext.broadcast("node.pair.requested", reconciliation.pendingPairing.request, {
               dropIfSlow: true,
             });

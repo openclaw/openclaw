@@ -41,6 +41,15 @@ export type NodePairingPendingRequest = NodePairingRequestInput & {
   ts: number;
 };
 
+export type NodePairingSupersededRequest = Pick<NodePairingPendingRequest, "requestId" | "nodeId">;
+
+export type RequestNodePairingResult = {
+  status: "pending";
+  request: NodePairingPendingRequest;
+  created: boolean;
+  superseded?: NodePairingSupersededRequest[];
+};
+
 type NodePairingPendingEntry = NodePairingPendingRequest & {
   requiredApproveScopes: NodeApprovalScope[];
 };
@@ -262,11 +271,7 @@ export async function getPairedNode(
 export async function requestNodePairing(
   req: NodePairingRequestInput,
   baseDir?: string,
-): Promise<{
-  status: "pending";
-  request: NodePairingPendingRequest;
-  created: boolean;
-}> {
+): Promise<RequestNodePairingResult> {
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const nodeId = normalizeNodeId(req.nodeId);
@@ -276,7 +281,7 @@ export async function requestNodePairing(
     const pendingForNode = Object.values(state.pendingById)
       .filter((pending) => pending.nodeId === nodeId)
       .toSorted((left, right) => right.ts - left.ts);
-    return await reconcilePendingPairingRequests({
+    const result = await reconcilePendingPairingRequests({
       pendingById: state.pendingById,
       existing: pendingForNode,
       incoming: {
@@ -291,6 +296,12 @@ export async function requestNodePairing(
         }),
       persist: async () => await persistState(state, baseDir),
     });
+    const superseded = result.created
+      ? pendingForNode
+          .filter((pending) => pending.requestId !== result.request.requestId)
+          .map((pending) => ({ requestId: pending.requestId, nodeId: pending.nodeId }))
+      : [];
+    return superseded.length > 0 ? { ...result, superseded } : result;
   });
 }
 

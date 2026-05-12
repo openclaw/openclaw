@@ -107,6 +107,7 @@ describe("node pairing tokens", () => {
       );
 
       expect(commandSecond.created).toBe(false);
+      expect(commandSecond.superseded).toBeUndefined();
       expect(commandSecond.request.requestId).toBe(commandFirst.request.requestId);
       expect(commandSecond.request.displayName).toBe("Updated Node");
       expect(commandSecond.request.commands).toEqual(["canvas.snapshot"]);
@@ -131,6 +132,7 @@ describe("node pairing tokens", () => {
       );
 
       expect(reorderedSecond.created).toBe(false);
+      expect(reorderedSecond.superseded).toBeUndefined();
       expect(reorderedSecond.request.requestId).toBe(reorderedFirst.request.requestId);
 
       await requestNodePairing(
@@ -172,6 +174,7 @@ describe("node pairing tokens", () => {
       );
 
       expect(second.created).toBe(true);
+      expect(second.superseded).toEqual([{ requestId: first.request.requestId, nodeId: "node-1" }]);
       expect(second.request.requestId).not.toBe(first.request.requestId);
 
       const list = await listNodePairing(baseDir);
@@ -218,6 +221,9 @@ describe("node pairing tokens", () => {
         baseDir,
       );
       expect(capsSecond.created).toBe(true);
+      expect(capsSecond.superseded).toEqual([
+        { requestId: capsFirst.request.requestId, nodeId: "node-2" },
+      ]);
       expect(capsSecond.request.requestId).not.toBe(capsFirst.request.requestId);
 
       const permissionsFirst = await requestNodePairing(
@@ -238,6 +244,9 @@ describe("node pairing tokens", () => {
       );
 
       expect(permissionsSecond.created).toBe(true);
+      expect(permissionsSecond.superseded).toEqual([
+        { requestId: permissionsFirst.request.requestId, nodeId: "node-3" },
+      ]);
       expect(permissionsSecond.request.requestId).not.toBe(permissionsFirst.request.requestId);
     });
   });

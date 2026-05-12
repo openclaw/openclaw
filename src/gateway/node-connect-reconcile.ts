@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   NodePairingPairedNode,
-  NodePairingPendingRequest,
   NodePairingRequestInput,
+  RequestNodePairingResult,
 } from "../infra/node-pairing.js";
 import {
   normalizeDeclaredNodeCommands,
@@ -10,16 +10,10 @@ import {
 } from "./node-command-policy.js";
 import type { ConnectParams } from "./protocol/index.js";
 
-type PendingNodePairingResult = {
-  status: "pending";
-  request: NodePairingPendingRequest;
-  created: boolean;
-};
-
 export type NodeConnectPairingReconcileResult = {
   nodeId: string;
   effectiveCommands: string[];
-  pendingPairing?: PendingNodePairingResult;
+  pendingPairing?: RequestNodePairingResult;
 };
 
 function resolveApprovedReconnectCommands(params: {
@@ -56,7 +50,7 @@ export async function reconcileNodePairingOnConnect(params: {
   connectParams: ConnectParams;
   pairedNode: NodePairingPairedNode | null;
   reportedClientIp?: string;
-  requestPairing: (input: NodePairingRequestInput) => Promise<PendingNodePairingResult>;
+  requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult>;
 }): Promise<NodeConnectPairingReconcileResult> {
   const nodeId = params.connectParams.device?.id ?? params.connectParams.client.id;
   const allowlist = resolveNodeCommandAllowlist(params.cfg, {
