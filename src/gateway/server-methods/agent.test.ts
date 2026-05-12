@@ -536,25 +536,24 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.acp).toEqual(existingAcpMeta);
   });
 
-  it("drops a stale transcript path when a stale session rotates ids", async () => {
+  it("rotates a stale session id", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     dateOnlyFakeClockActive = true;
     vi.setSystemTime(new Date("2026-05-07T12:00:00.000Z"));
     const staleEntry = {
       sessionId: "old-session-id",
-      sessionFile: "/tmp/openclaw/agents/main/sessions/old-session-id.jsonl",
       updatedAt: 0,
       sessionStartedAt: 0,
     };
     mockMainSessionEntry(staleEntry);
 
     let capturedEntry: Record<string, unknown> | undefined;
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+    mocks.applySessionEntryWrite.mockImplementation(async (_path, updater) => {
       const store: Record<string, unknown> = {
         "agent:main:main": { ...staleEntry },
       };
       const result = await updater(store);
-      capturedEntry = result as Record<string, unknown>;
+      capturedEntry = store["agent:main:main"] as Record<string, unknown>;
       return result;
     });
     mocks.agentCommand.mockResolvedValue({
@@ -565,7 +564,6 @@ describe("gateway agent handler", () => {
     await runMainAgent("test", "test-idem-stale-transcript");
 
     expect(capturedEntry?.sessionId).not.toBe("old-session-id");
-    expect(capturedEntry?.sessionFile).toBeUndefined();
   });
 
   it("keeps stored group metadata when a trusted group session receives caller-supplied selectors", async () => {
@@ -872,18 +870,15 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("preserves cliSessionIds from existing session entry", async () => {
-    const existingCliSessionIds = { "claude-cli": "abc-123-def" };
-    const existingClaudeCliSessionId = "abc-123-def";
+  it("preserves CLI session bindings from existing session entry", async () => {
+    const existingCliSessionBindings = { "claude-cli": { sessionId: "abc-123-def" } };
 
     mockMainSessionEntry({
-      cliSessionIds: existingCliSessionIds,
-      claudeCliSessionId: existingClaudeCliSessionId,
+      cliSessionBindings: existingCliSessionBindings,
     });
 
     const capturedEntry = await runMainAgentAndCaptureEntry("test-idem");
-    expect(capturedEntry.cliSessionIds).toEqual(existingCliSessionIds);
-    expect(capturedEntry.claudeCliSessionId).toBe(existingClaudeCliSessionId);
+    expect(capturedEntry.cliSessionBindings).toEqual(existingCliSessionBindings);
   });
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
@@ -975,20 +970,26 @@ describe("gateway agent handler", () => {
       updatedAt: Date.now(),
       fastMode: true,
       sendPolicy: "deny",
-      lastChannel: "telegram",
-      lastTo: "-100123",
-      lastAccountId: "acct-1",
-      lastThreadId: 42,
+      channel: "telegram",
+      deliveryContext: {
+        channel: "telegram",
+        to: "-100123",
+        accountId: "acct-1",
+        threadId: 42,
+      },
     });
     mocks.applySessionEntryWrite.mockImplementation(async (_path, updater) => {
       const store: Record<string, unknown> = {
         "agent:main:main": buildExistingMainStoreEntry({
           fastMode: true,
           sendPolicy: "deny",
-          lastChannel: "telegram",
-          lastTo: "-100123",
-          lastAccountId: "acct-1",
-          lastThreadId: 42,
+          channel: "telegram",
+          deliveryContext: {
+            channel: "telegram",
+            to: "-100123",
+            accountId: "acct-1",
+            threadId: 42,
+          },
         }),
       };
       return await updater(store);
@@ -1610,17 +1611,21 @@ describe("gateway agent handler", () => {
     expect(spawnedCall.workspaceDir).toBe("/tmp/inherited");
   });
 
-  it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {
+  it("keeps origin messageChannel as webchat while delivery uses typed session context", async () => {
     mockMainSessionEntry({
       sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "12345",
+      deliveryContext: {
+        channel: "telegram",
+        to: "12345",
+      },
     });
     mocks.applySessionEntryWrite.mockImplementation(async (_path, updater) => {
       const store: Record<string, unknown> = {
         "agent:main:main": buildExistingMainStoreEntry({
-          lastChannel: "telegram",
-          lastTo: "12345",
+          deliveryContext: {
+            channel: "telegram",
+            to: "12345",
+          },
         }),
       };
       return await updater(store);
@@ -1674,8 +1679,11 @@ describe("gateway agent handler", () => {
     }
     mockMainSessionEntry({
       sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
+      channel: "telegram",
+      deliveryContext: {
+        channel: "telegram",
+        to: "123",
+      },
     });
     mocks.agentCommand.mockResolvedValue({
       payloads: [{ text: "ok" }],
@@ -1713,8 +1721,11 @@ describe("gateway agent handler", () => {
     }
     mockMainSessionEntry({
       sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
+      channel: "telegram",
+      deliveryContext: {
+        channel: "telegram",
+        to: "123",
+      },
     });
     mocks.agentCommand.mockResolvedValue({
       payloads: [{ text: "ok" }],
@@ -1742,8 +1753,11 @@ describe("gateway agent handler", () => {
   it("does not honor caller-supplied exec approval runtime handoff ids without registry state", async () => {
     mockMainSessionEntry({
       sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
+      channel: "telegram",
+      deliveryContext: {
+        channel: "telegram",
+        to: "123",
+      },
     });
     mocks.agentCommand.mockResolvedValue({
       payloads: [{ text: "ok" }],
@@ -1781,8 +1795,11 @@ describe("gateway agent handler", () => {
     }
     mockMainSessionEntry({
       sessionId: "existing-session-id",
-      lastChannel: "telegram",
-      lastTo: "123",
+      channel: "telegram",
+      deliveryContext: {
+        channel: "telegram",
+        to: "123",
+      },
     });
     mocks.agentCommand.mockResolvedValue({
       payloads: [{ text: "ok" }],
@@ -2580,15 +2597,14 @@ describe("gateway agent handler", () => {
     expect(mocks.resolveVoiceWakeRouteByTrigger).not.toHaveBeenCalled();
   });
 
-  it("handles missing cliSessionIds gracefully", async () => {
+  it("handles missing CLI session bindings gracefully", async () => {
     mockMainSessionEntry({});
 
     const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-2");
     // Should be undefined, not cause an error
-    expect(capturedEntry.cliSessionIds).toBeUndefined();
-    expect(capturedEntry.claudeCliSessionId).toBeUndefined();
+    expect(capturedEntry.cliSessionBindings).toBeUndefined();
   });
-  it("leaves legacy main alias cleanup to doctor when writing a canonical session entry", async () => {
+  it("leaves noncanonical main row cleanup to doctor when writing a canonical session entry", async () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {
         session: { mainKey: "work" },
@@ -2600,7 +2616,6 @@ describe("gateway agent handler", () => {
       },
       canonicalKey: "agent:main:work",
       agentId: "main",
-      legacyKey: "agent:main:MAIN",
     });
 
     let capturedStore: Record<string, unknown> | undefined;
