@@ -223,7 +223,11 @@ describe("config form renderer", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Plugin Enabled");
+    const label = expectElement(
+      container.querySelector(".cfg-toggle-row__label"),
+      "plugin enabled label",
+    );
+    expect(label.textContent?.trim()).toBe("Plugin Enabled");
   });
 
   it("renders tags from uiHints metadata", () => {
@@ -246,8 +250,7 @@ describe("config form renderer", () => {
     const tags = Array.from(container.querySelectorAll(".cfg-tag")).map((node) =>
       node.textContent?.trim(),
     );
-    expect(tags).toContain("security");
-    expect(tags).toContain("secret");
+    expect(tags).toEqual(["security", "secret"]);
 
     render(
       renderConfigForm({
@@ -263,10 +266,21 @@ describe("config form renderer", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Gateway");
-    expect(container.textContent).toContain("Token");
-    expect(container.textContent).not.toContain("Allow From");
-    expect(container.textContent).not.toContain("Mode");
+    const sectionTitle = expectElement(
+      container.querySelector(".config-section-card__title"),
+      "tag-filtered section title",
+    );
+    expect(sectionTitle.textContent?.trim()).toBe("Gateway");
+    const fieldLabel = expectElement(
+      container.querySelector(".cfg-field__label"),
+      "tag-filtered field label",
+    );
+    expect(fieldLabel.textContent?.trim()).toBe("Token");
+    expect(
+      Array.from(container.querySelectorAll(".cfg-field__label")).map((label) =>
+        label.textContent?.trim(),
+      ),
+    ).toEqual(["Token"]);
   });
 
   it("supports SecretInput unions in additionalProperties maps", () => {
