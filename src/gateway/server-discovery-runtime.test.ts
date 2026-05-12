@@ -232,4 +232,30 @@ describe("startGatewayDiscovery", () => {
     ]);
     expect(result.bonjourStop).toBeNull();
   });
+
+  it("omits the CLI path from wide-area DNS-SD in minimal mode", async () => {
+    process.env.NODE_ENV = "development";
+    delete process.env.VITEST;
+
+    const logs = makeLogs();
+
+    await startGatewayDiscovery({
+      machineDisplayName: "Lab Mac",
+      port: 18789,
+      gatewayTls: { enabled: false },
+      wideAreaDiscoveryEnabled: true,
+      wideAreaDiscoveryDomain: "openclaw.internal.",
+      tailscaleMode: "serve",
+      mdnsMode: "minimal",
+      gatewayDiscoveryServices: [],
+      logDiscovery: logs,
+    });
+
+    const [zoneParams] = mocks.writeWideAreaGatewayZone.mock.calls.at(-1) ?? [];
+    if (zoneParams === undefined) {
+      throw new Error("Expected wide-area gateway zone to be written");
+    }
+    expect(zoneParams.cliPath).toBeUndefined();
+    expect(mocks.resolveBonjourCliPath).not.toHaveBeenCalled();
+  });
 });
