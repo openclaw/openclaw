@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- fix: scan plugin runtime entries during install [AI]. (#80998) Thanks @pgondhi987.
 - Require auth for sandbox browser CDP relay [AI]. (#81002) Thanks @pgondhi987.
 - fix: detect carried exec command forms [AI]. (#81000) Thanks @pgondhi987.
 - Reject truncated exec approval commands [AI]. (#81001) Thanks @pgondhi987.
