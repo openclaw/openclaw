@@ -24,6 +24,7 @@ const WhatsAppGroupEntrySchema = z
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     systemPrompt: z.string().optional(),
+    allowFrom: z.array(z.string()).optional(),
   })
   .strict()
   .optional();

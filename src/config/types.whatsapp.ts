@@ -28,6 +28,7 @@ export type WhatsAppGroupConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Optional system prompt for this group. */
   systemPrompt?: string;
+  allowFrom?: string[];
 };
 
 export type WhatsAppDirectConfig = {

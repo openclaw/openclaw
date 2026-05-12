@@ -255,6 +255,34 @@ content and identifiers.
     - if `groupAllowFrom` is unset, runtime falls back to `allowFrom` when available
     - sender allowlists are evaluated before mention/reply activation
 
+    Per-group sender overrides:
+
+    - `channels.whatsapp.groups.<jid>.allowFrom` (or the matching account-scoped entry) accepts an E.164 list that **overrides** (does not merge with) the channel/account-level `groupAllowFrom` for that one JID
+    - leave `allowFrom` unset (or empty) for a group to keep the channel/account-level allowlist
+    - matches the same per-group `allowFrom` already supported by Feishu, IRC, LINE, Telegram, and Nextcloud-talk
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15550001111"],
+      groups: {
+        "1203630000000000000@g.us": {
+          // Customer-support group: only staff numbers may drive the agent.
+          allowFrom: ["+15550003333", "+15550004444"],
+        },
+        "1203630000000000001@g.us": {
+          // Personal/private group: only the operator may drive the agent.
+          allowFrom: ["+15550005555"],
+        },
+        // Other groups inherit the channel-level groupAllowFrom above.
+      },
+    },
+  },
+}
+```
+
     Note: if no `channels.whatsapp` block exists at all, runtime group-policy fallback is `allowlist` (with a warning log), even if `channels.defaults.groupPolicy` is set.
 
   </Tab>

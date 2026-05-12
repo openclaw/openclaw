@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- WhatsApp: add per-group `allowFrom` on `channels.whatsapp.groups.<jid>` (and the matching account-scoped entry) so each group can carry its own sender allowlist. A non-empty per-group `allowFrom` overrides (does not merge with) the channel/account-level `groupAllowFrom` for that JID, while groups without an override keep the existing channel/account-level list. Matches the per-group `allowFrom` already shipped by Feishu, IRC, LINE, Telegram, and Nextcloud-talk. Fixes #69926. Thanks @jack-stormentswe.
 - Gateway/OpenAI HTTP: honor `max_completion_tokens` and `max_tokens` on inbound `/v1/chat/completions` requests so client-provided token caps reach the upstream provider via `streamParams.maxTokens`, with `max_completion_tokens` taking precedence when both are sent. Thanks @Lellansin.
 - Models/OpenAI CLI auth: make `openclaw models auth login --provider openai` start the ChatGPT/Codex account login by default, while `--method api-key` remains the explicit OpenAI API-key setup path.
 - Google/Gemini: normalize retired Gemini 3 Pro Preview ids inside explicit SDK OAuth auth-result config patches, so provider helpers emit `google/gemini-3.1-pro-preview` for Gemini 3.1 testing.
