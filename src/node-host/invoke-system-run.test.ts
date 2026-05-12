@@ -750,6 +750,21 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "denies safe-bin shell expansion carriers in allowlist mode",
+    async () => {
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        security: "allowlist",
+        ask: "off",
+        command: ["/bin/sh", "-lc", "head -c${IFS}16${IFS}${OPENCLAW_CONFIG_PATH}"],
+      });
+
+      expect(runCommand).not.toHaveBeenCalled();
+      expectInvokeErrorMessage(sendInvokeResult, { message: "allowlist miss" });
+    },
+  );
+
   it("denies abbreviated PowerShell encoded payloads even when the wrapper is allowlisted", async () => {
     const binDir = createFixtureDir("openclaw-pwsh-allowlist-");
     const executablePath = createTempExecutable({ dir: binDir, name: "pwsh" });
