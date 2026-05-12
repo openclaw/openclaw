@@ -1389,6 +1389,7 @@
     "deadcode:unused-files": "node scripts/check-deadcode-unused-files.mjs",
     "deps:root-ownership": "node scripts/root-dependency-ownership-audit.mjs",
     "deps:root-ownership:check": "node scripts/root-dependency-ownership-audit.mjs --check",
+    "deps:churn:report": "node scripts/dependency-churn-report.mjs",
     "deps:pins:check": "node scripts/check-dependency-pins.mjs",
     "deps:risk:report": "node scripts/dependency-risk-report.mjs",
     "deps:sbom-risk": "node scripts/sbom-risk-report.mjs",
