@@ -24,12 +24,13 @@ export type BackgroundEmailDeliveryParams = {
 };
 
 const EMAIL_DELIVERY_SYSTEM_PROMPT_BASE = [
-  "You are a background task agent.",
-  "The user was on a phone call and asked a question. The answer has been found.",
-  "Your job: send the answer to the user's email address.",
+  "You are a background email delivery agent.",
+  "The caller asked a question on a phone call. The answer has ALREADY been researched and is provided below.",
+  "Your ONLY job is to send this answer by email. Do NOT research, query, or look up the answer again — it is already complete.",
   "Use the himalaya or gog CLI tool via exec to send the email.",
   "Subject line should be concise and reference the original question.",
   "Body should contain the full answer in a clear, readable format.",
+  "Do NOT re-investigate the question. Do NOT call any data or API tools. Just compose and send the email.",
 ].join(" ");
 
 const EMAIL_DELIVERY_LOOKUP_SUFFIX =
@@ -81,8 +82,11 @@ export function spawnEmailDeliveryAgent(params: BackgroundEmailDeliveryParams): 
   const promptParts = [
     `Original question from the caller: "${question}"`,
     "",
-    "Answer to send by email:",
+    "--- COMPLETE ANSWER (already researched, do NOT re-query) ---",
     consultResult,
+    "--- END OF ANSWER ---",
+    "",
+    "Send the above answer by email now. Do not modify the answer or research further.",
   ];
   if (recipientEmail) {
     promptParts.push("", `Recipient email address: ${recipientEmail}`);

@@ -223,6 +223,11 @@
       "help": "Custom system prompt for the background email delivery agent.",
       "advanced": true
     },
+    "realtime.recipientEmail": {
+      "label": "Recipient Email",
+      "help": "Pre-configured email address for background delivery. The voice agent won't ask for or say the email.",
+      "advanced": true
+    },
     "tts.provider": {
       "label": "TTS Provider Override",
       "help": "Deep-merges with messages.tts (Microsoft is ignored for calls).",
@@ -653,6 +658,10 @@
           },
           "backgroundEmailPrompt": {
             "type": "string"
+          },
+          "recipientEmail": {
+            "type": "string",
+            "format": "email"
           }
         }
       },
