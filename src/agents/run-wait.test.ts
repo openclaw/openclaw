@@ -57,10 +57,9 @@ function expectAgentWaitRequest(
 
   const paramTimeoutMs = expectNumber(request.params?.timeoutMs, `${runId} param timeoutMs`);
   const requestTimeoutMs = expectNumber(request.timeoutMs, `${runId} request timeoutMs`);
-  expect(requestTimeoutMs).toBeGreaterThan(0);
+  expect(requestTimeoutMs).toBe(paramTimeoutMs + 2_000);
   expect(requestTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs + 2_000);
-  expect(paramTimeoutMs).toBe(requestTimeoutMs - 2_000);
-  expect(paramTimeoutMs).toBeGreaterThan(0);
+  expect(paramTimeoutMs).toBeGreaterThanOrEqual(1);
   expect(paramTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs);
 }
 

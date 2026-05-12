@@ -735,16 +735,14 @@ describe("subscribeEmbeddedPiSession", () => {
       });
       await flushBlockReplyCallbacks();
 
-      expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
       const payloadTexts = onBlockReply.mock.calls
         .map((call) => call[0]?.text)
         .filter((value): value is string => typeof value === "string");
+      expect(payloadTexts).toEqual(["Final answer"]);
       for (const text of payloadTexts) {
         expect(text).not.toContain("Reasoning");
         expect(text).not.toContain(open);
       }
-      const combined = payloadTexts.join(" ").replace(/\s+/g, " ").trim();
-      expect(combined).toBe("Final answer");
     },
   );
 
