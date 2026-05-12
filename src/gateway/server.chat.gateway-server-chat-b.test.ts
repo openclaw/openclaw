@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -9,6 +10,7 @@ import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
 import {
   connectOk,
+  connectWebchatClient,
   createGatewaySuiteHarness,
   dispatchInboundMessageMock,
   getReplyFromConfig,
@@ -711,6 +713,63 @@ describe("gateway server chat", () => {
         testState.agentConfig = undefined;
       }
     });
+  });
+
+  test("webchat chat.send keeps Codex harness visible replies automatic", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-webchat-codex-"));
+    let webchatWs: GatewaySocket | undefined;
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            agentHarnessId: "codex",
+          },
+        },
+      });
+      registerAgentHarness({
+        id: "codex",
+        label: "Codex",
+        deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: vi.fn(async () => ({}) as never),
+      });
+
+      let capturedOpts: GetReplyOptions | undefined;
+      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+        capturedOpts = opts;
+        return { text: "visible webchat reply" };
+      });
+
+      webchatWs = await connectWebchatClient({ port: harness.port });
+      const finalPromise = onceMessage(
+        webchatWs,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-webchat-codex-visible",
+        8000,
+      );
+
+      const sendRes = await rpcReq(webchatWs, "chat.send", {
+        sessionKey: "main",
+        message: "hello from browser webchat",
+        idempotencyKey: "idem-webchat-codex-visible",
+      });
+      expect(sendRes.ok).toBe(true);
+      const finalEvent = await finalPromise;
+
+      expect(capturedOpts?.sourceReplyDeliveryMode).toBe("automatic");
+      expect(JSON.stringify(finalEvent.payload)).toContain("visible webchat reply");
+    } finally {
+      clearAgentHarnesses();
+      testState.sessionStorePath = undefined;
+      webchatWs?.close();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
   });
 
   test("chat.history hard-caps single oversized nested payloads", async () => {
