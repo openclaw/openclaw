@@ -36,7 +36,7 @@ describe("whatsapp setup entry", () => {
     if (!doctorSessionMigrationSurface) {
       throw new Error("expected WhatsApp doctor session migration surface");
     }
-    expect(Object.keys(doctorSessionMigrationSurface).sort()).toEqual([
+    expect(Object.keys(doctorSessionMigrationSurface).toSorted()).toEqual([
       "canonicalizeLegacySessionKey",
       "isLegacyGroupSessionKey",
     ]);
