@@ -384,11 +384,11 @@ describe("subagent announce seam flow", () => {
     });
 
     expect(didAnnounce).toBe(true);
-    expect(queueEmbeddedPiMessageWithOutcomeMock).toHaveBeenCalledWith(
-      "session-typed-channel-steer",
-      expect.stringContaining("[Internal task completion event]"),
-      { steeringMode: "all" },
-    );
+    const queuedCall = queueEmbeddedPiMessageWithOutcomeMock.mock.calls[0];
+    expect(queuedCall?.[0]).toBe("session-typed-channel-steer");
+    expect(queuedCall?.[1]).toContain("[Internal task completion event]");
+    expect(queuedCall?.[1]).toContain("task: do thing");
+    expect(queuedCall?.[2]).toEqual({ steeringMode: "all" });
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
