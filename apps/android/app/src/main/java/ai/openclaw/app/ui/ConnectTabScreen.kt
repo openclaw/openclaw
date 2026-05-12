@@ -90,7 +90,12 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   var manualHostInput by rememberSaveable { mutableStateOf(manualHost.ifBlank { "10.0.2.2" }) }
   var manualPortInput by rememberSaveable { mutableStateOf(manualPort.toString()) }
   var manualTlsInput by rememberSaveable { mutableStateOf(manualTls) }
+  var manualDisableTlsVerificationInput by rememberSaveable { mutableStateOf(viewModel.manualDisableTlsVerification.value) }
   var passwordInput by rememberSaveable { mutableStateOf("") }
+  var bearerTokenInput by rememberSaveable { mutableStateOf("") }
+  var basicAuthUserInput by rememberSaveable { mutableStateOf("") }
+  var basicAuthPasswordInput by rememberSaveable { mutableStateOf("") }
+
   var validationText by rememberSaveable { mutableStateOf<String?>(null) }
 
   if (pendingTrust != null) {
@@ -257,6 +262,9 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               fallbackBootstrapToken = gatewayBootstrapToken,
               fallbackToken = gatewayToken,
               fallbackPassword = passwordInput,
+              fallbackBearerToken = bearerTokenInput,
+              fallbackBasicAuthUser = basicAuthUserInput,
+              fallbackBasicAuthPassword = basicAuthPasswordInput,
             )
 
           if (config == null) {
@@ -291,6 +299,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           viewModel.setManualHost(config.host)
           viewModel.setManualPort(config.port)
           viewModel.setManualTls(config.tls)
+          viewModel.setManualDisableTlsVerification(manualDisableTlsVerificationInput)
           viewModel.setGatewayBootstrapToken(config.bootstrapToken)
           if (config.token.isNotBlank()) {
             viewModel.setGatewayToken(config.token)
@@ -298,11 +307,17 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             viewModel.setGatewayToken("")
           }
           viewModel.setGatewayPassword(config.password)
+          viewModel.setGatewayBearerToken(bearerTokenInput)
+          viewModel.setGatewayBasicAuthUser(basicAuthUserInput)
+          viewModel.setGatewayBasicAuthPassword(basicAuthPasswordInput)
           viewModel.connect(
             GatewayEndpoint.manual(host = config.host, port = config.port),
             token = config.token.ifEmpty { null },
             bootstrapToken = config.bootstrapToken.ifEmpty { null },
             password = config.password.ifEmpty { null },
+            bearerToken = config.bearerToken.ifEmpty { null },
+            basicAuthUser = config.basicAuthUser.ifEmpty { null },
+            basicAuthPassword = config.basicAuthPassword.ifEmpty { null },
           )
         },
         modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -531,6 +546,37 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               )
             }
 
+            if (manualTlsInput) {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+              ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                  Text("Disable TLS Verification", style = mobileHeadline, color = mobileText)
+                  Text(
+                    "Skips TLS fingerprint checks. Use only for development.",
+                    style = mobileCallout,
+                    color = mobileTextSecondary,
+                  )
+                }
+                Switch(
+                  checked = manualDisableTlsVerificationInput,
+                  onCheckedChange = {
+                    manualDisableTlsVerificationInput = it
+                    validationText = null
+                  },
+                  colors =
+                    SwitchDefaults.colors(
+                      checkedTrackColor = mobileWarning,
+                      uncheckedTrackColor = mobileBorderStrong,
+                      checkedThumbColor = Color.White,
+                      uncheckedThumbColor = Color.White,
+                    ),
+                )
+              }
+            }
+
             Text("Token (optional)", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
             OutlinedTextField(
               value = gatewayToken,
@@ -552,6 +598,45 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             OutlinedTextField(
               value = passwordInput,
               onValueChange = { passwordInput = it },
+              placeholder = { Text("password", style = mobileBody, color = mobileTextTertiary) },
+              modifier = Modifier.fillMaxWidth(),
+              singleLine = true,
+              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+              textStyle = mobileBody.copy(color = mobileText),
+              shape = RoundedCornerShape(14.dp),
+              colors = outlinedColors(),
+            )
+
+            Text("BEARER TOKEN (OPTIONAL)", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            OutlinedTextField(
+              value = bearerTokenInput,
+              onValueChange = { bearerTokenInput = it },
+              placeholder = { Text("bearer token", style = mobileBody, color = mobileTextTertiary) },
+              modifier = Modifier.fillMaxWidth(),
+              singleLine = true,
+              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+              textStyle = mobileBody.copy(color = mobileText),
+              shape = RoundedCornerShape(14.dp),
+              colors = outlinedColors(),
+            )
+
+            Text("BASIC-AUTH USER (OPTIONAL)", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            OutlinedTextField(
+              value = basicAuthUserInput,
+              onValueChange = { basicAuthUserInput = it },
+              placeholder = { Text("username", style = mobileBody, color = mobileTextTertiary) },
+              modifier = Modifier.fillMaxWidth(),
+              singleLine = true,
+              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+              textStyle = mobileBody.copy(color = mobileText),
+              shape = RoundedCornerShape(14.dp),
+              colors = outlinedColors(),
+            )
+
+            Text("BASIC-AUTH PASSWORD (OPTIONAL)", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            OutlinedTextField(
+              value = basicAuthPasswordInput,
+              onValueChange = { basicAuthPasswordInput = it },
               placeholder = { Text("password", style = mobileBody, color = mobileTextTertiary) },
               modifier = Modifier.fillMaxWidth(),
               singleLine = true,

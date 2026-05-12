@@ -98,8 +98,12 @@ class MainViewModel(
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
+  val manualDisableTlsVerification: StateFlow<Boolean> = prefs.manualDisableTlsVerification
   val gatewayToken: StateFlow<String> = prefs.gatewayToken
   val gatewayBootstrapToken: StateFlow<String> = prefs.gatewayBootstrapToken
+  val gatewayBearerToken: StateFlow<String> = prefs.gatewayBearerToken
+  val gatewayBasicAuthUser: StateFlow<String> = prefs.gatewayBasicAuthUser
+  val gatewayBasicAuthPassword: StateFlow<String> = prefs.gatewayBasicAuthPassword
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
@@ -202,6 +206,10 @@ class MainViewModel(
     prefs.setManualTls(value)
   }
 
+  fun setManualDisableTlsVerification(value: Boolean) {
+    prefs.setManualDisableTlsVerification(value)
+  }
+
   fun setGatewayToken(value: String) {
     prefs.setGatewayToken(value)
   }
@@ -212,6 +220,18 @@ class MainViewModel(
 
   fun setGatewayPassword(value: String) {
     prefs.setGatewayPassword(value)
+  }
+
+  fun setGatewayBearerToken(value: String) {
+    prefs.setGatewayBearerToken(value)
+  }
+
+  fun setGatewayBasicAuthUser(value: String) {
+    prefs.setGatewayBasicAuthUser(value)
+  }
+
+  fun setGatewayBasicAuthPassword(value: String) {
+    prefs.setGatewayBasicAuthPassword(value)
   }
 
   fun resetGatewaySetupAuth() {
@@ -312,6 +332,9 @@ class MainViewModel(
     token: String?,
     bootstrapToken: String?,
     password: String?,
+    bearerToken: String? = null,
+    basicAuthUser: String? = null,
+    basicAuthPassword: String? = null,
   ) {
     ensureRuntime().connect(
       endpoint,
@@ -319,6 +342,9 @@ class MainViewModel(
         token = token,
         bootstrapToken = bootstrapToken,
         password = password,
+        bearerToken = bearerToken,
+        basicAuthUser = basicAuthUser,
+        basicAuthPassword = basicAuthPassword,
       ),
     )
   }

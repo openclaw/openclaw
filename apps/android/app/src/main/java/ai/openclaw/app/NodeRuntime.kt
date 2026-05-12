@@ -79,6 +79,9 @@ class NodeRuntime(
     val token: String?,
     val bootstrapToken: String?,
     val password: String?,
+    val bearerToken: String? = null,
+    val basicAuthUser: String? = null,
+    val basicAuthPassword: String? = null,
   )
 
   private val appContext = context.applicationContext
@@ -196,6 +199,7 @@ class NodeRuntime(
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
       hasRecordAudioPermission = { hasRecordAudioPermission() },
       manualTls = { manualTls.value },
+      manualDisableTlsVerification = { manualDisableTlsVerification.value },
     )
 
   private val invokeDispatcher: InvokeDispatcher =
@@ -335,6 +339,7 @@ class NodeRuntime(
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
         updateStatus()
+        handleTlsMismatchPrompt(message)
         micCapture.onGatewayConnectionChanged(false)
       },
       onEvent = { event, payloadJson ->
@@ -371,6 +376,7 @@ class NodeRuntime(
         _canvasRehydratePending.value = false
         _canvasRehydrateErrorText.value = null
         updateStatus()
+        handleTlsMismatchPrompt(message)
         showLocalCanvasOnDisconnect()
       },
       onEvent = { _, _ -> },
@@ -514,7 +520,7 @@ class NodeRuntime(
     _isConnected.value = operatorConnected
     val operator = operatorStatusText.trim()
     val node = nodeStatusText.trim()
-    _statusText.value =
+    val baseText =
       when {
         operatorConnected && _nodeConnected.value -> "Connected"
         operatorConnected && !_nodeConnected.value -> "Connected (node offline)"
@@ -527,7 +533,26 @@ class NodeRuntime(
         operator.isNotBlank() && operator != "Offline" -> operator
         else -> node
       }
+
+    _statusText.value = baseText
     updateHomeCanvasState()
+  }
+
+  private fun handleTlsMismatchPrompt(message: String) {
+    val prefix = "Gateway error: gateway TLS fingerprint mismatch: expected "
+    if (message.startsWith(prefix)) {
+      val regex = Regex("expected (.*), got (.*)")
+      val match = regex.find(message)
+      if (match != null) {
+        val actual = match.groupValues[2]
+        val endpoint = connectedEndpoint
+        val auth = activeGatewayAuth
+        if (endpoint != null && auth != null && _pendingGatewayTrust.value == null) {
+          _statusText.value = "Verify gateway TLS fingerprint…"
+          _pendingGatewayTrust.value = GatewayTrustPrompt(endpoint, actual, auth)
+        }
+      }
+    }
   }
 
   private fun resolveMainSessionKey(): String {
@@ -624,6 +649,7 @@ class NodeRuntime(
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
+  val manualDisableTlsVerification: StateFlow<Boolean> = prefs.manualDisableTlsVerification
   val gatewayToken: StateFlow<String> = prefs.gatewayToken
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
 
@@ -845,6 +871,10 @@ class NodeRuntime(
 
   fun setManualTls(value: Boolean) {
     prefs.setManualTls(value)
+  }
+
+  fun setManualDisableTlsVerification(value: Boolean) {
+    prefs.setManualDisableTlsVerification(value)
   }
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
@@ -1071,6 +1101,7 @@ class NodeRuntime(
     reconnect: Boolean = false,
   ) {
     activeGatewayAuth = auth
+    canvas.setAuthHeaders(auth.bearerToken, auth.basicAuthUser, auth.basicAuthPassword)
     val tls = connectionManager.resolveTlsParams(endpoint)
     val operatorAuth =
       resolveOperatorSessionConnectAuth(
@@ -1088,6 +1119,9 @@ class NodeRuntime(
         operatorAuth.token,
         operatorAuth.bootstrapToken,
         operatorAuth.password,
+        operatorAuth.bearerToken,
+        operatorAuth.basicAuthUser,
+        operatorAuth.basicAuthPassword,
         connectionManager.buildOperatorConnectOptions(),
         tls,
       )
@@ -1097,6 +1131,9 @@ class NodeRuntime(
       auth.token,
       auth.bootstrapToken,
       auth.password,
+      auth.bearerToken,
+      auth.basicAuthUser,
+      auth.basicAuthPassword,
       connectionManager.buildNodeConnectOptions(),
       tls,
     )
@@ -1153,11 +1190,22 @@ class NodeRuntime(
         token = prefs.loadGatewayToken(),
         bootstrapToken = prefs.loadGatewayBootstrapToken(),
         password = prefs.loadGatewayPassword(),
+        bearerToken = prefs.loadGatewayBearerToken(),
+        basicAuthUser = prefs.loadGatewayBasicAuthUser(),
+        basicAuthPassword = prefs.loadGatewayBasicAuthPassword(),
       )
 
   fun acceptGatewayTrustPrompt() {
     val prompt = _pendingGatewayTrust.value ?: return
     _pendingGatewayTrust.value = null
+
+    val oldFingerprint = prefs.loadGatewayTlsFingerprint(prompt.endpoint.stableId)
+    if (oldFingerprint != null && oldFingerprint != prompt.fingerprintSha256) {
+      val deviceId = identityStore.loadOrCreate().deviceId
+      deviceAuthStore.clearToken(deviceId, "node")
+      deviceAuthStore.clearToken(deviceId, "operator")
+    }
+
     prefs.saveGatewayTlsFingerprint(prompt.endpoint.stableId, prompt.fingerprintSha256)
     beginConnect(endpoint = prompt.endpoint, auth = prompt.auth)
   }
@@ -1215,6 +1263,9 @@ class NodeRuntime(
       operatorAuth.token,
       operatorAuth.bootstrapToken,
       operatorAuth.password,
+      operatorAuth.bearerToken,
+      operatorAuth.basicAuthUser,
+      operatorAuth.basicAuthPassword,
       connectionManager.buildOperatorConnectOptions(),
       connectionManager.resolveTlsParams(endpoint),
     )
@@ -1591,6 +1642,9 @@ internal fun resolveOperatorSessionConnectAuth(
       token = explicitToken,
       bootstrapToken = null,
       password = null,
+      bearerToken = auth.bearerToken,
+      basicAuthUser = auth.basicAuthUser,
+      basicAuthPassword = auth.basicAuthPassword,
     )
   }
 
@@ -1600,6 +1654,9 @@ internal fun resolveOperatorSessionConnectAuth(
       token = null,
       bootstrapToken = null,
       password = explicitPassword,
+      bearerToken = auth.bearerToken,
+      basicAuthUser = auth.basicAuthUser,
+      basicAuthPassword = auth.basicAuthPassword,
     )
   }
 
@@ -1609,6 +1666,9 @@ internal fun resolveOperatorSessionConnectAuth(
       token = null,
       bootstrapToken = null,
       password = null,
+      bearerToken = auth.bearerToken,
+      basicAuthUser = auth.basicAuthUser,
+      basicAuthPassword = auth.basicAuthPassword,
     )
   }
 
@@ -1618,6 +1678,9 @@ internal fun resolveOperatorSessionConnectAuth(
       token = null,
       bootstrapToken = explicitBootstrapToken,
       password = null,
+      bearerToken = auth.bearerToken,
+      basicAuthUser = auth.basicAuthUser,
+      basicAuthPassword = auth.basicAuthPassword,
     )
   }
 

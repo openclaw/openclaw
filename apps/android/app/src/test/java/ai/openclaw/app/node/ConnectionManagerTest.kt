@@ -533,6 +533,7 @@ class ConnectionManagerTest {
       callLogAvailable = { callLogAvailable },
       hasRecordAudioPermission = { hasRecordAudioPermission },
       manualTls = { false },
+      manualDisableTlsVerification = { false },
     )
   }
 }

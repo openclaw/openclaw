@@ -469,4 +469,32 @@ class GatewayConfigResolverTest {
   }
 
   private fun encodeSetupCode(payloadJson: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
+
+  @Test
+  fun resolveGatewayConnectConfigPreservesOptionalTokens() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = false,
+        manualHostInput = "192.168.31.100",
+        manualPortInput = "18789",
+        manualTlsInput = true,
+        fallbackBootstrapToken = "",
+        fallbackToken = "",
+        fallbackPassword = "",
+        fallbackBearerToken = "bearer-token-1",
+        fallbackBasicAuthUser = "user-1",
+        fallbackBasicAuthPassword = "password-1",
+      )
+
+    assertEquals("192.168.31.100", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(true, resolved?.tls)
+    assertEquals("bearer-token-1", resolved?.bearerToken)
+    assertEquals("user-1", resolved?.basicAuthUser)
+    assertEquals("password-1", resolved?.basicAuthPassword)
+  }
 }
