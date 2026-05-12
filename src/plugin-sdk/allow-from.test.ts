@@ -64,7 +64,7 @@ describe("isAllowedParsedChatSender", () => {
       expected: true,
     },
     {
-      name: "matches conversation targets by default",
+      name: "does not match conversation targets by default",
       input: [
         {
           allowFrom: ["chat_id:42"],
@@ -84,41 +84,41 @@ describe("isAllowedParsedChatSender", () => {
           allowFrom: ["chat_identifier:team"],
           sender: "+15551234567",
           chatIdentifier: "team",
-          normalizeSender: (sender: string) => sender,
-          parseAllowTarget,
-        },
-      ],
-      expected: [true, true, true],
-    },
-    {
-      name: "does not match conversation targets when they are disabled",
-      input: [
-        {
-          allowFrom: ["chat_id:42"],
-          sender: "+15551234567",
-          chatId: 42,
-          allowConversationTargets: false,
-          normalizeSender: (sender: string) => sender,
-          parseAllowTarget,
-        },
-        {
-          allowFrom: ["chat_guid:thread-42"],
-          sender: "+15551234567",
-          chatGuid: "thread-42",
-          allowConversationTargets: false,
-          normalizeSender: (sender: string) => sender,
-          parseAllowTarget,
-        },
-        {
-          allowFrom: ["chat_identifier:team"],
-          sender: "+15551234567",
-          chatIdentifier: "team",
-          allowConversationTargets: false,
           normalizeSender: (sender: string) => sender,
           parseAllowTarget,
         },
       ],
       expected: [false, false, false],
+    },
+    {
+      name: "matches conversation targets when they are enabled",
+      input: [
+        {
+          allowFrom: ["chat_id:42"],
+          sender: "+15551234567",
+          chatId: 42,
+          allowConversationTargets: true,
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+        {
+          allowFrom: ["chat_guid:thread-42"],
+          sender: "+15551234567",
+          chatGuid: "thread-42",
+          allowConversationTargets: true,
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+        {
+          allowFrom: ["chat_identifier:team"],
+          sender: "+15551234567",
+          chatIdentifier: "team",
+          allowConversationTargets: true,
+          normalizeSender: (sender: string) => sender,
+          parseAllowTarget,
+        },
+      ],
+      expected: [true, true, true],
     },
   ])("$name", ({ input, expected }) => {
     if (Array.isArray(input)) {
