@@ -30,6 +30,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   let prevHome: string | undefined;
   let prevOpenClawHome: string | undefined;
   let prevStateDir: string | undefined;
+  let prevServiceKind: string | undefined;
 
   beforeEach(() => {
     note.mockClear();
@@ -41,6 +42,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     prevHome = process.env.HOME;
     prevOpenClawHome = process.env.OPENCLAW_HOME;
     prevStateDir = process.env.OPENCLAW_STATE_DIR;
+    prevServiceKind = process.env.OPENCLAW_SERVICE_KIND;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_SERVICE_KIND;
@@ -73,6 +75,11 @@ describe("noteSecurityWarnings gateway exposure", () => {
       process.env.OPENCLAW_STATE_DIR = prevStateDir;
     }
     closeOpenClawStateDatabaseForTest();
+    if (prevServiceKind === undefined) {
+      delete process.env.OPENCLAW_SERVICE_KIND;
+    } else {
+      process.env.OPENCLAW_SERVICE_KIND = prevServiceKind;
+    }
   });
 
   const lastMessage = () => String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
