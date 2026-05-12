@@ -67,6 +67,9 @@ vi.mock("../logging/subsystem.js", () => ({
 const { createGatewayCloseHandler } = await import("./server-close.js");
 type GatewayCloseHandlerParams = Parameters<typeof createGatewayCloseHandler>[0];
 type GatewayCloseClient = GatewayCloseHandlerParams["clients"] extends Set<infer T> ? T : never;
+type DrainActiveSessionsForShutdown = NonNullable<
+  GatewayCloseHandlerParams["drainActiveSessionsForShutdown"]
+>;
 
 function createGatewayCloseTestDeps(
   overrides: Partial<GatewayCloseHandlerParams> = {},
@@ -154,14 +157,10 @@ describe("createGatewayCloseHandler", () => {
       ([event]) => event?.type === "gateway" && event?.action === "pre-restart",
     )?.[0];
 
-    expect(shutdownEvent?.context).toMatchObject({
-      reason: "gateway restarting",
-      restartExpectedMs: 123,
-    });
-    expect(preRestartEvent?.context).toMatchObject({
-      reason: "gateway restarting",
-      restartExpectedMs: 123,
-    });
+    expect(shutdownEvent?.context?.reason).toBe("gateway restarting");
+    expect(shutdownEvent?.context?.restartExpectedMs).toBe(123);
+    expect(preRestartEvent?.context?.reason).toBe("gateway restarting");
+    expect(preRestartEvent?.context?.restartExpectedMs).toBe(123);
   });
 
   it("continues shutdown and records a warning when gateway shutdown hook stalls", async () => {
@@ -188,6 +187,64 @@ describe("createGatewayCloseHandler", () => {
         String(message).includes("gateway:shutdown hook timed out after 1000ms"),
       ),
     ).toBe(true);
+  });
+
+  it("drains the active-session tracker with reason=shutdown on SIGTERM/SIGINT close", async () => {
+    const drainActiveSessionsForShutdown = vi.fn<DrainActiveSessionsForShutdown>(async () => ({
+      emittedSessionIds: ["session-A", "session-B"],
+      timedOut: false,
+    }));
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ drainActiveSessionsForShutdown }),
+    );
+
+    await close({ reason: "SIGTERM" });
+
+    expect(drainActiveSessionsForShutdown).toHaveBeenCalledTimes(1);
+    expect(drainActiveSessionsForShutdown.mock.calls[0]?.[0]?.reason).toBe("shutdown");
+  });
+
+  it("drains the active-session tracker with reason=restart when restartExpectedMs is set", async () => {
+    const drainActiveSessionsForShutdown = vi.fn<DrainActiveSessionsForShutdown>(async () => ({
+      emittedSessionIds: ["session-A"],
+      timedOut: false,
+    }));
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ drainActiveSessionsForShutdown }),
+    );
+
+    await close({ reason: "gateway restarting", restartExpectedMs: 1234 });
+
+    expect(drainActiveSessionsForShutdown).toHaveBeenCalledTimes(1);
+    expect(drainActiveSessionsForShutdown.mock.calls[0]?.[0]?.reason).toBe("restart");
+  });
+
+  it("records a warning and continues shutdown when the session-end drain reports a timeout", async () => {
+    const drainActiveSessionsForShutdown = vi.fn<DrainActiveSessionsForShutdown>(async () => ({
+      emittedSessionIds: ["session-A"],
+      timedOut: true,
+    }));
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ drainActiveSessionsForShutdown }),
+    );
+
+    const result = await close({ reason: "SIGTERM" });
+
+    expect(drainActiveSessionsForShutdown).toHaveBeenCalledTimes(1);
+    expect(result.warnings).toContain("session-end-drain");
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("session-end-drain timed out"),
+      ),
+    ).toBe(true);
+  });
+
+  it("skips the session-end drain step when no drain helper is provided", async () => {
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+
+    const result = await close({ reason: "SIGTERM" });
+
+    expect(result.warnings).not.toContain("session-end-drain");
   });
 
   it("continues restart shutdown and records a warning when gateway pre-restart hook stalls", async () => {
@@ -231,7 +288,8 @@ describe("createGatewayCloseHandler", () => {
 
     const result = await close({ reason: "test shutdown" });
 
-    expect(result.warnings).toEqual(expect.arrayContaining(["bonjour", "channel/telegram"]));
+    expect(result.warnings).toContain("bonjour");
+    expect(result.warnings).toContain("channel/telegram");
     expect(result.warnings).not.toContain("channel/discord");
     expect(lifecycleUnsub).toHaveBeenCalledTimes(1);
     expect(stopChannel).toHaveBeenCalledTimes(2);
@@ -514,9 +572,8 @@ describe("createGatewayCloseHandler", () => {
       }),
     );
 
-    await expect(close({ reason: "startup failed before bind" })).resolves.toMatchObject({
-      warnings: [],
-    });
+    const result = await close({ reason: "startup failed before bind" });
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("broadcasts normalized shutdown metadata", async () => {

@@ -129,6 +129,30 @@ function resolveMatrixSender(deps: DeliverOutboundArgs["deps"]): MatrixSendFn {
   return sender as MatrixSendFn;
 }
 
+function requireMockCallArg(
+  mockFn: { mock: { calls: unknown[][] } },
+  label: string,
+  index = 0,
+): Record<string, unknown> {
+  const arg = mockFn.mock.calls[index]?.[0] as Record<string, unknown> | undefined;
+  if (!arg) {
+    throw new Error(`expected ${label} call #${index + 1}`);
+  }
+  return arg;
+}
+
+function requireMockCall(
+  mockFn: { mock: { calls: unknown[][] } },
+  label: string,
+  index = 0,
+): unknown[] {
+  const call = mockFn.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected ${label} call #${index + 1}`);
+  }
+  return call;
+}
+
 function withMatrixChannel(result: Awaited<ReturnType<MatrixSendFn>>) {
   return {
     channel: "matrix" as const,
@@ -727,10 +751,9 @@ describe("deliverOutboundPayloads", () => {
     expect(failureParams?.kind).toBe("text");
     expect(failureParams?.attemptToken).toBe("pending-2");
     expect(failureParams?.error).toBeInstanceOf(Error);
-    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
-      "mock-queue-id",
-      expect.stringContaining("native send failed"),
-    );
+    const failDeliveryCall = requireMockCall(queueMocks.failDelivery, "failDelivery");
+    expect(failDeliveryCall[0]).toBe("mock-queue-id");
+    expect(String(failDeliveryCall[1])).toContain("native send failed");
   });
 
   it("preserves native send errors when failure cleanup throws", async () => {
@@ -784,10 +807,9 @@ describe("deliverOutboundPayloads", () => {
     expect(failureParams?.kind).toBe("text");
     expect(failureParams?.attemptToken).toBe("pending-2");
     expect(failureParams?.error).toBeInstanceOf(Error);
-    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
-      "mock-queue-id",
-      expect.stringContaining("native send failed"),
-    );
+    const failDeliveryCall = requireMockCall(queueMocks.failDelivery, "failDelivery");
+    expect(failDeliveryCall[0]).toBe("mock-queue-id");
+    expect(String(failDeliveryCall[1])).toContain("native send failed");
   });
 
   it("preserves successful sends when the success hook throws", async () => {
@@ -957,10 +979,9 @@ describe("deliverOutboundPayloads", () => {
 
     expect(queueMocks.markDeliveryPlatformSendAttemptStarted).toHaveBeenCalledWith("mock-queue-id");
     expect(sendMatrix).not.toHaveBeenCalled();
-    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
-      "mock-queue-id",
-      expect.stringContaining("marker offline"),
-    );
+    const failDeliveryCall = requireMockCall(queueMocks.failDelivery, "failDelivery");
+    expect(failDeliveryCall[0]).toBe("mock-queue-id");
+    expect(String(failDeliveryCall[1])).toContain("marker offline");
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
   });
 
@@ -1553,16 +1574,14 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "visible" }],
     });
 
-    expect(normalizePayload).toHaveBeenCalledWith({
-      accountId: "workspace-a",
-      cfg,
-      payload: expect.objectContaining({ text: "visible" }),
+    const normalizeParams = requireMockCallArg(normalizePayload, "normalizePayload");
+    expect(normalizeParams.accountId).toBe("workspace-a");
+    expect(normalizeParams.cfg).toBe(cfg);
+    expect((normalizeParams.payload as { text?: unknown }).text).toBe("visible");
+    const sendParams = requireMockCallArg(sendPayload, "sendPayload");
+    expect((sendParams.payload as { channelData?: unknown }).channelData).toEqual({
+      normalized: true,
     });
-    expect(sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({ channelData: { normalized: true } }),
-      }),
-    );
   });
 
   it("strips internal runtime scaffolding copied into rendered and normalized nested payloads", async () => {
@@ -2141,6 +2160,46 @@ describe("deliverOutboundPayloads", () => {
 
     expect(chunker).toHaveBeenCalledTimes(1);
     expect(chunker).toHaveBeenNthCalledWith(1, text, 4000);
+  });
+
+  it("passes formatting overrides for pre-rendered chunker output", async () => {
+    const chunker = vi.fn(() => ["<b>bold</b>"]);
+    const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
+      channel: "matrix" as const,
+      messageId: text,
+      roomId: "r1",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              chunker,
+              chunkerMode: "markdown",
+              chunkedTextFormatting: { parseMode: "HTML" },
+              textChunkLimit: 4000,
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "**bold**" }],
+    });
+
+    expect(chunker).toHaveBeenCalledWith("**bold**", 4000);
+    const sendTextParams = requireMockCallArg(sendText, "sendText");
+    expect(sendTextParams.text).toBe("<b>bold</b>");
+    expect(sendTextParams.formatting).toEqual({ parseMode: "HTML" });
   });
 
   it("passes config through for plugin media sends", async () => {

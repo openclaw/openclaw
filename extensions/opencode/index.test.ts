@@ -15,11 +15,13 @@ describe("opencode provider plugin", () => {
     });
 
     const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode");
-    expect(mediaProvider).toBeDefined();
-    expect(mediaProvider?.capabilities).toEqual(["image"]);
-    expect(mediaProvider?.defaultModels).toEqual({ image: "gpt-5-nano" });
-    expect(typeof mediaProvider?.describeImage).toBe("function");
-    expect(typeof mediaProvider?.describeImages).toBe("function");
+    if (!mediaProvider) {
+      throw new Error("Expected opencode media provider");
+    }
+    expect(mediaProvider.capabilities).toEqual(["image"]);
+    expect(mediaProvider.defaultModels).toEqual({ image: "gpt-5-nano" });
+    expect(typeof mediaProvider.describeImage).toBe("function");
+    expect(typeof mediaProvider.describeImages).toBe("function");
   });
 
   it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
@@ -51,35 +53,31 @@ describe("opencode provider plugin", () => {
       throw new Error("Expected OpenCode provider resolveThinkingProfile");
     }
 
-    expect(
-      resolveThinkingProfile({
-        provider: "opencode",
-        modelId: "claude-opus-4-7",
-      }),
-    ).toMatchObject({
-      levels: expect.arrayContaining([{ id: "xhigh" }, { id: "adaptive" }, { id: "max" }]),
-      defaultLevel: "off",
+    const opus47Profile = resolveThinkingProfile({
+      provider: "opencode",
+      modelId: "claude-opus-4-7",
     });
+    const opus47LevelIds = opus47Profile?.levels.map((level) => level.id) ?? [];
+    expect(opus47Profile?.defaultLevel).toBe("off");
+    expect(opus47LevelIds).toContain("xhigh");
+    expect(opus47LevelIds).toContain("adaptive");
+    expect(opus47LevelIds).toContain("max");
     const opus46Profile = resolveThinkingProfile({
       provider: "opencode",
       modelId: "claude-opus-4.6",
     });
-    expect(opus46Profile).toMatchObject({
-      levels: expect.arrayContaining([{ id: "adaptive" }]),
-      defaultLevel: "adaptive",
-    });
     const opus46LevelIds = opus46Profile?.levels.map((level) => level.id) ?? [];
+    expect(opus46Profile?.defaultLevel).toBe("adaptive");
+    expect(opus46LevelIds).toContain("adaptive");
     expect(opus46LevelIds).not.toContain("xhigh");
     expect(opus46LevelIds).not.toContain("max");
     const sonnet46Profile = resolveThinkingProfile({
       provider: "opencode",
       modelId: "claude-sonnet-4-6",
     });
-    expect(sonnet46Profile).toMatchObject({
-      levels: expect.arrayContaining([{ id: "adaptive" }]),
-      defaultLevel: "adaptive",
-    });
     const sonnet46LevelIds = sonnet46Profile?.levels.map((level) => level.id) ?? [];
+    expect(sonnet46Profile?.defaultLevel).toBe("adaptive");
+    expect(sonnet46LevelIds).toContain("adaptive");
     expect(sonnet46LevelIds).not.toContain("xhigh");
     expect(sonnet46LevelIds).not.toContain("max");
   });

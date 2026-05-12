@@ -22,10 +22,10 @@ function resolveOpsTarget(cfg: OpenClawConfig, env = process.env) {
 type MatrixMigrationTarget = NonNullable<ReturnType<typeof resolveOpsTarget>>;
 
 function expectMigrationTarget(target: ReturnType<typeof resolveOpsTarget>): MatrixMigrationTarget {
-  expect(target).toEqual(expect.objectContaining({ homeserver: expect.any(String) }));
   if (target === null) {
     throw new Error("Expected Matrix migration account target");
   }
+  expect(typeof target.homeserver).toBe("string");
   return target;
 }
 

@@ -25,6 +25,21 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   shouldPreferProviderRuntimeResolvedModel: () => false,
 }));
 
+function getEmbeddedPiAgentParams(): {
+  authProfileId?: string;
+  authProfileIdSource?: string;
+} {
+  const [call] = vi.mocked(runEmbeddedPiAgent).mock.calls;
+  if (!call) {
+    throw new Error("Expected embedded PI agent call for auth profile propagation");
+  }
+  const [params] = call;
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new Error("Expected embedded PI agent params to be an object");
+  }
+  return params;
+}
+
 describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
   beforeEach(() => {
     setupIsolatedAgentTurnMocks({ fast: true });
@@ -92,12 +107,9 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
       expect(vi.mocked(runEmbeddedPiAgent)).toHaveBeenCalledTimes(1);
 
       // 5. Check that authProfileId was passed
-      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
-        authProfileId?: string;
-        authProfileIdSource?: string;
-      };
+      const callArgs = getEmbeddedPiAgentParams();
 
-      expect(callArgs?.authProfileId).toBe("openrouter:default");
+      expect(callArgs.authProfileId).toBe("openrouter:default");
     });
   });
 });

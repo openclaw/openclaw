@@ -490,7 +490,7 @@ describe("subagent registry seam flow", () => {
       "updated child session store entry",
     );
 
-    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
+    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalledTimes(6);
   });
 
   it("suppresses stale timeout announces when the same child run later finishes successfully", async () => {

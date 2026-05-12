@@ -68,15 +68,15 @@ function isStructuredApprovalNotFoundError(err: unknown): boolean {
 }
 
 export class ExecApprovalButton extends Button {
-  label = "execapproval";
+  override label = "execapproval";
   customId = "execapproval:seed=1";
-  style = ButtonStyle.Primary;
+  override style = ButtonStyle.Primary;
 
   constructor(private readonly ctx: ExecApprovalButtonContext) {
     super();
   }
 
-  async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
+  override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
     const parsed = parseExecApprovalData(data);
     if (!parsed) {
       try {

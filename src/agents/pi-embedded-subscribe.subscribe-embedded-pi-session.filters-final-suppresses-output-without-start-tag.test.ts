@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   createStubSessionHarness,
@@ -27,7 +27,7 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "<final>Hi there</final>" });
 
-    expect(onPartialReply).toHaveBeenCalled();
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
     const firstPayload = onPartialReply.mock.calls[0][0];
     expect(firstPayload.text).toBe("Hi there");
 
@@ -76,7 +76,7 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "<final>Hello world</final>" });
 
-    expect(onPartialReply).toHaveBeenCalled();
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
     expect(onPartialReply.mock.calls[0][0].text).toBe("Hello world");
   });
 
@@ -269,7 +269,7 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "message_end", message: assistantMessage });
     await Promise.resolve();
 
-    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
     const payload = onBlockReply.mock.calls[0][0];
     expect(payload.text).toBe("Hello block");
   });

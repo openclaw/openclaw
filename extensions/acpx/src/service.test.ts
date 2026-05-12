@@ -157,7 +157,11 @@ function createMockRuntime(overrides: Record<string, unknown> = {}) {
 }
 
 function readFirstRuntimeFactoryInput(runtimeFactory: { mock: { calls: Array<Array<unknown>> } }) {
-  const input = runtimeFactory.mock.calls[0]?.[0];
+  const [call] = runtimeFactory.mock.calls;
+  if (!call) {
+    throw new Error("Expected runtimeFactory to be called");
+  }
+  const [input] = call;
   if (typeof input !== "object" || input === null) {
     throw new Error("Expected runtimeFactory to be called with an options object");
   }
@@ -544,9 +548,7 @@ describe("createAcpxRuntimeService", () => {
     await service.start(ctx);
 
     expect(ctx.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "embedded acpx runtime ignores legacy compatibility config: queueOwnerTtlSeconds, strictWindowsCmdWrapper=false",
-      ),
+      "embedded acpx runtime ignores legacy compatibility config: queueOwnerTtlSeconds, strictWindowsCmdWrapper=false",
     );
 
     await service.stop?.(ctx);
