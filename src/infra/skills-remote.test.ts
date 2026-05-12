@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { getSkillsSnapshotVersion, resetSkillsRefreshForTest } from "../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { NodeRegistry } from "../gateway/node-registry.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { approveNodePairing, requestNodePairing } from "./node-pairing.js";
 import {
   getRemoteSkillEligibility,
   recordRemoteNodeBins,
@@ -14,6 +16,21 @@ import {
   refreshRemoteNodeBins,
   setSkillsRemoteRegistry,
 } from "./skills-remote.js";
+
+async function approveRemoteProbeCommandsForTest(nodeId: string, commands: string[]) {
+  const pending = await requestNodePairing({
+    nodeId,
+    displayName: "Remote Mac",
+    platform: "darwin",
+    commands,
+  });
+  const approved = await approveNodePairing(pending.request.requestId, {
+    callerScopes: ["operator.pairing", "operator.admin"],
+  });
+  if (!approved || "status" in approved) {
+    throw new Error("Expected node pairing approval to succeed");
+  }
+}
 
 describe("skills-remote", () => {
   afterEach(() => {
@@ -156,6 +173,69 @@ describe("skills-remote", () => {
     }
   });
 
+  it("does not invoke bin probe commands before node pairing approval", async () => {
+    await resetSkillsRefreshForTest();
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    let invokeCount = 0;
+    try {
+      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceDir, "remote-skill", "SKILL.md"),
+        [
+          "---",
+          "name: remote-skill",
+          "description: Needs a remote bin",
+          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
+          "---",
+          "# Remote Skill",
+          "",
+        ].join("\n"),
+      );
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } satisfies OpenClawConfig;
+      setSkillsRemoteRegistry({
+        listConnected: () => [],
+        get: () => undefined,
+        invoke: async () => {
+          invokeCount += 1;
+          throw new Error("unexpected remote bin probe invoke");
+        },
+      } as unknown as NodeRegistry);
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Remote Mac",
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+      recordRemoteNodeBins(nodeId, [bin]);
+      const before = getSkillsSnapshotVersion(workspaceDir);
+
+      await withStateDirEnv("openclaw-remote-skills-state-", async () => {
+        await refreshRemoteNodeBins({
+          nodeId,
+          platform: "darwin",
+          commands: ["system.run", "system.which"],
+          cfg,
+          timeoutMs: 10,
+        });
+      });
+
+      expect(invokeCount).toBe(0);
+      expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("clears stale bins when a connected node probe times out", async () => {
     await resetSkillsRefreshForTest();
     const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
@@ -203,12 +283,15 @@ describe("skills-remote", () => {
       recordRemoteNodeBins(nodeId, [bin]);
       const before = getSkillsSnapshotVersion(workspaceDir);
 
-      await refreshRemoteNodeBins({
-        nodeId,
-        platform: "darwin",
-        commands: ["system.run", "system.which"],
-        cfg,
-        timeoutMs: 10,
+      await withStateDirEnv("openclaw-remote-skills-state-", async () => {
+        await approveRemoteProbeCommandsForTest(nodeId, ["system.run", "system.which"]);
+        await refreshRemoteNodeBins({
+          nodeId,
+          platform: "darwin",
+          commands: ["system.run", "system.which"],
+          cfg,
+          timeoutMs: 10,
+        });
       });
 
       expect(invokeCalls).toEqual(["system.which"]);
@@ -271,27 +354,30 @@ describe("skills-remote", () => {
         commands: ["system.run", "system.which"],
       });
 
-      const first = refreshRemoteNodeBins({
-        nodeId,
-        platform: "darwin",
-        commands: ["system.run", "system.which"],
-        cfg,
-        timeoutMs: 10,
-      });
-      await probeStarted;
-      const second = refreshRemoteNodeBins({
-        nodeId,
-        platform: "darwin",
-        commands: ["system.run", "system.which"],
-        cfg,
-        timeoutMs: 10,
-      });
-      if (!releaseProbe) {
-        throw new Error("Expected remote skill probe release callback to be initialized");
-      }
-      releaseProbe();
+      await withStateDirEnv("openclaw-remote-skills-state-", async () => {
+        await approveRemoteProbeCommandsForTest(nodeId, ["system.run", "system.which"]);
+        const first = refreshRemoteNodeBins({
+          nodeId,
+          platform: "darwin",
+          commands: ["system.run", "system.which"],
+          cfg,
+          timeoutMs: 10,
+        });
+        await probeStarted;
+        const second = refreshRemoteNodeBins({
+          nodeId,
+          platform: "darwin",
+          commands: ["system.run", "system.which"],
+          cfg,
+          timeoutMs: 10,
+        });
+        if (!releaseProbe) {
+          throw new Error("Expected remote skill probe release callback to be initialized");
+        }
+        releaseProbe();
 
-      await Promise.all([first, second]);
+        await Promise.all([first, second]);
+      });
       expect(invokeCount).toBe(1);
     } finally {
       removeRemoteNodeInfo(nodeId);
@@ -346,12 +432,15 @@ describe("skills-remote", () => {
       });
       const before = getSkillsSnapshotVersion(workspaceDir);
 
-      await refreshRemoteNodeBins({
-        nodeId,
-        platform: "darwin",
-        commands: ["system.run", "system.which"],
-        cfg,
-        timeoutMs: 10,
+      await withStateDirEnv("openclaw-remote-skills-state-", async () => {
+        await approveRemoteProbeCommandsForTest(nodeId, ["system.run", "system.which"]);
+        await refreshRemoteNodeBins({
+          nodeId,
+          platform: "darwin",
+          commands: ["system.run", "system.which"],
+          cfg,
+          timeoutMs: 10,
+        });
       });
 
       expect(invokeCalls).toEqual(["system.which"]);

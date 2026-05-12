@@ -9,7 +9,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
+import { getPairedNode, listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
 
 type RemoteNodeRecord = {
   nodeId: string;
@@ -117,6 +117,11 @@ function supportsSystemRun(commands?: string[]): boolean {
 
 function supportsSystemWhich(commands?: string[]): boolean {
   return Array.isArray(commands) && commands.includes("system.which");
+}
+
+async function hasApprovedRemoteProbeCommand(nodeId: string, command: string): Promise<boolean> {
+  const pairedNode = await getPairedNode(nodeId);
+  return pairedNode?.commands?.includes(command) === true;
 }
 
 function upsertNode(record: {
@@ -346,6 +351,18 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
   const command = canWhich ? "system.which" : "system.run";
   const logContext = { command, timeoutMs, requiredBinCount: binsList.length };
   try {
+    if (!(await hasApprovedRemoteProbeCommand(params.nodeId, command))) {
+      const cleared = clearRemoteNodeBins(params.nodeId);
+      log.info(
+        `remote bin probe skipped: node pairing approval required (${describeNode(
+          params.nodeId,
+        )}; command=${command} timeoutMs=${timeoutMs} requiredBins=${binsList.length})`,
+      );
+      if (cleared) {
+        bumpSkillsSnapshotVersion({ reason: "remote-node" });
+      }
+      return;
+    }
     const res = await remoteRegistry.invoke(
       canWhich
         ? {
