@@ -81,7 +81,7 @@ describe("NodeSqliteKyselyDialect", () => {
       }),
     });
 
-    await expect(readSqliteUserVersion(db)).resolves.toMatchObject({
+    await expect(readSqliteUserVersion(db)).resolves.toEqual({
       rows: [{ user_version: 7 }],
     });
     expect(createDatabase).toHaveBeenCalledTimes(1);
