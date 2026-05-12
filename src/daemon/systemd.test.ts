@@ -4,14 +4,20 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
+const spawnMock = vi.hoisted(() => vi.fn());
+const unrefMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
   const { mockNodeChildProcessExecFile } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeChildProcessExecFile(
+  const mocked = await mockNodeChildProcessExecFile(
     Object.assign(execFileMock, {
       __promisify__: vi.fn(),
     }) as typeof import("node:child_process").execFile,
   );
+  return {
+    ...mocked,
+    spawn: (...args: unknown[]) => spawnMock(...args),
+  };
 });
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
@@ -141,6 +147,9 @@ const assertRestartSuccess = async (env: NodeJS.ProcessEnv) => {
 describe("systemd availability", () => {
   beforeEach(() => {
     execFileMock.mockReset();
+    spawnMock.mockReset();
+    unrefMock.mockReset();
+    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
   });
 
   it("returns true when systemctl --user succeeds", async () => {
@@ -1265,6 +1274,48 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     await assertRestartSuccess({ OPENCLAW_PROFILE: "work" });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("schedules a detached restart handoff from inside the managed systemd gateway service", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertUserSystemctlArgs(args, "status");
+      cb(null, "", "");
+    });
+    const { write, stdout } = createWritableStreamMock();
+
+    const result = await restartSystemdService({
+      stdout,
+      env: {
+        HOME: "/home/debian",
+        OPENCLAW_SYSTEMD_UNIT: GATEWAY_SERVICE,
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+
+    expect(result).toEqual({ outcome: "scheduled" });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(requireFirstWrite(write)).toContain("Scheduled systemd service restart");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const [command, args, options] = spawnMock.mock.calls[0] as [
+      string,
+      string[],
+      { detached: boolean; stdio: string; env: Record<string, string | undefined> },
+    ];
+    expect(command).toBe("systemd-run");
+    expect(args).toContain("--user");
+    expect(args).toContain("--collect");
+    expect(args.some((arg) => arg.startsWith("--unit=openclaw-gateway-restart-handoff-"))).toBe(
+      true,
+    );
+    expect(args).toContain("/bin/sh");
+    expect(args).toContain(GATEWAY_SERVICE);
+    expect(args.join("\n")).toContain("systemctl --user restart");
+    expect(options.detached).toBe(true);
+    expect(options.stdio).toBe("ignore");
+    expect(options.env.OPENCLAW_SYSTEMD_UNIT).toBe(GATEWAY_SERVICE);
+    expect(unrefMock).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces stop failures with systemctl detail", async () => {

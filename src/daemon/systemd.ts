@@ -35,6 +35,10 @@ import type {
 } from "./service-types.js";
 import { enableSystemdUserLinger, readSystemdUserLingerStatus } from "./systemd-linger.js";
 import {
+  isCurrentProcessSystemdGatewayService,
+  scheduleDetachedSystemdRestartHandoff,
+} from "./systemd-restart-handoff.js";
+import {
   classifySystemdUnavailableDetail,
   isSystemctlMissingDetail,
   isSystemdUserBusUnavailableDetail,
@@ -824,12 +828,27 @@ export async function restartSystemdService({
   stdout,
   env,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
-  await runSystemdServiceAction({
-    stdout,
-    env,
-    action: "restart",
-    label: "Restarted systemd service",
-  });
+  const serviceEnv = env ?? process.env;
+  await assertSystemdAvailable(serviceEnv);
+  const serviceName = resolveSystemdServiceName(serviceEnv);
+  const unitName = `${serviceName}.service`;
+  if (isCurrentProcessSystemdGatewayService(unitName, serviceEnv)) {
+    const handoff = scheduleDetachedSystemdRestartHandoff({
+      env: serviceEnv,
+      unitName,
+      waitForPid: process.pid,
+    });
+    if (!handoff.ok) {
+      throw new Error(`systemd restart handoff failed: ${handoff.detail ?? "unknown error"}`);
+    }
+    stdout.write(`${formatLine("Scheduled systemd service restart", unitName)}\n`);
+    return { outcome: "scheduled" };
+  }
+  const res = await execSystemctlUser(serviceEnv, ["restart", unitName]);
+  if (res.code !== 0) {
+    throw new Error(`systemctl restart failed: ${res.stderr || res.stdout}`.trim());
+  }
+  stdout.write(`${formatLine("Restarted systemd service", unitName)}\n`);
   return { outcome: "completed" };
 }
 
