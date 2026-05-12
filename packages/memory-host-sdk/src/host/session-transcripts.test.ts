@@ -2,14 +2,17 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { replaceSqliteSessionTranscriptEvents } from "../../../../src/config/sessions/transcript-store.sqlite.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  replaceSqliteSessionTranscriptEvents,
+} from "./openclaw-runtime-session.js";
 import {
   buildSessionTranscriptEntry,
-  listSessionTranscriptsForAgent,
+  listSessionTranscriptScopesForAgent,
   readSessionTranscriptDeltaStats,
-  sessionPathForTranscript,
+  sessionTranscriptKeyForScope,
   type SessionTranscriptEntry,
+  type SessionTranscriptScope,
 } from "./session-transcripts.js";
 
 let fixtureRoot: string;
@@ -54,28 +57,22 @@ function requireSessionTranscriptEntry(
 function seedTranscript(params: {
   agentId?: string;
   sessionId: string;
-  transcriptPath?: string;
   events: unknown[];
-  rememberPath?: boolean;
   now?: number;
-}): string {
+}): SessionTranscriptScope {
   const agentId = params.agentId ?? "main";
-  const transcriptPath =
-    params.transcriptPath ??
-    path.join(tmpDir, "agents", agentId, "sessions", `${params.sessionId}.jsonl`);
   replaceSqliteSessionTranscriptEvents({
     agentId,
     sessionId: params.sessionId,
-    ...(params.rememberPath === false ? {} : { transcriptPath }),
     events: params.events,
     now: () => params.now ?? 1_770_000_000_000,
   });
-  return transcriptPath;
+  return { agentId, sessionId: params.sessionId };
 }
 
-describe("listSessionTranscriptsForAgent", () => {
-  it("lists SQLite transcript handles for an agent", async () => {
-    const includedPath = seedTranscript({
+describe("listSessionTranscriptScopesForAgent", () => {
+  it("lists SQLite transcript scopes for an agent", async () => {
+    const includedScope = seedTranscript({
       sessionId: "active",
       events: [{ type: "session", id: "active" }],
     });
@@ -85,50 +82,42 @@ describe("listSessionTranscriptsForAgent", () => {
       events: [{ type: "session", id: "other-active" }],
     });
 
-    const files = await listSessionTranscriptsForAgent("main");
+    const scopes = await listSessionTranscriptScopesForAgent("main");
 
-    expect(files).toEqual([includedPath]);
+    expect(scopes).toEqual([includedScope]);
   });
 
-  it("uses a virtual SQLite locator when no legacy transcript path is recorded", async () => {
-    seedTranscript({
+  it("reads SQLite-only transcript rows directly by scope", async () => {
+    const scope = seedTranscript({
       sessionId: "sqlite-only",
       events: [{ type: "message", message: { role: "user", content: "Stored only in SQLite" } }],
-      rememberPath: false,
     });
 
-    const files = await listSessionTranscriptsForAgent("main");
-    const [locator] = files;
+    const scopes = await listSessionTranscriptScopesForAgent("main");
 
-    expect(locator).toBe("sqlite-transcript://main/sqlite-only.jsonl");
-    const entry = await buildSessionTranscriptEntry(locator);
+    expect(scopes).toEqual([scope]);
+    const entry = await buildSessionTranscriptEntry(scope);
     expect(entry?.content).toBe("User: Stored only in SQLite");
-    expect(entry?.path).toBe("sessions/main/sqlite-only.jsonl");
+    expect(entry?.path).toBe("transcript:main:sqlite-only");
   });
 });
 
-describe("sessionPathForTranscript", () => {
-  it("includes the owning agent id when the transcript lives under an agent sessions dir", () => {
-    const absPath = path.join(tmpDir, "agents", "main", "sessions", "active-session.jsonl");
-
-    expect(sessionPathForTranscript(absPath)).toBe("sessions/main/active-session.jsonl");
-  });
-
-  it("keeps the legacy basename-only path when the agent owner cannot be derived", () => {
-    expect(sessionPathForTranscript(path.join(tmpDir, "loose-session.jsonl"))).toBe(
-      "sessions/loose-session.jsonl",
+describe("sessionTranscriptKeyForScope", () => {
+  it("formats SQLite scopes as stable opaque memory keys", () => {
+    expect(sessionTranscriptKeyForScope({ agentId: "main", sessionId: "active-session" })).toBe(
+      "transcript:main:active-session",
     );
   });
 });
 
 describe("buildSessionTranscriptEntry", () => {
-  it("returns lineMap tracking original JSONL line numbers", async () => {
+  it("returns lineMap tracking transcript event ordinals", async () => {
     // Simulate a real transcript event stream with metadata records interspersed
-    // Lines 1-3: non-message metadata records
-    // Line 4: user message
-    // Line 5: metadata
-    // Line 6: assistant message
-    // Line 7: user message
+    // Events 1-3: non-message metadata records
+    // Event 4: user message
+    // Event 5: metadata
+    // Event 6: assistant message
+    // Event 7: user message
     const events = [
       { type: "custom", customType: "model-snapshot", data: {} },
       { type: "custom", customType: "openclaw.cache-ttl", data: {} },
@@ -141,9 +130,9 @@ describe("buildSessionTranscriptEntry", () => {
       },
       { type: "message", message: { role: "user", content: "Tell me a joke" } },
     ];
-    const filePath = seedTranscript({ sessionId: "session", events });
+    const scope = seedTranscript({ sessionId: "session", events });
 
-    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(filePath));
+    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(scope));
     expect(entry.messageCount).toBe(7);
 
     // The content should have 3 lines (3 message records)
@@ -153,15 +142,15 @@ describe("buildSessionTranscriptEntry", () => {
     expect(contentLines[1]).toContain("Assistant: Hi there");
     expect(contentLines[2]).toContain("User: Tell me a joke");
 
-    // lineMap should map each content line to its original JSONL line (1-indexed)
-    // Content line 0 → JSONL line 4 (the first user message)
-    // Content line 1 → JSONL line 6 (the assistant message)
-    // Content line 2 → JSONL line 7 (the second user message)
+    // lineMap should map each content line to its original event ordinal (1-indexed)
+    // Content line 0 -> event 4 (the first user message)
+    // Content line 1 -> event 6 (the assistant message)
+    // Content line 2 -> event 7 (the second user message)
     expect(entry.lineMap).toEqual([4, 6, 7]);
   });
 
   it("returns empty lineMap when no messages are found", async () => {
-    const filePath = seedTranscript({
+    const scope = seedTranscript({
       sessionId: "empty-session",
       events: [
         { type: "custom", customType: "model-snapshot", data: {} },
@@ -169,43 +158,14 @@ describe("buildSessionTranscriptEntry", () => {
       ],
     });
 
-    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(filePath));
+    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(scope));
     expect(entry.content).toBe("");
     expect(entry.lineMap).toEqual([]);
   });
 
-  it("skips checkpoint artifacts so snapshots do not double-index session content", async () => {
-    const checkpointPath = path.join(
-      tmpDir,
-      "agents",
-      "main",
-      "sessions",
-      "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
-    );
-    seedTranscript({
-      sessionId: "ordinary.checkpoint.11111111-1111-4111-8111-111111111111",
-      transcriptPath: checkpointPath,
-      events: [
-        {
-          type: "message",
-          message: { role: "user", content: "Archived hello" },
-        },
-      ],
-    });
-
-    const checkpointEntry = requireSessionTranscriptEntry(
-      await buildSessionTranscriptEntry(checkpointPath),
-    );
-
-    expect(checkpointEntry.content).toBe("");
-    expect(checkpointEntry.lineMap).toEqual([]);
-  });
-
-  it("keeps cron-run deleted archives opaque when the live session store entry is gone", async () => {
-    const archivePath = path.join(tmpDir, "cron-run.jsonl.deleted.2026-02-16T22-27-33.000Z");
-    seedTranscript({
+  it("keeps cron-run transcripts opaque when the live session row is gone", async () => {
+    const transcriptRef = seedTranscript({
       sessionId: "cron-run-deleted",
-      transcriptPath: archivePath,
       events: [
         {
           type: "message",
@@ -221,18 +181,16 @@ describe("buildSessionTranscriptEntry", () => {
       ],
     });
 
-    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(archivePath));
+    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(transcriptRef));
 
     expect(entry.content).toBe("");
     expect(entry.lineMap).toEqual([]);
     expect(entry.generatedByCronRun).toBe(true);
   });
 
-  it("keeps cron-run reset archives opaque when session metadata preserves the cron key", async () => {
-    const archivePath = path.join(tmpDir, "cron-run.jsonl.reset.2026-02-16T22-26-33.000Z");
-    seedTranscript({
+  it("keeps cron-run transcripts opaque when session metadata preserves the cron key", async () => {
+    const transcriptRef = seedTranscript({
       sessionId: "cron-run-reset",
-      transcriptPath: archivePath,
       events: [
         {
           type: "session-meta",
@@ -245,7 +203,7 @@ describe("buildSessionTranscriptEntry", () => {
       ],
     });
 
-    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(archivePath));
+    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(transcriptRef));
 
     expect(entry.content).toBe("");
     expect(entry.lineMap).toEqual([]);
@@ -253,7 +211,7 @@ describe("buildSessionTranscriptEntry", () => {
   });
 
   it("skips non-message events without breaking lineMap", async () => {
-    const filePath = seedTranscript({
+    const scope = seedTranscript({
       sessionId: "gaps",
       events: [
         { type: "custom", customType: "ignored" },
@@ -263,12 +221,12 @@ describe("buildSessionTranscriptEntry", () => {
       ],
     });
 
-    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(filePath));
+    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(scope));
     expect(entry.lineMap).toEqual([2, 4]);
   });
 
   it("strips inbound metadata when a user envelope is split across text blocks", async () => {
-    const filePath = seedTranscript({
+    const scope = seedTranscript({
       sessionId: "enveloped-session-array",
       events: [
         {
@@ -293,12 +251,12 @@ describe("buildSessionTranscriptEntry", () => {
       ],
     });
 
-    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(filePath));
+    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(scope));
     expect(entry.content).toBe("User: Actual user text");
   });
 
   it("skips inter-session user messages", async () => {
-    const filePath = seedTranscript({
+    const scope = seedTranscript({
       sessionId: "inter-session-session",
       events: [
         {
@@ -320,13 +278,13 @@ describe("buildSessionTranscriptEntry", () => {
       ],
     });
 
-    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(filePath));
+    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(scope));
     expect(entry.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");
     expect(entry.lineMap).toStrictEqual([2, 3]);
   });
 
-  it("returns SQLite transcript delta stats without reading a transcript file", () => {
-    const filePath = seedTranscript({
+  it("returns SQLite transcript delta stats from transcript events", () => {
+    const scope = seedTranscript({
       sessionId: "delta-session",
       events: [
         { type: "message", message: { role: "user", content: "First" } },
@@ -336,7 +294,7 @@ describe("buildSessionTranscriptEntry", () => {
       now: 1_770_000_000_123,
     });
 
-    const stats = readSessionTranscriptDeltaStats(filePath);
+    const stats = readSessionTranscriptDeltaStats(scope);
 
     expect(stats).not.toBeNull();
     expect(stats!.messageCount).toBe(3);

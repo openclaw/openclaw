@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { closeOpenClawAgentDatabasesForTest } from "../../../src/state/openclaw-agent-db.js";
 import { telegramApprovalCapability, telegramNativeApprovalAdapter } from "./approval-native.js";
 
 function buildConfig(
@@ -167,7 +167,7 @@ describe("telegram native approval adapter", () => {
     });
   });
 
-  it("parses numeric string thread ids from the session store for plugin approvals", async () => {
+  it("parses numeric string thread ids from SQLite session rows for plugin approvals", async () => {
     seedSessionEntry({
       sessionId: "sess",
       updatedAt: Date.now(),
