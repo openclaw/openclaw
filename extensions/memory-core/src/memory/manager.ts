@@ -131,18 +131,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     available: boolean;
     loadError?: string;
   };
-  protected vectorReady: Promise<boolean> | null = null;
-  protected watcher: FSWatcher | null = null;
-  protected watchTimer: NodeJS.Timeout | null = null;
-  protected sessionWatchTimer: NodeJS.Timeout | null = null;
-  protected sessionUnsubscribe: (() => void) | null = null;
-  protected intervalTimer: NodeJS.Timeout | null = null;
-  protected closed = false;
-  protected dirty = false;
-  protected sessionsDirty = false;
-  protected dirtySessionTranscripts = new Set<string>();
-  protected pendingSessionTranscripts = new Set<string>();
-  protected sessionDeltas = new Map<
+  protected override vectorReady: Promise<boolean> | null = null;
+  protected override watcher: FSWatcher | null = null;
+  protected override watchTimer: NodeJS.Timeout | null = null;
+  protected override sessionWatchTimer: NodeJS.Timeout | null = null;
+  protected override sessionUnsubscribe: (() => void) | null = null;
+  protected override intervalTimer: NodeJS.Timeout | null = null;
+  protected override closed = false;
+  protected override dirty = false;
+  protected override sessionsDirty = false;
+  protected override dirtySessionTranscripts = new Set<string>();
+  protected override pendingSessionTranscripts = new Set<string>();
+  protected override sessionDeltas = new Map<
     string,
     { lastSize: number; lastMessages: number; pendingBytes: number; pendingMessages: number }
   >();

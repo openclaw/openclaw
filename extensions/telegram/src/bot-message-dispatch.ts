@@ -1128,24 +1128,6 @@ export const dispatchTelegramMessage = async ({
                     const segments = split.segments;
                     const reply = resolveSendableOutboundReplyParts(effectivePayload);
 
-                    const deliverFinalAnswerText = async (
-                      answerPayload: ReplyPayload,
-                      text: string,
-                      buttons?: TelegramInlineButtons,
-                    ) => {
-                      if (streamMode === "progress") {
-                        return deliverProgressModeFinalAnswer(answerPayload, text);
-                      }
-                      await rotateAnswerLaneAfterToolProgress();
-                      return deliverLaneText({
-                        laneName: "answer",
-                        text,
-                        payload: answerPayload,
-                        infoKind: "final",
-                        buttons,
-                      });
-                    };
-
                     const flushBufferedFinalAnswer = async () => {
                       const buffered =
                         reasoningStepState.takeBufferedFinalAnswer(replyFenceGeneration);
