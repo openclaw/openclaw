@@ -736,12 +736,15 @@ export async function resolveIMessageInboundDecision(params: {
     channel: "imessage",
     accountId: params.accountId,
   });
+  const replyContextAllowFrom = Array.from(
+    new Set([...params.groupAllowFrom, ...effectiveGroupAllowFrom]),
+  );
   const replySenderAllowed =
-    !isGroup || effectiveGroupAllowFrom.length === 0
+    !isGroup || replyContextAllowFrom.length === 0
       ? true
       : replyContext?.sender
         ? isAllowedIMessageReplyContextSender({
-            allowFrom: params.groupAllowFrom,
+            allowFrom: replyContextAllowFrom,
             sender: replyContext.sender,
             chatId,
             chatGuid,
