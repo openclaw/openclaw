@@ -80,6 +80,10 @@ import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import {
+  evaluateDeliveryPolicyViolation,
+  formatDeliveryPolicyViolationLog,
+} from "./delivery-policy-violation.js";
+import {
   createInternalHookEvent,
   loadSessionStore,
   resolveSessionStoreEntry,
@@ -1565,6 +1569,21 @@ export async function dispatchReplyFromConfig(
         continue;
       }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
+        const violation = evaluateDeliveryPolicyViolation({
+          reply,
+          suppressDelivery,
+          sendPolicyDenied,
+          sourceReplyDeliveryMode,
+        });
+        if (violation) {
+          logVerbose(
+            formatDeliveryPolicyViolationLog({
+              violation,
+              channel: deliveryChannel,
+              sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+            }),
+          );
+        }
         continue;
       }
       attemptedFinalDelivery = true;
