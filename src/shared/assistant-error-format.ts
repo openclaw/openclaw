@@ -15,7 +15,9 @@ const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530])
 const STANDALONE_HTML_ERROR_HINT_RE =
   /\bcloudflare\b|cdn-cgi\/challenge-platform|challenge-error-text|enable javascript and cookies to continue|access denied|forbidden|service unavailable|bad gateway|web server is down|captcha|attention required/i;
 const GENERIC_PROVIDER_INTERNAL_ERROR_RE = /an error occurred while processing your request/i;
-const SUPPORT_REQUEST_ID_RE = /(?:request[\s_-]*id)\s*[:#]?\s*([a-z0-9_-]{8,})/i;
+const SUPPORT_REQUEST_ID_RE = /(?:request[\s_-]*id)\s*[:#]?\s*([a-z0-9][a-z0-9_-]{6,}[a-z0-9])/i;
+const GENERIC_PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
+  "The AI service returned an internal error. Please try again in a moment.";
 
 export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
   "OpenClaw transport error: malformed_streaming_fragment";
@@ -130,10 +132,6 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   );
 }
 
-function extractSupportRequestId(raw: string): string | undefined {
-  return raw.match(SUPPORT_REQUEST_ID_RE)?.[1];
-}
-
 export function isGenericProviderInternalError(raw: string): boolean {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -215,10 +213,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   }
 
   if (isGenericProviderInternalError(trimmed)) {
-    const requestId = extractSupportRequestId(trimmed);
-    return requestId
-      ? `The AI service returned an internal error. Please try again in a moment. (request_id: ${requestId})`
-      : "The AI service returned an internal error. Please try again in a moment.";
+    return GENERIC_PROVIDER_INTERNAL_ERROR_USER_MESSAGE;
   }
 
   const leadingStatus = extractLeadingHttpStatus(trimmed);
