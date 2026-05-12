@@ -197,7 +197,11 @@ describe("agent event handler", () => {
     payloadIndex: number,
     label: string,
   ) {
-    return requireRecord(requireMockArg(mock, index, payloadIndex, label), label);
+    const call = mock.mock.calls[index];
+    if (!call) {
+      throw new Error(`missing ${label} call ${index + 1}`);
+    }
+    return requireRecord(call[payloadIndex], label);
   }
 
   const FALLBACK_LIFECYCLE_DATA = {
