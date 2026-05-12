@@ -97,10 +97,12 @@ describe("loadIMessageCatchupCursor / saveIMessageCatchupCursor", () => {
       lastSeenRowid: 42,
     });
     const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor).not.toBeNull();
-    expect(cursor?.lastSeenMs).toBe(1_700_000_000_000);
-    expect(cursor?.lastSeenRowid).toBe(42);
-    expect(cursor?.failureRetries).toBeUndefined();
+    if (!cursor) {
+      throw new Error("expected iMessage catchup cursor");
+    }
+    expect(cursor.lastSeenMs).toBe(1_700_000_000_000);
+    expect(cursor.lastSeenRowid).toBe(42);
+    expect(cursor.failureRetries).toBeUndefined();
     expect(fs.existsSync(path.join(tempStateDir, "imessage", "catchup"))).toBe(false);
   });
 
