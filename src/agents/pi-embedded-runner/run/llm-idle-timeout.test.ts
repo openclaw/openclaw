@@ -438,7 +438,7 @@ describe("streamWithIdleTimeout", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(/LLM idle timeout/);
     expect(onIdleTimeout).toHaveBeenCalledTimes(1);
-    const [timeoutError] = onIdleTimeout.mock.calls[0] ?? [];
+    const [timeoutError] = onIdleTimeout.mock.calls.at(0) ?? [];
     expect(timeoutError).toBeInstanceOf(Error);
     expect((timeoutError as Error).message).toMatch(/LLM idle timeout/);
   });

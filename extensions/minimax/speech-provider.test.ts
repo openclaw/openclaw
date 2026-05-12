@@ -528,8 +528,28 @@ describe("buildMinimaxSpeechProvider", () => {
         throw new Error("Expected MiniMax provider listVoices");
       }
       const voices = await listVoices({} as never);
-      expect(voices.length).toBeGreaterThan(0);
-      expect(voices[0].id).toBe("English_expressive_narrator");
+      expect(voices).toStrictEqual([
+        {
+          id: "English_expressive_narrator",
+          name: "English_expressive_narrator",
+        },
+        {
+          id: "Chinese (Mandarin)_Warm_Girl",
+          name: "Chinese (Mandarin)_Warm_Girl",
+        },
+        {
+          id: "Chinese (Mandarin)_Lively_Girl",
+          name: "Chinese (Mandarin)_Lively_Girl",
+        },
+        {
+          id: "Chinese (Mandarin)_Gentle_Boy",
+          name: "Chinese (Mandarin)_Gentle_Boy",
+        },
+        {
+          id: "Chinese (Mandarin)_Steady_Boy",
+          name: "Chinese (Mandarin)_Steady_Boy",
+        },
+      ]);
     });
   });
 });

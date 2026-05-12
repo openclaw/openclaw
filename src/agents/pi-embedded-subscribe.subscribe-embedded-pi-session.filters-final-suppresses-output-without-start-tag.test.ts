@@ -28,8 +28,8 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDelta({ emit, delta: "<final>Hi there</final>" });
 
     expect(onPartialReply).toHaveBeenCalledTimes(1);
-    const firstPayload = onPartialReply.mock.calls[0][0];
-    expect(firstPayload.text).toBe("Hi there");
+    const firstPayload = onPartialReply.mock.calls.at(0)?.[0];
+    expect(firstPayload?.text).toBe("Hi there");
 
     onPartialReply.mockClear();
 
@@ -77,7 +77,7 @@ describe("subscribeEmbeddedPiSession", () => {
     emitAssistantTextDelta({ emit, delta: "<final>Hello world</final>" });
 
     expect(onPartialReply).toHaveBeenCalledTimes(1);
-    expect(onPartialReply.mock.calls[0][0].text).toBe("Hello world");
+    expect(onPartialReply.mock.calls.at(0)?.[0]?.text).toBe("Hello world");
   });
 
   it("strips final tags split across streamed deltas without emitting tag remnants", () => {
@@ -183,7 +183,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Answer ends with <fi");
+    expect(onBlockReply.mock.calls.at(0)?.[0]?.text).toBe("Answer ends with <fi");
   });
 
   it("keeps a trailing final-tag prefix when synchronous message_end drains chunked text_end replies", async () => {
@@ -246,8 +246,8 @@ describe("subscribeEmbeddedPiSession", () => {
 
     emitAssistantTextDelta({ emit, delta: "Hello world" });
 
-    const payload = onPartialReply.mock.calls[0][0];
-    expect(payload.text).toBe("Hello world");
+    const payload = onPartialReply.mock.calls.at(0)?.[0];
+    expect(payload?.text).toBe("Hello world");
   });
   it("emits block replies on message_end", async () => {
     const { session, emit } = createStubSessionHarness();
@@ -270,7 +270,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const payload = onBlockReply.mock.calls[0][0];
-    expect(payload.text).toBe("Hello block");
+    const payload = onBlockReply.mock.calls.at(0)?.[0];
+    expect(payload?.text).toBe("Hello block");
   });
 });
