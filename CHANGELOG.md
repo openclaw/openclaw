@@ -3023,6 +3023,7 @@ Docs: https://docs.openclaw.ai
 - ACPX/Droid: add Factory Droid to the live ACP bind Docker matrix, including `.factory` settings staging, `FACTORY_API_KEY` forwarding, and the single-agent `test:docker:live-acp-bind:droid` recipe.
 - TTS/personas: add provider-aware TTS personas with deterministic provider binding merges, `/tts persona` controls, gateway/CLI persona state, Google Gemini `audio-profile-v1` prompt wrapping, and OpenAI instruction mapping. (#70748) Thanks @barronlroth.
 - Voice Wake: add trigger-based routing so macOS voice wake phrases can select a configured agent or session target, with Gateway routing APIs and node update events. (#30354) Thanks @longbiaochen.
+- Plugins/Secrets: add a `contracts.secretProviders` manifest seam plus an `openclaw/plugin-sdk/secret-provider` SDK subpath so new SecretRef sources can be added by bundled or third-party plugins without core changes. Ship two reference plugins: `secrets-gcp` (Google Cloud Secret Manager) and `secrets-keyring` (macOS Keychain via `security`, Linux libsecret via `secret-tool`). The built-in `env`, `file`, and `exec` sources are unchanged. Config zod schemas, the secrets resolver dispatch, and the typed Gateway protocol SecretRef wire schemas all open additively to accept plugin-owned source ids while keeping strict per-source validation for the built-in literals. (#71593) Thanks @akoscz.
 
 ### Fixes
 

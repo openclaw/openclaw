@@ -141,6 +141,9 @@ Define providers under `secrets.providers`:
         passEnv: ["PATH", "VAULT_ADDR"],
         jsonOnly: true,
       },
+      // Plugin-owned sources (require enabling the relevant bundled or third-party plugin).
+      myGcp: { source: "gcp", project: "my-project-id" },
+      local: { source: "keyring", service: "openclaw" },
     },
     defaults: {
       env: "default",
@@ -155,6 +158,11 @@ Define providers under `secrets.providers`:
   },
 }
 ```
+
+`env`, `file`, and `exec` are built into core. `gcp`, `keyring`, and any other
+non-built-in source are owned by plugins; install or enable the relevant plugin
+to make a source available. Built-in source behavior is unchanged when no
+plugin sources are configured.
 
 <AccordionGroup>
   <Accordion title="Env provider">
@@ -201,7 +209,45 @@ Define providers under `secrets.providers`:
     ```
 
   </Accordion>
+  <Accordion title="GCP provider (plugin-owned)">
+    Owned by the bundled `secrets-gcp` plugin. Resolves SecretRef ids against
+    Google Cloud Secret Manager via Application Default Credentials.
+
+    - Required: `project` (GCP project id, must match GCP grammar).
+    - Optional: `versionSuffix` (`"latest"` or a positive integer; default `"latest"`).
+    - Auth comes from ADC (`gcloud auth application-default login`, a service
+      account key at `GOOGLE_APPLICATION_CREDENTIALS`, or VM metadata).
+    - The plugin lazy-loads `@google-cloud/secret-manager`, so unconfigured
+      sources have no startup cost.
+
+    See [GCP secret provider plugin](/plugins/secrets-gcp) for full setup.
+
+  </Accordion>
+  <Accordion title="Keyring provider (plugin-owned)">
+    Owned by the bundled `secrets-keyring` plugin. Resolves SecretRef ids
+    against the OS-native credential store: macOS Keychain via the `security`
+    CLI, Linux libsecret via `secret-tool`.
+
+    - Optional: `service` (libsecret/Keychain service attribute; default `"openclaw"`).
+    - Optional: `keychainPath` (macOS only; absolute path ending in `.keychain-db` or `.keychain`; defaults to `~/Library/Keychains/openclaw.keychain-db`).
+    - Linux requires `secret-tool` from `libsecret-tools` (Debian/Ubuntu) or `libsecret` (Fedora/Arch).
+    - Not supported on Windows.
+
+    See [OS keyring secret provider plugin](/plugins/secrets-keyring) for full setup.
+
+  </Accordion>
 </AccordionGroup>
+
+## Plugin-owned secret sources
+
+The built-in `env`, `file`, and `exec` sources cover most local credential
+flows. Cloud-backend or OS-native sources (GCP Secret Manager, OS keyring,
+AWS Secrets Manager, HashiCorp Vault, Azure Key Vault, native 1Password) are
+owned by plugins so OpenClaw core does not need to bundle every vendor SDK.
+
+- Bundled plugins: `secrets-gcp`, `secrets-keyring` (both `enabledByDefault: false`; opt in via `plugins.entries.<id>.enabled = true`).
+- Third-party plugins: any plugin can declare `contracts.secretProviders: ["my-source"]` in its manifest and ship a `secret-provider.ts` factory artifact. The dispatch site routes any non-built-in `source` value through the lazy public-artifact loader at first use.
+- Plugin authors: see [Plugin SDK overview](/plugins/sdk-overview) and the `secret-provider` subpath in [Plugin SDK subpaths](/plugins/sdk-subpaths) for the contract shape.
 
 ## Exec integration examples
 

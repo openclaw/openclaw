@@ -1205,6 +1205,8 @@
                   "plugins/memory-lancedb",
                   "plugins/message-presentation",
                   "plugins/oc-path",
+                  "plugins/secrets-gcp",
+                  "plugins/secrets-keyring",
                   "plugins/skill-workshop",
                   "plugins/zalouser",
                   {

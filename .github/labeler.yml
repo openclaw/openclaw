@@ -52,6 +52,14 @@
       - any-glob-to-any-file:
           - "extensions/bonjour/**"
           - "docs/gateway/bonjour.md"
+"plugin: secrets-gcp":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/secrets-gcp/**"
+"plugin: secrets-keyring":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/secrets-keyring/**"
 "channel: imessage":
   - changed-files:
       - any-glob-to-any-file:

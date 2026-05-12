@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/secrets-gcp-plugin",
+  "version": "2026.4.25",
+  "private": true,
+  "description": "OpenClaw GCP Secret Manager provider plugin",
+  "type": "module",
+  "dependencies": {
+    "@google-cloud/secret-manager": "^5.6.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

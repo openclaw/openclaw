@@ -425,6 +425,67 @@ function extractBindingsSpecificUnionIssue(
   return { path: fullPath, message: subMessage };
 }
 
+/**
+ * Walk into an invalid_union issue (recursively into nested invalid_union
+ * issues) and return the deepest non-route-type, non-meta-union inner arm
+ * issue. Used for secret-ref / secret-provider unions: SecretInputSchema is
+ * `z.union([string, SecretRefSchema])` and SecretRefSchema is itself
+ * `z.union([discriminated, plugin])`, so the user-facing error (e.g.
+ * "absolute JSON pointer...") sits two invalid_union layers deep when an
+ * apiKey field receives a malformed SecretRef object.
+ *
+ * Returns null if no useful single arm issue is found.
+ */
+function collectNonUnionLeafIssues(record: UnknownIssueRecord): UnknownIssueRecord[] {
+  if (!Array.isArray(record.errors)) {
+    return [];
+  }
+  const leaves: UnknownIssueRecord[] = [];
+  for (const errGroup of record.errors) {
+    if (!Array.isArray(errGroup)) {
+      continue;
+    }
+    for (const rawIssue of errGroup) {
+      const issue = toIssueRecord(rawIssue);
+      if (!issue) {
+        continue;
+      }
+      if (isRouteTypeMismatchIssue(issue)) {
+        continue;
+      }
+      if (typeof issue.code === "string" && issue.code === "invalid_union") {
+        leaves.push(...collectNonUnionLeafIssues(issue));
+        continue;
+      }
+      leaves.push(issue);
+    }
+  }
+  return leaves;
+}
+
+function extractDeepestUnionArmIssue(
+  record: UnknownIssueRecord,
+  parentPath: string,
+): ConfigValidationIssue | null {
+  const leaves = collectNonUnionLeafIssues(record);
+  let bestIssue: UnknownIssueRecord | null = null;
+  let bestPathLen = -1;
+  for (const issue of leaves) {
+    const issuePathLen = toConfigPathSegments(issue.path).length;
+    if (issuePathLen > bestPathLen) {
+      bestIssue = issue;
+      bestPathLen = issuePathLen;
+    }
+  }
+  if (!bestIssue || bestPathLen < 1) {
+    return null;
+  }
+  const subPath = formatConfigPath(toConfigPathSegments(bestIssue.path));
+  const fullPath = parentPath && subPath ? `${parentPath}.${subPath}` : parentPath || subPath;
+  const subMessage = typeof bestIssue.message === "string" ? bestIssue.message : "Invalid input";
+  return { path: fullPath, message: subMessage };
+}
+
 function isObjectSecretRefCandidate(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -532,6 +593,14 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
     const betterIssue = extractBindingsSpecificUnionIssue(record, path);
     if (betterIssue) {
       return betterIssue;
+    }
+    // Fallthrough: surface the deepest inner arm issue for any union (e.g. the
+    // built-in vs. plugin secret schema split). Without this, users get a
+    // generic "Invalid input" instead of the per-source arm's specific
+    // validation message.
+    const deepestArmIssue = extractDeepestUnionArmIssue(record, path);
+    if (deepestArmIssue) {
+      return deepestArmIssue;
     }
   }
 

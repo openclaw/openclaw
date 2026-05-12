@@ -6,6 +6,7 @@ import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
+  isEnvSecretProviderConfig,
   normalizeSecretInputString,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
@@ -29,7 +30,7 @@ function resolveEnvSecretRefValue(params: {
 }): string | undefined {
   const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
   if (providerConfig) {
-    if (providerConfig.source !== "env") {
+    if (!isEnvSecretProviderConfig(providerConfig)) {
       throw new Error(
         `Secret provider "${params.provider}" has source "${providerConfig.source}" but ref requests "env".`,
       );

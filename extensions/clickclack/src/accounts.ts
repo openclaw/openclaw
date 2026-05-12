@@ -3,6 +3,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import {
+  isEnvSecretProviderConfig,
   normalizeSecretInputString,
   normalizeResolvedSecretInputString,
   resolveSecretInputString,
@@ -51,7 +52,10 @@ function resolveClickClackToken(params: {
     if (resolved.status === "configured_unavailable" && resolved.ref.source === "env") {
       const providerConfig = params.cfg.secrets?.providers?.[resolved.ref.provider];
       if (providerConfig) {
-        if (providerConfig.source !== "env") {
+        // Use the type guard so the open PluginSecretProviderConfig arm
+        // narrows out cleanly — a literal `!== "env"` check leaves it in
+        // the union and breaks `.allowlist` typing.
+        if (!isEnvSecretProviderConfig(providerConfig)) {
           throw new Error(
             `Secret provider "${resolved.ref.provider}" has source "${providerConfig.source}" but ref requests "env".`,
           );

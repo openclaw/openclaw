@@ -1183,6 +1183,10 @@
       "types": "./dist/plugin-sdk/document-extractor.d.ts",
       "default": "./dist/plugin-sdk/document-extractor.js"
     },
+    "./plugin-sdk/secret-provider": {
+      "types": "./dist/plugin-sdk/secret-provider.d.ts",
+      "default": "./dist/plugin-sdk/secret-provider.js"
+    },
     "./plugin-sdk/web-content-extractor": {
       "types": "./dist/plugin-sdk/web-content-extractor.d.ts",
       "default": "./dist/plugin-sdk/web-content-extractor.js"

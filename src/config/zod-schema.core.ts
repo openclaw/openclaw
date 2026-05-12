@@ -75,10 +75,37 @@ const ExecSecretRefSchema = z
   })
   .strict();
 
-export const SecretRefSchema = z.discriminatedUnion("source", [
-  EnvSecretRefSchema,
-  FileSecretRefSchema,
-  ExecSecretRefSchema,
+const BUILT_IN_SECRET_SOURCES = ["env", "file", "exec"] as const;
+
+function sourceIsBuiltIn(value: unknown): value is "env" | "file" | "exec" {
+  return (
+    typeof value === "string" && (BUILT_IN_SECRET_SOURCES as readonly string[]).includes(value)
+  );
+}
+
+const PluginSecretRefSchema = z
+  .object({
+    source: z.string().min(1),
+    provider: z
+      .string()
+      .regex(
+        SECRET_PROVIDER_ALIAS_PATTERN,
+        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
+      ),
+    id: z.string().min(1),
+  })
+  .strict()
+  .refine(
+    (value) => !sourceIsBuiltIn(value.source),
+    'Source matches a built-in name; use the built-in SecretRef schema for "env", "file", or "exec".',
+  );
+
+// Order matters: built-in discriminated arm first so its richer per-source
+// errors are picked by the validation.ts union flattener (see
+// extractFlattenedUnionIssue) when the user supplies a built-in source.
+export const SecretRefSchema = z.union([
+  z.discriminatedUnion("source", [EnvSecretRefSchema, FileSecretRefSchema, ExecSecretRefSchema]),
+  PluginSecretRefSchema,
 ]);
 
 export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
@@ -143,10 +170,27 @@ const SecretsExecProviderSchema = z
   })
   .strict();
 
-export const SecretProviderSchema = z.discriminatedUnion("source", [
-  SecretsEnvProviderSchema,
-  SecretsFileProviderSchema,
-  SecretsExecProviderSchema,
+/**
+ * Plugin-owned secret-provider config. The plugin's own SecretProviderPlugin.validateConfig
+ * enforces vendor-specific shape; core only validates that source is a non-empty string
+ * that does not collide with the built-in names.
+ */
+const SecretsPluginProviderSchema = z
+  .object({ source: z.string().min(1) })
+  .catchall(z.unknown())
+  .refine(
+    (value) => !sourceIsBuiltIn(value.source),
+    'Source matches a built-in name; use the built-in provider schema for "env", "file", or "exec".',
+  );
+
+// See SecretRefSchema for ordering rationale.
+export const SecretProviderSchema = z.union([
+  z.discriminatedUnion("source", [
+    SecretsEnvProviderSchema,
+    SecretsFileProviderSchema,
+    SecretsExecProviderSchema,
+  ]),
+  SecretsPluginProviderSchema,
 ]);
 
 export const SecretsConfigSchema = z

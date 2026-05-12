@@ -63,6 +63,7 @@ type ManifestContractKey =
   | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
   | "documentExtractors"
+  | "secretProviders"
   | "imageGenerationProviders"
   | "videoGenerationProviders"
   | "musicGenerationProviders"
@@ -97,6 +98,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       realtimeVoiceProviderIds: [...entry.realtimeVoiceProviderIds],
       mediaUnderstandingProviderIds: [...entry.mediaUnderstandingProviderIds],
       documentExtractorIds: [...entry.documentExtractorIds],
+      secretProviderIds: [...entry.secretProviderIds],
       imageGenerationProviderIds: [...entry.imageGenerationProviderIds],
       videoGenerationProviderIds: [...entry.videoGenerationProviderIds],
       musicGenerationProviderIds: [...entry.musicGenerationProviderIds],
@@ -118,6 +120,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
           (plugin.contracts?.realtimeVoiceProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.mediaUnderstandingProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.documentExtractors?.length ?? 0) > 0 ||
+          (plugin.contracts?.secretProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.imageGenerationProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.videoGenerationProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.musicGenerationProviders?.length ?? 0) > 0 ||
@@ -141,6 +144,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
         plugin.contracts?.mediaUnderstandingProviders ?? [],
       ),
       documentExtractorIds: uniqueStrings(plugin.contracts?.documentExtractors ?? []),
+      secretProviderIds: uniqueStrings(plugin.contracts?.secretProviders ?? []),
       imageGenerationProviderIds: uniqueStrings(plugin.contracts?.imageGenerationProviders ?? []),
       videoGenerationProviderIds: uniqueStrings(plugin.contracts?.videoGenerationProviders ?? []),
       musicGenerationProviderIds: uniqueStrings(plugin.contracts?.musicGenerationProviders ?? []),
@@ -181,6 +185,29 @@ function resolveBundledManifestContractPluginIds(contract: ManifestRegistryContr
   });
 }
 
+/**
+ * Look up which bundled plugin owns a specific secret-provider source id.
+ * Returns the plugin id if found, otherwise undefined.
+ *
+ * Source ids are required to be unique across bundled plugins — that invariant
+ * is enforced by `bundled-capability-metadata.test.ts` so a future bundled
+ * plugin cannot silently collide. If a collision were ever introduced (third-
+ * party plugin shipping the same source as a bundled one), the first match in
+ * iteration order wins; behavior is otherwise unspecified.
+ */
+export function resolveBundledPluginIdForSecretProviderSource(source: string): string | undefined {
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  for (const entry of resolveBundledManifestContracts()) {
+    if (entry.secretProviderIds.includes(trimmed)) {
+      return entry.pluginId;
+    }
+  }
+  return undefined;
+}
+
 function resolveBundledManifestPluginIdsForContract(contract: ManifestContractKey): string[] {
   return uniqueStrings(
     resolveBundledManifestContracts()
@@ -196,6 +223,8 @@ function resolveBundledManifestPluginIdsForContract(contract: ManifestContractKe
             return entry.mediaUnderstandingProviderIds.length > 0;
           case "documentExtractors":
             return entry.documentExtractorIds.length > 0;
+          case "secretProviders":
+            return entry.secretProviderIds.length > 0;
           case "imageGenerationProviders":
             return entry.imageGenerationProviderIds.length > 0;
           case "videoGenerationProviders":

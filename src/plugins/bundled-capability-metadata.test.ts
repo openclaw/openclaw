@@ -92,4 +92,23 @@ describe("bundled capability metadata", () => {
     expect(BUNDLED_LEGACY_PLUGIN_ID_ALIASES).toEqual(expectedLegacyAliases);
     expect(BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS).toEqual(expectedAutoEnableProviderPluginIds);
   });
+
+  it("each secret-provider source id is owned by exactly one bundled plugin", () => {
+    // The runtime resolver returns the first plugin that declares a given
+    // source id; if two bundled plugins ever declare the same source, the
+    // resolution becomes order-dependent and ambiguous. Catch that at build
+    // time so a future bundled plugin can't accidentally collide.
+    const ownership = new Map<string, string[]>();
+    for (const snapshot of BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS) {
+      for (const sourceId of snapshot.secretProviderIds) {
+        const owners = ownership.get(sourceId) ?? [];
+        owners.push(snapshot.pluginId);
+        ownership.set(sourceId, owners);
+      }
+    }
+    const collisions = [...ownership.entries()]
+      .filter(([, owners]) => owners.length > 1)
+      .map(([source, owners]) => ({ source, owners }));
+    expect(collisions).toEqual([]);
+  });
 });

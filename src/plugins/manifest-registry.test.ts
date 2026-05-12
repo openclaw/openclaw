@@ -1669,6 +1669,27 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("preserves secret-provider contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "secrets-gcp",
+      contracts: {
+        secretProviders: ["gcp", "  keyring  ", ""],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "secrets-gcp",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.contracts).toEqual({
+      secretProviders: ["gcp", "keyring"],
+    });
+  });
+
   it("preserves channel env metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

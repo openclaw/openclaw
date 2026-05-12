@@ -3,6 +3,7 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   coerceSecretRef,
+  isEnvSecretProviderConfig,
   normalizeResolvedSecretInputString,
 } from "openclaw/plugin-sdk/secret-input-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
@@ -174,7 +175,7 @@ function readEnvSecretRefFallback(params: {
 
   const providerConfig = params.config?.secrets?.providers?.[ref.provider];
   if (providerConfig) {
-    if (providerConfig.source !== "env") {
+    if (!isEnvSecretProviderConfig(providerConfig)) {
       throw new Error(
         `Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "env".`,
       );

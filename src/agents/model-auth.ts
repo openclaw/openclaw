@@ -4,7 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { coerceSecretRef, isEnvSecretProviderConfig } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -116,7 +116,7 @@ function canResolveEnvSecretRefInReadOnlyPath(params: {
   if (!providerConfig) {
     return params.provider === resolveDefaultSecretProviderAlias(params.cfg ?? {}, "env");
   }
-  if (providerConfig.source !== "env") {
+  if (!isEnvSecretProviderConfig(providerConfig)) {
     return false;
   }
   const allowlist = providerConfig.allowlist;

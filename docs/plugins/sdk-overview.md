@@ -105,6 +105,22 @@ methods:
 | `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider           |
 | `api.registerWebSearchProvider(...)`             | Web search                            |
 
+### Manifest-declared capabilities
+
+Some capabilities are declared in `openclaw.plugin.json` under `contracts`
+rather than registered through `api.register*`. Core inventories the
+declarations cold and lazy-loads a narrow public-artifact file from the
+plugin only when a config or runtime request actually references the
+capability.
+
+| Manifest contract              | Plugin artifact                         | What it owns                                                                                                    |
+| ------------------------------ | --------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `contracts.documentExtractors` | `document-extractor.ts` factory exports | Local document extraction adapters (e.g. `pdf`)                                                                 |
+| `contracts.secretProviders`    | `secret-provider.ts` factory exports    | SecretRef source ids (e.g. `gcp`, `keyring`); resolves credentials configured under `secrets.providers.<alias>` |
+
+See [Plugin SDK subpaths](/plugins/sdk-subpaths) for the matching SDK type
+re-exports (`plugin-sdk/document-extractor`, `plugin-sdk/secret-provider`).
+
 ### Tools and commands
 
 | Method                          | What it registers                             |

@@ -6,7 +6,14 @@ import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SecretProviderConfig, SecretRef, SecretRefSource } from "../config/types.secrets.js";
+import {
+  isEnvSecretProviderConfig,
+  isExecSecretProviderConfig,
+  isFileSecretProviderConfig,
+  type SecretProviderConfig,
+  type SecretRef,
+  type SecretRefSource,
+} from "../config/types.secrets.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -131,13 +138,16 @@ function removeSecretProvider(config: OpenClawConfig, providerAlias: string): bo
 }
 
 function providerHint(provider: SecretProviderConfig): string {
-  if (provider.source === "env") {
+  if (isEnvSecretProviderConfig(provider)) {
     return provider.allowlist?.length ? `env (${provider.allowlist.length} allowlisted)` : "env";
   }
-  if (provider.source === "file") {
+  if (isFileSecretProviderConfig(provider)) {
     return `file (${provider.mode ?? "json"})`;
   }
-  return `exec (${provider.jsonOnly === false ? "json+text" : "json"})`;
+  if (isExecSecretProviderConfig(provider)) {
+    return `exec (${provider.jsonOnly === false ? "json+text" : "json"})`;
+  }
+  return provider.source;
 }
 
 function toSourceChoices(config: OpenClawConfig): Array<{ value: SecretRefSource; label: string }> {
@@ -610,12 +620,12 @@ async function promptProviderConfig(
   current?: SecretProviderConfig,
 ): Promise<SecretProviderConfig> {
   if (source === "env") {
-    return await promptEnvProvider(current?.source === "env" ? current : undefined);
+    return await promptEnvProvider(isEnvSecretProviderConfig(current) ? current : undefined);
   }
   if (source === "file") {
-    return await promptFileProvider(current?.source === "file" ? current : undefined);
+    return await promptFileProvider(isFileSecretProviderConfig(current) ? current : undefined);
   }
-  return await promptExecProvider(current?.source === "exec" ? current : undefined);
+  return await promptExecProvider(isExecSecretProviderConfig(current) ? current : undefined);
 }
 
 async function configureProvidersInteractive(config: OpenClawConfig): Promise<void> {
