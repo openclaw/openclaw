@@ -137,11 +137,16 @@ function advancePosixInlineOptionScan(token: string): number {
   return 1;
 }
 
+function isPowerShellOptionToken(token: string): boolean {
+  return token.startsWith("-") || /^\/[A-Za-z][A-Za-z0-9]*$/.test(token);
+}
+
 export function resolveInlineCommandMatch(
   argv: string[],
   flags: ReadonlySet<string>,
   options: {
     allowCombinedC?: boolean;
+    isOptionToken?: (token: string) => boolean;
     stopAtFirstNonOption?: boolean;
     valueOptions?: ReadonlySet<string>;
   } = {},
@@ -175,7 +180,9 @@ export function resolveInlineCommandMatch(
       i += 2;
       continue;
     }
-    if (options.stopAtFirstNonOption && !token.startsWith("-")) {
+    const isOptionToken =
+      options.isOptionToken?.(token) ?? (token.startsWith("-") || token.startsWith("+"));
+    if (options.stopAtFirstNonOption && !isOptionToken) {
       break;
     }
     if (options.allowCombinedC && !token.startsWith("-") && !token.startsWith("+")) {
@@ -191,6 +198,7 @@ export function resolvePowerShellInlineCommandMatch(argv: string[]): {
   valueTokenIndex: number | null;
 } {
   return resolveInlineCommandMatch(argv, POWERSHELL_INLINE_COMMAND_FLAGS, {
+    isOptionToken: isPowerShellOptionToken,
     stopAtFirstNonOption: true,
     valueOptions: POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES,
   });

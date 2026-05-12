@@ -131,6 +131,16 @@ describe("resolveInlineCommandMatch", () => {
       argv: ["pwsh", "/ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
       expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 2 },
     },
+    {
+      name: "keeps scanning after PowerShell slash switches",
+      argv: ["pwsh", "/NoProfile", "/ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 3 },
+    },
+    {
+      name: "stops at slash paths before PowerShell script args",
+      argv: ["/usr/bin/pwsh", "/tmp/script.ps1", "/ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expected: { command: null, valueTokenIndex: null },
+    },
   ])("$name", ({ argv, expected }) => {
     expect(resolvePowerShellInlineCommandMatch(argv)).toEqual(expected);
   });

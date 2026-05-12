@@ -500,6 +500,14 @@ describe("extractShellWrapperCommand", () => {
       },
     },
     {
+      argv: ["pwsh", "/NoProfile", "/ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expectedInline: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      expectedCommand: {
+        isWrapper: true,
+        command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      },
+    },
+    {
       argv: ["pwsh", "script.ps1", "-en", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
       expectedInline: null,
       expectedCommand: { isWrapper: false, command: null },

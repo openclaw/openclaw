@@ -79,6 +79,7 @@ describe("system run command helpers", () => {
     { argv: ["powershell", "-enc", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
     { argv: ["pwsh", "-ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
     { argv: ["pwsh", "-en", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
+    { argv: ["pwsh", "/NoProfile", "/ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
     { argv: ["busybox", "sh", "-c", "echo hi"], expected: "echo hi" },
     { argv: ["toybox", "ash", "-c", "echo hi"], expected: "echo hi" },
   ])("extractShellCommandFromArgv unwraps %j", ({ argv, expected }) => {
@@ -94,6 +95,9 @@ describe("system run command helpers", () => {
 
   test("extractShellCommandFromArgv keeps omitted PowerShell file args out of shell payloads", () => {
     expect(extractShellCommandFromArgv(["pwsh", "script.ps1", "-en", "ZQBjAGgAbwA="])).toBe(null);
+    expect(extractShellCommandFromArgv(["/usr/bin/pwsh", "/tmp/script.ps1", "/ec", "AAA"])).toBe(
+      null,
+    );
   });
 
   test("extractShellCommandFromArgv includes trailing cmd.exe args after /c", () => {
