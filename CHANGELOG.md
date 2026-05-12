@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Azure OpenAI Responses: flatten memory tool corpus schemas and fail post-header no-event stalls with a bounded diagnostic instead of waiting for the embedded run timeout. Fixes #80926. Thanks @galiniliev.
 - fix(node-pairing): replace changed pending requests [AI]. (#80894) Thanks @pgondhi987.
 - Rate limit Google Chat webhook requests [AI]. (#80974) Thanks @pgondhi987.
 - Docker: mount the auth-profile secret key directory so OAuth-backed auth profiles survive container rebuilds. (#80991)

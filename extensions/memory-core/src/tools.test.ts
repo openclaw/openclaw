@@ -7,6 +7,7 @@ import {
   setMemorySearchImpl,
 } from "./memory-tool-manager-mock.js";
 import { createMemorySearchTool } from "./tools.js";
+import { MemoryGetSchema, MemorySearchSchema } from "./tools.shared.js";
 import {
   asOpenClawConfig,
   createMemorySearchToolOrThrow,
@@ -31,6 +32,24 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
       store: sessionStore,
     })),
   };
+});
+
+describe("memory tool schemas", () => {
+  it("uses flat corpus enums for provider-compatible tool schemas", () => {
+    const searchCorpus = MemorySearchSchema.properties.corpus;
+    const getCorpus = MemoryGetSchema.properties.corpus;
+
+    expect(searchCorpus).toMatchObject({
+      type: "string",
+      enum: ["memory", "wiki", "all", "sessions"],
+    });
+    expect(getCorpus).toMatchObject({
+      type: "string",
+      enum: ["memory", "wiki", "all"],
+    });
+    expect(searchCorpus).not.toHaveProperty("anyOf");
+    expect(getCorpus).not.toHaveProperty("anyOf");
+  });
 });
 
 describe("memory_search unavailable payloads", () => {
