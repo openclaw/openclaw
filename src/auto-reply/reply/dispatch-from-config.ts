@@ -296,6 +296,11 @@ const createShouldEmitVerboseProgress = (params: {
   };
 };
 
+const isInternalWebchatSourceContext = (ctx: FinalizedMsgContext): boolean =>
+  normalizeMessageChannel(ctx.Provider) === INTERNAL_MESSAGE_CHANNEL ||
+  normalizeMessageChannel(ctx.Surface) === INTERNAL_MESSAGE_CHANNEL ||
+  normalizeMessageChannel(ctx.OriginatingChannel) === INTERNAL_MESSAGE_CHANNEL;
+
 const resolveHarnessSourceVisibleRepliesDefault = (params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
@@ -304,6 +309,9 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
   sessionKey?: string;
 }): "automatic" | "message_tool" | undefined => {
   if (params.ctx.CommandSource === "native") {
+    return undefined;
+  }
+  if (isInternalWebchatSourceContext(params.ctx)) {
     return undefined;
   }
   try {
