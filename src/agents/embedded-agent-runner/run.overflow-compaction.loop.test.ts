@@ -301,15 +301,10 @@ describe("overflow compaction in run loop", () => {
     expectLogIncludes(mockedLog.warn, "auto-compaction failed");
   });
 
-  it("falls back to tool-result truncation and retries when oversized results are detected", async () => {
+  it("tries tool-result truncation before compaction and retries when oversized results are detected", async () => {
     queueOverflowAttemptWithOversizedToolOutput(mockedRunEmbeddedAttempt, makeOverflowError());
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    mockedCompactDirect.mockResolvedValueOnce({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
     mockedSessionLikelyHasOversizedToolResults.mockReturnValue(true);
     mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
       truncated: true,
@@ -318,7 +313,7 @@ describe("overflow compaction in run loop", () => {
 
     const result = await runEmbeddedAgent(baseParams);
 
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(
       requireMockCallArg(mockedSessionLikelyHasOversizedToolResults, 0).contextWindowTokens,
     ).toBe(200000);
@@ -330,7 +325,7 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
-  it("retries after fallback truncation for a mixed oversized-plus-aggregate tool tail", async () => {
+  it("retries after pre-compaction truncation for a mixed oversized-plus-aggregate tool tail", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
         makeAttemptResult({
@@ -353,11 +348,6 @@ describe("overflow compaction in run loop", () => {
       )
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    mockedCompactDirect.mockResolvedValueOnce({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
     mockedSessionLikelyHasOversizedToolResults.mockReturnValue(true);
     mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
       truncated: true,
@@ -366,7 +356,7 @@ describe("overflow compaction in run loop", () => {
 
     const result = await runEmbeddedAgent(baseParams);
 
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
     const oversizedArgs = requireMockCallArg(mockedSessionLikelyHasOversizedToolResults, 0);
     const messages = oversizedArgs.messages as Array<{ role?: string }>;
     expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(3);
@@ -374,7 +364,34 @@ describe("overflow compaction in run loop", () => {
       "/tmp/session.json",
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectLogIncludes(mockedLog.info, "Truncated 2 tool result(s)");
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("retries compaction when pre-compaction tool-result truncation does not help", async () => {
+    queueOverflowAttemptWithOversizedToolOutput(mockedRunEmbeddedAttempt, makeOverflowError());
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(true);
+    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
+      truncated: false,
+      truncatedCount: 0,
+      reason: "no reducible tool results",
+    });
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted after truncation miss",
+        firstKeptEntryId: "entry-9",
+        tokensBefore: 150000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedTruncateOversizedToolResultsInSession).toHaveBeenCalledTimes(1);
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expectLogIncludes(mockedLog.warn, "Tool result truncation did not help before compaction");
+    expectLogIncludes(mockedLog.info, "auto-compaction succeeded");
     expect(result.meta.error).toBeUndefined();
   });
 
