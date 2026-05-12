@@ -483,6 +483,30 @@ describe("command gating", () => {
     expect(isInternalMessageChannelMock).not.toHaveBeenCalled();
   });
 
+  it("enforces gateway client permissions when the scope list is empty", () => {
+    const result = requireGatewayClientScopeForInternalChannel(
+      {
+        ctx: {
+          Provider: "internal",
+          OriginatingChannel: "telegram",
+          GatewayClientScopes: [],
+        },
+        command: {
+          channel: "telegram",
+        },
+      } as unknown as HandleCommandsParams,
+      {
+        label: "/config write",
+        allowedScopes: ["operator.admin"],
+        missingText: "/config set|unset requires operator.admin for gateway clients.",
+      },
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("requires operator.admin");
+    expect(isInternalMessageChannelMock).not.toHaveBeenCalled();
+  });
+
   it("does not require gateway client permissions when scopes are absent", () => {
     const result = requireGatewayClientScopeForInternalChannel(
       {
