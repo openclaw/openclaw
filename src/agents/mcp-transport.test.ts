@@ -18,10 +18,12 @@ vi.mock("../infra/net/undici-runtime.js", () => ({
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: class MockStreamableHTTPClientTransport {
-    constructor(url: URL, options?: StreamableTransportOptions) {
-      streamableTransportConstructorMock(url, options);
-    }
+  StreamableHTTPClientTransport: function MockStreamableHTTPClientTransport(
+    this: unknown,
+    url: URL,
+    options?: StreamableTransportOptions,
+  ) {
+    streamableTransportConstructorMock(url, options);
   },
 }));
 
