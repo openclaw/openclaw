@@ -731,7 +731,7 @@ describe("host-hook fixture plugin contract", () => {
         });
         api.session.controls.registerControlUiDescriptor({
           id: "plan-mode-chip",
-          surface: "chat-header-chip",
+          surface: "chat-input-toolbar-chip",
           label: "Plan mode chip",
           description: "Header chip indicating the active execution mode",
           priority: 100,
@@ -751,7 +751,7 @@ describe("host-hook fixture plugin contract", () => {
     expect(descriptors.map((entry) => entry.descriptor.surface)).toEqual([
       "chat-message",
       "chat-input-bar",
-      "chat-header-chip",
+      "chat-input-toolbar-chip",
     ]);
     expect(descriptors[0]?.descriptor.priority).toBe(10);
     expect(descriptors[0]?.descriptor.activeWhen).toEqual({

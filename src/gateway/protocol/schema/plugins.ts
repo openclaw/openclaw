@@ -24,7 +24,7 @@ export const PluginControlUiDescriptorSchema = Type.Object(
       Type.Literal("settings"),
       Type.Literal("chat-message"),
       Type.Literal("chat-input-bar"),
-      Type.Literal("chat-header-chip"),
+      Type.Literal("chat-input-toolbar-chip"),
     ]),
     label: NonEmptyString,
     description: Type.Optional(Type.String()),

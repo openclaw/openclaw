@@ -355,7 +355,7 @@ addition to the existing static slots:
 
 - `chat-message`: rendered inline between agent messages.
 - `chat-input-bar`: rendered above (and suppressing) the chat composer.
-- `chat-header-chip`: rendered into the chat header strip.
+- `chat-input-toolbar-chip`: rendered into the chat input toolbar.
 
 The host carries the descriptor metadata across the wire; the client owns the
 actual rendering. To decide when a chat-stream descriptor mounts, attach an

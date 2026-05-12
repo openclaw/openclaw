@@ -140,7 +140,7 @@ export type PluginControlUiDescriptor = {
    * - `chat-input-bar`: a contribution that replaces or suppresses the chat
    *   composer for the active session — e.g. a plan-approval card that owns
    *   the input row while the user accepts or revises the plan.
-   * - `chat-header-chip`: a compact contribution rendered into the chat header
+   * - `chat-input-toolbar-chip`: a compact contribution rendered into the chat input toolbar
    *   strip — typically a mode-switcher chip showing the active execution
    *   mode (Plan / Ask / Bypass / etc.).
    */
@@ -151,7 +151,7 @@ export type PluginControlUiDescriptor = {
     | "settings"
     | "chat-message"
     | "chat-input-bar"
-    | "chat-header-chip";
+    | "chat-input-toolbar-chip";
   label: string;
   description?: string;
   placement?: string;

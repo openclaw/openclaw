@@ -1747,12 +1747,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     "settings",
     "chat-message",
     "chat-input-bar",
-    "chat-header-chip",
+    "chat-input-toolbar-chip",
   ]);
   const chatStreamSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
     "chat-message",
     "chat-input-bar",
-    "chat-header-chip",
+    "chat-input-toolbar-chip",
   ]);
 
   const registerSessionExtension = (

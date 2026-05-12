@@ -87,7 +87,7 @@ describe("plugins.uiDescriptors projection ordering", () => {
       },
       {
         pluginId: "m-plugin",
-        descriptor: { id: "no-priority", surface: "chat-header-chip", label: "M-no" },
+        descriptor: { id: "no-priority", surface: "chat-input-toolbar-chip", label: "M-no" },
         source: "test",
       },
       {
