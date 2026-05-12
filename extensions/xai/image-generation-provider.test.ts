@@ -93,7 +93,12 @@ describe("xai image generation provider", () => {
     expect(provider.id).toBe("xai");
     expect(provider.label).toBe("xAI");
     expect(provider.defaultModel).toBe("grok-imagine-image");
-    expect(provider.models).toEqual(["grok-imagine-image", "grok-imagine-image-pro"]);
+    expect(provider.models).toEqual([
+      "grok-imagine-image",
+      // deprecated; scheduled for removal
+      "grok-imagine-image-pro",
+      "grok-imagine-image-quality",
+    ]);
     expect(provider.capabilities.generate.maxCount).toBe(4);
     expect(provider.capabilities.generate.supportsAspectRatio).toBe(true);
     expect(provider.capabilities.geometry?.aspectRatios).toEqual([
