@@ -239,6 +239,15 @@ RUN chmod 755 /opt/rockie-gpu/rockie-gpu && \
     mkdir -p /usr/local/bin && \
     ln -sf /opt/rockie-gpu/rockie-gpu /usr/local/bin/rockie-gpu
 
+# Sibling CLI for the non-Rockie-GPU rungs of the compute trust ladder
+# (MVP step 6): byo_ssh / byo_github / artifact_only. Same shape as
+# rockie-gpu — stdlib-only Python, JSON-lines by default, ``--human``
+# flips to a kv block for ad-hoc debugging.
+RUN install -d -m 0755 /opt/rockie-compute
+COPY --chown=root:root overlay/multitenant/rockie-compute /opt/rockie-compute/rockie-compute
+RUN chmod 755 /opt/rockie-compute/rockie-compute && \
+    ln -sf /opt/rockie-compute/rockie-compute /usr/local/bin/rockie-compute
+
 # Drop in the mcp-rockie MCP server (Phase 5 h.3) so claude/codex can
 # call list_labs / get_lab / search / submit_experiment / etc. against
 # platform-context.

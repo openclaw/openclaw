@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""rockie-compute — agent-facing CLI for the non-Rockie-GPU rungs of
+the compute trust ladder.
+
+Sibling of ``rockie-gpu``. Lives at
+``/opt/rockie-compute/rockie-compute`` with a symlink at
+``/usr/local/bin/rockie-compute`` in the multitenant runtime image.
+
+Targets the ``/api/compute/*`` REST surface:
+
+  target              — show configured target + setup status
+  submit  --script F  — submit a script to the configured runner
+  status  HANDLE      — poll status
+  cancel  HANDLE      — cancel
+
+Stdlib-only. JSON-lines output by default; ``--human`` flips to
+table/kv format for ad-hoc debugging.
+
+Reads two env vars set by the runtime entrypoint:
+
+  ROCKIELAB_API_BASE        — e.g. https://api.rockielab.com
+  ROCKIELAB_TENANT_TOKEN    — passed as X-Tenant-Token
+
+Exit codes mirror rockie-gpu:
+  0  success
+  1  network / API error
+  2  bad argv / usage error
+  3  server returned HTTP 4xx
+  4  server returned HTTP 5xx
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from typing import Any, Optional
+
+
+DEFAULT_API_BASE = os.environ.get(
+    "ROCKIELAB_API_BASE", "https://api.rockielab.com"
+)
+TENANT_TOKEN = os.environ.get("ROCKIELAB_TENANT_TOKEN", "")
+
+
+class CLIError(Exception):
+    def __init__(self, message: str, exit_code: int = 1):
+        super().__init__(message)
+        self.exit_code = exit_code
+
+
+def _build_request(
+    method: str, path: str, body: Optional[dict]
+) -> urllib.request.Request:
+    url = f"{DEFAULT_API_BASE.rstrip('/')}{path}"
+    headers = {"Accept": "application/json"}
+    if TENANT_TOKEN:
+        headers["X-Tenant-Token"] = TENANT_TOKEN
+    data: Optional[bytes] = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    return urllib.request.Request(url, data=data, headers=headers, method=method)
+
+
+def _parse_http_error(e: urllib.error.HTTPError) -> "CLIError":
+    try:
+        payload = json.loads(e.read().decode("utf-8"))
+    except Exception:
+        payload = {"detail": str(e)}
+    code = 3 if 400 <= e.code < 500 else 4
+    return CLIError(f"HTTP {e.code}: {json.dumps(payload)}", exit_code=code)
+
+
+def _http(method: str, path: str, body: Optional[dict] = None) -> Any:
+    req = _build_request(method, path, body)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read()
+            return json.loads(raw.decode("utf-8")) if raw else None
+    except urllib.error.HTTPError as e:
+        raise _parse_http_error(e) from e
+    except urllib.error.URLError as e:
+        raise CLIError(f"Network error: {e.reason}", exit_code=1) from e
+
+
+def _emit_jsonlines(obj: Any) -> None:
+    rows = obj if isinstance(obj, list) else [obj]
+    for row in rows:
+        sys.stdout.write(json.dumps(row, sort_keys=True) + "\n")
+    sys.stdout.flush()
+
+
+def _emit_kv(obj: Any) -> None:
+    if isinstance(obj, list):
+        for row in obj:
+            _emit_kv(row)
+            print()
+        return
+    for k, v in obj.items():
+        print(f"{k}: {v}")
+
+
+def _emit(obj: Any, human: bool = False) -> None:
+    if not human:
+        _emit_jsonlines(obj)
+        return
+    _emit_kv(obj)
+
+
+# ---------------------------------------------------------------------------
+# Subcommands
+# ---------------------------------------------------------------------------
+
+
+def cmd_target(args: argparse.Namespace) -> int:
+    result = _http("GET", "/api/compute/target")
+    _emit(result, human=args.human)
+    return 0
+
+
+def cmd_submit(args: argparse.Namespace) -> int:
+    if args.script == "-":
+        script = sys.stdin.read()
+    else:
+        with open(args.script, "r", encoding="utf-8") as f:
+            script = f.read()
+    body = {"script": script}
+    if args.timeout_sec is not None:
+        body["timeout_sec"] = args.timeout_sec
+    if args.env:
+        env_dict = {}
+        for pair in args.env:
+            if "=" not in pair:
+                raise CLIError(
+                    f"--env must be KEY=VALUE; got {pair!r}", exit_code=2
+                )
+            k, _, v = pair.partition("=")
+            env_dict[k] = v
+        body["env"] = env_dict
+    result = _http("POST", "/api/compute/jobs", body=body)
+    _emit(result, human=args.human)
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    result = _http("GET", f"/api/compute/jobs/{args.handle}")
+    _emit(result, human=args.human)
+    return 0
+
+
+def cmd_cancel(args: argparse.Namespace) -> int:
+    _http("DELETE", f"/api/compute/jobs/{args.handle}")
+    _emit(
+        {"handle": args.handle, "state": "cancelled"},
+        human=args.human,
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# argparse
+# ---------------------------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="rockie-compute",
+        description=(
+            "Rockie compute-target CLI (agent-facing). Dispatches to "
+            "byo_ssh / byo_github / artifact_only runners."
+        ),
+    )
+    parser.add_argument(
+        "--human",
+        action="store_true",
+        help="Human-readable output (default: JSON-lines).",
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_target = sub.add_parser(
+        "target",
+        help="Show the tenant's configured target + setup status.",
+    )
+    p_target.set_defaults(func=cmd_target)
+
+    p_submit = sub.add_parser(
+        "submit",
+        help="Submit a script to the configured runner.",
+    )
+    p_submit.add_argument(
+        "--script",
+        required=True,
+        help="Path to script file (or '-' for stdin).",
+    )
+    p_submit.add_argument(
+        "--timeout-sec", type=int, default=None,
+        help="Wall-clock timeout for the submit step.",
+    )
+    p_submit.add_argument(
+        "--env", action="append", default=[],
+        help="KEY=VALUE env var (repeatable).",
+    )
+    p_submit.set_defaults(func=cmd_submit)
+
+    p_status = sub.add_parser(
+        "status",
+        help="Get a job's status + artifacts.",
+    )
+    p_status.add_argument("handle")
+    p_status.set_defaults(func=cmd_status)
+
+    p_cancel = sub.add_parser(
+        "cancel",
+        help="Cancel a running job. Idempotent.",
+    )
+    p_cancel.add_argument("handle")
+    p_cancel.set_defaults(func=cmd_cancel)
+
+    return parser
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        return args.func(args)
+    except CLIError as e:
+        sys.stderr.write(f"rockie-compute: {e}\n")
+        return e.exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
