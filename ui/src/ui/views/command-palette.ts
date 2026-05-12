@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../../i18n/index.ts";
-import { SLASH_COMMANDS } from "../chat/slash-commands.ts";
+import { SLASH_COMMANDS, getLocalizedCommandDescription } from "../chat/slash-commands.ts";
 import { icons, type IconName } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
@@ -21,7 +21,7 @@ function buildSlashPaletteItems(): PaletteItem[] {
     icon: command.icon ?? "terminal",
     category: "search",
     action: `/${command.name}`,
-    description: command.description,
+    description: getLocalizedCommandDescription(command),
   }));
 }
 
