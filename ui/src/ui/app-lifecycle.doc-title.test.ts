@@ -27,6 +27,7 @@ function createHost(overrides: Partial<Record<string, unknown>> = {}) {
     sessionsChangedReloadTimer: null as number | ReturnType<typeof globalThis.setTimeout> | null,
     popStateHandler: vi.fn(),
     topbarObserver: null,
+    settings: { documentTitleSyncEnabled: true },
     ...overrides,
   };
 }
@@ -78,5 +79,35 @@ describe("Control UI document.title sync (#80942)", () => {
     const changed = new Map<PropertyKey, unknown>([["logsEntries", []]]);
     handleUpdated(host as unknown as Parameters<typeof handleUpdated>[0], changed);
     expect(document.title).toBe("stale");
+  });
+
+  it("resets to OpenClaw Control when documentTitleSyncEnabled is false", () => {
+    const host = createHost({
+      assistantName: "Milly",
+      settings: { documentTitleSyncEnabled: false },
+    });
+    document.title = "Milly \u00b7 OpenClaw";
+    syncDocumentTitleFromHost(host as unknown as Parameters<typeof syncDocumentTitleFromHost>[0]);
+    expect(document.title).toBe("OpenClaw Control");
+  });
+
+  it("keeps static title even when assistantName changes if toggle is off", () => {
+    const host = createHost({
+      assistantName: "Sherry",
+      tab: "logs",
+      settings: { documentTitleSyncEnabled: false },
+    });
+    document.title = "OpenClaw Control";
+    const changed = new Map<PropertyKey, unknown>([["assistantName", ""]]);
+    handleUpdated(host as unknown as Parameters<typeof handleUpdated>[0], changed);
+    expect(document.title).toBe("OpenClaw Control");
+  });
+
+  it("re-applies title when settings toggle changes", () => {
+    const host = createHost({ assistantName: "Milly", tab: "logs" });
+    document.title = "OpenClaw Control";
+    const changed = new Map<PropertyKey, unknown>([["settings", null]]);
+    handleUpdated(host as unknown as Parameters<typeof handleUpdated>[0], changed);
+    expect(document.title).toBe("Milly \u00b7 OpenClaw");
   });
 });

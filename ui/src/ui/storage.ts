@@ -65,6 +65,7 @@ export type UiSettings = {
   navWidth: number; // Sidebar width when expanded (240–400px)
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
   borderRadius: number; // Corner roundness (0–100, default 50)
+  documentTitleSyncEnabled: boolean; // When true, document.title follows the active agent name.
   customTheme?: ImportedCustomTheme;
   locale?: string;
 };
@@ -206,6 +207,7 @@ export function loadSettings(): UiSettings {
     navWidth: 220,
     navGroupsCollapsed: {},
     borderRadius: 50,
+    documentTitleSyncEnabled: true,
   };
 
   try {
@@ -267,6 +269,10 @@ export function loadSettings(): UiSettings {
         parsed.borderRadius <= 100
           ? snapBorderRadius(parsed.borderRadius)
           : defaults.borderRadius,
+      documentTitleSyncEnabled:
+        typeof parsed.documentTitleSyncEnabled === "boolean"
+          ? parsed.documentTitleSyncEnabled
+          : defaults.documentTitleSyncEnabled,
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
@@ -386,6 +392,7 @@ function persistSettings(next: UiSettings) {
     navWidth: next.navWidth,
     navGroupsCollapsed: next.navGroupsCollapsed,
     borderRadius: next.borderRadius,
+    documentTitleSyncEnabled: next.documentTitleSyncEnabled,
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,
     ...(next.locale ? { locale: next.locale } : {}),

@@ -439,6 +439,7 @@ export type AppViewState = {
     importCustomTheme: () => Promise<void>;
     clearCustomTheme: () => void;
     setBorderRadius: (value: number) => void;
+    setDocumentTitleSyncEnabled: (enabled: boolean) => void;
     applySettings: (next: UiSettings) => void;
     applyLocalUserIdentity?: (next: { name?: string | null; avatar?: string | null }) => void;
     loadOverview: (opts?: { refresh?: boolean }) => Promise<void>;

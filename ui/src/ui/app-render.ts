@@ -1154,6 +1154,8 @@ export function renderApp(state: AppViewState) {
             },
             setThemeMode: (mode, context) => state.setThemeMode(mode, context),
             setBorderRadius: (value) => state.setBorderRadius(value),
+            documentTitleSyncEnabled: state.settings.documentTitleSyncEnabled,
+            setDocumentTitleSyncEnabled: (enabled) => state.setDocumentTitleSyncEnabled(enabled),
             userAvatar: state.userAvatar ?? null,
             onUserAvatarChange: (avatar) => state.applyLocalUserIdentity?.({ avatar }),
             assistantAvatar: configAssistantAvatar,

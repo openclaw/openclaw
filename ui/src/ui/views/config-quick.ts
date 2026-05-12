@@ -82,10 +82,12 @@ export type QuickSettingsProps = {
   hasCustomTheme: boolean;
   customThemeLabel?: string | null;
   borderRadius: number;
+  documentTitleSyncEnabled: boolean;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   onOpenCustomThemeImport?: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setBorderRadius: (value: number) => void;
+  setDocumentTitleSyncEnabled: (enabled: boolean) => void;
   userAvatar?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
 
@@ -656,6 +658,37 @@ function renderAppearanceCard(props: QuickSettingsProps) {
                 </button>
               `,
             )}
+          </div>
+        </div>
+        <div class="qs-row">
+          <span class="qs-row__label">Browser tab</span>
+          <div class="qs-segmented">
+            <button
+              class="qs-segmented__btn ${props.documentTitleSyncEnabled
+                ? "qs-segmented__btn--active"
+                : ""}"
+              @click=${() => {
+                if (!props.documentTitleSyncEnabled) {
+                  props.setDocumentTitleSyncEnabled(true);
+                }
+              }}
+              title="Show the active agent's name in the browser tab title"
+            >
+              Agent name
+            </button>
+            <button
+              class="qs-segmented__btn ${props.documentTitleSyncEnabled
+                ? ""
+                : "qs-segmented__btn--active"}"
+              @click=${() => {
+                if (props.documentTitleSyncEnabled) {
+                  props.setDocumentTitleSyncEnabled(false);
+                }
+              }}
+              title="Keep the static 'OpenClaw Control' tab title"
+            >
+              Static
+            </button>
           </div>
         </div>
       </div>
