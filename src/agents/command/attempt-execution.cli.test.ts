@@ -542,11 +542,15 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
     const sessionFile = updatedFirst?.sessionFile;
-    expect(typeof sessionFile).toBe("string");
-    expect(sessionFile?.length ?? 0).toBeGreaterThan(0);
-    if (typeof sessionFile !== "string" || sessionFile.length === 0) {
+    if (typeof sessionFile !== "string") {
       throw new Error("Expected CLI transcript session file.");
     }
+    expect(path.isAbsolute(sessionFile)).toBe(true);
+    expect(
+      sessionFile.endsWith(
+        path.join(".openclaw", "agents", "main", "sessions", `${sessionEntry.sessionId}.jsonl`),
+      ),
+    ).toBe(true);
 
     await appendSessionTranscriptMessage({
       transcriptPath: sessionFile,

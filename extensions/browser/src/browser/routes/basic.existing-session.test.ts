@@ -44,6 +44,18 @@ function createExistingSessionProfileState(params?: {
   };
 }
 
+function readFirstReachabilityCall(
+  isReachable: ReturnType<typeof vi.fn>,
+): [number | undefined, { ephemeral?: boolean; signal?: AbortSignal } | undefined] {
+  const [call] = isReachable.mock.calls as Array<
+    [number | undefined, { ephemeral?: boolean; signal?: AbortSignal } | undefined]
+  >;
+  if (!call) {
+    throw new Error("expected reachability probe call");
+  }
+  return call;
+}
+
 function createManagedProfileState() {
   return {
     resolved: {
@@ -329,12 +341,7 @@ describe("basic browser routes", () => {
     expect(response.statusCode).toBe(200);
     expect(isTransportAvailable).toHaveBeenCalledTimes(1);
     expect(isTransportAvailable).toHaveBeenCalledWith(5_000);
-    const [timeoutMs, reachabilityOptions] =
-      (
-        isReachable.mock.calls as unknown as Array<
-          [number, { ephemeral?: boolean; signal?: AbortSignal }]
-        >
-      )[0] ?? [];
+    const [timeoutMs, reachabilityOptions] = readFirstReachabilityCall(isReachable);
     expect(timeoutMs).toBe(7_000);
     expect(reachabilityOptions?.ephemeral).toBe(true);
     expect(reachabilityOptions?.signal).toBeInstanceOf(AbortSignal);
@@ -362,12 +369,7 @@ describe("basic browser routes", () => {
       });
 
       expect(response.statusCode).toBe(200);
-      const [timeoutMs, reachabilityOptions] =
-        (
-          isReachable.mock.calls as unknown as Array<
-            [number, { ephemeral?: boolean; signal?: AbortSignal }]
-          >
-        )[0] ?? [];
+      const [timeoutMs, reachabilityOptions] = readFirstReachabilityCall(isReachable);
       expect(timeoutMs).toBe(4_000);
       expect(reachabilityOptions?.ephemeral).toBe(true);
       expect(reachabilityOptions?.signal).toBeInstanceOf(AbortSignal);
@@ -392,8 +394,9 @@ describe("basic browser routes", () => {
     });
 
     expect(isReachable).toHaveBeenCalledTimes(1);
-    expect(isReachable.mock.calls[0]?.[1]?.ephemeral).toBe(true);
-    expect(isReachable.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    const [, reachabilityOptions] = readFirstReachabilityCall(isReachable);
+    expect(reachabilityOptions?.ephemeral).toBe(true);
+    expect(reachabilityOptions?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("skips the page-reachability probe when transport is unavailable", async () => {
