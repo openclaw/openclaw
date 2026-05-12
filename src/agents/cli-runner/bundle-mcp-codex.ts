@@ -9,6 +9,19 @@ import {
 } from "./bundle-mcp-adapter-shared.js";
 import { serializeTomlInlineValue } from "./toml-inline.js";
 
+// Mutable JSON shape that matches the Codex app-server's `JsonObject`
+// (extensions/codex/src/app-server/protocol.ts) so this projection result is
+// structurally assignable to `mergeCodexThreadConfigs`' parameters without
+// pulling plugin-local types across the boundary.
+type CodexThreadConfigValue =
+  | string
+  | number
+  | boolean
+  | null
+  | CodexThreadConfigValue[]
+  | { [key: string]: CodexThreadConfigValue };
+type CodexThreadConfigObject = { [key: string]: CodexThreadConfigValue };
+
 function isOpenClawLoopbackMcpServer(name: string, server: BundleMcpServerConfig): boolean {
   return (
     name === "openclaw" &&
@@ -20,8 +33,8 @@ function isOpenClawLoopbackMcpServer(name: string, server: BundleMcpServerConfig
 function normalizeCodexServerConfig(
   name: string,
   server: BundleMcpServerConfig,
-): Record<string, unknown> {
-  const next: Record<string, unknown> = {};
+): CodexThreadConfigObject {
+  const next: CodexThreadConfigObject = {};
   applyCommonServerConfig(next, server);
   if (isOpenClawLoopbackMcpServer(name, server)) {
     next.default_tools_approval_mode = "approve";
@@ -81,13 +94,13 @@ export function injectCodexMcpConfigArgs(
  */
 export function buildCodexUserMcpServersThreadConfigPatch(
   cfg: OpenClawConfig | undefined,
-): { mcp_servers: Record<string, Record<string, unknown>> } | undefined {
+): { mcp_servers: CodexThreadConfigObject } | undefined {
   const userServers = normalizeConfiguredMcpServers(cfg?.mcp?.servers);
   const entries = Object.entries(userServers);
   if (entries.length === 0) {
     return undefined;
   }
-  const mcp_servers: Record<string, Record<string, unknown>> = {};
+  const mcp_servers: CodexThreadConfigObject = {};
   for (const [name, server] of entries) {
     mcp_servers[name] = normalizeCodexServerConfig(name, server as BundleMcpServerConfig);
   }

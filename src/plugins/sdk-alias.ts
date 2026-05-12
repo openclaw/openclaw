@@ -266,6 +266,11 @@ const cachedPluginSdkScopedAliasMaps = new PluginLruCache<Record<string, string>
 );
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 const CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH = "codex-native-task-runtime";
+const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
+const BUNDLED_CODEX_PRIVATE_PLUGIN_SDK_SUBPATHS = new Set([
+  CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
+  CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
+]);
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".ts",
   ".mts",
@@ -474,7 +479,7 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
 }) {
   return (
     shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ||
-    (params.subpath === CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH &&
+    (BUNDLED_CODEX_PRIVATE_PLUGIN_SDK_SUBPATHS.has(params.subpath) &&
       isBundledCodexPluginModulePath({
         packageRoot: params.packageRoot,
         modulePath: params.modulePath,

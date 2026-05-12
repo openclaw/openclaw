@@ -129,7 +129,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     const startCall = request.mock.calls.find(([method]) => method === "thread/start");
     const startParams = startCall?.[1] as { config?: { mcp_servers?: Record<string, unknown> } };
     expect(startParams?.config?.mcp_servers).toBeDefined();
-    expect(startParams!.config!.mcp_servers).toMatchObject({
+    expect(startParams.config!.mcp_servers).toMatchObject({
       outlook: { command: "node", args: ["/opt/outlook-mcp/dist/index.js"] },
     });
   });
@@ -198,7 +198,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       config?: { mcp_servers?: Record<string, unknown> };
     };
     expect(resumeParams?.config?.mcp_servers).toBeDefined();
-    expect(resumeParams!.config!.mcp_servers).toMatchObject({
+    expect(resumeParams.config!.mcp_servers).toMatchObject({
       notes: { command: "node", args: ["/opt/notes-mcp/dist/index.js"] },
     });
   });

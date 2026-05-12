@@ -26,7 +26,7 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
           },
         },
       },
-    } as OpenClawConfig);
+    } as unknown as OpenClawConfig);
     expect(patch).toStrictEqual({
       mcp_servers: {
         outlook: {
@@ -52,7 +52,7 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
           },
         },
       },
-    } as OpenClawConfig);
+    } as unknown as OpenClawConfig);
     expect(patch).toStrictEqual({
       mcp_servers: {
         notes: {
@@ -72,7 +72,7 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
           two: { transport: "stdio", command: "two" },
         },
       },
-    } as OpenClawConfig);
+    } as unknown as OpenClawConfig);
     expect(patch?.mcp_servers).toBeDefined();
     expect(Object.keys(patch!.mcp_servers).toSorted()).toEqual(["one", "two"]);
     expect(patch!.mcp_servers.one).toMatchObject({ command: "one" });
