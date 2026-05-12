@@ -383,6 +383,29 @@ describe("handleSlackMessageAction", () => {
     expect(firstInvokeCall(invoke)[1]).toEqual({});
   });
 
+  it("forwards ISO read bounds for normalization by the Slack action layer", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "read",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          after: "2026-05-11T04:00:00Z",
+          before: "2026-05-11T05:30:00Z",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action.action).toBe("readMessages");
+    expect(action.after).toBe("2026-05-11T04:00:00Z");
+    expect(action.before).toBe("2026-05-11T05:30:00Z");
+  });
+
   it("requires filePath, path, or media for upload-file", async () => {
     await expect(
       handleSlackMessageAction({

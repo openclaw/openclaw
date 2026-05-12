@@ -93,6 +93,86 @@ describe("readSlackMessages", () => {
     expect(result.messages.map((message) => message.ts)).toEqual(["1"]);
   });
 
+  it("normalizes ISO read bounds before calling Slack history", async () => {
+    const client = createClient();
+    client.conversations.history.mockResolvedValueOnce({
+      messages: [{ ts: "1778472000.000000" }],
+      has_more: false,
+    });
+
+    await readSlackMessages("C1", {
+      client,
+      after: "2026-05-11T04:00:00Z",
+      before: "2026-05-11T05:30:00Z",
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.history).toHaveBeenCalledWith({
+      channel: "C1",
+      limit: undefined,
+      latest: "1778477400",
+      oldest: "1778472000",
+    });
+  });
+
+  it("preserves Slack timestamp read bounds", async () => {
+    const client = createClient();
+
+    await readSlackMessages("C1", {
+      client,
+      after: "1712345678.123456",
+      before: "1712349999",
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.history).toHaveBeenCalledWith({
+      channel: "C1",
+      limit: undefined,
+      latest: "1712349999",
+      oldest: "1712345678.123456",
+    });
+  });
+
+  it("rejects unrecognized read bounds instead of silently falling back", async () => {
+    const client = createClient();
+
+    await expect(
+      readSlackMessages("C1", {
+        client,
+        after: "yesterday morning",
+        token: "xoxb-test",
+      }),
+    ).rejects.toThrow(
+      "Invalid Slack message read after value: expected a Slack timestamp, Unix epoch seconds, or ISO 8601 timestamp.",
+    );
+    expect(client.conversations.history).not.toHaveBeenCalled();
+    expect(client.conversations.replies).not.toHaveBeenCalled();
+  });
+
+  it("normalizes ISO read bounds before calling Slack replies", async () => {
+    const client = createClient();
+    client.conversations.replies.mockResolvedValueOnce({
+      messages: [{ ts: "171234.567" }, { ts: "1778472000.000000" }],
+      has_more: false,
+    });
+
+    await readSlackMessages("C1", {
+      client,
+      threadId: "171234.567",
+      after: "2026-05-11T04:00:00Z",
+      before: "2026-05-11T05:30:00Z",
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.replies).toHaveBeenCalledWith({
+      channel: "C1",
+      ts: "171234.567",
+      limit: undefined,
+      latest: "1778477400",
+      oldest: "1778472000",
+    });
+  });
+
   it("filters a specific channel message by messageId", async () => {
     const client = createClient();
     client.conversations.history.mockResolvedValueOnce({

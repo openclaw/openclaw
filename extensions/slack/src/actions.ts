@@ -104,6 +104,23 @@ async function resolveBotUserId(client: WebClient) {
   return auth.user_id;
 }
 
+function normalizeSlackReadTimestampBound(value: string | undefined, field: string) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return trimmed;
+  }
+  const parsed = Date.parse(trimmed);
+  if (!Number.isNaN(parsed)) {
+    return String(parsed / 1000);
+  }
+  throw new Error(
+    `Invalid Slack message read ${field} value: expected a Slack timestamp, Unix epoch seconds, or ISO 8601 timestamp.`,
+  );
+}
+
 export async function reactSlackMessage(
   channelId: string,
   messageId: string,
@@ -278,8 +295,8 @@ export async function readSlackMessages(
         oldest: undefined,
       }
     : {
-        latest: opts.before,
-        oldest: opts.after,
+        latest: normalizeSlackReadTimestampBound(opts.before, "before"),
+        oldest: normalizeSlackReadTimestampBound(opts.after, "after"),
       };
 
   // Use conversations.replies for thread messages, conversations.history for channel messages.
