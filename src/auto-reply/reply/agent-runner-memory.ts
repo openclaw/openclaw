@@ -24,6 +24,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -165,9 +166,12 @@ function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): Repl
   );
 }
 
-function buildRestrictedMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
+function buildMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
+  if (isAbortError(err)) {
+    return undefined;
+  }
   const message = normalizeOptionalString(err instanceof Error ? err.message : String(err));
-  if (!message || !message.includes("Memory flush writes are restricted to ")) {
+  if (!message) {
     return undefined;
   }
   return {
@@ -1049,7 +1053,7 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   } catch (err) {
     logVerbose(`memory flush run failed: ${String(err)}`);
-    const visibleErrorPayload = buildRestrictedMemoryFlushErrorPayload(err);
+    const visibleErrorPayload = buildMemoryFlushErrorPayload(err);
     if (visibleErrorPayload) {
       params.onVisibleErrorPayloads?.([visibleErrorPayload]);
     }
