@@ -454,9 +454,11 @@ describe("channelsAddCommand", () => {
     await channelsAddCommand({}, runtime, { hasFlags: false });
 
     expect(channelWizardMocks.prompter.intro).toHaveBeenCalledWith("Channel setup");
-    expect(channelWizardMocks.setupChannels.mock.calls[0]?.[0]).toBe(config);
-    expect(channelWizardMocks.setupChannels.mock.calls[0]?.[1]).toBe(runtime);
-    expect(channelWizardMocks.setupChannels.mock.calls[0]?.[2]).toBe(channelWizardMocks.prompter);
+    expect(channelWizardMocks.setupChannels.mock.calls.at(0)?.[0]).toBe(config);
+    expect(channelWizardMocks.setupChannels.mock.calls.at(0)?.[1]).toBe(runtime);
+    expect(channelWizardMocks.setupChannels.mock.calls.at(0)?.[2]).toBe(
+      channelWizardMocks.prompter,
+    );
     expect(setupOptions().deferStatusUntilSelection).toBe(true);
     expect(setupOptions().skipStatusNote).toBe(true);
     expect(setupOptions().promptAccountIds).toBe(true);
@@ -1025,7 +1027,7 @@ describe("channelsAddCommand", () => {
     expect(configMocks.writeConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
       afterAccountConfigWritten.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    const hookCall = requireRecord(afterAccountConfigWritten.mock.calls[0]?.[0], "hook call");
+    const hookCall = requireRecord(afterAccountConfigWritten.mock.calls.at(0)?.[0], "hook call");
     expect(hookCall.previousCfg).toBe(baseConfigSnapshot.config);
     expect(requireRecord(hookCall.cfg, "hook config").channels).toEqual({
       signal: {

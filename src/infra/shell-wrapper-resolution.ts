@@ -11,7 +11,6 @@ import {
   hasPosixInteractiveStartupBeforeInlineCommand,
   hasPosixLoginStartupBeforeInlineCommand,
   POSIX_INLINE_COMMAND_FLAGS,
-  POWERSHELL_INLINE_COMMAND_TAIL_FLAGS,
   resolveInlineCommandMatch,
   resolvePowerShellInlineCommandMatch,
 } from "./shell-inline-command.js";
@@ -218,16 +217,7 @@ function extractCmdInlineCommand(argv: string[]): string | null {
 }
 
 function extractPowerShellInlineCommand(argv: string[]): string | null {
-  const match = resolvePowerShellInlineCommandMatch(argv);
-  if (match.command === null || match.valueTokenIndex === null) {
-    return match.command;
-  }
-  const flag = normalizeLowercaseStringOrEmpty(argv[match.valueTokenIndex - 1]);
-  if (POWERSHELL_INLINE_COMMAND_TAIL_FLAGS.has(flag)) {
-    const command = argv.slice(match.valueTokenIndex).join(" ").trim();
-    return command.length > 0 ? command : null;
-  }
-  return match.command;
+  return resolvePowerShellInlineCommandMatch(argv).command;
 }
 
 function extractInlineCommandByFlags(

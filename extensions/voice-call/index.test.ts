@@ -326,9 +326,9 @@ describe("voice-call plugin", () => {
     await service?.start(createServiceContext());
 
     expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(createVoiceCallRuntime).mock.calls[0]?.[0]?.config.twilio?.authToken).toEqual(
-      authToken,
-    );
+    expect(
+      vi.mocked(createVoiceCallRuntime).mock.calls.at(0)?.[0]?.config.twilio?.authToken,
+    ).toEqual(authToken);
   });
 
   it("still reports missing provider setup when a command needs the runtime", async () => {
@@ -347,7 +347,7 @@ describe("voice-call plugin", () => {
     await handler?.({ params: { message: "Hi", to: "+15550001234" }, respond });
 
     expect(createVoiceCallRuntime).not.toHaveBeenCalled();
-    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    const [ok, payload, error] = respond.mock.calls.at(0) ?? [];
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect(String((error as { message?: unknown } | undefined)?.message)).toContain(
@@ -366,7 +366,7 @@ describe("voice-call plugin", () => {
     const respond = vi.fn();
     await handler?.({ params: { message: "Hi" }, respond });
     expect(runtimeStub.manager.initiateCall).toHaveBeenCalled();
-    const [ok, payload] = respond.mock.calls[0];
+    const [ok, payload] = respond.mock.calls.at(0) ?? [];
     expect(ok).toBe(true);
     expect(payload.callId).toBe("call-1");
   });
@@ -412,7 +412,7 @@ describe("voice-call plugin", () => {
       message: "Hi",
       mode: "conversation",
     });
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls.at(0)?.[0]).toBe(true);
   });
 
   it("preserves explicit session keys on voicecall.start", async () => {
@@ -443,7 +443,7 @@ describe("voice-call plugin", () => {
         requesterSessionKey: "agent:main:discord:channel:general",
       },
     );
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls.at(0)?.[0]).toBe(true);
   });
 
   it("returns call status", async () => {
@@ -456,7 +456,7 @@ describe("voice-call plugin", () => {
       | undefined;
     const respond = vi.fn();
     await handler?.({ params: { callId: "call-1" }, respond });
-    const [ok, payload] = respond.mock.calls[0];
+    const [ok, payload] = respond.mock.calls.at(0) ?? [];
     expect(ok).toBe(true);
     expect(payload.found).toBe(true);
   });
@@ -474,7 +474,7 @@ describe("voice-call plugin", () => {
     await handler?.({ params: { callId: "call-1", digits: "ww123#" }, respond });
 
     expect(runtimeStub.manager.sendDtmf).toHaveBeenCalledWith("call-1", "ww123#");
-    expect(respond.mock.calls[0]).toEqual([true, { success: true }]);
+    expect(respond.mock.calls.at(0)).toEqual([true, { success: true }]);
   });
 
   it("normalizes provider call ids before speaking", async () => {
@@ -497,7 +497,7 @@ describe("voice-call plugin", () => {
     await handler?.({ params: { callId: "CA123", message: "hello" }, respond });
 
     expect(runtimeStub.manager.speak).toHaveBeenCalledWith("call-1", "hello");
-    expect(respond.mock.calls[0]).toEqual([true, { success: true }]);
+    expect(respond.mock.calls.at(0)).toEqual([true, { success: true }]);
   });
 
   it("does not fall back to one-shot TwiML speak when realtime-only speech is requested", async () => {
@@ -518,7 +518,7 @@ describe("voice-call plugin", () => {
 
     expect(runtimeStub.webhookServer.speakRealtime).toHaveBeenCalledWith("call-1", "hello");
     expect(runtimeStub.manager.speak).not.toHaveBeenCalled();
-    expect(respond.mock.calls[0]).toEqual([
+    expect(respond.mock.calls.at(0)).toEqual([
       true,
       { success: false, error: "No active realtime bridge for call" },
     ]);
@@ -547,7 +547,7 @@ describe("voice-call plugin", () => {
 
     await handler?.({ params: { callId: "CA123", message: "hello" }, respond });
 
-    const [ok, , error] = respond.mock.calls[0] ?? [];
+    const [ok, , error] = respond.mock.calls.at(0) ?? [];
     expect(ok).toBe(false);
     expect(error.message).toContain("call is not active");
     expect(error.message).toContain("last state=completed");
@@ -579,7 +579,7 @@ describe("voice-call plugin", () => {
     await handler?.({ params: { callId: "call-1" }, respond });
 
     expect(vi.mocked(createVoiceCallRuntime)).toHaveBeenCalledTimes(1);
-    const runtimeConfig = vi.mocked(createVoiceCallRuntime).mock.calls[0]?.[0]?.config;
+    const runtimeConfig = vi.mocked(createVoiceCallRuntime).mock.calls.at(0)?.[0]?.config;
     expect(runtimeConfig?.enabled).toBe(true);
     expect(runtimeConfig?.provider).toBe("mock");
     expect(runtimeConfig?.fromNumber).toBe("+15550001234");
@@ -707,7 +707,7 @@ describe("voice-call plugin", () => {
 
     await handler?.({ params: {}, respond });
 
-    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    const [ok, payload, error] = respond.mock.calls.at(0) ?? [];
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect((error as { code?: unknown } | undefined)?.code).toBe("INVALID_REQUEST");
@@ -791,7 +791,7 @@ describe("voice-call plugin", () => {
       params: { callId: "call-1", message: "Hello" },
       respond: startRespond,
     });
-    const startPayload = startRespond.mock.calls[0]?.[1] as
+    const startPayload = startRespond.mock.calls.at(0)?.[1] as
       | { operationId?: string; pollTimeoutMs?: number; status?: string }
       | undefined;
     expect(startPayload?.operationId).toMatch(
@@ -806,8 +806,8 @@ describe("voice-call plugin", () => {
       params: { operationId: startPayload?.operationId },
       respond: pendingRespond,
     });
-    expect(pendingRespond.mock.calls[0]?.[0]).toBe(true);
-    expect((pendingRespond.mock.calls[0]?.[1] as { status?: unknown } | undefined)?.status).toBe(
+    expect(pendingRespond.mock.calls.at(0)?.[0]).toBe(true);
+    expect((pendingRespond.mock.calls.at(0)?.[1] as { status?: unknown } | undefined)?.status).toBe(
       "pending",
     );
 
@@ -820,10 +820,10 @@ describe("voice-call plugin", () => {
       params: { operationId: startPayload?.operationId },
       respond: completedRespond,
     });
-    const completedPayload = completedRespond.mock.calls[0]?.[1] as
+    const completedPayload = completedRespond.mock.calls.at(0)?.[1] as
       | { status?: unknown; result?: unknown }
       | undefined;
-    expect(completedRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(completedRespond.mock.calls.at(0)?.[0]).toBe(true);
     expect(completedPayload?.status).toBe("completed");
     expect(completedPayload?.result).toEqual({ success: true, transcript: "gateway hello" });
   });

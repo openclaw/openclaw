@@ -7,6 +7,7 @@ import {
 } from "./exec-wrapper-resolution.js";
 import {
   POSIX_INLINE_COMMAND_FLAGS,
+  isPowerShellInlineRestCommandFlag,
   resolveInlineCommandMatch,
   resolvePowerShellInlineCommandMatch,
 } from "./shell-inline-command.js";
@@ -100,6 +101,12 @@ function hasTrailingPositionalArgvAfterInlineCommand(argv: string[]): boolean {
           allowCombinedC: true,
         }).valueTokenIndex;
   if (inlineCommandIndex === null) {
+    return false;
+  }
+  if (
+    (wrapper === "powershell" || wrapper === "pwsh") &&
+    isPowerShellInlineRestCommandFlag(wrapperArgv[inlineCommandIndex - 1] ?? "")
+  ) {
     return false;
   }
   return wrapperArgv.slice(inlineCommandIndex + 1).some((entry) => entry.trim().length > 0);

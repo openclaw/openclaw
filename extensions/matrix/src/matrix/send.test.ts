@@ -141,7 +141,7 @@ function requireArray(value: unknown, label: string): Array<unknown> {
 }
 
 function sentContent(sendMessage: { mock: { calls: Array<Array<unknown>> } }, index = 0) {
-  return requireRecord(sendMessage.mock.calls[index]?.[1], `sent content ${index}`);
+  return requireRecord(sendMessage.mock.calls.at(index)?.[1], `sent content ${index}`);
 }
 
 function newContent(content: Record<string, unknown>) {
@@ -219,10 +219,10 @@ describe("sendMessageMatrix media", () => {
       mediaUrl: "file:///tmp/photo.png",
     });
 
-    const uploadArg = uploadContent.mock.calls[0]?.[0];
+    const uploadArg = uploadContent.mock.calls.at(0)?.[0];
     expect(Buffer.isBuffer(uploadArg)).toBe(true);
 
-    const content = sendMessage.mock.calls[0]?.[1] as {
+    const content = sendMessage.mock.calls.at(0)?.[1] as {
       url?: string;
       msgtype?: string;
       format?: string;
@@ -243,12 +243,12 @@ describe("sendMessageMatrix media", () => {
       mediaUrl: "file:///tmp/photo.png",
     });
 
-    const uploadArg = uploadContent.mock.calls[0]?.[0];
+    const uploadArg = uploadContent.mock.calls.at(0)?.[0];
     expect(uploadArg instanceof Uint8Array ? Buffer.from(uploadArg).toString() : undefined).toBe(
       "encrypted",
     );
 
-    const content = sendMessage.mock.calls[0]?.[1] as {
+    const content = sendMessage.mock.calls.at(0)?.[1] as {
       url?: string;
       file?: { url?: string };
     };
@@ -292,7 +292,7 @@ describe("sendMessageMatrix media", () => {
     expect(isRoomEncrypted).toHaveBeenCalledTimes(1);
     expect(encryptMedia).toHaveBeenCalledTimes(2);
 
-    const content = sendMessage.mock.calls[0]?.[1] as {
+    const content = sendMessage.mock.calls.at(0)?.[1] as {
       url?: string;
       file?: { url?: string };
       info?: { thumbnail_url?: string; thumbnail_file?: { url?: string } };
@@ -324,7 +324,7 @@ describe("sendMessageMatrix media", () => {
       replyToId: "$reply",
     });
 
-    const transcriptContent = sendMessage.mock.calls[1]?.[1] as {
+    const transcriptContent = sendMessage.mock.calls.at(1)?.[1] as {
       body?: string;
       "m.relates_to"?: {
         "m.in_reply_to"?: { event_id?: string };
@@ -356,7 +356,7 @@ describe("sendMessageMatrix media", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    const mediaContent = sendMessage.mock.calls[0]?.[1] as {
+    const mediaContent = sendMessage.mock.calls.at(0)?.[1] as {
       msgtype?: string;
       body?: string;
       "org.matrix.msc3245.voice"?: Record<string, never>;
@@ -380,7 +380,7 @@ describe("sendMessageMatrix media", () => {
     });
 
     expect(uploadContent).toHaveBeenCalledTimes(2);
-    const content = sendMessage.mock.calls[0]?.[1] as {
+    const content = sendMessage.mock.calls.at(0)?.[1] as {
       info?: {
         thumbnail_url?: string;
         thumbnail_file?: { url?: string };
@@ -428,8 +428,8 @@ describe("sendMessageMatrix media", () => {
     });
 
     expect(loadConfigMock).not.toHaveBeenCalled();
-    expect(loadWebMediaMock.mock.calls[0]?.[0]).toBe("file:///tmp/photo.png");
-    const mediaOptions = requireRecord(loadWebMediaMock.mock.calls[0]?.[1], "media options");
+    expect(loadWebMediaMock.mock.calls.at(0)?.[0]).toBe("file:///tmp/photo.png");
+    const mediaOptions = requireRecord(loadWebMediaMock.mock.calls.at(0)?.[1], "media options");
     expect(mediaOptions.maxBytes).toBe(1024 * 1024);
     expect(mediaOptions.localRoots).toBeUndefined();
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(explicitCfg, "matrix", "ops");
@@ -445,8 +445,8 @@ describe("sendMessageMatrix media", () => {
       mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
     });
 
-    expect(loadWebMediaMock.mock.calls[0]?.[0]).toBe("file:///tmp/photo.png");
-    const mediaOptions = requireRecord(loadWebMediaMock.mock.calls[0]?.[1], "media options");
+    expect(loadWebMediaMock.mock.calls.at(0)?.[0]).toBe("file:///tmp/photo.png");
+    const mediaOptions = requireRecord(loadWebMediaMock.mock.calls.at(0)?.[1], "media options");
     expect(mediaOptions.maxBytes).toBeUndefined();
     expect(mediaOptions.localRoots).toEqual(["/tmp/openclaw-matrix-test"]);
   });
@@ -483,7 +483,7 @@ describe("sendMessageMatrix mentions", () => {
       user_ids: ["@alice:example.org"],
     });
     expect(
-      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+      (sendMessage.mock.calls.at(0)?.[1] as { formatted_body?: string }).formatted_body,
     ).toContain('href="https://matrix.to/#/%40alice%3Aexample.org"');
   });
 
@@ -497,7 +497,7 @@ describe("sendMessageMatrix mentions", () => {
 
     expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
     expect(
-      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+      (sendMessage.mock.calls.at(0)?.[1] as { formatted_body?: string }).formatted_body,
     ).not.toContain("matrix.to/#/@alice:example.org");
   });
 
@@ -511,7 +511,7 @@ describe("sendMessageMatrix mentions", () => {
 
     expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
     expect(
-      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+      (sendMessage.mock.calls.at(0)?.[1] as { formatted_body?: string }).formatted_body,
     ).not.toContain("matrix.to/#/@alice:example.org");
   });
 
@@ -569,7 +569,7 @@ describe("sendMessageMatrix mentions", () => {
     expect(sentContent(sendMessage).body).toBe("@room.png");
     expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
     expect(
-      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+      (sendMessage.mock.calls.at(0)?.[1] as { formatted_body?: string }).formatted_body,
     ).toBeUndefined();
   });
 });
@@ -589,7 +589,7 @@ describe("sendMessageMatrix threads", () => {
       threadId: "$thread",
     });
 
-    const content = sendMessage.mock.calls[0]?.[1] as {
+    const content = sendMessage.mock.calls.at(0)?.[1] as {
       "m.relates_to"?: {
         rel_type?: string;
         event_id?: string;
@@ -658,9 +658,9 @@ describe("sendMessageMatrix threads", () => {
     expect(sentContent(sendMessage, 0).body).toBe("first");
     expect(sentContent(sendMessage, 0)["com.openclaw.approval"]).toEqual({ id: "req-1" });
     expect(sentContent(sendMessage, 1).body).toBe("second");
-    expect(sendMessage.mock.calls[1]?.[1]).not.toHaveProperty("com.openclaw.approval");
+    expect(sendMessage.mock.calls.at(1)?.[1]).not.toHaveProperty("com.openclaw.approval");
     expect(sentContent(sendMessage, 2).body).toBe("third");
-    expect(sendMessage.mock.calls[2]?.[1]).not.toHaveProperty("com.openclaw.approval");
+    expect(sendMessage.mock.calls.at(2)?.[1]).not.toHaveProperty("com.openclaw.approval");
   });
 });
 
@@ -697,9 +697,9 @@ describe("sendSingleTextMessageMatrix", () => {
 
     expect(sentContent(sendMessage).msgtype).toBe("m.notice");
     expect(sentContent(sendMessage).body).toBe("@room hi @alice:example.org");
-    expect(sendMessage.mock.calls[0]?.[1]).not.toHaveProperty("m.mentions");
+    expect(sendMessage.mock.calls.at(0)?.[1]).not.toHaveProperty("m.mentions");
     expect(
-      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+      (sendMessage.mock.calls.at(0)?.[1] as { formatted_body?: string }).formatted_body,
     ).not.toContain("matrix.to");
   });
 
@@ -719,7 +719,7 @@ describe("sendSingleTextMessageMatrix", () => {
       "Working...\n- `@room ping @alice:example.org !room:example.org`",
     );
     expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
-    const formattedBody = (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string })
+    const formattedBody = (sendMessage.mock.calls.at(0)?.[1] as { formatted_body?: string })
       .formatted_body;
     expect(formattedBody).toContain("<code>@room ping @alice:example.org !room:example.org</code>");
     expect(formattedBody).not.toContain("matrix.to");
@@ -835,11 +835,11 @@ describe("editMessageMatrix mentions", () => {
     expect(content).not.toHaveProperty("m.mentions");
     expect(newContent(content)).not.toHaveProperty("m.mentions");
     expect(
-      (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string }).formatted_body,
+      (sendMessage.mock.calls.at(0)?.[1] as { formatted_body?: string }).formatted_body,
     ).not.toContain("matrix.to");
     expect(
       (
-        sendMessage.mock.calls[0]?.[1] as {
+        sendMessage.mock.calls.at(0)?.[1] as {
           "m.new_content"?: { formatted_body?: string };
         }
       )["m.new_content"]?.formatted_body,
@@ -882,9 +882,9 @@ describe("sendPollMatrix mentions", () => {
       },
     );
 
-    expect(sendEvent.mock.calls[0]?.[0]).toBe("!room:example");
-    expect(sendEvent.mock.calls[0]?.[1]).toBe("m.poll.start");
-    const content = requireRecord(sendEvent.mock.calls[0]?.[2], "poll start content");
+    expect(sendEvent.mock.calls.at(0)?.[0]).toBe("!room:example");
+    expect(sendEvent.mock.calls.at(0)?.[1]).toBe("m.poll.start");
+    const content = requireRecord(sendEvent.mock.calls.at(0)?.[2], "poll start content");
     expect(content["m.mentions"]).toEqual({
       room: true,
       user_ids: ["@alice:example.org"],
