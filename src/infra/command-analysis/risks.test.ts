@@ -73,6 +73,24 @@ describe("command-analysis risks", () => {
       detectInlineEvalArgv(["env", "sh", "-lc", '$0 "$@"', "find", ".", "-okdir", "id", "{}", ";"])
         ?.flag,
     ).toBe("-okdir");
+    expect(
+      detectInlineEvalArgv(["sudo", "sh", "-lc", '$0 "$@"', "find", ".", "-exec", "id", "{}", ";"])
+        ?.flag,
+    ).toBe("-exec");
+    expect(
+      detectInlineEvalArgv([
+        "command",
+        "sh",
+        "-lc",
+        '$0 "$@"',
+        "find",
+        ".",
+        "-execdir",
+        "id",
+        "{}",
+        ";",
+      ])?.flag,
+    ).toBe("-execdir");
     expect(detectInlineEvalArgv(["python3", "script.py"])).toBeNull();
   });
 
