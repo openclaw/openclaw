@@ -13,6 +13,7 @@ export async function resolveCommandConfigWithSecrets<TConfig extends OpenClawCo
   mode?: CommandSecretResolutionMode;
   allowedPaths?: Set<string>;
   runtime?: RuntimeEnv;
+  diagnosticLogTarget?: "stdout" | "stderr";
   autoEnable?: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<{
@@ -28,8 +29,10 @@ export async function resolveCommandConfigWithSecrets<TConfig extends OpenClawCo
     ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
   });
   if (params.runtime) {
+    const logDiagnostic =
+      params.diagnosticLogTarget === "stderr" ? params.runtime.error : params.runtime.log;
     for (const entry of diagnostics) {
-      params.runtime.log(`[secrets] ${entry}`);
+      logDiagnostic(`[secrets] ${entry}`);
     }
   }
   const effectiveConfig = params.autoEnable
