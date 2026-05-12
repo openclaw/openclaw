@@ -751,6 +751,54 @@ describe("migrateApplyCommand", () => {
     expect(itemsById.get("plugin:google-calendar")?.reason).toBe("not selected for migration");
   });
 
+  it("explains skipped plugin selection when Codex subscription auth is required", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const skillPlan = codexSkillPlan();
+    const warning =
+      "Codex app-backed plugin migration requires the Codex app-server source account to be logged in with a ChatGPT subscription account.";
+    const planned = codexSkillPlan({
+      summary: {
+        total: skillPlan.items.length + 1,
+        planned: skillPlan.summary.planned,
+        migrated: 0,
+        skipped: 1,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [
+        ...skillPlan.items,
+        {
+          id: "plugin:gmail:1",
+          kind: "manual",
+          action: "manual",
+          status: "skipped",
+          reason: "codex_subscription_required",
+          details: { code: "codex_subscription_required", pluginName: "gmail" },
+        },
+      ],
+      warnings: [warning],
+    });
+    mocks.provider.plan.mockResolvedValue(planned);
+    mocks.multiselect.mockResolvedValueOnce([MIGRATION_SKILL_SELECTION_SKIP]);
+
+    const result = await migrateDefaultCommand(runtime, { provider: "codex" });
+
+    expect(result.summary.planned).toBe(1);
+    expect(result.summary.skipped).toBe(3);
+    expect(mocks.multiselect).toHaveBeenCalledTimes(1);
+    expect(mocks.promptYesNo).not.toHaveBeenCalled();
+    expect(mocks.provider.apply).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("Codex skill migration skipped for now.");
+    expect(runtime.log).toHaveBeenCalledWith(warning);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "No Codex skills selected; native Codex plugins are not eligible for migration in this run.",
+    );
+  });
+
   it("does not apply archive-only Codex migration work after Toggle all off", async () => {
     Object.defineProperty(process.stdin, "isTTY", {
       configurable: true,

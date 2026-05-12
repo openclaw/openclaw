@@ -15,6 +15,7 @@ import type {
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { exists, sanitizeName } from "./helpers.js";
 import {
+  codexPluginMigrationSubscriptionWarning,
   discoverCodexSource,
   hasCodexSource,
   type CodexPluginAppReadinessCode,
@@ -420,15 +421,23 @@ export async function buildCodexMigrationPlan(
           "Conflicts were found. Re-run with --overwrite to replace conflicting migration targets after item-level backups.",
         ]
       : []),
-    ...(source.plugins.length > 0
+    ...(source.plugins.some((plugin) => plugin.migratable)
       ? [
           "Codex source-installed openai-curated plugins are planned for native activation; cached plugin bundles remain manual-review only.",
         ]
+      : []),
+    ...(source.plugins.some((plugin) => plugin.sourceKind === "cache")
+      ? ["Codex cached plugin bundles remain manual-review only."]
       : []),
     ...(source.pluginDiscoveryError
       ? [
           `Codex app-server plugin inventory discovery failed: ${source.pluginDiscoveryError}. Cached plugin bundles, if any, are advisory only.`,
         ]
+      : []),
+    ...(source.plugins.some(
+      (plugin) => plugin.appReadiness?.reason === "codex_subscription_required",
+    )
+      ? [codexPluginMigrationSubscriptionWarning()]
       : []),
     ...(source.archivePaths.length > 0
       ? [

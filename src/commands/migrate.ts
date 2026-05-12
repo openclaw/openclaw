@@ -202,7 +202,34 @@ function shouldSkipCodexApplyAfterInteractiveSelection(plan: MigrationPlan): boo
   return plan.providerId === "codex" && !hasSelectedCodexMigrationWork(plan);
 }
 
-function logNoCodexSelection(runtime: RuntimeEnv): void {
+function hasCodexSubscriptionRequiredPlugin(plan: MigrationPlan): boolean {
+  if (plan.providerId !== "codex") {
+    return false;
+  }
+  return plan.items.some(
+    (item) =>
+      item.reason === "codex_subscription_required" ||
+      item.details?.code === "codex_subscription_required",
+  );
+}
+
+function readCodexSubscriptionWarning(plan: MigrationPlan): string | undefined {
+  return plan.warnings?.find((warning) =>
+    warning.includes("Codex app-backed plugin migration requires"),
+  );
+}
+
+function logNoCodexSelection(runtime: RuntimeEnv, plan: MigrationPlan): void {
+  if (hasCodexSubscriptionRequiredPlugin(plan)) {
+    const warning = readCodexSubscriptionWarning(plan);
+    if (warning) {
+      runtime.log(warning);
+    }
+    runtime.log(
+      "No Codex skills selected; native Codex plugins are not eligible for migration in this run.",
+    );
+    return;
+  }
   runtime.log("No Codex skills or native Codex plugins selected for migration.");
 }
 
@@ -298,7 +325,7 @@ export async function migrateApplyCommand(
       return plan;
     }
     if (shouldSkipCodexApplyAfterInteractiveSelection(selectedPlan)) {
-      logNoCodexSelection(runtime);
+      logNoCodexSelection(runtime, selectedPlan);
       return selectedPlan;
     }
     const ok = await promptYesNo("Apply this migration now?", false);
@@ -365,7 +392,7 @@ export async function migrateDefaultCommand(
       return plan;
     }
     if (shouldSkipCodexApplyAfterInteractiveSelection(selectedPlan)) {
-      logNoCodexSelection(runtime);
+      logNoCodexSelection(runtime, selectedPlan);
       return selectedPlan;
     }
     const ok = await promptYesNo("Apply this migration now?", false);

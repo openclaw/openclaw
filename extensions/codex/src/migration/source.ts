@@ -12,7 +12,7 @@ import {
   pluginReadParams,
   type CodexPluginMarketplaceRef,
 } from "../app-server/plugin-inventory.js";
-import type { v2 } from "../app-server/protocol.js";
+import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
   exists,
@@ -62,6 +62,7 @@ export type CodexPluginAppReadinessCode =
   | "app_disabled"
   | "app_missing"
   | "app_auth_required"
+  | "codex_subscription_required"
   | "app_readiness_unknown"
   | "plugin_read_unavailable"
   | "app_inventory_unavailable";
@@ -385,6 +386,23 @@ async function withPluginAppReadiness(params: {
     return evaluated;
   }
 
+  const sourceAccount = await readSourceCodexAccount(params.requestOptions).catch(() => undefined);
+  if (sourceAccount && sourceAccount !== "chatgpt") {
+    for (const { plugin } of pending) {
+      plugin.appReadiness = {
+        status: "auth_required",
+        reason: "codex_subscription_required",
+        apps:
+          plugin.appReadiness?.apps.map((app) => ({
+            ...app,
+            status: "auth_required",
+          })) ?? [],
+      };
+      plugin.message = codexSubscriptionRequiredMessage(plugin);
+    }
+    return evaluated;
+  }
+
   const snapshot = await refreshSourceAppInventory(params.requestOptions).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     for (const { plugin } of pending) {
@@ -424,6 +442,24 @@ async function withPluginAppReadiness(params: {
   }
 
   return evaluated;
+}
+
+async function readSourceCodexAccount(
+  options: SourceAppServerRequestOptions,
+): Promise<"chatgpt" | "non_chatgpt" | "missing"> {
+  const response = await requestSourceCodexAppServerJson<CodexGetAccountResponse>(options, {
+    method: "account/read",
+    requestParams: { refreshToken: false },
+  });
+  if (
+    !response.account ||
+    typeof response.account !== "object" ||
+    Array.isArray(response.account)
+  ) {
+    return "missing";
+  }
+  const type = response.account.type;
+  return type === "chatgpt" ? "chatgpt" : "non_chatgpt";
 }
 
 async function readPluginDetail(
@@ -536,6 +572,14 @@ function appReadinessMessage(
     apps[0];
   const appLabel = blocking ? ` app "${blocking.name}"` : " an owned app";
   return `Codex plugin "${plugin.pluginName ?? plugin.name}" owns${appLabel} but the source app inventory reports it is ${blocking?.status ?? "unknown"}; authenticate or enable the app in Codex before migrating it to OpenClaw.`;
+}
+
+export function codexPluginMigrationSubscriptionWarning(): string {
+  return "Codex app-backed plugin migration requires the Codex app-server source account to be logged in with a ChatGPT subscription account. Log in to the Codex app with subscription auth; OpenClaw auth or API-key auth does not satisfy Codex app connector access.";
+}
+
+function codexSubscriptionRequiredMessage(plugin: CodexPluginSource): string {
+  return `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but ${codexPluginMigrationSubscriptionWarning()}`;
 }
 
 function pluginNameFromSummary(summary: v2.PluginSummary): string | undefined {

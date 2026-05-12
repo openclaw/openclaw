@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
-import type { v2 } from "../app-server/protocol.js";
+import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
 import { buildCodexMigrationProvider } from "./provider.js";
 
 const appServerRequest = vi.hoisted(() => vi.fn());
@@ -273,6 +273,9 @@ describe("buildCodexMigrationProvider", () => {
             pluginApp("asdk_app_readwise", { name: "Readwise", needsAuth: false }),
           ]);
         }
+        if (method === "account/read") {
+          return chatGptAccount();
+        }
         if (method === "app/list") {
           expectRecordFields(requestParams, { forceRefetch: true });
           return appsList([
@@ -325,6 +328,70 @@ describe("buildCodexMigrationProvider", () => {
     );
   });
 
+  it("warns and skips app-backed plugins when source Codex account is not ChatGPT subscription auth", async () => {
+    const fixture = await createCodexFixture();
+    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("gmail", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginRead("gmail", [pluginApp("app-gmail", { name: "Gmail", needsAuth: true })]);
+      }
+      if (method === "account/read") {
+        return {
+          account: { type: "apiKey" },
+          requiresOpenaiAuth: true,
+        } satisfies CodexGetAccountResponse;
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+      }),
+    );
+
+    expect(plan.items.some((item) => item.id === "plugin:gmail")).toBe(false);
+    expect(plan.items.some((item) => item.id === "config:codex-plugins")).toBe(false);
+    const manualItem = findItemByReason(plan.items, "codex_subscription_required");
+    expectRecordFields(manualItem, {
+      kind: "manual",
+      action: "manual",
+      status: "skipped",
+      reason: "codex_subscription_required",
+    });
+    const details = expectRecordFields(manualItem.details, {
+      code: "codex_subscription_required",
+      pluginName: "gmail",
+      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+    });
+    expect(details.apps).toEqual([
+      {
+        id: "app-gmail",
+        name: "Gmail",
+        status: "auth_required",
+        needsAuth: true,
+      },
+    ]);
+    expect(plan.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "Codex app-backed plugin migration requires the Codex app-server source account",
+        ),
+      ]),
+    );
+    expect(plan.warnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("planned for native activation")]),
+    );
+    expect(appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/list")).toHaveLength(
+      0,
+    );
+  });
+
   it("reads source plugin readiness with native source auth instead of target agent auth", async () => {
     const fixture = await createCodexFixture();
     appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
@@ -335,6 +402,9 @@ describe("buildCodexMigrationProvider", () => {
         return pluginRead("google-calendar", [
           pluginApp("app-google-calendar", { name: "Google Calendar", needsAuth: false }),
         ]);
+      }
+      if (method === "account/read") {
+        return chatGptAccount();
       }
       if (method === "app/list") {
         return appsList([appInfo("app-google-calendar")]);
@@ -363,7 +433,7 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    expect(appServerRequest).toHaveBeenCalledTimes(3);
+    expect(appServerRequest).toHaveBeenCalledTimes(4);
     for (const [arg] of appServerRequest.mock.calls) {
       expect(arg).toEqual(
         expect.objectContaining({
@@ -393,6 +463,9 @@ describe("buildCodexMigrationProvider", () => {
           pluginApp("asdk_app_readwise", { name: "Readwise", needsAuth: false }),
           pluginApp("asdk_app_reader", { name: "Reader", needsAuth: false }),
         ]);
+      }
+      if (method === "account/read") {
+        return chatGptAccount();
       }
       if (method === "app/list") {
         return appsList([
@@ -460,6 +533,9 @@ describe("buildCodexMigrationProvider", () => {
         if (method === "plugin/read") {
           const pluginName = (requestParams as v2.PluginReadParams).pluginName;
           return pluginRead(pluginName, [pluginApp(`app-${pluginName}`)]);
+        }
+        if (method === "account/read") {
+          return chatGptAccount();
         }
         if (method === "app/list") {
           expectRecordFields(requestParams, { forceRefetch: true });
@@ -535,6 +611,9 @@ describe("buildCodexMigrationProvider", () => {
       if (method === "plugin/read") {
         return pluginRead("readwise", [pluginApp("asdk_app_readwise", { name: "Readwise" })]);
       }
+      if (method === "account/read") {
+        return chatGptAccount();
+      }
       if (method === "app/list") {
         throw new Error("app inventory unavailable");
       }
@@ -568,6 +647,9 @@ describe("buildCodexMigrationProvider", () => {
           pluginApp("ready-app", { name: "Ready App", needsAuth: false }),
           pluginApp("auth-app", { name: "Auth App", needsAuth: true }),
         ]);
+      }
+      if (method === "account/read") {
+        return chatGptAccount();
       }
       if (method === "app/list") {
         return appsList([appInfo("ready-app"), appInfo("auth-app")]);
@@ -1244,6 +1326,13 @@ function appInfo(id: string, overrides: Partial<v2.AppInfo> = {}): v2.AppInfo {
 
 function appsList(apps: v2.AppInfo[]): v2.AppsListResponse {
   return { data: apps, nextCursor: null };
+}
+
+function chatGptAccount(): CodexGetAccountResponse {
+  return {
+    account: { type: "chatgpt", email: "codex@example.test", planType: "plus" },
+    requiresOpenaiAuth: false,
+  };
 }
 
 function pluginSummary(id: string, overrides: Partial<v2.PluginSummary> = {}): v2.PluginSummary {
