@@ -463,6 +463,36 @@ describe("session_status tool", () => {
     expectRecordFields(mockCallArg(buildStatusMessageMock), { includeTranscriptUsage: true });
   });
 
+  it("drops stale contextTokens when current status uses the live active model identity", async () => {
+    resetSessionStore({
+      "agent:main:webchat:direct:peer": {
+        sessionId: "s-webchat",
+        updatedAt: 10,
+        modelProvider: "sider-litellm-completions",
+        model: "deepseek/deepseek-v4-flash",
+        contextTokens: 200_000,
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:main:webchat:direct:peer",
+      runSessionKey: "agent:main:webchat:direct:peer",
+      activeModelProvider: "sider-litellm-messages",
+      activeModelId: "anthropic/claude-sonnet-4-6",
+      config: mockConfig as never,
+    });
+
+    await tool.execute("call-live-active-model-status", { sessionKey: "current" });
+
+    const statusArgs = buildStatusMessageMock.mock.calls.at(-1)?.[0] as
+      | { sessionEntry?: SessionEntry }
+      | undefined;
+    expect(statusArgs?.sessionEntry?.modelProvider).toBe("sider-litellm-messages");
+    expect(statusArgs?.sessionEntry?.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(statusArgs?.sessionEntry?.contextTokens).toBeUndefined();
+    expect(Object.hasOwn(statusArgs?.sessionEntry ?? {}, "contextTokens")).toBe(false);
+  });
+
   it("passes spawned workspace to session_status auth labels", async () => {
     resetSessionStore({
       "agent:main:spawned": {

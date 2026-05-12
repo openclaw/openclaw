@@ -644,8 +644,17 @@ export function buildStatusMessage(args: StatusArgs): string {
     }
   }
 
+  const selectedModelLabel = modelRefs.selected.label || "unknown";
   const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
-  const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
+  const runtimeDiffersFromSelected = activeModelLabel !== selectedModelLabel;
+  const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
+    selectedModelLabel,
+    activeModelLabel,
+  );
+  const runtimeIsFallback =
+    runtimeDiffersFromSelected && !runtimeAliasModelEquivalent && initialFallbackState.active;
+  const runtimeModelStale =
+    runtimeDiffersFromSelected && !runtimeAliasModelEquivalent && !runtimeIsFallback;
   const selectedContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     provider: selectedProvider,
@@ -663,6 +672,13 @@ export function buildStatusMessage(args: StatusArgs): string {
       model: contextLookupModel,
       allowAsyncLoad: false,
     }) ?? explicitRuntimeContextTokens;
+  const effectiveContextLookupProvider = runtimeModelStale
+    ? selectedProvider
+    : contextLookupProvider;
+  const effectiveContextLookupModel = runtimeModelStale ? selectedModel : contextLookupModel;
+  const effectiveActiveContextTokens = runtimeModelStale
+    ? selectedContextTokens
+    : activeContextTokens;
   const channelModelNote = resolveChannelModelNote({
     config: args.config,
     entry,
@@ -674,6 +690,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
       ? entry.contextTokens
       : undefined;
+  const effectivePersistedContextTokens = runtimeModelStale ? undefined : persistedContextTokens;
   const agentContextTokens =
     typeof args.agent?.contextTokens === "number" && args.agent.contextTokens > 0
       ? args.agent.contextTokens
@@ -685,21 +702,21 @@ export function buildStatusMessage(args: StatusArgs): string {
       : undefined;
   const cappedConfiguredContextTokens =
     typeof explicitConfiguredContextTokens === "number"
-      ? typeof activeContextTokens === "number"
-        ? Math.min(explicitConfiguredContextTokens, activeContextTokens)
+      ? typeof effectiveActiveContextTokens === "number"
+        ? Math.min(explicitConfiguredContextTokens, effectiveActiveContextTokens)
         : explicitConfiguredContextTokens
       : undefined;
   const cappedAgentContextTokens =
     typeof agentContextTokens === "number"
-      ? typeof activeContextTokens === "number"
-        ? Math.min(agentContextTokens, activeContextTokens)
+      ? typeof effectiveActiveContextTokens === "number"
+        ? Math.min(agentContextTokens, effectiveActiveContextTokens)
         : agentContextTokens
       : undefined;
   const channelOverrideContextTokens = channelModelNote
     ? (explicitRuntimeContextTokens ??
       cappedConfiguredContextTokens ??
-      (typeof activeContextTokens === "number"
-        ? (cappedAgentContextTokens ?? activeContextTokens)
+      (typeof effectiveActiveContextTokens === "number"
+        ? (cappedAgentContextTokens ?? effectiveActiveContextTokens)
         : cappedAgentContextTokens))
     : undefined;
   // When a fallback model is active, the selected-model context limit that
@@ -710,7 +727,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   // still take precedence over configured caps so historical fallback sessions
   // keep their last known live limit even if the active model later becomes
   // unresolvable.
-  const contextTokens = runtimeDiffersFromSelected
+  const contextTokens = runtimeIsFallback
     ? (explicitRuntimeContextTokens ??
       (() => {
         if (persistedContextTokens !== undefined) {
@@ -746,11 +763,11 @@ export function buildStatusMessage(args: StatusArgs): string {
       })())
     : (resolveContextTokensForModel({
         cfg: contextConfig,
-        ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
-        model: contextLookupModel,
+        ...(effectiveContextLookupProvider ? { provider: effectiveContextLookupProvider } : {}),
+        model: effectiveContextLookupModel,
         contextTokensOverride:
           channelOverrideContextTokens ??
-          persistedContextTokens ??
+          effectivePersistedContextTokens ??
           cappedConfiguredContextTokens ??
           cappedAgentContextTokens ??
           explicitRuntimeContextTokens,
@@ -850,11 +867,6 @@ export function buildStatusMessage(args: StatusArgs): string {
   ];
   const activationLine = activationParts.filter(Boolean).join(" · ");
 
-  const selectedModelLabel = modelRefs.selected.label || "unknown";
-  const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
-    selectedModelLabel,
-    activeModelLabel,
-  );
   const selectedAuthMode =
     normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedProvider, args.config);
   const rawSelectedAuthLabelValue =

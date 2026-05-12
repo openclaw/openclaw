@@ -731,6 +731,42 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Context: 1.0k/66k");
   });
 
+  it("uses the selected model window when stale runtime fields are not an active fallback", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "sider-litellm-completions": {
+              models: [{ id: "deepseek/deepseek-v4-flash", contextWindow: 200_000 }],
+            },
+            "sider-litellm-messages": {
+              models: [{ id: "anthropic/claude-sonnet-4-6", contextWindow: 1_000_000 }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "sider-litellm-messages/anthropic/claude-sonnet-4-6",
+      },
+      sessionEntry: {
+        sessionId: "default-model-switched",
+        updatedAt: 0,
+        modelProvider: "sider-litellm-completions",
+        model: "deepseek/deepseek-v4-flash",
+        contextTokens: 200_000,
+        totalTokens: 10_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: sider-litellm-messages/anthropic/claude-sonnet-4-6");
+    expect(normalized).toContain("Context: 10k/1.0m");
+    expect(normalized).not.toContain("Context: 10k/200k");
+  });
+
   it("recomputes context window from the active fallback model when session contextTokens are stale", () => {
     const text = buildStatusMessage({
       config: {
