@@ -104,6 +104,7 @@ async function startCodexAuth(opts: CodexLoginOptions) {
 async function runCodexOAuth(params: {
   isRemote: boolean;
   openUrl?: (url: string) => Promise<void>;
+  isLocalCallbackPortAvailable?: () => Promise<boolean>;
 }) {
   const { prompter, spin } = createPrompter();
   const runtime = createRuntime();
@@ -112,6 +113,7 @@ async function runCodexOAuth(params: {
     runtime,
     isRemote: params.isRemote,
     openUrl: params.openUrl ?? (async () => {}),
+    isLocalCallbackPortAvailable: params.isLocalCallbackPortAvailable,
   });
   return { result, prompter, spin, runtime };
 }
@@ -462,6 +464,43 @@ describe("loginOpenAICodexOAuth", () => {
       ),
     ).toHaveLength(1);
     expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it("does not open the browser and prompts immediately when localhost callback port is busy", async () => {
+    vi.useFakeTimers();
+    const openUrl = vi.fn(async () => {});
+    const { prompter, spin, text } = createPrompter();
+    const runtime = createRuntime();
+    mocks.loginOpenAICodex.mockImplementation(async (opts: CodexLoginOptions) => {
+      await opts.onAuth({ url: CODEX_AUTHORIZE_URL });
+      expect(openUrl).not.toHaveBeenCalled();
+      const manualCode = await opts.onManualCodeInput?.();
+      return createCodexCredentials({ manualCode });
+    });
+
+    const result = await loginOpenAICodexOAuth({
+      prompter,
+      runtime,
+      isRemote: false,
+      openUrl,
+      isLocalCallbackPortAvailable: async () => false,
+    });
+    expectFields(result, {
+      access: "access-token",
+      refresh: "refresh-token",
+    });
+
+    expectPromptTextCall(prompter);
+    expect(spin.stop).toHaveBeenCalledWith("Manual OAuth entry required");
+    expect(spin.stop.mock.invocationCallOrder[0]).toBeLessThan(
+      text.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("localhost:1455"));
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("lsof -nP -iTCP:1455 -sTCP:LISTEN"),
+    );
     expect(vi.getTimerCount()).toBe(0);
     vi.useRealTimers();
   });

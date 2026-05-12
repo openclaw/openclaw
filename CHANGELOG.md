@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 - fix(qqbot): authorize approval button callbacks [AI]. (#80892) Thanks @pgondhi987.
 - Telegram: render supported HTML tags in streamed and durable replies instead of showing literal markup. (#80977)
 - Scrub streamable MCP redirect headers [AI]. (#80906) Thanks @pgondhi987.
+- OpenAI Codex OAuth: skip the browser callback flow and prompt for manual entry immediately when localhost:1455 is already occupied. (#80963)
 - fix(memory-wiki): require admin scope for ingest [AI]. (#80897) Thanks @pgondhi987.
 - memory-wiki: require write scope for Obsidian search [AI]. (#80904) Thanks @pgondhi987.
 - Build: skip copied metadata for bundled plugins that are excluded from build entries, preventing update/status rebuilds from advertising missing QQ Bot runtime files. (#80925)

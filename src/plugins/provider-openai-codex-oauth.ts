@@ -1,6 +1,7 @@
 import { loginOpenAICodex, type OAuthCredentials } from "@earendil-works/pi-ai/oauth";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
+import { tryListenOnPort } from "../infra/ports-probe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { OAuthPrompt } from "./provider-oauth-flow.js";
@@ -14,6 +15,8 @@ const manualInputPromptMessage = "Paste the authorization code (or full redirect
 const openAICodexOAuthOriginator = "openclaw";
 const localManualFallbackDelayMs = 15_000;
 const localManualFallbackGraceMs = 1_000;
+const openAICodexCallbackPort = 1455;
+const openAICodexCallbackHost = process.env.PI_OAUTH_CALLBACK_HOST || "127.0.0.1";
 
 type OpenAICodexOAuthFailureCode =
   | "callback_timeout"
@@ -44,6 +47,29 @@ function waitForDelayOrLoginSettle(params: {
 
 function createNeverSettlingPromptResult(): Promise<string> {
   return new Promise<string>(() => undefined);
+}
+
+function formatLocalCallbackPortConflictMessage(): string {
+  return [
+    `OpenAI Codex OAuth automatic browser callback cannot use localhost:${openAICodexCallbackPort} because the port is already in use.`,
+    "OpenClaw will use manual OAuth entry instead of opening a browser flow that redirects to the wrong local process.",
+    `To identify the listener, run: lsof -nP -iTCP:${openAICodexCallbackPort} -sTCP:LISTEN`,
+    "If a browser tab shows `Invalid or expired OAuth state`, the callback may have been handled by the process occupying the port.",
+  ].join("\n");
+}
+
+async function isLocalCallbackPortAvailable(): Promise<boolean> {
+  try {
+    await tryListenOnPort({
+      port: openAICodexCallbackPort,
+      host: openAICodexCallbackHost,
+      exclusive: true,
+    });
+    return true;
+  } catch (err) {
+    const code = err && typeof err === "object" ? (err as { code?: unknown }).code : undefined;
+    return code !== "EADDRINUSE";
+  }
 }
 
 function createOpenAICodexOAuthError(
@@ -148,6 +174,7 @@ export async function loginOpenAICodexOAuth(params: {
   isRemote: boolean;
   openUrl: (url: string) => Promise<void>;
   localBrowserMessage?: string;
+  isLocalCallbackPortAvailable?: () => Promise<boolean>;
 }): Promise<OAuthCredentials | null> {
   const { prompter, runtime, isRemote, openUrl, localBrowserMessage } = params;
 
@@ -161,20 +188,28 @@ export async function loginOpenAICodexOAuth(params: {
     throw new Error(`OpenAI Codex OAuth prerequisites failed: ${preflight.message}`);
   }
 
-  await prompter.note(
-    isRemote
-      ? [
-          "You are running in a remote/VPS environment.",
-          "A URL will be shown for you to open in your LOCAL browser.",
-          "After signing in, paste the redirect URL back here.",
-        ].join("\n")
-      : [
-          "Browser will open for OpenAI authentication.",
-          "If the callback doesn't auto-complete, paste the redirect URL.",
-          "OpenAI OAuth uses localhost:1455 for the callback.",
-        ].join("\n"),
-    "OpenAI Codex OAuth",
-  );
+  const localCallbackAvailable =
+    isRemote || (await (params.isLocalCallbackPortAvailable ?? isLocalCallbackPortAvailable)());
+  if (!isRemote && !localCallbackAvailable) {
+    const hint = formatLocalCallbackPortConflictMessage();
+    await prompter.note(hint, "OpenAI Codex OAuth");
+    runtime.log(hint);
+  } else {
+    await prompter.note(
+      isRemote
+        ? [
+            "You are running in a remote/VPS environment.",
+            "A URL will be shown for you to open in your LOCAL browser.",
+            "After signing in, paste the redirect URL back here.",
+          ].join("\n")
+        : [
+            "Browser will open for OpenAI authentication.",
+            "If the callback doesn't auto-complete, paste the redirect URL.",
+            "OpenAI OAuth uses localhost:1455 for the callback.",
+          ].join("\n"),
+      "OpenAI Codex OAuth",
+    );
+  }
 
   const spin = prompter.progress("Starting OAuth flow…");
   let progressActive = true;
@@ -205,6 +240,9 @@ export async function loginOpenAICodexOAuth(params: {
       manualPromptMessage: manualInputPromptMessage,
     });
     const onAuth: typeof baseOnAuth = async (event) => {
+      if (!isRemote && !localCallbackAvailable) {
+        return;
+      }
       browserAuthStarted = true;
       await baseOnAuth(event);
     };
