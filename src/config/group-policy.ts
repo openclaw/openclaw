@@ -380,7 +380,13 @@ export function resolveChannelGroupPolicy(params: {
   const groups = resolveChannelGroups(cfg, channel, params.accountId);
   const groupPolicy = resolveChannelGroupPolicyMode(cfg, channel, params.accountId);
   const hasGroups = Boolean(groups && Object.keys(groups).length > 0);
-  const allowlistEnabled = groupPolicy === "allowlist" || hasGroups;
+  // Explicit `groupPolicy: "open"` keeps allowlist disabled even when `groups`
+  // has entries — those entries are then treated as per-group overrides
+  // (e.g. `requireMention: false` for a specific room) rather than an
+  // implicit whitelist that would silently block every other group.
+  // Backward-compat: when `groupPolicy` is omitted, a non-empty `groups`
+  // dictionary still flips on the implicit allowlist behavior.
+  const allowlistEnabled = groupPolicy === "allowlist" || (groupPolicy !== "open" && hasGroups);
   const normalizedId = params.groupId?.trim();
   const groupConfig = normalizedId
     ? resolveChannelGroupConfig(groups, normalizedId, params.groupIdCaseInsensitive)

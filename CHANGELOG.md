@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 - memory-wiki: require write scope for Obsidian search [AI]. (#80904) Thanks @pgondhi987.
 - Build: skip copied metadata for bundled plugins that are excluded from build entries, preventing update/status rebuilds from advertising missing QQ Bot runtime files. (#80925)
 - Control UI/sessions: nest subagent sessions under their parent session in the session picker dropdown using a visual `└─ ` prefix, making the parent-child relationship clear. Fixes #77628. (#78623) Thanks @chinar-amrutkar.
+- Channels/group policy: when `channels.<provider>.groupPolicy` is set to `"open"` explicitly, treat entries in `channels.<provider>.groups` as per-group overrides instead of silently flipping to allowlist mode, so adding a `requireMention: false` entry for one room no longer blocks every unlisted group. Implicit-allowlist behavior is preserved when `groupPolicy` is omitted. Thanks @voicewitness.
 
 ### Changes
 

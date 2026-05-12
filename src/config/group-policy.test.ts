@@ -142,6 +142,65 @@ describe("resolveChannelGroupPolicy", () => {
     expect(policy.allowed).toBe(false);
   });
 
+  it("treats groups dict as per-group overrides (not an allowlist) when groupPolicy=open", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "open",
+          groups: {
+            "456@g.us": { requireMention: false },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const unlisted = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      groupId: "123@g.us",
+    });
+    expect(unlisted.allowlistEnabled).toBe(false);
+    expect(unlisted.allowed).toBe(true);
+    expect(unlisted.groupConfig).toBeUndefined();
+
+    const listed = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      groupId: "456@g.us",
+    });
+    expect(listed.allowlistEnabled).toBe(false);
+    expect(listed.allowed).toBe(true);
+    expect(listed.groupConfig).toEqual({ requireMention: false });
+  });
+
+  it("preserves implicit-allowlist behavior when groupPolicy is omitted and groups is populated", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groups: {
+            "123@g.us": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const listed = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      groupId: "123@g.us",
+    });
+    expect(listed.allowlistEnabled).toBe(true);
+    expect(listed.allowed).toBe(true);
+
+    const unlisted = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      groupId: "456@g.us",
+    });
+    expect(unlisted.allowlistEnabled).toBe(true);
+    expect(unlisted.allowed).toBe(false);
+  });
+
   it("can default explicitly configured groups to no mention for channels that opt in", () => {
     const cfg = {
       channels: {
