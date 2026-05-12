@@ -102,9 +102,10 @@ describeLive("Crestodian live rescue channel smoke", () => {
 
     const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
     const defaultModel = config.agents?.defaults?.model;
-    expect(typeof defaultModel).toBe("object");
-    expect(defaultModel).not.toBeNull();
-    expect((defaultModel as { primary?: unknown }).primary).toBe("openai/gpt-5.5");
+    if (!defaultModel || typeof defaultModel !== "object") {
+      throw new Error("expected default model object");
+    }
+    expect(defaultModel.primary).toBe("openai/gpt-5.5");
     const auditEntries = await listCrestodianAuditEntriesForTests();
     expect(auditEntries.some((entry) => entry.value.operation === "config.setDefaultModel")).toBe(
       true,
