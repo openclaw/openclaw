@@ -69,9 +69,8 @@ describe("TwilioStreamFrameAdapter", () => {
 
 describe("TelnyxStreamFrameAdapter", () => {
   it("parses Telnyx start with top-level stream_id and start.call_control_id", () => {
-    const adapter = new TelnyxStreamFrameAdapter("call-control-id-123");
+    const adapter = new TelnyxStreamFrameAdapter();
 
-    // Telnyx start frame: stream_id is top-level, call_control_id lives in start.
     expect(
       adapter.parseInbound(
         JSON.stringify({
@@ -92,18 +91,25 @@ describe("TelnyxStreamFrameAdapter", () => {
     });
   });
 
-  it("falls back to the constructor providerCallId when start fields are absent", () => {
-    const adapter = new TelnyxStreamFrameAdapter("call-control-id-123");
+  it("ignores Telnyx start frames without stream_id or call_control_id", () => {
+    const adapter = new TelnyxStreamFrameAdapter();
 
     expect(adapter.parseInbound(JSON.stringify({ event: "start", start: {} }))).toEqual({
-      kind: "start",
-      streamId: "call-control-id-123",
-      providerCallId: "call-control-id-123",
+      kind: "ignored",
     });
+    expect(
+      adapter.parseInbound(
+        JSON.stringify({
+          event: "start",
+          stream_id: "telnyx-stream-7",
+          start: {},
+        }),
+      ),
+    ).toEqual({ kind: "ignored" });
   });
 
   it("parses media, mark, and stop with no streamSid", () => {
-    const adapter = new TelnyxStreamFrameAdapter("call-control-id-123");
+    const adapter = new TelnyxStreamFrameAdapter();
 
     expect(
       adapter.parseInbound(
@@ -128,7 +134,7 @@ describe("TelnyxStreamFrameAdapter", () => {
   });
 
   it("surfaces Telnyx WS error frames so failures don't get swallowed", () => {
-    const adapter = new TelnyxStreamFrameAdapter("call-control-id-123");
+    const adapter = new TelnyxStreamFrameAdapter();
 
     expect(
       adapter.parseInbound(
@@ -151,7 +157,7 @@ describe("TelnyxStreamFrameAdapter", () => {
   });
 
   it("serializes outbound frames without streamSid", () => {
-    const adapter = new TelnyxStreamFrameAdapter("call-control-id-123");
+    const adapter = new TelnyxStreamFrameAdapter();
 
     expect(JSON.parse(adapter.serializeMedia("payload-b64"))).toEqual({
       event: "media",
@@ -165,7 +171,7 @@ describe("TelnyxStreamFrameAdapter", () => {
   });
 
   it("ignores junk and unknown events", () => {
-    const adapter = new TelnyxStreamFrameAdapter("call-control-id-123");
+    const adapter = new TelnyxStreamFrameAdapter();
     expect(adapter.parseInbound("not json")).toEqual({ kind: "ignored" });
     expect(adapter.parseInbound(JSON.stringify({ event: "media" }))).toEqual({ kind: "ignored" });
     expect(adapter.parseInbound(JSON.stringify({ event: "something-else" }))).toEqual({

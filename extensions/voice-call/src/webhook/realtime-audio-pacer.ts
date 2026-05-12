@@ -25,23 +25,12 @@ type RealtimeAudioQueueItem =
 
 export type RealtimeAudioSend = (message: string) => boolean;
 
-/**
- * Outbound frame serializers supplied by the active {@link StreamFrameAdapter}.
- * Keeps the pacer carrier-agnostic; Twilio supplies streamSid in the resulting
- * envelope while Telnyx omits it.
- */
 export interface RealtimeAudioSerializer {
   media(payloadBase64: string): string;
   clear(): string;
   mark(name: string): string;
 }
 
-/**
- * Carrier-agnostic media-streaming pacer. Buffers μ-law audio into
- * 20ms / 160-byte frames, serializes via the provided serializer, and
- * dispatches at the telephony cadence. Marks are queued in order so the
- * carrier observes them after the audio they tag has been delivered.
- */
 export class RealtimeAudioPacer {
   private queue: RealtimeAudioQueueItem[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;

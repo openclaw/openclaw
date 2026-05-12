@@ -31,14 +31,6 @@ type CallManagerTransientState = {
   initialMessageInFlight: Set<CallId>;
 };
 
-/**
- * Lazily issue a per-call stream session (token + WSS URL) for carriers that
- * attach Media Streaming at dial or answer time (e.g. Telnyx). The manager
- * calls this just before delegating to the provider's initiate/answer so the
- * streaming params can be embedded in the carrier API payload.
- *
- * Returns `undefined` when realtime is not configured.
- */
 export type StreamSessionIssuer = (request: {
   providerName: "twilio" | "telnyx";
   callId: CallId;
@@ -48,9 +40,7 @@ export type StreamSessionIssuer = (request: {
 }) => { token: string; streamUrl: string } | undefined;
 
 type CallManagerHooks = {
-  /** Optional runtime hook invoked after an event transitions a call into answered state. */
   onCallAnswered?: (call: CallRecord) => void;
-  /** Carrier-side stream session issuer; supplied by runtime when realtime is enabled. */
   streamSessionIssuer?: StreamSessionIssuer;
 };
 

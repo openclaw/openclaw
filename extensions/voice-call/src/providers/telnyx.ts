@@ -210,13 +210,6 @@ export class TelnyxProvider implements VoiceCallProvider {
 
       case "streaming.started":
       case "streaming.stopped":
-        // Informational webhook acknowledgement. The realtime bridge tracks
-        // its own lifecycle via the WebSocket; we ack the carrier webhook with
-        // 200 and skip event emission to avoid duplicate signal at the
-        // manager. Telnyx surfaces stream errors as `{event:"error"}` JSON
-        // frames over the WS, not as carrier webhooks, so there is no
-        // matching `streaming.failed` webhook to handle here — see the
-        // `error` branch in `TelnyxStreamFrameAdapter`.
         return null;
 
       default:
@@ -261,11 +254,6 @@ export class TelnyxProvider implements VoiceCallProvider {
     }
   }
 
-  /**
-   * Initiate an outbound call via Telnyx API. When `input.streamUrl` is set,
-   * the dial payload also opens a bidirectional Media Streaming session on
-   * answer (PCMU 8 kHz), per the Telnyx documented "AI agent" pattern.
-   */
   async initiateCall(input: InitiateCallInput): Promise<InitiateCallResult> {
     const body: Record<string, unknown> = {
       connection_id: this.connectionId,
@@ -298,11 +286,6 @@ export class TelnyxProvider implements VoiceCallProvider {
     );
   }
 
-  /**
-   * Answer an inbound Telnyx Call Control leg. When `input.streamUrl` is set,
-   * the answer action also attaches a bidirectional Media Streaming session
-   * (PCMU 8 kHz), per the Telnyx canonical "answer-action inline" pattern.
-   */
   async answerCall(input: AnswerCallInput): Promise<void> {
     const body: Record<string, unknown> = {
       command_id: `openclaw-answer-${input.callId}`,
@@ -378,12 +361,6 @@ export class TelnyxProvider implements VoiceCallProvider {
   }
 }
 
-/**
- * Build the streaming-related fields for a Telnyx dial or answer-action
- * payload. PCMU 8 kHz mono only; bidirectional via RTP; target legs `"self"`
- * so the bot receives both inbound and outbound audio without the routing
- * gotcha that drops the call leg when `"opposite"` is configured.
- */
 function buildTelnyxStreamingFields(
   streamUrl: string,
   streamAuthToken: string | undefined,
@@ -399,10 +376,6 @@ function buildTelnyxStreamingFields(
     ...(streamAuthToken ? { stream_auth_token: streamAuthToken } : {}),
   };
 }
-
-// -----------------------------------------------------------------------------
-// Telnyx-specific types
-// -----------------------------------------------------------------------------
 
 interface TelnyxEvent {
   id?: string;

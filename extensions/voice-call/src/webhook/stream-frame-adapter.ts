@@ -1,18 +1,3 @@
-/**
- * Provider-shaped WebSocket frame adapter for Media Streaming.
- *
- * Twilio Media Streams and Telnyx Media Streaming both carry bidirectional
- * μ-law (PCMU) audio over a carrier-initiated WebSocket. The envelopes are
- * similar but not identical: Twilio tags every event with a `streamSid`;
- * Telnyx omits it and relies on the per-call auth token in the WS upgrade
- * URL to bind the connection to a call. This adapter normalizes inbound
- * frames into a small union and serializes outbound media / clear / mark
- * commands in the shape the carrier expects.
- *
- * The realtime bridge in `realtime-handler.ts` is otherwise carrier-agnostic
- * once it has an adapter.
- */
-
 export type StreamFrame =
   | { kind: "start"; streamId: string; providerCallId: string }
   | {
@@ -29,11 +14,8 @@ export type StreamFrame =
 export interface StreamFrameAdapter {
   readonly providerName: "twilio" | "telnyx";
   parseInbound(rawMessage: string): StreamFrame;
-  /** Serialize an outbound media frame carrying base64 μ-law audio. */
   serializeMedia(payloadBase64: string): string;
-  /** Serialize a clear command (drops queued outbound audio for barge-in). */
   serializeClear(): string;
-  /** Serialize a mark frame used to track playback completion. */
   serializeMark(name: string): string;
 }
 
@@ -60,15 +42,6 @@ function tryParseJson(rawMessage: string): Record<string, unknown> | null {
   return null;
 }
 
-/**
- * Twilio Media Streams frame format.
- *
- * Inbound `start` carries `start.streamSid` and `start.callSid`; subsequent
- * `media`, `mark`, and `stop` events reference the same streamSid. Outbound
- * frames must echo the streamSid Twilio sent at start.
- *
- * Reference: https://www.twilio.com/docs/voice/twiml/stream
- */
 export class TwilioStreamFrameAdapter implements StreamFrameAdapter {
   readonly providerName = "twilio" as const;
   private streamSid = "";
@@ -143,27 +116,8 @@ export class TwilioStreamFrameAdapter implements StreamFrameAdapter {
   }
 }
 
-/**
- * Telnyx Media Streaming frame format (PCMU profile).
- *
- * Inbound frames carry `stream_id` at the top level of the envelope; the
- * `start` frame additionally carries `start.call_control_id` (the carrier
- * call id). The WS is bound to a call via the per-call auth token in the
- * upgrade URL.
- *
- * Stream errors arrive as `{event:"error", payload:{...}}` frames over the
- * WebSocket — not as a webhook event. The adapter surfaces those as a
- * dedicated frame kind so the realtime bridge can log and tear down cleanly.
- *
- * Outbound frames are minimal envelopes: `{event:"media", media:{payload}}`,
- * `{event:"clear"}`, `{event:"mark", mark:{name}}`.
- *
- * Reference: https://developers.telnyx.com/docs/voice/programmable-voice/media-streaming
- */
 export class TelnyxStreamFrameAdapter implements StreamFrameAdapter {
   readonly providerName = "telnyx" as const;
-
-  constructor(private readonly providerCallId: string) {}
 
   parseInbound(rawMessage: string): StreamFrame {
     const msg = tryParseJson(rawMessage);
@@ -178,14 +132,17 @@ export class TelnyxStreamFrameAdapter implements StreamFrameAdapter {
         typeof msg.start === "object" && msg.start !== null
           ? (msg.start as Record<string, unknown>)
           : undefined;
-      const carrierCallControlId =
+      const providerCallId =
         typeof startData?.call_control_id === "string" && startData.call_control_id
           ? startData.call_control_id
-          : this.providerCallId;
+          : undefined;
+      if (!topLevelStreamId || !providerCallId) {
+        return { kind: "ignored" };
+      }
       return {
         kind: "start",
-        streamId: topLevelStreamId ?? this.providerCallId,
-        providerCallId: carrierCallControlId,
+        streamId: topLevelStreamId,
+        providerCallId,
       };
     }
     if (event === "media") {

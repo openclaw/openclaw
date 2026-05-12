@@ -224,17 +224,7 @@ type PendingStreamToken = {
   from?: string;
   to?: string;
   direction?: "inbound" | "outbound";
-  /**
-   * Carrier identifier. Determines which {@link StreamFrameAdapter} the
-   * WebSocket upgrade picks. Defaults to `twilio` when unset for backward
-   * compatibility with the original (Twilio-only) flow.
-   */
   providerName?: "twilio" | "telnyx";
-  /**
-   * OpenClaw-side call identifier (UUID generated before the carrier dial /
-   * answer). Lets the WebSocket upgrade resolve the carrier-side
-   * `providerCallId` via the manager once the dial response has landed.
-   */
   callId?: string;
 };
 
@@ -362,9 +352,6 @@ export class RealtimeCallHandler {
     const rawDirection = params?.get("Direction");
     const previousOrigin = this.publicOrigin;
     if (!previousOrigin) {
-      // Fall back to the request Host header when no public URL has been
-      // pushed. issueStreamSession reads publicOrigin internally, so we
-      // temporarily seat it here before delegating, then restore.
       this.publicOrigin = req.headers.host ?? DEFAULT_HOST;
     }
     try {
@@ -401,15 +388,8 @@ export class RealtimeCallHandler {
     }
 
     const providerName = callerMeta.providerName ?? "twilio";
-    let telnyxProviderCallId = "";
-    if (providerName === "telnyx" && callerMeta.callId) {
-      const call = this.manager.getCall(callerMeta.callId);
-      telnyxProviderCallId = call?.providerCallId ?? "";
-    }
     const adapter: StreamFrameAdapter =
-      providerName === "telnyx"
-        ? new TelnyxStreamFrameAdapter(telnyxProviderCallId)
-        : new TwilioStreamFrameAdapter();
+      providerName === "telnyx" ? new TelnyxStreamFrameAdapter() : new TwilioStreamFrameAdapter();
 
     const wss = new WebSocketServer({
       noServer: true,
@@ -479,8 +459,6 @@ export class RealtimeCallHandler {
             console.error(
               `[voice-call] realtime WS error frame providerCallId=${activeCallSid} code=${frame.code ?? "?"} title=${frame.title ?? ""} detail=${frame.detail ?? ""}`,
             );
-            // Carrier closes the stream after an error frame; let the close
-            // handler tear the bridge down on the resulting WS close.
             return;
           }
           if (frame.kind === "stop") {
@@ -520,12 +498,6 @@ export class RealtimeCallHandler {
     }
   }
 
-  /**
-   * Issue a stream session: returns the per-call auth token plus the wss URL
-   * the carrier should connect to. Provider-agnostic — callers wrap it in
-   * whatever delivery shape the carrier expects (TwiML for Twilio, dial- or
-   * answer-action params for Telnyx).
-   */
   issueStreamSession(request: StreamSessionRequest = {}): StreamSession {
     const token = this.issueStreamToken({
       providerName: request.providerName ?? "twilio",
@@ -1175,14 +1147,7 @@ export class RealtimeCallHandler {
       ...(callerMeta.to ? { to: callerMeta.to } : {}),
     };
 
-    this.manager.processEvent({
-      id: `realtime-initiated-${callSid}`,
-      callId: callSid,
-      type: "call.initiated",
-      ...baseFields,
-    });
-
-    const callRecord = this.manager.getCallByProviderCallId(callSid);
+    const callRecord = this.resolveRealtimeCall(callSid, callerMeta, baseFields);
     if (!callRecord) {
       return null;
     }
@@ -1197,7 +1162,7 @@ export class RealtimeCallHandler {
 
     this.manager.processEvent({
       id: `realtime-answered-${callSid}`,
-      callId: callSid,
+      callId: callRecord.callId,
       type: "call.answered",
       ...baseFields,
     });
@@ -1209,6 +1174,32 @@ export class RealtimeCallHandler {
         initialGreeting,
       ),
     };
+  }
+
+  private resolveRealtimeCall(
+    callSid: string,
+    callerMeta: Omit<PendingStreamToken, "expiry">,
+    baseFields: {
+      providerCallId: string;
+      timestamp: number;
+      direction: "inbound" | "outbound";
+      from?: string;
+      to?: string;
+    },
+  ): CallRecord | null {
+    if (callerMeta.callId) {
+      const call = this.manager.getCall(callerMeta.callId);
+      return call?.providerCallId === callSid ? call : null;
+    }
+
+    this.manager.processEvent({
+      id: `realtime-initiated-${callSid}`,
+      callId: callSid,
+      type: "call.initiated",
+      ...baseFields,
+    });
+
+    return this.manager.getCallByProviderCallId(callSid) ?? null;
   }
 
   private extractInitialGreeting(call: CallRecord): string | undefined {
