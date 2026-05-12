@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -9,26 +8,28 @@ import {
   createSubsystemLogger,
   onSessionTranscriptUpdate,
   resolveAgentDir,
-  resolveSessionTranscriptsDirForAgent,
   resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionTranscriptEntry,
-  listSessionTranscriptsForAgent,
+  listSessionTranscriptScopesForAgent,
   readSessionTranscriptDeltaStats,
-  resolveSessionTranscriptScope,
-  sessionPathForTranscript,
-} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+  type SessionTranscriptEntry,
+  type SessionTranscriptScope,
+} from "openclaw/plugin-sdk/memory-core-host-engine-session-transcripts";
 import {
   buildFileEntry,
   ensureMemoryIndexSchema,
   listMemoryFiles,
   loadSqliteVecExtension,
+  MEMORY_INDEX_TABLE_NAMES,
   normalizeExtraMemoryPaths,
   runWithConcurrency,
+  type MemoryFileEntry,
   type MemorySource,
+  type MemorySessionTranscriptScope,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -38,7 +39,6 @@ import {
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-import { runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./manager-db.js";
 import {
   applyMemoryFallbackProviderState,
@@ -65,19 +65,38 @@ type MemorySyncProgressState = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
-type MemoryIndexEntry = {
-  path: string;
-  absPath: string;
-  mtimeMs: number;
-  size: number;
-  hash: string;
-  content?: string;
-};
+type MemoryIndexEntry = MemoryFileEntry | SessionTranscriptEntry;
 
-const META_KEY = "memory_index_meta_v1";
-const VECTOR_TABLE = "chunks_vec";
-const FTS_TABLE = "chunks_fts";
-const EMBEDDING_CACHE_TABLE = "embedding_cache";
+function memoryEntrySourceKey(entry: MemoryIndexEntry, source: MemorySource): string {
+  if (source === "sessions" && "scope" in entry) {
+    return `session:${entry.scope.sessionId}`;
+  }
+  return entry.path;
+}
+
+function sessionTranscriptSourceKeyForScope(scope: Pick<SessionTranscriptScope, "sessionId">) {
+  return `session:${scope.sessionId}`;
+}
+
+function sessionTranscriptScopeKey(scope: Pick<SessionTranscriptScope, "agentId" | "sessionId">) {
+  return `${scope.agentId}\0${scope.sessionId}`;
+}
+
+function sessionTranscriptScopeFromKey(key: string): SessionTranscriptScope | null {
+  const [agentId, sessionId, ...rest] = key.split("\0");
+  if (!agentId || !sessionId || rest.length > 0) {
+    return null;
+  }
+  return { agentId, sessionId };
+}
+
+const META_KEY = "current";
+const META_TABLE = MEMORY_INDEX_TABLE_NAMES.meta;
+const SOURCES_TABLE = MEMORY_INDEX_TABLE_NAMES.sources;
+const CHUNKS_TABLE = MEMORY_INDEX_TABLE_NAMES.chunks;
+const VECTOR_TABLE = MEMORY_INDEX_TABLE_NAMES.vector;
+const FTS_TABLE = MEMORY_INDEX_TABLE_NAMES.fts;
+const EMBEDDING_CACHE_TABLE = MEMORY_INDEX_TABLE_NAMES.embeddingCache;
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const SESSION_SYNC_YIELD_EVERY = 10;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
@@ -93,6 +112,13 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 
 const log = createSubsystemLogger("memory");
 const TEST_MEMORY_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
+
+function sqliteTableExists(db: DatabaseSync, tableName: string): boolean {
+  const row = db
+    .prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { present?: number } | undefined;
+  return row?.present === 1;
+}
 
 function resolveMemoryWatchFactory(): typeof chokidar.watch {
   if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
@@ -190,8 +216,8 @@ export abstract class MemoryManagerSyncOps {
   protected closed = false;
   protected dirty = false;
   protected sessionsDirty = false;
-  protected sessionsDirtyFiles = new Set<string>();
-  protected sessionPendingFiles = new Set<string>();
+  protected dirtySessionTranscripts = new Set<string>();
+  protected pendingSessionTranscripts = new Set<string>();
   protected sessionDeltas = new Map<
     string,
     { lastSize: number; lastMessages: number; pendingBytes: number; pendingMessages: number }
@@ -319,85 +345,21 @@ export abstract class MemoryManagerSyncOps {
     if (sources.length === 0) {
       return { sql: "", params: [] };
     }
-    const column = alias ? `${alias}.source` : "source";
+    const column = alias ? `${alias}.source_kind` : "source_kind";
     const placeholders = sources.map(() => "?").join(", ");
     return { sql: ` AND ${column} IN (${placeholders})`, params: sources };
   }
 
   protected openDatabase(): DatabaseSync {
-    const dbPath = resolveUserPath(this.settings.store.path);
-    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
-  }
-
-  private async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {
-    if (!this.cache.enabled) {
-      return;
-    }
-    let transactionStarted = false;
-    try {
-      const rows = sourceDb
-        .prepare(
-          `SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM ${EMBEDDING_CACHE_TABLE}`,
-        )
-        .iterate() as IterableIterator<{
-        provider: string;
-        model: string;
-        provider_key: string;
-        hash: string;
-        embedding: string;
-        dims: number | null;
-        updated_at: number;
-      }>;
-      // Keep gateway health probes responsive while rebuilding large caches.
-      const SEED_EMBEDDING_YIELD_EVERY = 1000;
-      let rowCount = 0;
-      let insert: ReturnType<DatabaseSync["prepare"]> | null = null;
-      for (const row of rows) {
-        if (!insert) {
-          insert = this.db.prepare(
-            `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET
-               embedding=excluded.embedding,
-               dims=excluded.dims,
-               updated_at=excluded.updated_at`,
-          );
-          this.db.exec("BEGIN");
-          transactionStarted = true;
-        }
-        insert.run(
-          row.provider,
-          row.model,
-          row.provider_key,
-          row.hash,
-          row.embedding,
-          row.dims,
-          row.updated_at,
-        );
-        rowCount += 1;
-        if (rowCount % SEED_EMBEDDING_YIELD_EVERY === 0) {
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-        }
-      }
-      if (transactionStarted) {
-        this.db.exec("COMMIT");
-      }
-    } catch (err) {
-      if (transactionStarted) {
-        try {
-          this.db.exec("ROLLBACK");
-        } catch {}
-      }
-      throw err;
-    }
+    const dbPath = resolveUserPath(this.settings.store.databasePath);
+    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, this.agentId);
   }
 
   protected ensureSchema() {
     const result = ensureMemoryIndexSchema({
       db: this.db,
       embeddingCacheTable: EMBEDDING_CACHE_TABLE,
+      skipCoreTables: true,
       cacheEnabled: this.cache.enabled,
       ftsTable: FTS_TABLE,
       ftsEnabled: this.fts.enabled,
@@ -476,20 +438,24 @@ export abstract class MemoryManagerSyncOps {
       if (this.closed) {
         return;
       }
-      const sessionTranscript = update.sessionFile;
       const updateAgentId = update.agentId?.trim();
       if (updateAgentId && updateAgentId !== this.agentId) {
         return;
       }
-      if (!updateAgentId && !this.isSessionTranscriptForAgent(sessionTranscript)) {
+      const sessionId = update.sessionId?.trim();
+      if (!sessionId) {
         return;
       }
+      const sessionTranscript = sessionTranscriptScopeKey({
+        agentId: updateAgentId || this.agentId,
+        sessionId,
+      });
       this.scheduleSessionDirty(sessionTranscript);
     });
   }
 
   private scheduleSessionDirty(sessionTranscript: string) {
-    this.sessionPendingFiles.add(sessionTranscript);
+    this.pendingSessionTranscripts.add(sessionTranscript);
     if (this.sessionWatchTimer) {
       return;
     }
@@ -502,11 +468,11 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private async processSessionDeltaBatch(): Promise<void> {
-    if (this.sessionPendingFiles.size === 0) {
+    if (this.pendingSessionTranscripts.size === 0) {
       return;
     }
-    const pending = Array.from(this.sessionPendingFiles);
-    this.sessionPendingFiles.clear();
+    const pending = Array.from(this.pendingSessionTranscripts);
+    this.pendingSessionTranscripts.clear();
     let shouldSync = false;
     for (const sessionTranscript of pending) {
       const delta = await this.updateSessionDelta(sessionTranscript);
@@ -524,7 +490,7 @@ export abstract class MemoryManagerSyncOps {
       if (!bytesHit && !messagesHit) {
         continue;
       }
-      this.sessionsDirtyFiles.add(sessionTranscript);
+      this.dirtySessionTranscripts.add(sessionTranscript);
       this.sessionsDirty = true;
       delta.pendingBytes =
         bytesThreshold > 0 ? Math.max(0, delta.pendingBytes - bytesThreshold) : 0;
@@ -549,7 +515,11 @@ export abstract class MemoryManagerSyncOps {
     if (!thresholds) {
       return null;
     }
-    const stats = readSessionTranscriptDeltaStats(sessionTranscript);
+    const scope = sessionTranscriptScopeFromKey(sessionTranscript);
+    if (!scope) {
+      return null;
+    }
+    const stats = readSessionTranscriptDeltaStats(scope);
     if (!stats) {
       return null;
     }
@@ -599,33 +569,18 @@ export abstract class MemoryManagerSyncOps {
     state.pendingMessages = 0;
   }
 
-  private isSessionTranscriptForAgent(sessionTranscript: string): boolean {
-    if (!sessionTranscript) {
-      return false;
-    }
-    const scope = resolveSessionTranscriptScope(sessionTranscript);
-    if (scope) {
-      return scope.agentId === this.agentId;
-    }
-    const sessionsDir = resolveSessionTranscriptsDirForAgent(this.agentId);
-    const resolvedFile = path.resolve(sessionTranscript);
-    const resolvedDir = path.resolve(sessionsDir);
-    return resolvedFile.startsWith(`${resolvedDir}${path.sep}`);
-  }
-
-  private normalizeTargetSessionTranscripts(sessionTranscripts?: string[]): Set<string> | null {
-    if (!sessionTranscripts || sessionTranscripts.length === 0) {
+  private normalizeTargetSessionTranscripts(params?: {
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
+  }): Set<string> | null {
+    if (!params?.sessionTranscriptScopes || params.sessionTranscriptScopes.length === 0) {
       return null;
     }
     const normalized = new Set<string>();
-    for (const sessionTranscript of sessionTranscripts) {
-      const trimmed = sessionTranscript.trim();
-      if (!trimmed) {
-        continue;
-      }
-      const resolved = path.resolve(trimmed);
-      if (this.isSessionTranscriptForAgent(resolved)) {
-        normalized.add(resolved);
+    for (const scope of params?.sessionTranscriptScopes ?? []) {
+      const agentId = scope.agentId.trim();
+      const sessionId = scope.sessionId.trim();
+      if (agentId === this.agentId && sessionId) {
+        normalized.add(sessionTranscriptScopeKey({ agentId, sessionId }));
       }
     }
     return normalized.size > 0 ? normalized : null;
@@ -656,13 +611,17 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private shouldSyncSessions(
-    params?: { reason?: string; force?: boolean; sessionTranscripts?: string[] },
+    params?: {
+      reason?: string;
+      force?: boolean;
+      sessionTranscriptScopes?: MemorySessionTranscriptScope[];
+    },
     needsFullReindex = false,
   ) {
     return shouldSyncSessionsForReindex({
       hasSessionSource: this.sources.has("sessions"),
       sessionsDirty: this.sessionsDirty,
-      dirtySessionTranscriptCount: this.sessionsDirtyFiles.size,
+      dirtySessionTranscriptCount: this.dirtySessionTranscripts.size,
       sync: params,
       needsFullReindex,
     });
@@ -672,21 +631,21 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    const deleteFileByPathAndSource = this.db.prepare(
-      `DELETE FROM files WHERE path = ? AND source = ?`,
+    const deleteSourceByKeyAndKind = this.db.prepare(
+      `DELETE FROM ${SOURCES_TABLE} WHERE source_key = ? AND source_kind = ?`,
     );
-    const deleteChunksByPathAndSource = this.db.prepare(
-      `DELETE FROM chunks WHERE path = ? AND source = ?`,
+    const deleteChunksByKeyAndKind = this.db.prepare(
+      `DELETE FROM ${CHUNKS_TABLE} WHERE source_key = ? AND source_kind = ?`,
     );
     const deleteVectorRowsByPathAndSource =
-      this.vector.enabled && this.vector.available
+      this.vector.enabled && this.vector.available && sqliteTableExists(this.db, VECTOR_TABLE)
         ? this.db.prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM ${CHUNKS_TABLE} WHERE source_key = ? AND source_kind = ?)`,
           )
         : null;
     const deleteFtsRowsByPathAndSource =
       this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE source_key = ? AND source = ?`)
         : null;
 
     const files = await listMemoryFiles(
@@ -702,7 +661,7 @@ export abstract class MemoryManagerSyncOps {
         ),
         this.getIndexConcurrency(),
       )
-    ).filter((entry): entry is MemoryIndexEntry => entry !== null);
+    ).filter((entry): entry is MemoryFileEntry => entry !== null);
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
       needsFullReindex: params.needsFullReindex,
@@ -715,7 +674,9 @@ export abstract class MemoryManagerSyncOps {
     });
     const existingRows = existingState.rows;
     const existingHashes = existingState.hashes;
-    const activePaths = new Set(fileEntries.map((entry) => entry.path));
+    const activeSourceKeys = new Set(
+      fileEntries.map((entry) => memoryEntrySourceKey(entry, "memory")),
+    );
     if (params.progress) {
       params.progress.total += fileEntries.length;
       params.progress.report({
@@ -726,7 +687,8 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const tasks = fileEntries.map((entry) => async () => {
-      if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+      const sourceKey = memoryEntrySourceKey(entry, "memory");
+      if (!params.needsFullReindex && existingHashes.get(sourceKey) === entry.hash) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -748,19 +710,19 @@ export abstract class MemoryManagerSyncOps {
     await runWithConcurrency(tasks, this.getIndexConcurrency());
 
     for (const stale of existingRows) {
-      if (activePaths.has(stale.path)) {
+      if (activeSourceKeys.has(stale.sourceKey)) {
         continue;
       }
-      deleteFileByPathAndSource.run(stale.path, "memory");
+      deleteSourceByKeyAndKind.run(stale.sourceKey, "memory");
       if (deleteVectorRowsByPathAndSource) {
         try {
-          deleteVectorRowsByPathAndSource.run(stale.path, "memory");
+          deleteVectorRowsByPathAndSource.run(stale.sourceKey, "memory");
         } catch {}
       }
-      deleteChunksByPathAndSource.run(stale.path, "memory");
+      deleteChunksByKeyAndKind.run(stale.sourceKey, "memory");
       if (deleteFtsRowsByPathAndSource) {
         try {
-          deleteFtsRowsByPathAndSource.run(stale.path, "memory");
+          deleteFtsRowsByPathAndSource.run(stale.sourceKey, "memory");
         } catch {}
       }
     }
@@ -768,56 +730,61 @@ export abstract class MemoryManagerSyncOps {
 
   private async syncSessionTranscripts(params: {
     needsFullReindex: boolean;
-    targetSessionTranscripts?: string[];
+    targetSessionTranscriptKeys?: string[];
     progress?: MemorySyncProgressState;
   }) {
-    const deleteFileByPathAndSource = this.db.prepare(
-      `DELETE FROM files WHERE path = ? AND source = ?`,
+    const deleteSourceByKeyAndKind = this.db.prepare(
+      `DELETE FROM ${SOURCES_TABLE} WHERE source_key = ? AND source_kind = ?`,
     );
-    const deleteChunksByPathAndSource = this.db.prepare(
-      `DELETE FROM chunks WHERE path = ? AND source = ?`,
+    const deleteChunksByKeyAndKind = this.db.prepare(
+      `DELETE FROM ${CHUNKS_TABLE} WHERE source_key = ? AND source_kind = ?`,
     );
     const deleteVectorRowsByPathAndSource =
-      this.vector.enabled && this.vector.available
+      this.vector.enabled && this.vector.available && sqliteTableExists(this.db, VECTOR_TABLE)
         ? this.db.prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM ${CHUNKS_TABLE} WHERE source_key = ? AND source_kind = ?)`,
           )
         : null;
     const deleteFtsRowsByPathSourceAndModel =
       this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+        ? this.db.prepare(
+            `DELETE FROM ${FTS_TABLE} WHERE source_key = ? AND source = ? AND model = ?`,
+          )
         : null;
 
-    const targetSessionTranscripts = params.needsFullReindex
-      ? null
-      : this.normalizeTargetSessionTranscripts(params.targetSessionTranscripts);
-    const files = targetSessionTranscripts
-      ? Array.from(targetSessionTranscripts)
-      : await listSessionTranscriptsForAgent(this.agentId);
+    const targetSessionTranscriptKeys =
+      params.needsFullReindex || !params.targetSessionTranscriptKeys
+        ? null
+        : new Set(params.targetSessionTranscriptKeys);
+    const transcripts = targetSessionTranscriptKeys
+      ? Array.from(targetSessionTranscriptKeys)
+          .map(sessionTranscriptScopeFromKey)
+          .filter((scope): scope is SessionTranscriptScope => scope !== null)
+      : await listSessionTranscriptScopesForAgent(this.agentId);
     const sessionPlan = resolveMemorySessionSyncPlan({
       needsFullReindex: params.needsFullReindex,
-      files,
-      targetSessionTranscripts,
-      sessionsDirtyFiles: this.sessionsDirtyFiles,
-      existingRows: targetSessionTranscripts
+      transcripts,
+      targetSessionTranscriptKeys,
+      dirtySessionTranscripts: this.dirtySessionTranscripts,
+      existingRows: targetSessionTranscriptKeys
         ? null
         : loadMemorySourceFileState({
             db: this.db,
             source: "sessions",
           }).rows,
-      sessionPathForTranscript,
+      sessionTranscriptSourceKeyForScope,
     });
-    const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
+    const { activeSourceKeys, existingRows, existingHashes, indexAll } = sessionPlan;
     log.debug("memory sync: indexing session transcripts", {
-      files: files.length,
+      transcripts: transcripts.length,
       indexAll,
-      dirtyFiles: this.sessionsDirtyFiles.size,
-      targetedFiles: targetSessionTranscripts?.size ?? 0,
+      dirtyTranscripts: this.dirtySessionTranscripts.size,
+      targetedTranscripts: targetSessionTranscriptKeys?.size ?? 0,
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
     if (params.progress) {
-      params.progress.total += files.length;
+      params.progress.total += transcripts.length;
       params.progress.report({
         completed: params.progress.completed,
         total: params.progress.total,
@@ -827,10 +794,11 @@ export abstract class MemoryManagerSyncOps {
       });
     }
 
-    const yieldAfterSessionFile = createSessionSyncYield(files.length);
-    const tasks = files.map((absPath) => async () => {
+    const yieldAfterSessionTranscript = createSessionSyncYield(transcripts.length);
+    const tasks = transcripts.map((scope) => async () => {
+      const scopeKey = sessionTranscriptScopeKey(scope);
       try {
-        if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+        if (!indexAll && !this.dirtySessionTranscripts.has(scopeKey)) {
           if (params.progress) {
             params.progress.completed += 1;
             params.progress.report({
@@ -840,7 +808,7 @@ export abstract class MemoryManagerSyncOps {
           }
           return;
         }
-        const entry = await buildSessionTranscriptEntry(absPath);
+        const entry = await buildSessionTranscriptEntry(scope);
         if (!entry) {
           if (params.progress) {
             params.progress.completed += 1;
@@ -854,7 +822,7 @@ export abstract class MemoryManagerSyncOps {
         const existingHash = resolveMemorySourceExistingHash({
           db: this.db,
           source: "sessions",
-          path: entry.path,
+          sourceKey: memoryEntrySourceKey(entry, "sessions"),
           existingHashes,
         });
         if (!params.needsFullReindex && existingHash === entry.hash) {
@@ -865,11 +833,11 @@ export abstract class MemoryManagerSyncOps {
               total: params.progress.total,
             });
           }
-          this.resetSessionDelta(absPath, entry.size, entry.messageCount);
+          this.resetSessionDelta(scopeKey, entry.size, entry.messageCount);
           return;
         }
         await this.indexFile(entry, { source: "sessions", content: entry.content });
-        this.resetSessionDelta(absPath, entry.size, entry.messageCount);
+        this.resetSessionDelta(scopeKey, entry.size, entry.messageCount);
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -878,12 +846,12 @@ export abstract class MemoryManagerSyncOps {
           });
         }
       } finally {
-        await yieldAfterSessionFile();
+        await yieldAfterSessionTranscript();
       }
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
 
-    if (activePaths === null) {
+    if (activeSourceKeys === null) {
       // Targeted syncs only refresh the requested transcripts and should not
       // prune unrelated session rows without a full directory enumeration.
       return;
@@ -893,20 +861,20 @@ export abstract class MemoryManagerSyncOps {
     const yieldAfterStaleSessionRow = createSessionSyncYield(staleRows.length);
     for (const stale of staleRows) {
       try {
-        if (activePaths.has(stale.path)) {
+        if (activeSourceKeys.has(stale.sourceKey)) {
           continue;
         }
-        deleteFileByPathAndSource.run(stale.path, "sessions");
+        deleteSourceByKeyAndKind.run(stale.sourceKey, "sessions");
         if (deleteVectorRowsByPathAndSource) {
           try {
-            deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
+            deleteVectorRowsByPathAndSource.run(stale.sourceKey, "sessions");
           } catch {}
         }
-        deleteChunksByPathAndSource.run(stale.path, "sessions");
+        deleteChunksByKeyAndKind.run(stale.sourceKey, "sessions");
         if (deleteFtsRowsByPathSourceAndModel) {
           try {
             deleteFtsRowsByPathSourceAndModel.run(
-              stale.path,
+              stale.sourceKey,
               "sessions",
               this.provider?.model ?? "fts-only",
             );
@@ -946,7 +914,7 @@ export abstract class MemoryManagerSyncOps {
   protected async runSync(params?: {
     reason?: string;
     force?: boolean;
-    sessionTranscripts?: string[];
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
@@ -969,29 +937,21 @@ export abstract class MemoryManagerSyncOps {
         maxFileBytes: this.settings.multimodal.maxFileBytes,
       },
     });
-    const targetSessionTranscripts = this.normalizeTargetSessionTranscripts(
-      params?.sessionTranscripts,
-    );
-    const hasTargetSessionTranscripts = targetSessionTranscripts !== null;
+    const targetSessionTranscriptKeys = this.normalizeTargetSessionTranscripts(params);
+    const hasTargetSessionTranscripts = targetSessionTranscriptKeys !== null;
     const targetedSessionSync = await runMemoryTargetedSessionSync({
       hasSessionSource: this.sources.has("sessions"),
-      targetSessionTranscripts,
+      targetSessionTranscriptKeys,
       reason: params?.reason,
       progress: progress ?? undefined,
-      useUnsafeReindex:
-        process.env.OPENCLAW_TEST_FAST === "1" &&
-        process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1",
-      sessionsDirtyFiles: this.sessionsDirtyFiles,
+      dirtySessionTranscripts: this.dirtySessionTranscripts,
       syncSessionTranscripts: async (targetedParams) => {
         await this.syncSessionTranscripts(targetedParams);
       },
       shouldFallbackOnError: (message) => this.shouldFallbackOnError(message),
       activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
-      runSafeReindex: async (reindexParams) => {
-        await this.runSafeReindex(reindexParams);
-      },
-      runUnsafeReindex: async (reindexParams) => {
-        await this.runUnsafeReindex(reindexParams);
+      runFullReindex: async (reindexParams) => {
+        await this.runInPlaceReindex(reindexParams);
       },
     });
     if (targetedSessionSync.handled) {
@@ -1014,22 +974,11 @@ export abstract class MemoryManagerSyncOps {
       });
     try {
       if (needsFullReindex) {
-        if (
-          process.env.OPENCLAW_TEST_FAST === "1" &&
-          process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1"
-        ) {
-          await this.runUnsafeReindex({
-            reason: params?.reason,
-            force: params?.force,
-            progress: progress ?? undefined,
-          });
-        } else {
-          await this.runSafeReindex({
-            reason: params?.reason,
-            force: params?.force,
-            progress: progress ?? undefined,
-          });
-        }
+        await this.runInPlaceReindex({
+          reason: params?.reason,
+          force: params?.force,
+          progress: progress ?? undefined,
+        });
         return;
       }
 
@@ -1046,14 +995,14 @@ export abstract class MemoryManagerSyncOps {
       if (shouldSyncSessions) {
         await this.syncSessionTranscripts({
           needsFullReindex,
-          targetSessionTranscripts: targetSessionTranscripts
-            ? Array.from(targetSessionTranscripts)
+          targetSessionTranscriptKeys: targetSessionTranscriptKeys
+            ? Array.from(targetSessionTranscriptKeys)
             : undefined,
           progress: progress ?? undefined,
         });
         this.sessionsDirty = false;
-        this.sessionsDirtyFiles.clear();
-      } else if (this.sessionsDirtyFiles.size > 0) {
+        this.dirtySessionTranscripts.clear();
+      } else if (this.dirtySessionTranscripts.size > 0) {
         this.sessionsDirty = true;
       } else {
         this.sessionsDirty = false;
@@ -1063,7 +1012,7 @@ export abstract class MemoryManagerSyncOps {
       const activated =
         this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
       if (activated) {
-        await this.runSafeReindex({
+        await this.runInPlaceReindex({
           reason: params?.reason ?? "fallback",
           force: true,
           progress: progress ?? undefined,
@@ -1140,144 +1089,13 @@ export abstract class MemoryManagerSyncOps {
     return true;
   }
 
-  private async runSafeReindex(params: {
+  private async runInPlaceReindex(params: {
     reason?: string;
     force?: boolean;
     progress?: MemorySyncProgressState;
   }): Promise<void> {
-    const dbPath = resolveUserPath(this.settings.store.path);
-    const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
-    const tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
-
-    const originalDb = this.db;
-    let tempDbClosed = false;
-    let originalDbClosed = false;
-    const originalState = {
-      ftsAvailable: this.fts.available,
-      ftsError: this.fts.loadError,
-      vectorAvailable: this.vector.available,
-      vectorLoadError: this.vector.loadError,
-      vectorDims: this.vector.dims,
-      vectorDegradedWriteWarningShown: this.vectorDegradedWriteWarningShown,
-      vectorReady: this.vectorReady,
-    };
-
-    const restoreOriginalState = () => {
-      if (originalDbClosed) {
-        this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
-      } else {
-        this.db = originalDb;
-      }
-      this.fts.available = originalState.ftsAvailable;
-      this.fts.loadError = originalState.ftsError;
-      this.vector.available = originalDbClosed ? null : originalState.vectorAvailable;
-      this.vector.loadError = originalState.vectorLoadError;
-      this.vector.dims = originalState.vectorDims;
-      this.vectorDegradedWriteWarningShown = originalState.vectorDegradedWriteWarningShown;
-      this.vectorReady = originalDbClosed ? null : originalState.vectorReady;
-    };
-
-    this.db = tempDb;
-    this.resetVectorState();
-    this.fts.available = false;
-    this.fts.loadError = undefined;
-    this.ensureSchema();
-
-    let nextMeta: MemoryIndexMeta | null = null;
-
-    try {
-      nextMeta = await runMemoryAtomicReindex({
-        targetPath: dbPath,
-        tempPath: tempDbPath,
-        beforeTempCleanup: () => {
-          if (!tempDbClosed) {
-            closeMemoryDatabase(tempDb);
-            tempDbClosed = true;
-          }
-        },
-        build: async () => {
-          await this.seedEmbeddingCache(originalDb);
-          const shouldSyncMemory = this.sources.has("memory");
-          const shouldSyncSessions = this.shouldSyncSessions(
-            { reason: params.reason, force: params.force },
-            true,
-          );
-
-          if (shouldSyncMemory) {
-            await this.syncMemoryFiles({ needsFullReindex: true, progress: params.progress });
-            this.dirty = false;
-          }
-
-          if (shouldSyncSessions) {
-            await this.syncSessionTranscripts({
-              needsFullReindex: true,
-              progress: params.progress,
-            });
-            this.sessionsDirty = false;
-            this.sessionsDirtyFiles.clear();
-          } else if (this.sessionsDirtyFiles.size > 0) {
-            this.sessionsDirty = true;
-          } else {
-            this.sessionsDirty = false;
-          }
-
-          const meta: MemoryIndexMeta = {
-            model: this.provider?.model ?? "fts-only",
-            provider: this.provider?.id ?? "none",
-            providerKey: this.providerKey!,
-            sources: resolveConfiguredSourcesForMeta(this.sources),
-            scopeHash: resolveConfiguredScopeHash({
-              workspaceDir: this.workspaceDir,
-              extraPaths: this.settings.extraPaths,
-              multimodal: {
-                enabled: this.settings.multimodal.enabled,
-                modalities: this.settings.multimodal.modalities,
-                maxFileBytes: this.settings.multimodal.maxFileBytes,
-              },
-            }),
-            chunkTokens: this.settings.chunking.tokens,
-            chunkOverlap: this.settings.chunking.overlap,
-            ftsTokenizer: this.settings.store.fts.tokenizer,
-          };
-
-          if (this.vector.available && this.vector.dims) {
-            meta.vectorDims = this.vector.dims;
-          }
-
-          this.writeMeta(meta);
-          this.pruneEmbeddingCacheIfNeeded?.();
-
-          closeMemoryDatabase(tempDb);
-          tempDbClosed = true;
-          closeMemoryDatabase(originalDb);
-          originalDbClosed = true;
-          return meta;
-        },
-      });
-
-      this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
-      this.resetVectorState();
-      this.ensureSchema();
-      this.vector.dims = nextMeta?.vectorDims;
-    } catch (err) {
-      try {
-        if (!tempDbClosed && this.db === tempDb) {
-          closeMemoryDatabase(tempDb);
-          tempDbClosed = true;
-        }
-      } catch {}
-      restoreOriginalState();
-      throw err;
-    }
-  }
-
-  private async runUnsafeReindex(params: {
-    reason?: string;
-    force?: boolean;
-    progress?: MemorySyncProgressState;
-  }): Promise<void> {
-    // Perf: for test runs, skip atomic temp-db swapping. The index is isolated
-    // under the per-test HOME anyway, and this cuts substantial fs+sqlite churn.
+    // The builtin memory index lives inside the per-agent database. A full
+    // reindex must reset only memory-owned tables, never swap the database file.
     this.resetIndex();
 
     const shouldSyncMemory = this.sources.has("memory");
@@ -1294,8 +1112,8 @@ export abstract class MemoryManagerSyncOps {
     if (shouldSyncSessions) {
       await this.syncSessionTranscripts({ needsFullReindex: true, progress: params.progress });
       this.sessionsDirty = false;
-      this.sessionsDirtyFiles.clear();
-    } else if (this.sessionsDirtyFiles.size > 0) {
+      this.dirtySessionTranscripts.clear();
+    } else if (this.dirtySessionTranscripts.size > 0) {
       this.sessionsDirty = true;
     } else {
       this.sessionsDirty = false;
@@ -1328,8 +1146,8 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private resetIndex() {
-    this.db.exec(`DELETE FROM files`);
-    this.db.exec(`DELETE FROM chunks`);
+    this.db.exec(`DELETE FROM ${SOURCES_TABLE}`);
+    this.db.exec(`DELETE FROM ${CHUNKS_TABLE}`);
     if (this.fts.enabled && this.fts.available) {
       try {
         this.db.exec(`DROP TABLE IF EXISTS ${FTS_TABLE}`);
@@ -1338,20 +1156,49 @@ export abstract class MemoryManagerSyncOps {
     this.ensureSchema();
     this.dropVectorTable();
     this.vector.dims = undefined;
-    this.sessionsDirtyFiles.clear();
+    this.dirtySessionTranscripts.clear();
   }
 
   protected readMeta(): MemoryIndexMeta | null {
-    const row = this.db.prepare(`SELECT value FROM meta WHERE key = ?`).get(META_KEY) as
-      | { value: string }
+    const row = this.db
+      .prepare(
+        `SELECT schema_version, provider, model, provider_key, sources_json, scope_hash, chunk_tokens, chunk_overlap, vector_dims, fts_tokenizer, config_hash, updated_at FROM ${META_TABLE} WHERE meta_key = ?`,
+      )
+      .get(META_KEY) as
+      | {
+          schema_version: number;
+          provider: string;
+          model: string;
+          provider_key: string | null;
+          sources_json: string;
+          scope_hash: string;
+          chunk_tokens: number;
+          chunk_overlap: number;
+          vector_dims: number | null;
+          fts_tokenizer: string;
+          config_hash: string | null;
+          updated_at: number;
+        }
       | undefined;
-    if (!row?.value) {
+    if (!row) {
       this.lastMetaSerialized = null;
       return null;
     }
     try {
-      const parsed = JSON.parse(row.value) as MemoryIndexMeta;
-      this.lastMetaSerialized = row.value;
+      const parsed: MemoryIndexMeta = {
+        provider: row.provider,
+        model: row.model,
+        providerKey: row.provider_key ?? undefined,
+        sources: JSON.parse(row.sources_json) as MemoryIndexMeta["sources"],
+        scopeHash: row.scope_hash,
+        chunkTokens: row.chunk_tokens,
+        chunkOverlap: row.chunk_overlap,
+        ftsTokenizer: row.fts_tokenizer,
+      };
+      if (typeof row.vector_dims === "number") {
+        parsed.vectorDims = row.vector_dims;
+      }
+      this.lastMetaSerialized = JSON.stringify(parsed);
       return parsed;
     } catch {
       this.lastMetaSerialized = null;
@@ -1366,9 +1213,37 @@ export abstract class MemoryManagerSyncOps {
     }
     this.db
       .prepare(
-        `INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+        `INSERT INTO ${META_TABLE} (meta_key, schema_version, provider, model, provider_key, sources_json, scope_hash, chunk_tokens, chunk_overlap, vector_dims, fts_tokenizer, config_hash, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(meta_key) DO UPDATE SET
+           schema_version=excluded.schema_version,
+           provider=excluded.provider,
+           model=excluded.model,
+           provider_key=excluded.provider_key,
+           sources_json=excluded.sources_json,
+           scope_hash=excluded.scope_hash,
+           chunk_tokens=excluded.chunk_tokens,
+           chunk_overlap=excluded.chunk_overlap,
+           vector_dims=excluded.vector_dims,
+           fts_tokenizer=excluded.fts_tokenizer,
+           config_hash=excluded.config_hash,
+           updated_at=excluded.updated_at`,
       )
-      .run(META_KEY, value);
+      .run(
+        META_KEY,
+        1,
+        meta.provider,
+        meta.model,
+        meta.providerKey ?? null,
+        JSON.stringify(meta.sources ?? []),
+        meta.scopeHash ?? "",
+        meta.chunkTokens,
+        meta.chunkOverlap,
+        meta.vectorDims ?? null,
+        meta.ftsTokenizer ?? "unicode61",
+        value,
+        Date.now(),
+      );
     this.lastMetaSerialized = value;
   }
 }

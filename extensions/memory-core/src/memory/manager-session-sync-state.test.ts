@@ -2,29 +2,32 @@ import { describe, expect, it } from "vitest";
 import { resolveMemorySessionSyncPlan } from "./manager-session-sync-state.js";
 
 describe("memory session sync state", () => {
-  it("tracks active paths and bulk hashes for full scans", () => {
+  it("tracks active source keys and bulk hashes for full scans", () => {
     const plan = resolveMemorySessionSyncPlan({
       needsFullReindex: false,
-      files: ["/tmp/a.jsonl", "/tmp/b.jsonl"],
-      targetSessionTranscripts: null,
-      sessionsDirtyFiles: new Set(),
-      existingRows: [
-        { path: "sessions/a.jsonl", hash: "hash-a" },
-        { path: "sessions/b.jsonl", hash: "hash-b" },
+      transcripts: [
+        { agentId: "main", sessionId: "a" },
+        { agentId: "main", sessionId: "b" },
       ],
-      sessionPathForTranscript: (file) => `sessions/${file.split("/").at(-1)}`,
+      targetSessionTranscriptKeys: null,
+      dirtySessionTranscripts: new Set(),
+      existingRows: [
+        { sourceKey: "session:a", path: "transcript:main:a", hash: "hash-a" },
+        { sourceKey: "session:b", path: "transcript:main:b", hash: "hash-b" },
+      ],
+      sessionTranscriptSourceKeyForScope: (scope) => `session:${scope.sessionId}`,
     });
 
     expect(plan.indexAll).toBe(true);
-    expect(plan.activePaths).toEqual(new Set(["sessions/a.jsonl", "sessions/b.jsonl"]));
+    expect(plan.activeSourceKeys).toEqual(new Set(["session:a", "session:b"]));
     expect(plan.existingRows).toEqual([
-      { path: "sessions/a.jsonl", hash: "hash-a" },
-      { path: "sessions/b.jsonl", hash: "hash-b" },
+      { sourceKey: "session:a", path: "transcript:main:a", hash: "hash-a" },
+      { sourceKey: "session:b", path: "transcript:main:b", hash: "hash-b" },
     ]);
     expect(plan.existingHashes).toEqual(
       new Map([
-        ["sessions/a.jsonl", "hash-a"],
-        ["sessions/b.jsonl", "hash-b"],
+        ["session:a", "hash-a"],
+        ["session:b", "hash-b"],
       ]),
     );
   });
@@ -32,18 +35,26 @@ describe("memory session sync state", () => {
   it("treats targeted session syncs as refresh-only and skips unrelated pruning", () => {
     const plan = resolveMemorySessionSyncPlan({
       needsFullReindex: false,
-      files: ["/tmp/targeted-first.jsonl"],
-      targetSessionTranscripts: new Set(["/tmp/targeted-first.jsonl"]),
-      sessionsDirtyFiles: new Set(["/tmp/targeted-first.jsonl"]),
+      transcripts: [{ agentId: "main", sessionId: "targeted-first" }],
+      targetSessionTranscriptKeys: new Set(["main\0targeted-first"]),
+      dirtySessionTranscripts: new Set(["main\0targeted-first"]),
       existingRows: [
-        { path: "sessions/targeted-first.jsonl", hash: "hash-first" },
-        { path: "sessions/targeted-second.jsonl", hash: "hash-second" },
+        {
+          sourceKey: "session:targeted-first",
+          path: "transcript:main:targeted-first",
+          hash: "hash-first",
+        },
+        {
+          sourceKey: "session:targeted-second",
+          path: "transcript:main:targeted-second",
+          hash: "hash-second",
+        },
       ],
-      sessionPathForTranscript: (file) => `sessions/${file.split("/").at(-1)}`,
+      sessionTranscriptSourceKeyForScope: (scope) => `session:${scope.sessionId}`,
     });
 
     expect(plan.indexAll).toBe(true);
-    expect(plan.activePaths).toBeNull();
+    expect(plan.activeSourceKeys).toBeNull();
     expect(plan.existingRows).toBeNull();
     expect(plan.existingHashes).toBeNull();
   });
@@ -51,14 +62,14 @@ describe("memory session sync state", () => {
   it("keeps dirty-only incremental mode when no targeted sync is requested", () => {
     const plan = resolveMemorySessionSyncPlan({
       needsFullReindex: false,
-      files: ["/tmp/incremental.jsonl"],
-      targetSessionTranscripts: null,
-      sessionsDirtyFiles: new Set(["/tmp/incremental.jsonl"]),
+      transcripts: [{ agentId: "main", sessionId: "incremental" }],
+      targetSessionTranscriptKeys: null,
+      dirtySessionTranscripts: new Set(["main\0incremental"]),
       existingRows: [],
-      sessionPathForTranscript: (file) => `sessions/${file.split("/").at(-1)}`,
+      sessionTranscriptSourceKeyForScope: (scope) => `session:${scope.sessionId}`,
     });
 
     expect(plan.indexAll).toBe(false);
-    expect(plan.activePaths).toEqual(new Set(["sessions/incremental.jsonl"]));
+    expect(plan.activeSourceKeys).toEqual(new Set(["session:incremental"]));
   });
 });

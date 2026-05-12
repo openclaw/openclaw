@@ -19,6 +19,7 @@ import {
   type MemorySearchResult,
   type MemorySource,
   type MemorySyncProgressUpdate,
+  MEMORY_INDEX_TABLE_NAMES,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   createEmbeddingProvider,
@@ -56,9 +57,10 @@ import {
 } from "./manager-sync-control.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 const SNIPPET_MAX_CHARS = 700;
-const VECTOR_TABLE = "chunks_vec";
-const FTS_TABLE = "chunks_fts";
-const EMBEDDING_CACHE_TABLE = "embedding_cache";
+const VECTOR_TABLE = MEMORY_INDEX_TABLE_NAMES.vector;
+const FTS_TABLE = MEMORY_INDEX_TABLE_NAMES.fts;
+const CHUNKS_TABLE = MEMORY_INDEX_TABLE_NAMES.chunks;
+const EMBEDDING_CACHE_TABLE = MEMORY_INDEX_TABLE_NAMES.embeddingCache;
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
 export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
@@ -128,18 +130,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     available: boolean;
     loadError?: string;
   };
-  protected override vectorReady: Promise<boolean> | null = null;
-  protected override watcher: FSWatcher | null = null;
-  protected override watchTimer: NodeJS.Timeout | null = null;
-  protected override sessionWatchTimer: NodeJS.Timeout | null = null;
-  protected override sessionUnsubscribe: (() => void) | null = null;
-  protected override intervalTimer: NodeJS.Timeout | null = null;
-  protected override closed = false;
-  protected override dirty = false;
-  protected override sessionsDirty = false;
-  protected override sessionsDirtyFiles = new Set<string>();
-  protected override sessionPendingFiles = new Set<string>();
-  protected override sessionDeltas = new Map<
+  protected vectorReady: Promise<boolean> | null = null;
+  protected watcher: FSWatcher | null = null;
+  protected watchTimer: NodeJS.Timeout | null = null;
+  protected sessionWatchTimer: NodeJS.Timeout | null = null;
+  protected sessionUnsubscribe: (() => void) | null = null;
+  protected intervalTimer: NodeJS.Timeout | null = null;
+  protected closed = false;
+  protected dirty = false;
+  protected sessionsDirty = false;
+  protected dirtySessionTranscripts = new Set<string>();
+  protected pendingSessionTranscripts = new Set<string>();
+  protected sessionDeltas = new Map<
     string,
     { lastSize: number; lastMessages: number; pendingBytes: number; pendingMessages: number }
   >();
@@ -504,7 +506,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private hasIndexedContent(): boolean {
-    const chunkRow = this.db.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
+    const chunkRow = this.db.prepare(`SELECT 1 as found FROM ${CHUNKS_TABLE} LIMIT 1`).get() as
       | {
           found?: number;
         }
@@ -535,6 +537,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const results = await searchVector({
       db: this.db,
       vectorTable: VECTOR_TABLE,
+      chunksTable: CHUNKS_TABLE,
       providerModel: this.provider.model,
       queryVec,
       limit,
@@ -559,12 +562,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!this.fts.enabled || !this.fts.available) {
       return [];
     }
-    const sourceFilter = this.buildSourceFilter(undefined, sourceFilterList);
+    const sourceFilter = this.buildFtsSourceFilter(sourceFilterList);
     // In FTS-only mode (no provider), search all models; otherwise filter by current provider's model
     const providerModel = this.provider?.model;
     const results = await searchKeyword({
       db: this.db,
       ftsTable: FTS_TABLE,
+      chunksTable: CHUNKS_TABLE,
+      requireChunkBacklink: true,
       providerModel,
       query,
       ftsTokenizer: this.settings.store.fts.tokenizer,
@@ -576,6 +581,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       boostFallbackRanking: options?.boostFallbackRanking,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
+  }
+
+  private buildFtsSourceFilter(sourcesOverride?: MemorySource[]): {
+    sql: string;
+    params: MemorySource[];
+  } {
+    const sources = sourcesOverride ?? Array.from(this.sources);
+    if (sources.length === 0) {
+      return { sql: "", params: [] };
+    }
+    const placeholders = sources.map(() => "?").join(", ");
+    return { sql: ` AND source IN (${placeholders})`, params: sources };
   }
 
   private mergeHybridResults(params: {
@@ -770,7 +787,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       chunks: aggregateState.chunks,
       dirty: this.dirty || this.sessionsDirty,
       workspaceDir: this.workspaceDir,
-      dbPath: this.settings.store.path,
+      dbPath: this.settings.store.databasePath,
       provider: providerInfo.provider,
       model: providerInfo.model,
       requestedProvider: this.requestedProvider,
