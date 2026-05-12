@@ -146,6 +146,7 @@ async function issueMixedRolePairingScopedDevice(name: string): Promise<{
   deviceId: string;
   identityPath: string;
   pairingToken: string;
+  publicKey: string;
 }> {
   const loaded = loadDeviceIdentity(name);
   const request = await requestDevicePairing({
@@ -173,6 +174,7 @@ async function issueMixedRolePairingScopedDevice(name: string): Promise<{
     deviceId: loaded.identity.deviceId,
     identityPath: loaded.identityPath,
     pairingToken,
+    publicKey: loaded.publicKey,
   };
 }
 
@@ -294,6 +296,54 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
       const pairedAfterRotate = await getPairedDevice(device.deviceId);
       expect(pairedAfterRotate?.tokens?.node?.token).toBe(revokedNodeToken?.token);
       expect(pairedAfterRotate?.tokens?.node?.revokedAtMs).toBe(revokedNodeToken?.revokedAtMs);
+    } finally {
+      pairingWs?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("rejects a pairing-scoped operator session approving a refreshed node token", async () => {
+    const started = await startServerWithClient("secret");
+    const device = await issueMixedRolePairingScopedDevice("same-device-node-pair-approve");
+
+    let pairingWs: WebSocket | undefined;
+    try {
+      await connectOk(started.ws);
+
+      const revoke = await rpcReq<{ revokedAtMs?: number }>(started.ws, "device.token.revoke", {
+        deviceId: device.deviceId,
+        role: "node",
+      });
+      expect(revoke.ok).toBe(true);
+      const pairedAfterRevoke = await getPairedDevice(device.deviceId);
+      const revokedNodeToken = pairedAfterRevoke?.tokens?.node;
+      expect(revokedNodeToken?.revokedAtMs).toBeTypeOf("number");
+
+      const request = await requestDevicePairing({
+        deviceId: device.deviceId,
+        publicKey: device.publicKey,
+        role: "node",
+        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+      });
+
+      pairingWs = await connectPairingScopedOperator({
+        port: started.port,
+        identityPath: device.identityPath,
+        deviceToken: device.pairingToken,
+      });
+
+      const approve = await rpcReq(pairingWs, "device.pair.approve", {
+        requestId: request.request.requestId,
+      });
+      expect(approve.ok).toBe(false);
+      expect(approve.error?.message).toBe("device pairing approval denied");
+
+      const pairedAfterApprove = await getPairedDevice(device.deviceId);
+      expect(pairedAfterApprove?.tokens?.node?.token).toBe(revokedNodeToken?.token);
+      expect(pairedAfterApprove?.tokens?.node?.revokedAtMs).toBe(revokedNodeToken?.revokedAtMs);
     } finally {
       pairingWs?.close();
       started.ws.close();

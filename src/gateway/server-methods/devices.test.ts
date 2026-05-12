@@ -696,6 +696,27 @@ describe("deviceHandlers", () => {
     );
   });
 
+  it("rejects approving node roles for the caller device without admin scope", async () => {
+    getPendingDevicePairingMock.mockResolvedValue({
+      requestId: "req-1",
+      deviceId: " device-1 ",
+      publicKey: "pk-1",
+      role: "node",
+      roles: ["node"],
+      ts: 100,
+    });
+    const opts = createOptions(
+      "device.pair.approve",
+      { requestId: "req-1" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+
+    await deviceHandlers["device.pair.approve"](opts);
+
+    expect(approveDevicePairingMock).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device pairing approval denied");
+  });
+
   it("rejects rejecting another device from a non-admin device session", async () => {
     getPendingDevicePairingMock.mockResolvedValue({
       requestId: "req-2",

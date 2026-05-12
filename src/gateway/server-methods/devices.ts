@@ -131,6 +131,21 @@ function deniesDeviceTokenRoleManagement(
   return normalizedTargetRole !== "operator";
 }
 
+function requestsNonOperatorDeviceRole(pending: { role?: string; roles?: string[] }): boolean {
+  const roles = new Set<string>();
+  const role = pending.role?.trim();
+  if (role) {
+    roles.add(role);
+  }
+  for (const entry of pending.roles ?? []) {
+    const normalized = entry.trim();
+    if (normalized) {
+      roles.add(normalized);
+    }
+  }
+  return [...roles].some((entry) => entry !== "operator");
+}
+
 export const deviceHandlers: GatewayRequestHandlers = {
   "device.pair.list": async ({ params, respond, client }) => {
     if (!validateDevicePairListParams(params)) {
@@ -195,6 +210,17 @@ export const deviceHandlers: GatewayRequestHandlers = {
       if (pending.deviceId.trim() !== authz.callerDeviceId) {
         context.logGateway.warn(
           `device pairing approval denied request=${requestId} reason=device-ownership-mismatch`,
+        );
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_APPROVAL_DENIED_MESSAGE),
+        );
+        return;
+      }
+      if (requestsNonOperatorDeviceRole(pending)) {
+        context.logGateway.warn(
+          `device pairing approval denied request=${requestId} reason=role-management-requires-admin`,
         );
         respond(
           false,
