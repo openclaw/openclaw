@@ -493,6 +493,48 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalledWith(123, 17, "Message B partial");
   });
 
+  it("archives already-delivered preview id via onSupersededPreview when forceNewMessage is called after send completes", async () => {
+    // Regression: when forceNewMessage() is called after streamMessageId is already set
+    // (send completed), the old message was silently discarded without notifying
+    // onSupersededPreview. This left reasoning preview messages permanently in chat. (#80862)
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const onSupersededPreview = vi.fn();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      onSupersededPreview,
+    });
+
+    // First message delivered and send completed — streamMessageId is set.
+    stream.update("First reasoning block");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    // Confirm the first message was delivered via editMessageText on next update.
+    stream.update("First reasoning block — more text");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "First reasoning block — more text");
+
+    // Rotate to next reasoning step — send already completed so onSupersededPreview
+    // must be called synchronously inside forceNewMessage().
+    stream.forceNewMessage();
+    expect(onSupersededPreview).toHaveBeenCalledWith({
+      messageId: 17,
+      textSnapshot: "First reasoning block — more text",
+      parseMode: undefined,
+    });
+
+    // The second reasoning step creates a fresh message.
+    stream.update("Second reasoning block");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "Second reasoning block", undefined);
+    // No attempt to edit the superseded first message.
+    expect(api.editMessageText).not.toHaveBeenCalledWith(123, 17, "Second reasoning block");
+  });
+
   it("marks sendMayHaveLanded after an ambiguous first preview send failure", async () => {
     const api = createMockDraftApi();
     api.sendMessage.mockRejectedValueOnce(new Error("timeout after Telegram accepted send"));

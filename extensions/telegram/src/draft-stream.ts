@@ -397,6 +397,19 @@ export function createTelegramDraftStream(params: {
   };
 
   const forceNewMessage = () => {
+    // Archive any already-delivered preview message before discarding its id.
+    // Without this, a reasoning lane that has already sent a message (streamMessageId
+    // is set) silently loses track of that message when forceNewMessage() is called
+    // for the next reasoning step. The superseded message stays in the chat permanently
+    // because onSupersededPreview only fires for sends that complete *after* the
+    // generation change — sends that completed earlier are never notified. (#80862)
+    if (typeof streamMessageId === "number" && previewTransport === "message") {
+      params.onSupersededPreview?.({
+        messageId: streamMessageId,
+        textSnapshot: lastDeliveredText,
+        parseMode: lastSentParseMode,
+      });
+    }
     streamState.final = false;
     generation += 1;
     messageSendAttempted = false;
