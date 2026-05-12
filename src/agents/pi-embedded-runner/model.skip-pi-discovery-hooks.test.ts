@@ -52,7 +52,7 @@ let resolveModelAsync: typeof import("./model.js").resolveModelAsync;
 
 function expectWorkspaceHookCall(mock: { mock: { calls: unknown[][] } }) {
   expect(mock.mock.calls).toHaveLength(1);
-  const [arg] = mock.mock.calls[0] ?? [];
+  const [arg] = mock.mock.calls.at(0) ?? [];
   if (!arg || typeof arg !== "object") {
     throw new Error("Expected runtime hook call argument");
   }
