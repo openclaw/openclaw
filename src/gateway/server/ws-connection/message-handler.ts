@@ -1355,7 +1355,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               dropIfSlow: true,
             });
           }
+          connectParams.caps = reconciliation.effectiveCaps;
           connectParams.commands = reconciliation.effectiveCommands;
+          connectParams.permissions = reconciliation.effectivePermissions;
         }
 
         const shouldTrackPresence = !isGatewayCliClient(connectParams.client);

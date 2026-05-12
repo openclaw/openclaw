@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { NodePairingRequestInput } from "../infra/node-pairing.js";
+import type { NodePairingPairedNode, NodePairingRequestInput } from "../infra/node-pairing.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
 import type { ConnectParams } from "./protocol/index.js";
 
@@ -14,6 +14,16 @@ function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParam
       mode: "node",
     },
     commands: ["canvas.snapshot"],
+    ...overrides,
+  };
+}
+
+function makePairedNode(overrides?: Partial<NodePairingPairedNode>): NodePairingPairedNode {
+  return {
+    nodeId: "ios-node-1",
+    token: "token-1",
+    createdAtMs: 1,
+    approvedAtMs: 1,
     ...overrides,
   };
 }
@@ -41,5 +51,67 @@ describe("reconcileNodePairingOnConnect", () => {
         permissions: { camera: true, notifications: false },
       }),
     );
+  });
+
+  it("requires a fresh pairing request when paired node capabilities change", async () => {
+    const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
+      status: "pending" as const,
+      request: { ...input, requestId: "req-caps", ts: 1 },
+      created: true,
+    }));
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        caps: ["camera", "screen"],
+        commands: [],
+      }),
+      pairedNode: makePairedNode({
+        caps: ["camera"],
+        commands: [],
+      }),
+      requestPairing,
+    });
+
+    expect(requestPairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caps: ["camera", "screen"],
+        commands: [],
+      }),
+    );
+    expect(result.effectiveCaps).toEqual(["camera"]);
+    expect(result.effectiveCommands).toEqual([]);
+    expect(result.pendingPairing?.request.requestId).toBe("req-caps");
+  });
+
+  it("requires a fresh pairing request when paired node permissions change", async () => {
+    const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
+      status: "pending" as const,
+      request: { ...input, requestId: "req-permissions", ts: 1 },
+      created: true,
+    }));
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        commands: [],
+        permissions: { camera: true, notifications: false },
+      }),
+      pairedNode: makePairedNode({
+        commands: [],
+        permissions: { camera: true },
+      }),
+      requestPairing,
+    });
+
+    expect(requestPairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commands: [],
+        permissions: { camera: true, notifications: false },
+      }),
+    );
+    expect(result.effectiveCommands).toEqual([]);
+    expect(result.effectivePermissions).toEqual({ camera: true });
+    expect(result.pendingPairing?.request.requestId).toBe("req-permissions");
   });
 });

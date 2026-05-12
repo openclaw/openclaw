@@ -4,6 +4,7 @@ import type {
   NodePairingRequestInput,
   RequestNodePairingResult,
 } from "../infra/node-pairing.js";
+import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normalization.js";
 import {
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
@@ -12,7 +13,9 @@ import type { ConnectParams } from "./protocol/index.js";
 
 export type NodeConnectPairingReconcileResult = {
   nodeId: string;
+  effectiveCaps: string[];
   effectiveCommands: string[];
+  effectivePermissions?: Record<string, boolean>;
   pendingPairing?: RequestNodePairingResult;
 };
 
@@ -26,10 +29,64 @@ function resolveApprovedReconnectCommands(params: {
   });
 }
 
+function normalizeApprovalSurfaceList(value: readonly string[] | undefined): string[] {
+  return normalizeArrayBackedTrimmedStringList(value) ?? [];
+}
+
+function sameApprovalSurfaceSet(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  const normalizedLeft = new Set(normalizeApprovalSurfaceList(left));
+  const normalizedRight = new Set(normalizeApprovalSurfaceList(right));
+  if (normalizedLeft.size !== normalizedRight.size) {
+    return false;
+  }
+  for (const entry of normalizedLeft) {
+    if (!normalizedRight.has(entry)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function normalizePermissionMap(
+  value: Record<string, boolean> | undefined,
+): Record<string, boolean> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const entries = Object.entries(value).toSorted(([leftKey], [rightKey]) =>
+    leftKey.localeCompare(rightKey),
+  );
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function samePermissions(
+  left: Record<string, boolean> | undefined,
+  right: Record<string, boolean> | undefined,
+): boolean {
+  const leftEntries = Object.entries(left ?? {}).toSorted(([leftKey], [rightKey]) =>
+    leftKey.localeCompare(rightKey),
+  );
+  const rightEntries = Object.entries(right ?? {}).toSorted(([leftKey], [rightKey]) =>
+    leftKey.localeCompare(rightKey),
+  );
+  if (leftEntries.length !== rightEntries.length) {
+    return false;
+  }
+  return leftEntries.every(([key, value], index) => {
+    const rightEntry = rightEntries[index];
+    return rightEntry !== undefined && rightEntry[0] === key && rightEntry[1] === value;
+  });
+}
+
 function buildNodePairingRequestInput(params: {
   nodeId: string;
   connectParams: ConnectParams;
+  caps: string[];
   commands: string[];
+  permissions?: Record<string, boolean>;
   remoteIp?: string;
 }): NodePairingRequestInput {
   return {
@@ -39,9 +96,9 @@ function buildNodePairingRequestInput(params: {
     version: params.connectParams.client.version,
     deviceFamily: params.connectParams.client.deviceFamily,
     modelIdentifier: params.connectParams.client.modelIdentifier,
-    caps: params.connectParams.caps,
+    caps: params.caps,
     commands: params.commands,
-    permissions: params.connectParams.permissions,
+    permissions: params.permissions,
     remoteIp: params.remoteIp,
   };
 }
@@ -66,19 +123,25 @@ export async function reconcileNodePairingOnConnect(params: {
       : [],
     allowlist,
   });
+  const declaredCaps = normalizeApprovalSurfaceList(params.connectParams.caps);
+  const declaredPermissions = normalizePermissionMap(params.connectParams.permissions);
 
   if (!params.pairedNode) {
     const pendingPairing = await params.requestPairing(
       buildNodePairingRequestInput({
         nodeId,
         connectParams: params.connectParams,
+        caps: declaredCaps,
         commands: declared,
+        permissions: declaredPermissions,
         remoteIp: params.reportedClientIp,
       }),
     );
     return {
       nodeId,
+      effectiveCaps: declaredCaps,
       effectiveCommands: declared,
+      effectivePermissions: declaredPermissions,
       pendingPairing,
     };
   }
@@ -87,26 +150,36 @@ export async function reconcileNodePairingOnConnect(params: {
     pairedCommands: params.pairedNode.commands,
     allowlist,
   });
+  const approvedCaps = normalizeApprovalSurfaceList(params.pairedNode.caps);
+  const approvedPermissions = normalizePermissionMap(params.pairedNode.permissions);
   const hasCommandUpgrade = declared.some((command) => !approvedCommands.includes(command));
+  const hasCapabilityChange = !sameApprovalSurfaceSet(params.pairedNode.caps, declaredCaps);
+  const hasPermissionChange = !samePermissions(params.pairedNode.permissions, declaredPermissions);
 
-  if (hasCommandUpgrade) {
+  if (hasCommandUpgrade || hasCapabilityChange || hasPermissionChange) {
     const pendingPairing = await params.requestPairing(
       buildNodePairingRequestInput({
         nodeId,
         connectParams: params.connectParams,
+        caps: declaredCaps,
         commands: declared,
+        permissions: declaredPermissions ?? (hasPermissionChange ? {} : undefined),
         remoteIp: params.reportedClientIp,
       }),
     );
     return {
       nodeId,
+      effectiveCaps: approvedCaps,
       effectiveCommands: approvedCommands,
+      effectivePermissions: approvedPermissions,
       pendingPairing,
     };
   }
 
   return {
     nodeId,
+    effectiveCaps: declaredCaps,
     effectiveCommands: declared,
+    effectivePermissions: declaredPermissions,
   };
 }
