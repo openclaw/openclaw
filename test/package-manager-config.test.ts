@@ -29,4 +29,12 @@ describe("package manager build policy", () => {
     expect(workspace.blockExoticSubdeps).toBe(true);
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });
+
+  it("allows Baileys' pinned libsignal git subdependency", () => {
+    const workspace = parse(fs.readFileSync("pnpm-workspace.yaml", "utf8")) as WorkspaceConfig;
+
+    expect(workspace.allowBuilds?.["baileys"]).toBe(true);
+    expect(workspace.allowBuilds?.["@whiskeysockets/libsignal-node"]).toBe(true);
+    expect(workspace.blockExoticSubdeps).toBe(false);
+  });
 });

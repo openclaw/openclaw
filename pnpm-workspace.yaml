@@ -38,6 +38,10 @@ minimumReleaseAgeExclude:
 nodeLinker: hoisted
 blockExoticSubdeps: true
 
+# Baileys 7 depends on @whiskeysockets/libsignal-node via a pinned git tarball.
+# Keep this off until pnpm supports a narrow allowlist for exotic subdeps.
+blockExoticSubdeps: false
+
 overrides:
   "@anthropic-ai/sdk": 0.95.1
   hono: 4.12.18
