@@ -24,11 +24,11 @@ import {
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
 
 const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
-  0: "None",
-  25: "Slight",
-  50: "Default",
-  75: "Round",
-  100: "Full",
+  0: t("config.themeRoundness.none"),
+  25: t("config.themeRoundness.slight"),
+  50: t("config.themeRoundness.default"),
+  75: t("config.themeRoundness.round"),
+  100: t("config.themeRoundness.full"),
 };
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
@@ -401,84 +401,88 @@ type SectionCategory = {
   sections: Array<{ key: string; label: string }>;
 };
 
-const SECTION_CATEGORIES: SectionCategory[] = [
-  {
-    id: "core",
-    label: "Core",
-    sections: [
-      { key: "env", label: "Environment" },
-      { key: "auth", label: "Authentication" },
-      { key: "update", label: "Updates" },
-      { key: "meta", label: "Meta" },
-      { key: "logging", label: "Logging" },
-      { key: "diagnostics", label: "Diagnostics" },
-      { key: "cli", label: "Cli" },
-      { key: "secrets", label: "Secrets" },
-    ],
-  },
-  {
-    id: "ai",
-    label: "AI & Agents",
-    sections: [
-      { key: "agents", label: "Agents" },
-      { key: "models", label: "Models" },
-      { key: "skills", label: "Skills" },
-      { key: "tools", label: "Tools" },
-      { key: "memory", label: "Memory" },
-      { key: "session", label: "Session" },
-    ],
-  },
-  {
-    id: "communication",
-    label: "Communication",
-    sections: [
-      { key: "channels", label: "Channels" },
-      { key: "messages", label: "Messages" },
-      { key: "broadcast", label: "Broadcast" },
-      { key: "talk", label: "Talk" },
-      { key: "audio", label: "Audio" },
-    ],
-  },
-  {
-    id: "automation",
-    label: "Automation",
-    sections: [
-      { key: "commands", label: "Commands" },
-      { key: "hooks", label: "Hooks" },
-      { key: "bindings", label: "Bindings" },
-      { key: "cron", label: "Cron" },
-      { key: "approvals", label: "Approvals" },
-      { key: "plugins", label: "Plugins" },
-    ],
-  },
-  {
-    id: "infrastructure",
-    label: "Infrastructure",
-    sections: [
-      { key: "gateway", label: "Gateway" },
-      { key: "web", label: "Web" },
-      { key: "browser", label: "Browser" },
-      { key: "nodeHost", label: "NodeHost" },
-      { key: "canvasHost", label: "CanvasHost" },
-      { key: "discovery", label: "Discovery" },
-      { key: "media", label: "Media" },
-      { key: "acp", label: "Acp" },
-      { key: "mcp", label: "Mcp" },
-    ],
-  },
-  {
-    id: "appearance",
-    label: t("tabs.appearance"),
-    sections: [
-      { key: "__appearance__", label: "Theme" },
-      { key: "ui", label: "UI" },
-      { key: "wizard", label: "Setup Wizard" },
-    ],
-  },
-];
+function getSectionCategories(): SectionCategory[] {
+  return [
+    {
+      id: "core",
+      label: t("config.category.core"),
+      sections: [
+        { key: "env", label: t("config.section.environment") },
+        { key: "auth", label: t("config.section.authentication") },
+        { key: "update", label: t("config.section.updates") },
+        { key: "meta", label: t("config.section.meta") },
+        { key: "logging", label: t("config.section.logging") },
+        { key: "diagnostics", label: t("config.section.diagnostics") },
+        { key: "cli", label: t("config.section.cli") },
+        { key: "secrets", label: t("config.section.secrets") },
+      ],
+    },
+    {
+      id: "ai",
+      label: t("config.category.ai"),
+      sections: [
+        { key: "agents", label: t("config.section.agents") },
+        { key: "models", label: t("config.section.models") },
+        { key: "skills", label: t("config.section.skills") },
+        { key: "tools", label: t("config.section.tools") },
+        { key: "memory", label: t("config.section.memory") },
+        { key: "session", label: t("config.section.session") },
+      ],
+    },
+    {
+      id: "communication",
+      label: t("config.category.communication"),
+      sections: [
+        { key: "channels", label: t("config.section.channels") },
+        { key: "messages", label: t("config.section.messages") },
+        { key: "broadcast", label: t("config.section.broadcast") },
+        { key: "talk", label: t("config.section.talk") },
+        { key: "audio", label: t("config.section.audio") },
+      ],
+    },
+    {
+      id: "automation",
+      label: t("config.category.automation"),
+      sections: [
+        { key: "commands", label: t("config.section.commands") },
+        { key: "hooks", label: t("config.section.hooks") },
+        { key: "bindings", label: t("config.section.bindings") },
+        { key: "cron", label: t("config.section.cron") },
+        { key: "approvals", label: t("config.section.approvals") },
+        { key: "plugins", label: t("config.section.plugins") },
+      ],
+    },
+    {
+      id: "infrastructure",
+      label: t("config.category.infrastructure"),
+      sections: [
+        { key: "gateway", label: t("config.section.gateway") },
+        { key: "web", label: t("config.section.web") },
+        { key: "browser", label: t("config.section.browser") },
+        { key: "nodeHost", label: t("config.section.nodeHost") },
+        { key: "canvasHost", label: t("config.section.canvasHost") },
+        { key: "discovery", label: t("config.section.discovery") },
+        { key: "media", label: t("config.section.media") },
+        { key: "acp", label: t("config.section.acp") },
+        { key: "mcp", label: t("config.section.mcp") },
+      ],
+    },
+    {
+      id: "appearance",
+      label: t("tabs.appearance"),
+      sections: [
+        { key: "__appearance__", label: t("config.section.theme") },
+        { key: "ui", label: t("config.section.ui") },
+        { key: "wizard", label: t("config.section.wizard") },
+      ],
+    },
+  ];
+}
 
 // Flat lookup: all categorised keys
-const CATEGORISED_KEYS = new Set(SECTION_CATEGORIES.flatMap((c) => c.sections.map((s) => s.key)));
+const CATEGORISED_KEYS = new Set(
+  getSectionCategories().flatMap((c) => c.sections.map((s) => s.key)),
+);
 
 function getSectionIcon(key: string) {
   return sidebarIcons[key as keyof typeof sidebarIcons] ?? sidebarIcons.default;
@@ -782,13 +786,20 @@ type ThemeOption = {
   icon: TemplateResult;
 };
 const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
-  { id: "claw", label: "Claw", description: "Chroma family", icon: icons.zap },
-  { id: "knot", label: "Knot", description: "Black & red", icon: icons.link },
-  { id: "dash", label: "Dash", description: "Chocolate blueprint", icon: icons.barChart },
+  { id: "claw", label: "Claw", description: t("config.theme.chromaFamily"), icon: icons.zap },
+  { id: "knot", label: "Knot", description: t("config.theme.blackRed"), icon: icons.link },
+  {
+    id: "dash",
+    label: "Dash",
+    description: t("config.theme.chocolateBlueprint"),
+    icon: icons.barChart,
+  },
 ];
 
 function importedThemeName(props: Pick<ConfigProps, "hasCustomTheme" | "customThemeLabel">) {
-  return props.hasCustomTheme && props.customThemeLabel ? props.customThemeLabel : "Imported theme";
+  return props.hasCustomTheme && props.customThemeLabel
+    ? props.customThemeLabel
+    : t("config.theme.importedTheme");
 }
 
 function focusCustomThemeImportInput() {
@@ -838,15 +849,15 @@ function renderNotificationsSection(props: ConfigProps) {
     <div class="settings-appearance">
       <div class="settings-appearance__section">
         <h3 class="settings-appearance__heading">Push Notifications</h3>
-        <p class="settings-appearance__hint">
-          Subscribe to receive browser push notifications from your gateway.
-        </p>
+        <p class="settings-appearance__hint">${t("config.pushNotifications.subscribeHint")}</p>
 
         <div class="settings-info-grid">
           <div class="settings-info-row">
             <span class="settings-info-row__label">Browser support</span>
             <span class="settings-info-row__value"
-              >${push.supported ? "Available" : "Not supported"}</span
+              >${push.supported
+                ? t("config.pushNotifications.available")
+                : t("config.pushNotifications.notSupported")}</span
             >
           </div>
           <div class="settings-info-row">
@@ -928,7 +939,7 @@ function renderAppearanceSection(props: ConfigProps) {
       label: props.hasCustomTheme ? importedName : "Import",
       description: props.hasCustomTheme
         ? `Imported from tweakcn: ${importedName}`
-        : "Import a tweakcn theme into this browser-local slot",
+        : t("config.theme.importDescription"),
       icon: icons.spark,
     },
   ];
@@ -986,7 +997,7 @@ function renderAppearanceSection(props: ConfigProps) {
                   target="_blank"
                   rel="noreferrer noopener"
                 >
-                  Browse tweakcn themes ${icons.externalLink}
+                  ${t("config.theme.browse")} ${icons.externalLink}
                 </a>
                 <label class="settings-theme-import__field">
                   <span class="settings-theme-import__label">Theme link or ID</span>
@@ -995,7 +1006,7 @@ function renderAppearanceSection(props: ConfigProps) {
                     data-custom-theme-import-input
                     type="text"
                     spellcheck="false"
-                    placeholder="https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
+                    placeholder=${t("config.theme.linkPlaceholder")}
                     .value=${props.customThemeImportUrl}
                     @input=${(e: Event) =>
                       props.onCustomThemeImportUrlChange(
@@ -1231,7 +1242,9 @@ export function renderConfig(props: ConfigProps) {
     .map((k) => ({ key: k, label: k.charAt(0).toUpperCase() + k.slice(1) }));
 
   const otherCategory: SectionCategory | null =
-    extraSections.length > 0 ? { id: "other", label: "Other", sections: extraSections } : null;
+    extraSections.length > 0
+      ? { id: "other", label: t("config.nav.other"), sections: extraSections }
+      : null;
 
   const isVirtualSection =
     includeVirtualSections &&
@@ -1252,9 +1265,13 @@ export function renderConfig(props: ConfigProps) {
   const effectiveSubsection = null;
 
   const topTabs = [
+<<<<<<< HEAD
     ...(showRootTab
-      ? [{ key: null as string | null, label: props.navRootLabel ?? "Settings" }]
+      ? [{ key: null as string | null, label: props.navRootLabel ?? t("config.nav.settings") }]
       : []),
+=======
+    { key: null as string | null, label: props.navRootLabel ?? t("config.nav.settings") },
+>>>>>>> 91ee7d66e2 (feat(i18n): translate config pages to Simplified Chinese)
     ...[...visibleCategories, ...(otherCategory ? [otherCategory] : [])].flatMap((cat) =>
       cat.sections.map((s) => ({ key: s.key, label: s.label })),
     ),
@@ -1460,7 +1477,9 @@ export function renderConfig(props: ConfigProps) {
                 ? html`
                     <button
                       class="btn btn--sm"
-                      title=${props.configPath ? `Open ${props.configPath}` : "Open config file"}
+                      title="${props.configPath
+                        ? t("config.changes.openPath", { path: props.configPath })
+                        : t("config.changes.openFile")}}"
                       @click=${props.onOpenFile}
                     >
                       ${icons.fileText} Open
@@ -1522,8 +1541,8 @@ export function renderConfig(props: ConfigProps) {
                           <input
                             type="text"
                             class="config-search__input"
-                            placeholder="Search settings..."
-                            aria-label="Search settings"
+                            placeholder=${t("config.search.placeholder")}
+                            aria-label=${t("config.search.ariaLabel")}
                             .value=${props.searchQuery}
                             @input=${(e: Event) =>
                               props.onSearchChange((e.target as HTMLInputElement).value)}
@@ -1532,7 +1551,7 @@ export function renderConfig(props: ConfigProps) {
                             ? html`
                                 <button
                                   class="config-search__clear"
-                                  aria-label="Clear search"
+                                  aria-label=${t("config.search.clear")}
                                   @click=${() => props.onSearchChange("")}
                                 >
                                   ×
@@ -1547,7 +1566,7 @@ export function renderConfig(props: ConfigProps) {
                 <div
                   class="config-top-tabs__scroller"
                   role="tablist"
-                  aria-label="${t("common.settingsSections")}"
+                  aria-label=${t("common.settingsSections")}
                 >
                   ${topTabs.map(
                     (tab) => html`
@@ -1590,9 +1609,7 @@ export function renderConfig(props: ConfigProps) {
                   <line x1="12" y1="9" x2="12" y2="13"></line>
                   <line x1="12" y1="17" x2="12.01" y2="17"></line>
                 </svg>
-                <span class="config-validity-warning__text"
-                  >Your configuration is invalid. Some settings may not work as expected.</span
-                >
+                <span class="config-validity-warning__text">${t("config.validation.invalid")}</span>
                 <button
                   class="btn btn--sm"
                   @click=${() => {
@@ -1600,7 +1617,7 @@ export function renderConfig(props: ConfigProps) {
                     requestUpdate();
                   }}
                 >
-                  Don't remind again
+                  ${t("config.validation.dismiss")}
                 </button>
               </div>
             `
@@ -1774,7 +1791,7 @@ export function renderConfig(props: ConfigProps) {
                       ? html`
                           <div class="config-loading">
                             <div class="config-loading__spinner"></div>
-                            <span>Loading schema…</span>
+                            <span>${t("config.loadingSchema")}</span>
                           </div>
                         `
                       : renderConfigForm({
@@ -1827,7 +1844,7 @@ export function renderConfig(props: ConfigProps) {
                                   title=${blurred
                                     ? "Reveal sensitive values"
                                     : "Hide sensitive values"}
-                                  aria-label="Toggle raw config redaction"
+                                  aria-label=${t("config.raw.toggleAria")}
                                   aria-pressed=${!blurred}
                                   @click=${() => {
                                     cvs.rawRevealed = !cvs.rawRevealed;
@@ -1848,7 +1865,7 @@ export function renderConfig(props: ConfigProps) {
                             `
                           : html`
                               <textarea
-                                placeholder="Raw config (JSON/JSON5)"
+                                placeholder=t("config.raw.label")
                                 .value=${props.raw}
                                 @input=${(e: Event) => {
                                   props.onRawChange((e.target as HTMLTextAreaElement).value);

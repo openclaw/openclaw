@@ -196,14 +196,14 @@ function renderSensitiveToggleButton(params: {
       style="width:28px;height:28px;padding:0;"
       title=${state.canReveal
         ? state.isRevealed
-          ? "Hide value"
-          : "Reveal value"
-        : "Disable stream mode to reveal value"}
+          ? t("config.form.hideValue")
+          : t("config.form.revealValue")
+        : t("config.form.disableStreamToReveal")}
       aria-label=${state.canReveal
         ? state.isRevealed
-          ? "Hide value"
-          : "Reveal value"
-        : "Disable stream mode to reveal value"}
+          ? t("config.form.hideValue")
+          : t("config.form.revealValue")
+        : t("config.form.disableStreamToReveal")}
       aria-pressed=${state.isRevealed}
       ?disabled=${params.disabled || !state.canReveal}
       @click=${() => params.onToggleSensitivePath?.(params.path)}
@@ -683,8 +683,8 @@ function renderTextInput(params: {
   const placeholder = effectiveRedacted
     ? isStructuredSecretRef
       ? rawAvailable
-        ? "Structured value (SecretRef) - use Raw mode to edit"
-        : "Structured value (SecretRef) - edit the config file directly"
+        ? t("config.form.secretRefRaw")
+        : t("config.form.secretRefDirect")
       : REDACTED_PLACEHOLDER
     : (hint?.placeholder ??
       (schema.default !== undefined ? `Default: ${formatUnknownText(schema.default)}` : ""));
@@ -753,7 +753,7 @@ function renderTextInput(params: {
               <button
                 type="button"
                 class="cfg-input__reset"
-                title="Reset to default"
+                title=${t("config.form.resetToDefault")}
                 ?disabled=${disabled || effectiveRedacted}
                 @click=${() => onPatch(path, schema.default)}
               >
@@ -1137,7 +1137,7 @@ function renderArray(params: {
                       <button
                         type="button"
                         class="cfg-array__item-remove"
-                        title="Remove item"
+                        title=${t("config.form.removeItem")}
                         ?disabled=${disabled}
                         @click=${() => {
                           const next = [...arr];
@@ -1265,7 +1265,7 @@ function renderMapField(params: {
                         <input
                           type="text"
                           class="cfg-input cfg-input--sm"
-                          placeholder="Key"
+                          placeholder=${t("config.form.keyPlaceholder")}
                           .value=${key}
                           ?disabled=${disabled}
                           @change=${(e: Event) => {
@@ -1286,7 +1286,7 @@ function renderMapField(params: {
                       <button
                         type="button"
                         class="cfg-map__item-remove"
-                        title="Remove entry"
+                        title=${t("config.form.removeEntry")}
                         ?disabled=${disabled}
                         @click=${() => {
                           const next = { ...value };

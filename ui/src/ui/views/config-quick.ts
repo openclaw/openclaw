@@ -129,17 +129,17 @@ export type QuickSettingsProps = {
 
 type ThemeOption = { id: ThemeName; label: string };
 const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
-  { id: "claw", label: "Claw" },
-  { id: "knot", label: "Knot" },
-  { id: "dash", label: "Dash" },
+  { id: "claw", label: t("config.quick.theme.claw") },
+  { id: "knot", label: t("config.quick.theme.knot") },
+  { id: "dash", label: t("config.quick.theme.dash") },
 ];
 
 const BORDER_RADIUS_STOPS: Array<{ value: BorderRadiusStop; label: string }> = [
-  { value: 0, label: "None" },
-  { value: 25, label: "Slight" },
-  { value: 50, label: "Default" },
-  { value: 75, label: "Round" },
-  { value: 100, label: "Full" },
+  { value: 0, label: t("config.quick.roundness.none") },
+  { value: 25, label: t("config.quick.roundness.slight") },
+  { value: 50, label: t("config.quick.roundness.default") },
+  { value: 75, label: t("config.quick.roundness.round") },
+  { value: 100, label: t("config.quick.roundness.full") },
 ];
 
 const TEXT_SCALE_OPTIONS: Array<{ value: TextScaleStop; label: string }> = [
@@ -152,7 +152,7 @@ const TEXT_SCALE_OPTIONS: Array<{ value: TextScaleStop; label: string }> = [
 
 const THINKING_LEVELS = ["off", "low", "medium", "high"];
 const TOOL_PROFILES = ["minimal", "coding", "messaging", "full"];
-const LOCAL_USER_LABEL = "You";
+const LOCAL_USER_LABEL = t("config.quick.localUser");
 // Keep raw uploads comfortably below the 2 MB persisted data URL limit after
 // base64 expansion and a small MIME/header prefix are added.
 const MAX_LOCAL_USER_AVATAR_FILE_BYTES = 1_500_000;
@@ -247,7 +247,7 @@ function formatAssistantAvatarIssue(
 }
 
 function renderAssistantAvatarPreview(props: QuickSettingsProps) {
-  const assistantName = normalizeOptionalString(props.assistantName) ?? "Assistant";
+  const assistantName = normalizeOptionalString(props.assistantName) ?? t("config.quick.assistant");
   const assistantAvatarOverride = normalizeOptionalString(props.assistantAvatarOverride);
   const assistantAvatarUrl = resolveAssistantPreviewAvatarUrl(props);
   if (assistantAvatarUrl) {
@@ -409,17 +409,17 @@ function renderCardHeader(icon: TemplateResult, title: string, action?: Template
 function renderModelCard(props: QuickSettingsProps) {
   return html`
     <div class="qs-card qs-card--model">
-      ${renderCardHeader(icons.brain, "Model & Thinking")}
+      ${renderCardHeader(icons.brain, t("config.quick.modelCard"))}
       <div class="qs-card__body">
         <div class="qs-row">
-          <span class="qs-row__label">Model</span>
+          <span class="qs-row__label">${t("config.quick.model")}</span>
           <button class="qs-row__value qs-row__value--action" @click=${props.onModelChange}>
-            <code>${props.currentModel || "default"}</code>
+            <code>${props.currentModel || t("config.quick.modelDefault")}</code>
             <span class="qs-row__chevron">${icons.chevronRight}</span>
           </button>
         </div>
         <div class="qs-row">
-          <span class="qs-row__label">Thinking</span>
+          <span class="qs-row__label">${t("config.quick.thinking")}</span>
           <div class="qs-segmented">
             ${THINKING_LEVELS.map(
               (level) => html`
@@ -436,12 +436,14 @@ function renderModelCard(props: QuickSettingsProps) {
           </div>
         </div>
         <div class="qs-row">
-          <span class="qs-row__label">Fast mode</span>
+          <span class="qs-row__label">${t("config.quick.fastMode")}</span>
           <label class="qs-toggle">
             <input type="checkbox" .checked=${props.fastMode} @change=${props.onFastModeToggle} />
             <span class="qs-toggle__track"></span>
             <span class="qs-toggle__hint muted"
-              >${props.fastMode ? "On — cheaper, less capable" : "Off"}</span
+              >${props.fastMode
+                ? t("config.quick.fastModeOn")
+                : t("config.quick.fastModeOff")}</span
             >
           </label>
         </div>
@@ -477,7 +479,7 @@ function renderChannelsCard(props: QuickSettingsProps) {
                           class="qs-link-btn"
                           @click=${() => props.onChannelConfigure?.(ch.id)}
                         >
-                          Connect →
+                          ${t("config.quick.connect")}
                         </button>`}
                   </span>
                 </div>
@@ -499,19 +501,25 @@ function renderAutomationsCard(props: QuickSettingsProps) {
           <span class="qs-row__label">
             ${cronJobCount} scheduled task${cronJobCount !== 1 ? "s" : ""}
           </span>
-          <button class="qs-link-btn" @click=${props.onManageCron}>Manage →</button>
+          <button class="qs-link-btn" @click=${props.onManageCron}>
+            ${t("config.quick.manage")}
+          </button>
         </div>
         <div class="qs-row">
           <span class="qs-row__label">
             ${skillCount} skill${skillCount !== 1 ? "s" : ""} installed
           </span>
-          <button class="qs-link-btn" @click=${props.onBrowseSkills}>Browse →</button>
+          <button class="qs-link-btn" @click=${props.onBrowseSkills}>
+            ${t("config.quick.browse")}
+          </button>
         </div>
         <div class="qs-row">
           <span class="qs-row__label">
             ${mcpServerCount} MCP server${mcpServerCount !== 1 ? "s" : ""}
           </span>
-          <button class="qs-link-btn" @click=${props.onConfigureMcp}>Configure →</button>
+          <button class="qs-link-btn" @click=${props.onConfigureMcp}>
+            ${t("config.quick.configure")}
+          </button>
         </div>
       </div>
     </div>
@@ -530,11 +538,13 @@ function renderSecurityCard(props: QuickSettingsProps) {
       ${renderCardHeader(
         icons.eye,
         "Security",
-        html`<button class="qs-link-btn" @click=${props.onSecurityConfigure}>Configure →</button>`,
+        html`<button class="qs-link-btn" @click=${props.onSecurityConfigure}>
+          ${t("config.quick.configure")}
+        </button>`,
       )}
       <div class="qs-card__body">
         <div class="qs-row">
-          <span class="qs-row__label">Gateway auth</span>
+          <span class="qs-row__label">${t("config.quick.gatewayAuth")}</span>
           <span class="qs-row__value">
             <span class="qs-badge ${gatewayAuth !== "none" ? "qs-badge--ok" : "qs-badge--warn"}"
               >${gatewayAuth}</span
@@ -542,11 +552,11 @@ function renderSecurityCard(props: QuickSettingsProps) {
           </span>
         </div>
         <div class="qs-row">
-          <span class="qs-row__label">Exec policy</span>
+          <span class="qs-row__label">${t("config.quick.execPolicy")}</span>
           <span class="qs-row__value"><span class="qs-badge">${execPolicy}</span></span>
         </div>
         <div class="qs-row">
-          <span class="qs-row__label">${t("quickSettings.security.browserEnabled")}</span>
+          <span class="qs-row__label">${t("config.quick.browserEnabled")}</span>
           <label class="qs-toggle">
             <input
               type="checkbox"
@@ -559,7 +569,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
           </label>
         </div>
         <div class="qs-row qs-row--tool-profile">
-          <span class="qs-row__label">${t("quickSettings.security.toolProfile")}</span>
+          <span class="qs-row__label">${t("config.quick.toolProfile")}</span>
           <div class="qs-segmented">
             ${toolProfiles.map(
               (profile) => html`
@@ -577,7 +587,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
           </div>
         </div>
         <div class="qs-row">
-          <span class="qs-row__label">Device auth</span>
+          <span class="qs-row__label">${t("config.quick.deviceAuth")}</span>
           <span class="qs-row__value">
             <span class="qs-badge ${deviceAuth ? "qs-badge--ok" : "qs-badge--warn"}"
               >${deviceAuth ? "Enabled" : "Disabled"}</span
@@ -602,7 +612,7 @@ function renderAppearanceCard(props: QuickSettingsProps) {
       ${renderCardHeader(icons.spark, "Appearance")}
       <div class="qs-card__body">
         <div class="qs-row">
-          <span class="qs-row__label">Theme</span>
+          <span class="qs-row__label">${t("common.theme")}</span>
           <div class="qs-segmented">
             ${themeOptions.map(
               (opt) => html`
@@ -629,7 +639,7 @@ function renderAppearanceCard(props: QuickSettingsProps) {
           </div>
         </div>
         <div class="qs-row">
-          <span class="qs-row__label">Mode</span>
+          <span class="qs-row__label">${t("common.mode")}</span>
           <div class="qs-segmented">
             ${(["light", "dark", "system"] as ThemeMode[]).map(
               (mode) => html`
@@ -652,7 +662,7 @@ function renderAppearanceCard(props: QuickSettingsProps) {
           </div>
         </div>
         <div class="qs-row">
-          <span class="qs-row__label">Roundness</span>
+          <span class="qs-row__label">${t("config.quick.roundness")}</span>
           <div class="qs-segmented">
             ${BORDER_RADIUS_STOPS.map(
               (stop) => html`
@@ -699,7 +709,7 @@ function renderPersonalCard(props: QuickSettingsProps) {
     avatar: props.userAvatar ?? null,
   });
   const avatarText = resolveLocalUserAvatarText(identity) ?? "";
-  const assistantName = normalizeOptionalString(props.assistantName) ?? "Assistant";
+  const assistantName = normalizeOptionalString(props.assistantName) ?? t("config.quick.assistant");
   const assistantAvatarUrl = resolveAssistantPreviewAvatarUrl(props);
   const assistantAvatarRendered = Boolean(
     assistantAvatarUrl ||
@@ -715,35 +725,37 @@ function renderPersonalCard(props: QuickSettingsProps) {
     assistantAvatarRendered,
     Boolean(assistantAvatarOverride),
   );
-  const assistantAvatarSourceLabel = assistantAvatarOverride ? "UI override" : "IDENTITY.md";
+  const assistantAvatarSourceLabel = assistantAvatarOverride
+    ? t("config.quick.uiOverride")
+    : "IDENTITY.md";
   const canOverrideAssistantAvatar = Boolean(props.onAssistantAvatarOverrideChange);
   const assistantAvatarSubtitle = assistantAvatarOverride
-    ? "Override from settings"
+    ? t("config.quick.overrideFromSettings")
     : assistantAvatarIssue
-      ? "Fallback avatar"
+      ? t("config.quick.fallbackAvatar")
       : assistantAvatarRendered
-        ? "From IDENTITY.md"
-        : "Fallback logo";
+        ? t("config.quick.fromIdentity")
+        : t("config.quick.fallbackLogo");
   return html`
     <div class="qs-card qs-card--personal">
-      ${renderCardHeader(icons.image, "Personal")}
+      ${renderCardHeader(icons.image, t("config.quick.personalCard"))}
       <div class="qs-card__body">
         <div class="qs-identity-grid">
-          <section class="qs-identity-card" aria-label="Your local chat identity">
+          <section class="qs-identity-card" aria-label=${t("config.quick.userIdentity")}>
             ${renderLocalUserAvatarPreview(props.userAvatar)}
             <div class="qs-identity-card__copy">
-              <div class="qs-identity-card__eyebrow">User</div>
+              <div class="qs-identity-card__eyebrow">${t("config.quick.user")}</div>
               <div class="qs-identity-card__title">${LOCAL_USER_LABEL}</div>
-              <div class="qs-identity-card__sub">Avatar is browser-local</div>
+              <div class="qs-identity-card__sub">${t("config.quick.avatarBrowserLocal")}</div>
               <div class="qs-identity-card__repair">
                 <label class="qs-field">
-                  <span class="qs-row__label">Avatar text / emoji</span>
+                  <span class="qs-row__label">${t("config.quick.avatarText")}</span>
                   <input
                     class="qs-field__input"
                     type="text"
                     maxlength="16"
                     .value=${avatarText}
-                    placeholder="JD or 🦞"
+                    placeholder=${t("config.quick.avatarPlaceholder")}
                     @input=${(e: Event) => {
                       const value = (e.target as HTMLInputElement).value;
                       props.onUserAvatarChange?.(value.trim() ? value : null);
@@ -752,7 +764,7 @@ function renderPersonalCard(props: QuickSettingsProps) {
                 </label>
                 <div class="qs-identity-card__actions">
                   <label class="btn btn--sm">
-                    Choose image
+                    ${t("config.quick.chooseImage")}
                     <input
                       type="file"
                       accept="image/*"
@@ -768,20 +780,20 @@ function renderPersonalCard(props: QuickSettingsProps) {
                       props.onUserAvatarChange?.(null);
                     }}
                   >
-                    Clear avatar
+                    ${t("config.quick.clearAvatar")}
                   </button>
                 </div>
-                <div class="muted">Stored in this browser only.</div>
+                <div class="muted">${t("config.quick.storedLocally")}</div>
               </div>
             </div>
           </section>
           <section
             class="qs-identity-card qs-identity-card--assistant"
-            aria-label="Assistant identity"
+            aria-label=${t("config.quick.assistantIdentity")}
           >
             ${renderAssistantAvatarPreview(props)}
             <div class="qs-identity-card__copy">
-              <div class="qs-identity-card__eyebrow">Assistant</div>
+              <div class="qs-identity-card__eyebrow">${t("config.quick.assistant")}</div>
               <div class="qs-identity-card__title">${assistantName}</div>
               <div class="qs-identity-card__sub">${assistantAvatarSubtitle}</div>
               ${assistantAvatarSource
@@ -806,8 +818,8 @@ function renderPersonalCard(props: QuickSettingsProps) {
                           ${props.assistantAvatarUploadBusy
                             ? "Saving..."
                             : assistantAvatarOverride
-                              ? "Replace image"
-                              : "Choose image"}
+                              ? t("config.quick.replaceImage")
+                              : t("config.quick.chooseImage")}
                           <input
                             type="file"
                             accept="image/*"
@@ -826,7 +838,7 @@ function renderPersonalCard(props: QuickSettingsProps) {
                                   void props.onAssistantAvatarClearOverride?.();
                                 }}
                               >
-                                Clear override
+                                ${t("config.quick.clearOverride")}
                               </button>
                             `
                           : nothing}
@@ -906,12 +918,9 @@ function renderPresetsCard(props: QuickSettingsProps) {
             </div>
           </div>
         `;
-  const panelTitle = selectedPreset?.label ?? "Custom Configuration";
-  const panelDescription =
-    selectedPreset?.detail ?? "This config does not currently match one of the built-in profiles.";
-  const panelImpact =
-    selectedPreset?.impact ??
-    "Pick a profile to stage a focused change to bootstrap size and follow-up behavior.";
+  const panelTitle = selectedPreset?.label ?? t("config.quick.customConfiguration");
+  const panelDescription = selectedPreset?.detail ?? t("config.quick.customDescription");
+  const panelImpact = selectedPreset?.impact ?? t("config.quick.customImpact");
   const commitCopy = hasPendingProfileChange
     ? "Save Profile writes this as the default. Apply Now writes it and reloads the current session."
     : "Other staged config edits are pending. Saving here will commit all staged config changes.";
@@ -924,7 +933,7 @@ function renderPresetsCard(props: QuickSettingsProps) {
         hasPendingProfileChange
           ? html`<span class="qs-badge qs-badge--warn">Pending</span>`
           : savedPreset
-            ? html`<span class="qs-badge qs-badge--ok">Saved</span>`
+            ? html`<span class="qs-badge qs-badge--ok">${t("config.quick.saved")}</span>`
             : html`<span class="qs-badge">Custom</span>`,
       )}
       <div class="qs-card__body qs-profiles">
@@ -1048,9 +1057,7 @@ function renderPresetsCard(props: QuickSettingsProps) {
               `
             : html`
                 <div class="qs-profile-panel__footer muted" aria-live="polite">
-                  ${savedPreset
-                    ? "Saved and ready. Choose another profile to stage a change."
-                    : "Current values are custom. Choose a profile to stage a change."}
+                  ${savedPreset ? t("config.quick.savedReady") : t("config.quick.customReady")}
                 </div>
               `}
         </div>

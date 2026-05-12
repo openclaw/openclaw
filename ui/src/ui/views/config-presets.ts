@@ -1,3 +1,4 @@
+import { t } from "../../i18n/index.ts";
 /**
  * Config presets — opinionated configuration bundles that set multiple
  * settings at once. Applied via config.patch.
@@ -28,10 +29,10 @@ export type ConfigPreset = {
 export const CONFIG_PRESETS: ConfigPreset[] = [
   {
     id: "personal",
-    label: "Personal Assistant",
-    description: "Balanced default for daily use.",
-    detail: "Good fit for chat, docs, and light edits without a large coding budget.",
-    impact: "Injects bootstrap context every turn with a moderate prompt budget.",
+    label: t("config.preset.personal.label"),
+    description: t("config.preset.personal.description"),
+    detail: t("config.preset.personal.detail"),
+    impact: t("config.preset.personal.impact"),
     icon: "✨",
     patch: {
       agents: {
@@ -45,10 +46,10 @@ export const CONFIG_PRESETS: ConfigPreset[] = [
   },
   {
     id: "codeAgent",
-    label: "Code Agent",
-    description: "Highest context budget for repo work.",
-    detail: "Best for multi-file changes, long bootstrap docs, and code-heavy sessions.",
-    impact: "Uses the largest prompt budget and reinjects context every turn.",
+    label: t("config.preset.codeAgent.label"),
+    description: t("config.preset.codeAgent.description"),
+    detail: t("config.preset.codeAgent.detail"),
+    impact: t("config.preset.codeAgent.impact"),
     icon: "🛠️",
     patch: {
       agents: {
@@ -62,11 +63,10 @@ export const CONFIG_PRESETS: ConfigPreset[] = [
   },
   {
     id: "teamBot",
-    label: "Team Bot",
-    description: "Lean follow-ups for shared bots.",
-    detail:
-      "Best for multi-channel workflows where continuity matters more than large bootstrap payloads.",
-    impact: "Keeps follow-up turns smaller by skipping safe continuation reinjection.",
+    label: t("config.preset.teamBot.label"),
+    description: t("config.preset.teamBot.description"),
+    detail: t("config.preset.teamBot.detail"),
+    impact: t("config.preset.teamBot.impact"),
     icon: "👥",
     patch: {
       agents: {
@@ -80,10 +80,10 @@ export const CONFIG_PRESETS: ConfigPreset[] = [
   },
   {
     id: "minimal",
-    label: "Minimal",
-    description: "Smallest context budget and lowest cost.",
-    detail: "Best for quick utility turns, automations, and cost-sensitive workflows.",
-    impact: "Uses the smallest bootstrap budget and the leanest follow-up behavior.",
+    label: t("config.preset.minimal.label"),
+    description: t("config.preset.minimal.description"),
+    detail: t("config.preset.minimal.detail"),
+    impact: t("config.preset.minimal.impact"),
     icon: "⚡",
     patch: {
       agents: {
