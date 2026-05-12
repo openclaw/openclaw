@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { evaluateShellAllowlist, normalizeSafeBins } from "./exec-approvals-allowlist.js";
+import {
+  evaluateExecAllowlist,
+  evaluateShellAllowlist,
+  normalizeSafeBins,
+} from "./exec-approvals-allowlist.js";
 import {
   analyzeArgvCommand,
   analyzeShellCommand,
@@ -216,6 +220,7 @@ describe("exec approvals shell analysis", () => {
     it("still rejects unquoted metacharacters on Windows", () => {
       const cases = [
         "ping 127.0.0.1 -n 1 & whoami",
+        "node allowed.js; unlisted.exe",
         "echo hello | clip",
         "node tool.js > output.txt",
         "for /f %i in (file.txt) do echo %i",
@@ -754,6 +759,38 @@ describe("exec approvals shell analysis", () => {
         expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual([nodePath]);
         expect(result.segmentAllowlistEntries).toEqual([null]);
         expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects Windows inline cmd payloads with PowerShell command separators", () => {
+      const dir = makeTempDir();
+      const cmdPath = path.join(dir, "cmd.exe");
+      const allowedPath = path.join(dir, "allowed.exe");
+      for (const file of [cmdPath, allowedPath]) {
+        fs.writeFileSync(file, "");
+        fs.chmodSync(file, 0o755);
+      }
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({
+          argv: ["cmd.exe", "/c", "pwsh", "-Command", "allowed.exe;", "unlisted.exe"],
+          cwd: dir,
+          env,
+        });
+        expect(analysis.ok).toBe(true);
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: allowedPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }

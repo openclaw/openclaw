@@ -51,6 +51,7 @@ const WINDOWS_UNSUPPORTED_TOKENS = new Set([
   "|",
   "<",
   ">",
+  ";",
   "^",
   "(",
   ")",
