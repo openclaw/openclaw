@@ -529,6 +529,25 @@ function isAfterSessionBoundary(
   return true;
 }
 
+function normalizeSessionBoundaryTimestamp(timestampMs?: number): number | undefined {
+  if (typeof timestampMs !== "number" || !Number.isFinite(timestampMs)) {
+    return undefined;
+  }
+  return Math.floor(timestampMs / 1000) * 1000;
+}
+
+function isAtOrAfterSessionBoundaryTimestamp(
+  node: TelegramCachedMessageNode,
+  boundaryTimestampMs?: number,
+): boolean {
+  if (boundaryTimestampMs === undefined) {
+    return true;
+  }
+  return typeof node.timestamp !== "number" || !Number.isFinite(node.timestamp)
+    ? true
+    : node.timestamp >= boundaryTimestampMs;
+}
+
 function resolveSessionBoundaryNode(params: {
   cache: TelegramMessageCache;
   accountId: string;
@@ -602,15 +621,20 @@ export function buildTelegramConversationContext(params: {
   replyChainNodes: TelegramCachedMessageNode[];
   recentLimit: number;
   replyTargetWindowSize: number;
+  minTimestampMs?: number;
 }): TelegramConversationContextNode[] {
   const selected = new Map<string, TelegramConversationContextNode>();
   const replyTargetIds = new Set<string>();
   const sessionBoundary = resolveSessionBoundaryNode(params);
+  const sessionBoundaryTimestamp = normalizeSessionBoundaryTimestamp(params.minTimestampMs);
   const addNode = (node: TelegramCachedMessageNode, flags?: { replyTarget?: boolean }) => {
     if (!node.messageId || node.messageId === params.messageId) {
       return;
     }
     if (!isAfterSessionBoundary(node, sessionBoundary)) {
+      return;
+    }
+    if (!isAtOrAfterSessionBoundaryTimestamp(node, sessionBoundaryTimestamp)) {
       return;
     }
     const existing = selected.get(node.messageId);
