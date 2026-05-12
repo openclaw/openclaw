@@ -185,10 +185,10 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expect(progressOptions?.contextKey).toBe("acp-spawn:run-cron:progress");
     expect(progressOptions?.sessionKey).toBe("global");
     expect(progressOptions?.trusted).toBe(false);
-    const heartbeatOptions = requestHeartbeatMock.mock.calls[0]?.[0];
+    const heartbeatOptions = requestHeartbeatMock.mock.calls.at(0)?.[0];
     expect(heartbeatOptions?.agentId).toBe("ops");
     expect(heartbeatOptions?.reason).toBe("acp:spawn:stream");
-    expect(requestHeartbeatMock.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
+    expect(requestHeartbeatMock.mock.calls.at(0)?.[0]).not.toHaveProperty("sessionKey");
     relay.dispose();
   });
 
@@ -421,7 +421,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
       sessionKey: "agent:codex:acp:child-1",
     });
     expect(resolveSessionFilePathMock).toHaveBeenCalledTimes(1);
-    const [sessionId, entry, options] = resolveSessionFilePathMock.mock.calls[0] as [
+    const [sessionId, entry, options] = resolveSessionFilePathMock.mock.calls.at(0) as [
       string,
       { sessionId?: unknown },
       { storePath?: unknown },

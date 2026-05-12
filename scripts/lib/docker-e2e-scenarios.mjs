@@ -128,7 +128,7 @@ const bundledPluginInstallUninstallLanes = Array.from(
 function livePluginToolLane() {
   return liveLane(
     "live-plugin-tool",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",
+    "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",
     {
       cacheKey: "plugin-tool",
       e2eImageKind: "bare",

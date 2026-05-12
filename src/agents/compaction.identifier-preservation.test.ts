@@ -58,7 +58,7 @@ describe("compaction identifier-preservation instructions", () => {
   }
 
   function firstSummaryInstructions() {
-    return extractSummaryInstructions(mockGenerateSummary.mock.calls[0]);
+    return extractSummaryInstructions(mockGenerateSummary.mock.calls.at(0));
   }
 
   it("injects identifier-preservation guidance even without custom instructions", async () => {

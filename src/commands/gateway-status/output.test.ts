@@ -33,6 +33,15 @@ function createRuntimeCapture(): RuntimeEnv {
   } as unknown as RuntimeEnv;
 }
 
+function requireRuntimeJsonPayload(runtime: RuntimeEnv, index = 0): unknown {
+  const call = mocks.writeRuntimeJson.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected writeRuntimeJson call ${index}`);
+  }
+  expect(call[0]).toBe(runtime);
+  return call[1];
+}
+
 function createProbe(
   capability: GatewayProbeResult["auth"]["capability"],
   params: {
@@ -144,10 +153,7 @@ describe("gateway status output", () => {
     });
 
     expect(mocks.writeRuntimeJson).toHaveBeenCalledOnce();
-    expect(mocks.writeRuntimeJson.mock.calls[0]?.[0]).toBe(runtime);
-    const payload = mocks.writeRuntimeJson.mock.calls[0]?.[1] as
-      | { ok?: unknown; capability?: unknown }
-      | undefined;
+    const payload = requireRuntimeJsonPayload(runtime) as { ok?: unknown; capability?: unknown };
     expect(payload?.ok).toBe(true);
     expect(payload?.capability).toBe("read_only");
   });
@@ -218,8 +224,7 @@ describe("gateway status output", () => {
     });
 
     expect(mocks.writeRuntimeJson).toHaveBeenCalledOnce();
-    expect(mocks.writeRuntimeJson.mock.calls[0]?.[0]).toBe(runtime);
-    const payload = mocks.writeRuntimeJson.mock.calls[0]?.[1];
+    const payload = requireRuntimeJsonPayload(runtime);
     expect(payload).toStrictEqual({
       ok: true,
       degraded: true,

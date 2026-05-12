@@ -5,6 +5,17 @@ import {
   resolveCliContainerTarget,
 } from "./container-target.js";
 
+function requireSpawnCall(
+  spawnSync: ReturnType<typeof vi.fn>,
+  index: number,
+): [string, string[], unknown?] {
+  const call = spawnSync.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`Expected spawnSync call ${index}`);
+  }
+  return call as [string, string[], unknown?];
+}
+
 describe("parseCliContainerArgs", () => {
   it("extracts a root --container flag before the command", () => {
     expect(
@@ -356,10 +367,10 @@ describe("maybeRunCliInContainer", () => {
       spawnSync,
     });
 
-    const podmanCall = spawnSync.mock.calls[2];
-    expect(podmanCall?.[0]).toBe("podman");
-    expect(podmanCall?.[1]).toContain("OPENCLAW_PROXY_URL=http://127.0.0.1:3128");
-    if (podmanCall?.[2] === undefined) {
+    const podmanCall = requireSpawnCall(spawnSync, 2);
+    expect(podmanCall[0]).toBe("podman");
+    expect(podmanCall[1]).toContain("OPENCLAW_PROXY_URL=http://127.0.0.1:3128");
+    if (podmanCall[2] === undefined) {
       throw new Error("Expected podman spawn options");
     }
   });

@@ -77,7 +77,7 @@ describe("acp cli option collisions", () => {
     });
 
     expect(runAcpClientInteractive).toHaveBeenCalledTimes(1);
-    const clientOptions = runAcpClientInteractive.mock.calls[0]?.[0] as
+    const clientOptions = runAcpClientInteractive.mock.calls.at(0)?.[0] as
       | { verbose?: boolean }
       | undefined;
     expect(clientOptions?.verbose).toBe(true);
@@ -99,7 +99,7 @@ describe("acp cli option collisions", () => {
     );
 
     expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    const gatewayOptions = serveAcpGateway.mock.calls[0]?.[0] as
+    const gatewayOptions = serveAcpGateway.mock.calls.at(0)?.[0] as
       | { gatewayPassword?: string; gatewayToken?: string }
       | undefined;
     expect(gatewayOptions?.gatewayToken).toBe("tok_file");
@@ -150,7 +150,7 @@ describe("acp cli option collisions", () => {
     });
 
     expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    const gatewayOptions = serveAcpGateway.mock.calls[0]?.[0] as
+    const gatewayOptions = serveAcpGateway.mock.calls.at(0)?.[0] as
       | { gatewayToken?: string }
       | undefined;
     expect(gatewayOptions?.gatewayToken).toBe("tok_file");

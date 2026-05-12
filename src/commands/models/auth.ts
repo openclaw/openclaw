@@ -24,6 +24,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   applyProviderAuthConfigPatch,
@@ -306,6 +307,9 @@ async function persistProviderAuthResult(params: {
   prompter: ReturnType<typeof createClackPrompter>;
   setDefault?: boolean;
 }) {
+  const defaultModel = params.result.defaultModel
+    ? normalizeAgentModelRefForConfig(params.result.defaultModel)
+    : undefined;
   for (const profile of params.result.profiles) {
     upsertAuthProfile({
       profileId: profile.profileId,
@@ -339,15 +343,15 @@ async function persistProviderAuthResult(params: {
       priorAgentsDefaultsModel,
       setDefault: params.setDefault,
     });
-    if (params.setDefault && params.result.defaultModel) {
-      next = applyDefaultModel(next, params.result.defaultModel);
+    if (params.setDefault && defaultModel) {
+      next = applyDefaultModel(next, defaultModel);
     }
     return next;
   });
-  if (params.result.defaultModel) {
+  if (defaultModel) {
     const repaired = await repairCodexRuntimePluginInstallForModelSelection({
       cfg: updated,
-      model: params.result.defaultModel,
+      model: defaultModel,
     });
     for (const warning of repaired.warnings) {
       params.runtime.error?.(warning);
@@ -360,11 +364,11 @@ async function persistProviderAuthResult(params: {
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
     );
   }
-  if (params.result.defaultModel) {
+  if (defaultModel) {
     params.runtime.log(
       params.setDefault
-        ? `Default model set to ${params.result.defaultModel}`
-        : `Default model available: ${params.result.defaultModel} (use --set-default to apply)`,
+        ? `Default model set to ${defaultModel}`
+        : `Default model available: ${defaultModel} (use --set-default to apply)`,
     );
   }
   if (params.result.notes && params.result.notes.length > 0) {
