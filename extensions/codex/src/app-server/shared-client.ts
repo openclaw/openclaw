@@ -39,7 +39,8 @@ export async function getSharedCodexAppServerClient(options?: {
   const state = getSharedCodexAppServerClientState();
   const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
   const usesNativeAuth = options?.authProfileId === null;
-  const requestedAuthProfileId = usesNativeAuth ? undefined : options?.authProfileId;
+  const requestedAuthProfileId =
+    options?.authProfileId === null ? undefined : options?.authProfileId;
   const authProfileId = usesNativeAuth
     ? undefined
     : resolveCodexAppServerAuthProfileIdForAgent({
@@ -110,7 +111,8 @@ export async function createIsolatedCodexAppServerClient(options?: {
 }): Promise<CodexAppServerClient> {
   const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
   const usesNativeAuth = options?.authProfileId === null;
-  const requestedAuthProfileId = usesNativeAuth ? undefined : options?.authProfileId;
+  const requestedAuthProfileId =
+    options?.authProfileId === null ? undefined : options?.authProfileId;
   const authProfileId = usesNativeAuth
     ? undefined
     : resolveCodexAppServerAuthProfileIdForAgent({
