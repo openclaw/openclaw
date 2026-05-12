@@ -28,6 +28,7 @@ export type SkillScanSummary = {
 
 export type SkillScanOptions = {
   excludeTestFiles?: boolean;
+  includeHiddenDirectories?: boolean;
   includeNodeModules?: boolean;
   includeFiles?: string[];
   maxFiles?: number;
@@ -425,6 +426,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
 function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOptions> {
   return {
     excludeTestFiles: opts?.excludeTestFiles ?? false,
+    includeHiddenDirectories: opts?.includeHiddenDirectories ?? false,
     includeNodeModules: opts?.includeNodeModules ?? false,
     includeFiles: opts?.includeFiles ?? [],
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
@@ -444,6 +446,7 @@ async function walkDirWithLimit(
   dirPath: string,
   maxFiles: number,
   excludeTestFiles: boolean,
+  includeHiddenDirectories: boolean,
   includeNodeModules: boolean,
 ): Promise<string[]> {
   const files: string[] = [];
@@ -460,8 +463,10 @@ async function walkDirWithLimit(
       if (files.length >= maxFiles) {
         break;
       }
-      // Skip hidden dirs and node_modules
-      if (entry.name.startsWith(".") || (!includeNodeModules && entry.name === "node_modules")) {
+      if (
+        (!includeHiddenDirectories && entry.name.startsWith(".")) ||
+        (!includeNodeModules && entry.name === "node_modules")
+      ) {
         continue;
       }
       if (
@@ -575,6 +580,7 @@ async function collectScannableFiles(dirPath: string, opts: Required<SkillScanOp
     dirPath,
     opts.maxFiles,
     opts.excludeTestFiles,
+    opts.includeHiddenDirectories,
     opts.includeNodeModules,
   );
   const seen = new Set(forcedFiles.map((f) => path.resolve(f)));

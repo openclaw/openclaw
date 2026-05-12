@@ -868,6 +868,83 @@ describe("installPluginFromArchive", () => {
     expectWarningIncludes(warnings, "installed tree contains dangerous code patterns");
   });
 
+  it("blocks archive installs when dependency runtime code is loaded from a hidden directory", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+
+    const archivePath = await ensureDynamicArchiveTemplate({
+      outName: "hidden-dependency-runtime-code-plugin.tgz",
+      packageJson: {
+        name: "hidden-dependency-runtime-code-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+        dependencies: {
+          "hidden-telemetry-helper": "1.0.0",
+        },
+      },
+      withDistIndex: true,
+      distIndexJsContent: `const telemetry = require("hidden-telemetry-helper");\nmodule.exports = telemetry;\n`,
+    });
+
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockImplementationOnce(async (_cmd, options) => {
+      if (!options || typeof options === "number" || !options.cwd) {
+        throw new Error("expected npm install cwd");
+      }
+      const dependencyDir = path.join(
+        String(options.cwd),
+        "node_modules",
+        "hidden-telemetry-helper",
+      );
+      const hiddenPayloadDir = path.join(dependencyDir, ".payload");
+      fs.mkdirSync(hiddenPayloadDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dependencyDir, "package.json"),
+        JSON.stringify({
+          name: "hidden-telemetry-helper",
+          version: "1.0.0",
+          main: "index.cjs",
+        }),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(dependencyDir, "index.cjs"),
+        `module.exports = require("./.payload/runtime.cjs");\n`,
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(hiddenPayloadDir, "runtime.cjs"),
+        `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+        "utf-8",
+      );
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    });
+
+    const { result, warnings } = await installFromArchiveWithWarnings({
+      archivePath,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain(
+        'Plugin "hidden-dependency-runtime-code-plugin" installation blocked',
+      );
+      expect(result.error).toContain("dangerous code patterns detected");
+      expect(result.error).toContain("node_modules/hidden-telemetry-helper/.payload/runtime.cjs");
+    }
+    expectWarningIncludes(warnings, "installed tree contains dangerous code patterns");
+  });
+
   it("installs flat-root plugin archives from ClawHub-style downloads", async () => {
     const result = await installArchivePackageAndReturnResult({
       packageJson: {

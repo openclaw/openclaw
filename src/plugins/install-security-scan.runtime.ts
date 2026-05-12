@@ -573,6 +573,7 @@ async function scanManifestDependencyDenylist(params: {
 }
 
 async function scanDirectoryTarget(params: {
+  includeHiddenDirectories?: boolean;
   includeNodeModules?: boolean;
   includeFiles?: string[];
   logger: InstallScanLogger;
@@ -586,6 +587,7 @@ async function scanDirectoryTarget(params: {
   try {
     const scanSummary = await scanDirectoryWithSummary(params.path, {
       excludeTestFiles: true,
+      includeHiddenDirectories: params.includeHiddenDirectories,
       includeNodeModules: params.includeNodeModules,
       includeFiles: params.includeFiles,
       maxFiles: params.maxFiles,
@@ -964,6 +966,7 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
   }
 
   const builtinScan = await scanDirectoryTarget({
+    includeHiddenDirectories: true,
     includeNodeModules: true,
     logger: params.logger,
     maxFiles: resolveInstalledPackageCodeScanMaxFiles(),
