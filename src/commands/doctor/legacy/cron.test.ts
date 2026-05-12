@@ -18,7 +18,7 @@ vi.mock("../../../terminal/note.js", () => ({
 let tempRoot: string | null = null;
 let originalOpenClawStateDir: string | undefined;
 
-async function makeTempStorePath() {
+async function makeTempLegacyStorePath() {
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-legacy-cron-"));
   originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_STATE_DIR = path.join(tempRoot, "state");
@@ -46,10 +46,10 @@ function makePrompter(confirmResult = true) {
   };
 }
 
-function createCronConfig(storePath: string): OpenClawConfig {
+function createCronConfig(legacyStorePath: string): OpenClawConfig {
   return {
     cron: {
-      store: storePath,
+      store: legacyStorePath,
       webhook: "https://example.invalid/cron-finished",
     } as OpenClawConfig["cron"] & { store: string },
   };
@@ -72,10 +72,10 @@ function createLegacyCronJob(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function writeCronStore(storePath: string, jobs: Array<Record<string, unknown>>) {
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
+async function writeLegacyCronStore(legacyStorePath: string, jobs: Array<Record<string, unknown>>) {
+  await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
   await fs.writeFile(
-    storePath,
+    legacyStorePath,
     JSON.stringify(
       {
         version: 1,
@@ -88,8 +88,10 @@ async function writeCronStore(storePath: string, jobs: Array<Record<string, unkn
   );
 }
 
-async function readPersistedJobs(storePath: string): Promise<Array<Record<string, unknown>>> {
-  const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+async function readPersistedLegacyJobs(
+  legacyStorePath: string,
+): Promise<Array<Record<string, unknown>>> {
+  const persisted = JSON.parse(await fs.readFile(legacyStorePath, "utf-8")) as {
     jobs: Array<Record<string, unknown>>;
   };
   return persisted.jobs;
@@ -121,10 +123,10 @@ function expectNoNoteContaining(message: string, title: string): void {
 
 describe("maybeRepairLegacyCronStore", () => {
   it("repairs legacy cron store fields and migrates notify fallback to webhook delivery", async () => {
-    const storePath = await makeTempStorePath();
-    await writeCronStore(storePath, [createLegacyCronJob()]);
+    const legacyStorePath = await makeTempLegacyStorePath();
+    await writeLegacyCronStore(legacyStorePath, [createLegacyCronJob()]);
 
-    const cfg = createCronConfig(storePath);
+    const cfg = createCronConfig(legacyStorePath);
 
     await maybeRepairLegacyCronStore({
       cfg,
@@ -154,13 +156,13 @@ describe("maybeRepairLegacyCronStore", () => {
 
     expectNoteContaining("Legacy cron job storage detected", "Cron");
     expectNoteContaining("Cron store normalized", "Doctor changes");
-    await expect(fs.stat(storePath)).rejects.toThrow();
+    await expect(fs.stat(legacyStorePath)).rejects.toThrow();
   });
 
   it("imports legacy cron runtime state sidecars into SQLite", async () => {
-    const storePath = await makeTempStorePath();
-    const statePath = storePath.replace(/\.json$/, "-state.json");
-    await writeCronStore(storePath, [
+    const legacyStorePath = await makeTempLegacyStorePath();
+    const legacyStatePath = legacyStorePath.replace(/\.json$/, "-state.json");
+    await writeLegacyCronStore(legacyStorePath, [
       {
         id: "stateful-job",
         name: "Stateful job",
@@ -174,7 +176,7 @@ describe("maybeRepairLegacyCronStore", () => {
       },
     ]);
     await fs.writeFile(
-      statePath,
+      legacyStatePath,
       JSON.stringify(
         {
           version: 1,
@@ -192,7 +194,7 @@ describe("maybeRepairLegacyCronStore", () => {
     );
 
     await maybeRepairLegacyCronStore({
-      cfg: createCronConfig(storePath),
+      cfg: createCronConfig(legacyStorePath),
       options: {},
       prompter: makePrompter(true),
     });
@@ -200,7 +202,7 @@ describe("maybeRepairLegacyCronStore", () => {
     const loaded = await loadCronStore(resolveCronStoreKey());
     expect(loaded.jobs[0]?.updatedAtMs).toBe(Date.parse("2026-02-01T00:01:00.000Z"));
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(Date.parse("2026-02-01T00:02:00.000Z"));
-    await expect(fs.stat(statePath)).rejects.toThrow();
+    await expect(fs.stat(legacyStatePath)).rejects.toThrow();
     expect(noteMock).toHaveBeenCalledWith(
       expect.stringContaining("Imported 1 cron runtime state row into SQLite"),
       "Doctor changes",
@@ -208,8 +210,8 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 
   it("imports legacy cron runtime state sidecars when job definitions are already SQLite-backed", async () => {
-    const storePath = await makeTempStorePath();
-    const statePath = storePath.replace(/\.json$/, "-state.json");
+    const legacyStorePath = await makeTempLegacyStorePath();
+    const legacyStatePath = legacyStorePath.replace(/\.json$/, "-state.json");
     await saveCronStore(resolveCronStoreKey(), {
       version: 1,
       jobs: [
@@ -227,9 +229,9 @@ describe("maybeRepairLegacyCronStore", () => {
         },
       ],
     });
-    await fs.mkdir(path.dirname(statePath), { recursive: true });
+    await fs.mkdir(path.dirname(legacyStatePath), { recursive: true });
     await fs.writeFile(
-      statePath,
+      legacyStatePath,
       JSON.stringify(
         {
           version: 1,
@@ -247,7 +249,7 @@ describe("maybeRepairLegacyCronStore", () => {
     );
 
     await maybeRepairLegacyCronStore({
-      cfg: createCronConfig(storePath),
+      cfg: createCronConfig(legacyStorePath),
       options: {},
       prompter: makePrompter(true),
     });
@@ -255,8 +257,8 @@ describe("maybeRepairLegacyCronStore", () => {
     const loaded = await loadCronStore(resolveCronStoreKey());
     expect(loaded.jobs[0]?.updatedAtMs).toBe(Date.parse("2026-02-01T00:01:00.000Z"));
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(Date.parse("2026-02-01T00:02:00.000Z"));
-    await expect(fs.stat(storePath)).rejects.toThrow();
-    await expect(fs.stat(statePath)).rejects.toThrow();
+    await expect(fs.stat(legacyStorePath)).rejects.toThrow();
+    await expect(fs.stat(legacyStatePath)).rejects.toThrow();
     expect(noteMock).toHaveBeenCalledWith(
       expect.stringContaining("Imported 1 cron runtime state row into SQLite"),
       "Doctor changes",
@@ -264,9 +266,9 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 
   it("imports legacy cron run-log files into SQLite", async () => {
-    const storePath = await makeTempStorePath();
-    const logPath = path.join(path.dirname(storePath), "runs", "stateful-job.jsonl");
-    await writeCronStore(storePath, [
+    const legacyStorePath = await makeTempLegacyStorePath();
+    const legacyLogPath = path.join(path.dirname(legacyStorePath), "runs", "stateful-job.jsonl");
+    await writeLegacyCronStore(legacyStorePath, [
       {
         id: "stateful-job",
         name: "Stateful job",
@@ -279,15 +281,15 @@ describe("maybeRepairLegacyCronStore", () => {
         state: {},
       },
     ]);
-    await fs.mkdir(path.dirname(logPath), { recursive: true });
+    await fs.mkdir(path.dirname(legacyLogPath), { recursive: true });
     await fs.writeFile(
-      logPath,
+      legacyLogPath,
       `${JSON.stringify({ ts: 1, jobId: "stateful-job", action: "finished", status: "ok" })}\n`,
       "utf-8",
     );
 
     await maybeRepairLegacyCronStore({
-      cfg: createCronConfig(storePath),
+      cfg: createCronConfig(legacyStorePath),
       options: {},
       prompter: makePrompter(true),
     });
@@ -296,7 +298,7 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(
       readCronRunLogEntriesFromSqliteSync(resolveCronStoreKey(), { jobId: "stateful-job" }),
     ).toEqual([expect.objectContaining({ ts: 1, status: "ok" })]);
-    await expect(fs.stat(logPath)).rejects.toThrow();
+    await expect(fs.stat(legacyLogPath)).rejects.toThrow();
     expect(noteMock).toHaveBeenCalledWith(
       expect.stringContaining("Imported 1 cron run-log row from 1 legacy run-log file"),
       "Doctor changes",
@@ -304,8 +306,8 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 
   it("imports legacy cron run-log files when job definitions are already SQLite-backed", async () => {
-    const storePath = await makeTempStorePath();
-    const logPath = path.join(path.dirname(storePath), "runs", "stateful-job.jsonl");
+    const legacyStorePath = await makeTempLegacyStorePath();
+    const legacyLogPath = path.join(path.dirname(legacyStorePath), "runs", "stateful-job.jsonl");
     await saveCronStore(resolveCronStoreKey(), {
       version: 1,
       jobs: [
@@ -323,15 +325,15 @@ describe("maybeRepairLegacyCronStore", () => {
         },
       ],
     });
-    await fs.mkdir(path.dirname(logPath), { recursive: true });
+    await fs.mkdir(path.dirname(legacyLogPath), { recursive: true });
     await fs.writeFile(
-      logPath,
+      legacyLogPath,
       `${JSON.stringify({ ts: 1, jobId: "stateful-job", action: "finished", status: "ok" })}\n`,
       "utf-8",
     );
 
     await maybeRepairLegacyCronStore({
-      cfg: createCronConfig(storePath),
+      cfg: createCronConfig(legacyStorePath),
       options: {},
       prompter: makePrompter(true),
     });
@@ -340,8 +342,8 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(
       readCronRunLogEntriesFromSqliteSync(resolveCronStoreKey(), { jobId: "stateful-job" }),
     ).toEqual([expect.objectContaining({ ts: 1, status: "ok" })]);
-    await expect(fs.stat(storePath)).rejects.toThrow();
-    await expect(fs.stat(logPath)).rejects.toThrow();
+    await expect(fs.stat(legacyStorePath)).rejects.toThrow();
+    await expect(fs.stat(legacyLogPath)).rejects.toThrow();
     expect(noteMock).toHaveBeenCalledWith(
       expect.stringContaining("Imported 1 cron run-log row from 1 legacy run-log file"),
       "Doctor changes",
@@ -349,8 +351,8 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 
   it("repairs malformed persisted cron ids before list rendering sees them", async () => {
-    const storePath = await makeTempStorePath();
-    await writeCronStore(storePath, [
+    const legacyStorePath = await makeTempLegacyStorePath();
+    await writeLegacyCronStore(legacyStorePath, [
       createLegacyCronJob({
         id: 42,
         jobId: undefined,
@@ -365,7 +367,7 @@ describe("maybeRepairLegacyCronStore", () => {
     ]);
 
     await maybeRepairLegacyCronStore({
-      cfg: createCronConfig(storePath),
+      cfg: createCronConfig(legacyStorePath),
       options: {},
       prompter: makePrompter(true),
     });
@@ -379,10 +381,10 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 
   it("warns instead of replacing announce delivery for notify fallback jobs", async () => {
-    const storePath = await makeTempStorePath();
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    const legacyStorePath = await makeTempLegacyStorePath();
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
     await fs.writeFile(
-      storePath,
+      legacyStorePath,
       JSON.stringify(
         {
           version: 1,
@@ -411,7 +413,7 @@ describe("maybeRepairLegacyCronStore", () => {
     await maybeRepairLegacyCronStore({
       cfg: {
         cron: {
-          store: storePath,
+          store: legacyStorePath,
           webhook: "https://example.invalid/cron-finished",
         } as OpenClawConfig["cron"] & { store: string },
       },
@@ -421,7 +423,7 @@ describe("maybeRepairLegacyCronStore", () => {
 
     const persisted = await loadCronStore(resolveCronStoreKey());
     expect(persisted.jobs).toEqual([]);
-    await expect(fs.stat(storePath)).resolves.toBeTruthy();
+    await expect(fs.stat(legacyStorePath)).resolves.toBeTruthy();
     expectNoteContaining(
       'uses legacy notify fallback alongside delivery mode "announce"',
       "Doctor warnings",
@@ -429,18 +431,18 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 
   it("does not auto-repair in non-interactive mode without explicit repair approval", async () => {
-    const storePath = await makeTempStorePath();
-    await writeCronStore(storePath, [createLegacyCronJob()]);
+    const legacyStorePath = await makeTempLegacyStorePath();
+    await writeLegacyCronStore(legacyStorePath, [createLegacyCronJob()]);
 
     const prompter = makePrompter(false);
 
     await maybeRepairLegacyCronStore({
-      cfg: createCronConfig(storePath),
+      cfg: createCronConfig(legacyStorePath),
       options: { nonInteractive: true },
       prompter,
     });
 
-    const jobs = await readPersistedJobs(storePath);
+    const jobs = await readPersistedLegacyJobs(legacyStorePath);
     const job = requirePersistedJob(jobs, 0);
     expect(prompter.confirm).toHaveBeenCalledWith({
       message: "Repair legacy cron jobs now?",
@@ -452,10 +454,10 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 
   it("migrates notify fallback none delivery jobs to cron.webhook", async () => {
-    const storePath = await makeTempStorePath();
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    const legacyStorePath = await makeTempLegacyStorePath();
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
     await fs.writeFile(
-      storePath,
+      legacyStorePath,
       JSON.stringify(
         {
           version: 1,
@@ -485,7 +487,7 @@ describe("maybeRepairLegacyCronStore", () => {
     await maybeRepairLegacyCronStore({
       cfg: {
         cron: {
-          store: storePath,
+          store: legacyStorePath,
           webhook: "https://example.invalid/cron-finished",
         } as OpenClawConfig["cron"] & { store: string },
       },
@@ -502,8 +504,8 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 
   it("repairs legacy root delivery threadId hints into delivery", async () => {
-    const storePath = await makeTempStorePath();
-    await writeCronStore(storePath, [
+    const legacyStorePath = await makeTempLegacyStorePath();
+    await writeLegacyCronStore(legacyStorePath, [
       {
         id: "legacy-thread-hint",
         name: "Legacy thread hint",
@@ -525,7 +527,7 @@ describe("maybeRepairLegacyCronStore", () => {
     ]);
 
     await maybeRepairLegacyCronStore({
-      cfg: createCronConfig(storePath),
+      cfg: createCronConfig(legacyStorePath),
       options: {},
       prompter: makePrompter(true),
     });
@@ -544,8 +546,8 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 
   it("rewrites stale managed dreaming jobs to the isolated agentTurn shape", async () => {
-    const storePath = await makeTempStorePath();
-    await writeCronStore(storePath, [
+    const legacyStorePath = await makeTempLegacyStorePath();
+    await writeLegacyCronStore(legacyStorePath, [
       {
         id: "memory-dreaming",
         name: "Memory Dreaming Promotion",
@@ -566,7 +568,7 @@ describe("maybeRepairLegacyCronStore", () => {
     ]);
 
     await maybeRepairLegacyCronStore({
-      cfg: createCronConfig(storePath),
+      cfg: createCronConfig(legacyStorePath),
       options: {},
       prompter: makePrompter(true),
     });

@@ -44,12 +44,12 @@ export function isLegacyWhatsAppAuthFile(name: string): boolean {
   return /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
 }
 
-export function readSessionStoreJson5(storePath: string): {
+export function readSessionStoreJson5(legacySessionIndexPath: string): {
   store: Record<string, SessionEntryLike>;
   ok: boolean;
 } {
   try {
-    const raw = fs.readFileSync(storePath, "utf-8");
+    const raw = fs.readFileSync(legacySessionIndexPath, "utf-8");
     const parsed = JSON5.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return { store: parsed as Record<string, SessionEntryLike>, ok: true };
