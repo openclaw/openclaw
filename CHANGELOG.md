@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Enforce inline shell wrapper payload matching [AI]. (#80978) Thanks @pgondhi987.
 - fix(node-pairing): replace changed pending requests [AI]. (#80894) Thanks @pgondhi987.
 - Rate limit Google Chat webhook requests [AI]. (#80974) Thanks @pgondhi987.
 - Docker: mount the auth-profile secret key directory so OAuth-backed auth profiles survive container rebuilds. (#80991)
