@@ -22,6 +22,7 @@ const createSession = vi.hoisted(() => vi.fn());
 const readEffectiveTools = vi.hoisted(() => vi.fn());
 const readSkillStatus = vi.hoisted(() => vi.fn());
 const readRawQaSessionStore = vi.hoisted(() => vi.fn());
+const readSessionTranscriptSummary = vi.hoisted(() => vi.fn());
 const runQaCli = vi.hoisted(() => vi.fn());
 const extractMediaPathFromText = vi.hoisted(() => vi.fn());
 const resolveGeneratedImagePath = vi.hoisted(() => vi.fn());
@@ -54,6 +55,8 @@ const reportsDiscoveryScopeLeak = vi.hoisted(() => vi.fn());
 const reportsMissingDiscoveryFiles = vi.hoisted(() => vi.fn());
 const hasModelSwitchContinuityEvidence = vi.hoisted(() => vi.fn());
 const qaChannelPlugin = vi.hoisted(() => ({ id: "qa-channel" }));
+const scanGatewayLogSentinels = vi.hoisted(() => vi.fn());
+const assertNoGatewayLogSentinels = vi.hoisted(() => vi.fn());
 
 vi.mock("./scenario-runtime-api.js", () => ({
   createQaScenarioRuntimeApi,
@@ -87,6 +90,7 @@ vi.mock("./suite-runtime-agent.js", () => ({
   readEffectiveTools,
   readSkillStatus,
   readRawQaSessionStore,
+  readSessionTranscriptSummary,
   runQaCli,
   extractMediaPathFromText,
   resolveGeneratedImagePath,
@@ -102,6 +106,11 @@ vi.mock("./suite-runtime-agent.js", () => ({
   runAgentPrompt,
   ensureImageGenerationConfigured,
   handleQaAction,
+}));
+
+vi.mock("./gateway-log-sentinel.js", () => ({
+  scanGatewayLogSentinels,
+  assertNoGatewayLogSentinels,
 }));
 
 vi.mock("./browser-runtime.js", () => ({
@@ -150,7 +159,9 @@ describe("qa suite runtime flow", () => {
     const env = {
       lab: { baseUrl: "http://127.0.0.1:4444" },
       webSessionIds: new Set<string>(),
-      gateway: {} as QaSuiteRuntimeEnv["gateway"],
+      gateway: {
+        logs: vi.fn(() => "safe line\ncodex app-server attempt timed out"),
+      } as unknown as QaSuiteRuntimeEnv["gateway"],
       transport: {
         id: "qa-channel",
         label: "QA Channel",
@@ -237,6 +248,11 @@ describe("qa suite runtime flow", () => {
         findManagedDreamingCronJob: typeof findManagedDreamingCronJob;
         forceMemoryIndex: typeof forceMemoryIndex;
         runAgentPrompt: typeof runAgentPrompt;
+        readGatewayLogs: () => string;
+        markGatewayLogCursor: () => number;
+        scanGatewayLogSentinels: typeof scanGatewayLogSentinels;
+        assertNoGatewayLogSentinels: typeof assertNoGatewayLogSentinels;
+        readSessionTranscriptSummary: typeof readSessionTranscriptSummary;
         qaChannelPlugin: typeof qaChannelPlugin;
         webOpenPage: (params: { url: string }) => Promise<unknown>;
       };
@@ -254,6 +270,21 @@ describe("qa suite runtime flow", () => {
     expect(call.deps.findManagedDreamingCronJob).toBe(findManagedDreamingCronJob);
     expect(call.deps.forceMemoryIndex).toBe(forceMemoryIndex);
     expect(call.deps.runAgentPrompt).toBe(runAgentPrompt);
+    expect(call.deps.readGatewayLogs()).toBe("safe line\ncodex app-server attempt timed out");
+    expect(call.deps.markGatewayLogCursor()).toBe(
+      "safe line\ncodex app-server attempt timed out".length,
+    );
+    call.deps.scanGatewayLogSentinels({ since: "safe line\n".length });
+    expect(scanGatewayLogSentinels).toHaveBeenCalledWith(
+      "safe line\ncodex app-server attempt timed out",
+      { since: "safe line\n".length },
+    );
+    call.deps.assertNoGatewayLogSentinels({ kinds: ["plugin-hook-failure"] });
+    expect(assertNoGatewayLogSentinels).toHaveBeenCalledWith(
+      "safe line\ncodex app-server attempt timed out",
+      { kinds: ["plugin-hook-failure"] },
+    );
+    expect(call.deps.readSessionTranscriptSummary).toBe(readSessionTranscriptSummary);
     expect(call.deps.qaChannelPlugin).toBe(qaChannelPlugin);
     expect(call.constants).toEqual({
       imageUnderstandingPngBase64: "small",

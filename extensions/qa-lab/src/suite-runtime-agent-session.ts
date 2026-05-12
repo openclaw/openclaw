@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { summarizeRuntimeTranscript } from "./runtime-transcript.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type {
   QaRawSessionStoreEntry,
@@ -93,4 +94,57 @@ async function readRawQaSessionStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
   }
 }
 
-export { createSession, readEffectiveTools, readRawQaSessionStore, readSkillStatus };
+function resolveSessionTranscriptFile(params: {
+  sessionsDir: string;
+  sessionId: string;
+  sessionEntry?: QaRawSessionStoreEntry;
+}) {
+  const explicitSessionFile = params.sessionEntry?.sessionFile?.trim();
+  if (explicitSessionFile) {
+    return path.isAbsolute(explicitSessionFile)
+      ? explicitSessionFile
+      : path.join(params.sessionsDir, explicitSessionFile);
+  }
+  return path.join(params.sessionsDir, `${params.sessionId}.jsonl`);
+}
+
+async function readSessionTranscriptSummary(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  sessionKey: string,
+) {
+  const sessionsDir = path.join(env.gateway.tempRoot, "state", "agents", "qa", "sessions");
+  const store = await readRawQaSessionStore(env);
+  const entry =
+    store[sessionKey] ??
+    Object.values(store).find(
+      (candidate) => candidate.sessionId === sessionKey || candidate.label === sessionKey,
+    );
+  const sessionId = entry?.sessionId?.trim();
+  if (!sessionId) {
+    return summarizeRuntimeTranscript("");
+  }
+  try {
+    const transcript = await fs.readFile(
+      resolveSessionTranscriptFile({
+        sessionsDir,
+        sessionId,
+        sessionEntry: entry,
+      }),
+      "utf8",
+    );
+    return summarizeRuntimeTranscript(transcript);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return summarizeRuntimeTranscript("");
+    }
+    throw error;
+  }
+}
+
+export {
+  createSession,
+  readEffectiveTools,
+  readRawQaSessionStore,
+  readSessionTranscriptSummary,
+  readSkillStatus,
+};

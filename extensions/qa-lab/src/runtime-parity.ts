@@ -1,7 +1,18 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  scanDirectReplyTranscriptSentinels,
+  scanGatewayLogSentinels,
+  type GatewayLogSentinelFinding,
+} from "./gateway-log-sentinel.js";
 import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
+import {
+  buildRuntimeTranscriptRecords,
+  extractRuntimeFinalAssistantText,
+  normalizeRuntimeTranscriptText,
+  type RuntimeTranscriptRecord,
+} from "./runtime-transcript.js";
 
 export type RuntimeId = "pi" | "codex";
 
@@ -69,6 +80,7 @@ export type RuntimeParityCell = {
   transportErrorClass?: string;
   runtimeErrorClass?: string;
   bootStateLines: string[];
+  gatewayLogSentinels?: GatewayLogSentinelFinding[];
   pluginState?: RuntimeParityPluginState;
 };
 
@@ -123,11 +135,6 @@ type RuntimeParitySessionEntry = {
   systemPromptReport?: RuntimeParitySystemPromptReport;
 };
 
-type RuntimeParityTranscriptRecord = {
-  message: Record<string, unknown>;
-  role: "user" | "assistant" | "tool" | "toolResult";
-};
-
 type RuntimeParityMockRequestSnapshot = {
   plannedToolName?: string;
   plannedToolArgs?: unknown;
@@ -142,7 +149,7 @@ const DEFAULT_AGENT_ID = "qa";
 const BOOT_STATE_LINE_RE =
   /\b(?:FailoverError|No API key found|Codex app-server|auth profile|runtime policy|restart mode:|plugin|doctor)\b/i;
 function normalizeTextForParity(text: string) {
-  return text.replace(/\s+/gu, " ").trim();
+  return normalizeRuntimeTranscriptText(text);
 }
 
 function readFiniteNumber(value: unknown): number | undefined {
@@ -345,55 +352,8 @@ function addUsage(target: RuntimeParityUsage, next: RuntimeParityUsage) {
   }
 }
 
-function extractAssistantText(message: Record<string, unknown>) {
-  const rawContent = message.content;
-  if (typeof rawContent === "string") {
-    return rawContent.trim();
-  }
-  if (!Array.isArray(rawContent)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of rawContent) {
-    if (typeof block === "string") {
-      if (block.trim()) {
-        parts.push(block.trim());
-      }
-      continue;
-    }
-    if (!isMessageRecord(block)) {
-      continue;
-    }
-    const text = readNonEmptyString(block.text);
-    if (text) {
-      parts.push(text);
-      continue;
-    }
-    const nestedText = readNonEmptyString(block.content);
-    if (
-      nestedText &&
-      (block.type === "output_text" || block.type === "text" || block.type === "message")
-    ) {
-      parts.push(nestedText);
-    }
-  }
-  return parts.join("\n").trim();
-}
-
 function normalizeToolCallId(value: unknown) {
   return readNonEmptyString(value);
-}
-
-function normalizeTranscriptRole(
-  value: string | undefined,
-): RuntimeParityTranscriptRecord["role"] | undefined {
-  if (value === "user" || value === "assistant" || value === "tool" || value === "toolResult") {
-    return value;
-  }
-  if (value === "tool_result" || value === "tool-result") {
-    return "toolResult";
-  }
-  return undefined;
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | undefined {
@@ -631,7 +591,7 @@ function classifyToolResultError(params: {
   return undefined;
 }
 
-function resolveToolCallOrder(records: RuntimeParityTranscriptRecord[]): RuntimeParityToolCall[] {
+function resolveToolCallOrder(records: RuntimeTranscriptRecord[]): RuntimeParityToolCall[] {
   const ordered: RuntimeParityPendingToolCall[] = [];
   const byId = new Map<string, number>();
   const unresolvedByTool = new Map<string, number[]>();
@@ -835,50 +795,15 @@ function extractBootStateLines(logs: string | undefined): string[] {
     .slice(-30);
 }
 
-function buildTranscriptRecords(transcriptBytes: string): RuntimeParityTranscriptRecord[] {
-  const records: RuntimeParityTranscriptRecord[] = [];
-  for (const line of transcriptBytes.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-      const message = isMessageRecord(parsed.message) ? parsed.message : undefined;
-      const role = normalizeTranscriptRole(readNonEmptyString(message?.role));
-      if (!message || !role) {
-        continue;
-      }
-      records.push({
-        message,
-        role,
-      });
-    } catch {
-      // Ignore malformed QA transcript rows and keep the classifier deterministic.
-    }
-  }
-  return records;
-}
-
 function countComparableTranscriptRecords(transcriptBytes: string) {
-  return buildTranscriptRecords(transcriptBytes).length;
+  return buildRuntimeTranscriptRecords(transcriptBytes).length;
 }
 
-function extractFinalAssistantText(records: RuntimeParityTranscriptRecord[]) {
-  let lastAssistantText = "";
-  for (const record of records) {
-    if (record.role !== "assistant") {
-      continue;
-    }
-    const text = extractAssistantText(record.message);
-    if (text) {
-      lastAssistantText = text;
-    }
-  }
-  return normalizeTextForParity(lastAssistantText);
+function extractFinalAssistantText(records: RuntimeTranscriptRecord[]) {
+  return normalizeTextForParity(extractRuntimeFinalAssistantText(records));
 }
 
-function aggregateUsage(records: RuntimeParityTranscriptRecord[]): RuntimeParityUsage {
+function aggregateUsage(records: RuntimeTranscriptRecord[]): RuntimeParityUsage {
   const totals: RuntimeParityUsage = {
     inputTokens: 0,
     outputTokens: 0,
@@ -1040,6 +965,18 @@ function classifyRuntimeParityCells(params: {
   codexScenarioStatus: "pass" | "fail" | "skip";
   comparisonMode?: RuntimeParityComparisonMode;
 }): Pick<RuntimeParityResult, "drift" | "driftDetails"> {
+  const gatewayLogSentinels = [
+    ...(params.pi.gatewayLogSentinels ?? []),
+    ...(params.codex.gatewayLogSentinels ?? []),
+  ];
+  if (gatewayLogSentinels.length > 0) {
+    const kinds = [...new Set(gatewayLogSentinels.map((finding) => finding.kind))].join(", ");
+    return {
+      drift: "failure-mode",
+      driftDetails: `gateway log sentinel(s) detected: ${kinds}`,
+    };
+  }
+
   if (
     isHardFailureRuntimeError(params.pi.runtimeErrorClass) ||
     isHardFailureRuntimeError(params.codex.runtimeErrorClass) ||
@@ -1299,7 +1236,7 @@ export async function captureRuntimeParityCell(
     gateway: params.gateway,
     agentId,
   });
-  const transcriptRecords = buildTranscriptRecords(transcriptBytes);
+  const transcriptRecords = buildRuntimeTranscriptRecords(transcriptBytes);
   const providerPlanToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl);
   const systemPromptReport = await loadRuntimeParitySystemPromptReport({
     gateway: params.gateway,
@@ -1309,6 +1246,10 @@ export async function captureRuntimeParityCell(
     gateway: params.gateway,
     agentId,
   });
+  const gatewayLogSentinels = [
+    ...scanGatewayLogSentinels(params.gateway.logs?.()),
+    ...scanDirectReplyTranscriptSentinels(transcriptBytes),
+  ];
   return {
     runtime: params.runtime,
     transcriptBytes,
@@ -1322,6 +1263,7 @@ export async function captureRuntimeParityCell(
       ? { runtimeErrorClass: classifyScenarioError(params.scenarioResult.details) }
       : {}),
     bootStateLines: extractBootStateLines(params.gateway.logs?.()),
+    ...(gatewayLogSentinels.length > 0 ? { gatewayLogSentinels } : {}),
     ...(pluginState ? { pluginState } : {}),
   };
 }

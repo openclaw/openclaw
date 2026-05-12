@@ -106,6 +106,10 @@ export const QA_RUNTIME_FAULT_INJECTION_MOCK_SCENARIO_IDS = [
 ] as const;
 
 export const QA_RUNTIME_FAULT_INJECTION_LIVE_SCENARIO_IDS = [
+  "plugin-hook-health-sentinel",
+  "plugin-manifest-contract-health",
+  "cron-model-allowlist-migration",
+  "long-context-progress-watchdog",
   "gateway-restart-inflight-run",
   "config-apply-restart-wakeup",
   "cron-one-minute-ping",
@@ -121,6 +125,10 @@ export const QA_RUNTIME_FAULT_INJECTION_LIVE_SCENARIO_IDS = [
 
 export const QA_RUNTIME_FIRST_HOUR_LIVE_SCENARIO_IDS = [
   ...QA_RUNTIME_FIRST_HOUR_SCENARIO_IDS,
+  "plugin-hook-health-sentinel",
+  "plugin-manifest-contract-health",
+  "webchat-direct-reply-routing",
+  "long-context-progress-watchdog",
   "streaming-final-integrity",
   "codex-pi-shaped-read-vocabulary",
   "gateway-restart-inflight-run",

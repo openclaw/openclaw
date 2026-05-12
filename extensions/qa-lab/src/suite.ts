@@ -5,6 +5,10 @@ import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harne
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
+import {
+  formatGatewayLogSentinelSummary,
+  type GatewayLogSentinelFinding,
+} from "./gateway-log-sentinel.js";
 import type {
   QaLabLatestReport,
   QaLabScenarioOutcome,
@@ -77,6 +81,7 @@ export type QaSuiteScenarioResult = {
   steps: QaReportCheck[];
   details?: string;
   runtimeParity?: RuntimeParityResult;
+  gatewayLogSentinels?: GatewayLogSentinelFinding[];
 };
 
 type QaSuiteEnvironment = {
@@ -378,6 +383,10 @@ function formatRuntimeParityCellDetails(cell: RuntimeParityCell) {
   ].join(" ");
 }
 
+function collectRuntimeParityGatewayLogSentinels(result: RuntimeParityResult) {
+  return Object.values(result.cells).flatMap((cell) => cell.gatewayLogSentinels ?? []);
+}
+
 function buildRuntimeParityScenarioResult(params: {
   scenarioName: string;
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
@@ -394,12 +403,26 @@ function buildRuntimeParityScenarioResult(params: {
     : reportOnlyReason
       ? "skip"
       : "fail";
+  const gatewayLogSentinels = collectRuntimeParityGatewayLogSentinels(params.result);
+  const hasGatewayLogSentinels = gatewayLogSentinels.length > 0;
+  const gatewayLogSentinelsEnvironmentOnly =
+    hasGatewayLogSentinels &&
+    gatewayLogSentinels.every((finding) => finding.verdict === "environment-blocked");
+  const gatewayLogSentinelStepStatus = gatewayLogSentinelsEnvironmentOnly ? "skip" : "fail";
+  const scenarioStatus =
+    driftStepStatus === "fail"
+      ? "fail"
+      : hasGatewayLogSentinels
+        ? gatewayLogSentinelStepStatus
+        : driftStepStatus;
   const details = reportOnlyReason
     ? `report-only runtime drift classified as ${params.result.drift}: ${reportOnlyReason}`
-    : (params.result.driftDetails ?? `runtime drift classified as ${params.result.drift}`);
+    : hasGatewayLogSentinels
+      ? `gateway log sentinel(s): ${formatGatewayLogSentinelSummary(gatewayLogSentinels)}`
+      : (params.result.driftDetails ?? `runtime drift classified as ${params.result.drift}`);
   return {
     name: params.scenarioName,
-    status: driftStepStatus,
+    status: scenarioStatus,
     details,
     steps: [
       {
@@ -426,8 +449,18 @@ function buildRuntimeParityScenarioResult(params: {
           ? `${params.result.driftDetails ?? params.result.drift}\nreport-only: ${reportOnlyReason}`
           : (params.result.driftDetails ?? params.result.drift),
       },
+      ...(hasGatewayLogSentinels
+        ? [
+            {
+              name: "gateway log sentinel",
+              status: gatewayLogSentinelStepStatus,
+              details: formatGatewayLogSentinelSummary(gatewayLogSentinels),
+            } satisfies QaReportCheck,
+          ]
+        : []),
     ],
     runtimeParity: params.result,
+    ...(hasGatewayLogSentinels ? { gatewayLogSentinels } : {}),
   };
 }
 
@@ -560,6 +593,9 @@ export type { QaSuiteSummaryJson } from "./suite-summary.js";
 export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSuiteSummaryJson {
   const primarySplit = splitModelRef(params.primaryModel);
   const alternateSplit = splitModelRef(params.alternateModel);
+  const gatewayLogSentinels = params.scenarios.flatMap(
+    (scenario) => scenario.gatewayLogSentinels ?? [],
+  );
   return {
     scenarios: params.scenarios,
     counts: {
@@ -568,6 +604,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
       skipped: countQaSuiteSkippedScenarios(params.scenarios),
       failed: countQaSuiteFailedScenarios(params.scenarios),
     },
+    ...(gatewayLogSentinels.length > 0 ? { gatewayLogSentinels } : {}),
     ...(params.metrics ? { metrics: params.metrics } : {}),
     run: {
       startedAt: params.startedAt.toISOString(),

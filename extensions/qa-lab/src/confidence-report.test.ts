@@ -308,6 +308,111 @@ describe("qa confidence report", () => {
     });
   });
 
+  it("classifies environment-blocking gateway sentinels without turning them into unknowns", async () => {
+    await writeJson("live/qa-suite-summary.json", {
+      counts: { total: 1, passed: 1, skipped: 0, failed: 0 },
+      gatewayLogSentinels: [
+        {
+          kind: "live-quota-or-subscription",
+          verdict: "environment-blocked",
+          owner: "environment",
+          productImpact: "P4",
+          qaImpact: "P0",
+          line: 12,
+          text: "OpenAI quota exceeded",
+        },
+      ],
+      scenarios: [],
+    });
+
+    const report = await buildQaConfidenceReport({
+      manifest: {
+        version: 1,
+        profile: "codex-100",
+        lanes: [
+          {
+            id: "first-hour-live",
+            title: "First hour live",
+            kind: "qa-suite-summary",
+            artifact: "live/qa-suite-summary.json",
+            required: true,
+          },
+        ],
+      },
+      artifactRoot: tempRoot,
+      strictZeroUnknowns: true,
+      generatedAt: "2026-05-13T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.globalPass).toBe(false);
+    expect(report.counts).toMatchObject({ blocked: 1, unknown: 0 });
+    expect(report.lanes[0]).toMatchObject({
+      status: "blocked",
+      verdict: "environment-blocked",
+    });
+  });
+
+  it("classifies product and plugin gateway sentinels as known failing lanes", async () => {
+    await writeJson("live/qa-suite-summary.json", {
+      counts: { total: 1, passed: 1, skipped: 0, failed: 0 },
+      scenarios: [
+        {
+          name: "plugin hook health sentinel",
+          status: "pass",
+          steps: [],
+          runtimeParity: {
+            scenarioId: "plugin-hook-health-sentinel",
+            drift: "none",
+            cells: {
+              pi: { gatewayLogSentinels: [] },
+              codex: {
+                gatewayLogSentinels: [
+                  {
+                    kind: "plugin-hook-failure",
+                    verdict: "qa-harness-bug",
+                    owner: "plugin",
+                    productImpact: "P1",
+                    qaImpact: "P0",
+                    line: 4,
+                    text: "before_prompt_build hook failed",
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const report = await buildQaConfidenceReport({
+      manifest: {
+        version: 1,
+        profile: "codex-100",
+        lanes: [
+          {
+            id: "first-hour-live",
+            title: "First hour live",
+            kind: "qa-suite-summary",
+            artifact: "live/qa-suite-summary.json",
+            required: true,
+          },
+        ],
+      },
+      artifactRoot: tempRoot,
+      strictZeroUnknowns: true,
+      generatedAt: "2026-05-13T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.globalPass).toBe(false);
+    expect(report.counts).toMatchObject({ failed: 1, unknown: 0 });
+    expect(report.lanes[0]).toMatchObject({
+      status: "fail",
+      verdict: "qa-harness-bug",
+    });
+  });
+
   it("fails strict zero-unknowns for an unclassified failing lane", async () => {
     await writeJson("first-hour/qa-suite-summary.json", {
       counts: { total: 18, passed: 17, failed: 1 },

@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  formatGatewayLogSentinelSummary,
+  type GatewayLogSentinelFinding,
+} from "./gateway-log-sentinel.js";
+import {
   buildHarnessParityCell,
   buildHarnessParityResult,
   type HarnessParityDrift,
@@ -146,6 +150,41 @@ function readStringArray(value: unknown): string[] | undefined {
   }
   const values = value.filter((entry): entry is string => typeof entry === "string");
   return values.length === value.length ? values : undefined;
+}
+
+function isGatewayLogSentinelFinding(value: unknown): value is GatewayLogSentinelFinding {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const kind = readString(value.kind);
+  const verdict = readString(value.verdict);
+  return Boolean(kind && verdict && isQaConfidenceVerdict(verdict));
+}
+
+function collectGatewayLogSentinels(value: unknown): GatewayLogSentinelFinding[] {
+  const findings: GatewayLogSentinelFinding[] = [];
+  const visit = (candidate: unknown) => {
+    if (Array.isArray(candidate)) {
+      for (const entry of candidate) {
+        visit(entry);
+      }
+      return;
+    }
+    if (!isRecord(candidate)) {
+      return;
+    }
+    if (Array.isArray(candidate.gatewayLogSentinels)) {
+      findings.push(...candidate.gatewayLogSentinels.filter(isGatewayLogSentinelFinding));
+    }
+    for (const [key, nested] of Object.entries(candidate)) {
+      if (key === "gatewayLogSentinels") {
+        continue;
+      }
+      visit(nested);
+    }
+  };
+  visit(value);
+  return findings;
 }
 
 function isQaConfidenceVerdict(value: string): value is QaConfidenceVerdict {
@@ -300,11 +339,30 @@ type QaConfidenceLaneEvaluation = {
   passed: boolean;
   details: string;
   skippedCount?: number;
+  status?: QaConfidenceLaneStatus;
+  verdict?: QaConfidenceVerdict;
 };
 
 function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
   if (!isRecord(payload)) {
     return { passed: false, details: "qa-suite-summary payload was not an object" };
+  }
+  const gatewayLogSentinels = collectGatewayLogSentinels(payload);
+  if (gatewayLogSentinels.length > 0) {
+    const allEnvironmentBlocked = gatewayLogSentinels.every(
+      (finding) => finding.verdict === "environment-blocked",
+    );
+    const firstBlockingSentinel =
+      gatewayLogSentinels.find((finding) => finding.verdict !== "environment-blocked") ??
+      gatewayLogSentinels[0];
+    return {
+      passed: false,
+      status: allEnvironmentBlocked ? "blocked" : "fail",
+      verdict: allEnvironmentBlocked
+        ? "environment-blocked"
+        : (firstBlockingSentinel?.verdict ?? "product-bug"),
+      details: `gateway log sentinel(s): ${formatGatewayLogSentinelSummary(gatewayLogSentinels)}`,
+    };
   }
   const failedCount = readNumber(isRecord(payload.counts) ? payload.counts.failed : undefined);
   if (failedCount !== undefined) {
@@ -503,6 +561,22 @@ function classifiedFailureResult(
   };
 }
 
+function evaluatedFailureResult(
+  lane: QaConfidenceManifestLane,
+  artifactPath: string,
+  evaluated: QaConfidenceLaneEvaluation,
+): QaConfidenceLaneResult {
+  if (evaluated.status || evaluated.verdict) {
+    return {
+      ...baseLaneResult(lane, artifactPath),
+      status: evaluated.status ?? "fail",
+      ...(evaluated.verdict ? { verdict: evaluated.verdict } : {}),
+      details: evaluated.details,
+    };
+  }
+  return classifiedFailureResult(lane, artifactPath, evaluated.details);
+}
+
 async function evaluateLane(
   lane: QaConfidenceManifestLane,
   artifactRoot: string,
@@ -517,7 +591,7 @@ async function evaluateLane(
   const evaluated = evaluateLaneArtifact(lane, payload);
   if (!evaluated.passed) {
     return {
-      ...classifiedFailureResult(lane, artifactPath, evaluated.details),
+      ...evaluatedFailureResult(lane, artifactPath, evaluated),
       ...(evaluated.skippedCount === undefined ? {} : { skippedCount: evaluated.skippedCount }),
     };
   }

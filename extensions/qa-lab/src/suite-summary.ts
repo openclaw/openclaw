@@ -1,3 +1,4 @@
+import type { GatewayLogSentinelFinding } from "./gateway-log-sentinel.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
 import type { QaCodexToolLoading } from "./runtime-tool-metadata.js";
@@ -8,6 +9,7 @@ type QaSuiteSummaryScenario = {
   steps: unknown[];
   details?: string;
   runtimeParity?: RuntimeParityResult;
+  gatewayLogSentinels?: GatewayLogSentinelFinding[];
 };
 
 export type QaSuiteSummaryJson = {
@@ -26,6 +28,7 @@ export type QaSuiteSummaryJson = {
     gatewayProcessRssEndBytes?: number | null;
     gatewayProcessRssDeltaBytes?: number | null;
   };
+  gatewayLogSentinels?: GatewayLogSentinelFinding[];
   run: {
     startedAt: string;
     finishedAt: string;

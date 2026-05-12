@@ -369,6 +369,26 @@ describe("qa scenario catalog", () => {
     expect(JSON.stringify(scenario.execution.flow)).toContain("Use the Read tool");
   });
 
+  it("adds live gateway log sentinel scenarios to operational parity coverage", () => {
+    const scenarioIds = [
+      "plugin-hook-health-sentinel",
+      "plugin-manifest-contract-health",
+      "webchat-direct-reply-routing",
+      "long-context-progress-watchdog",
+      "cron-model-allowlist-migration",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = readQaScenarioById(scenarioId);
+      expect(scenario.runtimeParityTier).toBe("live-only");
+      expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
+      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
+    }
+    expect(readQaScenarioById("webchat-direct-reply-routing").sourcePath).toBe(
+      "qa/scenarios/channels/webchat-direct-reply-routing.md",
+    );
+  });
+
   it("marks prose-only first-hour scenarios as outcome-only comparisons", () => {
     expect(readQaScenarioExecutionConfig("channel-chat-baseline")).toMatchObject({
       runtimeParityComparison: "outcome-only",
