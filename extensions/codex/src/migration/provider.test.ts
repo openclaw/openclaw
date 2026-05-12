@@ -368,6 +368,7 @@ describe("buildCodexMigrationProvider", () => {
       expect(arg).toEqual(
         expect.objectContaining({
           authProfileId: null,
+          isolated: true,
           startOptions: expect.objectContaining({
             env: {
               CODEX_HOME: fixture.codexHome,

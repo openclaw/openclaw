@@ -284,6 +284,7 @@ async function requestSourceCodexAppServerJson<T>(
     timeoutMs: 60_000,
     startOptions: options.startOptions,
     authProfileId: null,
+    isolated: true,
   });
 }
 

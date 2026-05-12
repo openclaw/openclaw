@@ -90,10 +90,10 @@ The integration has three separate states:
 Migration is the durable install/eligibility step. During planning, OpenClaw
 reads source Codex `plugin/read` details and takes a fresh source `app/list`
 snapshot. App-backed source plugins are eligible only when every owned app is
-present, enabled, accessible, and not auth-required in that fresh source
-snapshot. Runtime app inventory is the target-session accessibility check after
-migration. Codex harness session setup then computes a restrictive thread app
-config for the enabled and accessible plugin apps.
+present, enabled, and accessible in that fresh source snapshot. Runtime app
+inventory is the target-session accessibility check after migration. Codex
+harness session setup then computes a restrictive thread app config for the
+enabled and accessible plugin apps.
 
 Thread app config is computed when OpenClaw establishes a Codex harness session
 or replaces a stale Codex thread binding. It is not recomputed on every turn.
@@ -105,9 +105,8 @@ V1 is intentionally narrow:
 - Only `openai-curated` plugins that were already installed in the source Codex
   app-server inventory are migration-eligible.
 - App-backed source plugins must pass the migration-time app-readiness gate.
-  Inaccessible, disabled, missing, auth-required, unreadable, or stale source
-  app state is reported as a skipped manual item instead of an enabled config
-  entry.
+  Inaccessible, disabled, missing, unreadable, or stale source app state is
+  reported as a skipped manual item instead of an enabled config entry.
 - Migration writes explicit plugin identities with `marketplaceName` and
   `pluginName`; it does not write local `marketplacePath` cache paths.
 - `codexPlugins.enabled` is the global enablement switch.
