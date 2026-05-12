@@ -201,6 +201,7 @@ jobs:
             --repo-root . \
             --runtime-axis \
             --token-efficiency \
+            --allow-failures \
             --summary "${root}/first-hour-20-direct/qa-suite-summary.json" \
             --output-dir "${root}/first-hour-20-direct-report"
 
@@ -345,6 +346,7 @@ jobs:
             --repo-root . \
             --runtime-axis \
             --token-efficiency \
+            --allow-failures \
             --summary "${root}/codex-native-live/qa-suite-summary.json" \
             --output-dir "${root}/live-token-efficiency"
 

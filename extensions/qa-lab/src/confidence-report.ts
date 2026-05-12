@@ -1,6 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  buildHarnessParityCell,
+  buildHarnessParityResult,
+  type HarnessParityDrift,
+} from "./harness-parity.js";
+import {
+  runRuntimeParityScenario,
+  type RuntimeParityCell,
+  type RuntimeParityDrift,
+  type RuntimeParityResult,
+  type RuntimeParitySystemPromptReport,
+  type RuntimeParityToolCall,
+} from "./runtime-parity.js";
+import { buildTokenEfficiencyReport } from "./token-efficiency-report.js";
 
 export const QA_CONFIDENCE_VERDICTS = [
   "pass",
@@ -561,56 +575,266 @@ export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): st
   return `${lines.join("\n")}\n`;
 }
 
-export function buildQaConfidenceSelfTestSummary(
+function syntheticRuntimeCell(
+  runtime: RuntimeParityCell["runtime"],
+  overrides: Partial<RuntimeParityCell> = {},
+): RuntimeParityCell {
+  return {
+    runtime,
+    transcriptBytes: JSON.stringify({ message: { role: "assistant", content: "ok" } }),
+    toolCalls: [],
+    finalText: "ok",
+    usage: {
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+    },
+    wallClockMs: 10,
+    bootStateLines: [],
+    ...overrides,
+  };
+}
+
+function syntheticToolCall(overrides: Partial<RuntimeParityToolCall> = {}): RuntimeParityToolCall {
+  return {
+    tool: "openclaw.synthetic",
+    argsHash: "args-a",
+    resultHash: "result-a",
+    ...overrides,
+  };
+}
+
+async function detectRuntimeDrift(params: {
+  scenarioId: string;
+  pi: RuntimeParityCell;
+  codex: RuntimeParityCell;
+  expectedDrift: RuntimeParityDrift;
+}): Promise<boolean> {
+  const result = await runRuntimeParityScenario({
+    scenarioId: params.scenarioId,
+    runCell: async (runtime) => ({
+      scenarioStatus: "pass",
+      cell: runtime === "pi" ? params.pi : params.codex,
+    }),
+  });
+  return result.drift === params.expectedDrift;
+}
+
+function syntheticPromptReport(
+  overrides: Partial<RuntimeParitySystemPromptReport> = {},
+): RuntimeParitySystemPromptReport {
+  return {
+    systemPrompt: {
+      chars: 100,
+      projectContextChars: 10,
+      nonProjectContextChars: 90,
+    },
+    skills: {
+      promptChars: 20,
+    },
+    tools: {
+      listChars: 30,
+      schemaChars: 40,
+      entries: [
+        {
+          name: "openclaw.synthetic",
+          summaryChars: 12,
+          schemaChars: 18,
+          propertiesCount: 2,
+        },
+      ],
+    },
+    ...overrides,
+  };
+}
+
+function detectHarnessDrift(params: {
+  leftReport: RuntimeParitySystemPromptReport;
+  rightReport: RuntimeParitySystemPromptReport;
+  expectedDrift: HarnessParityDrift;
+}): boolean {
+  const left = buildHarnessParityCell({
+    variant: { id: "left", label: "Left" },
+    cell: syntheticRuntimeCell("pi", { systemPromptReport: params.leftReport }),
+    tokenUsageSource: "mock-estimate",
+  });
+  const right = buildHarnessParityCell({
+    variant: { id: "right", label: "Right" },
+    cell: syntheticRuntimeCell("codex", { systemPromptReport: params.rightReport }),
+    tokenUsageSource: "mock-estimate",
+  });
+  return (
+    buildHarnessParityResult({
+      scenarioId: "confidence-self-test",
+      left,
+      right,
+    }).drift === params.expectedDrift
+  );
+}
+
+function detectTokenEfficiencyRegression(): boolean {
+  const pi = syntheticRuntimeCell("pi", {
+    usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
+  });
+  const codex = syntheticRuntimeCell("codex", {
+    usage: { inputTokens: 200, outputTokens: 40, totalTokens: 240 },
+  });
+  const runtimeParity: RuntimeParityResult = {
+    scenarioId: "token-efficiency-regression",
+    cells: { pi, codex },
+    drift: "none",
+    toolBreakdown: [],
+  };
+  const report = buildTokenEfficiencyReport({
+    summary: {
+      run: {
+        providerMode: "live-frontier",
+        runtimePair: ["pi", "codex"],
+      },
+      scenarios: [
+        {
+          name: "token-efficiency-regression",
+          status: "pass",
+          runtimeParity,
+        },
+      ],
+    },
+    thresholdPercent: 15,
+    generatedAt: "2026-05-12T00:00:00.000Z",
+  });
+  return !report.pass && report.failures.length === 1;
+}
+
+function detectJsonlReplayDrift(): boolean {
+  return !evaluateJsonlReplaySummary({
+    transcripts: [
+      {
+        transcriptPath: "synthetic.jsonl",
+        userTurnCount: 2,
+        drift: ["none", "tool-result-shape"],
+        firstDriftAtTurn: 2,
+      },
+    ],
+  }).passed;
+}
+
+export async function buildQaConfidenceSelfTestSummary(
   generatedAt = new Date().toISOString(),
-): QaConfidenceSelfTestSummary {
+): Promise<QaConfidenceSelfTestSummary> {
+  const promptDriftDetected = detectHarnessDrift({
+    leftReport: syntheticPromptReport(),
+    rightReport: syntheticPromptReport({
+      systemPrompt: {
+        chars: 101,
+        projectContextChars: 10,
+        nonProjectContextChars: 91,
+      },
+    }),
+    expectedDrift: "system-prompt",
+  });
+  const toolDescriptionDetected = detectHarnessDrift({
+    leftReport: syntheticPromptReport(),
+    rightReport: syntheticPromptReport({
+      tools: {
+        listChars: 31,
+        schemaChars: 40,
+        entries: [
+          {
+            name: "openclaw.synthetic",
+            summaryChars: 13,
+            schemaChars: 18,
+            propertiesCount: 2,
+          },
+        ],
+      },
+    }),
+    expectedDrift: "tool-description",
+  });
+  const toolSchemaDetected = detectHarnessDrift({
+    leftReport: syntheticPromptReport(),
+    rightReport: syntheticPromptReport({
+      tools: {
+        listChars: 30,
+        schemaChars: 41,
+        entries: [
+          {
+            name: "openclaw.synthetic",
+            summaryChars: 12,
+            schemaChars: 19,
+            propertiesCount: 3,
+          },
+        ],
+      },
+    }),
+    expectedDrift: "tool-schema",
+  });
+  const runtimeToolCallDropDetected = await detectRuntimeDrift({
+    scenarioId: "runtime-tool-call-drop",
+    pi: syntheticRuntimeCell("pi", { toolCalls: [syntheticToolCall()] }),
+    codex: syntheticRuntimeCell("codex", { toolCalls: [] }),
+    expectedDrift: "tool-call-shape",
+  });
+  const toolResultMismatchDetected = await detectRuntimeDrift({
+    scenarioId: "tool-result-mismatch",
+    pi: syntheticRuntimeCell("pi", { toolCalls: [syntheticToolCall()] }),
+    codex: syntheticRuntimeCell("codex", {
+      toolCalls: [syntheticToolCall({ resultHash: "result-b" })],
+    }),
+    expectedDrift: "tool-result-shape",
+  });
+  const failureModeDriftDetected = await detectRuntimeDrift({
+    scenarioId: "failure-mode-drift",
+    pi: syntheticRuntimeCell("pi"),
+    codex: syntheticRuntimeCell("codex", { transportErrorClass: "synthetic-transport" }),
+    expectedDrift: "failure-mode",
+  });
   const canaries: QaConfidenceSelfTestCanary[] = [
     {
       id: "prompt-drift",
       category: "prompt",
-      detected: true,
+      detected: promptDriftDetected,
       expectedVerdict: "qa-harness-bug",
       details: "synthetic harness prompt hash changed",
     },
     {
       id: "tool-description-schema-drift",
       category: "tool-schema",
-      detected: true,
+      detected: toolDescriptionDetected && toolSchemaDetected,
       expectedVerdict: "qa-harness-bug",
       details: "synthetic tool description/schema hash changed",
     },
     {
       id: "runtime-tool-call-drop",
       category: "tool-call",
-      detected: true,
+      detected: runtimeToolCallDropDetected,
       expectedVerdict: "product-bug",
       details: "synthetic runtime transcript omitted a required tool call",
     },
     {
       id: "tool-result-mismatch",
       category: "tool-result",
-      detected: true,
+      detected: toolResultMismatchDetected,
       expectedVerdict: "product-bug",
       details: "synthetic runtime transcript returned a mismatched tool result",
     },
     {
       id: "failure-mode-drift",
       category: "failure-mode",
-      detected: true,
+      detected: failureModeDriftDetected,
       expectedVerdict: "product-bug",
       details: "synthetic runtime failed with a different failure mode",
     },
     {
       id: "token-efficiency-regression",
       category: "token-efficiency",
-      detected: true,
+      detected: detectTokenEfficiencyRegression(),
       expectedVerdict: "qa-harness-bug",
       details: "synthetic token row exceeded the configured efficiency threshold",
     },
     {
       id: "jsonl-replay-ordering-drift",
       category: "jsonl-replay",
-      detected: true,
+      detected: detectJsonlReplayDrift(),
       expectedVerdict: "fixture-bug",
       details: "synthetic JSONL replay drifted after turn ordering changed",
     },
@@ -647,7 +871,7 @@ export async function writeQaConfidenceSelfTestArtifacts(params: {
   generatedAt?: string;
 }): Promise<{ reportPath: string; summaryPath: string; summary: QaConfidenceSelfTestSummary }> {
   await fs.mkdir(params.outputDir, { recursive: true });
-  const summary = buildQaConfidenceSelfTestSummary(params.generatedAt);
+  const summary = await buildQaConfidenceSelfTestSummary(params.generatedAt);
   const report = renderQaConfidenceSelfTestMarkdownReport(summary);
   const reportPath = path.join(params.outputDir, "qa-confidence-self-test-report.md");
   const summaryPath = path.join(params.outputDir, "qa-confidence-self-test-summary.json");

@@ -68,6 +68,7 @@ async function runQaParityReport(opts: {
   harnessAxis?: boolean;
   summary?: string;
   tokenEfficiency?: boolean;
+  allowFailures?: boolean;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaParityReportCommand(opts);
@@ -421,6 +422,7 @@ export function registerQaLabCli(program: Command) {
     )
     .option("--baseline-label <label>", "Baseline display label", QA_FRONTIER_PARITY_BASELINE_LABEL)
     .option("--output-dir <path>", "Artifact directory for the parity report")
+    .option("--allow-failures", "Write reports without setting a failing exit code", false)
     .action(
       async (opts: {
         repoRoot?: string;
@@ -433,6 +435,7 @@ export function registerQaLabCli(program: Command) {
         harnessAxis?: boolean;
         summary?: string;
         tokenEfficiency?: boolean;
+        allowFailures?: boolean;
       }) => {
         await runQaParityReport(opts);
       },
@@ -522,6 +525,7 @@ export function registerQaLabCli(program: Command) {
     .option("--output-dir <path>", "Artifact directory for the confidence self-test")
     .action(async (opts: { repoRoot?: string; outputDir?: string }) => {
       await runQaConfidenceSelfTest(opts);
+      process.exit(process.exitCode ?? 0);
     });
 
   qa.command("coverage")

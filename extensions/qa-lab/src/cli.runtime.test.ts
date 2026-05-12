@@ -1041,6 +1041,74 @@ describe("qa cli runtime", () => {
     }
   });
 
+  it("keeps runtime-axis parity report exit code clear when --allow-failures is set", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-runtime-parity-allow-"));
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    try {
+      await fs.writeFile(
+        path.join(repoRoot, "runtime-summary.json"),
+        JSON.stringify({
+          scenarios: [
+            {
+              name: "Approval turn tool followthrough",
+              status: "fail",
+              steps: [],
+              runtimeParity: {
+                scenarioId: "approval-turn-tool-followthrough",
+                drift: "tool-call-shape",
+                driftDetails: "tool call 1 differs",
+                cells: {
+                  pi: {
+                    runtime: "pi",
+                    transcriptBytes: '{"role":"assistant"}\n',
+                    toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
+                    finalText: "done",
+                    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                    wallClockMs: 10,
+                    bootStateLines: [],
+                  },
+                  codex: {
+                    runtime: "codex",
+                    transcriptBytes: '{"role":"assistant"}\n',
+                    toolCalls: [{ tool: "read_file", argsHash: "b", resultHash: "r" }],
+                    finalText: "done",
+                    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                    wallClockMs: 10,
+                    bootStateLines: [],
+                  },
+                },
+              },
+            },
+          ],
+          counts: { total: 1, passed: 0, failed: 1 },
+          run: {
+            providerMode: "mock-openai",
+            primaryModel: "openai/gpt-5.5",
+            runtimePair: ["pi", "codex"],
+          },
+        }),
+        "utf8",
+      );
+
+      await runQaParityReportCommand({
+        repoRoot,
+        runtimeAxis: true,
+        summary: "runtime-summary.json",
+        allowFailures: true,
+      });
+
+      expect(process.exitCode).toBeUndefined();
+      expect(stdoutWrite).toHaveBeenCalledWith(
+        expect.stringContaining("QA runtime parity verdict: fail"),
+      );
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("writes a mock token-efficiency estimate report for runtime-axis summaries", async () => {
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-token-efficiency-"));
     const priorExitCode = process.exitCode;

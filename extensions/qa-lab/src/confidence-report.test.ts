@@ -163,7 +163,7 @@ describe("qa confidence report", () => {
   });
 
   it("emits confidence self-test canaries for every drift class we need to catch", async () => {
-    const summary = buildQaConfidenceSelfTestSummary("2026-05-12T00:00:00.000Z");
+    const summary = await buildQaConfidenceSelfTestSummary("2026-05-12T00:00:00.000Z");
 
     expect(summary.pass).toBe(true);
     expect(summary.canaries.map((canary) => canary.id)).toEqual([

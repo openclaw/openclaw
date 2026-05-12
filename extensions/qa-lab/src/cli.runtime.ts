@@ -887,6 +887,7 @@ export async function runQaParityReportCommand(opts: {
   harnessAxis?: boolean;
   summary?: string;
   tokenEfficiency?: boolean;
+  allowFailures?: boolean;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputDir =
@@ -905,7 +906,7 @@ export async function runQaParityReportCommand(opts: {
     await fs.writeFile(reportPath, report, "utf8");
     process.stdout.write(`QA harness parity report: ${reportPath}\n`);
     process.stdout.write(`QA harness parity verdict: ${reportPayload.pass ? "pass" : "fail"}\n`);
-    if (!reportPayload.pass) {
+    if (!reportPayload.pass && opts.allowFailures !== true) {
       process.exitCode = 1;
     }
     return;
@@ -948,7 +949,7 @@ export async function runQaParityReportCommand(opts: {
       );
     }
 
-    if (!reportPayload.pass || !tokenEfficiencyPass) {
+    if ((!reportPayload.pass || !tokenEfficiencyPass) && opts.allowFailures !== true) {
       process.exitCode = 1;
     }
     return;
@@ -983,7 +984,7 @@ export async function runQaParityReportCommand(opts: {
   process.stdout.write(`QA parity report: ${reportPath}\n`);
   process.stdout.write(`QA parity summary: ${summaryPath}\n`);
   process.stdout.write(`QA parity verdict: ${comparison.pass ? "pass" : "fail"}\n`);
-  if (!comparison.pass) {
+  if (!comparison.pass && opts.allowFailures !== true) {
     process.exitCode = 1;
   }
 }
