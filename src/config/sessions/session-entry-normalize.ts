@@ -1,15 +1,18 @@
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.js";
 
-type LegacySessionOriginShadow = { origin?: unknown };
+type LegacySessionShadows = {
+  origin?: unknown;
+  lastChannel?: unknown;
+  lastTo?: unknown;
+  lastAccountId?: unknown;
+  lastThreadId?: unknown;
+};
 
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
+  const legacyEntry = entry as SessionEntry & LegacySessionShadows;
   const normalized = normalizeSessionDeliveryFields({
     channel: entry.channel,
-    lastChannel: entry.lastChannel,
-    lastTo: entry.lastTo,
-    lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId,
     deliveryContext: entry.deliveryContext,
   });
   const nextDelivery = normalized.deliveryContext;
@@ -18,21 +21,24 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
     (entry.deliveryContext?.to ?? undefined) === nextDelivery?.to &&
     (entry.deliveryContext?.accountId ?? undefined) === nextDelivery?.accountId &&
     (entry.deliveryContext?.threadId ?? undefined) === nextDelivery?.threadId;
-  const sameLast =
-    entry.lastChannel === normalized.lastChannel &&
-    entry.lastTo === normalized.lastTo &&
-    entry.lastAccountId === normalized.lastAccountId &&
-    entry.lastThreadId === normalized.lastThreadId;
-  if (sameDelivery && sameLast) {
+  const hasLegacyShadows =
+    legacyEntry.lastChannel !== undefined ||
+    legacyEntry.lastTo !== undefined ||
+    legacyEntry.lastAccountId !== undefined ||
+    legacyEntry.lastThreadId !== undefined;
+  if (sameDelivery && !hasLegacyShadows) {
     return entry;
   }
+  const {
+    lastChannel: _lastChannel,
+    lastTo: _lastTo,
+    lastAccountId: _lastAccountId,
+    lastThreadId: _lastThreadId,
+    ...rest
+  } = legacyEntry;
   return {
-    ...entry,
+    ...rest,
     deliveryContext: nextDelivery,
-    lastChannel: normalized.lastChannel,
-    lastTo: normalized.lastTo,
-    lastAccountId: normalized.lastAccountId,
-    lastThreadId: normalized.lastThreadId,
   };
 }
 
@@ -49,7 +55,7 @@ function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
   return { ...entry, skillsSnapshot: rest };
 }
 
-function stripPersistedOriginShadow(entry: SessionEntry & LegacySessionOriginShadow): SessionEntry {
+function stripPersistedShadows(entry: SessionEntry & LegacySessionShadows): SessionEntry {
   if (entry.origin === undefined) {
     return entry;
   }
@@ -63,7 +69,7 @@ export function normalizeSessionEntries(entries: Record<string, SessionEntry>): 
     if (!entry) {
       continue;
     }
-    const normalized = stripPersistedOriginShadow(
+    const normalized = stripPersistedShadows(
       stripPersistedSkillsCache(
         normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry)),
       ),
