@@ -3,6 +3,7 @@ import {
   POSIX_INLINE_COMMAND_FLAGS,
   POWERSHELL_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
+  resolvePowerShellInlineCommandMatch,
 } from "./shell-inline-command.js";
 
 describe("resolveInlineCommandMatch", () => {
@@ -106,5 +107,31 @@ describe("resolveInlineCommandMatch", () => {
       command: null,
       valueTokenIndex: null,
     });
+  });
+
+  it.each([
+    {
+      name: "stops at an omitted PowerShell script file before script args",
+      argv: ["pwsh", "script.ps1", "-en", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expected: { command: null, valueTokenIndex: null },
+    },
+    {
+      name: "skips PowerShell option values before encoded-command prefixes",
+      argv: [
+        "pwsh",
+        "-WorkingDirectory",
+        "/tmp/project",
+        "-en",
+        "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      ],
+      expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 4 },
+    },
+    {
+      name: "extracts PowerShell slash switch forms before script file binding",
+      argv: ["pwsh", "/ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 2 },
+    },
+  ])("$name", ({ argv, expected }) => {
+    expect(resolvePowerShellInlineCommandMatch(argv)).toEqual(expected);
   });
 });

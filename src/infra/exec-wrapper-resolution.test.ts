@@ -500,6 +500,11 @@ describe("extractShellWrapperCommand", () => {
       },
     },
     {
+      argv: ["pwsh", "script.ps1", "-en", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expectedInline: null,
+      expectedCommand: { isWrapper: false, command: null },
+    },
+    {
       argv: ["bash", "script.sh"],
       expectedInline: null,
       expectedCommand: { isWrapper: false, command: null },

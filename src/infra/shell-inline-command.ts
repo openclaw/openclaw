@@ -18,6 +18,32 @@ export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
   ...expandPowerShellSwitchPrefixForms("ec", "e"),
 ]);
 
+function expandPowerShellSwitchForms(names: readonly string[]): string[] {
+  return names.flatMap((name) => [`-${name}`, `--${name}`, `/${name}`]);
+}
+
+const POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set(
+  expandPowerShellSwitchForms([
+    "configurationfile",
+    "encodedarguments",
+    "ea",
+    "executionpolicy",
+    "ep",
+    "inputformat",
+    "of",
+    "outputformat",
+    "pscf",
+    "psconsolefile",
+    "settingsfile",
+    "v",
+    "version",
+    "w",
+    "wd",
+    "windowstyle",
+    "workingdirectory",
+  ]),
+);
+
 const POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
   "--init-file",
   "--rcfile",
@@ -114,7 +140,11 @@ function advancePosixInlineOptionScan(token: string): number {
 export function resolveInlineCommandMatch(
   argv: string[],
   flags: ReadonlySet<string>,
-  options: { allowCombinedC?: boolean } = {},
+  options: {
+    allowCombinedC?: boolean;
+    stopAtFirstNonOption?: boolean;
+    valueOptions?: ReadonlySet<string>;
+  } = {},
 ): { command: string | null; valueTokenIndex: number | null } {
   for (let i = 1; i < argv.length; ) {
     const token = argv[i]?.trim();
@@ -141,12 +171,29 @@ export function resolveInlineCommandMatch(
       const command = argv[valueTokenIndex]?.trim();
       return { command: command ? command : null, valueTokenIndex };
     }
+    if (options.valueOptions?.has(lower)) {
+      i += 2;
+      continue;
+    }
+    if (options.stopAtFirstNonOption && !token.startsWith("-")) {
+      break;
+    }
     if (options.allowCombinedC && !token.startsWith("-") && !token.startsWith("+")) {
       break;
     }
     i += options.allowCombinedC ? advancePosixInlineOptionScan(token) : 1;
   }
   return { command: null, valueTokenIndex: null };
+}
+
+export function resolvePowerShellInlineCommandMatch(argv: string[]): {
+  command: string | null;
+  valueTokenIndex: number | null;
+} {
+  return resolveInlineCommandMatch(argv, POWERSHELL_INLINE_COMMAND_FLAGS, {
+    stopAtFirstNonOption: true,
+    valueOptions: POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES,
+  });
 }
 
 export function hasPosixInteractiveStartupBeforeInlineCommand(

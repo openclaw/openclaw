@@ -92,6 +92,10 @@ describe("system run command helpers", () => {
     expect(extractShellCommandFromArgv(["/usr/bin/env", "FOO=bar"])).toBe(null);
   });
 
+  test("extractShellCommandFromArgv keeps omitted PowerShell file args out of shell payloads", () => {
+    expect(extractShellCommandFromArgv(["pwsh", "script.ps1", "-en", "ZQBjAGgAbwA="])).toBe(null);
+  });
+
   test("extractShellCommandFromArgv includes trailing cmd.exe args after /c", () => {
     expect(extractShellCommandFromArgv(["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"])).toBe(
       "echo SAFE&&whoami",
