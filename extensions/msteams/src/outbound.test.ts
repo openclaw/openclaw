@@ -48,6 +48,23 @@ function requireSendPoll(): MSTeamsSendPoll {
   return sendPoll;
 }
 
+type PollRecord = Record<string, unknown> & { createdAt: string };
+
+function firstPollRecord(): PollRecord {
+  const [call] = mocks.createPoll.mock.calls;
+  if (!call) {
+    throw new Error("expected createPoll call");
+  }
+  const [pollRecord] = call;
+  if (!pollRecord || typeof pollRecord !== "object" || Array.isArray(pollRecord)) {
+    throw new Error("expected createPoll record");
+  }
+  if (typeof (pollRecord as { createdAt?: unknown }).createdAt !== "string") {
+    throw new Error("expected createPoll record timestamp");
+  }
+  return pollRecord as PollRecord;
+}
+
 describe("msteamsOutbound cfg threading", () => {
   beforeEach(() => {
     mocks.sendMessageMSTeams.mockReset();
@@ -138,13 +155,18 @@ describe("msteamsOutbound cfg threading", () => {
       options: ["Pizza", "Sushi"],
       maxSelections: 1,
     });
-    expect(mocks.createPoll).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "poll-1",
-        question: "Snack?",
-        options: ["Pizza", "Sushi"],
-      }),
-    );
+    const pollRecord = firstPollRecord();
+    expect(pollRecord).toEqual({
+      id: "poll-1",
+      question: "Snack?",
+      options: ["Pizza", "Sushi"],
+      maxSelections: 1,
+      createdAt: pollRecord?.createdAt,
+      conversationId: "conv-1",
+      messageId: "msg-poll-1",
+      votes: {},
+    });
+    expect(Number.isNaN(Date.parse(pollRecord?.createdAt))).toBe(false);
   });
 
   it("chunks outbound text without requiring MSTeams runtime initialization", () => {

@@ -250,6 +250,12 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         'import * as lark from "@larksuiteoapi/node-sdk";\nexport { lark };\n',
         "utf8",
       );
+      mkdirSync(join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "plugin-sdk/channel-test-helpers.js"),
+        'import { expect, it } from "vitest";\nexport { expect, it };\n',
+        "utf8",
+      );
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
@@ -344,9 +350,10 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(join(packageRoot, "package.json"), "{not-json\n", "utf8");
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        expect.stringMatching(/^installed package\.json could not be parsed:/u),
-      ]);
+      const errors = collectInstalledRootDependencyManifestErrors(packageRoot);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.startsWith("installed package.json could not be parsed:")).toBe(true);
+      expect(errors[0]?.endsWith(".")).toBe(true);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -363,12 +370,12 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(
         join(packageRoot, "dist", "oversized.js"),
-        "x".repeat(4 * 1024 * 1024 + 1),
+        "x".repeat(6 * 1024 * 1024 + 1),
         "utf8",
       );
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        "installed package root dist file 'oversized.js' is invalid or exceeds 4194304 bytes.",
+        "installed package root dist file 'oversized.js' is invalid or exceeds 6291456 bytes.",
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });

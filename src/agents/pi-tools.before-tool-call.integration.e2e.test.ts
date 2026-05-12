@@ -18,6 +18,7 @@ import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import {
   __testing as beforeToolCallTesting,
   consumeAdjustedParamsForToolCall,
+  isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
 
@@ -310,6 +311,18 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     );
 
     expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the hook marker when abort wrapping a hooked tool", () => {
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const baseTool = { name: "Bash", execute, description: "bash", parameters: {} } as any;
+    const wrapped = wrapToolWithBeforeToolCallHook(baseTool, {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const withAbort = wrapToolWithAbortSignal(wrapped, new AbortController().signal);
+
+    expect(isToolWrappedWithBeforeToolCallHook(withAbort)).toBe(true);
   });
 });
 

@@ -147,14 +147,12 @@ describe("sessions_send gateway loopback", () => {
     expect(details.reply).toBe("pong");
     expect(details.sessionKey).toBe("main");
 
-    const firstCall = spy.mock.calls[0]?.[0] as
+    const firstCall = spy.mock.calls.at(0)?.[0] as
       | { lane?: string; inputProvenance?: { kind?: string; sourceTool?: string } }
       | undefined;
     expect(firstCall?.lane).toMatch(/^nested(?::|$)/);
-    expect(firstCall?.inputProvenance).toMatchObject({
-      kind: "inter_session",
-      sourceTool: "sessions_send",
-    });
+    expect(firstCall?.inputProvenance?.kind).toBe("inter_session");
+    expect(firstCall?.inputProvenance?.sourceTool).toBe("sessions_send");
   });
 });
 

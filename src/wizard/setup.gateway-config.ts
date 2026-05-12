@@ -1,3 +1,4 @@
+import { formatPortRangeHint } from "../cli/error-format.js";
 import {
   normalizeGatewayTokenInput,
   randomToken,
@@ -55,7 +56,7 @@ function normalizeWizardTextInput(value: unknown): string {
 function validateGatewayPortInput(value: unknown): string | undefined {
   const port = Number(normalizeWizardTextInput(value));
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    return "Use a port number from 1 to 65535, for example 18789.";
+    return formatPortRangeHint();
   }
   return undefined;
 }

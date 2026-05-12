@@ -196,6 +196,13 @@ Packaged installs must ship that JavaScript runtime output. The TypeScript
 source fallback is for source checkouts and local development paths, not for
 npm packages installed into OpenClaw's managed plugin root.
 
+Untracked directories dropped into the global extension root are treated as
+local source checkouts and may load TypeScript entries directly. Directories
+still named by an install record, including `installPath` or `sourcePath`, stay
+managed and keep the compiled-output requirement even when the global scan sees
+them. If you intentionally convert a managed install into an untracked local
+checkout, remove the stale install record first with uninstall or doctor cleanup.
+
 If a managed package warning says it `requires compiled runtime output for
 TypeScript entry ...`, the package was published without the JavaScript files
 OpenClaw needs at runtime. That is a plugin packaging issue, not a local config
@@ -717,7 +724,7 @@ hook surface. Plugins can block native Codex tools through `before_tool_call`,
 observe results through `after_tool_call`, and participate in Codex
 `PermissionRequest` approvals. The bridge does not rewrite Codex-native tool
 arguments yet. The exact Codex runtime support boundary lives in the
-[Codex harness v1 support contract](/plugins/codex-harness#v1-support-contract).
+[Codex harness v1 support contract](/plugins/codex-harness-runtime#v1-support-contract).
 
 For full typed hook behavior, see [SDK overview](/plugins/sdk-overview#hook-decision-semantics).
 

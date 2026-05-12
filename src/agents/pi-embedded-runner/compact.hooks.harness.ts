@@ -318,7 +318,7 @@ export function resetCompactHooksHarnessMocks(): void {
 export async function loadCompactHooksHarness(): Promise<{
   compactEmbeddedPiSessionDirect: typeof import("./compact.js").compactEmbeddedPiSessionDirect;
   compactEmbeddedPiSession: typeof import("./compact.queued.js").compactEmbeddedPiSession;
-  __testing: typeof import("./compact.js").__testing;
+  testing: typeof import("./compact.js").testing;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 }> {
   resetCompactHooksHarnessMocks();
@@ -364,9 +364,9 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("@mariozechner/pi-ai/oauth", async () => {
-    const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-      "@mariozechner/pi-ai/oauth",
+  vi.doMock("@earendil-works/pi-ai/oauth", async () => {
+    const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
+      "@earendil-works/pi-ai/oauth",
     );
     return {
       ...actual,
@@ -375,7 +375,7 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("@mariozechner/pi-coding-agent", () => ({
+  vi.doMock("@earendil-works/pi-coding-agent", () => ({
     AuthStorage: function AuthStorage() {},
     ModelRegistry: function ModelRegistry() {},
     createAgentSession: vi.fn(async () => {

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { Writable } from "node:stream";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -704,6 +704,7 @@ export async function startCommandAgentAudioBridge(params: {
   });
 
   sttSession = resolved.provider.createSession({
+    cfg: params.fullConfig,
     providerConfig: resolved.providerConfig,
     onTranscript: (text) => {
       const trimmed = text.trim();
@@ -1115,6 +1116,7 @@ export async function startCommandRealtimeAudioBridge(params: {
   });
   bridge = createRealtimeVoiceBridgeSession({
     provider: resolved.provider,
+    cfg: params.fullConfig,
     providerConfig: resolved.providerConfig,
     audioFormat: resolveGoogleMeetRealtimeAudioFormat(params.config),
     instructions: params.config.realtime.instructions,

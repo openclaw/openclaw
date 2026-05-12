@@ -19,6 +19,7 @@ const hoisted = vi.hoisted(() => ({
   fetchMock: vi.fn(),
   registerProviderStreamForModelMock: vi.fn(),
   prepareProviderDynamicModelMock: vi.fn(async () => {}),
+  resolveModelAsyncMock: vi.fn(),
   resolveModelWithRegistryMock: vi.fn(),
 }));
 const {
@@ -32,6 +33,7 @@ const {
   fetchMock,
   registerProviderStreamForModelMock,
   prepareProviderDynamicModelMock,
+  resolveModelAsyncMock,
   resolveModelWithRegistryMock,
 } = hoisted;
 
@@ -46,8 +48,35 @@ type AuthRequestCall = {
   store?: unknown;
 };
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+function requireMockCallAt<const Calls extends readonly unknown[][]>(
+  mock: { mock: { calls: Calls } },
+  index: number,
+  label: string,
+): Calls[number] {
+  const call = mock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`Expected ${label} call ${index}`);
+  }
+  return call as Calls[number];
+}
+
+function requireFirstMockCall<const Calls extends readonly unknown[][]>(
+  mock: { mock: { calls: Calls } },
+  label: string,
+): Calls[number] {
+  return requireMockCallAt(mock, 0, label);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+vi.mock("@earendil-works/pi-ai", async () => {
+  const actual =
+    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
   return {
     ...actual,
     complete: completeMock,
@@ -86,7 +115,7 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
 }));
 
 vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModelWithRegistry: resolveModelWithRegistryMock,
+  resolveModelAsync: resolveModelAsyncMock,
 }));
 
 const { describeImageWithModel } = await import("./image.js");
@@ -126,10 +155,26 @@ describe("describeImageWithModel", () => {
       ({ modelRegistry, provider, modelId }: ResolveModelWithRegistryTestParams) =>
         modelRegistry.find(provider, modelId),
     );
+    resolveModelAsyncMock.mockImplementation(
+      async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) => {
+        const authStorage = {
+          setRuntimeApiKey: setRuntimeApiKeyMock,
+        };
+        const modelRegistry = discoverModelsMock(authStorage, agentDir);
+        const model = resolveModelWithRegistryMock({
+          provider,
+          modelId,
+          modelRegistry,
+          cfg,
+          agentDir,
+        });
+        return { authStorage, model, modelRegistry };
+      },
+    );
   });
 
   function getApiKeyForModelCall(index = 0): AuthRequestCall {
-    const call = (getApiKeyForModelMock.mock.calls as unknown[][])[index];
+    const call = (getApiKeyForModelMock.mock.calls as unknown[][]).at(index);
     if (!call) {
       throw new Error(`Expected getApiKeyForModel call ${index}`);
     }
@@ -161,7 +206,8 @@ describe("describeImageWithModel", () => {
     expect(authRequest?.store).toBe(authStore);
     expect(requireApiKeyMock).toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("minimax-portal", "oauth-test");
-    const [fetchUrl, fetchOptions] = fetchMock.mock.calls[0] ?? [];
+    const [fetchUrl, fetchOptionsValue] = requireFirstMockCall(fetchMock, "fetch");
+    const fetchOptions = requireRecord(fetchOptionsValue, "fetch options");
     expect(fetchUrl).toBe("https://api.minimax.io/v1/coding_plan/vlm");
     expect(fetchOptions).toEqual({
       method: "POST",
@@ -174,9 +220,9 @@ describe("describeImageWithModel", () => {
         prompt: "Describe the image.",
         image_url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
       }),
-      signal: fetchOptions?.signal,
+      signal: fetchOptions.signal,
     });
-    expect(fetchOptions?.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
     expect(timeoutSpy).toHaveBeenCalledWith(1000);
     expect(completeMock).not.toHaveBeenCalled();
   });
@@ -216,7 +262,10 @@ describe("describeImageWithModel", () => {
       text: "generic ok",
       model: "custom-vision",
     });
-    const [streamRequest] = registerProviderStreamForModelMock.mock.calls[0] ?? [];
+    const [streamRequest] = requireFirstMockCall(
+      registerProviderStreamForModelMock,
+      "provider stream registration",
+    );
     expect(streamRequest).toEqual({
       model: {
         provider: "minimax-portal",
@@ -290,11 +339,24 @@ describe("describeImageWithModel", () => {
       model: "google/gemma-4-e2b",
     });
     expect(registryFind).not.toHaveBeenCalled();
-    const [resolveRequest] = resolveModelWithRegistryMock.mock.calls[0] ?? [];
-    expect(resolveRequest?.provider).toBe("lmstudio");
-    expect(resolveRequest?.modelId).toBe("google/gemma-4-e2b");
-    expect(resolveRequest?.agentDir).toBe("/tmp/openclaw-agent");
-    expect(resolveRequest?.cfg.models?.providers?.lmstudio?.baseUrl).toBe("http://127.0.0.1:1234");
+    const [resolveRequestValue] = requireFirstMockCall(
+      resolveModelWithRegistryMock,
+      "model registry resolution",
+    );
+    const resolveRequest = requireRecord(resolveRequestValue, "model registry request");
+    expect(resolveRequest.provider).toBe("lmstudio");
+    expect(resolveRequest.modelId).toBe("google/gemma-4-e2b");
+    expect(resolveRequest.agentDir).toBe("/tmp/openclaw-agent");
+    expect(
+      requireRecord(
+        requireRecord(
+          requireRecord(requireRecord(resolveRequest.cfg, "request config").models, "models")
+            .providers,
+          "model providers",
+        ).lmstudio,
+        "lmstudio provider",
+      ).baseUrl,
+    ).toBe("http://127.0.0.1:1234");
     expect(prepareProviderDynamicModelMock).not.toHaveBeenCalled();
     expect(completeMock).toHaveBeenCalledOnce();
   });
@@ -364,10 +426,7 @@ describe("describeImageWithModel", () => {
       model: "gpt-5.4",
     });
     expect(completeMock).toHaveBeenCalledOnce();
-    const firstCall = completeMock.mock.calls[0];
-    if (!firstCall) {
-      throw new Error("Expected image completion call");
-    }
+    const firstCall = requireFirstMockCall(completeMock, "image completion");
     const [completionModel, context, options] = firstCall;
     expect(completionModel).toEqual({
       provider: "openai-codex",
@@ -432,10 +491,7 @@ describe("describeImageWithModel", () => {
       text: "openrouter ok",
       model: "google/gemini-2.5-flash",
     });
-    const firstCall = completeMock.mock.calls[0];
-    if (!firstCall) {
-      throw new Error("Expected OpenRouter image completion call");
-    }
+    const firstCall = requireFirstMockCall(completeMock, "OpenRouter image completion");
     const [, context] = firstCall;
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages[0];
@@ -555,10 +611,7 @@ describe("describeImageWithModel", () => {
         model: model.id,
       });
       expect(completeMock).toHaveBeenCalledTimes(2);
-      const retryCall = completeMock.mock.calls[1];
-      if (!retryCall) {
-        throw new Error("Expected retry image completion call");
-      }
+      const retryCall = requireMockCallAt(completeMock, 1, "retry image completion");
       const [retryModel, , retryOptions] = retryCall;
       if (!retryOptions?.onPayload) {
         throw new Error("expected retry payload mapper");
@@ -603,10 +656,7 @@ describe("describeImageWithModel", () => {
     const assertion = expect(result).rejects.toThrow("image description timed out after 25ms");
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
-    const firstCall = completeMock.mock.calls[0];
-    if (!firstCall) {
-      throw new Error("Expected timed image completion call");
-    }
+    const firstCall = requireFirstMockCall(completeMock, "timed image completion");
     const [, , options] = firstCall;
     if (!options?.signal) {
       throw new Error("Expected image completion abort signal");

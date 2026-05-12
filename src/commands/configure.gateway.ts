@@ -1,3 +1,4 @@
+import { formatPortRangeHint } from "../cli/error-format.js";
 import { resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidEnvSecretRefId, type SecretInput } from "../config/types.secrets.js";
@@ -29,7 +30,7 @@ type GatewayTokenInputMode = "plaintext" | "ref";
 function validateGatewayPortInput(value: unknown): string | undefined {
   const port = Number(typeof value === "string" ? value.trim() : value);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    return "Use a port number from 1 to 65535, for example 18789.";
+    return formatPortRangeHint();
   }
   return undefined;
 }

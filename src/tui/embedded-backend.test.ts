@@ -303,6 +303,77 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
+  it("keeps a fallback response deliverable after a retryable lifecycle error", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "recover after timeout",
+      runId: "run-local-fallback",
+    });
+
+    registeredListener?.({
+      runId: "run-local-fallback",
+      stream: "lifecycle",
+      data: { phase: "error", error: "primary model timed out" },
+    });
+    await flushMicrotasks();
+    expect(
+      events.some(
+        (entry) =>
+          entry.event === "chat" && (entry.payload as { state?: string }).state === "error",
+      ),
+    ).toBe(false);
+
+    registeredListener?.({
+      runId: "run-local-fallback",
+      stream: "lifecycle",
+      data: {
+        phase: "fallback_step",
+        fallbackStepFinalOutcome: "succeeded",
+        fallbackStepFromModel: "anthropic/claude-sonnet-4-6",
+        fallbackStepToModel: "anthropic/claude-sonnet-4-5",
+      },
+    });
+    registeredListener?.({
+      runId: "run-local-fallback",
+      stream: "assistant",
+      data: { text: "fallback answer", delta: "fallback answer" },
+    });
+    registeredListener?.({
+      runId: "run-local-fallback",
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+
+    pending.resolve({ payloads: [{ text: "fallback answer" }], meta: {} });
+    await flushMicrotasks();
+    vi.advanceTimersByTime(15_001);
+
+    const chatPayloads = events
+      .filter((entry) => entry.event === "chat")
+      .map((entry) => entry.payload as { state?: string; message?: { content?: unknown } });
+    expect(chatPayloads.some((payload) => payload.state === "error")).toBe(false);
+    const finalPayload = chatPayloads.at(-1);
+    expect(finalPayload?.state).toBe("final");
+    const finalContent = finalPayload?.message?.content as Array<{ type?: string; text?: string }>;
+    expect(finalContent).toHaveLength(1);
+    expect(finalContent[0]?.type).toBe("text");
+    expect(finalContent[0]?.text).toBe("fallback answer");
+  });
+
   it("emits side-result events for local /btw runs", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     agentCommandFromIngressMock.mockResolvedValueOnce({
@@ -495,7 +566,7 @@ describe("EmbeddedTuiBackend", () => {
       await flushMicrotasks();
 
       expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-      const ingressOptions = agentCommandFromIngressMock.mock.calls[0]?.[0] as
+      const ingressOptions = agentCommandFromIngressMock.mock.calls.at(0)?.[0] as
         | { timeout?: unknown }
         | undefined;
       expect(ingressOptions?.timeout).toBe("300");

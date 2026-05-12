@@ -62,9 +62,7 @@ function expectNpmInstallIntoRoot(params: { calls: unknown[][]; npmRoot: string 
     (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "install",
   );
   expect(installCalls).toHaveLength(1);
-  expect(installCalls[0]?.[1]).toMatchObject({
-    cwd: params.npmRoot,
-  });
+  expect((installCalls[0]?.[1] as { cwd?: unknown } | undefined)?.cwd).toBe(params.npmRoot);
   expect(installCalls[0]?.[0]).toEqual([
     "npm",
     "install",
@@ -484,13 +482,11 @@ describe("installPluginFromNpmSpec", () => {
       mode: "update",
     });
 
-    expect(result).toMatchObject({
-      ok: false,
-      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
-    });
-    if (!result.ok) {
-      expect(result.error).toContain("unsupported npm pack package name");
+    if (result.ok) {
+      throw new Error("expected traversal package metadata to be rejected");
     }
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC);
+    expect(result.error).toContain("unsupported npm pack package name");
     expect(fs.existsSync(path.join(victimDir, "keep.txt"))).toBe(true);
     expect(fs.existsSync(path.join(npmRoot, "package.json"))).toBe(false);
     expect(fs.existsSync(path.join(npmRoot, "_openclaw-pack-archives"))).toBe(false);
@@ -551,15 +547,10 @@ describe("installPluginFromNpmSpec", () => {
     });
 
     expect(result.ok).toBe(true);
-    await expect(
-      fs.promises
-        .readFile(path.join(npmRoot, "package.json"), "utf8")
-        .then((raw) => JSON.parse(raw)),
-    ).resolves.toMatchObject({
-      dependencies: {
-        "mutable-plugin": "1.2.3",
-      },
-    });
+    const manifest = JSON.parse(
+      await fs.promises.readFile(path.join(npmRoot, "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(manifest.dependencies?.["mutable-plugin"]).toBe("1.2.3");
   });
 
   it("rejects npm installs when the installed artifact drifts from verified metadata", async () => {
@@ -727,6 +718,64 @@ describe("installPluginFromNpmSpec", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "does not fail a managed npm install for an unrelated skipped peer link",
+    async () => {
+      const stateDir = suiteTempRootTracker.makeTempDir();
+      const npmRoot = path.join(stateDir, "npm");
+      const warnings: string[] = [];
+
+      mockNpmViewAndInstallMany([
+        {
+          spec: "peer-plugin@1.0.0",
+          packageName: "peer-plugin",
+          version: "1.0.0",
+          pluginId: "peer-plugin",
+          npmRoot,
+          peerDependencies: { openclaw: "^2026.0.0" },
+        },
+        {
+          spec: "next-plugin@1.0.0",
+          packageName: "next-plugin",
+          version: "1.0.0",
+          pluginId: "next-plugin",
+          npmRoot,
+        },
+      ]);
+
+      const first = await installPluginFromNpmSpec({
+        spec: "peer-plugin@1.0.0",
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: () => {} },
+      });
+      expect(first.ok).toBe(true);
+
+      const staleNodeModulesPath = path.join(
+        npmRoot,
+        "node_modules",
+        "peer-plugin",
+        "node_modules",
+      );
+      fs.rmSync(staleNodeModulesPath, { recursive: true, force: true });
+      fs.writeFileSync(staleNodeModulesPath, "not a directory", "utf-8");
+
+      const second = await installPluginFromNpmSpec({
+        spec: "next-plugin@1.0.0",
+        npmDir: npmRoot,
+        logger: { info: () => {}, warn: (message) => warnings.push(message) },
+      });
+
+      expect(second.ok).toBe(true);
+      expect(
+        warnings.some((warning) =>
+          warning.includes(`Skipping openclaw peerDependency link because ${staleNodeModulesPath}`),
+        ),
+      ).toBe(true);
+      expect(fs.existsSync(path.join(npmRoot, "node_modules", "next-plugin"))).toBe(true);
+      expect(fs.readFileSync(staleNodeModulesPath, "utf-8")).toBe("not a directory");
+    },
+  );
+
   it("rejects managed npm plugins when their openclaw peer link cannot be repaired", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
@@ -754,9 +803,9 @@ describe("installPluginFromNpmSpec", () => {
     }
     expect(result.error).toContain("@openclaw/codex");
     expect(result.error).toContain("plugin-local node_modules/openclaw link");
-    expect(warnings).toEqual(
-      expect.arrayContaining([expect.stringContaining("Could not locate openclaw package root")]),
-    );
+    expect(
+      warnings.some((warning) => warning.includes("Could not locate openclaw package root")),
+    ).toBe(true);
     expect(fs.existsSync(path.join(npmRoot, "node_modules", "@openclaw", "codex"))).toBe(false);
     const managedManifest = JSON.parse(
       fs.readFileSync(path.join(npmRoot, "package.json"), "utf8"),
@@ -879,9 +928,7 @@ describe("installPluginFromNpmSpec", () => {
       dependencies?: Record<string, string>;
     };
     expect(manifest.dependencies).not.toHaveProperty("openclaw");
-    expect(manifest.dependencies).toMatchObject({
-      "@openclaw/discord": "2026.5.5-beta.1",
-    });
+    expect(manifest.dependencies?.["@openclaw/discord"]).toBe("2026.5.5-beta.1");
     const lockfile = JSON.parse(
       fs.readFileSync(path.join(npmRoot, "package-lock.json"), "utf8"),
     ) as {
@@ -986,17 +1033,14 @@ describe("installPluginFromNpmSpec", () => {
     if (!result.ok) {
       expect(result.error).toContain("registry unavailable");
     }
-    await expect(
-      fs.promises
-        .readFile(path.join(npmRoot, "package.json"), "utf8")
-        .then((raw) => JSON.parse(raw)),
-    ).resolves.toMatchObject({
-      dependencies: {},
-    });
+    const manifest = JSON.parse(
+      await fs.promises.readFile(path.join(npmRoot, "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(manifest.dependencies).toEqual({});
     expect(fs.lstatSync(peerLink).isSymbolicLink()).toBe(true);
     await expect(
       fs.promises.access(path.join(npmRoot, "node_modules", "openclaw")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    ).rejects.toHaveProperty("code", "ENOENT");
   });
 
   it("rolls back installed npm package debris when security scan blocks the plugin", async () => {
@@ -1018,13 +1062,10 @@ describe("installPluginFromNpmSpec", () => {
 
     expect(result.ok).toBe(false);
     expect(fs.existsSync(path.join(npmRoot, "node_modules", "dangerous-plugin"))).toBe(false);
-    await expect(
-      fs.promises
-        .readFile(path.join(npmRoot, "package.json"), "utf8")
-        .then((raw) => JSON.parse(raw)),
-    ).resolves.toMatchObject({
-      dependencies: {},
-    });
+    const manifest = JSON.parse(
+      await fs.promises.readFile(path.join(npmRoot, "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(manifest.dependencies).toEqual({});
   });
 
   const officialLaunchPluginCases = [
@@ -1117,9 +1158,7 @@ describe("installPluginFromNpmSpec", () => {
         return;
       }
       expect(result.pluginId).toBe(pluginId);
-      expect(warnings).not.toEqual(
-        expect.arrayContaining([expect.stringContaining("installation blocked")]),
-      );
+      expect(warnings.some((warning) => warning.includes("installation blocked"))).toBe(false);
       expectNpmInstallIntoRoot({
         calls: runCommandWithTimeoutMock.mock.calls,
         npmRoot,

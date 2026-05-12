@@ -117,6 +117,36 @@ describe("video-generation runtime", () => {
     ]);
   });
 
+  it("uses configured video-generation timeout when call omits timeoutMs", async () => {
+    let seenTimeoutMs: number | undefined;
+    providers = [
+      {
+        id: "video-plugin",
+        capabilities: {},
+        async generateVideo(req: { timeoutMs?: number }) {
+          seenTimeoutMs = req.timeoutMs;
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: "vid-v1",
+          };
+        },
+      },
+    ];
+
+    await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "video-plugin/vid-v1", timeoutMs: 300_000 },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+    });
+
+    expect(seenTimeoutMs).toBe(300_000);
+  });
+
   it("does not list providers when explicit config disables auto provider fallback", async () => {
     const provider: VideoGenerationProvider = {
       id: "video-plugin",
@@ -424,10 +454,14 @@ describe("video-generation runtime", () => {
     });
     expect(seenCapabilityLookupTimeoutMs).toBe(5_000);
     expect(seenSupportedDurationHint).toEqual([5]);
-    expect(result.ignoredOverrides).toContainEqual({ key: "audio", value: true });
-    expect(result.normalization?.durationSeconds?.requested).toBe(6);
-    expect(result.normalization?.durationSeconds?.applied).toBe(5);
-    expect(result.normalization?.durationSeconds?.supportedValues).toEqual([5]);
+    expect(result.ignoredOverrides).toEqual([{ key: "audio", value: true }]);
+    expect(result.normalization).toEqual({
+      durationSeconds: {
+        requested: 6,
+        applied: 5,
+        supportedValues: [5],
+      },
+    });
   });
 
   it("skips providers that cannot satisfy reference audio inputs and falls back", async () => {

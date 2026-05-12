@@ -28,14 +28,13 @@ import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
-  buildAllowedModelSet,
-  buildConfiguredModelCatalog,
   buildModelAliasIndex,
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
-  resolveThinkingDefault,
+  resolveThinkingDefaultWithRuntimeCatalog,
 } from "../model-selection.js";
+import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import {
   describeSessionStatusTool,
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
@@ -288,7 +287,7 @@ async function resolveModelOverride(params: {
     defaultProvider: currentProvider,
   });
   const catalog = await loadModelCatalog({ config: params.cfg });
-  const allowed = buildAllowedModelSet({
+  const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
     catalog,
     defaultProvider: currentProvider,
@@ -305,7 +304,7 @@ async function resolveModelOverride(params: {
     throw new Error(`Unrecognized model "${raw}".`);
   }
   const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (allowed.allowedKeys.size > 0 && !allowed.allowedKeys.has(key)) {
+  if (!policy.allowsKey(key)) {
     throw new Error(`Model "${key}" is not allowed.`);
   }
   const isDefault =
@@ -713,32 +712,13 @@ export function createSessionStatusTool(opts?: {
         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
         resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
         resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
-        resolveDefaultThinkingLevel: async () => {
-          const configuredCatalog = buildConfiguredModelCatalog({ cfg });
-          const configuredSelectedEntry = configuredCatalog.find(
-            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
-          );
-          const shouldHydrateRuntimeCatalog =
-            configuredCatalog.length === 0 ||
-            !configuredSelectedEntry ||
-            configuredSelectedEntry.reasoning === undefined;
-          const runtimeCatalog = shouldHydrateRuntimeCatalog
-            ? await loadModelCatalog({ config: cfg })
-            : undefined;
-          const runtimeSelectedEntry = runtimeCatalog?.find(
-            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
-          );
-          const catalog =
-            runtimeSelectedEntry || configuredCatalog.length === 0
-              ? (runtimeCatalog ?? configuredCatalog)
-              : configuredCatalog;
-          return resolveThinkingDefault({
+        resolveDefaultThinkingLevel: () =>
+          resolveThinkingDefaultWithRuntimeCatalog({
             cfg,
             provider: providerForCard,
             model: defaultModelForCard,
-            catalog,
-          });
-        },
+            loadModelCatalog: () => loadModelCatalog({ config: cfg }),
+          }),
         isGroup,
         defaultGroupActivation: () => "mention",
         taskLineOverride: taskLine,

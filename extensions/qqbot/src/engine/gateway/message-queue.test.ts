@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMessageQueue, mergeGroupMessages, type QueuedMessage } from "./message-queue.js";
 
 function groupMsg(overrides: Partial<QueuedMessage> = {}): QueuedMessage {
@@ -206,7 +206,9 @@ describe("engine/gateway/message-queue", () => {
         throw new Error("Expected QQBot queue gate callback to be initialized");
       }
       gate();
-      await new Promise((res) => setTimeout(res, 0));
+      await vi.waitFor(() => {
+        expect(seen.length).toBeGreaterThan(1);
+      });
       const seenIds = seen.map((m) => m.messageId);
       expect(seenIds).toContain("First");
       // The bot message should NOT have been processed — it was evicted.
@@ -275,10 +277,8 @@ describe("engine/gateway/message-queue", () => {
       expect(seen.length).toBeGreaterThanOrEqual(1);
       expect(seen.length).toBeLessThan(3);
       const mergedCall = seen.find((m) => (m.merge?.count ?? 0) > 1);
-      expect(mergedCall).toMatchObject({
-        content: expect.stringContaining("[Alice]:"),
-        merge: { count: expect.any(Number) },
-      });
+      expect(mergedCall?.content).toContain("[Alice]:");
+      expect(mergedCall?.merge?.count).toBeGreaterThan(1);
     });
 
     it("processes slash commands independently from regular messages", async () => {
@@ -299,7 +299,7 @@ describe("engine/gateway/message-queue", () => {
       aborted = true;
       // Command should appear as its own call (not merged with the others).
       const cmdCall = seen.find((m) => m.content === "/stop");
-      expect(cmdCall).toEqual(expect.objectContaining({ content: "/stop" }));
+      expect(cmdCall?.content).toBe("/stop");
       expect(cmdCall).not.toHaveProperty("merge");
     });
   });

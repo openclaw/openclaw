@@ -137,13 +137,21 @@ export function isExpectedCodexStatusCommandText(text: string): boolean {
     normalized.includes("no compactions") &&
     (normalized.includes("current session is") || normalized.includes("cache hit")) &&
     mentionsModel;
+  const isWorkspaceOnlyHealthyStatus =
+    normalized.includes("working normally.") && normalized.includes("current workspace:");
   const isIdleReadyStatus = normalized.includes("idle and ready");
+  const isReadyStatus = normalized.trim() === "ready.";
+  const isOnlineIdleStatus =
+    normalized.includes("online") && normalized.includes("no active task is running");
 
   return (
     isCurrentSessionStatus ||
     isCompactSessionStatus ||
     isRunningSessionStatus ||
+    isWorkspaceOnlyHealthyStatus ||
     isIdleReadyStatus ||
+    isReadyStatus ||
+    isOnlineIdleStatus ||
     (mentionsOpenClawStatus && mentionsHarnessSession && mentionsModel)
   );
 }

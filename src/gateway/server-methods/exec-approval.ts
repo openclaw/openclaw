@@ -1,7 +1,9 @@
+import { resolveExecCommandHighlighting } from "../../config/exec-command-highlighting.js";
 import { resolveCommandAnalysisSummaryForDisplay } from "../../infra/command-analysis/explain.js";
 import {
   resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
+  sanitizeExecApprovalDisplayTextWithStatus,
   sanitizeExecApprovalWarningText,
 } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
@@ -241,6 +243,27 @@ export function createExecApprovalHandlers(
       }
       const envBinding = buildSystemRunApprovalEnvBinding(p.env);
       const warningText = normalizeOptionalString(p.warningText);
+      const runtimeConfig =
+        typeof context.getRuntimeConfig === "function" ? context.getRuntimeConfig() : {};
+      const commandHighlighting = resolveExecCommandHighlighting({
+        config: runtimeConfig,
+        agentId: effectiveAgentId,
+      });
+      const sanitizedCommandDisplay =
+        sanitizeExecApprovalDisplayTextWithStatus(effectiveCommandText);
+      if (sanitizedCommandDisplay.truncated || sanitizedCommandDisplay.oversized) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "command exceeds exec approval display limit", {
+            details: {
+              reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT",
+            },
+          }),
+        );
+        return;
+      }
+      const sanitizedCommandText = sanitizedCommandDisplay.text;
       const commandAnalysis = resolveCommandAnalysisSummaryForDisplay({
         host,
         commandText: effectiveCommandText,
@@ -248,9 +271,8 @@ export function createExecApprovalHandlers(
         cwd: effectiveCwd,
         sanitizeText: sanitizeExecApprovalWarningText,
       });
-      const sanitizedCommandText = sanitizeExecApprovalDisplayText(effectiveCommandText);
       const commandSpans =
-        sanitizedCommandText === effectiveCommandText
+        commandHighlighting && sanitizedCommandText === effectiveCommandText
           ? normalizeCommandSpans(p.commandSpans, sanitizedCommandText.length)
           : undefined;
       const systemRunBinding =
