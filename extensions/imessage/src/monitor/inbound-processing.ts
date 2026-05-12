@@ -463,12 +463,17 @@ export async function resolveIMessageInboundDecision(params: {
   const reactionContext = resolveIMessageReactionContext(params.message, bodyText || messageText);
 
   const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
+  const groupAllowFromWithLegacyChatTargets = mergeIMessageGroupAllowFromWithLegacyChatTargets({
+    groupAllowFrom: params.groupAllowFrom,
+    allowFrom: params.allowFrom,
+  });
   const groupListPolicy = groupIdCandidate
     ? resolveChannelGroupPolicy({
         cfg: params.cfg,
         channel: "imessage",
         accountId: params.accountId,
         groupId: groupIdCandidate,
+        hasGroupAllowFrom: groupAllowFromWithLegacyChatTargets.length > 0,
       })
     : {
         allowlistEnabled: false,
@@ -553,10 +558,7 @@ export async function resolveIMessageInboundDecision(params: {
   const groupId = isGroup ? groupIdCandidate : undefined;
   const hasControlCommandInMessage = hasControlCommand(messageText, params.cfg);
   const groupAllowFromForAccess = isGroup
-    ? mergeIMessageGroupAllowFromWithLegacyChatTargets({
-        groupAllowFrom: params.groupAllowFrom,
-        allowFrom: params.allowFrom,
-      })
+    ? groupAllowFromWithLegacyChatTargets
     : params.groupAllowFrom;
   const accessDecision = await createChannelIngressResolver({
     channelId: "imessage",
