@@ -1212,6 +1212,7 @@ async function scanAndLinkInstalledPackage(params: {
           params.dependencyScanRootDir !== undefined &&
           path.resolve(params.dependencyScanRootDir) !== path.resolve(params.installedDir),
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        dependencyScanRootDir: params.dependencyScanRootDir,
         logger: params.logger,
         packageDir: params.installedDir,
         pluginId: params.pluginId,

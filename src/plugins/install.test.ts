@@ -3090,6 +3090,53 @@ describe("installPluginFromDir", () => {
     }
   });
 
+  it("scans flattened managed npm dependencies reachable from the installed package", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(caseDir, "npm-root");
+    const pluginDir = path.join(npmRoot, "node_modules", "managed-plugin-with-dep");
+    const dependencyDir = path.join(npmRoot, "node_modules", "flattened-runtime-helper");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(dependencyDir, { recursive: true });
+    writeMinimalPackagePlugin(pluginDir, "managed-plugin-with-dep");
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "managed-plugin-with-dep",
+        version: "1.0.0",
+        dependencies: {
+          "flattened-runtime-helper": "1.0.0",
+        },
+        openclaw: { extensions: ["index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(dependencyDir, "package.json"),
+      JSON.stringify({
+        name: "flattened-runtime-helper",
+        version: "1.0.0",
+        main: "index.cjs",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(dependencyDir, "index.cjs"),
+      `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+      "utf-8",
+    );
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: pluginDir,
+      dependencyScanRootDir: npmRoot,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("flattened-runtime-helper/index.cjs");
+    }
+  });
+
   it.each([
     {
       name: "rejects plugins whose minHostVersion is newer than the current host",

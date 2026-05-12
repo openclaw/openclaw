@@ -82,6 +82,7 @@ export async function scanPackageInstallSource(
 export async function scanInstalledPackageDependencyTree(params: {
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
+  dependencyScanRootDir?: string;
   logger: InstallScanLogger;
   packageDir: string;
   pluginId: string;
