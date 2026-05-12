@@ -33,15 +33,12 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     expect(blocks).toHaveLength(1);
     const block = blocks[0] as {
       type?: string;
-      source?: { type?: string; media_type?: string; data?: string };
+      attachment?: { url?: string; kind?: string; label?: string; mimeType?: string };
     };
-    expect(block.type).toBe("audio");
-    expect(block.source?.type).toBe("base64");
-    expect(block.source?.media_type).toBe("audio/mpeg");
-    expect(block.source?.data?.includes("data:")).toBe(false);
-    expect(Buffer.from(block.source?.data ?? "", "base64")).toEqual(
-      Buffer.from([0xff, 0xfb, 0x90, 0x00]),
-    );
+    expect(block.type).toBe("attachment");
+    expect(block.attachment?.kind).toBe("audio");
+    expect(block.attachment?.url).toContain("clip.mp3");
+    expect(block.attachment?.mimeType).toBe("audio/mpeg");
   });
 
   it("suppresses reasoning payload audio", async () => {
@@ -113,7 +110,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     );
 
     expect(blocks).toHaveLength(1);
-    expect((blocks[0] as { type?: string }).type).toBe("audio");
+    expect((blocks[0] as { type?: string }).type).toBe("attachment");
   });
 
   it("drops tool-result file:// URLs with remote hosts before touching the filesystem", async () => {
@@ -171,7 +168,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     ]);
 
     expect(blocks).toHaveLength(1);
-    expect((blocks[0] as { type?: string }).type).toBe("audio");
+    expect((blocks[0] as { type?: string }).type).toBe("attachment");
   });
 
   it("skips local audio when the opened file stat is over the cap", async () => {
