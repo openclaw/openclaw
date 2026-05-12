@@ -36,12 +36,19 @@ CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated_at
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_created_at
   ON sessions(created_at DESC, session_id);
 
-CREATE INDEX IF NOT EXISTS idx_agent_sessions_session_key
-  ON sessions(session_key);
-
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_conversation
   ON sessions(primary_conversation_id, updated_at DESC, session_id)
   WHERE primary_conversation_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS session_routes (
+  session_key TEXT NOT NULL PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_routes_session_id
+  ON session_routes(session_id);
 
 CREATE TABLE IF NOT EXISTS conversations (
   conversation_id TEXT NOT NULL PRIMARY KEY,
@@ -89,29 +96,23 @@ CREATE TABLE IF NOT EXISTS session_conversations (
 CREATE INDEX IF NOT EXISTS idx_agent_session_conversations_conversation
   ON session_conversations(conversation_id, last_seen_at DESC, session_id);
 
-CREATE TABLE IF NOT EXISTS session_routes (
-  session_key TEXT NOT NULL PRIMARY KEY,
-  session_id TEXT NOT NULL,
-  updated_at INTEGER NOT NULL,
-  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_agent_session_routes_session_id
-  ON session_routes(session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_session_conversations_primary
+  ON session_conversations(session_id)
+  WHERE role = 'primary';
 
 CREATE TABLE IF NOT EXISTS session_entries (
-  session_id TEXT NOT NULL PRIMARY KEY,
-  session_key TEXT NOT NULL,
+  session_key TEXT NOT NULL PRIMARY KEY,
+  session_id TEXT NOT NULL,
   entry_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_entries_updated_at
-  ON session_entries(updated_at DESC, session_id);
+  ON session_entries(updated_at DESC, session_key);
 
-CREATE INDEX IF NOT EXISTS idx_agent_session_entries_session_key
-  ON session_entries(session_key, updated_at DESC, session_id);
+CREATE INDEX IF NOT EXISTS idx_agent_session_entries_session_id
+  ON session_entries(session_id);
 
 CREATE TABLE IF NOT EXISTS transcript_events (
   session_id TEXT NOT NULL,
@@ -261,7 +262,7 @@ CREATE TABLE IF NOT EXISTS memory_index_chunks (
   hash TEXT NOT NULL,
   model TEXT NOT NULL,
   text TEXT NOT NULL,
-  embedding BLOB,
+  embedding BLOB NOT NULL,
   embedding_dims INTEGER,
   updated_at INTEGER NOT NULL,
   FOREIGN KEY (source_kind, source_key)
