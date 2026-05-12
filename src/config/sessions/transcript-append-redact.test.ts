@@ -98,6 +98,68 @@ describe("appendSessionTranscriptMessage - redaction", () => {
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
   });
 
+  it("masks secrets in string payloads without role before writing to disk", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "redact-string-payload",
+      fixture.sessionsDir(),
+    );
+    const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: "my key is sk-abcdef1234567890xyz ok",
+      config,
+    });
+
+    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(raw).not.toContain("sk-abcdef1234567890xyz");
+    expect(raw).toContain("ok");
+
+    const [msg] = readMessages(sessionFile) as string[];
+    expect(msg).not.toContain("sk-abcdef1234567890xyz");
+    expect(msg).toContain("ok");
+  });
+
+  it("masks secrets in structured payloads without role before writing to disk", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "redact-structured-no-role",
+      fixture.sessionsDir(),
+    );
+    const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        apiKey: "plainsecretvalue123",
+        password: "hunter2",
+        nested: { accessToken: ["nestedplainsecret123"] },
+        command: "OPENAI_API_KEY=sk-abcdef1234567890xyz openclaw health",
+        safe: "visible",
+      },
+      config,
+    });
+
+    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(raw).not.toContain("plainsecretvalue123");
+    expect(raw).not.toContain("hunter2");
+    expect(raw).not.toContain("nestedplainsecret123");
+    expect(raw).not.toContain("sk-abcdef1234567890xyz");
+    expect(raw).toContain("visible");
+
+    const [msg] = readMessages(sessionFile) as Array<{
+      apiKey: string;
+      password: string;
+      nested: { accessToken: string[] };
+      command: string;
+      safe: string;
+    }>;
+    expect(msg.apiKey).toBe("plains…e123");
+    expect(msg.password).toBe("***");
+    expect(msg.nested.accessToken[0]).toBe("nested…t123");
+    expect(msg.command).toBe("OPENAI_API_KEY=sk-abc…0xyz openclaw health");
+    expect(msg.safe).toBe("visible");
+  });
+
   it("uses configured custom patterns when cfg omits logging", async () => {
     const sessionFile = resolveSessionTranscriptPathInDir(
       "redact-config-pattern-fallback",

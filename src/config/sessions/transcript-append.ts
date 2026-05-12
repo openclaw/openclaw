@@ -9,6 +9,7 @@ import {
 } from "../../agents/session-write-lock.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { redactSecrets } from "../../logging/redact.js";
 
 const TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES = 64 * 1024;
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
@@ -297,7 +298,7 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
     const finalMessage = (
       isTranscriptAgentMessage(params.message)
         ? redactTranscriptMessage(params.message, params.config)
-        : params.message
+        : redactSecrets(params.message)
     ) as TMessage;
     const entry = {
       type: "message",
