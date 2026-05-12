@@ -42,6 +42,22 @@ const DEFAULT_INPUT_WAIT_IDLE_MS = 15_000;
 const MIN_INPUT_WAIT_IDLE_MS = 1_000;
 const MAX_INPUT_WAIT_IDLE_MS = 10 * 60 * 1000;
 
+// Allowed `action` values for the `process` tool. Keep in sync with the
+// processSchema description in `bash-tools.schemas.ts` and the union typed at
+// the runtime cast site below.
+const PROCESS_TOOL_ACTIONS = new Set<string>([
+  "list",
+  "poll",
+  "log",
+  "write",
+  "send-keys",
+  "submit",
+  "paste",
+  "kill",
+  "clear",
+  "remove",
+]);
+
 function resolveLogSliceWindow(offset?: number, limit?: number) {
   const usingDefaultTail = offset === undefined && limit === undefined;
   const effectiveLimit =
@@ -260,6 +276,23 @@ export function createProcessTool(
         limit?: number;
         timeout?: unknown;
       };
+
+      const rawAction = (args as { action?: unknown }).action;
+      if (typeof rawAction !== "string" || !PROCESS_TOOL_ACTIONS.has(rawAction)) {
+        const got =
+          rawAction === undefined
+            ? "missing"
+            : `${typeof rawAction}: ${JSON.stringify(rawAction)}`;
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Invalid 'action' parameter for process tool (got ${got}). Expected one of: ${[...PROCESS_TOOL_ACTIONS].join(", ")}. Do not retry with the same argument shape.`,
+            },
+          ],
+          details: { status: "failed" },
+        };
+      }
 
       if (params.action === "list") {
         const running = listRunningSessions()
