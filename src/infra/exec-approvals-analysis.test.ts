@@ -828,6 +828,30 @@ describe("exec approvals shell analysis", () => {
     it.each([
       { name: "slash encoded-command alias", argv: ["pwsh", "/ec", "ZQBjAGgAbwA="] },
       { name: "encoded-command prefix abbreviation", argv: ["pwsh", "-en", "ZQBjAGgAbwA="] },
+      {
+        name: "error action alias before command",
+        argv: ["pwsh", "-ea", "stop", "-Command", "inline_payload"],
+      },
+      {
+        name: "execution policy alias before command",
+        argv: ["pwsh", "-ep", "Bypass", "-Command", "inline_payload"],
+      },
+      {
+        name: "custom pipe name before encoded-command alias",
+        argv: ["pwsh", "-cus", "pipe-name", "-ec", "ZQBjAGgAbwA="],
+      },
+      {
+        name: "token alias before command",
+        argv: ["pwsh", "-to", "token-value", "-Command", "inline_payload"],
+      },
+      {
+        name: "utc timestamp alias before command",
+        argv: ["pwsh", "-utc", "1234", "-Command", "inline_payload"],
+      },
+      {
+        name: "encoded arguments prefix before command",
+        argv: ["pwsh", "-encodeda", "YQByAGcA", "-Command", "inline_payload"],
+      },
     ])("does not satisfy bare wrapper allowlist entries for PowerShell $name", ({ argv }) => {
       const dir = makeTempDir();
       const pwshPath = path.join(dir, "pwsh");

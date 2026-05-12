@@ -13,6 +13,13 @@ function expandPowerShellSwitchPrefixForms(name: string, minPrefixLength: number
   return forms;
 }
 
+function expandPowerShellSwitchForms(names: string[]): string[] {
+  return names.flatMap((name) => {
+    const normalized = normalizeLowercaseStringOrEmpty(name);
+    return [`-${normalized}`, `/${normalized}`];
+  });
+}
+
 const POWERSHELL_COMMAND_FLAGS = [
   ...expandPowerShellSwitchPrefixForms("command", 1),
   "-cwa",
@@ -27,14 +34,19 @@ const POWERSHELL_ENCODED_COMMAND_FLAGS = [
 ];
 const POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
   ...expandPowerShellSwitchPrefixForms("configurationname", 1),
+  ...expandPowerShellSwitchPrefixForms("custompipename", 3),
+  ...expandPowerShellSwitchPrefixForms("encodedarguments", 8),
   ...expandPowerShellSwitchPrefixForms("executionpolicy", 1),
   ...expandPowerShellSwitchPrefixForms("inputformat", 1),
   ...expandPowerShellSwitchPrefixForms("outputformat", 1),
   ...expandPowerShellSwitchPrefixForms("psconsolefile", 1),
   ...expandPowerShellSwitchPrefixForms("settingsfile", 1),
+  ...expandPowerShellSwitchPrefixForms("token", 2),
+  ...expandPowerShellSwitchPrefixForms("utctimestamp", 3),
   ...expandPowerShellSwitchPrefixForms("version", 1),
   ...expandPowerShellSwitchPrefixForms("windowstyle", 1),
   ...expandPowerShellSwitchPrefixForms("workingdirectory", 1),
+  ...expandPowerShellSwitchForms(["ea", "ep"]),
   "-if",
   "/if",
   "-of",

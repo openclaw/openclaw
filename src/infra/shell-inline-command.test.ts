@@ -137,6 +137,41 @@ describe("resolvePowerShellInlineCommandMatch", () => {
       expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 4 },
     },
     {
+      name: "error action alias value before command",
+      argv: ["pwsh", "-ea", "stop", "-Command", "Get-Date"],
+      expected: { command: "Get-Date", valueTokenIndex: 4 },
+    },
+    {
+      name: "slash error action alias value before command",
+      argv: ["pwsh", "/ea", "stop", "-Command", "Get-Date"],
+      expected: { command: "Get-Date", valueTokenIndex: 4 },
+    },
+    {
+      name: "execution policy alias value before slash command",
+      argv: ["pwsh", "/ep", "Bypass", "/c", "Get-Date"],
+      expected: { command: "Get-Date", valueTokenIndex: 4 },
+    },
+    {
+      name: "custom pipe name value before encoded-command alias",
+      argv: ["pwsh", "-cus", "pipe-name", "-ec", "ZQBjAGgAbwA="],
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 4 },
+    },
+    {
+      name: "token value before command",
+      argv: ["pwsh", "-to", "token-value", "-Command", "Get-Date"],
+      expected: { command: "Get-Date", valueTokenIndex: 4 },
+    },
+    {
+      name: "utc timestamp value before command",
+      argv: ["pwsh", "-utc", "1234", "-Command", "Get-Date"],
+      expected: { command: "Get-Date", valueTokenIndex: 4 },
+    },
+    {
+      name: "encoded arguments value before command",
+      argv: ["pwsh", "-encodeda", "YQByAGcA", "-Command", "Get-Date"],
+      expected: { command: "Get-Date", valueTokenIndex: 4 },
+    },
+    {
       name: "stops at the first positional argument",
       argv: ["pwsh", "script.ps1", "/ec", "ZQBjAGgAbwA="],
       expected: { command: null, valueTokenIndex: null },

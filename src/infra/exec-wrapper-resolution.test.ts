@@ -529,6 +529,36 @@ describe("extractShellWrapperCommand", () => {
       expectedCommand: { isWrapper: true, command: "ZQBjAGgAbwA=" },
     },
     {
+      argv: ["pwsh", "-ea", "stop", "-Command", "Get-Date"],
+      expectedInline: "Get-Date",
+      expectedCommand: { isWrapper: true, command: "Get-Date" },
+    },
+    {
+      argv: ["pwsh", "-ep", "Bypass", "-Command", "Get-Date"],
+      expectedInline: "Get-Date",
+      expectedCommand: { isWrapper: true, command: "Get-Date" },
+    },
+    {
+      argv: ["pwsh", "-cus", "pipe-name", "-ec", "ZQBjAGgAbwA="],
+      expectedInline: "ZQBjAGgAbwA=",
+      expectedCommand: { isWrapper: true, command: "ZQBjAGgAbwA=" },
+    },
+    {
+      argv: ["pwsh", "-to", "token-value", "-Command", "Get-Date"],
+      expectedInline: "Get-Date",
+      expectedCommand: { isWrapper: true, command: "Get-Date" },
+    },
+    {
+      argv: ["pwsh", "-utc", "1234", "-Command", "Get-Date"],
+      expectedInline: "Get-Date",
+      expectedCommand: { isWrapper: true, command: "Get-Date" },
+    },
+    {
+      argv: ["pwsh", "-encodeda", "YQByAGcA", "-Command", "Get-Date"],
+      expectedInline: "Get-Date",
+      expectedCommand: { isWrapper: true, command: "Get-Date" },
+    },
+    {
       argv: ["pwsh", "-en", "ZQBjAGgAbwA="],
       expectedInline: "ZQBjAGgAbwA=",
       expectedCommand: { isWrapper: true, command: "ZQBjAGgAbwA=" },
