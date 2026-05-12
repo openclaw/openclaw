@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 
 export type ServicePrefix<TService extends string> = { prefix: string; service: TService };
@@ -44,13 +47,28 @@ export function isAllowedParsedChatSender(params: {
   }
 
   const senderNormalized = params.normalizeSender(params.sender);
+  const chatId = params.chatId ?? undefined;
+  const chatGuid = normalizeOptionalString(params.chatGuid);
+  const chatIdentifier = normalizeOptionalString(params.chatIdentifier);
 
   for (const entry of allowFrom) {
     if (!entry) {
       continue;
     }
     const parsed = params.parseAllowTarget(entry);
-    if (parsed.kind === "handle" && senderNormalized) {
+    if (parsed.kind === "chat_id" && chatId !== undefined) {
+      if (parsed.chatId === chatId) {
+        return true;
+      }
+    } else if (parsed.kind === "chat_guid" && chatGuid) {
+      if (parsed.chatGuid === chatGuid) {
+        return true;
+      }
+    } else if (parsed.kind === "chat_identifier" && chatIdentifier) {
+      if (parsed.chatIdentifier === chatIdentifier) {
+        return true;
+      }
+    } else if (parsed.kind === "handle" && senderNormalized) {
       if (parsed.handle === senderNormalized) {
         return true;
       }

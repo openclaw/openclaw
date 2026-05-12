@@ -44,7 +44,7 @@ describe("isAllowedParsedChatSender", () => {
     ).toBe(true);
   });
 
-  it("does not match conversation targets as sender handles", () => {
+  it("matches conversation targets when chat context is supplied", () => {
     for (const entry of ["chat_id:123", "chat_guid:thread-123", "chat_identifier:team"]) {
       expect(
         isAllowedParsedChatSender({
@@ -56,7 +56,7 @@ describe("isAllowedParsedChatSender", () => {
           normalizeSender,
           parseAllowTarget,
         }),
-      ).toBe(false);
+      ).toBe(true);
     }
   });
 });
