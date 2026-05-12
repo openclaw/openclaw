@@ -119,6 +119,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "gateway.identity.get",
     "gateway.restart.preflight",
     "system-presence",
+    "system.workspaceBoundaryStatus",
     "last-heartbeat",
     "node.list",
     "node.describe",

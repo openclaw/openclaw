@@ -1,3 +1,4 @@
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -15,6 +16,15 @@ import {
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+export type WorkspaceBoundaryStatus = {
+  state: "healthy" | "warning" | "failed" | "unavailable";
+  reason: string;
+  boundary_scope: "workspace-vs-canon";
+  workspace_root: string;
+  canonical_root: string | null;
+  recommended_next_action: string;
+};
 
 export const systemHandlers: GatewayRequestHandlers = {
   "gateway.identity.get": ({ respond }) => {
@@ -50,6 +60,20 @@ export const systemHandlers: GatewayRequestHandlers = {
   "system-presence": ({ respond }) => {
     const presence = listSystemPresence();
     respond(true, presence, undefined);
+  },
+  "system.workspaceBoundaryStatus": ({ respond, context }) => {
+    const cfg = context.getRuntimeConfig();
+    const workspaceRoot = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    const result: WorkspaceBoundaryStatus = {
+      state: "unavailable",
+      reason: "canonical_root_unavailable",
+      boundary_scope: "workspace-vs-canon",
+      workspace_root: workspaceRoot,
+      canonical_root: null,
+      recommended_next_action:
+        "Configure or expose an approved canonical root signal before treating workspace boundary posture as confirmed.",
+    };
+    respond(true, result, undefined);
   },
   "system-event": ({ params, respond, context }) => {
     const text = normalizeOptionalString(params.text) ?? "";
