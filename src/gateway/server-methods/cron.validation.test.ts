@@ -78,6 +78,7 @@ function createCronContext(currentJob?: CronJob) {
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn(() => currentJob),
       wake: vi.fn(() => ({ ok: true }) as const),
+      readJob: vi.fn(async (id: string) => (id === currentJob?.id ? currentJob : undefined)),
     },
     logGateway: {
       info: vi.fn(),

@@ -83,13 +83,50 @@ async function invokePluginGatewayHandler(params: {
   });
 }
 
-function mockCronAdd(response: unknown) {
-  workflowMocks.callGatewayTool.mockImplementation(async (method: string) => {
-    if (method === "cron.add") {
-      return response;
-    }
-    return { ok: true };
-  });
+function createMockCronService(): CronServiceContract {
+  return {
+    start: vi.fn(async () => undefined),
+    stop: vi.fn(),
+    status: vi.fn(async () => ({
+      enabled: true,
+      storePath: "/tmp/openclaw-test-cron.json",
+      jobs: 0,
+      nextWakeAtMs: null,
+    })),
+    list: vi.fn(async () => []),
+    listPage: workflowMocks.cronListPage,
+    add: workflowMocks.cronAdd,
+    update: vi.fn(async (id, patch) => makeCronJob({ id, ...patch })),
+    remove: workflowMocks.cronRemove,
+    run: vi.fn(async () => ({ ok: true, ran: false, reason: "not-due" })),
+    enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "not-due" })),
+    getJob: vi.fn(() => undefined),
+    readJob: vi.fn(async () => undefined),
+    getDefaultAgentId: vi.fn(() => undefined),
+    wake: vi.fn(() => ({ ok: true })),
+  } as CronServiceContract;
+}
+
+function makeCronJob(input: Partial<CronJob> & { id: string }): CronJob {
+  return {
+    name: input.name ?? input.id,
+    enabled: true,
+    schedule: { kind: "at", at: "2026-05-01T00:00:00.000Z" },
+    sessionTarget: input.sessionTarget ?? `session:${MAIN_SESSION_KEY}`,
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "wake" },
+    delivery: { mode: "announce", channel: "last" },
+    state: {},
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    ...input,
+  };
+}
+
+const cron = createMockCronService();
+
+function mockCronAdd(response: CronJob) {
+  workflowMocks.cronAdd.mockResolvedValue(response);
 }
 
 function getCronAddBody() {
