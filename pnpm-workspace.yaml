@@ -34,6 +34,10 @@ minimumReleaseAgeExclude:
 
 nodeLinker: hoisted
 
+# Allow exotic subdependencies (git/tarball specs) used by baileys/libsignal
+# Required because baileys depends on @whiskeysockets/libsignal-node via git tarball
+blockExoticSubdeps: false
+
 overrides:
   "@anthropic-ai/sdk": 0.95.1
   hono: 4.12.18
