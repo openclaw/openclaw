@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { __testing, registerNativeHookRelay } from "../agents/harness/native-hook-relay.js";
 import {
+  __testing as cliTesting,
   createReadableTextStream,
   createWritableTextBuffer,
   runNativeHookRelayCli,
@@ -57,6 +58,113 @@ describe("native hook relay CLI", () => {
       relay?.unregister();
       __testing.clearNativeHookRelaysForTests();
     }
+  });
+
+  it("reserves timeout budget for gateway fallback and fail-closed output", async () => {
+    expect(
+      cliTesting.calculateNativeHookRelayBridgeRegistrationTimeoutMs({
+        startedAt: 1_000,
+        timeoutMs: 5_000,
+        now: 1_000,
+      }),
+    ).toBe(3_750);
+    expect(
+      cliTesting.calculateNativeHookRelayDirectBridgeTimeoutMs({
+        startedAt: 1_000,
+        timeoutMs: 5_000,
+        now: 1_000,
+      }),
+    ).toBe(4_750);
+    expect(
+      cliTesting.calculateNativeHookRelayGatewayFallbackTimeoutMs({
+        startedAt: 1_000,
+        timeoutMs: 5_000,
+        now: 4_750,
+      }),
+    ).toBe(1_000);
+    expect(cliTesting.calculateNativeHookRelayResponseReserveMs(5_000)).toBe(250);
+  });
+
+  it("keeps reachable direct bridge invocation on the remaining hook budget", async () => {
+    const callGateway = vi.fn();
+    const invokeNativeHookRelayBridge = vi.fn(async () => {
+      await delay(95);
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      {
+        provider: "codex",
+        relayId: "relay-slow-direct-bridge",
+        event: "pre_tool_use",
+        timeout: "120",
+      },
+      {
+        stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
+        callGateway: callGateway as never,
+        invokeNativeHookRelayBridge: invokeNativeHookRelayBridge as never,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout.text()).toBe("");
+    expect(stderr.text()).toBe("");
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(invokeNativeHookRelayBridge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        registrationTimeoutMs: 90,
+        timeoutMs: 114,
+      }),
+    );
+  });
+
+  it("uses the remaining timeout budget when the bridge is absent", async () => {
+    __testing.clearNativeHookRelaysForTests();
+    const callGateway = vi.fn(async () => {
+      throw new Error("gateway closed");
+    });
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      {
+        provider: "codex",
+        relayId: "relay-missing-bridge-budget",
+        event: "pre_tool_use",
+        timeout: "120",
+      },
+      {
+        stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: expect.any(Number),
+      }),
+    );
+    const firstCall = (callGateway.mock.calls as unknown[][])[0]?.[0] as
+      | { timeoutMs: number }
+      | undefined;
+    expect(firstCall).toBeDefined();
+    expect(firstCall?.timeoutMs).toBeGreaterThanOrEqual(1);
+    expect(firstCall?.timeoutMs).toBeLessThan(120);
+    expect(JSON.parse(stdout.text())).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: expect.stringContaining("Native hook relay unavailable"),
+      },
+    });
+    expect(stderr.text()).toContain("native hook relay unavailable");
   });
 
   it("reads Codex hook JSON from stdin and forwards it to the gateway relay", async () => {
