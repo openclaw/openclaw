@@ -4,7 +4,7 @@ import { updateSessionStoreEntry, resolveStoredSessionKeyForSessionId } from "./
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FailoverError } from "./failover-error.js";
 
-vi.mock("../config/sessions.js", () => ({
+vi.mock("./command/session.js", () => ({
   updateSessionStoreEntry: vi.fn(),
   resolveStoredSessionKeyForSessionId: vi.fn(),
 }));
