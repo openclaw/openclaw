@@ -121,11 +121,17 @@ describe("device-pair notify persistence", () => {
     });
     expect(status.text).toContain("Pair request notifications: disabled for this chat.");
 
-    const persisted = readState() as { subscribers: Array<{ to: string; accountId?: string }> };
-    expect(persisted.subscribers).toHaveLength(1);
-    expect(persisted.subscribers[0]).toMatchObject({
-      to: "chat|123",
-      accountId: "acct",
+    const persisted = readState();
+    expect(persisted).toStrictEqual({
+      subscribers: [
+        {
+          to: "chat|123",
+          accountId: "acct",
+          mode: "persistent",
+          addedAtMs: 1,
+        },
+      ],
+      notifiedRequestIds: {},
     });
   });
 });
