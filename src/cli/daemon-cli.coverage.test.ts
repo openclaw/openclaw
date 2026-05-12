@@ -28,6 +28,21 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   listeners: [],
   hints: [],
 }));
+
+function collectMatching<T, U>(
+  items: readonly T[],
+  predicate: (item: T) => boolean,
+  map: (item: T) => U,
+): U[] {
+  const matches: U[] = [];
+  for (const item of items) {
+    if (predicate(item)) {
+      matches.push(map(item));
+    }
+  }
+  return matches;
+}
+
 const buildGatewayInstallPlan = vi.fn(
   async (params: {
     port: number;
@@ -139,6 +154,18 @@ async function runDaemonCommand(args: string[]) {
   await daemonProgram.parseAsync(args, { from: "user" });
 }
 
+function requireMockCallArg(
+  mockFn: { mock: { calls: unknown[][] } },
+  label: string,
+  index = 0,
+): Record<string, unknown> {
+  const arg = mockFn.mock.calls[index]?.[0] as Record<string, unknown> | undefined;
+  if (!arg) {
+    throw new Error(`expected ${label} call #${index + 1}`);
+  }
+  return arg;
+}
+
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe logged JSON shape.
 function parseFirstJsonRuntimeLine<T>() {
   const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
@@ -180,11 +207,11 @@ describe("daemon-cli coverage", () => {
     await runDaemonCommand(["daemon", "status"]);
 
     expect(probeGatewayStatus).toHaveBeenCalledTimes(1);
-    expect(probeGatewayStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    expect(requireMockCallArg(probeGatewayStatus, "probeGatewayStatus").url).toBe(
+      "ws://127.0.0.1:18789",
     );
     expect(findExtraGatewayServices).not.toHaveBeenCalled();
-    expect(inspectPortUsage).toHaveBeenCalled();
+    expect(inspectPortUsage).toHaveBeenCalledTimes(1);
   });
 
   it("derives probe URL from service args + env (json)", async () => {
@@ -205,10 +232,8 @@ describe("daemon-cli coverage", () => {
 
     await runDaemonCommand(["daemon", "status", "--json"]);
 
-    expect(probeGatewayStatus).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "ws://127.0.0.1:19001",
-      }),
+    expect(requireMockCallArg(probeGatewayStatus, "probeGatewayStatus").url).toBe(
+      "ws://127.0.0.1:19001",
     );
     expect(inspectPortUsage).toHaveBeenCalledWith(19001);
 
@@ -230,10 +255,12 @@ describe("daemon-cli coverage", () => {
 
     await runDaemonCommand(["daemon", "status", "--deep"]);
 
-    expect(findExtraGatewayServices).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ deep: true }),
-    );
+    expect(findExtraGatewayServices).toHaveBeenCalledTimes(1);
+    const discoveryCall = findExtraGatewayServices.mock.calls.at(0);
+    if (discoveryCall?.[0] === undefined) {
+      throw new Error("Expected gateway service discovery params");
+    }
+    expect(discoveryCall[1]).toEqual({ deep: true });
   });
 
   it("installs the daemon (json output)", async () => {
@@ -278,18 +305,18 @@ describe("daemon-cli coverage", () => {
 
     await runDaemonCommand(["daemon", "install", "--force", "--json"]);
 
-    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        existingEnvironment: {
-          PATH: "/custom/go/bin:/usr/bin",
-          OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
-          GOPATH: "/Users/test/.local/gopath",
-          GOBIN: "/Users/test/.local/gopath/bin",
-        },
-        env: expect.objectContaining({
-          OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
-        }),
-      }),
+    const installPlanParams = requireMockCallArg(
+      buildGatewayInstallPlan,
+      "buildGatewayInstallPlan",
+    );
+    expect(installPlanParams.existingEnvironment).toEqual({
+      PATH: "/custom/go/bin:/usr/bin",
+      OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
+      GOPATH: "/Users/test/.local/gopath",
+      GOBIN: "/Users/test/.local/gopath/bin",
+    });
+    expect((installPlanParams.env as NodeJS.ProcessEnv).OPENCLAW_WRAPPER).toBe(
+      "/usr/local/bin/openclaw-doppler",
     );
   });
 
@@ -305,10 +332,8 @@ describe("daemon-cli coverage", () => {
       "--json",
     ]);
 
-    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        wrapperPath: "/usr/local/bin/openclaw-doppler",
-      }),
+    expect(requireMockCallArg(buildGatewayInstallPlan, "buildGatewayInstallPlan").wrapperPath).toBe(
+      "/usr/local/bin/openclaw-doppler",
     );
   });
 
@@ -325,7 +350,12 @@ describe("daemon-cli coverage", () => {
     expect(serviceStop).toHaveBeenCalledTimes(1);
     const jsonLines = runtimeLogs.filter((line) => line.trim().startsWith("{"));
     const parsed = jsonLines.map((line) => JSON.parse(line) as { action?: string; ok?: boolean });
-    expect(parsed.some((entry) => entry.action === "start" && entry.ok === true)).toBe(true);
-    expect(parsed.some((entry) => entry.action === "stop" && entry.ok === true)).toBe(true);
+    expect(
+      collectMatching(
+        parsed,
+        (entry) => Boolean(entry.ok),
+        (entry) => entry.action,
+      ),
+    ).toEqual(["start", "stop"]);
   });
 });

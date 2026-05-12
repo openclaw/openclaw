@@ -10,6 +10,11 @@ import { isModernCodexModel } from "../../provider.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import {
+  isCodexPluginThreadBindingStale,
+  mergeCodexThreadConfigs,
+  type CodexPluginThreadConfig,
+} from "./plugin-thread-config.js";
+import {
   assertCodexThreadResumeResponse,
   assertCodexThreadStartResponse,
 } from "./protocol-validators.js";
@@ -32,6 +37,18 @@ import {
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 
+export type CodexPluginThreadConfigProvider = {
+  enabled: boolean;
+  inputFingerprint?: string;
+  enabledPluginConfigKeys?: readonly string[];
+  build: () => Promise<CodexPluginThreadConfig>;
+};
+
+export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
+  "features.code_mode": true,
+  "features.code_mode_only": true,
+};
+
 export async function startOrResumeThread(params: {
   client: CodexAppServerClient;
   params: EmbeddedRunAttemptParams;
@@ -40,14 +57,50 @@ export async function startOrResumeThread(params: {
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   config?: JsonObject;
+  pluginThreadConfig?: CodexPluginThreadConfigProvider;
 }): Promise<CodexAppServerThreadBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
-  const binding = await readCodexAppServerBinding(params.params.sessionFile, {
+  let binding = await readCodexAppServerBinding(params.params.sessionFile, {
     authProfileStore: params.params.authProfileStore,
     agentDir: params.params.agentDir,
     config: params.params.config,
   });
   let preserveExistingBinding = false;
+  let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
+  if (binding?.threadId) {
+    let pluginBindingStale = isCodexPluginThreadBindingStale({
+      codexPluginsEnabled: params.pluginThreadConfig?.enabled ?? false,
+      bindingFingerprint: binding.pluginAppsFingerprint,
+      bindingInputFingerprint: binding.pluginAppsInputFingerprint,
+      currentInputFingerprint: params.pluginThreadConfig?.inputFingerprint,
+      hasBindingPolicyContext: Boolean(binding.pluginAppPolicyContext),
+    });
+    if (
+      !pluginBindingStale &&
+      shouldRecheckRecoverablePluginBinding({
+        binding,
+        pluginThreadConfig: params.pluginThreadConfig,
+      })
+    ) {
+      try {
+        prebuiltPluginThreadConfig = await params.pluginThreadConfig?.build();
+        pluginBindingStale =
+          prebuiltPluginThreadConfig?.fingerprint !== binding.pluginAppsFingerprint;
+      } catch (error) {
+        embeddedAgentLog.warn("codex app-server plugin app config recovery check failed", {
+          error,
+          threadId: binding.threadId,
+        });
+      }
+    }
+    if (pluginBindingStale) {
+      embeddedAgentLog.debug("codex app-server plugin app config changed; starting a new thread", {
+        threadId: binding.threadId,
+      });
+      await clearCodexAppServerBinding(params.params.sessionFile);
+      binding = undefined;
+    }
+  }
   if (binding?.threadId) {
     // `/codex resume <thread>` writes a binding before the next turn can know
     // the dynamic tool catalog, so only invalidate fingerprints we actually have.
@@ -110,6 +163,9 @@ export async function startOrResumeThread(params: {
             model: params.params.modelId,
             modelProvider: response.modelProvider ?? fallbackModelProvider,
             dynamicToolsFingerprint,
+            pluginAppsFingerprint: binding.pluginAppsFingerprint,
+            pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
+            pluginAppPolicyContext: binding.pluginAppPolicyContext,
             createdAt: binding.createdAt,
           },
           {
@@ -126,6 +182,9 @@ export async function startOrResumeThread(params: {
           model: params.params.modelId,
           modelProvider: response.modelProvider ?? fallbackModelProvider,
           dynamicToolsFingerprint,
+          pluginAppsFingerprint: binding.pluginAppsFingerprint,
+          pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
+          pluginAppPolicyContext: binding.pluginAppPolicyContext,
         };
       } catch (error) {
         if (isCodexAppServerConnectionClosedError(error)) {
@@ -139,6 +198,10 @@ export async function startOrResumeThread(params: {
     }
   }
 
+  const pluginThreadConfig = params.pluginThreadConfig?.enabled
+    ? (prebuiltPluginThreadConfig ?? (await params.pluginThreadConfig.build()))
+    : undefined;
+  const config = mergeCodexThreadConfigs(params.config, pluginThreadConfig?.configPatch);
   const response = assertCodexThreadStartResponse(
     await params.client.request(
       "thread/start",
@@ -147,7 +210,7 @@ export async function startOrResumeThread(params: {
         dynamicTools: params.dynamicTools,
         appServer: params.appServer,
         developerInstructions: params.developerInstructions,
-        config: params.config,
+        config,
       }),
     ),
   );
@@ -169,6 +232,9 @@ export async function startOrResumeThread(params: {
         model: response.model ?? params.params.modelId,
         modelProvider: response.modelProvider ?? modelProvider,
         dynamicToolsFingerprint,
+        pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
+        pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
+        pluginAppPolicyContext: pluginThreadConfig?.policyContext,
         createdAt,
       },
       {
@@ -187,9 +253,34 @@ export async function startOrResumeThread(params: {
     model: response.model ?? params.params.modelId,
     modelProvider: response.modelProvider ?? modelProvider,
     dynamicToolsFingerprint,
+    pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
+    pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
+    pluginAppPolicyContext: pluginThreadConfig?.policyContext,
     createdAt,
     updatedAt: createdAt,
   };
+}
+
+function shouldRecheckRecoverablePluginBinding(params: {
+  binding: CodexAppServerThreadBinding;
+  pluginThreadConfig?: CodexPluginThreadConfigProvider;
+}): boolean {
+  if (!params.pluginThreadConfig?.enabled) {
+    return false;
+  }
+  if (
+    !params.binding.pluginAppsFingerprint ||
+    !params.binding.pluginAppsInputFingerprint ||
+    params.binding.pluginAppsInputFingerprint !== params.pluginThreadConfig.inputFingerprint
+  ) {
+    return false;
+  }
+  const policyContext = params.binding.pluginAppPolicyContext;
+  if (!policyContext) {
+    return false;
+  }
+  const expectedPluginConfigKeys = params.pluginThreadConfig.enabledPluginConfigKeys ?? [];
+  return Object.keys(policyContext.apps).length === 0 || expectedPluginConfigKeys.length > 0;
 }
 
 export function buildThreadStartParams(
@@ -218,7 +309,7 @@ export function buildThreadStartParams(
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     serviceName: "OpenClaw",
-    ...(options.config ? { config: options.config } : {}),
+    config: buildCodexRuntimeThreadConfig(options.config),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     dynamicTools: options.dynamicTools,
     experimentalRawEvents: true,
@@ -251,10 +342,18 @@ export function buildThreadResumeParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
-    ...(options.config ? { config: options.config } : {}),
+    config: buildCodexRuntimeThreadConfig(options.config),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     persistExtendedHistory: true,
   };
+}
+
+export function buildCodexRuntimeThreadConfig(config: JsonObject | undefined): JsonObject {
+  return (
+    mergeCodexThreadConfigs(config, CODEX_CODE_MODE_THREAD_CONFIG) ?? {
+      ...CODEX_CODE_MODE_THREAD_CONFIG,
+    }
+  );
 }
 
 export function buildTurnStartParams(
@@ -299,6 +398,7 @@ export function buildTurnCollaborationMode(
 function buildHeartbeatCollaborationInstructions(): string {
   return [
     "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.",
+    "When you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.",
     CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
   ].join("\n\n");
 }
@@ -376,8 +476,8 @@ function compareJsonFingerprint(left: JsonValue, right: JsonValue): number {
 export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
   const promptOverlay = renderCodexRuntimePromptOverlay(params);
   const sections = [
-    "You are running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-specific integrations such as messaging, cron, sessions, media, gateway, and nodes when available.",
-    "Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.",
+    "Running inside OpenClaw. Use dynamic tools for messaging, cron, sessions, media, gateway, and nodes when available.",
+    "Preserve channel/session context. Visible channel replies: use `message`, do not describe would-reply.",
     promptOverlay,
     params.extraSystemPrompt,
     params.skillsSnapshot?.prompt,
@@ -428,7 +528,7 @@ function buildUserInput(
   ];
 }
 
-function resolveCodexAppServerModelProvider(params: {
+export function resolveCodexAppServerModelProvider(params: {
   provider: string;
   authProfileId?: string;
   authProfileStore?: CodexAppServerAuthProfileLookup["authProfileStore"];

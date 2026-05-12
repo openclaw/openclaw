@@ -52,6 +52,7 @@ const {
   runMantisDesktopBrowserSmokeCommand,
   runMantisDiscordSmokeCommand,
   runMantisSlackDesktopSmokeCommand,
+  runMantisTelegramDesktopBuilderCommand,
 } = vi.hoisted(() => ({
   runQaCredentialsAddCommand: vi.fn(),
   runQaCredentialsListCommand: vi.fn(),
@@ -64,6 +65,7 @@ const {
   runMantisDesktopBrowserSmokeCommand: vi.fn(),
   runMantisDiscordSmokeCommand: vi.fn(),
   runMantisSlackDesktopSmokeCommand: vi.fn(),
+  runMantisTelegramDesktopBuilderCommand: vi.fn(),
 }));
 
 const { listQaRunnerCliContributions } = vi.hoisted(() => ({
@@ -71,6 +73,24 @@ const { listQaRunnerCliContributions } = vi.hoisted(() => ({
     createAvailableQaRunnerContribution(),
   ]),
 }));
+
+function requireQaTelegramOptions() {
+  const [call] = runQaTelegramCommand.mock.calls;
+  if (!call) {
+    throw new Error("expected qa telegram command call");
+  }
+  const [options] = call;
+  return options;
+}
+
+function requireQaSuiteOptions() {
+  const [call] = runQaSuiteCommand.mock.calls;
+  if (!call) {
+    throw new Error("expected qa suite command call");
+  }
+  const [options] = call;
+  return options;
+}
 
 vi.mock("openclaw/plugin-sdk/qa-runner-runtime", () => ({
   listQaRunnerCliContributions,
@@ -85,6 +105,7 @@ vi.mock("./mantis/cli.runtime.js", () => ({
   runMantisDesktopBrowserSmokeCommand,
   runMantisDiscordSmokeCommand,
   runMantisSlackDesktopSmokeCommand,
+  runMantisTelegramDesktopBuilderCommand,
 }));
 
 vi.mock("./cli.runtime.js", () => ({
@@ -114,6 +135,7 @@ describe("qa cli registration", () => {
     runMantisDesktopBrowserSmokeCommand.mockReset();
     runMantisDiscordSmokeCommand.mockReset();
     runMantisSlackDesktopSmokeCommand.mockReset();
+    runMantisTelegramDesktopBuilderCommand.mockReset();
     listQaRunnerCliContributions
       .mockReset()
       .mockReturnValue([createAvailableQaRunnerContribution()]);
@@ -126,16 +148,15 @@ describe("qa cli registration", () => {
 
   it("registers discovered and built-in live transport subcommands", () => {
     const qa = program.commands.find((command) => command.name() === "qa");
-    expect(qa).toBeDefined();
-    expect(qa?.commands.map((command) => command.name())).toEqual(
-      expect.arrayContaining([
-        TEST_QA_RUNNER.commandName,
-        "telegram",
-        "mantis",
-        "credentials",
-        "coverage",
-      ]),
-    );
+    if (!qa) {
+      throw new Error("expected qa command");
+    }
+    const commandNames = qa.commands.map((command) => command.name());
+    expect(commandNames).toContain(TEST_QA_RUNNER.commandName);
+    expect(commandNames).toContain("telegram");
+    expect(commandNames).toContain("mantis");
+    expect(commandNames).toContain("credentials");
+    expect(commandNames).toContain("coverage");
   });
 
   it("routes mantis discord-smoke flags into the mantis runtime command", async () => {
@@ -351,6 +372,62 @@ describe("qa cli registration", () => {
     });
   });
 
+  it("routes mantis Telegram desktop builder flags into the mantis runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "telegram-desktop-builder",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output-dir",
+      ".artifacts/qa-e2e/mantis/telegram-desktop",
+      "--crabbox-bin",
+      "/tmp/crabbox",
+      "--provider",
+      "hetzner",
+      "--machine-class",
+      "beast",
+      "--lease-id",
+      "cbx_123abc",
+      "--idle-timeout",
+      "45m",
+      "--ttl",
+      "120m",
+      "--credential-source",
+      "convex",
+      "--credential-role",
+      "ci",
+      "--hydrate-mode",
+      "prehydrated",
+      "--telegram-profile-archive-env",
+      "TELEGRAM_PROFILE_TGZ_B64",
+      "--telegram-profile-dir",
+      "/home/crabbox/.local/share/TelegramDesktop",
+      "--no-gateway-setup",
+      "--keep-lease",
+    ]);
+
+    expect(runMantisTelegramDesktopBuilderCommand).toHaveBeenCalledWith({
+      crabboxBin: "/tmp/crabbox",
+      credentialRole: "ci",
+      credentialSource: "convex",
+      gatewaySetup: false,
+      hydrateMode: "prehydrated",
+      idleTimeout: "45m",
+      keepLease: true,
+      leaseId: "cbx_123abc",
+      machineClass: "beast",
+      outputDir: ".artifacts/qa-e2e/mantis/telegram-desktop",
+      provider: "hetzner",
+      repoRoot: "/tmp/openclaw-repo",
+      telegramProfileArchiveEnv: "TELEGRAM_PROFILE_TGZ_B64",
+      telegramProfileDir: "/home/crabbox/.local/share/TelegramDesktop",
+      ttl: "120m",
+    });
+  });
+
   it("routes coverage report flags into the qa runtime command", async () => {
     await program.parseAsync([
       "node",
@@ -381,16 +458,16 @@ describe("qa cli registration", () => {
     const telegram = qa?.commands.find((command) => command.name() === "telegram");
     const optionNames = telegram?.options.map((option) => option.long) ?? [];
 
-    expect(optionNames).toEqual(
-      expect.arrayContaining(["--credential-source", "--credential-role"]),
-    );
+    expect(optionNames).toContain("--credential-source");
+    expect(optionNames).toContain("--credential-role");
+    expect(optionNames).toContain("--list-scenarios");
   });
 
   it("registers standalone provider server commands from the provider registry", async () => {
     const qa = program.commands.find((command) => command.name() === "qa");
-    expect(qa?.commands.map((command) => command.name())).toEqual(
-      expect.arrayContaining(["mock-openai", "aimock"]),
-    );
+    const commandNames = qa?.commands.map((command) => command.name()) ?? [];
+    expect(commandNames).toContain("mock-openai");
+    expect(commandNames).toContain("aimock");
 
     await program.parseAsync(["node", "openclaw", "qa", "aimock", "--port", "44080"]);
 
@@ -432,30 +509,32 @@ describe("qa cli registration", () => {
       fastMode: false,
       allowFailures: false,
       scenarioIds: [],
+      listScenarios: false,
       sutAccountId: "sut",
       credentialSource: undefined,
       credentialRole: undefined,
     });
   });
 
+  it("forwards --list-scenarios for telegram runs", async () => {
+    await program.parseAsync(["node", "openclaw", "qa", "telegram", "--list-scenarios"]);
+
+    const options = requireQaTelegramOptions();
+    expect(options.listScenarios).toBe(true);
+  });
+
   it("forwards --allow-failures for telegram runs", async () => {
     await program.parseAsync(["node", "openclaw", "qa", "telegram", "--allow-failures"]);
 
-    expect(runQaTelegramCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowFailures: true,
-      }),
-    );
+    const options = requireQaTelegramOptions();
+    expect(options.allowFailures).toBe(true);
   });
 
   it("forwards --allow-failures for suite runs", async () => {
     await program.parseAsync(["node", "openclaw", "qa", "suite", "--allow-failures"]);
 
-    expect(runQaSuiteCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowFailures: true,
-      }),
-    );
+    const options = requireQaSuiteOptions();
+    expect(options.allowFailures).toBe(true);
   });
 
   it("routes credential add flags into the qa runtime command", async () => {

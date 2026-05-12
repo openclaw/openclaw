@@ -95,6 +95,7 @@ import {
   type ErrorShape,
   errorShape,
   formatValidationErrors,
+  MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   validateConnectParams,
   validateRequestFrame,
@@ -148,6 +149,30 @@ const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
 };
+
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function resolveTrustedProxyControlUiScopes(params: {
+  requestedScopes: string[];
+  upgradeReq: IncomingMessage;
+}): string[] {
+  const rawHeader = firstHeaderValue(params.upgradeReq.headers["x-openclaw-scopes"]);
+  if (rawHeader === undefined) {
+    return params.requestedScopes;
+  }
+  const declaredScopes = new Set(
+    rawHeader
+      .split(",")
+      .map((scope) => scope.trim())
+      .filter((scope) => scope.length > 0),
+  );
+  if (declaredScopes.size === 0) {
+    return [];
+  }
+  return params.requestedScopes.filter((scope) => declaredScopes.has(scope));
+}
 
 function resolvePinnedClientMetadata(params: {
   claimedPlatform?: string;
@@ -478,17 +503,27 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
 
         // protocol negotiation
         const { minProtocol, maxProtocol } = connectParams;
-        if (maxProtocol < PROTOCOL_VERSION || minProtocol > PROTOCOL_VERSION) {
+        const supportsCurrentProtocol =
+          maxProtocol >= PROTOCOL_VERSION && minProtocol <= PROTOCOL_VERSION;
+        const supportsProbeRestartProtocol =
+          connectParams.client.mode === GATEWAY_CLIENT_MODES.PROBE &&
+          maxProtocol >= MIN_PROBE_PROTOCOL_VERSION &&
+          minProtocol <= PROTOCOL_VERSION;
+        if (!supportsCurrentProtocol && !supportsProbeRestartProtocol) {
           markHandshakeFailure("protocol-mismatch", {
             minProtocol,
             maxProtocol,
             expectedProtocol: PROTOCOL_VERSION,
+            minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
           });
           logWsControl.warn(
             `protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
           );
           sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
-            details: { expectedProtocol: PROTOCOL_VERSION },
+            details: {
+              expectedProtocol: PROTOCOL_VERSION,
+              minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
+            },
           });
           close(1002, "protocol mismatch");
           return;
@@ -673,6 +708,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             isControlUi,
             controlUiAuthPolicy,
             trustedProxyAuthOk,
+            localBackendSelfPairingOk: skipLocalBackendSelfPairing,
             sharedAuthOk,
             authOk,
             hasSharedAuth,
@@ -874,6 +910,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           authOk,
           authMethod,
         });
+        if (trustedProxyAuthOk) {
+          scopes = resolveTrustedProxyControlUiScopes({
+            requestedScopes: scopes,
+            upgradeReq,
+          });
+          connectParams.scopes = scopes;
+        }
         const skipControlUiPairingForDevice = shouldSkipControlUiPairing(
           controlUiAuthPolicy,
           role,
@@ -1142,8 +1185,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 return;
               }
               hasServerApprovedDeviceTokenBaseline = true;
-            } else if (trustedProxyAuthOk) {
-              clearUnboundScopes();
             } else if (
               skipControlUiPairingForDevice ||
               (skipLocalBackendSelfPairing && authMethod !== "device-token")

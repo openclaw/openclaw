@@ -14,9 +14,24 @@ const PAYMENT_CREDENTIAL_ENV_KEYS = String.raw`CARD[_-]?NUMBER|CARD[_-]?CVC|CARD
 const PAYMENT_CREDENTIAL_QUERY_KEYS = String.raw`card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token`;
 const PAYMENT_CREDENTIAL_JSON_KEYS = String.raw`cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token`;
 const STRUCTURED_SECRET_FIELD_RE = new RegExp(
-  String.raw`^(?:api[-_]?key|apiKey|token|secret|password|passwd|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|client[-_]?secret|clientSecret|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
+  String.raw`^(?:api[-_]?key|apiKey|token|secret|password|passwd|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|client[-_]?secret|clientSecret|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
   "i",
 );
+const STRUCTURED_APP_PASSWORD_FIELD_RE =
+  /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password|text|content|message|error|errorMessage|detail|details|reason)$/i;
+const APP_SPECIFIC_PASSWORD_RE = /\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b/g;
+const BENIGN_APP_PASSWORD_WORDS = new Set([
+  "case",
+  "claw",
+  "demo",
+  "file",
+  "main",
+  "name",
+  "open",
+  "path",
+  "slug",
+  "test",
+]);
 
 const DEFAULT_REDACT_PATTERNS: string[] = [
   // ENV-style assignments. Keep this case-sensitive so diagnostics like
@@ -27,6 +42,10 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`/[?&](?:access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|api[-_]?key|client[-_]?secret|token|key|secret|password|pass|passwd|auth|signature|${PAYMENT_CREDENTIAL_QUERY_KEYS})=([^&\s"'<>]+)/gi`,
   // JSON fields.
   String.raw`"(?:apiKey|token|secret|password|passwd|accessToken|refreshToken|${PAYMENT_CREDENTIAL_JSON_KEYS})"\s*:\s*"([^"]+)"`,
+  // HTTP client diagnostics often stringify request config objects using
+  // JSON or util.inspect-style fields rather than env/CLI syntax.
+  String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`,
+  String.raw`(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`,
   // CLI flags.
   String.raw`--(?:api[-_]?key|hook[-_]?token|token|secret|password|passwd|${PAYMENT_CREDENTIAL_QUERY_KEYS})\s+(["']?)([^\s"']+)\1`,
   // Authorization headers.
@@ -34,7 +53,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`\bBearer\s+([A-Za-z0-9._\-+=]{18,})\b`,
   // Standalone token assignments in CLI or HTTP diagnostics. URL query params
   // are handled above so non-secret params survive and long values stay hinted.
-  String.raw`(^|[\s,;])(?:access_token|refresh_token|api[-_]?key|token|secret|password|passwd|${PAYMENT_CREDENTIAL_QUERY_KEYS})=([^\s&#]+)`,
+  String.raw`(^|[\s,;])(?:access_token|refresh_token|auth[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|token|secret|password|passwd|${PAYMENT_CREDENTIAL_QUERY_KEYS})=([^\s&#]+)`,
   // PEM blocks.
   String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`,
   // Common token prefixes.
@@ -45,6 +64,9 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`\b(xapp-[A-Za-z0-9-]{10,})\b`,
   String.raw`\b(gsk_[A-Za-z0-9_-]{10,})\b`,
   String.raw`\b(AIza[0-9A-Za-z\-_]{20,})\b`,
+  String.raw`\b(ya29\.[0-9A-Za-z_\-./+=]{10,})\b`,
+  String.raw`\b(1//0[0-9A-Za-z_\-./+=]{10,})\b`,
+  String.raw`\b(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b`,
   String.raw`\b(pplx-[A-Za-z0-9_-]{10,})\b`,
   String.raw`\b(npm_[A-Za-z0-9]{10,})\b`,
   // Additional access-key and token-style prefixes.
@@ -133,6 +155,16 @@ function redactText(text: string, patterns: RegExp[]): string {
   return next;
 }
 
+function looksLikeAppSpecificPassword(candidate: string): boolean {
+  return candidate.split("-").every((part) => !BENIGN_APP_PASSWORD_WORDS.has(part.toLowerCase()));
+}
+
+function redactAppSpecificPasswords(text: string): string {
+  return replacePatternBounded(text, APP_SPECIFIC_PASSWORD_RE, (match: string, token: string) =>
+    looksLikeAppSpecificPassword(token) ? redactMatch(match, [token]) : match,
+  );
+}
+
 function resolveConfigRedaction(): RedactOptions {
   const cfg = readLoggingConfig();
   return {
@@ -178,6 +210,16 @@ export function redactToolDetail(detail: string): string {
   return redactSensitiveText(detail, resolved);
 }
 
+function resolveToolPayloadRedaction(): RedactOptions {
+  const cfg = readLoggingConfig();
+  const userPatterns = cfg?.redactPatterns;
+  const patterns =
+    userPatterns && userPatterns.length > 0
+      ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
+      : undefined;
+  return { mode: "tools", patterns };
+}
+
 // Forces tools-mode regardless of `logging.redactSensitive` (which governs log
 // output, not UI surfaces), and merges user `logging.redactPatterns` with the
 // built-in defaults so both apply.
@@ -185,24 +227,93 @@ export function redactToolPayloadText(text: string): string {
   if (!text) {
     return text;
   }
-  const cfg = readLoggingConfig();
-  const userPatterns = cfg?.redactPatterns;
-  const patterns =
-    userPatterns && userPatterns.length > 0
-      ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
-      : undefined;
-  return redactSensitiveText(text, { mode: "tools", patterns });
+  return redactSensitiveText(text, resolveToolPayloadRedaction());
 }
 
-export function redactSensitiveFieldValue(key: string, value: string): string {
-  const redacted = redactToolPayloadText(value);
-  if (redacted !== value) {
+function redactSensitiveFieldValueWithOptions(
+  key: string,
+  value: string,
+  options: RedactOptions,
+): string {
+  const redacted = redactSensitiveText(value, options);
+  const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
+  if (shouldRedactAppPassword) {
+    const appRedacted = redactAppSpecificPasswords(redacted);
+    if (appRedacted !== value) {
+      return appRedacted;
+    }
+  } else if (redacted !== value) {
     return redacted;
   }
   if (STRUCTURED_SECRET_FIELD_RE.test(key)) {
     return maskToken(value);
   }
   return value;
+}
+
+export function redactSensitiveFieldValue(key: string, value: string): string {
+  return redactSensitiveFieldValueWithOptions(key, value, resolveToolPayloadRedaction());
+}
+
+function isPlainRedactableObject(value: object): value is Record<string, unknown> {
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function redactStructuredSecretValue(
+  key: string,
+  value: unknown,
+  seen: WeakSet<object>,
+  options: RedactOptions,
+): unknown {
+  if (typeof value === "string") {
+    return redactSensitiveFieldValueWithOptions(key, value, options);
+  }
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    const out = value.map((entry) => redactStructuredSecretValue(key, entry, seen, options));
+    seen.delete(value);
+    return out;
+  }
+  if (typeof value === "object") {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    if (!isPlainRedactableObject(value)) {
+      return value;
+    }
+    seen.add(value);
+    const out: Record<string, unknown> = {};
+    for (const [nestedKey, nestedValue] of Object.entries(value)) {
+      out[nestedKey] = redactStructuredSecretValue(nestedKey, nestedValue, seen, options);
+    }
+    seen.delete(value);
+    return out;
+  }
+  return value;
+}
+
+export function redactSecrets<T>(value: T): T {
+  const options = resolveToolPayloadRedaction();
+  if (typeof value === "string") {
+    return redactSensitiveText(value, options) as T;
+  }
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (typeof value !== "object") {
+    return value;
+  }
+  return redactStructuredSecretValue("", value, new WeakSet<object>(), options) as T;
 }
 
 export function getDefaultRedactPatterns(): string[] {

@@ -2,7 +2,6 @@ import { Buffer } from "node:buffer";
 import { describe, expect, it, vi } from "vitest";
 import {
   config,
-  flush,
   getSignalToolResultTestMocks,
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
@@ -62,16 +61,13 @@ describe("monitorSignalProvider tool results", () => {
       abortSignal: abortController.signal,
     });
 
-    await flush();
-
     expect(replyMock).not.toHaveBeenCalled();
-    expect(upsertPairingRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "signal",
-        id: `uuid:${uuid}`,
-        meta: expect.objectContaining({ name: "Ada" }),
-      }),
-    );
+    expect(upsertPairingRequestMock).toHaveBeenCalledWith({
+      channel: "signal",
+      id: `uuid:${uuid}`,
+      accountId: "default",
+      meta: { name: "Ada" },
+    });
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0]?.[0]).toBe(`signal:${uuid}`);
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
@@ -110,8 +106,8 @@ describe("monitorSignalProvider tool results", () => {
       await monitorPromise;
 
       expect(streamMock).toHaveBeenCalledTimes(2);
-      expect(streamMock.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: 0 });
-      expect(streamMock.mock.calls[1]?.[0]).toMatchObject({ timeoutMs: 0 });
+      expect(streamMock.mock.calls[0]?.[0]?.timeoutMs).toBe(0);
+      expect(streamMock.mock.calls[1]?.[0]?.timeoutMs).toBe(0);
     } finally {
       randomSpy.mockRestore();
       vi.useRealTimers();
@@ -150,15 +146,18 @@ describe("monitorSignalProvider tool results", () => {
       abortSignal: abortController.signal,
     });
 
-    await flush();
-
     expect(signalRpcRequestMock).toHaveBeenCalledWith(
       "getAttachment",
-      expect.objectContaining({ id: "attachment-1", recipient: "+15550001111" }),
-      expect.objectContaining({
+      {
+        id: "attachment-1",
+        recipient: "+15550001111",
+      },
+      {
         baseUrl: "http://127.0.0.1:8080",
+        timeoutMs: undefined,
+        apiMode: "auto",
         maxResponseBytes: expectedMaxResponseBytes,
-      }),
+      },
     );
   });
 });

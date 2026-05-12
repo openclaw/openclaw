@@ -61,12 +61,13 @@ describe("logging/logger browser-safe import", () => {
   it("disables file logging when imported in a browser-like environment", async () => {
     const { module, resolvePreferredOpenClawTmpDir } = await importBrowserSafeLogger();
 
-    expect(module.getResolvedLoggerSettings()).toMatchObject({
+    expect(module.getResolvedLoggerSettings()).toStrictEqual({
       level: "silent",
       file: "/tmp/openclaw/openclaw.log",
+      maxFileBytes: 100 * 1024 * 1024,
     });
     expect(module.isFileLogLevelEnabled("info")).toBe(false);
-    expect(() => module.getLogger().info("browser-safe")).not.toThrow();
+    expect(module.getLogger().info("browser-safe")).toBeUndefined();
     expect(resolvePreferredOpenClawTmpDir).not.toHaveBeenCalled();
   });
 });

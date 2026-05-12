@@ -19,8 +19,13 @@ describe("defineChannelMessageAdapter", () => {
       channelReplyPipeline.createReplyPrefixOptions,
     );
     expect(channelMessage.createTypingCallbacks).toBe(channelReplyPipeline.createTypingCallbacks);
-    expect(typeof channelMessageRuntime.sendDurableMessageBatch).toBe("function");
-    expect(typeof compat.createChannelReplyPipeline).toBe("function");
+    expect(channelMessageRuntime.sendDurableMessageBatch).toBe(
+      channelMessage.sendDurableMessageBatch,
+    );
+    expect(channelMessageRuntime.withDurableMessageSendContext).toBe(
+      channelMessage.withDurableMessageSendContext,
+    );
+    expect(compat.createChannelReplyPipeline).toBe(channelReplyPipeline.createChannelReplyPipeline);
   });
 
   it("defaults new message adapters to plugin-owned receive acknowledgement", () => {

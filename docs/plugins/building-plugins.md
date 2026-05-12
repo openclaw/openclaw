@@ -14,7 +14,7 @@ generation, video generation, web fetch, web search, agent tools, or any
 combination.
 
 You do not need to add your plugin to the OpenClaw repository. Publish to
-[ClawHub](/tools/clawhub) and users install with
+[ClawHub](/clawhub) and users install with
 `openclaw plugins install clawhub:<package-name>`. Bare package specs still
 install from npm during the launch cutover.
 
@@ -247,6 +247,14 @@ register(api) {
   );
 }
 ```
+
+Tool factories receive a runtime-supplied context object. Use
+`ctx.activeModel` when a tool needs to log, display, or adapt to the active
+model for the current turn. The object can include `provider`, `modelId`, and
+`modelRef`. Treat it as informational runtime metadata, not as a security
+boundary against the local operator, installed plugin code, or a modified
+OpenClaw runtime. For sensitive local tools, keep an explicit plugin or operator
+opt-in and fail closed when the active model metadata is missing or unsuitable.
 
 Every tool registered with `api.registerTool(...)` must also be declared in the
 plugin manifest:

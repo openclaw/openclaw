@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
@@ -19,12 +19,12 @@ import {
 } from "../test-helpers.js";
 
 let sessionManagerModulePromise:
-  | Promise<typeof import("@mariozechner/pi-coding-agent")>
+  | Promise<typeof import("@earendil-works/pi-coding-agent")>
   | undefined;
 let gatewayConfigModulePromise: Promise<typeof import("../../config/config.js")> | undefined;
 
 export async function getSessionManagerModule() {
-  sessionManagerModulePromise ??= import("@mariozechner/pi-coding-agent");
+  sessionManagerModulePromise ??= import("@earendil-works/pi-coding-agent");
   return await sessionManagerModulePromise;
 }
 
@@ -120,6 +120,16 @@ const bundleMcpRuntimeMocks = vi.hoisted(() => ({
 vi.mock("../../auto-reply/reply/queue.js", async () => {
   const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue.js")>(
     "../../auto-reply/reply/queue.js",
+  );
+  return {
+    ...actual,
+    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
+  };
+});
+
+vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
+  const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue/cleanup.js")>(
+    "../../auto-reply/reply/queue/cleanup.js",
   );
   return {
     ...actual,
@@ -405,7 +415,9 @@ export function expectActiveRunCleanup(
   const clearedKeys = (
     sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
   )[0]?.[0];
-  expect(clearedKeys).toEqual(expect.arrayContaining(expectedQueueKeys));
+  for (const key of expectedQueueKeys) {
+    expect(clearedKeys).toContain(key);
+  }
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
 }

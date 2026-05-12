@@ -179,11 +179,60 @@ export const discordChannelConfigUiHints = {
   },
   "voice.model": {
     label: "Discord Voice Model",
-    help: "Optional LLM model override for Discord voice channel responses (for example openai/gpt-5.4-mini). Leave unset to inherit the routed agent model.",
+    help: "Optional LLM model override for Discord voice channel responses and realtime agent consults (for example openai-codex/gpt-5.5). Leave unset to inherit the routed agent model.",
+  },
+  "voice.mode": {
+    label: "Discord Voice Mode",
+    help: "Conversation mode: agent-proxy (default) uses realtime voice as the microphone/speaker for the routed OpenClaw agent, stt-tts uses batch speech-to-text plus TTS, and bidi lets the realtime provider converse directly with the OpenClaw consult tool.",
+  },
+  "voice.agentSession": {
+    label: "Discord Voice Agent Session",
+    help: 'Controls which OpenClaw conversation receives voice turns. Leave unset for the voice channel session, or set mode="target" with a Discord target such as channel:123 to make voice an extension of an existing text channel session.',
+  },
+  "voice.agentSession.target": {
+    label: "Discord Voice Agent Session Target",
+    help: 'Discord target used when voice.agentSession.mode="target", for example channel:123.',
+  },
+  "voice.realtime.provider": {
+    label: "Discord Realtime Provider",
+    help: "Realtime voice provider for agent-proxy or bidi Discord voice modes, such as openai.",
+  },
+  "voice.realtime.model": {
+    label: "Discord Realtime Model",
+    help: "Provider realtime session model, such as gpt-realtime-2. This is separate from voice.model, which remains the OpenClaw agent brain model.",
+  },
+  "voice.realtime.voice": {
+    label: "Discord Realtime Voice",
+    help: "Provider realtime output voice, such as cedar.",
+  },
+  "voice.realtime.toolPolicy": {
+    label: "Discord Realtime Tool Policy",
+    help: "Tool policy for the OpenClaw agent consult tool in realtime voice modes: safe-read-only, owner, or none. Default is owner for agent-proxy and safe-read-only for bidi.",
+  },
+  "voice.realtime.consultPolicy": {
+    label: "Discord Realtime Consult Policy",
+    help: "Use always to strongly prefer the OpenClaw agent brain for substantive realtime turns. agent-proxy defaults to always.",
+  },
+  "voice.realtime.bargeIn": {
+    label: "Discord Realtime Barge-In",
+    help: "Allow Discord speaker-start events to interrupt active realtime playback. Set true to keep manual interruption when provider input-audio interruption is disabled for echo control.",
+  },
+  "voice.realtime.minBargeInAudioEndMs": {
+    label: "Discord Realtime Minimum Barge-In Audio (ms)",
+    help: "Minimum assistant playback duration before a Discord barge-in truncates realtime audio. Default: 250; set 0 for immediate interruption in low-echo rooms.",
+  },
+  "voice.realtime.providers": {
+    label: "Discord Realtime Provider Settings",
+    help: "Provider-specific realtime voice settings keyed by provider id.",
+    advanced: true,
   },
   "voice.autoJoin": {
     label: "Discord Voice Auto-Join",
     help: "Voice channels to auto-join on startup (list of guildId/channelId entries).",
+  },
+  "voice.allowedChannels": {
+    label: "Discord Voice Allowed Channels",
+    help: "Optional voice channel residency allowlist. When set, /vc join, auto-join, and bot voice-state moves are restricted to these guildId/channelId entries. Leave unset to allow any voice channel.",
   },
   "voice.daveEncryption": {
     label: "Discord Voice DAVE Encryption",

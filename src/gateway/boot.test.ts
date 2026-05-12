@@ -135,13 +135,9 @@ describe("runBootOnce", () => {
       });
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const call = agentCommand.mock.calls[0]?.[0];
-      expect(call).toEqual(
-        expect.objectContaining({
-          deliver: false,
-          sessionKey: resolveMainSessionKey({}),
-        }),
-      );
+      const call = agentCommand.mock.calls.at(0)?.[0];
+      expect(call?.deliver).toBe(false);
+      expect(call?.sessionKey).toBe(resolveMainSessionKey({}));
       expect(call?.message).toContain("BOOT.md:");
       expect(call?.message).toContain(content);
       expect(call?.message).toContain("NO_REPLY");
@@ -153,7 +149,7 @@ describe("runBootOnce", () => {
       agentCommand.mockRejectedValue(new Error("boom"));
       await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
         status: "failed",
-        reason: expect.stringContaining("agent run failed: boom"),
+        reason: "agent run failed: boom",
       });
       expect(agentCommand).toHaveBeenCalledTimes(1);
     });
@@ -169,7 +165,7 @@ describe("runBootOnce", () => {
       });
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const perAgentCall = agentCommand.mock.calls[0]?.[0];
+      const perAgentCall = agentCommand.mock.calls.at(0)?.[0];
       expect(perAgentCall?.sessionKey).toBe(resolveAgentMainSessionKey({ cfg, agentId }));
     });
   });
@@ -184,7 +180,7 @@ describe("runBootOnce", () => {
       });
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const call = agentCommand.mock.calls[0]?.[0];
+      const call = agentCommand.mock.calls.at(0)?.[0];
 
       // Verify a boot-style session ID was generated (format: boot-YYYY-MM-DD_HH-MM-SS-xxx-xxxxxxxx)
       expect(call?.sessionId).toMatch(
@@ -213,7 +209,7 @@ describe("runBootOnce", () => {
       });
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const call = agentCommand.mock.calls[0]?.[0];
+      const call = agentCommand.mock.calls.at(0)?.[0];
 
       expect(call?.sessionId).not.toBe(existingSessionId);
       expect(call?.sessionId).toMatch(

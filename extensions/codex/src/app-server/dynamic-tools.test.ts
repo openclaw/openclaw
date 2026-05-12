@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
@@ -14,7 +14,10 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import {
+  CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+  createCodexDynamicToolBridge,
+} from "./dynamic-tools.js";
 import type { JsonValue } from "./protocol.js";
 
 function createTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
@@ -65,6 +68,74 @@ function expectInputText(text: string) {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown, label: string): Array<unknown> {
+  expect(Array.isArray(value), label).toBe(true);
+  return value as Array<unknown>;
+}
+
+function callArg(
+  mock: { mock: { calls: Array<Array<unknown>> } },
+  callIndex: number,
+  argIndex: number,
+  label: string,
+) {
+  const call = mock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[argIndex];
+}
+
+function expectDynamicSpec(
+  spec: unknown,
+  fields: { name: string; namespace?: string; deferLoading?: boolean },
+) {
+  const record = requireRecord(spec, `${fields.name} spec`);
+  expect(record.name).toBe(fields.name);
+  if (fields.namespace !== undefined) {
+    expect(record.namespace).toBe(fields.namespace);
+  }
+  if (fields.deferLoading !== undefined) {
+    expect(record.deferLoading).toBe(fields.deferLoading);
+  }
+}
+
+function expectNoNamespace(spec: unknown) {
+  const record = requireRecord(spec, "tool spec");
+  expect(record).not.toHaveProperty("namespace");
+  expect(record).not.toHaveProperty("deferLoading");
+}
+
+function expectContextFields(context: unknown, fields: Record<string, unknown>) {
+  const record = requireRecord(context, "hook context");
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function expectToolResult(value: unknown, expected: AgentToolResult<unknown>) {
+  const result = requireRecord(value, "tool result");
+  expect(result.content).toEqual(expected.content);
+  expect(result.details).toEqual(expected.details);
+}
+
+function expectExecuteCall(
+  execute: { mock: { calls: Array<Array<unknown>> } },
+  expected: { callId: string; args: Record<string, unknown> },
+) {
+  expect(callArg(execute, 0, 0, "execute call id")).toBe(expected.callId);
+  expect(callArg(execute, 0, 1, "execute args")).toEqual(expected.args);
+  expect(callArg(execute, 0, 2, "execute signal")).toBeInstanceOf(AbortSignal);
+  expect(callArg(execute, 0, 3, "execute extra")).toBeUndefined();
+}
+
 async function handleMessageToolCall(
   bridge: ReturnType<typeof createCodexDynamicToolBridge>,
   arguments_: JsonValue,
@@ -85,6 +156,71 @@ afterEach(() => {
 });
 
 describe("createCodexDynamicToolBridge", () => {
+  it("defers OpenClaw dynamic tools behind Codex tool search by default", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({ name: "web_search" }),
+        createTool({ name: "message" }),
+        createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME }),
+        createTool({ name: "sessions_yield" }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const webSearch = bridge.specs.find((tool) => tool.name === "web_search");
+    const message = bridge.specs.find((tool) => tool.name === "message");
+    const heartbeat = bridge.specs.find((tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME);
+    const sessionsYield = bridge.specs.find((tool) => tool.name === "sessions_yield");
+
+    expectDynamicSpec(webSearch, {
+      name: "web_search",
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      deferLoading: true,
+    });
+    expectDynamicSpec(message, {
+      name: "message",
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      deferLoading: true,
+    });
+    expectDynamicSpec(heartbeat, {
+      name: HEARTBEAT_RESPONSE_TOOL_NAME,
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      deferLoading: true,
+    });
+    expectNoNamespace(sessionsYield);
+  });
+
+  it("keeps configured direct tools in the initial Codex tool context", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "message" }), createTool({ name: "web_search" })],
+      signal: new AbortController().signal,
+      directToolNames: ["message"],
+    });
+
+    expect(bridge.specs).toHaveLength(2);
+    expectDynamicSpec(bridge.specs[0], { name: "message" });
+    expectDynamicSpec(bridge.specs[1], {
+      name: "web_search",
+      namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      deferLoading: true,
+    });
+    expectNoNamespace(bridge.specs[0]);
+  });
+
+  it("can expose all dynamic tools directly for compatibility", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "web_search" }), createTool({ name: "message" })],
+      signal: new AbortController().signal,
+      loading: "direct",
+    });
+
+    expect(bridge.specs).toHaveLength(2);
+    expectDynamicSpec(bridge.specs[0], { name: "web_search" });
+    expectDynamicSpec(bridge.specs[1], { name: "message" });
+    expectNoNamespace(bridge.specs[0]);
+    expectNoNamespace(bridge.specs[1]);
+  });
+
   it.each([
     { toolName: "tts", mediaUrl: "/tmp/reply.opus", audioAsVoice: true },
     { toolName: "image_generate", mediaUrl: "/tmp/generated.png" },
@@ -169,21 +305,19 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("Sent."));
-    expect(bridge.telemetry).toMatchObject({
-      didSendViaMessagingTool: true,
-      messagingToolSentTexts: ["hello from Codex"],
-      messagingToolSentMediaUrls: ["/tmp/reply.png"],
-      messagingToolSentTargets: [
-        {
-          tool: "message",
-          provider: "telegram",
-          to: "chat-1",
-          threadId: "thread-ts-1",
-          text: "hello from Codex",
-          mediaUrls: ["/tmp/reply.png"],
-        },
-      ],
-    });
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+    expect(bridge.telemetry.messagingToolSentTexts).toEqual(["hello from Codex"]);
+    expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual(["/tmp/reply.png"]);
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "telegram",
+        to: "chat-1",
+        threadId: "thread-ts-1",
+        text: "hello from Codex",
+        mediaUrls: ["/tmp/reply.png"],
+      },
+    ]);
   });
 
   it("does not record messaging side effects when the send fails", async () => {
@@ -209,12 +343,10 @@ describe("createCodexDynamicToolBridge", () => {
       success: false,
       contentItems: [{ type: "inputText", text: "send failed" }],
     });
-    expect(bridge.telemetry).toMatchObject({
-      didSendViaMessagingTool: false,
-      messagingToolSentTexts: [],
-      messagingToolSentMediaUrls: [],
-      messagingToolSentTargets: [],
-    });
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
+    expect(bridge.telemetry.messagingToolSentTexts).toEqual([]);
+    expect(bridge.telemetry.messagingToolSentMediaUrls).toEqual([]);
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
   });
 
   it("records heartbeat response tool outcomes", async () => {
@@ -284,16 +416,13 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("exec compacted"));
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({
-        threadId: "thread-1",
-        turnId: "turn-1",
-        toolCallId: "call-1",
-        toolName: "exec",
-        args: { command: "git status" },
-      }),
-      expect.objectContaining({ runtime: "codex" }),
-    );
+    const event = requireRecord(callArg(handler, 0, 0, "middleware event"), "middleware event");
+    expect(event.threadId).toBe("thread-1");
+    expect(event.turnId).toBe("turn-1");
+    expect(event.toolCallId).toBe("call-1");
+    expect(event.toolName).toBe("exec");
+    expect(event.args).toEqual({ command: "git status" });
+    expectContextFields(callArg(handler, 0, 1, "middleware context"), { runtime: "codex" });
   });
 
   it("passes raw tool failure state into agent tool result middleware", async () => {
@@ -327,10 +456,9 @@ describe("createCodexDynamicToolBridge", () => {
       success: false,
       contentItems: [{ type: "inputText", text: "failed output" }],
     });
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ isError: true }),
-      expect.objectContaining({ runtime: "codex" }),
-    );
+    const event = requireRecord(callArg(handler, 0, 0, "middleware event"), "middleware event");
+    expect(event.isError).toBe(true);
+    expectContextFields(callArg(handler, 0, 1, "middleware context"), { runtime: "codex" });
   });
 
   it("uses raw tool provenance for media trust after middleware rewrites details", async () => {
@@ -374,7 +502,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("Generated media reply."));
-    expect(bridge.telemetry.toolMediaUrls).toEqual([]);
+    expect(bridge.telemetry.toolMediaUrls).toStrictEqual([]);
   });
 
   it("still applies legacy codex app-server extension factories after middleware", async () => {
@@ -479,14 +607,9 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { command: "pwd" },
     });
 
-    expect(execute).toHaveBeenCalledWith(
-      "call-1",
-      { command: "pwd" },
-      expect.any(AbortSignal),
-      undefined,
-    );
+    expectExecuteCall(execute, { callId: "call-1", args: { command: "pwd" } });
     expect(middlewareContexts).toHaveLength(1);
-    expect(middlewareContexts[0]).toMatchObject({
+    expectContextFields(middlewareContexts[0], {
       runtime: "codex",
       agentId: "agent-1",
       sessionId: "session-1",
@@ -495,7 +618,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
     expect(middlewareContexts[0]).not.toHaveProperty("config");
     expect(legacyContexts).toHaveLength(1);
-    expect(legacyContexts[0]).toMatchObject({
+    expectContextFields(legacyContexts[0], {
       agentId: "agent-1",
       sessionId: "session-1",
       sessionKey: "agent:agent-1:session-1",
@@ -525,21 +648,19 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     await vi.waitFor(() => {
-      expect(afterToolCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolName: "exec",
-          toolCallId: "call-1",
-          params: { command: "pwd" },
-          result: expect.objectContaining({
-            content: [{ type: "text", text: "done" }],
-            details: {},
-          }),
-        }),
-        expect.objectContaining({
-          toolName: "exec",
-          toolCallId: "call-1",
-        }),
-      );
+      expect(afterToolCall).toHaveBeenCalledTimes(1);
+    });
+    const event = requireRecord(callArg(afterToolCall, 0, 0, "after_tool_call event"), "event");
+    expect(event.toolName).toBe("exec");
+    expect(event.toolCallId).toBe("call-1");
+    expect(event.params).toEqual({ command: "pwd" });
+    expectToolResult(event.result, {
+      content: [{ type: "text", text: "done" }],
+      details: {},
+    });
+    expectContextFields(callArg(afterToolCall, 0, 1, "after_tool_call context"), {
+      toolName: "exec",
+      toolCallId: "call-1",
     });
   });
 
@@ -575,46 +696,42 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("done"));
-    expect(beforeToolCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "exec",
-        toolCallId: "call-1",
-        runId: "run-1",
-        params: { command: "pwd" },
-      }),
-      expect.objectContaining({
-        agentId: "agent-1",
-        sessionId: "session-1",
-        sessionKey: "agent:agent-1:session-1",
-        runId: "run-1",
-        toolCallId: "call-1",
-      }),
+    const beforeEvent = requireRecord(
+      callArg(beforeToolCall, 0, 0, "before_tool_call event"),
+      "before event",
     );
-    expect(execute).toHaveBeenCalledWith(
-      "call-1",
-      { command: "pwd", mode: "safe" },
-      expect.any(AbortSignal),
-      undefined,
-    );
+    expect(beforeEvent.toolName).toBe("exec");
+    expect(beforeEvent.toolCallId).toBe("call-1");
+    expect(beforeEvent.runId).toBe("run-1");
+    expect(beforeEvent.params).toEqual({ command: "pwd" });
+    expectContextFields(callArg(beforeToolCall, 0, 1, "before_tool_call context"), {
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+      runId: "run-1",
+      toolCallId: "call-1",
+    });
+    expectExecuteCall(execute, { callId: "call-1", args: { command: "pwd", mode: "safe" } });
     await vi.waitFor(() => {
-      expect(afterToolCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolName: "exec",
-          toolCallId: "call-1",
-          params: { command: "pwd", mode: "safe" },
-          result: expect.objectContaining({
-            content: [{ type: "text", text: "done" }],
-            details: { ok: true },
-          }),
-        }),
-        expect.objectContaining({
-          agentId: "agent-1",
-          sessionId: "session-1",
-          sessionKey: "agent:agent-1:session-1",
-          runId: "run-1",
-          toolCallId: "call-1",
-        }),
-      );
+      expect(afterToolCall).toHaveBeenCalledTimes(1);
+    });
+    const afterEvent = requireRecord(
+      callArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after event",
+    );
+    expect(afterEvent.toolName).toBe("exec");
+    expect(afterEvent.toolCallId).toBe("call-1");
+    expect(afterEvent.params).toEqual({ command: "pwd", mode: "safe" });
+    expectToolResult(afterEvent.result, {
+      content: [{ type: "text", text: "done" }],
+      details: { ok: true },
+    });
+    expectContextFields(callArg(afterToolCall, 0, 1, "after_tool_call context"), {
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+      runId: "run-1",
+      toolCallId: "call-1",
     });
   });
 
@@ -651,30 +768,28 @@ describe("createCodexDynamicToolBridge", () => {
     expect(execute).not.toHaveBeenCalled();
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
     await vi.waitFor(() => {
-      expect(afterToolCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolName: "message",
-          toolCallId: "call-1",
-          params: {
-            action: "send",
-            text: "blocked",
-            provider: "telegram",
-            to: "chat-1",
-          },
-          result: expect.objectContaining({
-            content: [{ type: "text", text: "blocked by policy" }],
-            details: {
-              status: "blocked",
-              deniedReason: "plugin-before-tool-call",
-              reason: "blocked by policy",
-            },
-          }),
-        }),
-        expect.objectContaining({
-          runId: "run-blocked",
-          toolCallId: "call-1",
-        }),
-      );
+      expect(afterToolCall).toHaveBeenCalledTimes(1);
+    });
+    const event = requireRecord(callArg(afterToolCall, 0, 0, "after_tool_call event"), "event");
+    expect(event.toolName).toBe("message");
+    expect(event.toolCallId).toBe("call-1");
+    expect(event.params).toEqual({
+      action: "send",
+      text: "blocked",
+      provider: "telegram",
+      to: "chat-1",
+    });
+    expectToolResult(event.result, {
+      content: [{ type: "text", text: "blocked by policy" }],
+      details: {
+        status: "blocked",
+        deniedReason: "plugin-before-tool-call",
+        reason: "blocked by policy",
+      },
+    });
+    expectContextFields(callArg(afterToolCall, 0, 1, "after_tool_call context"), {
+      runId: "run-blocked",
+      toolCallId: "call-1",
     });
   });
 
@@ -686,12 +801,11 @@ describe("createCodexDynamicToolBridge", () => {
     });
     const afterToolCall = vi.fn(async (event) => {
       events.push("after_tool_call");
-      expect(event).toMatchObject({
-        params: { command: "status", mode: "safe" },
-        result: {
-          content: [{ type: "text", text: "compacted output" }],
-          details: { stage: "middleware" },
-        },
+      const record = requireRecord(event, "after_tool_call event");
+      expect(record.params).toEqual({ command: "status", mode: "safe" });
+      expectToolResult(record.result, {
+        content: [{ type: "text", text: "compacted output" }],
+        details: { stage: "middleware" },
       });
     });
     initializeGlobalHookRunner(
@@ -779,25 +893,21 @@ describe("createCodexDynamicToolBridge", () => {
       success: false,
       contentItems: [{ type: "inputText", text: "tool failed" }],
     });
-    expect(execute).toHaveBeenCalledWith(
-      "call-err",
-      { command: "false", timeoutSec: 1 },
-      expect.any(AbortSignal),
-      undefined,
-    );
+    expectExecuteCall(execute, {
+      callId: "call-err",
+      args: { command: "false", timeoutSec: 1 },
+    });
     await vi.waitFor(() => {
-      expect(afterToolCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          toolName: "exec",
-          toolCallId: "call-err",
-          params: { command: "false", timeoutSec: 1 },
-          error: "tool failed",
-        }),
-        expect.objectContaining({
-          runId: "run-error",
-          toolCallId: "call-err",
-        }),
-      );
+      expect(afterToolCall).toHaveBeenCalledTimes(1);
+    });
+    const event = requireRecord(callArg(afterToolCall, 0, 0, "after_tool_call event"), "event");
+    expect(event.toolName).toBe("exec");
+    expect(event.toolCallId).toBe("call-err");
+    expect(event.params).toEqual({ command: "false", timeoutSec: 1 });
+    expect(event.error).toBe("tool failed");
+    expectContextFields(callArg(afterToolCall, 0, 1, "after_tool_call context"), {
+      runId: "run-error",
+      toolCallId: "call-err",
     });
   });
 
@@ -829,10 +939,17 @@ describe("createCodexDynamicToolBridge", () => {
       },
       { signal: callController.signal },
     );
-    await vi.waitFor(() => expect(capturedSignal).toBeDefined());
+    await vi.waitFor(() => {
+      if (!capturedSignal) {
+        throw new Error("expected dynamic tool call signal");
+      }
+    });
+    if (!capturedSignal) {
+      throw new Error("expected dynamic tool call signal");
+    }
 
     callController.abort(new Error("deadline"));
-    expect(capturedSignal?.aborted).toBe(true);
+    expect(capturedSignal.aborted).toBe(true);
     resolveTool?.(textToolResult("done"));
 
     await expect(result).resolves.toEqual(expectInputText("done"));
@@ -863,11 +980,9 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(beforeToolCall).toHaveBeenCalledTimes(1);
-    expect(execute).toHaveBeenCalledWith(
-      "call-wrapped",
-      { command: "pwd", mode: "safe" },
-      expect.any(AbortSignal),
-      undefined,
-    );
+    expectExecuteCall(execute, {
+      callId: "call-wrapped",
+      args: { command: "pwd", mode: "safe" },
+    });
   });
 });

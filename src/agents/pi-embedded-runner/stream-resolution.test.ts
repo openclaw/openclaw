@@ -1,8 +1,10 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { getApiProvider, streamSimple } from "@earendil-works/pi-ai";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as providerTransportStream from "../provider-transport-stream.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt-cache-boundary.js";
 import {
+  __testing,
   describeEmbeddedAgentStreamStrategy,
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentStreamFn,
@@ -27,13 +29,30 @@ const overrideBoundaryAwareStreamFnOnce = (streamFn: StreamFn): void => {
   );
 };
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+async function expectStreamResultRecord(
+  result: ReturnType<StreamFn>,
+  label: string,
+): Promise<Record<string, unknown>> {
+  return requireRecord(await result, label);
+}
+
+afterEach(() => {
+  __testing.resetPiNativeCodexResponsesStreamFnForTest();
+});
+
 describe("describeEmbeddedAgentStreamStrategy", () => {
   it("describes provider-owned stream paths explicitly", () => {
     expect(
       describeEmbeddedAgentStreamStrategy({
         currentStreamFn: undefined,
         providerStreamFn: vi.fn() as never,
-        shouldUseWebSocketTransport: false,
         model: {
           api: "openai-completions",
           provider: "ollama",
@@ -47,7 +66,6 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
     expect(
       describeEmbeddedAgentStreamStrategy({
         currentStreamFn: undefined,
-        shouldUseWebSocketTransport: false,
         model: {
           api: "openai-responses",
           provider: "openai",
@@ -57,25 +75,23 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
     ).toBe("boundary-aware:openai-responses");
   });
 
-  it("describes default Codex fallback shaping", () => {
+  it("describes default Codex fallback as PI native", () => {
     expect(
       describeEmbeddedAgentStreamStrategy({
         currentStreamFn: undefined,
-        shouldUseWebSocketTransport: false,
         model: {
           api: "openai-codex-responses",
           provider: "openai-codex",
           id: "codex-mini-latest",
         } as never,
       }),
-    ).toBe("boundary-aware:openai-codex-responses");
+    ).toBe("pi-native-codex-responses");
   });
 
   it("keeps custom session streams labeled as custom", () => {
     expect(
       describeEmbeddedAgentStreamStrategy({
         currentStreamFn: vi.fn() as never,
-        shouldUseWebSocketTransport: false,
         model: {
           api: "openai-responses",
           provider: "openai",
@@ -83,6 +99,20 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
         } as never,
       }),
     ).toBe("session-custom");
+  });
+
+  it("describes runtime-auth custom session streams as boundary-aware", () => {
+    expect(
+      describeEmbeddedAgentStreamStrategy({
+        currentStreamFn: vi.fn() as never,
+        model: {
+          api: "anthropic-messages",
+          provider: "cloudflare-ai-gateway",
+          id: "claude-sonnet-4-6",
+        } as never,
+        resolvedApiKey: "runtime-key",
+      }),
+    ).toBe("boundary-aware:anthropic-messages");
   });
 });
 
@@ -105,7 +135,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
   it("still routes supported streamSimple fallbacks through boundary-aware transports", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-responses",
@@ -117,25 +146,37 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(streamFn).not.toBe(streamSimple);
   });
 
-  it("routes Codex responses fallbacks through boundary-aware transports", () => {
+  it("routes Codex responses fallbacks through PI native transport", async () => {
+    const nativeStreamFn = vi.fn(async (_model, context, options) => ({ context, options }));
+    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-codex-responses",
         provider: "openai-codex",
         id: "codex-mini-latest",
       } as never,
+      resolvedApiKey: "oauth-bearer-token",
     });
 
     expect(streamFn).not.toBe(streamSimple);
+    const result = await expectStreamResultRecord(
+      streamFn(
+        { provider: "openai-codex", id: "codex-mini-latest" } as never,
+        { systemPrompt: `intro${SYSTEM_PROMPT_CACHE_BOUNDARY}tail` } as never,
+        {},
+      ),
+      "codex native result",
+    );
+    expect(requireRecord(result.context, "codex native context").systemPrompt).toBe("intro\ntail");
+    expect(requireRecord(result.options, "codex native options").apiKey).toBe("oauth-bearer-token");
+    expect(nativeStreamFn).toHaveBeenCalledTimes(1);
   });
 
   it("routes GitHub Copilot fallbacks through boundary-aware transports", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-responses",
@@ -145,6 +186,64 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
 
     expect(streamFn).not.toBe(streamSimple);
+  });
+
+  it("routes PI native OpenAI-compatible provider streams through boundary-aware transports", async () => {
+    const nativeStreamFn = getApiProvider("openai-completions")?.streamSimple;
+    if (!nativeStreamFn) {
+      throw new Error("expected native OpenAI-compatible stream function");
+    }
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: nativeStreamFn,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "llama",
+        id: "qwen36-35b-a3b",
+      } as never,
+      resolvedApiKey: "local-token",
+    });
+
+    expect(streamFn).not.toBe(nativeStreamFn);
+    const result = await expectStreamResultRecord(
+      streamFn({ provider: "llama", id: "qwen36-35b-a3b" } as never, {} as never, {}),
+      "openai compatible result",
+    );
+    expect(result.apiKey).toBe("local-token");
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes runtime-auth custom session streams for supported APIs through boundary-aware transports", async () => {
+    const currentStreamFn = vi.fn(async (_model, _context, options) => options);
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      sessionId: "session-1",
+      model: {
+        api: "anthropic-messages",
+        provider: "cloudflare-ai-gateway",
+        id: "claude-sonnet-4-6",
+      } as never,
+      resolvedApiKey: "anthropic-runtime-key",
+    });
+
+    expect(streamFn).not.toBe(currentStreamFn);
+    const result = await expectStreamResultRecord(
+      streamFn(
+        { provider: "cloudflare-ai-gateway", id: "claude-sonnet-4-6" } as never,
+        {} as never,
+        {},
+      ),
+      "runtime auth result",
+    );
+    expect(result.apiKey).toBe("anthropic-runtime-key");
+    expect(currentStreamFn).not.toHaveBeenCalled();
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
   });
 
   it("injects the resolved run api key into provider-owned stream functions", async () => {
@@ -155,7 +254,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       providerStreamFn,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-completions",
@@ -166,11 +264,11 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       authStorage,
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "openai", id: "gpt-5.4" } as never, {} as never, {}),
-    ).resolves.toMatchObject({
-      apiKey: "resolved-key",
-    });
+      "provider-owned result",
+    );
+    expect(result.apiKey).toBe("resolved-key");
     expect(authStorage.getApiKey).not.toHaveBeenCalled();
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
@@ -181,7 +279,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       providerStreamFn,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       signal,
       model: {
@@ -192,11 +289,11 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       resolvedApiKey: "resolved-key",
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "github-copilot", id: "gpt-5.4" } as never, {} as never, {}),
-    ).resolves.toMatchObject({
-      signal,
-    });
+      "provider-owned signal result",
+    );
+    expect(result.signal).toBe(signal);
   });
 
   it("does not overwrite an explicit provider-owned stream signal", async () => {
@@ -206,7 +303,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       providerStreamFn,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       signal: runSignal,
       model: {
@@ -216,21 +312,20 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       } as never,
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "github-copilot", id: "gpt-5.4" } as never, {} as never, {
         signal: explicitSignal,
       }),
-    ).resolves.toMatchObject({
-      signal: explicitSignal,
-    });
+      "provider-owned explicit signal result",
+    );
+    expect(result.signal).toBe(explicitSignal);
   });
 
-  it("injects the resolved run api key into the boundary-aware Codex Responses fallback", async () => {
-    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
-    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+  it("injects the resolved run api key into the PI native Codex Responses fallback", async () => {
+    const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
+    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-codex-responses",
@@ -240,21 +335,22 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       resolvedApiKey: "oauth-bearer-token",
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
-    ).resolves.toMatchObject({ apiKey: "oauth-bearer-token" });
-    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+      "codex api key result",
+    );
+    expect(result.apiKey).toBe("oauth-bearer-token");
+    expect(nativeStreamFn).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to authStorage when no resolved api key is available for boundary-aware fallback", async () => {
-    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+  it("falls back to authStorage when no resolved api key is available for PI native fallback", async () => {
+    const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
     const authStorage = {
       getApiKey: vi.fn(async () => "stored-bearer-token"),
     };
-    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-codex-responses",
@@ -264,19 +360,20 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       authStorage,
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
-    ).resolves.toMatchObject({ apiKey: "stored-bearer-token" });
+      "codex stored api key result",
+    );
+    expect(result.apiKey).toBe("stored-bearer-token");
     expect(authStorage.getApiKey).toHaveBeenCalledWith("openai-codex");
   });
 
-  it("forwards the run abort signal into the boundary-aware fallback when callers omit one", async () => {
-    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+  it("forwards the run abort signal into the PI native fallback when callers omit one", async () => {
+    const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
     const runSignal = new AbortController().signal;
-    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       signal: runSignal,
       model: {
@@ -287,19 +384,21 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       resolvedApiKey: "oauth-bearer-token",
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
-    ).resolves.toMatchObject({ signal: runSignal, apiKey: "oauth-bearer-token" });
+      "codex signal and api key result",
+    );
+    expect(result.signal).toBe(runSignal);
+    expect(result.apiKey).toBe("oauth-bearer-token");
   });
 
-  it("does not overwrite an explicit signal on the boundary-aware fallback path", async () => {
-    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+  it("does not overwrite an explicit signal on the PI native fallback path", async () => {
+    const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
     const runSignal = new AbortController().signal;
     const explicitSignal = new AbortController().signal;
-    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       signal: runSignal,
       model: {
@@ -310,20 +409,21 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       resolvedApiKey: "oauth-bearer-token",
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {
         signal: explicitSignal,
       }),
-    ).resolves.toMatchObject({ signal: explicitSignal });
+      "codex explicit signal result",
+    );
+    expect(result.signal).toBe(explicitSignal);
   });
 
-  it("forwards the run signal on the sync boundary-aware fallback path without auth credentials", async () => {
-    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+  it("forwards the run signal on the sync PI native fallback path without auth credentials", async () => {
+    const nativeStreamFn = vi.fn(async (_model, _context, options) => options);
     const runSignal = new AbortController().signal;
-    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       signal: runSignal,
       model: {
@@ -333,17 +433,18 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       } as never,
     });
 
-    await expect(
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
-    ).resolves.toMatchObject({ signal: runSignal });
+      "codex unauthenticated signal result",
+    );
+    expect(result.signal).toBe(runSignal);
   });
 
-  it("does not strip cache boundary markers on the boundary-aware fallback path", async () => {
-    const innerStreamFn = vi.fn(async (_model, context, _options) => context);
-    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+  it("strips cache boundary markers on the PI native fallback path", async () => {
+    const nativeStreamFn = vi.fn(async (_model, context, _options) => context);
+    __testing.setPiNativeCodexResponsesStreamFnForTest(nativeStreamFn as never);
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       model: {
         api: "openai-codex-responses",
@@ -353,9 +454,11 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       resolvedApiKey: "oauth-bearer-token",
     });
 
-    const systemPrompt = "intro<<openclaw-cache-boundary>>tail";
-    await expect(
+    const systemPrompt = `intro${SYSTEM_PROMPT_CACHE_BOUNDARY}tail`;
+    const result = await expectStreamResultRecord(
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, { systemPrompt } as never, {}),
-    ).resolves.toMatchObject({ systemPrompt });
+      "codex stripped context result",
+    );
+    expect(result.systemPrompt).toBe("intro\ntail");
   });
 });

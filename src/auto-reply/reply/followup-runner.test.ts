@@ -46,6 +46,64 @@ function debugFollowupTest(message: string): void {
   process.stderr.write(`[followup-runner.test] ${message}\n`);
 }
 
+function joinPromptSections(...sections: Array<string | undefined>): string {
+  const promptSections: string[] = [];
+  for (const section of sections) {
+    if (section) {
+      promptSections.push(section);
+    }
+  }
+  return promptSections.join("\n\n");
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireMockCallArg(
+  mock: { mock: { calls: unknown[][] } },
+  index: number,
+): Record<string, unknown> {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected mock call ${index}`);
+  }
+  return requireRecord(call[0], `mock call ${index} arg`);
+}
+
+function expectBlockReplyText(onBlockReply: { mock: { calls: unknown[][] } }, text: string): void {
+  expect(
+    onBlockReply.mock.calls.some(
+      (call) => requireRecord(call[0], "block reply payload").text === text,
+    ),
+  ).toBe(true);
+}
+
+function expectNoBlockReplyText(
+  onBlockReply: { mock: { calls: unknown[][] } },
+  text: string,
+): void {
+  expect(
+    onBlockReply.mock.calls.some(
+      (call) => requireRecord(call[0], "block reply payload").text === text,
+    ),
+  ).toBe(false);
+}
+
+function expectNoBlockReplyTextIncludes(
+  onBlockReply: { mock: { calls: unknown[][] } },
+  fragment: string,
+): void {
+  expect(
+    onBlockReply.mock.calls.some((call) =>
+      String(requireRecord(call[0], "block reply payload").text).includes(fragment),
+    ),
+  ).toBe(false);
+}
+
 function registerFollowupTestSessionStore(
   storePath: string,
   sessionStore: Record<string, SessionEntry>,
@@ -567,11 +625,7 @@ describe("createFollowupRunner runtime config", () => {
     await runner(queued);
 
     expect(queued.run.config).toBe(runtimeConfig);
-    expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: runtimeConfig,
-      }),
-    );
+    expect(requireMockCallArg(runPreflightCompactionIfNeededMock, 0).cfg).toBe(runtimeConfig);
     const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
       | {
           config?: unknown;
@@ -688,7 +742,7 @@ describe("createFollowupRunner compaction", () => {
 
     await runner(queued);
 
-    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(1);
@@ -740,7 +794,7 @@ describe("createFollowupRunner compaction", () => {
 
     await runner(queued);
 
-    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(2);
@@ -931,13 +985,11 @@ describe("createFollowupRunner compaction", () => {
           sessionFile: transcriptPath,
           workspaceDir,
         });
-        params.followupRun.run.extraSystemPrompt = [
+        params.followupRun.run.extraSystemPrompt = joinPromptSections(
           params.followupRun.run.extraSystemPrompt,
           "Post-compaction context refresh",
           "Read AGENTS.md before replying.",
-        ]
-          .filter(Boolean)
-          .join("\n\n");
+        );
         const updatedEntry =
           params.sessionEntry ??
           (params.sessionKey && params.sessionStore
@@ -1166,14 +1218,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
 
     expect(onBlockReply).not.toHaveBeenCalled();
-    expect(persistSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath,
-        sessionKey,
-        modelUsed: "claude-opus-4-6",
-        providerUsed: "anthropic",
-      }),
-    );
+    const persistCall = requireMockCallArg(persistSpy, 0);
+    expect(persistCall.storePath).toBe(storePath);
+    expect(persistCall.sessionKey).toBe(sessionKey);
+    expect(persistCall.modelUsed).toBe("claude-opus-4-6");
+    expect(persistCall.providerUsed).toBe("anthropic");
     expect(sessionStore[sessionKey]?.totalTokens).toBe(400);
     expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
     // Accumulated usage is still stored for usage/cost tracking.
@@ -1226,13 +1275,10 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       ),
     ).resolves.toBeUndefined();
 
-    expect(persistSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath,
-        sessionKey,
-        cfg,
-      }),
-    );
+    const persistCall = requireMockCallArg(persistSpy, 0);
+    expect(persistCall.storePath).toBe(storePath);
+    expect(persistCall.sessionKey).toBe(sessionKey);
+    expect(persistCall.cfg).toBe(cfg);
     persistSpy.mockRestore();
   });
 
@@ -1284,12 +1330,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       ),
     ).resolves.toBeUndefined();
 
-    expect(persistSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerUsed: "anthropic",
-      }),
-    );
-    expect(persistSpy.mock.calls[0]?.[0]?.usageIsContextSnapshot).toBeUndefined();
+    expect(requireMockCallArg(persistSpy, 0).providerUsed).toBe("anthropic");
+    expect(persistSpy.mock.calls.at(0)?.[0]?.usageIsContextSnapshot).toBeUndefined();
     persistSpy.mockRestore();
   });
 
@@ -1309,18 +1351,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     expect(routeReplyMock).toHaveBeenCalledTimes(2);
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isError: true,
-        text: expect.stringContaining("could not deliver it to the originating channel"),
-      }),
-    );
-    expect(onBlockReply).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: "hello world!" }),
-    );
-    expect(onBlockReply).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: "second payload" }),
-    );
+    const reply = requireMockCallArg(onBlockReply, 0);
+    expect(reply.isError).toBe(true);
+    expect(String(reply.text)).toContain("could not deliver it to the originating channel");
+    expectNoBlockReplyText(onBlockReply, "hello world!");
+    expectNoBlockReplyText(onBlockReply, "second payload");
   });
 
   it("does not emit cross-channel route-failure notice when a later payload routes", async () => {
@@ -1340,11 +1375,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
 
     expect(routeReplyMock).toHaveBeenCalledTimes(2);
-    expect(onBlockReply).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: expect.stringContaining("could not deliver it to the originating channel"),
-      }),
-    );
+    expectNoBlockReplyTextIncludes(onBlockReply, "could not deliver it to the originating channel");
   });
 
   it("uses dispatcher when origin routing metadata is incomplete", async () => {
@@ -1359,7 +1390,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+    expectBlockReplyText(onBlockReply, "hello world!");
   });
 
   it("keeps message-tool-only queued followup finals private", async () => {
@@ -1377,12 +1408,9 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       } as FollowupRun,
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sourceReplyDeliveryMode: "message_tool_only",
-        forceMessageTool: true,
-      }),
-    );
+    const runArg = requireMockCallArg(runEmbeddedPiAgentMock, 0);
+    expect(runArg.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(runArg.forceMessageTool).toBe(true);
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
   });
@@ -1403,19 +1431,15 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
-    expect(resolveProviderFollowupFallbackRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "anthropic",
-        context: expect.objectContaining({
-          provider: "anthropic",
-          modelId: "claude",
-          originRoutable: true,
-          dispatcherAvailable: true,
-          payload: expect.objectContaining({ text: "hello world!" }),
-        }),
-      }),
-    );
+    expectBlockReplyText(onBlockReply, "hello world!");
+    const routeArg = requireMockCallArg(resolveProviderFollowupFallbackRouteMock, 0);
+    expect(routeArg.provider).toBe("anthropic");
+    const context = requireRecord(routeArg.context, "provider fallback context");
+    expect(context.provider).toBe("anthropic");
+    expect(context.modelId).toBe("claude");
+    expect(context.originRoutable).toBe(true);
+    expect(context.dispatcherAvailable).toBe(true);
+    expect(requireRecord(context.payload, "provider fallback payload").text).toBe("hello world!");
   });
 
   it("lets provider followup route hooks drop payloads explicitly", async () => {
@@ -1451,8 +1475,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
 
     expect(routeReplyMock).not.toHaveBeenCalled();
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses JSON NO_REPLY followups without origin or dispatcher delivery", async () => {
@@ -1470,8 +1494,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
 
     expect(routeReplyMock).not.toHaveBeenCalled();
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
   it("keeps NO_REPLY followups with media deliverable", async () => {
@@ -1493,12 +1517,9 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText,
-        mediaUrl: "file:///tmp/followup.png",
-      }),
-    );
+    const reply = requireMockCallArg(onBlockReply, 0);
+    expect(reply.text).toBe(DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText);
+    expect(reply.mediaUrl).toBe("file:///tmp/followup.png");
   });
 
   it("falls back to dispatcher when successful output has no complete origin route", async () => {
@@ -1513,9 +1534,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.dispatcherText }),
-    );
+    expectBlockReplyText(onBlockReply, DELIVERY_NO_REPLY_RUNTIME_CONTRACT.dispatcherText);
   });
 
   it("falls back to dispatcher when same-channel origin routing fails", async () => {
@@ -1537,9 +1556,9 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       } as FollowupRun,
     });
 
-    expect(routeReplyMock).toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+    expectBlockReplyText(onBlockReply, "hello world!");
   });
 
   it("routes followups with originating account/thread metadata", async () => {
@@ -1554,14 +1573,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       } as FollowupRun,
     });
 
-    expect(routeReplyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "discord",
-        to: "channel:C1",
-        accountId: "work",
-        threadId: "1739142736.000100",
-      }),
-    );
+    const routeArg = requireMockCallArg(routeReplyMock, 0);
+    expect(routeArg.channel).toBe("discord");
+    expect(routeArg.to).toBe("channel:C1");
+    expect(routeArg.accountId).toBe("work");
+    expect(routeArg.threadId).toBe("1739142736.000100");
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 });
@@ -1586,8 +1602,8 @@ describe("createFollowupRunner typing cleanup", () => {
   }
 
   function expectTypingCleanup(typing: ReturnType<typeof createMockTypingController>) {
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   }
 
   it("calls both markRunComplete and markDispatchIdle on NO_REPLY", async () => {
@@ -1633,7 +1649,7 @@ describe("createFollowupRunner typing cleanup", () => {
 
     await runner(baseQueuedRun());
 
-    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
     expectTypingCleanup(typing);
   });
 });

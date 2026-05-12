@@ -101,7 +101,6 @@ describe("buildTelegramMessageContext reactions", () => {
       }),
     });
 
-    expect(ctx).not.toBeNull();
     expect(ctx?.ackReactionPromise).toBeNull();
     expect(ctx?.statusReactionController).toBeNull();
     expect(createStatusReactionController).not.toHaveBeenCalled();
@@ -147,7 +146,7 @@ describe("buildTelegramMessageContext reactions", () => {
     expect(controller.setQueued).toHaveBeenCalledTimes(1);
     expect(createStatusReactionController).toHaveBeenCalledTimes(1);
 
-    const params = createStatusReactionController.mock.calls[0]?.[0];
+    const params = createStatusReactionController.mock.calls.at(0)?.[0];
     expect(params?.initialEmoji).toBe("👀");
     expect(params?.emojis?.done).toBe("✅");
 

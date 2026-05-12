@@ -20,7 +20,7 @@ Codex has two OpenClaw routes:
 
 | Route                      | Config/command                                         | Setup page                              |
 | -------------------------- | ------------------------------------------------------ | --------------------------------------- |
-| Native Codex app-server    | `/codex ...`, `agentRuntime.id: "codex"`               | [Codex harness](/plugins/codex-harness) |
+| Native Codex app-server    | `/codex ...`, `openai/gpt-*` agent refs                | [Codex harness](/plugins/codex-harness) |
 | Explicit Codex ACP adapter | `/acp spawn codex`, `runtime: "acp", agentId: "codex"` | This page                               |
 
 Prefer the native route unless you explicitly need ACP/acpx behavior.
@@ -164,10 +164,10 @@ Then verify backend health:
 
 ### acpx command and version configuration
 
-By default, the `acpx` plugin registers the embedded ACP backend without
-spawning an ACP agent during Gateway startup. Run `/acp doctor` for an explicit
-live probe. Set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=1` only when you need the
-Gateway to probe the configured agent at startup.
+By default, the `acpx` plugin probes the embedded ACP backend during Gateway
+startup and waits for that probe before the gateway `ready` signal. Set
+`OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` to skip the startup probe and register
+the backend lazily instead. Run `/acp doctor` for an explicit on-demand probe.
 
 Override the command or version in plugin config:
 
@@ -190,6 +190,32 @@ Override the command or version in plugin config:
 - `command` accepts an absolute path, relative path (resolved from the OpenClaw workspace), or command name.
 - `expectedVersion: "any"` disables strict version matching.
 - Custom `command` paths disable plugin-local auto-install.
+
+Override an individual ACP agent command with structured arguments when a path
+or flag value should remain one argv token:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "acpx": {
+        "enabled": true,
+        "config": {
+          "agents": {
+            "claude": {
+              "command": "node",
+              "args": ["/path/to/custom adapter.mjs", "--verbose"]
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+- `agents.<id>.command` is the executable or existing command string for that ACP agent.
+- `agents.<id>.args` is optional. Each array item is shell-quoted before OpenClaw passes it through the current acpx command-string registry.
 
 See [Plugins](/tools/plugin).
 
@@ -263,11 +289,10 @@ Restart the gateway after changing this value.
 
 ### Health probe agent configuration
 
-When `/acp doctor` or the opt-in startup probe checks the backend, the bundled
-`acpx` plugin probes one harness agent. If `acp.allowedAgents` is set, it
-defaults to the first allowed agent; otherwise it defaults to `codex`. If your
-deployment needs a different ACP agent for health checks, set the probe agent
-explicitly:
+When `/acp doctor` or the startup probe checks the backend, the bundled `acpx`
+plugin probes one harness agent. If `acp.allowedAgents` is set, it defaults to
+the first allowed agent; otherwise it defaults to `codex`. If your deployment
+needs a different ACP agent for health checks, set the probe agent explicitly:
 
 ```bash
 openclaw config set plugins.entries.acpx.config.probeAgent claude

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { msteamsPlugin } from "./channel.js";
 
@@ -452,7 +452,9 @@ describe("msteamsPlugin message actions", () => {
       } as OpenClawConfig,
     });
     const schema = discovery?.schema;
-    expect(schema).toBeTruthy();
+    if (!schema) {
+      throw new Error("expected msteams message tool schema");
+    }
     const properties = Array.isArray(schema)
       ? schema[0]?.properties
       : (schema as { properties: Record<string, unknown> })?.properties;

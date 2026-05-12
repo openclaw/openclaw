@@ -1,3 +1,4 @@
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromPrivateNetworkOptIn,
@@ -5,8 +6,8 @@ import {
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
-import { z } from "openclaw/plugin-sdk/zod";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { z } from "zod";
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -486,10 +487,6 @@ function readErrorCode(error: unknown): string | undefined {
     return String(raw);
   }
   return undefined;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function createMattermostPost(

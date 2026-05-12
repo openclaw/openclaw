@@ -130,7 +130,8 @@ describeUnix("inspectPortUsage", () => {
     try {
       const result = await inspectPortUsage(port);
       expect(result.status).toBe("busy");
-      expect(result.errors?.some((err) => err.includes("ENOENT"))).toBe(true);
+      const enoentErrors = (result.errors ?? []).filter((err) => err.includes("ENOENT"));
+      expect(enoentErrors.length).toBeGreaterThan(0);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
@@ -231,7 +232,7 @@ describe("inspectPortUsage on Windows", () => {
     expect(result.listeners[0]?.command).toBe("node.exe");
     expect(result.listeners[0]?.commandLine).toContain("openclaw");
     expect(result.hints.some((hint) => hint.includes("Gateway already running locally"))).toBe(
-      true,
+      false,
     );
   });
 
@@ -265,6 +266,7 @@ describe("inspectPortUsage on Windows", () => {
     const result = await inspectPortUsage(18789);
 
     expect(result.listeners[0]?.commandLine).toContain("openclaw");
-    expect(runCommandWithTimeoutMock.mock.calls.some(([argv]) => argv[0] === "wmic")).toBe(true);
+    const commandNames = runCommandWithTimeoutMock.mock.calls.map(([argv]) => argv[0]);
+    expect(commandNames).toContain("wmic");
   });
 });

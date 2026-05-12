@@ -20,8 +20,8 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/target-resolver-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   listDiscordAccountIds,
   resolveDiscordAccount,
@@ -58,6 +58,7 @@ import {
   loadDiscordResolveChannelsModule,
   loadDiscordResolveUsersModule,
   loadDiscordSendModule,
+  loadDiscordTargetResolverModule,
   loadDiscordThreadBindingsManagerModule,
 } from "./channel.loaders.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
@@ -326,6 +327,28 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         targetResolver: {
           looksLikeId: looksLikeDiscordTargetId,
           hint: "<channelId|user:ID|channel:ID>",
+          resolveTarget: async ({ cfg, accountId, input, normalized, preferredKind }) => {
+            const resolved = await (
+              await loadDiscordTargetResolverModule()
+            ).resolveDiscordTarget(
+              input,
+              { cfg, accountId },
+              preferredKind === "user"
+                ? { defaultKind: "user" }
+                : preferredKind === "channel" || preferredKind === "group"
+                  ? { defaultKind: "channel" }
+                  : {},
+            );
+            if (!resolved) {
+              return null;
+            }
+            return {
+              to: resolved.normalized,
+              kind: resolved.kind === "user" ? "user" : "channel",
+              display: resolved.raw,
+              source: resolved.normalized === normalized ? "normalized" : "directory",
+            };
+          },
         },
       },
       approvalCapability: getDiscordApprovalCapability(),

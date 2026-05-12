@@ -44,20 +44,22 @@ vi.mock("./run-wait.js", () => {
         continue;
       }
       const content = (message as { content?: unknown }).content;
-      const text = Array.isArray(content)
-        ? content
-            .map((block) =>
-              block &&
-              typeof block === "object" &&
-              typeof (block as { text?: unknown }).text === "string"
-                ? (block as { text: string }).text
-                : "",
-            )
-            .filter(Boolean)
-            .join("\n")
-        : typeof content === "string"
-          ? content
-          : "";
+      let text = "";
+      if (Array.isArray(content)) {
+        const textBlocks: string[] = [];
+        for (const block of content) {
+          if (
+            block &&
+            typeof block === "object" &&
+            typeof (block as { text?: unknown }).text === "string"
+          ) {
+            textBlocks.push((block as { text: string }).text);
+          }
+        }
+        text = textBlocks.join("\n");
+      } else if (typeof content === "string") {
+        text = content;
+      }
       if (text.trim()) {
         return { text, fingerprint: JSON.stringify(message) };
       }
@@ -260,11 +262,9 @@ describe("sendControlledSubagentMessage", () => {
       message: "continue",
     });
 
-    expect(result).toEqual({
-      status: "error",
-      runId: expect.any(String),
-      error: "gateway unavailable",
-    });
+    expect(result.status).toBe("error");
+    expect(typeof result.runId).toBe("string");
+    expect(result.error).toBe("gateway unavailable");
   });
 
   it("does not send to a newer live run when the caller passes a stale run entry", async () => {
@@ -555,12 +555,10 @@ describe("killSubagentRunAdmin", () => {
       sessionKey: childSessionKey,
     });
 
-    expect(result).toMatchObject({
-      found: true,
-      killed: true,
-      runId: "run-worker",
-      sessionKey: childSessionKey,
-    });
+    expect(result.found).toBe(true);
+    expect(result.killed).toBe(true);
+    expect(result.runId).toBe("run-worker");
+    expect(result.sessionKey).toBe(childSessionKey);
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
   });
 
@@ -606,12 +604,10 @@ describe("killSubagentRunAdmin", () => {
       sessionKey: childSessionKey,
     });
 
-    expect(result).toMatchObject({
-      found: true,
-      killed: false,
-      runId: "run-current-admin",
-      sessionKey: childSessionKey,
-    });
+    expect(result.found).toBe(true);
+    expect(result.killed).toBe(false);
+    expect(result.runId).toBe("run-current-admin");
+    expect(result.sessionKey).toBe(childSessionKey);
   });
 
   it("still terminates the run when session store persistence fails during kill", async () => {
@@ -646,12 +642,10 @@ describe("killSubagentRunAdmin", () => {
       sessionKey: childSessionKey,
     });
 
-    expect(result).toMatchObject({
-      found: true,
-      killed: true,
-      runId: "run-worker-store-fail",
-      sessionKey: childSessionKey,
-    });
+    expect(result.found).toBe(true);
+    expect(result.killed).toBe(true);
+    expect(result.runId).toBe("run-worker-store-fail");
+    expect(result.sessionKey).toBe(childSessionKey);
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
   });
 });
@@ -1230,10 +1224,9 @@ describe("steerControlledSubagentRun", () => {
         sessionId: undefined,
         error: "failed to replace steered subagent run",
       });
-      expect(getSubagentRunByChildSessionKey("agent:main:subagent:steer-worker")).toMatchObject({
-        runId: "run-steer-old",
-        suppressAnnounceReason: undefined,
-      });
+      const storedRun = getSubagentRunByChildSessionKey("agent:main:subagent:steer-worker");
+      expect(storedRun?.runId).toBe("run-steer-old");
+      expect(storedRun?.suppressAnnounceReason).toBeUndefined();
     } finally {
       replaceSpy.mockRestore();
     }

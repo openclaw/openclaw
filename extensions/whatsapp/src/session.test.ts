@@ -150,6 +150,42 @@ function mockLogWebSelfIdCreds(me: Record<string, string>) {
   };
 }
 
+function readLastSocketOptions(): { agent?: unknown; fetchAgent?: unknown } {
+  const options = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+  if (typeof options !== "object" || options === null) {
+    throw new Error("expected Baileys socket options");
+  }
+  return options as { agent?: unknown; fetchAgent?: unknown };
+}
+
+function requireValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+function firstWriteFileCall(writeFileSpy: ReturnType<typeof vi.fn>): {
+  data: unknown;
+  options: { flag?: string; mode?: number };
+  path: string;
+} {
+  const [filePath, data, options] = writeFileSpy.mock.calls[0] ?? [];
+  expect(typeof filePath).toBe("string");
+  return {
+    data,
+    options: (options ?? {}) as { flag?: string; mode?: number },
+    path: filePath as string,
+  };
+}
+
+function expectRuntimeLogContaining(
+  runtime: { log: ReturnType<typeof vi.fn> },
+  text: string,
+): void {
+  expect(runtime.log.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+}
+
 describe("web session", () => {
   beforeAll(async () => {
     ({
@@ -183,23 +219,24 @@ describe("web session", () => {
 
     await createWaSocket(true, false, { authDir });
     const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
-    expect(makeWASocket).toHaveBeenCalledWith(
-      expect.objectContaining({
-        printQRInTerminal: false,
-        ...DEFAULT_WHATSAPP_SOCKET_TIMING,
-      }),
-    );
     const passed = makeWASocket.mock.calls[0][0];
+    expect(passed.printQRInTerminal).toBe(false);
+    expect(passed.keepAliveIntervalMs).toBe(DEFAULT_WHATSAPP_SOCKET_TIMING.keepAliveIntervalMs);
+    expect(passed.connectTimeoutMs).toBe(DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs);
+    expect(passed.defaultQueryTimeoutMs).toBe(DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs);
     const passedLogger = (passed as { logger?: { level?: string; trace?: unknown } }).logger;
     expect(passedLogger?.level).toBe("silent");
-    expect(typeof passedLogger?.trace).toBe("function");
+    if (typeof passedLogger?.trace !== "function") {
+      throw new Error("expected WhatsApp socket logger trace no-op");
+    }
+    passedLogger.trace("ignored");
     await emitCredsUpdate(authDir);
 
-    expect(openMock.writeFileSpy).toHaveBeenCalledWith(
-      expect.stringContaining(path.join(authDir, ".creds.")),
-      expect.any(String),
-      expect.objectContaining({ mode: 0o600, flag: "wx" }),
-    );
+    const write = firstWriteFileCall(openMock.writeFileSpy);
+    expect(write.path).toContain(path.join(authDir, ".creds."));
+    expect(typeof write.data).toBe("string");
+    expect(write.options.mode).toBe(0o600);
+    expect(write.options.flag).toBe("wx");
     openMock.restore();
   });
 
@@ -210,13 +247,10 @@ describe("web session", () => {
       defaultQueryTimeoutMs: 120_000,
     });
 
-    expect(baileys.makeWASocket).toHaveBeenCalledWith(
-      expect.objectContaining({
-        keepAliveIntervalMs: 10_000,
-        connectTimeoutMs: 90_000,
-        defaultQueryTimeoutMs: 120_000,
-      }),
-    );
+    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    expect(passed.keepAliveIntervalMs).toBe(10_000);
+    expect(passed.connectTimeoutMs).toBe(90_000);
+    expect(passed.defaultQueryTimeoutMs).toBe(120_000);
   });
 
   it("uses ambient env proxy agent when HTTPS_PROXY is configured", async () => {
@@ -224,16 +258,11 @@ describe("web session", () => {
 
     await createWaSocket(false, false);
 
-    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      agent?: unknown;
-      fetchAgent?: unknown;
-    };
-    expect(passed.agent).toBeDefined();
-    expect(passed.fetchAgent).toBeDefined();
-    expect(passed.fetchAgent).not.toBe(passed.agent);
-    expect(typeof (passed.fetchAgent as { dispatch?: unknown } | undefined)?.dispatch).toBe(
-      "function",
-    );
+    const passed = readLastSocketOptions();
+    const agent = requireValue(passed.agent, "WebSocket proxy agent");
+    const fetchAgent = requireValue(passed.fetchAgent, "fetch proxy agent");
+    expect(fetchAgent).not.toBe(agent);
+    expect(typeof (fetchAgent as { dispatch?: unknown }).dispatch).toBe("function");
   });
 
   it("uses lowercase HTTPS proxy before uppercase for WA WebSocket connection", async () => {
@@ -242,11 +271,11 @@ describe("web session", () => {
 
     await createWaSocket(false, false);
 
-    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      agent?: { proxy?: URL };
-    };
-    expect(passed.agent).toBeDefined();
-    expect(passed.agent?.proxy?.href).toContain("lower-proxy.test");
+    const agent = requireValue(
+      readLastSocketOptions().agent as { proxy?: URL } | undefined,
+      "WebSocket proxy agent",
+    );
+    expect(agent.proxy?.href).toContain("lower-proxy.test");
   });
 
   it("skips WA WebSocket env proxy agent when NO_PROXY covers WhatsApp Web", async () => {
@@ -255,12 +284,9 @@ describe("web session", () => {
 
     await createWaSocket(false, false);
 
-    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      agent?: unknown;
-      fetchAgent?: unknown;
-    };
+    const passed = readLastSocketOptions();
     expect(passed.agent).toBeUndefined();
-    expect(passed.fetchAgent).toBeDefined();
+    requireValue(passed.fetchAgent, "fetch proxy agent");
   });
 
   it("does not create a proxy agent when no env proxy is configured", async () => {
@@ -316,9 +342,7 @@ describe("web session", () => {
 
     logWebSelfId("/tmp/wa-creds", runtime as never, true);
 
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Web Channel: +12345 (jid 12345@s.whatsapp.net)"),
-    );
+    expectRuntimeLogContaining(runtime, "Web Channel: +12345 (jid 12345@s.whatsapp.net)");
     creds.restore();
   });
 
@@ -335,8 +359,9 @@ describe("web session", () => {
 
     logWebSelfId("/tmp/wa-creds", runtime as never, true);
 
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Web Channel: +12345 (jid 12345@s.whatsapp.net, lid 777@lid)"),
+    expectRuntimeLogContaining(
+      runtime,
+      "Web Channel: +12345 (jid 12345@s.whatsapp.net, lid 777@lid)",
     );
     creds.restore();
   });
@@ -505,13 +530,13 @@ describe("web session", () => {
         me: { id: "123@s.whatsapp.net" },
       });
 
-      expect(openMock.writeFileSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          path.join("/tmp", "openclaw-oauth", "whatsapp", "default", ".creds."),
-        ),
-        expect.any(String),
-        expect.objectContaining({ mode: 0o600, flag: "wx" }),
+      const write = firstWriteFileCall(openMock.writeFileSpy);
+      expect(write.path).toContain(
+        path.join("/tmp", "openclaw-oauth", "whatsapp", "default", ".creds."),
       );
+      expect(typeof write.data).toBe("string");
+      expect(write.options.mode).toBe(0o600);
+      expect(write.options.flag).toBe("wx");
       expect(openMock.tempHandles).toHaveLength(1);
       expect(openMock.tempHandles[0]?.sync).toHaveBeenCalledTimes(1);
       expect(openMock.tempHandles[0]?.close).toHaveBeenCalledTimes(1);
@@ -574,8 +599,8 @@ describe("web session", () => {
       .filter((entry) => entry.startsWith(".creds.") && entry.endsWith(".tmp"));
 
     expect(renameSpy).toHaveBeenCalledOnce();
-    expect(() => JSON.parse(raw)).not.toThrow();
-    expect(JSON.parse(raw)).toMatchObject(originalCreds);
+    const parsedCreds = JSON.parse(raw) as unknown;
+    expect(parsedCreds).toEqual(originalCreds);
     expect(tempEntries).toHaveLength(0);
 
     renameSpy.mockRestore();

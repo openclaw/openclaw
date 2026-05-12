@@ -21,6 +21,31 @@ function attachOpenSocket(gateway: GatewayPlugin) {
   return send;
 }
 
+function sentGatewayOpcodes(send: ReturnType<typeof attachOpenSocket>) {
+  return send.mock.calls.map((call) => {
+    const [rawPayload] = call;
+    const payload = JSON.parse(String(rawPayload)) as { op?: unknown };
+    return payload.op;
+  });
+}
+
+function firstDispatchedData(dispatchGatewayEvent: ReturnType<typeof vi.fn>): unknown {
+  const [call] = dispatchGatewayEvent.mock.calls;
+  if (!call) {
+    throw new Error("Expected dispatched gateway event call");
+  }
+  return call[1];
+}
+
+function firstSentGatewayPayload(send: ReturnType<typeof attachOpenSocket>): unknown {
+  const [call] = send.mock.calls;
+  if (!call) {
+    throw new Error("Expected gateway socket send call");
+  }
+  const [rawPayload] = call;
+  return JSON.parse(String(rawPayload));
+}
+
 function presenceUpdate(
   status: PresenceUpdateStatus.Online | PresenceUpdateStatus.Idle = PresenceUpdateStatus.Online,
 ): GatewaySendPayload {
@@ -45,12 +70,12 @@ class TestGatewayPlugin extends GatewayPlugin {
   sockets: FakeSocket[] = [];
   connectCalls: boolean[] = [];
 
-  connect(resume = false): void {
+  override connect(resume = false): void {
     this.connectCalls.push(resume);
     super.connect(resume);
   }
 
-  protected createWebSocket(): never {
+  protected override createWebSocket(): never {
     const socket = new FakeSocket();
     this.sockets.push(socket);
     return socket as never;
@@ -193,7 +218,7 @@ describe("GatewayPlugin", () => {
     });
 
     expect(dispatchGatewayEvent).toHaveBeenCalledTimes(1);
-    const dispatched = dispatchGatewayEvent.mock.calls[0]?.[1] as {
+    const dispatched = firstDispatchedData(dispatchGatewayEvent) as {
       author?: { id: string };
       message?: { author?: { id: string } | null; content?: string };
     };
@@ -235,18 +260,24 @@ describe("GatewayPlugin", () => {
     gateway.send(presenceUpdate(PresenceUpdateStatus.Idle));
 
     expect(send).toHaveBeenCalledTimes(120);
-    expect(gateway.getRateLimitStatus()).toEqual(
-      expect.objectContaining({ remainingEvents: 0, currentEventCount: 120, queuedEvents: 1 }),
-    );
+    expect(gateway.getRateLimitStatus()).toEqual({
+      remainingEvents: 0,
+      resetTime: 60_000,
+      currentEventCount: 120,
+      queuedEvents: 1,
+    });
 
     vi.advanceTimersByTime(59_999);
     expect(send).toHaveBeenCalledTimes(120);
 
     vi.advanceTimersByTime(1);
     expect(send).toHaveBeenCalledTimes(121);
-    expect(gateway.getRateLimitStatus()).toEqual(
-      expect.objectContaining({ currentEventCount: 1, queuedEvents: 0 }),
-    );
+    expect(gateway.getRateLimitStatus()).toEqual({
+      remainingEvents: 119,
+      resetTime: 120_000,
+      currentEventCount: 1,
+      queuedEvents: 0,
+    });
   });
 
   it("sends critical gateway events immediately even when regular sends are queued", () => {
@@ -266,9 +297,12 @@ describe("GatewayPlugin", () => {
       op: GatewayOpcodes.Heartbeat,
       d: 1,
     });
-    expect(gateway.getRateLimitStatus()).toEqual(
-      expect.objectContaining({ remainingEvents: 0, queuedEvents: 1 }),
-    );
+    expect(gateway.getRateLimitStatus()).toEqual({
+      remainingEvents: 0,
+      resetTime: 60_000,
+      currentEventCount: 121,
+      queuedEvents: 1,
+    });
   });
 
   it("rejects gateway payloads that exceed Discord's size limit", () => {
@@ -484,15 +518,15 @@ describe("GatewayPlugin", () => {
     expect(gateway.ws).toBeNull();
     expect(gateway.firstHeartbeatTimeout).toBeUndefined();
     expect(gateway.heartbeatInterval).toBeUndefined();
-    expect(() => vi.advanceTimersByTime(20)).not.toThrow();
+    vi.advanceTimersByTime(20);
     expect(send).not.toHaveBeenCalled();
-    expect(() =>
+    expect(
       (
         gateway as unknown as {
           sendHeartbeat(): void;
         }
       ).sendHeartbeat(),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("clears stale heartbeat timers before early reconnect exits", () => {
@@ -544,17 +578,11 @@ describe("GatewayPlugin", () => {
     }
 
     await vi.advanceTimersByTimeAsync(0);
-    expect(firstSend).toHaveBeenCalledWith(
-      expect.stringContaining(`"op":${GatewayOpcodes.Identify}`),
-    );
-    expect(secondSend).not.toHaveBeenCalledWith(
-      expect.stringContaining(`"op":${GatewayOpcodes.Identify}`),
-    );
+    expect(sentGatewayOpcodes(firstSend)).toContain(GatewayOpcodes.Identify);
+    expect(sentGatewayOpcodes(secondSend)).not.toContain(GatewayOpcodes.Identify);
 
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(secondSend).toHaveBeenCalledWith(
-      expect.stringContaining(`"op":${GatewayOpcodes.Identify}`),
-    );
+    expect(sentGatewayOpcodes(secondSend)).toContain(GatewayOpcodes.Identify);
   });
 
   it("validates requestGuildMembers before sending", () => {
@@ -595,7 +623,7 @@ describe("GatewayPlugin", () => {
 
     valid.requestGuildMembers({ guild_id: "guild1", query: "", limit: 0, presences: true });
     expect(send).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(send.mock.calls[0]?.[0] as string)).toEqual({
+    expect(firstSentGatewayPayload(send)).toEqual({
       op: GatewayOpcodes.RequestGuildMembers,
       d: { guild_id: "guild1", query: "", limit: 0, presences: true },
     });

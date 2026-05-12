@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
-import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   bootstrapCacheMocks,
@@ -17,6 +17,54 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
+
+type HookEventRecord = Record<string, unknown> & {
+  context?: Record<string, unknown> & {
+    previousSessionEntry?: { sessionId?: string };
+  };
+  messages?: Array<{ role?: string; content?: unknown }>;
+};
+
+function firstHookCall(mock: { mock: { calls: unknown[][] } }): [HookEventRecord, HookEventRecord] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected hook call");
+  }
+  return [call[0] as HookEventRecord, call[1] as HookEventRecord];
+}
+
+function expectTranscriptResetEvent(params: {
+  event: HookEventRecord;
+  sessionFile: string;
+  content: string;
+}) {
+  expect(params.event.sessionFile).toBe(params.sessionFile);
+  expect(params.event.reason).toBe("new");
+  expect(params.event.messages).toHaveLength(1);
+  expect(params.event.messages?.[0]?.role).toBe("user");
+  expect(params.event.messages?.[0]?.content).toBe(params.content);
+}
+
+function expectMainHookContext(context: HookEventRecord, sessionId: string) {
+  expect(context.agentId).toBe("main");
+  expect(context.sessionKey).toBe("agent:main:main");
+  expect(context.sessionId).toBe(sessionId);
+}
+
+function expectStringValue(value: unknown, label: string): string {
+  expect(typeof value, label).toBe("string");
+  if (typeof value !== "string") {
+    throw new Error(`${label} must be a string`);
+  }
+  return value;
+}
+
+function expectStringWithPrefix(value: unknown, prefix: string, label: string): string {
+  const text = expectStringValue(value, label);
+  expect(text.startsWith(prefix), label).toBe(true);
+  expect(text.length, label).toBeGreaterThan(prefix.length);
+  return text;
+}
 
 test("sessions.reset emits internal command hook with reason", async () => {
   const { dir } = await createSessionStoreDir();
@@ -43,7 +91,11 @@ test("sessions.reset emits internal command hook with reason", async () => {
       ): event is {
         type: string;
         action: string;
-        context?: { previousSessionEntry?: unknown };
+        sessionKey?: string;
+        context?: {
+          commandSource?: string;
+          previousSessionEntry?: { sessionId?: string };
+        };
       } =>
         Boolean(event) &&
         typeof event === "object" &&
@@ -55,15 +107,11 @@ test("sessions.reset emits internal command hook with reason", async () => {
   if (!event) {
     throw new Error("expected session hook event");
   }
-  expect(event).toMatchObject({
-    type: "command",
-    action: "new",
-    sessionKey: "agent:main:main",
-    context: {
-      commandSource: "gateway:sessions.reset",
-    },
-  });
-  expect(event.context?.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
+  expect(event.type).toBe("command");
+  expect(event.action).toBe("new");
+  expect(event.sessionKey).toBe("agent:main:main");
+  expect(event.context?.commandSource).toBe("gateway:sessions.reset");
+  expect(event.context?.previousSessionEntry?.sessionId).toBe("sess-main");
 });
 
 test("sessions.reset emits before_reset hook with transcript context", async () => {
@@ -97,24 +145,13 @@ test("sessions.reset emits before_reset hook with transcript context", async () 
   });
   expect(reset.ok).toBe(true);
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
-  const [event, context] = (
-    beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
-  )[0] ?? [undefined, undefined];
-  expect(event).toMatchObject({
+  const [event, context] = firstHookCall(beforeResetHookMocks.runBeforeReset);
+  expectTranscriptResetEvent({
+    event,
     sessionFile: transcriptPath,
-    reason: "new",
-    messages: [
-      {
-        role: "user",
-        content: "hello from transcript",
-      },
-    ],
+    content: "hello from transcript",
   });
-  expect(context).toMatchObject({
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    sessionId: "sess-main",
-  });
+  expectMainHookContext(context, "sess-main");
 });
 
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {
@@ -148,39 +185,27 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
   expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
 
-  const [endEvent, endContext] = (
-    sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
-  )[0] ?? [undefined, undefined];
-  const [startEvent, startContext] = (
-    sessionLifecycleHookMocks.runSessionStart.mock.calls as unknown as Array<[unknown, unknown]>
-  )[0] ?? [undefined, undefined];
+  const [endEvent, endContext] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
+  const [startEvent, startContext] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
 
-  expect(endEvent).toMatchObject({
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    reason: "new",
-    transcriptArchived: true,
-  });
-  expect((endEvent as { sessionFile?: string } | undefined)?.sessionFile).toContain(
-    ".jsonl.reset.",
+  expect(endEvent.sessionId).toBe("sess-main");
+  expect(endEvent.sessionKey).toBe("agent:main:main");
+  expect(endEvent.reason).toBe("new");
+  expect(endEvent.transcriptArchived).toBe(true);
+  const realDir = await fs.realpath(dir);
+  const archivedSessionFile = expectStringWithPrefix(
+    endEvent.sessionFile,
+    path.join(realDir, "sess-main.jsonl.reset."),
+    "archived session file",
   );
-  expect((endEvent as { nextSessionId?: string } | undefined)?.nextSessionId).toBe(
-    (startEvent as { sessionId?: string } | undefined)?.sessionId,
-  );
-  expect(endContext).toMatchObject({
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    agentId: "main",
-  });
-  expect(startEvent).toMatchObject({
-    sessionKey: "agent:main:main",
-    resumedFrom: "sess-main",
-  });
-  expect(startContext).toMatchObject({
-    sessionId: (startEvent as { sessionId?: string } | undefined)?.sessionId,
-    sessionKey: "agent:main:main",
-    agentId: "main",
-  });
+  expect(path.dirname(archivedSessionFile)).toBe(realDir);
+  expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
+  expectMainHookContext(endContext, "sess-main");
+  expect(startEvent.sessionKey).toBe("agent:main:main");
+  expect(startEvent.resumedFrom).toBe("sess-main");
+  expect(startContext.sessionId).toBe(startEvent.sessionId);
+  expect(startContext.sessionKey).toBe("agent:main:main");
+  expect(startContext.agentId).toBe("main");
 });
 
 test("sessions.reset returns unavailable when active run does not stop", async () => {
@@ -211,7 +236,9 @@ test("sessions.reset returns unavailable when active run does not stop", async (
   >;
   expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
   const filesAfterResetAttempt = await fs.readdir(dir);
-  expect(filesAfterResetAttempt.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(false);
+  expect(
+    filesAfterResetAttempt.filter((file) => file.startsWith("sess-main.jsonl.reset.")),
+  ).toEqual([]);
 });
 
 test("sessions.reset emits before_reset for the entry actually reset in the writer slot", async () => {
@@ -277,24 +304,9 @@ test("sessions.reset emits before_reset for the entry actually reset in the writ
   )[0]?.[0] as { context?: { previousSessionEntry?: { sessionId?: string } } } | undefined;
   expect(internalEvent?.context?.previousSessionEntry?.sessionId).toBe("sess-new");
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
-  const [event, context] = (
-    beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
-  )[0] ?? [undefined, undefined];
-  expect(event).toMatchObject({
-    sessionFile: newTranscriptPath,
-    reason: "new",
-    messages: [
-      {
-        role: "user",
-        content: "new transcript",
-      },
-    ],
-  });
-  expect(context).toMatchObject({
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    sessionId: "sess-new",
-  });
+  const [event, context] = firstHookCall(beforeResetHookMocks.runBeforeReset);
+  expectTranscriptResetEvent({ event, sessionFile: newTranscriptPath, content: "new transcript" });
+  expectMainHookContext(context, "sess-new");
 });
 
 test("sessions.create with emitCommandHooks=true fires command:new hook against parent (#76957)", async () => {
@@ -325,11 +337,9 @@ test("sessions.create with emitCommandHooks=true fires command:new hook against 
         (event as { action?: unknown }).action === "new",
     );
   expect(commandNewEvents).toHaveLength(1);
-  expect(commandNewEvents[0]).toMatchObject({
-    type: "command",
-    action: "new",
-    context: { commandSource: "webchat" },
-  });
+  expect(commandNewEvents[0]?.type).toBe("command");
+  expect(commandNewEvents[0]?.action).toBe("new");
+  expect(commandNewEvents[0]?.context?.commandSource).toBe("webchat");
 });
 
 test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {
@@ -364,47 +374,81 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
   expect(result.ok).toBe(true);
 
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
-  const [beforeResetEvent, beforeResetContext] = (
-    beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
-  )[0] ?? [undefined, undefined];
-  expect(beforeResetEvent).toMatchObject({
+  const [beforeResetEvent, beforeResetContext] = firstHookCall(beforeResetHookMocks.runBeforeReset);
+  expectTranscriptResetEvent({
+    event: beforeResetEvent,
     sessionFile: transcriptPath,
-    reason: "new",
-    messages: [
-      {
-        role: "user",
-        content: "remember this before new",
-      },
-    ],
+    content: "remember this before new",
   });
-  expect(beforeResetContext).toMatchObject({
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    sessionId: "sess-parent-hooks",
-  });
+  expectMainHookContext(beforeResetContext, "sess-parent-hooks");
 
   expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
   expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
-  const [endEvent] = (
-    sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
-  )[0] ?? [undefined, undefined];
-  const [startEvent] = (
-    sessionLifecycleHookMocks.runSessionStart.mock.calls as unknown as Array<[unknown, unknown]>
-  )[0] ?? [undefined, undefined];
-  expect(endEvent).toMatchObject({
-    sessionId: "sess-parent-hooks",
-    sessionKey: "agent:main:main",
-    reason: "new",
-    nextSessionId: (startEvent as { sessionId?: string } | undefined)?.sessionId,
-    nextSessionKey: (startEvent as { sessionKey?: string } | undefined)?.sessionKey,
-  });
-  expect(startEvent).toMatchObject({
-    resumedFrom: "sess-parent-hooks",
-  });
-  expect((startEvent as { sessionId?: string } | undefined)?.sessionId).toEqual(expect.any(String));
-  expect((startEvent as { sessionKey?: string } | undefined)?.sessionKey).toMatch(
-    /^agent:main:dashboard:/,
+  const [endEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
+  const [startEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
+  expect(endEvent.sessionId).toBe("sess-parent-hooks");
+  expect(endEvent.sessionKey).toBe("agent:main:main");
+  expect(endEvent.reason).toBe("new");
+  expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
+  expect(endEvent.nextSessionKey).toBe(startEvent.sessionKey);
+  expect(startEvent.resumedFrom).toBe("sess-parent-hooks");
+  expect(startEvent.sessionId).toBeTypeOf("string");
+  expect(startEvent.sessionId).not.toBe("");
+  expectStringWithPrefix(startEvent.sessionKey, "agent:main:dashboard:", "created session key");
+});
+
+test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-parent-dms.jsonl");
+  await fs.writeFile(
+    transcriptPath,
+    `${JSON.stringify({
+      type: "message",
+      id: "m1",
+      message: { role: "user", content: "hello before /new" },
+    })}\n`,
+    "utf-8",
   );
+
+  testState.sessionConfig = { dmScope: "main" };
+  try {
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-parent-dms",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    const result = await directSessionReq<{
+      ok: boolean;
+      key: string;
+      sessionId: string;
+      runStarted: boolean;
+    }>("sessions.create", {
+      parentSessionKey: "main",
+      emitCommandHooks: true,
+    });
+    expect(result.ok).toBe(true);
+    // Reset-in-place: response key matches the parent main key, NOT a dashboard child.
+    expect(result.payload?.key).toBe("agent:main:main");
+    expect(result.payload?.runStarted).toBe(false);
+    expect(result.payload?.sessionId).not.toBe("sess-parent-dms");
+
+    expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
+    const [endEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
+    const [startEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
+    expect(endEvent.sessionId).toBe("sess-parent-dms");
+    expect(endEvent.sessionKey).toBe("agent:main:main");
+    expect(endEvent.reason).toBe("new");
+    expect(startEvent.sessionKey).toBe("agent:main:main");
+    expect(startEvent.resumedFrom).toBe("sess-parent-dms");
+  } finally {
+    testState.sessionConfig = undefined;
+  }
 });
 
 test("sessions.create without emitCommandHooks does not fire command:new hook (#76957)", async () => {

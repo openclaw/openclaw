@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { formatChannelProgressDraftLine } from "../plugin-sdk/channel-streaming.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 
@@ -146,6 +147,48 @@ describe("agent event handler", () => {
 
   function sessionChatCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
     return nodeSendToSession.mock.calls.filter(([, event]) => event === "chat");
+  }
+
+  function requireCall<T>(call: T | undefined, label: string): T {
+    if (call === undefined) {
+      throw new Error(`expected ${label}`);
+    }
+    return call;
+  }
+
+  function requireRecord(value: unknown, label: string): Record<string, unknown> {
+    if (typeof value !== "object" || value === null) {
+      throw new Error(`${label} was not an object`);
+    }
+    return value as Record<string, unknown>;
+  }
+
+  function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+    for (const [key, value] of Object.entries(fields)) {
+      expect(record[key]).toEqual(value);
+    }
+  }
+
+  function expectPayloadFields(value: unknown, fields: Record<string, unknown>) {
+    expectRecordFields(requireRecord(value, "event payload"), fields);
+  }
+
+  function expectPayloadDataFields(value: unknown, fields: Record<string, unknown>) {
+    const payload = requireRecord(value, "event payload");
+    expectRecordFields(requireRecord(payload.data, "event payload data"), fields);
+  }
+
+  function requireMockPayload(
+    mock: ReturnType<typeof vi.fn>,
+    index: number,
+    payloadIndex: number,
+    label: string,
+  ) {
+    const call = mock.mock.calls[index];
+    if (!call) {
+      throw new Error(`missing ${label} call ${index + 1}`);
+    }
+    return requireRecord(call[payloadIndex], label);
   }
 
   const FALLBACK_LIFECYCLE_DATA = {
@@ -809,15 +852,12 @@ describe("agent event handler", () => {
 
     const nodeToolCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
     expect(nodeToolCalls).toHaveLength(1);
-    expect(nodeToolCalls[0]?.[2]).toEqual(
-      expect.objectContaining({
-        stream: "tool",
-        data: expect.objectContaining({
-          phase: "start",
-          name: "read",
-        }),
-      }),
-    );
+    const payload = requireRecord(nodeToolCalls[0]?.[2], "node tool payload");
+    expect(payload.stream).toBe("tool");
+    expectRecordFields(requireRecord(payload.data, "node tool payload data"), {
+      phase: "start",
+      name: "read",
+    });
     resetAgentRunContextForTest();
   });
 
@@ -890,32 +930,31 @@ describe("agent event handler", () => {
     });
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "session.tool",
-      expect.objectContaining({
-        runId: "run-session-tool",
-        sessionKey: "session-1",
-        spawnedBy: "agent:main:main",
-        spawnedWorkspaceDir: "/tmp/subagent",
-        forkedFromParent: true,
-        spawnDepth: 2,
-        subagentRole: "orchestrator",
-        subagentControlScope: "children",
-        lastThreadId: 42,
-        fastMode: true,
-        verboseLevel: "on",
-        stream: "tool",
-        ts: 1_234,
-        data: expect.objectContaining({
-          phase: "start",
-          name: "exec",
-          toolCallId: "tool-session-1",
-          args: { command: "echo hi" },
-        }),
-      }),
-      new Set(["conn-session"]),
-      { dropIfSlow: true },
-    );
+    expect(broadcastToConnIds.mock.calls[0]?.[0]).toBe("session.tool");
+    const sessionToolPayload = requireMockPayload(broadcastToConnIds, 0, 1, "session tool payload");
+    expectRecordFields(sessionToolPayload, {
+      runId: "run-session-tool",
+      sessionKey: "session-1",
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      lastThreadId: 42,
+      fastMode: true,
+      verboseLevel: "on",
+      stream: "tool",
+      ts: 1_234,
+    });
+    expectRecordFields(requireRecord(sessionToolPayload.data, "session tool payload data"), {
+      phase: "start",
+      name: "exec",
+      toolCallId: "tool-session-1",
+      args: { command: "echo hi" },
+    });
+    expect(broadcastToConnIds.mock.calls[0]?.[2]).toEqual(new Set(["conn-session"]));
+    expect(broadcastToConnIds.mock.calls[0]?.[3]).toEqual({ dropIfSlow: true });
     resetAgentRunContextForTest();
   });
 
@@ -956,30 +995,83 @@ describe("agent event handler", () => {
     });
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "agent",
-      expect.objectContaining({
-        runId: "run-tool-owner",
-        sessionKey: "session-1",
-        spawnedBy: "agent:main:main",
-        spawnedWorkspaceDir: "/tmp/subagent",
-        forkedFromParent: true,
-        spawnDepth: 2,
-        subagentRole: "orchestrator",
-        subagentControlScope: "children",
-        lastThreadId: 42,
-        fastMode: true,
-        verboseLevel: "on",
-        stream: "tool",
-        ts: 1_234,
-        data: expect.objectContaining({
-          phase: "start",
-          name: "exec",
-          toolCallId: "tool-run-1",
-          args: { command: "echo hi" },
-        }),
+    expect(broadcastToConnIds.mock.calls[0]?.[0]).toBe("agent");
+    const runToolPayload = requireMockPayload(broadcastToConnIds, 0, 1, "run tool payload");
+    expectRecordFields(runToolPayload, {
+      runId: "run-tool-owner",
+      sessionKey: "session-1",
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      lastThreadId: 42,
+      fastMode: true,
+      verboseLevel: "on",
+      stream: "tool",
+      ts: 1_234,
+    });
+    expectRecordFields(requireRecord(runToolPayload.data, "run tool payload data"), {
+      phase: "start",
+      name: "exec",
+      toolCallId: "tool-run-1",
+      args: { command: "echo hi" },
+    });
+    expect(broadcastToConnIds.mock.calls[0]?.[2]).toEqual(new Set(["conn-run"]));
+    resetAgentRunContextForTest();
+  });
+
+  it("projects tool-search bridge calls like native channel verbose tool events", () => {
+    const { nodeSendToSession, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-1",
+    });
+
+    registerAgentRunContext("run-tool-search-node", {
+      sessionKey: "session-1",
+      verboseLevel: "on",
+    });
+
+    handler({
+      runId: "run-tool-search-node",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: {
+        phase: "start",
+        name: "tool_search_code",
+        toolCallId: "tool-search-node-1",
+        args: {
+          code: 'return await openclaw.tools.call("openclaw:core:exec", { command: "echo hi" });',
+        },
+      },
+    });
+
+    const payload = nodeSendToSession.mock.calls[0]?.[2] as {
+      stream?: string;
+      data?: { name?: string; args?: Record<string, unknown> };
+    };
+    expect(payload.stream).toBe("tool");
+    expect(payload.data).toMatchObject({
+      phase: "start",
+      name: "exec",
+      bridgeToolName: "tool_search_code",
+      bridgeTargetToolName: "openclaw:core:exec",
+      bridgeVerb: "call",
+      args: { command: "echo hi" },
+    });
+    expect(
+      formatChannelProgressDraftLine({
+        event: "tool",
+        name: payload.data?.name,
+        args: payload.data?.args,
       }),
-      new Set(["conn-run"]),
+    ).toBe(
+      formatChannelProgressDraftLine({
+        event: "tool",
+        name: "exec",
+        args: { command: "echo hi" },
+      }),
     );
     resetAgentRunContextForTest();
   });
@@ -1019,31 +1111,30 @@ describe("agent event handler", () => {
       },
     });
 
-    expect(nodeSendToSession).toHaveBeenCalledWith(
-      "session-1",
-      "agent",
-      expect.objectContaining({
-        runId: "run-tool-node",
-        sessionKey: "session-1",
-        spawnedBy: "agent:main:main",
-        spawnedWorkspaceDir: "/tmp/subagent",
-        forkedFromParent: true,
-        spawnDepth: 2,
-        subagentRole: "orchestrator",
-        subagentControlScope: "children",
-        lastThreadId: 42,
-        fastMode: true,
-        verboseLevel: "on",
-        stream: "tool",
-        ts: 1_234,
-        data: expect.objectContaining({
-          phase: "start",
-          name: "exec",
-          toolCallId: "tool-node-1",
-          args: { command: "echo hi" },
-        }),
-      }),
-    );
+    expect(nodeSendToSession.mock.calls[0]?.[0]).toBe("session-1");
+    expect(nodeSendToSession.mock.calls[0]?.[1]).toBe("agent");
+    const nodeToolPayload = requireMockPayload(nodeSendToSession, 0, 2, "node tool payload");
+    expectRecordFields(nodeToolPayload, {
+      runId: "run-tool-node",
+      sessionKey: "session-1",
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      lastThreadId: 42,
+      fastMode: true,
+      verboseLevel: "on",
+      stream: "tool",
+      ts: 1_234,
+    });
+    expectRecordFields(requireRecord(nodeToolPayload.data, "node tool payload data"), {
+      phase: "start",
+      name: "exec",
+      toolCallId: "tool-node-1",
+      args: { command: "echo hi" },
+    });
     resetAgentRunContextForTest();
   });
 
@@ -1084,25 +1175,29 @@ describe("agent event handler", () => {
       ([event]) => event === "sessions.changed",
     );
     expect(sessionsChangedCalls).toHaveLength(2);
-    expect(sessionsChangedCalls[1]?.[1]).toEqual(
-      expect.objectContaining({
-        sessionKey: "session-finished",
-        phase: "end",
-        status: "done",
-        startedAt: 900,
-        endedAt: 1_700,
-        runtimeMs: 800,
-        updatedAt: 1_700,
-        abortedLastRun: false,
-      }),
-    );
-    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith({
+    expectPayloadFields(sessionsChangedCalls[1]?.[1], {
       sessionKey: "session-finished",
-      event: expect.objectContaining({
-        runId: "run-finished",
-        data: expect.objectContaining({ phase: "end" }),
-      }),
+      phase: "end",
+      status: "done",
+      startedAt: 900,
+      endedAt: 1_700,
+      runtimeMs: 800,
+      updatedAt: 1_700,
+      abortedLastRun: false,
     });
+    const persistParams = requireRecord(
+      persistGatewaySessionLifecycleEventMock.mock.calls
+        .map((call) => call[0])
+        .find((params) => {
+          const event = (params as { event?: { data?: { phase?: string } } } | undefined)?.event;
+          return event?.data?.phase === "end";
+        }),
+      "persist lifecycle params",
+    );
+    expect(persistParams.sessionKey).toBe("session-finished");
+    const persistEvent = requireRecord(persistParams.event, "persist lifecycle event");
+    expect(persistEvent.runId).toBe("run-finished");
+    expect(requireRecord(persistEvent.data, "persist lifecycle event data").phase).toBe("end");
     resetAgentRunContextForTest();
   });
 
@@ -1175,30 +1270,28 @@ describe("agent event handler", () => {
       },
     });
 
-    expect(broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.changed",
-      expect.objectContaining({
-        sessionKey: "session-finished",
-        phase: "end",
-        spawnedBy: "agent:main:main",
-        spawnedWorkspaceDir: "/tmp/subagent",
-        forkedFromParent: true,
-        spawnDepth: 2,
-        subagentRole: "orchestrator",
-        subagentControlScope: "children",
-        fastMode: true,
-        sendPolicy: "deny",
-        verboseLevel: "on",
-        responseUsage: "full",
-        totalTokens: 42,
-        totalTokensFresh: true,
-        contextTokens: 21,
-        estimatedCostUsd: 0.12,
-        lastThreadId: 42,
-      }),
-      new Set(["conn-session"]),
-      { dropIfSlow: true },
-    );
+    expect(broadcastToConnIds.mock.calls[0]?.[0]).toBe("sessions.changed");
+    expectPayloadFields(broadcastToConnIds.mock.calls[0]?.[1], {
+      sessionKey: "session-finished",
+      phase: "end",
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      fastMode: true,
+      sendPolicy: "deny",
+      verboseLevel: "on",
+      responseUsage: "full",
+      totalTokens: 42,
+      totalTokensFresh: true,
+      contextTokens: 21,
+      estimatedCostUsd: 0.12,
+      lastThreadId: 42,
+    });
+    expect(broadcastToConnIds.mock.calls[0]?.[2]).toEqual(new Set(["conn-session"]));
+    expect(broadcastToConnIds.mock.calls[0]?.[3]).toEqual({ dropIfSlow: true });
   });
 
   it("keeps tool output for Control UI recipients when verbose is on", () => {
@@ -1500,7 +1593,7 @@ describe("agent event handler", () => {
       ([, payload]) => (payload as { state?: string }).state === "error",
     );
     expect(chatErrors).toHaveLength(1);
-    expect(chatErrors[0]?.[1]).toMatchObject({
+    expectPayloadFields(chatErrors[0]?.[1], {
       runId: "run-chat-send",
       sessionKey: "session-chat-send",
       state: "error",
@@ -1531,15 +1624,16 @@ describe("agent event handler", () => {
     emitLifecycleEnd(handler, "run-hidden", 2);
 
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
-    expect(broadcast.mock.calls.filter(([event]) => event === "agent")).toHaveLength(0);
+    expect(broadcast.mock.calls.some(([event]) => event === "agent")).toBe(false);
     expect(nodeSendToSession).not.toHaveBeenCalled();
-    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith({
-      sessionKey: "session-hidden",
-      event: expect.objectContaining({
-        runId: "run-hidden",
-        data: expect.objectContaining({ phase: "end" }),
-      }),
-    });
+    const persistParams = requireRecord(
+      persistGatewaySessionLifecycleEventMock.mock.calls[0]?.[0],
+      "persist lifecycle params",
+    );
+    expect(persistParams.sessionKey).toBe("session-hidden");
+    const persistEvent = requireRecord(persistParams.event, "persist lifecycle event");
+    expect(persistEvent.runId).toBe("run-hidden");
+    expect(requireRecord(persistEvent.data, "persist lifecycle event data").phase).toBe("end");
   });
 
   it("uses agent event sessionKey when run-context lookup cannot resolve", () => {
@@ -1690,7 +1784,7 @@ describe("agent event handler", () => {
       const chatCalls = chatBroadcastCalls(broadcast);
       expect(chatCalls.length).toBeGreaterThanOrEqual(1);
       const [, payload] = chatCalls[0];
-      expect(payload).toMatchObject({
+      expectPayloadFields(payload, {
         sessionKey: "agent:coder:subagent:abc",
         spawnedBy: "agent:conductor:task:parent-1",
         state: "delta",
@@ -1698,7 +1792,7 @@ describe("agent event handler", () => {
 
       const nodeCalls = sessionChatCalls(nodeSendToSession);
       expect(nodeCalls.length).toBeGreaterThanOrEqual(1);
-      expect(nodeCalls[0][2]).toMatchObject({
+      expectPayloadFields(nodeCalls[0]?.[2], {
         spawnedBy: "agent:conductor:task:parent-1",
       });
     });
@@ -1737,9 +1831,11 @@ describe("agent event handler", () => {
       });
 
       const chatCalls = chatBroadcastCalls(broadcast);
-      const finalCall = chatCalls.find(([, p]) => p.state === "final");
-      expect(finalCall).toBeDefined();
-      expect(finalCall![1]).toMatchObject({
+      const finalCall = requireCall(
+        chatCalls.find(([, p]) => p.state === "final"),
+        "final chat call",
+      );
+      expectPayloadFields(finalCall[1], {
         sessionKey: "agent:coder:subagent:abc",
         spawnedBy: "agent:conductor:task:parent-1",
         state: "final",
@@ -1830,7 +1926,7 @@ describe("agent event handler", () => {
 
       const agentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
       expect(agentCalls.length).toBeGreaterThanOrEqual(1);
-      expect(agentCalls[0][1]).toMatchObject({
+      expectPayloadFields(agentCalls[0]?.[1], {
         sessionKey: "agent:coder:subagent:xyz",
         spawnedBy: "agent:conductor:task:parent-2",
       });
@@ -1873,9 +1969,11 @@ describe("agent event handler", () => {
       });
 
       const chatCalls = chatBroadcastCalls(broadcast);
-      const errorCall = chatCalls.find(([, p]) => p.state === "error");
-      expect(errorCall).toBeDefined();
-      expect(errorCall![1]).toMatchObject({
+      const errorCall = requireCall(
+        chatCalls.find(([, p]) => p.state === "error"),
+        "error chat call",
+      );
+      expectPayloadFields(errorCall[1], {
         sessionKey: "agent:coder:subagent:err",
         spawnedBy: "agent:conductor:task:parent-err",
         state: "error",
@@ -1933,11 +2031,14 @@ describe("agent event handler", () => {
       });
 
       const chatCalls = chatBroadcastCalls(broadcast);
-      const flushedDelta = chatCalls.find(
-        ([, p]) => p.state === "delta" && p.message?.content?.[0]?.text === "before tool expanded",
+      const flushedDelta = requireCall(
+        chatCalls.find(
+          ([, p]) =>
+            p.state === "delta" && p.message?.content?.[0]?.text === "before tool expanded",
+        ),
+        "flushed delta chat call",
       );
-      expect(flushedDelta).toBeDefined();
-      expect(flushedDelta![1]).toMatchObject({
+      expectPayloadFields(flushedDelta[1], {
         spawnedBy: "agent:conductor:task:parent-flush",
       });
 
@@ -1976,15 +2077,15 @@ describe("agent event handler", () => {
       });
 
       const agentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
-      const gapError = agentCalls.find(
-        ([, p]) => p.stream === "error" && p.data?.reason === "seq gap",
+      const gapError = requireCall(
+        agentCalls.find(([, p]) => p.stream === "error" && p.data?.reason === "seq gap"),
+        "seq gap error agent call",
       );
-      expect(gapError).toBeDefined();
-      expect(gapError![1]).toMatchObject({
+      expectPayloadFields(gapError[1], {
         sessionKey: "agent:coder:subagent:gap",
         spawnedBy: "agent:conductor:task:parent-gap",
-        data: { reason: "seq gap", expected: 2, received: 5 },
       });
+      expectPayloadDataFields(gapError[1], { reason: "seq gap", expected: 2, received: 5 });
 
       resetAgentRunContextForTest();
     });
@@ -2037,7 +2138,7 @@ describe("agent event handler", () => {
       // All broadcasts still have correct spawnedBy
       const chatCalls = chatBroadcastCalls(broadcast);
       for (const [, payload] of chatCalls) {
-        expect(payload).toMatchObject({
+        expectPayloadFields(payload, {
           spawnedBy: "agent:conductor:task:parent-cache",
         });
       }

@@ -106,13 +106,13 @@ describe("tool-policy", () => {
     });
   });
 
-  it("strips owner-only tools for non-owner senders", async () => {
+  it("strips owner-only tools for non-owner senders", () => {
     const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, false);
     expect(filtered.map((t) => t.name)).toEqual(["read"]);
   });
 
-  it("keeps owner-only tools for the owner sender", async () => {
+  it("keeps owner-only tools for the owner sender", () => {
     const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, true);
     expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway", "nodes"]);
@@ -131,7 +131,7 @@ describe("tool-policy", () => {
     });
   });
 
-  it("honors ownerOnly metadata for custom tool names", async () => {
+  it("honors ownerOnly metadata for custom tool names", () => {
     const tools = [
       {
         name: "custom_admin_tool",
@@ -139,7 +139,7 @@ describe("tool-policy", () => {
         execute: async () => ({ content: [], details: {} }) as any,
       },
     ] as unknown as AnyAgentTool[];
-    expect(applyOwnerOnlyToolPolicy(tools, false)).toEqual([]);
+    expect(applyOwnerOnlyToolPolicy(tools, false)).toStrictEqual([]);
     expect(applyOwnerOnlyToolPolicy(tools, true)).toHaveLength(1);
   });
 
@@ -196,7 +196,8 @@ describe("TOOL_POLICY_CONFORMANCE", () => {
   });
 
   it("is JSON-serializable", () => {
-    expect(() => JSON.stringify(TOOL_POLICY_CONFORMANCE)).not.toThrow();
+    const serialized = JSON.stringify(TOOL_POLICY_CONFORMANCE);
+    expect(JSON.parse(serialized)).toEqual({ toolGroups: TOOL_GROUPS });
   });
 });
 
@@ -256,7 +257,7 @@ describe("resolveSandboxToolPolicyForAgent", () => {
       source: "global",
       key: "tools.sandbox.tools.allow",
     });
-    expect(resolved.allow).toEqual([]);
+    expect(resolved.allow).toStrictEqual([]);
     expect(resolved.deny).toEqual(["browser"]);
 
     const policy: SandboxToolPolicy = { allow: resolved.allow, deny: resolved.deny };

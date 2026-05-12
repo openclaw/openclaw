@@ -6,6 +6,8 @@ import {
   validateModelsListParams,
   validateNodeEventResult,
   validateNodePresenceAlivePayload,
+  validateTasksCancelParams,
+  validateTasksListParams,
   validateTalkConfigResult,
   validateTalkEvent,
   validateTalkClientCreateParams,
@@ -151,6 +153,7 @@ describe("validateTalkConfigResult", () => {
               },
               model: "gpt-realtime",
               voice: "alloy",
+              instructions: "Speak with crisp diction.",
               mode: "realtime",
               transport: "gateway-relay",
               brain: "agent-consult",
@@ -168,7 +171,7 @@ describe("validateTalkClientCreateParams", () => {
       validateTalkClientCreateParams({
         sessionKey: "agent:main:main",
         provider: "openai",
-        model: "gpt-realtime-1.5",
+        model: "gpt-realtime-2",
         voice: "alloy",
         mode: "realtime",
         transport: "webrtc",
@@ -177,7 +180,7 @@ describe("validateTalkClientCreateParams", () => {
     ).toBe(true);
   });
 
-  it("rejects request-time instruction overrides", () => {
+  it("rejects request-time instruction overrides for Talk client creation", () => {
     expect(
       validateTalkClientCreateParams({
         sessionKey: "agent:main:main",
@@ -270,7 +273,7 @@ describe("validateTalkSession", () => {
       validateTalkSessionCreateParams({
         sessionKey: "agent:main:main",
         provider: "openai",
-        model: "gpt-realtime-1.5",
+        model: "gpt-realtime-2",
         voice: "alloy",
         mode: "realtime",
         transport: "managed-room",
@@ -284,7 +287,7 @@ describe("validateTalkSession", () => {
         roomUrl: "/talk/rooms/talk_handoff-1",
         sessionKey: "agent:main:main",
         provider: "openai",
-        model: "gpt-realtime-1.5",
+        model: "gpt-realtime-2",
         voice: "alloy",
         mode: "realtime",
         transport: "managed-room",
@@ -311,7 +314,7 @@ describe("validateTalkSession", () => {
     ).toBe(true);
   });
 
-  it("rejects request-time instruction overrides", () => {
+  it("rejects request-time instruction overrides for Talk session creation", () => {
     expect(
       validateTalkSessionCreateParams({
         sessionKey: "agent:main:main",
@@ -406,6 +409,7 @@ describe("validateTalkSessionRelayParams", () => {
         sessionId: "session-1",
         callId: "call-1",
         result: { ok: true },
+        options: { suppressResponse: true, willContinue: true },
       }),
     ).toBe(true);
   });
@@ -454,6 +458,25 @@ describe("validateModelsListParams", () => {
   it("rejects unknown model catalog views and extra fields", () => {
     expect(validateModelsListParams({ view: "available" })).toBe(false);
     expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
+  });
+});
+
+describe("validateTasksListParams", () => {
+  it("accepts SDK task ledger filters", () => {
+    expect(
+      validateTasksListParams({
+        status: ["running", "completed"],
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        limit: 50,
+        cursor: "100",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects internal task statuses and unknown fields", () => {
+    expect(validateTasksListParams({ status: "succeeded" })).toBe(false);
+    expect(validateTasksCancelParams({ taskId: "task-1", force: true })).toBe(false);
   });
 });
 

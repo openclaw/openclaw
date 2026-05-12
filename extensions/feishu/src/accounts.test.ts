@@ -436,24 +436,27 @@ describe("resolveFeishuAccount", () => {
     expect((caught as Error).message).toMatch(/channels\.feishu\.appSecret: unresolved SecretRef/i);
   });
 
-  it("does not throw when account name is non-string", () => {
-    expect(() =>
-      resolveFeishuAccount({
-        cfg: {
-          channels: {
-            feishu: {
-              accounts: {
-                main: {
-                  name: { bad: true },
-                  appId: "cli_123",
-                  appSecret: "secret_456", // pragma: allowlist secret
-                } as never,
-              },
+  it("ignores non-string account names", () => {
+    const account = resolveFeishuAccount({
+      cfg: {
+        channels: {
+          feishu: {
+            accounts: {
+              main: {
+                name: { bad: true },
+                appId: "cli_123",
+                appSecret: "secret_456", // pragma: allowlist secret
+              } as never,
             },
           },
-        } as never,
-        accountId: "main",
-      }),
-    ).not.toThrow();
+        },
+      } as never,
+      accountId: "main",
+    });
+
+    expect(account.accountId).toBe("main");
+    expect(account.appId).toBe("cli_123");
+    expect(account.appSecret).toBe("secret_456");
+    expect(account.name).toBeUndefined();
   });
 });

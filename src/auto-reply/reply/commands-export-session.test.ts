@@ -89,6 +89,8 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
+import { buildExportSessionReply } from "./commands-export-session.js";
+
 function makeParams(): HandleCommandsParams {
   return {
     cfg: {},
@@ -156,8 +158,6 @@ describe("buildExportSessionReply", () => {
   });
 
   it("resolves store and transcript paths from the target session agent", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
-
     await buildExportSessionReply(makeParams());
 
     expect(hoisted.resolveDefaultSessionStorePathMock).toHaveBeenCalledWith("target");
@@ -168,7 +168,6 @@ describe("buildExportSessionReply", () => {
   });
 
   it("prefers the active command storePath over the default target-agent store", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
     hoisted.loadSessionStoreMock.mockReturnValue({
       "agent:target:session": {
         sessionId: "session-1",
@@ -192,7 +191,6 @@ describe("buildExportSessionReply", () => {
   });
 
   it("uses the target store entry even when the wrapper sessionEntry is missing", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
     hoisted.loadSessionStoreMock.mockReturnValue({
       "agent:target:session": {
         sessionId: "session-from-store",
@@ -206,18 +204,13 @@ describe("buildExportSessionReply", () => {
     });
 
     expect(reply.text).toContain("✅ Session exported!");
-    expect(hoisted.resolveCommandsSystemPromptBundleMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionEntry: expect.objectContaining({
-          sessionId: "session-from-store",
-        }),
-      }),
-    );
+    const [[systemPromptBundleParams]] = hoisted.resolveCommandsSystemPromptBundleMock.mock
+      .calls as unknown as Array<[{ sessionEntry?: { sessionId?: string; updatedAt?: number } }]>;
+    expect(systemPromptBundleParams?.sessionEntry?.sessionId).toBe("session-from-store");
+    expect(systemPromptBundleParams?.sessionEntry?.updatedAt).toBe(2);
   });
 
   it("injects scripts and session data through the real export template", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
-
     await buildExportSessionReply(makeParams());
 
     const html = hoisted.writeFileMock.mock.calls[0]?.[1];
@@ -243,7 +236,6 @@ describe("buildExportSessionReply", () => {
   });
 
   it("suffixes colliding default export filenames instead of overwriting", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-05T10:11:12.345Z"));
     const collision = Object.assign(new Error("exists"), { code: "EEXIST" });
@@ -260,7 +252,7 @@ describe("buildExportSessionReply", () => {
       "openclaw-session-session--2026-05-05T10-11-12-2.html",
     );
     expect(hoisted.writeFileMock.mock.calls[0]?.[0]).toBe(expectedBase);
-    expect(hoisted.writeFileMock.mock.calls[0]?.[2]).toMatchObject({
+    expect(hoisted.writeFileMock.mock.calls[0]?.[2]).toEqual({
       encoding: "utf-8",
       flag: "wx",
     });
@@ -269,7 +261,6 @@ describe("buildExportSessionReply", () => {
   });
 
   it("preserves replacement text with dollar sequences", async () => {
-    const { buildExportSessionReply } = await import("./commands-export-session.js");
     hoisted.exportHtmlTemplateContents.set(
       "template.html",
       [

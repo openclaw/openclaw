@@ -141,13 +141,17 @@ async function expectStaleMetadataSnapshotRebuild(params: {
   });
 
   expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
-  expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
-    expect.objectContaining({
-      index: requestedIndex,
-      config: params.config,
-      env: requestedEnv,
-    }),
-  );
+  expect(loadPluginManifestRegistryForInstalledIndex.mock.calls).toEqual([
+    [
+      {
+        index: requestedIndex,
+        config: params.config,
+        workspaceDir: undefined,
+        env: requestedEnv,
+        includeDisabled: true,
+      },
+    ],
+  ]);
   return { table, requestedRegistry };
 }
 
@@ -224,17 +228,19 @@ describe("loadPluginLookUpTable", () => {
 
     expect(table.manifestRegistry).toBe(manifestRegistry);
     expect(table.diagnostics).toEqual([indexDiagnostic, manifestDiagnostic]);
-    expect(table.metrics).toMatchObject({
-      registrySnapshotMs: expect.any(Number),
-      manifestRegistryMs: expect.any(Number),
-      startupPlanMs: expect.any(Number),
-      ownerMapsMs: expect.any(Number),
-      totalMs: expect.any(Number),
-      indexPluginCount: 2,
-      manifestPluginCount: 2,
-      startupPluginCount: 1,
-      deferredChannelPluginCount: 0,
-    });
+    expect(table.metrics.indexPluginCount).toBe(2);
+    expect(table.metrics.manifestPluginCount).toBe(2);
+    expect(table.metrics.startupPluginCount).toBe(1);
+    expect(table.metrics.deferredChannelPluginCount).toBe(0);
+    for (const metricName of [
+      "registrySnapshotMs",
+      "manifestRegistryMs",
+      "startupPlanMs",
+      "ownerMapsMs",
+      "totalMs",
+    ] as const) {
+      expect(table.metrics[metricName]).toBeGreaterThanOrEqual(0);
+    }
     expect(table.byPluginId.get("telegram")?.id).toBe("telegram");
     expect(table.normalizePluginId("openai-codex")).toBe("openai");
     expect(table.owners.channels.get("telegram")).toEqual(["telegram"]);
@@ -247,7 +253,7 @@ describe("loadPluginLookUpTable", () => {
     expect(table.owners.commandAliases.get("telegram-send")).toEqual(["telegram"]);
     expect(table.owners.contracts.get("tools")).toEqual(["telegram"]);
     expect(table.startup.channelPluginIds).toEqual(["telegram"]);
-    expect(table.startup.configuredDeferredChannelPluginIds).toEqual([]);
+    expect(table.startup.configuredDeferredChannelPluginIds).toStrictEqual([]);
     expect(table.startup.pluginIds).toEqual(["telegram"]);
   });
 
@@ -347,12 +353,17 @@ describe("loadPluginLookUpTable", () => {
     });
 
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
-      expect.objectContaining({
-        index: requestedIndex,
-        config: requestedConfig,
-      }),
-    );
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls).toEqual([
+      [
+        {
+          index: requestedIndex,
+          config: requestedConfig,
+          workspaceDir: undefined,
+          env: {},
+          includeDisabled: true,
+        },
+      ],
+    ]);
   });
 
   it("rebuilds when a provided metadata snapshot has stale plugin load paths", async () => {
@@ -398,12 +409,17 @@ describe("loadPluginLookUpTable", () => {
     });
 
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledWith(
-      expect.objectContaining({
-        index,
-        config: requestedConfig,
-      }),
-    );
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls).toEqual([
+      [
+        {
+          index,
+          config: requestedConfig,
+          workspaceDir: undefined,
+          env: {},
+          includeDisabled: true,
+        },
+      ],
+    ]);
   });
 
   it("rebuilds when a provided metadata snapshot has stale env-resolved plugin load paths", async () => {

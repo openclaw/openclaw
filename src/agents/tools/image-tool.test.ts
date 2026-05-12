@@ -522,18 +522,45 @@ async function expectImageToolExecOk(
   },
   image: string,
 ) {
-  await expect(
-    tool.execute("t1", {
-      prompt: "Describe the image.",
-      image,
-    }),
-  ).resolves.toMatchObject({
-    content: [{ type: "text", text: "ok" }],
+  const result = await tool.execute("t1", {
+    prompt: "Describe the image.",
+    image,
   });
+  expectToolText(result, "ok");
+}
+
+type ToolTextResult = {
+  content?: Array<{
+    type?: string;
+    text?: string;
+    image_url?: { url?: string };
+  }>;
+  details?: Record<string, unknown>;
+};
+
+function expectToolText(result: unknown, text: string): void {
+  const content = (result as ToolTextResult).content ?? [];
+  expect(content.some((block) => block.type === "text" && block.text === text)).toBe(true);
+}
+
+function firstImageRequest(mock: { mock: { calls: unknown[][] } }): ImageDescriptionRequest {
+  const request = mock.mock.calls.at(0)?.[0];
+  if (!request) {
+    throw new Error("expected describeImage call");
+  }
+  return request as ImageDescriptionRequest;
+}
+
+function fetchCallAt(mock: { mock: { calls: unknown[][] } }, index: number): unknown[] {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected fetch call ${index + 1}`);
+  }
+  return call;
 }
 
 function requireImageTool<T>(tool: T | null | undefined): T {
-  expect(tool).not.toBeNull();
+  expect(typeof (tool as { execute?: unknown } | null | undefined)?.execute).toBe("function");
   if (!tool) {
     throw new Error("expected image tool");
   }
@@ -654,9 +681,42 @@ describe("image tool implicit imageModel config", () => {
         deferAutoModelResolution: true,
       });
 
-      expect(tool).not.toBeNull();
+      expect(typeof tool?.execute).toBe("function");
       expect(resolveDefaultMediaModelSpy).not.toHaveBeenCalled();
       expect(resolveAutoMediaKeyProvidersSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("honors a per-call model override when no imageModel is configured", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+        text: `ok ${params.provider}/${params.model}`,
+        model: params.model,
+      }));
+      installImageUnderstandingProviderStubs({
+        id: "opencode-go",
+        capabilities: ["image"],
+        describeImage,
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "opencode-go/kimi-k2.6" } } },
+      };
+      const tool = createRequiredImageTool({
+        config: cfg,
+        agentDir,
+        deferAutoModelResolution: true,
+      });
+
+      const result = await tool.execute("t1", {
+        prompt: "Describe this image.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        model: "opencode-go/mimo-v2-omni",
+      });
+
+      const request = firstImageRequest(describeImage);
+      expect(request.provider).toBe("opencode-go");
+      expect(request.model).toBe("mimo-v2-omni");
+      expectToolText(result, "ok opencode-go/mimo-v2-omni");
     });
   });
 
@@ -673,7 +733,7 @@ describe("image tool implicit imageModel config", () => {
         ...createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
         fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -700,7 +760,7 @@ describe("image tool implicit imageModel config", () => {
         ...createDefaultImageFallbackExpectation("minimax/MiniMax-VL-01"),
         fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -732,7 +792,7 @@ describe("image tool implicit imageModel config", () => {
 
         await expectImageToolExecOk(tool, imagePath);
 
-        expect(describeImage).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 180_000 }));
+        expect(firstImageRequest(describeImage).timeoutMs).toBe(180_000);
       });
     });
   });
@@ -774,7 +834,7 @@ describe("image tool implicit imageModel config", () => {
 
         await expectImageToolExecOk(tool, imagePath);
 
-        expect(describeImage).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 300_000 }));
+        expect(firstImageRequest(describeImage).timeoutMs).toBe(300_000);
       });
     });
   });
@@ -801,7 +861,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
         createDefaultImageFallbackExpectation("minimax-portal/MiniMax-VL-01"),
       );
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -814,7 +874,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "opencode/gpt-5-nano",
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -827,7 +887,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "opencode-go/kimi-k2.6",
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -842,7 +902,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual(
         createDefaultImageFallbackExpectation("zai/glm-4.6v"),
       );
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -871,7 +931,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "acme/vision-1",
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -933,7 +993,7 @@ describe("image tool implicit imageModel config", () => {
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "amazon-bedrock/vision-1",
       });
-      expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });
   });
 
@@ -1018,12 +1078,10 @@ describe("image tool implicit imageModel config", () => {
         image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       });
 
-      expect(describeImage).toHaveBeenCalledWith(
-        expect.objectContaining({ provider: "ollama", model: "moondream" }),
-      );
-      expect(result.content).toEqual(
-        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok moondream" })]),
-      );
+      const request = firstImageRequest(describeImage);
+      expect(request.provider).toBe("ollama");
+      expect(request.model).toBe("moondream");
+      expectToolText(result, "ok moondream");
     });
   });
 
@@ -1098,7 +1156,7 @@ describe("image tool implicit imageModel config", () => {
         primary: "openai/gpt-5.4-mini",
       });
       const tool = createImageTool({ config: cfg, agentDir, modelHasVision: true });
-      expect(tool).not.toBeNull();
+      expect(typeof tool?.execute).toBe("function");
       expect(tool?.description).toContain(
         "Only use this tool when images were NOT already provided",
       );
@@ -1134,7 +1192,7 @@ describe("image tool implicit imageModel config", () => {
       });
 
       expect(fetch).toHaveBeenCalledTimes(1);
-      const [url, init] = fetch.mock.calls[0] as [unknown, { body?: unknown }];
+      const [url, init] = fetchCallAt(fetch, 0) as [unknown, { body?: unknown }];
       expect(String(url)).toBe("https://api.moonshot.ai/v1/chat/completions");
       expect(typeof init?.body).toBe("string");
       const bodyRaw = typeof init?.body === "string" ? init.body : "";
@@ -1151,22 +1209,17 @@ describe("image tool implicit imageModel config", () => {
 
       expect(payload.messages?.map((message) => message.role)).toEqual(["user"]);
       const userContent = payload.messages?.[0]?.content ?? [];
-      expect(userContent).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "text",
-            text: "Describe this image in one word.",
-          }),
-          expect.objectContaining({ type: "image_url" }),
-        ]),
-      );
+      expect(
+        userContent.some(
+          (block) => block.type === "text" && block.text === "Describe this image in one word.",
+        ),
+      ).toBe(true);
+      expect(userContent.some((block) => block.type === "image_url")).toBe(true);
       expect(userContent.find((block) => block.type === "image_url")?.image_url?.url).toContain(
         "data:image/png;base64,",
       );
       expect(bodyRaw).not.toContain('"role":"developer"');
-      expect(result.content).toEqual(
-        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok moonshot" })]),
-      );
+      expectToolText(result, "ok moonshot");
     });
   });
 
@@ -1199,9 +1252,7 @@ describe("image tool implicit imageModel config", () => {
       });
 
       expect(fetch).toHaveBeenCalledTimes(1);
-      expect(result.content).toEqual(
-        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok openrouter" })]),
-      );
+      expectToolText(result, "ok openrouter");
     });
   });
 
@@ -1237,9 +1288,7 @@ describe("image tool implicit imageModel config", () => {
       });
 
       expect(fetch).toHaveBeenCalledTimes(1);
-      expect(result.content).toEqual(
-        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok multi" })]),
-      );
+      expectToolText(result, "ok multi");
     });
   });
 
@@ -1277,7 +1326,7 @@ describe("image tool implicit imageModel config", () => {
   it("exposes an Anthropic-safe image schema without union keywords", async () => {
     await withMinimaxImageToolFromTempAgentDir(async (tool) => {
       const violations = findSchemaUnionKeywords(tool.parameters, "image.parameters");
-      expect(violations).toEqual([]);
+      expect(violations).toStrictEqual([]);
 
       const schema = tool.parameters as {
         properties?: Record<string, unknown>;
@@ -1453,7 +1502,9 @@ describe("image tool implicit imageModel config", () => {
       const tool = createRequiredImageTool({ config: cfg, agentDir });
 
       await expectImageToolExecOk(tool, "http://198.18.0.153/reference.png");
-      expect(fetch).toHaveBeenCalledWith("http://198.18.0.153/reference.png", expect.any(Object));
+      const [input, init] = fetchCallAt(fetch, 0);
+      expect(input).toBe("http://198.18.0.153/reference.png");
+      expect(typeof init).toBe("object");
     });
   });
 
@@ -1557,7 +1608,7 @@ describe("image tool data URL support", () => {
     const out = __testing.decodeDataUrl(`data:image/png;base64,${pngB64}`);
     expect(out.kind).toBe("image");
     expect(out.mimeType).toBe("image/png");
-    expect(out.buffer.length).toBeGreaterThan(0);
+    expect(out.buffer).toEqual(Buffer.from(pngB64, "base64"));
   });
 
   it("rejects non-image data URLs", () => {
@@ -1619,7 +1670,10 @@ describe("image tool MiniMax VLM routing", () => {
     });
 
     expect(fetch).toHaveBeenCalledTimes(1);
-    const [url, init] = fetch.mock.calls[0];
+    const [url, init] = fetchCallAt(fetch, 0) as [
+      unknown,
+      { body?: unknown; headers?: unknown; method?: unknown },
+    ];
     expect(String(url)).toBe("https://api.minimax.io/v1/coding_plan/vlm");
     expect(init?.method).toBe("POST");
     expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer minimax-test");
@@ -1676,11 +1730,16 @@ describe("image tool MiniMax VLM routing", () => {
     });
 
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(tooMany.details).toMatchObject({
-      error: "too_many_images",
-      count: 2,
-      max: 1,
-    });
+    const tooManyDetails = tooMany.details as
+      | {
+          error?: string;
+          count?: number;
+          max?: number;
+        }
+      | undefined;
+    expect(tooManyDetails?.error).toBe("too_many_images");
+    expect(tooManyDetails?.count).toBe(2);
+    expect(tooManyDetails?.max).toBe(1);
   });
 
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {

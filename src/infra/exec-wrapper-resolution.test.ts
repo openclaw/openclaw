@@ -471,17 +471,81 @@ describe("extractShellWrapperCommand", () => {
     {
       argv: ["bash", "-lc", "echo hi"],
       expectedInline: "echo hi",
-      expectedCommand: { isWrapper: true, command: "echo hi" },
+      expectedCommand: { isWrapper: true, command: null },
     },
     {
       argv: ["busybox", "sh", "-lc", "echo hi"],
       expectedInline: "echo hi",
-      expectedCommand: { isWrapper: true, command: "echo hi" },
+      expectedCommand: { isWrapper: true, command: null },
     },
     {
       argv: ["env", "--", "pwsh", "-Command", "Get-Date"],
       expectedInline: "Get-Date",
       expectedCommand: { isWrapper: true, command: "Get-Date" },
+    },
+    {
+      argv: ["pwsh", "-ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expectedInline: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      expectedCommand: {
+        isWrapper: true,
+        command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      },
+    },
+    {
+      argv: ["pwsh", "-en", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expectedInline: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      expectedCommand: {
+        isWrapper: true,
+        command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      },
+    },
+    {
+      argv: ["pwsh", "/NoProfile", "/ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expectedInline: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      expectedCommand: {
+        isWrapper: true,
+        command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      },
+    },
+    {
+      argv: [
+        "pwsh",
+        "-WorkingDir",
+        "/tmp/project",
+        "/ec",
+        "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      ],
+      expectedInline: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      expectedCommand: {
+        isWrapper: true,
+        command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      },
+    },
+    {
+      argv: ["pwsh", "-if", "XML", "-EncodedCommand", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expectedInline: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      expectedCommand: {
+        isWrapper: true,
+        command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      },
+    },
+    {
+      argv: ["pwsh", "-config", "SomeConfig", "-ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expectedInline: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      expectedCommand: {
+        isWrapper: true,
+        command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      },
+    },
+    {
+      argv: ["pwsh", "-cwa", "Write-Output", "hi"],
+      expectedInline: "Write-Output hi",
+      expectedCommand: { isWrapper: true, command: "Write-Output hi" },
+    },
+    {
+      argv: ["pwsh", "script.ps1", "-en", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expectedInline: null,
+      expectedCommand: { isWrapper: false, command: null },
     },
     {
       argv: ["bash", "script.sh"],
@@ -494,7 +558,7 @@ describe("extractShellWrapperCommand", () => {
   });
 
   test("prefers an explicit raw command override when provided", () => {
-    expect(extractShellWrapperCommand(["bash", "-lc", "echo hi"], "  run this instead  ")).toEqual({
+    expect(extractShellWrapperCommand(["bash", "-c", "echo hi"], "  run this instead  ")).toEqual({
       isWrapper: true,
       command: "run this instead",
     });

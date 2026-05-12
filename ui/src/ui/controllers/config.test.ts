@@ -55,6 +55,14 @@ function createRequestWithConfigGet() {
   });
 }
 
+function requireRequestCall(request: ReturnType<typeof vi.fn>, index = 0): unknown[] {
+  const call = request.mock.calls[index];
+  if (!call) {
+    throw new Error("expected client request call");
+  }
+  return call;
+}
+
 describe("applyConfigSnapshot", () => {
   it("does not clobber form edits while dirty", () => {
     const state = createState();
@@ -260,6 +268,104 @@ describe("updateConfigFormValue", () => {
 
     expect(state.configFormDirty).toBe(false);
   });
+
+  it("removes only automatically added plugin allow entries", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      hash: "hash-plugins",
+      config: {
+        plugins: {
+          allow: ["openai"],
+          entries: {
+            deepseek: { enabled: false },
+          },
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{}",
+    });
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], true);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: ["openai", "deepseek"],
+        entries: {
+          deepseek: { enabled: true },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(true);
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], false);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: ["openai"],
+        entries: {
+          deepseek: { enabled: false },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(false);
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], true);
+    updateConfigFormValue(state, ["plugins", "allow"], ["openai", "deepseek", "firecrawl"]);
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], false);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: ["openai", "deepseek", "firecrawl"],
+        entries: {
+          deepseek: { enabled: false },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(true);
+  });
+
+  it("preserves empty plugin allowlists when enabling a plugin", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      hash: "hash-plugins",
+      config: {
+        plugins: {
+          allow: [],
+          entries: {
+            deepseek: { enabled: false },
+          },
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{}",
+    });
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], true);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: [],
+        entries: {
+          deepseek: { enabled: true },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(true);
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], false);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: [],
+        entries: {
+          deepseek: { enabled: false },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(false);
+  });
 });
 
 describe("stageConfigPreset", () => {
@@ -392,7 +498,7 @@ describe("resetConfigPendingChanges", () => {
     resetConfigPendingChanges(state);
 
     expect(state.configFormDirty).toBe(false);
-    expect(state.configForm).toEqual({});
+    expect(state.configForm).toStrictEqual({});
     expect(state.configRaw).toBe("");
   });
 });
@@ -573,8 +679,9 @@ describe("applyConfig", () => {
 
     await applyConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.apply");
-    const params = request.mock.calls[0]?.[1] as {
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.apply");
+    const params = call[1] as {
       raw: string;
       baseHash: string;
       sessionKey: string;
@@ -615,8 +722,9 @@ describe("saveConfig", () => {
 
     await saveConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.set");
-    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
     expect(params.baseHash).toBe("hash-original");
   });
 
@@ -645,8 +753,9 @@ describe("saveConfig", () => {
 
     await saveConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.set");
-    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
     const parsed = JSON.parse(params.raw) as {
       gateway: { port: unknown; enabled: unknown };
     };
@@ -670,8 +779,9 @@ describe("saveConfig", () => {
 
     await saveConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.set");
-    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
     const parsed = JSON.parse(params.raw) as {
       gateway: { port: unknown };
     };
