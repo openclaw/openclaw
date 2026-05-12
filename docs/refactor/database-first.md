@@ -96,6 +96,102 @@ This migration has one canonical runtime shape:
 Implementation work should keep deleting code until these statements are true
 without exceptions outside doctor/import/export/debug boundaries.
 
+## Goal state and progress
+
+### Hard goal
+
+- One global SQLite database owns control-plane state:
+  `state/openclaw.sqlite`.
+- One per-agent SQLite database owns data-plane state:
+  `agents/<agentId>/agent/openclaw-agent.sqlite`.
+- Config remains file-backed. `openclaw.json` is not part of this database
+  refactor.
+- Legacy files are doctor migration inputs only.
+- Runtime never writes or reads session or transcript JSONL as active state.
+
+### Goal states
+
+- `not-started`: file-era runtime code still writes active state.
+- `migrating`: doctor/import code can move file data into SQLite.
+- `dual-read`: temporary bridge reads both SQLite and legacy files. This state
+  is forbidden for this refactor unless it is explicitly documented as
+  doctor-only.
+- `sqlite-runtime`: runtime reads and writes SQLite only.
+- `clean`: legacy runtime APIs and tests are removed, and the guard prevents
+  regressions.
+- `done`: docs, tests, backup, doctor migration, and changed checks prove the
+  clean state.
+
+### Current state
+
+- Sessions: `clean` for runtime. Session rows live in the per-agent database,
+  runtime APIs use `{agentId, sessionId}` or `{agentId, sessionKey}`, and
+  `sessions.json` is doctor-only legacy input.
+- Transcripts: `clean` for runtime. Transcript events, identities, snapshots,
+  and trajectory runtime events live in the per-agent database. Runtime no
+  longer accepts transcript locators or JSONL transcript paths.
+- PI embedded runner: `clean`. Embedded PI runs, prepared workers, compaction,
+  and retry loops use SQLite session scope and reject stale transcript handles.
+- Cron: `clean` for runtime. Runtime uses `cron_jobs` and `cron_run_logs`;
+  runtime tests use SQLite `storeKey` naming, and file-era cron paths remain in
+  doctor legacy migration tests only.
+- Task registry: `clean`. Task and Task Flow runtime rows live in
+  `state/openclaw.sqlite`; unshipped sidecar SQLite importers are deleted.
+- Plugin state: `clean`. Plugin state/blob rows live in the shared global
+  database; old plugin-state sidecar SQLite helpers are guarded against.
+- Memory: `sqlite-runtime` for built-in memory and session transcript indexing.
+  Memory index tables live in the per-agent database, plugin memory state uses
+  shared plugin-state rows, and legacy memory files are doctor migration inputs
+  or user workspace content.
+- Backup: `sqlite-runtime`. Backup stages compact SQLite snapshots, omits live
+  WAL/SHM sidecars, verifies SQLite integrity, and records backup runs in the
+  global database.
+- Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
+  JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
+  and removes successful sources.
+- E2E scripts: `clean` for runtime coverage. Docker MCP seeding writes SQLite
+  rows. The runtime-context Docker script creates legacy JSONL only inside the
+  doctor migration seed and names the legacy session index path explicitly.
+
+### Remaining work
+
+- [x] Rename cron runtime-test store variables away from `storePath` unless
+      they are doctor legacy inputs.
+      Files: `src/cron/service.test-harness.ts`,
+      `src/cron/service.runs-one-shot-main-job-disables-it.test.ts`,
+      `src/cron/service/timer.regression.test.ts`,
+      `src/cron/service/ops.test.ts`, `src/cron/service/store.test.ts`,
+      `src/cron/service.heartbeat-ok-summary-suppressed.test.ts`,
+      `src/cron/service.main-job-passes-heartbeat-target-last.test.ts`,
+      `src/cron/store.test.ts`.
+      Proof: `pnpm check:database-first-legacy-stores`; `rg -n 'storePath' src/cron --glob '!**/commands/doctor/**'`.
+- [x] Remove or rename obsolete file-era export test mocks.
+      File: `src/auto-reply/reply/commands-export-test-mocks.ts`.
+      Proof: `rg -n 'resolveSessionFilePath|sessionFile|storePath|transcriptLocator' src/auto-reply/reply`.
+- [x] Make the Docker runtime-context legacy JSONL seed obviously doctor-only.
+      File: `scripts/e2e/session-runtime-context-docker-client.ts`.
+      Proof: `rg -n 'sessions\\.json|sessionFile|\\.jsonl' scripts/e2e/session-runtime-context-docker-client.ts` shows only
+      `seedBrokenLegacySessionForDoctorMigration`.
+- [ ] Keep Kysely generated types aligned after any schema change.
+      Files: `src/state/openclaw-state-schema.sql`,
+      `src/state/openclaw-agent-schema.sql`,
+      `src/state/*generated*`.
+      Proof: `pnpm db:kysely:gen`; `pnpm db:kysely:check`; `pnpm lint:kysely`.
+- [x] Re-run focused tests for touched stores, commands, and scripts.
+      Proof: `pnpm test src/cron/service/store.test.ts src/cron/store.test.ts src/cron/service.heartbeat-ok-summary-suppressed.test.ts src/cron/service.main-job-passes-heartbeat-target-last.test.ts src/cron/service.every-jobs-fire.test.ts src/cron/service.persists-delivered-status.test.ts src/cron/service.runs-one-shot-main-job-disables-it.test.ts src/cron/service/ops.test.ts src/cron/service/timer.regression.test.ts src/auto-reply/reply/commands-export-trajectory.test.ts extensions/telegram/src/thread-bindings.test.ts extensions/slack/src/monitor/message-handler/prepare.test.ts src/acp/translator.session-lineage-meta.test.ts`; `git diff --check`.
+- [ ] Before declaring `done`, run the changed gate or remote broad proof.
+      Proof: `pnpm check:changed` for narrow local scope, or Crabbox/Testbox run id
+      for broad/E2E proof.
+
+### Do not regress
+
+- No transcript locators.
+- No active session files.
+- No fake JSONL test fixtures except doctor legacy migration tests.
+- No raw SQLite access where Kysely is expected.
+- No new legacy DB migrations. This layout has not shipped; keep schema version
+  at `1` unless there is a strong reason.
+
 ## Code-Read Assumptions
 
 No follow-up product decisions are blocking this plan. The implementation should
