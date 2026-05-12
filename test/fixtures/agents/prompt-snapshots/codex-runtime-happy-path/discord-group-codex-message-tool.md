@@ -76,6 +76,8 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.code_mode": true,
+    "features.code_mode_only": true,
     "instructions": "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\nSOUL.md: persona/tone. Follow it unless higher-priority instructions override.\n\n## /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/TOOLS.md\n\n<TOOLS.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/HEARTBEAT.md\n\n<HEARTBEAT.md contents will be here>"
   },
   "cwd": "/tmp/openclaw-happy-path/workspace",
@@ -112,6 +114,8 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.code_mode": true,
+    "features.code_mode_only": true,
     "instructions": "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.\n\n# Project Context\n\nThe following project context files have been loaded:\nSOUL.md: persona/tone. Follow it unless higher-priority instructions override.\n\n## /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/TOOLS.md\n\n<TOOLS.md contents will be here>\n\n## /tmp/openclaw-happy-path/workspace/HEARTBEAT.md\n\n<HEARTBEAT.md contents will be here>"
   },
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
@@ -213,8 +217,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 140
   },
   "dynamicToolsJson": {
-    "chars": 43441,
-    "roughTokens": 10861
+    "chars": 43597,
+    "roughTokens": 10900
   },
   "openClawDeveloperInstructions": {
     "chars": 5436,
@@ -225,8 +229,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 7129
   },
   "totalWithDynamicToolsJson": {
-    "chars": 71959,
-    "roughTokens": 17990
+    "chars": 72115,
+    "roughTokens": 18029
   },
   "userInputText": {
     "chars": 870,
