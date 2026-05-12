@@ -3,13 +3,11 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 describe("OpenClawSchema cron run-log validation", () => {
   it("accepts valid cron.runLog values", () => {
-    expect(
-      OpenClawSchema.safeParse({
-        cron: {
-          runLog: {
-            maxBytes: "5mb",
-            keepLines: 2500,
-          },
+    const result = OpenClawSchema.safeParse({
+      cron: {
+        runLog: {
+          maxBytes: "5mb",
+          keepLines: 2500,
         },
       },
     });
