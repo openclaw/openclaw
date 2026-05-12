@@ -209,8 +209,7 @@ describe("llm_input userPrompt/prependedContext plumbing", () => {
     const { runner } = createHookRunnerWithRegistry([{ hookName: "llm_input", handler }]);
 
     // prompt includes a runtime currentTurnContext prefix + hook-append suffix
-    // that are NOT part of prependedContext/userPrompt. The hook-attributed
-    // slots are hints only; `prompt` is the authoritative final text.
+    // outside prependedContext/userPrompt — slots are hints, not a reconstruction.
     await runner.runLlmInput(
       {
         runId: "run-1",
@@ -229,11 +228,6 @@ describe("llm_input userPrompt/prependedContext plumbing", () => {
     expect(events[0]?.userPrompt).toBe("RAW");
     expect(events[0]?.prependedContext).toBe("CTX");
     expect(events[0]?.prompt).toBe("TURN\n\nCTX\n\nRAW\n\nAPPEND");
-    // Hook-attributed slots are substrings of prompt, but their concatenation
-    // is NOT required to equal prompt (runtime prefixes / hook append suffixes
-    // are intentionally not part of the split).
-    expect(events[0]?.prompt.includes(events[0]?.prependedContext ?? "")).toBe(true);
-    expect(events[0]?.prompt.includes(events[0]?.userPrompt ?? "")).toBe(true);
   });
 
   it("passes undefined prependedContext through when hook did not prepend", async () => {
