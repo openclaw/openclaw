@@ -1,6 +1,7 @@
-import { expandToolGroups, normalizeToolName } from "./tool-policy-shared.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { normalizeToolName } from "./tool-policy-shared.js";
 
-const ACP_UNSUPPORTED_INHERITED_TOOL_DENY = new Set([
+const ACP_UNSUPPORTED_INHERITED_TOOL_DENY = [
   "apply_patch",
   "edit",
   "exec",
@@ -12,7 +13,7 @@ const ACP_UNSUPPORTED_INHERITED_TOOL_DENY = new Set([
   "shell",
   "spawn",
   "write",
-]);
+] as const;
 
 export function normalizeInheritedToolDenylist(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -40,8 +41,12 @@ export function inheritedToolDenyPatch(value: unknown): { inheritedToolDeny?: st
 }
 
 export function findAcpUnsupportedInheritedToolDeny(value: unknown): string | undefined {
-  return expandToolGroups(normalizeInheritedToolDenylist(value)).find((tool) =>
-    ACP_UNSUPPORTED_INHERITED_TOOL_DENY.has(tool),
+  const inheritedToolDeny = normalizeInheritedToolDenylist(value);
+  if (inheritedToolDeny.length === 0) {
+    return undefined;
+  }
+  return ACP_UNSUPPORTED_INHERITED_TOOL_DENY.find(
+    (toolName) => !isToolAllowedByPolicyName(toolName, { deny: inheritedToolDeny }),
   );
 }
 
