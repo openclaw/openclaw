@@ -588,10 +588,16 @@ describe("provider request config", () => {
       baseUrl: "http://ollama-host:11434",
       expectedEndpointClass: "custom",
     },
+    {
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "http://anthropic-proxy.lan:8080",
+      expectedEndpointClass: "custom",
+    },
   ])("classifies $provider configured baseUrl as exact-origin trusted endpoint class", (entry) => {
     const resolved = resolveProviderRequestPolicyConfig({
       provider: entry.provider,
-      api: entry.provider === "ollama" ? "ollama" : "openai-completions",
+      api: entry.api ?? (entry.provider === "ollama" ? "ollama" : "openai-completions"),
       baseUrl: entry.baseUrl,
       capability: "llm",
       transport: "stream",
