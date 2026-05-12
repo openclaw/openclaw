@@ -1,8 +1,4 @@
-import {
-  createRunningTaskRun,
-  finalizeTaskRunByRunId,
-  recordTaskRunProgressByRunId,
-} from "openclaw/plugin-sdk/codex-native-task-runtime";
+import { createRequire } from "node:module";
 import type {
   CodexServerNotification,
   CodexSessionSource,
@@ -18,11 +14,12 @@ import { isJsonObject } from "./protocol.js";
 
 const CODEX_NATIVE_SUBAGENT_RUNTIME = "subagent";
 const CODEX_NATIVE_SUBAGENT_TASK_KIND = "codex-native";
+const requireCodexAppServerTaskRuntime = createRequire(import.meta.url);
 
 export type TaskLifecycleRuntime = {
-  createRunningTaskRun: typeof createRunningTaskRun;
-  recordTaskRunProgressByRunId: typeof recordTaskRunProgressByRunId;
-  finalizeTaskRunByRunId: typeof finalizeTaskRunByRunId;
+  createRunningTaskRun: (params: Record<string, unknown>) => unknown;
+  recordTaskRunProgressByRunId: (params: Record<string, unknown>) => unknown;
+  finalizeTaskRunByRunId: (params: Record<string, unknown>) => unknown;
 };
 
 export type CodexNativeSubagentTaskMirrorParams = {
@@ -32,11 +29,36 @@ export type CodexNativeSubagentTaskMirrorParams = {
   now?: () => number;
 };
 
-const defaultRuntime: TaskLifecycleRuntime = {
-  createRunningTaskRun,
-  recordTaskRunProgressByRunId,
-  finalizeTaskRunByRunId,
+const unavailableRuntime: TaskLifecycleRuntime = {
+  createRunningTaskRun: () => undefined,
+  recordTaskRunProgressByRunId: () => undefined,
+  finalizeTaskRunByRunId: () => undefined,
 };
+
+let defaultRuntime: TaskLifecycleRuntime | undefined;
+
+function resolveDefaultRuntime(): TaskLifecycleRuntime {
+  if (defaultRuntime !== undefined) {
+    return defaultRuntime;
+  }
+  try {
+    const runtime = requireCodexAppServerTaskRuntime(
+      "openclaw/plugin-sdk/codex-native-task-runtime",
+    ) as Partial<TaskLifecycleRuntime>;
+    if (
+      typeof runtime.createRunningTaskRun === "function" &&
+      typeof runtime.recordTaskRunProgressByRunId === "function" &&
+      typeof runtime.finalizeTaskRunByRunId === "function"
+    ) {
+      defaultRuntime = runtime as TaskLifecycleRuntime;
+      return defaultRuntime;
+    }
+  } catch {
+    // The npm-installed Codex plugin may run without this private host-only helper.
+  }
+  defaultRuntime = unavailableRuntime;
+  return defaultRuntime;
+}
 
 export class CodexNativeSubagentTaskMirror {
   private readonly mirroredThreadIds = new Set<string>();
@@ -45,7 +67,7 @@ export class CodexNativeSubagentTaskMirror {
 
   constructor(
     private readonly params: CodexNativeSubagentTaskMirrorParams,
-    private readonly runtime: TaskLifecycleRuntime = defaultRuntime,
+    private readonly runtime: TaskLifecycleRuntime = resolveDefaultRuntime(),
   ) {
     this.now = params.now ?? Date.now;
   }

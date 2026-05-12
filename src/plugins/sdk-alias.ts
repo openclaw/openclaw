@@ -461,9 +461,18 @@ function isBundledCodexPluginModulePath(params: { packageRoot: string; modulePat
     path.join(params.packageRoot, "dist", "extensions", "codex"),
     path.join(params.packageRoot, "dist-runtime", "extensions", "codex"),
   ];
-  return roots.some(
-    (root) =>
-      normalizedModulePath === root || normalizedModulePath.startsWith(`${root}${path.sep}`),
+  if (
+    roots.some(
+      (root) =>
+        normalizedModulePath === root || normalizedModulePath.startsWith(`${root}${path.sep}`),
+    )
+  ) {
+    return true;
+  }
+  const parts = normalizedModulePath.split(path.sep);
+  return parts.some(
+    (part, index) =>
+      part === "node_modules" && parts[index + 1] === "@openclaw" && parts[index + 2] === "codex",
   );
 }
 
