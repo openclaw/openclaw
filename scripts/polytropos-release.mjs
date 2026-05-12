@@ -218,6 +218,10 @@ const prefix = getGlobalPrefix();
 console.log(`Installing globally into prefix: ${prefix}`);
 shInherit("npm", ["install", "-g", "--prefix", prefix, currentTgz]);
 
+// Run doctor --fix to perform plugin-local installs / optional dependency repairs
+console.log("Running openclaw doctor --fix (non-interactive)...");
+shInherit("openclaw", ["doctor", "--fix", "--non-interactive"]);
+
 console.log("Restarting gateway...");
 shInherit("systemctl", ["--user", "restart", "openclaw-gateway"]);
 
