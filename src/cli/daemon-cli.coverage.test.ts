@@ -211,7 +211,7 @@ describe("daemon-cli coverage", () => {
       "ws://127.0.0.1:18789",
     );
     expect(findExtraGatewayServices).not.toHaveBeenCalled();
-    expect(inspectPortUsage).toHaveBeenCalled();
+    expect(inspectPortUsage).toHaveBeenCalledTimes(1);
   });
 
   it("derives probe URL from service args + env (json)", async () => {

@@ -132,6 +132,7 @@ describe("gateway-cli coverage", () => {
     defaultRuntime.writeStdout.mockClear();
     defaultRuntime.writeJson.mockClear();
     defaultRuntime.exit.mockClear();
+    startGatewayServer.mockClear();
     inspectPortUsage.mockClear();
     formatPortDiagnostics.mockClear();
   });
@@ -386,7 +387,7 @@ describe("gateway-cli coverage", () => {
           runGatewayCommand(["gateway", "--token", "test-token", "--allow-unconfigured"]),
         ).rejects.toThrow("__exit__:0");
 
-        expect(startGatewayServer).toHaveBeenCalled();
+        expect(startGatewayServer).toHaveBeenCalledTimes(1);
         expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
         expect(runtimeErrors.join("\n")).toContain("gateway stop");
       },

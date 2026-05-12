@@ -112,7 +112,7 @@ async function expectInlineActionSkipped(params: {
 }) {
   const result = await handleInlineActions(createHandleInlineActionsInput(params));
   expect(result).toEqual({ kind: "reply", reply: undefined });
-  expect(params.typing.cleanup).toHaveBeenCalled();
+  expect(params.typing.cleanup).toHaveBeenCalledTimes(1);
   expect(handleCommandsMock).not.toHaveBeenCalled();
 }
 
@@ -284,7 +284,7 @@ describe("handleInlineActions", () => {
     expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
     expect(mockObjectArg(buildStatusReplyMock, "buildStatusReply").storePath).toBeUndefined();
     expect(handleCommandsMock).not.toHaveBeenCalled();
-    expect(typing.cleanup).toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("preserves storePath when routing inline status through the shared status builder", async () => {
@@ -378,7 +378,7 @@ describe("handleInlineActions", () => {
     expect(result).toEqual({ kind: "reply", reply: undefined });
     expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
     expect(handleCommandsMock).not.toHaveBeenCalled();
-    expect(typing.cleanup).toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("continues into the agent when mention-wrapped inline status leaves real text", async () => {
@@ -630,7 +630,7 @@ describe("handleInlineActions", () => {
     expect(
       mockObjectArg(createOpenClawToolsMock, "createOpenClawTools").requesterAgentIdOverride,
     ).toBe("named-worker");
-    expect(toolExecute).toHaveBeenCalled();
+    expect(toolExecute).toHaveBeenCalledTimes(1);
   });
 
   it("passes senderIsOwner into inline tool runtimes before owner-only filtering", async () => {
@@ -785,6 +785,6 @@ describe("handleInlineActions", () => {
       skillName: "matrix-profile",
     });
     expect(blockedToolCall?.[2]).toBe(abortController.signal);
-    expect(typing.cleanup).toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 });

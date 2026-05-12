@@ -1307,7 +1307,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     };
 
     expect(result.cancel).not.toBe(true);
-    expect(mockSummarizeInStages).toHaveBeenCalled();
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
     const droppedCall = mockSummarizeInStages.mock.calls[0]?.[0];
     expect(droppedCall?.customInstructions).toContain(
       "Produce a compact, factual summary with these exact section headings:",
@@ -2130,7 +2130,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     });
 
     expect(result).toEqual({ cancel: true });
-    expect(getApiKeyAndHeadersMock).toHaveBeenCalled();
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
   });
 
   it("falls back to visible custom session branch entries before writing an empty boundary", async () => {
@@ -2201,22 +2201,21 @@ describe("compaction-safeguard double-compaction guard", () => {
     const compaction = expectCompactionResult(result);
     expect(compaction.summary).toContain("branch summary");
     expect(compaction.summary).not.toContain("No prior history.");
-    expect(mockSummarizeInStages).toHaveBeenCalled();
-    const summaryCall = mockSummarizeInStages.mock.calls[0]?.[0];
-    const summaryMessages = summaryCall?.messages ?? [];
-    const cronRequest = summaryMessages.find(
-      (message) =>
-        message.role === "custom" &&
-        "customType" in message &&
-        message.customType === "cron-request",
-    ) as { content?: unknown } | undefined;
-    expect(cronRequest?.content).toBe("prepare the daily report");
-    expect(
-      summaryMessages.some(
-        (message) =>
-          message.role === "toolResult" && "toolName" in message && message.toolName === "read",
-      ),
-    ).toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: "custom",
+            customType: "cron-request",
+            content: "prepare the daily report",
+          }),
+          expect.objectContaining({
+            role: "toolResult",
+            toolName: "read",
+          }),
+        ]),
+      }),
+    );
   });
 
   it("continues when messages include real conversation content", async () => {
@@ -2234,7 +2233,7 @@ describe("compaction-safeguard double-compaction guard", () => {
       apiKey: null,
     });
     expect(result).toEqual({ cancel: true });
-    expect(getApiKeyAndHeadersMock).toHaveBeenCalled();
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
   });
 
   it("treats tool results as real conversation only when linked to a meaningful user ask", () => {
