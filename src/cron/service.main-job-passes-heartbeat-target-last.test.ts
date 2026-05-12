@@ -3,7 +3,7 @@ import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 import type { CronJob } from "./types.js";
 
-const { logger, makeStorePath } = setupCronServiceSuite({
+const { logger, makeStoreKey } = setupCronServiceSuite({
   prefix: "cron-main-heartbeat-target",
 });
 
@@ -31,11 +31,12 @@ describe("cron main job passes heartbeat target=last", () => {
     };
   }
 
-  function createCronWithSpies(params: { storePath: string; runHeartbeatOnce: RunHeartbeatOnce }) {
+  function createCronWithSpies(params: { storeKey: string; runHeartbeatOnce: RunHeartbeatOnce }) {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const cron = new CronService({
       cronEnabled: true,
+      storeKey: params.storeKey,
       log: logger,
       enqueueSystemEvent,
       requestHeartbeat,
@@ -78,7 +79,7 @@ describe("cron main job passes heartbeat target=last", () => {
   }
 
   it("should pass heartbeat.target=last to runHeartbeatOnce for wakeMode=now main jobs", async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
     const now = Date.now();
 
     const job = createMainCronJob({
@@ -87,7 +88,7 @@ describe("cron main job passes heartbeat target=last", () => {
       wakeMode: "now",
     });
 
-    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    await writeCronStoreSnapshot({ storeKey, jobs: [job] });
 
     const runHeartbeatOnce = vi.fn<RunHeartbeatOnce>(async () => ({
       status: "ran" as const,
@@ -95,7 +96,7 @@ describe("cron main job passes heartbeat target=last", () => {
     }));
 
     const { cron } = createCronWithSpies({
-      storePath,
+      storeKey,
       runHeartbeatOnce,
     });
 
@@ -111,7 +112,7 @@ describe("cron main job passes heartbeat target=last", () => {
   });
 
   it("should preserve heartbeat.target=last when wakeMode=now falls back to requestHeartbeat", async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
     const now = Date.now();
 
     const job = createMainCronJob({
@@ -120,7 +121,7 @@ describe("cron main job passes heartbeat target=last", () => {
       wakeMode: "now",
     });
 
-    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    await writeCronStoreSnapshot({ storeKey, jobs: [job] });
 
     const runHeartbeatOnce = vi.fn<RunHeartbeatOnce>(async () => ({
       status: "skipped" as const,
@@ -128,7 +129,7 @@ describe("cron main job passes heartbeat target=last", () => {
     }));
 
     const { cron, requestHeartbeat } = createCronWithSpies({
-      storePath,
+      storeKey,
       runHeartbeatOnce,
     });
 
@@ -143,7 +144,7 @@ describe("cron main job passes heartbeat target=last", () => {
   });
 
   it("should preserve heartbeat.target=last for wakeMode=next-heartbeat main jobs", async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
     const now = Date.now();
 
     const job = createMainCronJob({
@@ -152,7 +153,7 @@ describe("cron main job passes heartbeat target=last", () => {
       wakeMode: "next-heartbeat",
     });
 
-    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    await writeCronStoreSnapshot({ storeKey, jobs: [job] });
 
     const runHeartbeatOnce = vi.fn<RunHeartbeatOnce>(async () => ({
       status: "ran" as const,
@@ -160,7 +161,7 @@ describe("cron main job passes heartbeat target=last", () => {
     }));
 
     const { cron, requestHeartbeat } = createCronWithSpies({
-      storePath,
+      storeKey,
       runHeartbeatOnce,
     });
 

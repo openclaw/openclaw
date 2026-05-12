@@ -36,11 +36,6 @@ const hoisted = await vi.hoisted(async () => {
   };
 });
 
-vi.mock("../../config/sessions/paths.js", () => ({
-  resolveSessionFilePath: hoisted.resolveSessionFilePathMock,
-  resolveSessionFilePathOptions: hoisted.resolveSessionFilePathOptionsMock,
-}));
-
 vi.mock("../../config/sessions/store.js", () => ({
   getSessionEntry: (params: { sessionKey: string }) => hoisted.sessionRowsMock()[params.sessionKey],
   listSessionEntries: () =>

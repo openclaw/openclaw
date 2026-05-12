@@ -64,96 +64,19 @@ function makeStore(jobId: string, enabled: boolean): CronStoreSnapshot {
   };
 }
 
-async function captureRenameDestinations(action: () => Promise<void>): Promise<string[]> {
-  const renamedDestinations: string[] = [];
-  const origRename = fs.rename.bind(fs);
-  const spy = vi.spyOn(fs, "rename").mockImplementation(async (src, dest) => {
-    renamedDestinations.push(String(dest));
-    return origRename(src, dest);
-  });
-
-  try {
-    await action();
-  } finally {
-    spy.mockRestore();
-  }
-
-  return renamedDestinations;
+function openCronStoreTestDb() {
+  const stateDatabase = openOpenClawStateDatabase();
+  return {
+    stateDatabase,
+    db: getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "cron_jobs">>(stateDatabase.db),
+  };
 }
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.stat(targetPath);
-  } catch (err) {
-    expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected path to be missing: ${targetPath}`);
-}
-
-describe("resolveCronStorePath", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("uses OPENCLAW_HOME for tilde expansion", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    vi.stubEnv("HOME", "/home/other");
-
-    const result = resolveLegacyCronStorePath("~/cron/jobs.json");
-    expect(result).toBe(path.resolve("/srv/openclaw-home", "cron", "jobs.json"));
-  });
-});
 
 describe("cron store", () => {
   it("returns empty store when SQLite has no rows for the store key", async () => {
     const { storeKey } = makeStoreKey();
     const loaded = await loadCronStore(storeKey);
     expect(loaded).toEqual({ version: 1, jobs: [] });
-  });
-
-  it("ignores invalid legacy jobs.json at runtime but rejects it during migration", async () => {
-    const store = await makeStorePath();
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
-    await fs.writeFile(store.storePath, "{ not json", "utf-8");
-
-    await expect(loadCronStore(store.storePath)).resolves.toEqual({ version: 1, jobs: [] });
-    await expect(loadLegacyCronStoreForMigration(store.storePath)).rejects.toThrow(
-      /Failed to parse cron store/i,
-    );
-  });
-
-  it("accepts JSON5 syntax when doctor loads a legacy cron store", async () => {
-    const store = await makeStorePath();
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
-    await fs.writeFile(
-      store.storePath,
-      `{
-        // hand-edited legacy store
-        version: 1,
-        jobs: [
-          {
-            id: 'job-1',
-            name: 'Job 1',
-            enabled: true,
-            createdAtMs: 1,
-            updatedAtMs: 1,
-            schedule: { kind: 'every', everyMs: 60000 },
-            sessionTarget: 'main',
-            wakeMode: 'next-heartbeat',
-            payload: { kind: 'systemEvent', text: 'tick-job-1' },
-            state: {},
-          },
-        ],
-      }`,
-      "utf-8",
-    );
-
-    const loaded = await loadCronStore(store.storePath);
-    expect(loaded.version).toBe(1);
-    expect(loaded.jobs).toHaveLength(1);
-    expect(loaded.jobs[0]?.id).toBe("job-1");
-    expect(loaded.jobs[0]?.enabled).toBe(true);
   });
 
   it("persists and round-trips job definitions through SQLite without writing jobs.json", async () => {

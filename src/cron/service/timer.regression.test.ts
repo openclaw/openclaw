@@ -332,7 +332,7 @@ describe("cron service timer regressions", () => {
   });
 
   it("retries OpenAI-compatible server_error payloads when retryOn only includes server_error", async () => {
-    const store = timerRegressionFixtures.makeStorePath();
+    const store = timerRegressionFixtures.makeStoreKey();
     const scheduledAt = Date.parse("2026-03-14T00:00:00.000Z");
     const serverErrorPayload =
       'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
@@ -345,7 +345,7 @@ describe("cron service timer regressions", () => {
       payload: { kind: "agentTurn", message: "remind me" },
       state: { nextRunAtMs: scheduledAt },
     });
-    await writeCronJobs(store.storePath, [cronJob]);
+    await writeCronJobs(store.storeKey, [cronJob]);
 
     let now = scheduledAt;
     const runIsolatedAgentJob = vi
@@ -354,7 +354,7 @@ describe("cron service timer regressions", () => {
       .mockResolvedValueOnce({ status: "ok", summary: "done" });
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: store.storePath,
+      storeKey: store.storeKey,
       log: noopLogger,
       nowMs: () => now,
       enqueueSystemEvent: vi.fn(),

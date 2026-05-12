@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "../service.test-harness.js";
-import { saveCronStore } from "../store.js";
+import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
@@ -44,18 +44,6 @@ function createReloadCronJob(params?: Partial<CronJob>): CronJob {
   };
 }
 
-function expectWarnedJob(params: { storeKey: string; jobId: string; message: string }) {
-  const warnCalls = logger.warn.mock.calls as unknown as Array<
-    [{ storeKey?: string; jobId?: string }, string]
-  >;
-  const warning = warnCalls.find(
-    ([metadata, message]) => metadata.jobId === params.jobId && message.includes(params.message),
-  );
-  expect(warning?.[0].storeKey).toBe(params.storeKey);
-  expect(warning?.[0].jobId).toBe(params.jobId);
-  expect(warning?.[1]).toContain(params.message);
-}
-
 describe("cron service store seam coverage", () => {
   it("loads stored jobs, recomputes next runs, and keeps JSON files out of the load path", async () => {
     const { storeKey } = await makeStoreKey();
@@ -92,61 +80,9 @@ describe("cron service store seam coverage", () => {
     expect(job.delivery?.to).toBe("123");
     expect(job?.state.nextRunAtMs).toBe(STORE_TEST_NOW);
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
-      jobs: Array<Record<string, unknown>>;
-    };
-    const persistedJob = persisted.jobs[0];
-    const persistedPayload = persistedJob?.payload as
-      | { kind?: string; message?: string }
-      | undefined;
-    expect(persistedPayload?.kind).toBe("agentTurn");
-    expect(persistedPayload?.message).toBe("ping");
-    const persistedDelivery = persistedJob?.delivery as
-      | { mode?: string; channel?: string; to?: string }
-      | undefined;
-    expect(persistedDelivery?.mode).toBe("announce");
-    expect(persistedDelivery?.channel).toBe("telegram");
-    expect(persistedDelivery?.to).toBe("123");
-
-    const firstMtime = state.storeFileMtimeMs;
-    expect(typeof firstMtime).toBe("number");
-
     await persist(state);
-    expect(typeof state.storeFileMtimeMs).toBe("number");
-    expect((state.storeFileMtimeMs ?? 0) >= (firstMtime ?? 0)).toBe(true);
-  });
-
-  it("normalizes jobId-only jobs in memory so scheduler lookups resolve by stable id", async () => {
-    const { storePath } = await makeStorePath();
-
-    await writeSingleJobStore(storePath, {
-      jobId: "repro-stable-id",
-      name: "handed",
-      enabled: true,
-      createdAtMs: STORE_TEST_NOW - 60_000,
-      updatedAtMs: STORE_TEST_NOW - 60_000,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
-      state: {},
-    });
-
-    const state = createStoreTestState(storePath);
-
-    await ensureLoaded(state);
-
-    expectWarnedJob({ storePath, jobId: "repro-stable-id", message: "legacy jobId" });
-
-    const job = findJobOrThrow(state, "repro-stable-id");
-    expect(job.id).toBe("repro-stable-id");
-    expect((job as { jobId?: unknown }).jobId).toBeUndefined();
-
-    const raw = JSON.parse(await fs.readFile(storePath, "utf8")) as {
-      jobs: Array<Record<string, unknown>>;
-    };
-    expect(raw.jobs[0]?.jobId).toBe("repro-stable-id");
-    expect(raw.jobs[0]?.id).toBeUndefined();
+    const persisted = await loadCronStore(storeKey);
+    expect(persisted.jobs[0]?.payload.kind).toBe("agentTurn");
   });
 
   it("loads persisted custom session ids without rewriting them", async () => {

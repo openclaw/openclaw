@@ -50,11 +50,11 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  async function makeStorePath() {
+  async function makeLegacyCronStorePath() {
     const dir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(dir, { recursive: true });
     return {
-      storePath: path.join(dir, "cron", "jobs.json"),
+      legacyStorePath: path.join(dir, "cron", "jobs.json"),
       cleanup: async () => {},
     };
   }
@@ -70,15 +70,11 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
     };
   }
 
-  return { makeStorePath, makeStoreKey };
+  return { makeLegacyCronStorePath, makeStoreKey };
 }
 
-export async function writeCronStoreSnapshot(params: {
-  storeKey?: string;
-  storePath?: string;
-  jobs: CronJob[];
-}) {
-  await saveCronStore(params.storeKey ?? params.storePath ?? "default", {
+export async function writeCronStoreSnapshot(params: { storeKey?: string; jobs: CronJob[] }) {
+  await saveCronStore(params.storeKey ?? "default", {
     version: 1,
     jobs: params.jobs,
   });
@@ -109,12 +105,12 @@ export function installCronTestHooks(options: {
 
 export function setupCronServiceSuite(options?: { prefix?: string; baseTimeIso?: string }) {
   const logger = createNoopLogger();
-  const { makeStorePath } = createCronStoreHarness({ prefix: options?.prefix });
+  const { makeStoreKey } = createCronStoreHarness({ prefix: options?.prefix });
   installCronTestHooks({
     logger,
     baseTimeIso: options?.baseTimeIso,
   });
-  return { logger, makeStorePath };
+  return { logger, makeStoreKey };
 }
 
 export function createFinishedBarrier() {
@@ -139,7 +135,7 @@ export function createFinishedBarrier() {
 }
 
 export function createStartedCronServiceWithFinishedBarrier(params: {
-  storePath?: string;
+  storeKey?: string;
   logger: ReturnType<typeof createNoopLogger>;
 }): {
   cron: CronService;
@@ -151,7 +147,7 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
   const requestHeartbeat = vi.fn();
   const finished = createFinishedBarrier();
   const cron = new CronService({
-    storeKey: params.storePath ?? "default",
+    storeKey: params.storeKey ?? "default",
     cronEnabled: true,
     log: params.logger,
     enqueueSystemEvent,
@@ -164,7 +160,7 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
 
 export async function withCronServiceForTest(
   params: {
-    makeStorePath: () => Promise<{ storePath: string; cleanup: () => Promise<void> }>;
+    makeStoreKey: () => Promise<{ storeKey: string; cleanup: () => Promise<void> }>;
     logger: ReturnType<typeof createNoopLogger>;
     cronEnabled: boolean;
     runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
@@ -175,12 +171,12 @@ export async function withCronServiceForTest(
     requestHeartbeat: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
 ): Promise<void> {
-  const store = await params.makeStorePath();
+  const store = await params.makeStoreKey();
   const enqueueSystemEvent = vi.fn();
   const requestHeartbeat = vi.fn();
   const cron = new CronService({
     cronEnabled: params.cronEnabled,
-    storeKey: store.storePath,
+    storeKey: store.storeKey,
     log: params.logger,
     enqueueSystemEvent,
     requestHeartbeat,
@@ -199,14 +195,14 @@ export async function withCronServiceForTest(
 }
 
 export function createRunningCronServiceState(params: {
-  storePath?: string;
+  storeKey?: string;
   log: ReturnType<typeof createNoopLogger>;
   nowMs: () => number;
   jobs: CronJob[];
 }) {
   const state = createCronServiceState({
     cronEnabled: true,
-    storeKey: params.storePath ?? "default",
+    storeKey: params.storeKey ?? "default",
     log: params.log,
     nowMs: params.nowMs,
     enqueueSystemEvent: vi.fn(),

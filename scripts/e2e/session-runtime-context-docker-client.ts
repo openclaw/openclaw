@@ -189,8 +189,9 @@ async function seedBrokenLegacySessionForDoctorMigration(stateDir: string): Prom
   );
   // This is intentionally a legacy input: the scenario proves doctor imports
   // session indexes and transcript JSONL into SQLite, then removes the sources.
+  const legacySessionIndexPath = path.join(sessionsDir, "sessions.json");
   await fs.writeFile(
-    path.join(sessionsDir, "sessions.json"),
+    legacySessionIndexPath,
     JSON.stringify(
       {
         "agent:main:qa:docker-runtime-context": {

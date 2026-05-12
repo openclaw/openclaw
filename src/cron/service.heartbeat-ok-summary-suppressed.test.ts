@@ -3,7 +3,7 @@ import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 import type { CronJob } from "./types.js";
 
-const { logger, makeStorePath } = setupCronServiceSuite({
+const { logger, makeStoreKey } = setupCronServiceSuite({
   prefix: "cron-heartbeat-ok-suppressed",
 });
 type CronServiceParams = ConstructorParameters<typeof CronService>[0];
@@ -59,7 +59,7 @@ async function runScheduledCron(cron: CronService): Promise<void> {
 
 describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
   it("does not enqueue HEARTBEAT_OK as a system event to the main session", async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
     const now = Date.now();
 
     const job = createDueIsolatedAnnounceJob({
@@ -68,12 +68,12 @@ describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
       now,
     });
 
-    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    await writeCronStoreSnapshot({ storeKey, jobs: [job] });
 
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const cron = createCronServiceForSummary({
-      storeKey: storePath,
+      storeKey,
       summary: "HEARTBEAT_OK",
       enqueueSystemEvent,
       requestHeartbeat,
@@ -87,7 +87,7 @@ describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
   });
 
   it("does not revive legacy main-session relay for real cron summaries", async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
     const now = Date.now();
 
     const job = createDueIsolatedAnnounceJob({
@@ -96,12 +96,12 @@ describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
       now,
     });
 
-    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+    await writeCronStoreSnapshot({ storeKey, jobs: [job] });
 
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const cron = createCronServiceForSummary({
-      storeKey: storePath,
+      storeKey,
       summary: "Weather update: sunny, 72°F",
       enqueueSystemEvent,
       requestHeartbeat,

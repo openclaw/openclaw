@@ -11,7 +11,7 @@ import { run, start, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
 import { runMissedJobs } from "./timer.js";
 
-const { logger, makeStorePath, makeStoreKey } = setupCronServiceSuite({
+const { logger, makeStoreKey } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
 });
 
@@ -211,16 +211,17 @@ describe("cron service ops seam coverage", () => {
   });
 
   it("start persists load-time updatedAtMs repairs to SQLite state only", async () => {
-    const { storePath } = await makeStorePath();
+    const { storeKey, stateDir } = await makeStoreKey();
     const now = Date.parse("2026-04-09T08:00:00.000Z");
     const createdAtMs = now - 86_400_000;
     const nextRunAtMs = Date.parse("2026-04-10T09:00:00.000Z");
     const jobId = "future-sidecar-repair";
-    const statePath = storePath.replace(/\.json$/, "-state.json");
+    const legacyStorePath = path.join(stateDir, "cron", "jobs.json");
+    const legacyStatePath = legacyStorePath.replace(/\.json$/, "-state.json");
 
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
     await fs.writeFile(
-      storePath,
+      legacyStorePath,
       JSON.stringify(
         {
           version: 1,
@@ -244,12 +245,13 @@ describe("cron service ops seam coverage", () => {
       "utf-8",
     );
     await fs.writeFile(
-      statePath,
+      legacyStatePath,
       JSON.stringify(
         {
           version: 1,
           jobs: {
             [jobId]: {
+              updatedAtMs: createdAtMs,
               state: { nextRunAtMs },
             },
           },
@@ -259,10 +261,10 @@ describe("cron service ops seam coverage", () => {
       ),
       "utf-8",
     );
-    await importLegacyCronStoreToSqlite({ legacyStorePath: storePath, storeKey: storePath });
+    await importLegacyCronStoreToSqlite({ legacyStorePath, storeKey });
 
     const state = createCronServiceState({
-      storeKey: storePath,
+      storeKey,
       cronEnabled: true,
       log: logger,
       nowMs: () => now,
@@ -274,11 +276,11 @@ describe("cron service ops seam coverage", () => {
     try {
       await start(state);
 
-      const persisted = await loadCronStore(storePath);
+      const persisted = await loadCronStore(storeKey);
 
       expect(persisted.jobs[0]?.updatedAtMs).toBe(createdAtMs);
       expect(persisted.jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
-      await expect(fs.stat(storePath)).rejects.toThrow();
+      await expect(fs.stat(legacyStorePath)).rejects.toThrow();
     } finally {
       stop(state);
     }
