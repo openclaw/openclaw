@@ -1,3 +1,5 @@
+import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
@@ -63,4 +65,31 @@ export function injectCodexMcpConfigArgs(
     ),
   );
   return [...(args ?? []), "-c", `mcp_servers=${overrides}`];
+}
+
+/**
+ * Codex app-server runtime (extensions/codex) receives its thread config as a
+ * JSON object through JSON-RPC `thread/start`/`thread/resume`, not as `-c` CLI
+ * args. This returns a thread-config patch projecting user-configured
+ * `cfg.mcp.servers` entries into Codex's `mcp_servers` table using the same
+ * per-server normalization the CLI path uses, so app-server agents see the
+ * same user MCP servers the CLI runtime exposes via `injectCodexMcpConfigArgs`.
+ *
+ * Only user-configured servers (`cfg.mcp.servers`) are projected. Plugin-
+ * curated app-server apps are already attached separately through the codex
+ * plugin thread-config `apps` patch, so they must not be re-projected here.
+ */
+export function buildCodexUserMcpServersThreadConfigPatch(
+  cfg: OpenClawConfig | undefined,
+): { mcp_servers: Record<string, Record<string, unknown>> } | undefined {
+  const userServers = normalizeConfiguredMcpServers(cfg?.mcp?.servers);
+  const entries = Object.entries(userServers);
+  if (entries.length === 0) {
+    return undefined;
+  }
+  const mcp_servers: Record<string, Record<string, unknown>> = {};
+  for (const [name, server] of entries) {
+    mcp_servers[name] = normalizeCodexServerConfig(name, server as BundleMcpServerConfig);
+  }
+  return { mcp_servers };
 }

@@ -2,6 +2,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
 import {
   CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
   renderCodexPromptOverlay,
@@ -60,6 +61,7 @@ export async function startOrResumeThread(params: {
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
 }): Promise<CodexAppServerThreadBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
+  const userMcpServersConfigPatch = buildCodexUserMcpServersThreadConfigPatch(params.params.config);
   let binding = await readCodexAppServerBinding(params.params.sessionFile, {
     authProfileStore: params.params.authProfileStore,
     agentDir: params.params.agentDir,
@@ -142,7 +144,7 @@ export async function startOrResumeThread(params: {
               authProfileId,
               appServer: params.appServer,
               developerInstructions: params.developerInstructions,
-              config: params.config,
+              config: mergeCodexThreadConfigs(params.config, userMcpServersConfigPatch),
             }),
           ),
         );
@@ -201,7 +203,11 @@ export async function startOrResumeThread(params: {
   const pluginThreadConfig = params.pluginThreadConfig?.enabled
     ? (prebuiltPluginThreadConfig ?? (await params.pluginThreadConfig.build()))
     : undefined;
-  const config = mergeCodexThreadConfigs(params.config, pluginThreadConfig?.configPatch);
+  const config = mergeCodexThreadConfigs(
+    params.config,
+    userMcpServersConfigPatch,
+    pluginThreadConfig?.configPatch,
+  );
   const response = assertCodexThreadStartResponse(
     await params.client.request(
       "thread/start",
