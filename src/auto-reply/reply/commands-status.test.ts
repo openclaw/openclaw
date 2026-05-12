@@ -117,7 +117,6 @@ afterEach(() => {
 });
 
 function writeTranscriptUsageLog(params: {
-  dir: string;
   agentId: string;
   sessionId: string;
   usage: {
@@ -128,14 +127,6 @@ function writeTranscriptUsageLog(params: {
     totalTokens: number;
   };
 }) {
-  const transcriptPath = path.join(
-    params.dir,
-    ".openclaw",
-    "agents",
-    params.agentId,
-    "sessions",
-    `${params.sessionId}.jsonl`,
-  );
   replaceSqliteSessionTranscriptEvents({
     agentId: params.agentId,
     sessionId: params.sessionId,
@@ -488,7 +479,6 @@ describe("buildStatusReply subagent summary", () => {
     await withTempHome(async (dir) => {
       const sessionId = "sess-status-transcript";
       writeTranscriptUsageLog({
-        dir,
         agentId: "main",
         sessionId,
         usage: {
