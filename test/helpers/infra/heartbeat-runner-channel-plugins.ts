@@ -36,6 +36,7 @@ function createHeartbeatOutboundAdapter(channelId: HeartbeatSendChannelId): Chan
               ...baseOptions,
               ...(typeof threadId === "number" ? { messageThreadId: threadId } : {}),
               ...(typeof replyToId === "string" ? { replyToMessageId: Number(replyToId) } : {}),
+              ...(opts.silent === true ? { silent: true } : {}),
             }
           : {
               ...baseOptions,

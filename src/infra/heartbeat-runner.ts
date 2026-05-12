@@ -765,14 +765,33 @@ function stripLeadingHeartbeatResponsePrefix(
   return text.replace(prefixPattern, "");
 }
 
+type NormalizedHeartbeatReply = {
+  shouldSkip: boolean;
+  text: string;
+  hasMedia: boolean;
+  silent?: boolean;
+};
+
+function stripTrailingHeartbeatNotifyFalseMarker(text: string): {
+  text: string;
+  silent: boolean;
+} {
+  const stripped = text.replace(/(?:^|\r?\n)[ \t]*notify=false[ \t]*$/i, "").trimEnd();
+  if (stripped === text) {
+    return { text, silent: false };
+  }
+  return { text: stripped, silent: true };
+}
+
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
   ackMaxChars: number,
-) {
+): NormalizedHeartbeatReply {
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
-  const stripped = stripHeartbeatToken(textForStrip, {
+  const notifyMarker = stripTrailingHeartbeatNotifyFalseMarker(textForStrip);
+  const stripped = stripHeartbeatToken(notifyMarker.text, {
     mode: "heartbeat",
     maxAckChars: ackMaxChars,
   });
@@ -782,19 +801,25 @@ function normalizeHeartbeatReply(
       shouldSkip: true,
       text: "",
       hasMedia,
+      ...(notifyMarker.silent ? { silent: true } : {}),
     };
   }
   let finalText = stripped.text;
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
     finalText = `${responsePrefix} ${finalText}`;
   }
-  return { shouldSkip: false, text: finalText, hasMedia };
+  return {
+    shouldSkip: false,
+    text: finalText,
+    hasMedia,
+    ...(notifyMarker.silent ? { silent: true } : {}),
+  };
 }
 
 function normalizeHeartbeatToolNotification(
   response: HeartbeatToolResponse,
   responsePrefix: string | undefined,
-) {
+): NormalizedHeartbeatReply {
   let finalText = getHeartbeatToolNotificationText(response);
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
     finalText = `${responsePrefix} ${finalText}`;
@@ -1973,6 +1998,7 @@ export async function runHeartbeatOnce(opts: {
             ]),
       ],
       deps: opts.deps,
+      silent: normalized.silent === true ? true : undefined,
     });
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;

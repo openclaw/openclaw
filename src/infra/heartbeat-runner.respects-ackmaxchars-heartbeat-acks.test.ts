@@ -78,7 +78,7 @@ describe("runHeartbeatOnce ack handling", () => {
 
   function expectTelegramMessageSend(
     send: ReturnType<typeof vi.fn>,
-    params: { to: string; text: string; cfg: OpenClawConfig },
+    params: { to: string; text: string; cfg: OpenClawConfig; silent?: boolean },
   ) {
     expect(send.mock.calls).toEqual([
       [
@@ -88,6 +88,7 @@ describe("runHeartbeatOnce ack handling", () => {
           verbose: false,
           cfg: params.cfg,
           accountId: undefined,
+          ...(params.silent !== undefined ? { silent: params.silent } : {}),
         },
       ],
     ]);
@@ -283,7 +284,25 @@ describe("runHeartbeatOnce ack handling", () => {
       expectedCalls: 1,
       expectedText: "History check complete",
     },
-  ])("$title", async ({ replyText, messages, expectedCalls, expectedText }) => {
+    {
+      title: "strips trailing notify=false and sends the heartbeat reply silently",
+      replyText: "No interruption needed.\n\nnotify=false",
+      expectedCalls: 1,
+      expectedText: "No interruption needed.",
+      expectedSilent: true,
+    },
+    {
+      title: "drops a marker-only notify=false heartbeat reply",
+      replyText: "notify=false",
+      expectedCalls: 0,
+    },
+    {
+      title: "does not strip inline notify=false text",
+      replyText: "Status includes notify=false in config",
+      expectedCalls: 1,
+      expectedText: "Status includes notify=false in config",
+    },
+  ])("$title", async ({ replyText, messages, expectedCalls, expectedText, expectedSilent }) => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const { sendTelegram, cfg } = await runTelegramHeartbeatWithDefaults({
         tmpDir,
@@ -299,6 +318,7 @@ describe("runHeartbeatOnce ack handling", () => {
           to: TELEGRAM_GROUP,
           text: expectedText,
           cfg,
+          ...(expectedSilent !== undefined ? { silent: expectedSilent } : {}),
         });
       }
     });
