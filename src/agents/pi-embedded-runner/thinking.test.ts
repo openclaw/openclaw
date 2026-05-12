@@ -523,6 +523,96 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     expect(callCount).toBe(1);
   });
 
+  it("retries when a transport stream reports the thinking rejection before content", async () => {
+    const finalMessage = castAgentMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "recovered" }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    }) as AssistantMessage;
+    const errorMessage = {
+      ...finalMessage,
+      content: [],
+      stopReason: "error",
+      errorMessage: anthropicThinkingError.message,
+    } as AssistantMessage;
+    const contexts: Array<{ messages?: AgentMessage[] }> = [];
+    let callCount = 0;
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      ((_model, context) => {
+        callCount += 1;
+        contexts.push(context as { messages?: AgentMessage[] });
+        const stream = createAssistantMessageEventStream();
+        queueMicrotask(() => {
+          if (callCount === 1) {
+            stream.push({ type: "start", partial: errorMessage });
+            stream.push({ type: "error", reason: "error", error: errorMessage });
+            stream.end();
+            return;
+          }
+          stream.push({ type: "start", partial: finalMessage });
+          stream.push({ type: "text_start", contentIndex: 0, partial: finalMessage });
+          stream.push({
+            type: "text_delta",
+            contentIndex: 0,
+            delta: "recovered",
+            partial: finalMessage,
+          });
+          stream.push({ type: "done", reason: "stop", message: finalMessage });
+          stream.end();
+        });
+        stream.result = () => Promise.resolve(callCount === 1 ? errorMessage : finalMessage);
+        return stream;
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session" },
+    );
+
+    const response = wrapped(
+      {} as never,
+      {
+        messages: castAgentMessages([
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "secret", thinkingSignature: "sig" },
+              { type: "text", text: "visible answer" },
+            ],
+          },
+        ]),
+      } as never,
+      {} as never,
+    ) as { result: () => Promise<AssistantMessage> } & AsyncIterable<{ type?: string }>;
+    const events: Array<{ type?: string }> = [];
+    for await (const event of response) {
+      events.push(event);
+    }
+
+    await expect(response.result()).resolves.toEqual(finalMessage);
+    expect(callCount).toBe(2);
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "text_start",
+      "text_delta",
+      "done",
+    ]);
+    const retryMessage = contexts[1]?.messages?.[0];
+    if (!retryMessage || !isAssistantMessageWithContent(retryMessage)) {
+      throw new Error("Expected retry context to keep an assistant message");
+    }
+    expect(retryMessage.content).toEqual([{ type: "text", text: "visible answer" }]);
+  });
+
   it("does not retry non-Anthropic-thinking errors", async () => {
     const rateLimitError = new Error("rate limit exceeded");
     let callCount = 0;

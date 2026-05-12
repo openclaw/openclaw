@@ -1,5 +1,6 @@
 import type { Model } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { wrapAnthropicStreamWithRecovery } from "./pi-embedded-runner/thinking.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
@@ -403,6 +404,119 @@ describe("anthropic transport stream", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("OpenClaw transport error: malformed_streaming_fragment");
+  });
+
+  it("recovers thinking-block rejection emitted by the Anthropic transport before content", async () => {
+    const thinkingError =
+      "messages.1.content.0: thinking or redacted_thinking blocks in the latest assistant message cannot be modified";
+    guardedFetchMock
+      .mockResolvedValueOnce(
+        createSseResponse([
+          {
+            type: "error",
+            error: {
+              type: "invalid_request_error",
+              message: thinkingError,
+            },
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        createSseResponse([
+          {
+            type: "message_start",
+            message: { id: "msg_retry", usage: { input_tokens: 8, output_tokens: 0 } },
+          },
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "text", text: "recovered" },
+          },
+          {
+            type: "content_block_stop",
+            index: 0,
+          },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { input_tokens: 8, output_tokens: 1 },
+          },
+        ]),
+      );
+    const streamFn = wrapAnthropicStreamWithRecovery(createAnthropicMessagesTransportStreamFn(), {
+      id: "transport-session",
+    });
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel(),
+        {
+          messages: [
+            { role: "user", content: "continue" },
+            {
+              role: "assistant",
+              provider: "anthropic",
+              api: "anthropic-messages",
+              model: "claude-sonnet-4-6",
+              stopReason: "stop",
+              timestamp: 0,
+              content: [
+                { type: "thinking", thinking: "private", thinkingSignature: "sig_1" },
+                { type: "text", text: "visible answer" },
+              ],
+            },
+            { role: "user", content: "next" },
+          ],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "sk-ant-api",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const events: Array<{ type?: string }> = [];
+    for await (const event of stream as AsyncIterable<{ type?: string }>) {
+      events.push(event);
+    }
+    const result = await stream.result();
+
+    expect(guardedFetchMock).toHaveBeenCalledTimes(2);
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
+
+    const firstPayload = JSON.parse(String(guardedFetchMock.mock.calls[0]?.[1]?.body)) as Record<
+      string,
+      unknown
+    >;
+    const retryPayload = JSON.parse(String(guardedFetchMock.mock.calls[1]?.[1]?.body)) as Record<
+      string,
+      unknown
+    >;
+    const firstAssistant = findRecord(
+      firstPayload.messages,
+      (record) => record.role === "assistant",
+    );
+    const retryAssistant = findRecord(
+      retryPayload.messages,
+      (record) => record.role === "assistant",
+    );
+    expect(
+      requireArray(firstAssistant.content, "first assistant content").some(
+        (item) => requireRecord(item, "first assistant content item").type === "thinking",
+      ),
+    ).toBe(true);
+    expect(
+      requireArray(retryAssistant.content, "retry assistant content").some(
+        (item) => requireRecord(item, "retry assistant content item").type === "thinking",
+      ),
+    ).toBe(false);
+    expect(retryAssistant.content).toContainEqual({ type: "text", text: "visible answer" });
   });
 
   it("preserves Anthropic OAuth identity and tool-name remapping with transport overrides", async () => {
