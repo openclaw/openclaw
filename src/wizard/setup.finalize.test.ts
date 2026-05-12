@@ -253,7 +253,7 @@ function expectNoteContains(
   title: string,
 ): void {
   const calls = vi.mocked(prompter.note).mock.calls;
-  expect(calls.some((call) => call[0].includes(expected) && call[1] === title)).toBe(true);
+  expect(calls.filter((call) => call[0].includes(expected) && call[1] === title)).not.toEqual([]);
 }
 
 function expectNoteTitleNotCalled(
@@ -261,7 +261,7 @@ function expectNoteTitleNotCalled(
   title: string,
 ): void {
   const calls = vi.mocked(prompter.note).mock.calls;
-  expect(calls.every((call) => call[1] !== title)).toBe(true);
+  expect(calls.filter((call) => call[1] === title)).toEqual([]);
 }
 
 describe("finalizeSetupWizard", () => {
@@ -833,6 +833,6 @@ describe("finalizeSetupWizard", () => {
       runtime: createRuntime(),
     });
 
-    expect(note.mock.calls.every((call) => call[1] !== "Codex native search")).toBe(true);
+    expect(note.mock.calls.filter((call) => call[1] === "Codex native search")).toEqual([]);
   });
 });

@@ -55,6 +55,14 @@ function createProvider(id: string): ProviderPlugin {
   };
 }
 
+function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call[0];
+}
+
 describe("resolveImplicitProviders startup discovery scope", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -87,9 +95,14 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       providerDiscoveryTimeoutMs: 1234,
     });
 
-    const [discoveryOptions] = mocks.resolveRuntimePluginDiscoveryProviders.mock.calls.at(0) ?? [];
+    const discoveryOptions = firstMockArg(
+      mocks.resolveRuntimePluginDiscoveryProviders,
+      "runtime plugin discovery",
+    ) as { onlyPluginIds?: string[] };
     expect(discoveryOptions?.onlyPluginIds).toEqual(["openai"]);
-    const [catalogOptions] = mocks.runProviderCatalog.mock.calls.at(0) ?? [];
+    const catalogOptions = firstMockArg(mocks.runProviderCatalog, "provider catalog") as {
+      timeoutMs?: number;
+    };
     expect(catalogOptions?.timeoutMs).toBe(1234);
   });
 
@@ -102,7 +115,10 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       providerDiscoveryEntriesOnly: true,
     });
 
-    const [discoveryOptions] = mocks.resolveRuntimePluginDiscoveryProviders.mock.calls.at(0) ?? [];
+    const discoveryOptions = firstMockArg(
+      mocks.resolveRuntimePluginDiscoveryProviders,
+      "runtime plugin discovery",
+    ) as { discoveryEntriesOnly?: boolean };
     expect(discoveryOptions?.discoveryEntriesOnly).toBe(true);
   });
 });

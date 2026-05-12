@@ -284,11 +284,9 @@ describe("streamWithIdleTimeout", () => {
 
     void wrapped(model, context, options);
 
-    expect(baseFn).toHaveBeenCalledWith(
-      expect.objectContaining({ api: "openai", requestTimeoutMs: 1000 }),
-      context,
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
+    expect(baseFn).toHaveBeenCalledWith({ api: "openai", requestTimeoutMs: 1000 }, context, {
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it("keeps model request timeouts that are shorter than the idle watchdog", () => {
@@ -302,11 +300,9 @@ describe("streamWithIdleTimeout", () => {
 
     void wrapped(model, context, options);
 
-    expect(baseFn).toHaveBeenCalledWith(
-      expect.objectContaining({ requestTimeoutMs: 250 }),
-      context,
-      expect.any(Object),
-    );
+    expect(baseFn).toHaveBeenCalledWith({ requestTimeoutMs: 250 }, context, {
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it("throws on idle timeout", async () => {

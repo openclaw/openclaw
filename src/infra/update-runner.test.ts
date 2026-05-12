@@ -323,7 +323,7 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("skipped");
     expect(result.reason).toBe("dirty");
-    expect(calls.some((call) => call.includes("rebase"))).toBe(false);
+    expect(calls.filter((call) => call.includes("rebase"))).toEqual([]);
   });
 
   it.each([
@@ -366,7 +366,7 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("rebase-failed");
-    expect(calls.some((call) => call.includes("rebase --abort"))).toBe(true);
+    expect(calls.filter((call) => call.includes("rebase --abort"))).not.toEqual([]);
   });
 
   it("returns error and stops early when deps install fails", async () => {
@@ -612,12 +612,14 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, { channel: "dev" });
 
     expect(result.status).toBe("ok");
-    expect(calls.some((call) => call.startsWith("npm install --prefix "))).toBe(true);
+    expect(calls.filter((call) => call.startsWith("npm install --prefix "))).not.toEqual([]);
     expect(calls).toContain("pnpm install");
     expect(calls).toContain("pnpm build");
     expect(calls).not.toContain("pnpm lint");
     expect(calls).toContain("pnpm ui:build");
-    expect(pnpmEnvPaths.some((envPath) => envPath.includes("openclaw-update-pnpm-"))).toBe(true);
+    expect(pnpmEnvPaths.filter((envPath) => envPath.includes("openclaw-update-pnpm-"))).not.toEqual(
+      [],
+    );
   });
 
   it("runs dev preflight lint in constrained mode when explicitly enabled", async () => {
@@ -1961,7 +1963,7 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("not-openclaw-root");
-    expect(calls.some((call) => call.includes("status --porcelain"))).toBe(false);
+    expect(calls.filter((call) => call.includes("status --porcelain"))).toEqual([]);
   });
 
   it("fails with a clear reason when openclaw.mjs is missing", async () => {
