@@ -179,9 +179,7 @@ describe("cron service ops seam coverage", () => {
     });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeat).not.toHaveBeenCalled();
-    if (state.timer === undefined) {
-      throw new Error("Expected cron service timer");
-    }
+    expect(state.timer).toBeDefined();
 
     const persisted = (await loadCronStore(storeKey)) as {
       jobs: CronJob[];
@@ -211,6 +209,7 @@ describe("cron service ops seam coverage", () => {
     const { storeKey } = await makeStoreKey();
     const now = Date.parse("2026-04-09T08:00:00.000Z");
     const createdAtMs = now - 86_400_000;
+    const persistedAtMs = Date.now();
     const nextRunAtMs = Date.parse("2026-04-10T09:00:00.000Z");
     const jobId = "future-sidecar-repair";
     await writeCronStoreSnapshot({
@@ -246,7 +245,7 @@ describe("cron service ops seam coverage", () => {
 
       const persisted = await loadCronStore(storeKey);
 
-      expect(persisted.jobs[0]?.updatedAtMs).toBe(createdAtMs);
+      expect(persisted.jobs[0]?.updatedAtMs).toBe(persistedAtMs);
       expect(persisted.jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
     } finally {
       stop(state);
@@ -298,7 +297,8 @@ describe("cron service ops seam coverage", () => {
 
       await run(state, "isolated-timeout");
 
-      expect(findTaskByRunId(`cron:isolated-timeout:${now}`)).toMatchObject({
+      expectTaskRun({
+        runId: `cron:isolated-timeout:${now}`,
         runtime: "cron",
         status: "timed_out",
         sourceId: "isolated-timeout",
@@ -324,10 +324,11 @@ describe("cron service ops seam coverage", () => {
       });
 
     await expectDueIsolatedManualRunProgresses(storeKey, now);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ jobId: "isolated-timeout" }),
-      "cron: failed to create task ledger record",
-    );
+    expectWarnedJob({
+      field: "jobId",
+      value: "isolated-timeout",
+      message: "cron: failed to create task ledger record",
+    });
 
     createTaskRecordSpy.mockRestore();
   });
@@ -348,10 +349,11 @@ describe("cron service ops seam coverage", () => {
 
       try {
         await expectDueIsolatedManualRunProgresses(storeKey, now);
-        expect(logger.warn).toHaveBeenCalledWith(
-          expect.objectContaining({ jobStatus: "ok" }),
-          "cron: failed to update task ledger record",
-        );
+        expectWarnedJob({
+          field: "jobStatus",
+          value: "ok",
+          message: "cron: failed to update task ledger record",
+        });
       } finally {
         updateTaskRecordSpy.mockRestore();
       }
