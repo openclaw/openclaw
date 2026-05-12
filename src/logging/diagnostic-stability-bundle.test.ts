@@ -151,17 +151,11 @@ describe("diagnostic stability bundles", () => {
     }
     const bundle = latest.bundle;
     const raw = JSON.stringify(bundle);
-    expect(bundle).toMatchObject({
-      reason: "gateway.restart_startup_failed",
-      error: {
-        name: "Error",
-        code: "ERR_CONFIG_PARSE",
-        message: "raw startup config payload",
-      },
-      snapshot: {
-        count: 0,
-        events: [],
-      },
+    expect(bundle.reason).toBe("gateway.restart_startup_failed");
+    expect(bundle.error).toEqual({
+      name: "Error",
+      code: "ERR_CONFIG_PARSE",
+      message: "raw startup config payload",
     });
     expect(bundle.snapshot.count).toBe(0);
     expect(bundle.snapshot.events).toEqual([]);
