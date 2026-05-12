@@ -14,7 +14,6 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMessageTool } from "../../../../src/agents/tools/message-tool.js";
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
   createCodexDynamicToolBridge,
@@ -321,13 +320,17 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("treats same-session WebChat message sends as successful codex tool results", async () => {
-    const tool = createMessageTool({
-      config: {} as never,
-      currentChannelProvider: "webchat",
-      currentChannelId: "webchat-session-1",
-      sourceReplyDeliveryMode: "message_tool_only",
-      runMessageAction: vi.fn(),
+  it("treats same-session WebChat message status as a successful codex tool result", async () => {
+    const tool = createTool({
+      name: "message",
+      execute: vi.fn(async () =>
+        textToolResult("Sent.", {
+          ok: true,
+          status: "ok",
+          deliveryStatus: "sent",
+          delivery: "webchat-session",
+        }),
+      ),
     });
     const bridge = createCodexDynamicToolBridge({
       tools: [tool],
@@ -339,20 +342,7 @@ describe("createCodexDynamicToolBridge", () => {
       message: "Visible reply from Codex.",
     });
 
-    expect(result.success).toBe(true);
-    expect(result.contentItems).toHaveLength(1);
-    const content = result.contentItems[0];
-    expect(content?.type).toBe("inputText");
-    const details = JSON.parse(content?.type === "inputText" ? content.text : "{}") as Record<
-      string,
-      unknown
-    >;
-    expect(details).toMatchObject({
-      ok: true,
-      status: "ok",
-      deliveryStatus: "sent",
-      delivery: "webchat-session",
-    });
+    expect(result).toEqual(expectInputText("Sent."));
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
     expect(bridge.telemetry.messagingToolSentTexts).toEqual(["Visible reply from Codex."]);
     expect(bridge.telemetry.messagingToolSentTargets).toEqual([
