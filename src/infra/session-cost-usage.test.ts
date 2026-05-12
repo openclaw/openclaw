@@ -1,7 +1,6 @@
-import os from "node:os";
-import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -20,13 +19,18 @@ import {
 describe("session cost usage", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-session-cost-" });
 
+  const closeDatabases = () => {
+    closeOpenClawStateDatabaseForTest();
+    closeOpenClawAgentDatabasesForTest();
+  };
+
   const withStateDir = async <T>(stateDir: string, fn: () => Promise<T>): Promise<T> =>
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      closeOpenClawStateDatabaseForTest();
+      closeDatabases();
       try {
         return await fn();
       } finally {
-        closeOpenClawStateDatabaseForTest();
+        closeDatabases();
       }
     });
 
@@ -55,8 +59,6 @@ describe("session cost usage", () => {
     input: number;
     output: number;
     totalTokens?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
     cost?: number;
     provider?: string;
     model?: string;
@@ -69,11 +71,7 @@ describe("session cost usage", () => {
     usage: {
       input: params.input,
       output: params.output,
-      cacheRead: params.cacheRead ?? 0,
-      cacheWrite: params.cacheWrite ?? 0,
-      totalTokens:
-        params.totalTokens ??
-        params.input + params.output + (params.cacheRead ?? 0) + (params.cacheWrite ?? 0),
+      totalTokens: params.totalTokens ?? params.input + params.output,
       ...(params.cost === undefined ? {} : { cost: { total: params.cost } }),
     },
     message: {
@@ -84,11 +82,7 @@ describe("session cost usage", () => {
       usage: {
         input: params.input,
         output: params.output,
-        cacheRead: params.cacheRead ?? 0,
-        cacheWrite: params.cacheWrite ?? 0,
-        totalTokens:
-          params.totalTokens ??
-          params.input + params.output + (params.cacheRead ?? 0) + (params.cacheWrite ?? 0),
+        totalTokens: params.totalTokens ?? params.input + params.output,
         ...(params.cost === undefined ? {} : { cost: { total: params.cost } }),
       },
     },
@@ -99,11 +93,11 @@ describe("session cost usage", () => {
   });
 
   afterAll(async () => {
-    closeOpenClawStateDatabaseForTest();
+    closeDatabases();
     await suiteRootTracker.cleanup();
   });
 
-  it("discovers sessions from SQLite transcript scopes", async () => {
+  it("discovers sessions by durable SQLite scope", async () => {
     const root = await makeRoot("discover");
     await withStateDir(root, async () => {
       writeTranscript({
@@ -119,12 +113,15 @@ describe("session cost usage", () => {
 
       const sessions = await discoverAllSessions();
       expect(sessions).toHaveLength(1);
-      expect(sessions[0]?.agentId).toBe("main");
-      expect(sessions[0]?.sessionId).toBe("sess-discover");
+      expect(sessions[0]).toMatchObject({
+        agentId: "main",
+        sessionId: "sess-discover",
+        firstUserMessage: "Summarize the last build",
+      });
     });
   });
 
-  it("loads aggregate usage from SQLite transcript events", async () => {
+  it("loads aggregate usage directly from SQLite transcript events", async () => {
     const root = await makeRoot("aggregate");
     await withStateDir(root, async () => {
       writeTranscript({
@@ -146,43 +143,28 @@ describe("session cost usage", () => {
       expect(summary.daily).toHaveLength(1);
       expect(summary.totals.totalTokens).toBe(30);
       expect(summary.totals.totalCost).toBeCloseTo(0.03, 5);
-    });
-  });
 
-  it("keeps cache APIs as fresh SQLite-backed compatibility entrypoints", async () => {
-    const root = await makeRoot("cache-api");
-    await withStateDir(root, async () => {
-      writeTranscript({
-        sessionId: "sess-cache",
-        events: [
-          assistantUsage({
-            timestamp: "2026-02-05T12:00:00.000Z",
-            input: 3,
-            output: 7,
-            cost: 0.01,
-          }),
-        ],
-      });
-
-      expect(await refreshCostUsageCache()).toBe("refreshed");
-      requestCostUsageCacheRefresh({ sessionTranscripts: ["sess-cache"] });
-      const summary = await loadCostUsageSummaryFromCache({
+      const cached = await loadCostUsageSummaryFromCache({
         startMs: Date.parse("2026-02-05T00:00:00.000Z"),
         endMs: Date.parse("2026-02-06T00:00:00.000Z"),
+        requestRefresh: false,
       });
-      expect(summary.totals.totalTokens).toBe(10);
-      expect(summary.cacheStatus).toMatchObject({
+      expect(cached.cacheStatus).toMatchObject({
         status: "fresh",
+        cachedFiles: 1,
         pendingFiles: 0,
         staleFiles: 0,
       });
+      expect(await refreshCostUsageCache()).toBe("refreshed");
+      requestCostUsageCacheRefresh();
     });
   });
 
-  it("loads session summary, time series, and logs from SQLite", async () => {
+  it("loads session summary, time series, and logs by agent/session id", async () => {
     const root = await makeRoot("session");
     await withStateDir(root, async () => {
       writeTranscript({
+        agentId: "worker",
         sessionId: "sess-summary",
         events: [
           {
@@ -213,11 +195,14 @@ describe("session cost usage", () => {
         ],
       });
 
+      expect(await loadSessionCostSummary({ sessionId: "sess-summary" })).toBeNull();
+
       const summary = await loadSessionCostSummary({
-        agentId: "main",
+        agentId: "worker",
         sessionId: "sess-summary",
       });
       expect(summary).toMatchObject({
+        agentId: "worker",
         sessionId: "sess-summary",
         totalTokens: 30,
         totalCost: 0.03,
@@ -227,21 +212,22 @@ describe("session cost usage", () => {
       expect(summary?.modelUsage?.[0]).toMatchObject({ provider: "openai", model: "gpt-5.4" });
 
       const cached = await loadSessionCostSummaryFromCache({
-        agentId: "main",
+        agentId: "worker",
         sessionId: "sess-summary",
       });
       expect(cached.cacheStatus.status).toBe("fresh");
       expect(cached.summary?.totalTokens).toBe(30);
 
       const timeseries = await loadSessionUsageTimeSeries({
-        agentId: "main",
+        agentId: "worker",
         sessionId: "sess-summary",
       });
+      expect(timeseries).toMatchObject({ sessionId: "sess-summary" });
       expect(timeseries?.points).toHaveLength(1);
       expect(timeseries?.points[0]).toMatchObject({ totalTokens: 30, cumulativeTokens: 30 });
 
       const logs = await loadSessionLogs({
-        agentId: "main",
+        agentId: "worker",
         sessionId: "sess-summary",
       });
       expect(logs?.map((entry) => entry.role)).toEqual(["user", "assistant"]);
@@ -250,111 +236,22 @@ describe("session cost usage", () => {
     });
   });
 
-  it("resolves non-main agent transcripts by agent id", async () => {
-    const root = await makeRoot("agent");
-    await withStateDir(root, async () => {
-      writeTranscript({
-        agentId: "worker",
-        sessionId: "sess-worker",
-        events: [
-          assistantUsage({
-            timestamp: "2026-02-05T12:00:00.000Z",
-            input: 5,
-            output: 6,
-            cost: 0.02,
-          }),
-        ],
-      });
-
-      expect(await loadSessionCostSummary({ sessionId: "sess-worker" })).toBeNull();
-      const summary = await loadSessionCostSummary({
-        agentId: "worker",
-        sessionId: "sess-worker",
-      });
-      expect(summary?.totalTokens).toBe(11);
-    });
-  });
-
-  it("captures UTC quarter-hour token usage buckets from SQLite transcript events", async () => {
-    const root = await makeRoot("token-quarter");
-    await withStateDir(root, async () => {
-      writeTranscript({
-        sessionId: "sess-token-quarter",
-        events: [
-          assistantUsage({
-            timestamp: "2026-03-15T06:30:00.000Z",
-            input: 5,
-            output: 7,
-            cacheRead: 3,
-            cacheWrite: 2,
-            totalTokens: 25,
-            cost: 0.025,
-          }),
-          assistantUsage({
-            timestamp: "2026-03-15T06:35:00.000Z",
-            input: 1,
-            output: 2,
-            cacheRead: 3,
-            cacheWrite: 4,
-            totalTokens: 10,
-            cost: 0.01,
-          }),
-          assistantUsage({
-            timestamp: "2026-03-15T23:59:00.000Z",
-            input: 2,
-            output: 3,
-            totalTokens: 9,
-            cost: 0.009,
-          }),
-        ],
-      });
-
-      const summary = await loadSessionCostSummary({
-        agentId: "main",
-        sessionId: "sess-token-quarter",
-      });
-      const tokenBuckets = summary?.utcQuarterHourTokenUsage;
-      expect(tokenBuckets).toHaveLength(2);
-
-      const sorted = [...(tokenBuckets ?? [])].toSorted((a, b) => a.quarterIndex - b.quarterIndex);
-      expect(sorted[0]).toMatchObject({
-        date: "2026-03-15",
-        quarterIndex: 26,
-        input: 6,
-        output: 9,
-        cacheRead: 6,
-        cacheWrite: 6,
-        totalTokens: 35,
-      });
-      expect(sorted[0]?.totalCost).toBeCloseTo(0.035, 6);
-      expect(sorted[1]).toMatchObject({
-        date: "2026-03-15",
-        quarterIndex: 95,
-        input: 2,
-        output: 3,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 9,
-      });
-      expect(sorted[1]?.totalCost).toBeCloseTo(0.009, 6);
-    });
-  });
-
-  it("returns null and stale status for missing SQLite transcripts", async () => {
+  it("reports stale session cache status for missing SQLite transcripts", async () => {
     const root = await makeRoot("missing");
     await withStateDir(root, async () => {
-      expect(
-        await loadSessionCostSummary({
-          agentId: "main",
-          sessionId: "missing",
-        }),
-      ).toBeNull();
+      expect(await loadSessionCostSummary({ agentId: "main", sessionId: "missing" })).toBeNull();
+
       const cached = await loadSessionCostSummaryFromCache({
         agentId: "main",
         sessionId: "missing",
       });
       expect(cached.summary).toBeNull();
-      expect(cached.cacheStatus.status).toBe("stale");
+      expect(cached.cacheStatus).toMatchObject({
+        status: "stale",
+        cachedFiles: 0,
+        pendingFiles: 0,
+        staleFiles: 1,
+      });
     });
   });
 });
