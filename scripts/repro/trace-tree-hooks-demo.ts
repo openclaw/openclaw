@@ -79,7 +79,7 @@ async function demoHookOrdering() {
     console.error("  FAIL: expected agent_start before llm_input");
     process.exit(1);
   }
-  const llm = calls[1]?.event as Record<string, unknown>;
+  const llm = calls[1]?.event;
   console.log(`  llm_input.prompt            = ${JSON.stringify(llm.prompt)}`);
   console.log(`  llm_input.userPrompt        = ${JSON.stringify(llm.userPrompt)}`);
   console.log(`  llm_input.prependedContext  = ${JSON.stringify(llm.prependedContext)}`);
