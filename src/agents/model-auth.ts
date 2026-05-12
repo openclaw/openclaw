@@ -28,6 +28,7 @@ import {
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
   isConfiguredAwsSdkAuthProfileForProvider,
+  isStoredCredentialCompatibleWithAuthProvider,
   listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
@@ -376,6 +377,122 @@ function shouldUseImplicitAwsSdkAuth(params: {
 
 function profileTypeToAuthMode(type: AuthProfileCredential["type"]): ResolvedProviderAuth["mode"] {
   return type === "oauth" ? "oauth" : type === "token" ? "token" : "api-key";
+}
+
+/**
+ * Outcome of evaluating whether `models.providers.<id>.apiKey` is a stored-
+ * profile-ID reference (`"<provider>:<name>"`) rather than a literal bearer.
+ *
+ * - `no-match`: the configured value is missing, a non-secret marker, or does
+ *   not name any stored profile — fall through to the normal credential paths.
+ * - `matched-resolved`: the value names a stored profile and credential
+ *   resolution succeeded — return the resulting auth.
+ * - `matched-incompatible`: the value names a stored profile whose credential
+ *   targets a categorically different auth class (OAuth or AWS SDK while the
+ *   per-entry provider expects an api-key-style bearer). Routing those would
+ *   send the wrong kind of secret to the endpoint, so this is surfaced as an
+ *   error instead of falling through. *Same-class cross-provider references*
+ *   (e.g. `openrouter:key-b` on `openrouter-minimax`, the documented split-
+ *   provider pattern) are allowed — the explicit profile reference is itself
+ *   the user's safe-mapping declaration.
+ * - `matched-failed`: the value names a stored profile but credential
+ *   resolution returned null or threw. Falling through here would either pick
+ *   a *different* profile (silent wrong-credential) or eventually send the
+ *   profile-ID string itself as the literal bearer (the original #67423 bug).
+ *   Surface as an error so the operator can fix the referenced profile.
+ */
+type PerEntryProfileReferenceResolution =
+  | { kind: "no-match" }
+  | { kind: "matched-resolved"; auth: ResolvedProviderAuth }
+  | {
+      kind: "matched-incompatible";
+      profileId: string;
+      credentialProvider: string;
+      credentialType: AuthProfileCredential["type"];
+    }
+  | { kind: "matched-failed"; profileId: string; error?: unknown };
+
+/**
+ * Returns true when the credential's auth class is compatible with the
+ * per-entry provider's expected bearer-style auth. The check is intentionally
+ * coarser than `isStoredCredentialCompatibleWithAuthProvider`: explicit
+ * profile-ID references are the documented split-provider pattern (e.g.
+ * `openrouter-minimax.apiKey: "openrouter:key-b"`) and would fail a strict
+ * id-equality check despite being the exact case this code path was added to
+ * support. We only block when the credential class itself is wrong (OAuth
+ * tokens or AWS SDK profiles routed to an api-key-style endpoint), and rely
+ * on the explicit reference as the user's safe-mapping declaration for the
+ * cross-provider id case.
+ */
+function isProfileReferenceCredentialClassCompatible(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  credential: AuthProfileCredential;
+}): boolean {
+  if (params.credential.type === "api_key" || params.credential.type === "token") {
+    return true;
+  }
+  // OAuth or AWS SDK credentials reaching this branch would be sent as a
+  // bearer-style header by the api-key call sites, which is the wrong shape
+  // for those credential classes. The strict alias check still applies here
+  // because we cannot trust an OAuth refresh token to be a usable api key.
+  return isStoredCredentialCompatibleWithAuthProvider({
+    cfg: params.cfg,
+    provider: params.provider,
+    credential: params.credential,
+  });
+}
+
+async function resolvePerEntryProviderApiKeyReference(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  store: AuthProfileStore;
+  agentDir?: string;
+}): Promise<PerEntryProfileReferenceResolution> {
+  const perEntryRawKey = getCustomProviderApiKey(params.cfg, params.provider);
+  if (!perEntryRawKey || isNonSecretApiKeyMarker(perEntryRawKey)) {
+    return { kind: "no-match" };
+  }
+  const credential = params.store.profiles[perEntryRawKey];
+  if (!credential) {
+    return { kind: "no-match" };
+  }
+  if (
+    !isProfileReferenceCredentialClassCompatible({
+      cfg: params.cfg,
+      provider: params.provider,
+      credential,
+    })
+  ) {
+    return {
+      kind: "matched-incompatible",
+      profileId: perEntryRawKey,
+      credentialProvider: credential.provider,
+      credentialType: credential.type,
+    };
+  }
+  try {
+    const resolved = await resolveApiKeyForProfile({
+      cfg: params.cfg,
+      store: params.store,
+      profileId: perEntryRawKey,
+      agentDir: params.agentDir,
+    });
+    if (!resolved) {
+      return { kind: "matched-failed", profileId: perEntryRawKey };
+    }
+    return {
+      kind: "matched-resolved",
+      auth: {
+        apiKey: resolved.apiKey,
+        profileId: perEntryRawKey,
+        source: `profile:${perEntryRawKey}`,
+        mode: profileTypeToAuthMode(credential.type),
+      },
+    };
+  } catch (err) {
+    return { kind: "matched-failed", profileId: perEntryRawKey, error: err };
+  }
 }
 
 function resolveConfiguredAwsSdkProfileAuth(params: {
@@ -844,6 +961,47 @@ export async function resolveApiKeyForProvider(params: {
   if (shouldUseImplicitAwsSdkAuth({ cfg, provider, modelApi: params.modelApi })) {
     return resolveAwsSdkAuthInfo();
   }
+
+  // A per-entry apiKey can be a profile-ID reference (e.g. "openrouter:key-b")
+  // rather than a literal bearer token. Resolve that **before** the explicit
+  // `auth: "api-key"` early-return below, otherwise `resolveUsableCustomProviderApiKey`
+  // would return the profile-ID string itself as a literal bearer (the
+  // original #67423 failure mode). The helper is also terminal — a matched
+  // reference must either resolve cleanly with a provider-compatible
+  // credential or surface an explicit error, never fall through to other
+  // credential paths that could silently use a different key.
+  scopedStore ??= resolveScopedAuthProfileStore({
+    agentDir: params.agentDir,
+    cfg,
+    provider,
+    preferredProfile,
+  });
+  const perEntryProfileRef = await resolvePerEntryProviderApiKeyReference({
+    cfg,
+    provider,
+    store: scopedStore,
+    agentDir: params.agentDir,
+  });
+  if (perEntryProfileRef.kind === "matched-resolved") {
+    return perEntryProfileRef.auth;
+  }
+  if (perEntryProfileRef.kind === "matched-incompatible") {
+    throw new Error(
+      `Per-entry apiKey "${perEntryProfileRef.profileId}" for provider "${provider}" references a "${perEntryProfileRef.credentialType}" credential for provider "${perEntryProfileRef.credentialProvider}", which is not a bearer-style auth class. Use an api-key or token profile, or set apiKey to a literal bearer token.`,
+    );
+  }
+  if (perEntryProfileRef.kind === "matched-failed") {
+    const cause =
+      perEntryProfileRef.error instanceof Error
+        ? perEntryProfileRef.error.message
+        : perEntryProfileRef.error
+          ? String(perEntryProfileRef.error)
+          : "credential resolution returned no key";
+    throw new Error(
+      `Per-entry apiKey "${perEntryProfileRef.profileId}" for provider "${provider}" matched a stored profile but failed to resolve: ${cause}. Fix the referenced profile or set apiKey to a literal bearer token.`,
+    );
+  }
+
   if (shouldPreferExplicitConfigApiKeyAuth(cfg, provider)) {
     const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
     if (customKey) {
@@ -902,37 +1060,6 @@ export async function resolveApiKeyForProvider(params: {
       provider,
       preferredProfile,
     });
-  // A per-entry apiKey can be a profile ID reference (e.g. "openrouter:key-b")
-  // rather than a literal bearer token. If the raw value matches an existing
-  // profile in the store, resolve the actual credential through that profile.
-  const perEntryRawKey = getCustomProviderApiKey(cfg, provider);
-  if (
-    perEntryRawKey &&
-    !isNonSecretApiKeyMarker(perEntryRawKey) &&
-    store.profiles[perEntryRawKey]
-  ) {
-    try {
-      const resolved = await resolveApiKeyForProfile({
-        cfg,
-        store,
-        profileId: perEntryRawKey,
-        agentDir: params.agentDir,
-      });
-      if (resolved) {
-        const mode = store.profiles[perEntryRawKey]?.type;
-        return {
-          apiKey: resolved.apiKey,
-          profileId: perEntryRawKey,
-          source: `profile:${perEntryRawKey}`,
-          mode: mode ? profileTypeToAuthMode(mode) : "api-key",
-        };
-      }
-    } catch (err) {
-      log.debug?.(
-        `per-entry apiKey profile "${perEntryRawKey}" failed for "${provider}": ${String(err)}`,
-      );
-    }
-  }
   const order = resolveAuthProfileOrder({
     cfg,
     store,

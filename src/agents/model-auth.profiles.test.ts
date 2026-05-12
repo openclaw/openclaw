@@ -1662,4 +1662,108 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
     expect(resolved.profileId).toBe("openrouter:key-b");
     expect(resolved.source).toBe("profile:openrouter:key-b");
   });
+
+  it("resolves profile reference even when provider sets auth: api-key explicitly (regression for clawsweeper P3)", async () => {
+    // Before the fix the explicit `auth: "api-key"` early-return short-circuited
+    // resolveUsableCustomProviderApiKey and sent "openrouter:key-b" as a literal bearer
+    // before the profile-ref logic could run. Verify the profile-ref lookup wins.
+    const resolved = await resolveApiKeyForProvider({
+      provider: "openrouter-minimax",
+      cfg: {
+        models: {
+          providers: {
+            "openrouter-minimax": {
+              api: "openai-completions" as const,
+              baseUrl: "https://openrouter.ai/api/v1",
+              apiKey: "openrouter:key-b",
+              auth: "api-key" as const,
+              models: [],
+            },
+          },
+        },
+      },
+      store: {
+        version: 1,
+        profiles: {
+          "openrouter:key-b": {
+            type: "api_key",
+            provider: "openrouter",
+            key: "sk-or-actual-key-b",
+          },
+        },
+      },
+    });
+
+    expect(resolved.apiKey).toBe("sk-or-actual-key-b");
+    expect(resolved.profileId).toBe("openrouter:key-b");
+    expect(resolved.source).toBe("profile:openrouter:key-b");
+  });
+
+  it("throws when matched profile is an OAuth credential routed to an api-key provider (clawsweeper P1)", async () => {
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "openrouter-minimax",
+        cfg: {
+          models: {
+            providers: {
+              "openrouter-minimax": {
+                api: "openai-completions" as const,
+                baseUrl: "https://openrouter.ai/api/v1",
+                apiKey: "google:oauth-a",
+                models: [],
+              },
+            },
+          },
+        },
+        store: {
+          version: 1,
+          profiles: {
+            "google:oauth-a": {
+              type: "oauth",
+              provider: "google",
+              access: "oauth-access",
+              refresh: "oauth-refresh",
+              expires: 0,
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(
+      /references a "oauth" credential for provider "google", which is not a bearer-style auth class/,
+    );
+  });
+
+  it("throws (does not fall through to literal bearer) when matched profile resolution fails (clawsweeper P2)", async () => {
+    // Profile is matched on ID but its credential has no usable api key material
+    // (no `key` and no `keyRef`). Pre-fix, this would fall through to the late
+    // `resolveUsableCustomProviderApiKey` and send "openrouter:key-b" itself as the
+    // literal bearer — the original #67423 failure mode. Verify it throws instead.
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "openrouter-minimax",
+        cfg: {
+          models: {
+            providers: {
+              "openrouter-minimax": {
+                api: "openai-completions" as const,
+                baseUrl: "https://openrouter.ai/api/v1",
+                apiKey: "openrouter:key-b",
+                models: [],
+              },
+            },
+          },
+        },
+        store: {
+          version: 1,
+          profiles: {
+            "openrouter:key-b": {
+              type: "api_key",
+              provider: "openrouter",
+              // no `key` and no `keyRef` -> resolveApiKeyForProfile returns null
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow(/matched a stored profile but failed to resolve/);
+  });
 });
