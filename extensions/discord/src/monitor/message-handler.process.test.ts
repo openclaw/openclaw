@@ -1777,7 +1777,7 @@ describe("processDiscordMessage draft streaming", () => {
       "Clawing...\n🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-prev…",
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates.every((update) => !update.includes("Apply Patch"))).toBe(true);
+    expect(updates.join("\n")).not.toContain("Apply Patch");
   });
 
   it("shows reasoning text instead of a bare Reasoning progress line", async () => {
@@ -1811,7 +1811,7 @@ describe("processDiscordMessage draft streaming", () => {
       "Clawing...\n🛠️ Exec\n• _Reading the event projector_",
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates.every((update) => !update.includes("Reasoning"))).toBe(true);
+    expect(updates.join("\n")).not.toContain("Reasoning");
   });
 
   it("replaces reasoning snapshots instead of appending duplicates", async () => {
@@ -1843,7 +1843,7 @@ describe("processDiscordMessage draft streaming", () => {
       "Clawing...\n🛠️ Exec\n• _Checking files and tests_",
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates.some((update) => update.includes("_Checking files_Reasoning:"))).toBe(false);
+    expect(updates.join("\n")).not.toContain("_Checking files_Reasoning:");
   });
 
   it("keeps Discord progress lines across assistant boundaries", async () => {

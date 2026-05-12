@@ -59,7 +59,6 @@ function requireRunCrestodianOptions(index = 0): { onReady?: unknown } {
     throw new Error(`expected runCrestodian call ${index}`);
   }
   expect(typeof call[0]).toBe("object");
-  expect(call[0]).not.toBeNull();
   if (typeof call[0] !== "object" || call[0] === null) {
     throw new Error(`expected runCrestodian call ${index} to receive options`);
   }

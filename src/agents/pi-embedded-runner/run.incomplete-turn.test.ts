@@ -54,11 +54,11 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
   }
 
   function expectWarnMessageWith(text: string): void {
-    expect(warnMessages().some((message) => message.includes(text))).toBe(true);
+    expect(warnMessages().join("\n")).toContain(text);
   }
 
   function expectNoWarnMessageWith(text: string): void {
-    expect(warnMessages().some((message) => message.includes(text))).toBe(false);
+    expect(warnMessages().join("\n")).not.toContain(text);
   }
 
   it("emits the before_agent_run hook block message as the agent payload", async () => {

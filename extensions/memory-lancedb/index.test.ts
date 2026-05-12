@@ -101,7 +101,7 @@ function expectHookRegistered(on: ReturnType<typeof vi.fn>, hookName: string) {
 }
 
 function expectHookNotRegistered(on: ReturnType<typeof vi.fn>, hookName: string) {
-  expect(on.mock.calls.some(([name]) => name === hookName)).toBe(false);
+  expect(on.mock.calls.map(([name]) => name)).not.toContain(hookName);
 }
 
 function expectToolExecute(tool: unknown, name?: string) {
@@ -1758,11 +1758,9 @@ describe("memory plugin e2e", () => {
 
       expect(embeddingsCreate).toHaveBeenCalledTimes(2);
       expect(harness.add).toHaveBeenCalledTimes(1);
-      expect(
-        harness.logger.warn.mock.calls.some(([message]) =>
-          String(message).includes("memory-lancedb: capture failed:"),
-        ),
-      ).toBe(true);
+      expect(harness.logger.warn.mock.calls.map(([message]) => String(message))).toEqual([
+        "memory-lancedb: capture failed: Error: temporary embedding failure",
+      ]);
     } finally {
       await cleanupAutoCaptureCursorHarness();
     }

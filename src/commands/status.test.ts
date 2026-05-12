@@ -98,11 +98,11 @@ function getJoinedRuntimeLogs() {
 }
 
 function expectLogsInclude(logs: readonly string[], fragment: string) {
-  expect(logs.some((log) => log.includes(fragment))).toBe(true);
+  expect(logs.join("\n")).toContain(fragment);
 }
 
 function expectLogsExclude(logs: readonly string[], fragment: string) {
-  expect(logs.some((log) => log.includes(fragment))).toBe(false);
+  expect(logs.join("\n")).not.toContain(fragment);
 }
 
 function expectLogsMatch(logs: readonly string[], pattern: RegExp) {

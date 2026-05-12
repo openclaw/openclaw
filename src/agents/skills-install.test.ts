@@ -163,10 +163,9 @@ describe("installSkill code safety scanning", () => {
 
       expect(result.ok).toBe(false);
       expect(result.message).toContain('Skill "danger-skill" installation blocked');
-      expect(
-        (result.warnings ?? []).some((warning) => warning.includes("dangerous code patterns")),
-      ).toBe(true);
-      expect((result.warnings ?? []).some((warning) => warning.includes("runner.js:1"))).toBe(true);
+      const warningOutput = (result.warnings ?? []).join("\n");
+      expect(warningOutput).toContain("dangerous code patterns");
+      expect(warningOutput).toContain("runner.js:1");
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     });
   });
