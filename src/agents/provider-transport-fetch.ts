@@ -9,6 +9,8 @@ import {
 } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
+import { emitModelTransportDebug } from "./model-transport-debug.js";
+import { formatModelTransportDebugUrl } from "./model-transport-url.js";
 import type { Api, Model } from "./pi-ai-contract.js";
 import {
   ensureModelProviderLocalService,
@@ -451,7 +453,7 @@ export function buildGuardedModelFetch(
       `code=${read(record.code)}`,
       `causeName=${read(cause?.name)}`,
       `causeCode=${read(cause?.code)}`,
-      `message=${error instanceof Error ? error.message : read(record.message)}`,
+      `message=${error instanceof Error ? error.message : String(error)}`,
     ].join(" ");
   };
   return async (input, init) => {
