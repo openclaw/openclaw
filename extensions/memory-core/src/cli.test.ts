@@ -565,6 +565,69 @@ describe("memory cli", () => {
     });
   });
 
+  it("does not follow symlinked memory files during encrypted export", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const outsidePath = path.join(workspaceDir, "outside-secret.txt");
+      await fs.writeFile(outsidePath, "do not back this up\n");
+      await fs.symlink(outsidePath, path.join(workspaceDir, "MEMORY.md"));
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+      const previous = process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;
+      process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = "symlink export passphrase";
+      try {
+        const backupPath = path.join(workspaceDir, "backup.age");
+        const restoreDir = path.join(workspaceDir, "restore-symlink-export");
+        await runMemoryCli(["export", "--encrypted", "--out", backupPath]);
+        await runMemoryCli(["import", "--encrypted", "--in", backupPath, "--target", restoreDir]);
+
+        await expectPathMissing(path.join(restoreDir, "MEMORY.md"));
+        expect(close).toHaveBeenCalled();
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;
+        } else {
+          process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = previous;
+        }
+      }
+    });
+  });
+
+  it("refuses to restore through symlinked parent directories", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-05", ["Restore safety."]);
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+      const previous = process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;
+      process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = "symlink restore passphrase";
+      try {
+        const backupPath = path.join(workspaceDir, "backup.age");
+        const restoreDir = path.join(workspaceDir, "restore-symlink-parent");
+        const outsideDir = path.join(workspaceDir, "outside-restore-target");
+        await runMemoryCli(["export", "--encrypted", "--out", backupPath]);
+        await fs.mkdir(restoreDir, { recursive: true });
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.symlink(outsideDir, path.join(restoreDir, "memory"));
+
+        await expect(
+          runMemoryCli(["import", "--encrypted", "--in", backupPath, "--target", restoreDir]),
+        ).rejects.toThrow("Refusing to restore through symlinked directory");
+        await expectPathMissing(path.join(outsideDir, "2026-04-05.md"));
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;
+        } else {
+          process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = previous;
+        }
+      }
+    });
+  });
+
   it("prints vector error when unavailable", async () => {
     const close = vi.fn(async () => {});
     mockManager({

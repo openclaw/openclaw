@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, beforeAll } from "vitest";
+import { assertPathIsSafe } from "./lab-safety.js";
 
 export function createMemoryCoreTestHarness() {
   let fixtureRoot = "";
@@ -29,8 +30,5 @@ export function createMemoryCoreTestHarness() {
 
   return {
     createTempWorkspace,
-  };
-}
-rkspace,
   };
 }

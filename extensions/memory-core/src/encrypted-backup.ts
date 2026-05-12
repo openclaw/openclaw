@@ -1,6 +1,6 @@
-import ageInit from "age-encryption";
 import fs from "node:fs/promises";
 import path from "node:path";
+import ageInit from "age-encryption";
 
 export type MemoryBackupFile = {
   path: string;
@@ -70,7 +70,7 @@ export async function collectMemoryBackupArchive(params: {
     assertSafeRelativePath(relativePath);
     let stat;
     try {
-      stat = await fs.stat(resolvedPath);
+      stat = await fs.lstat(resolvedPath);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         continue;
@@ -106,7 +106,7 @@ export async function encryptMemoryBackupArchive(
   const plaintext = JSON.stringify(archive);
   const encrypter = new Encrypter();
   encrypter.setPassphrase(passphrase);
-  const ciphertext = await encrypter.encrypt(new TextEncoder().encode(plaintext));
+  const ciphertext = encrypter.encrypt(new TextEncoder().encode(plaintext));
   return Buffer.from(ciphertext);
 }
 
@@ -120,8 +120,8 @@ export async function decryptMemoryBackupArchive(
   const { Decrypter } = await ageInit();
   const decrypter = new Decrypter();
   decrypter.addPassphrase(passphrase);
-  const decrypted = await decrypter.decrypt(new Uint8Array(input));
-  const plaintext = new TextDecoder().decode(decrypted as Uint8Array);
+  const decrypted = decrypter.decrypt(new Uint8Array(input));
+  const plaintext = new TextDecoder().decode(decrypted);
   const archive = JSON.parse(plaintext) as Partial<MemoryBackupArchive>;
   if (archive.version !== 1 || !Array.isArray(archive.files)) {
     throw new Error("Unsupported memory backup archive.");
@@ -130,6 +130,28 @@ export async function decryptMemoryBackupArchive(
     assertSafeRelativePath(file.path);
   }
   return archive as MemoryBackupArchive;
+}
+
+async function assertNoSymlinkParents(targetDir: string, outputPath: string): Promise<void> {
+  const relativeDir = path.relative(targetDir, path.dirname(outputPath));
+  if (!relativeDir) {
+    return;
+  }
+  let current = targetDir;
+  for (const segment of relativeDir.split(path.sep)) {
+    current = path.join(current, segment);
+    try {
+      const stat = await fs.lstat(current);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Refusing to restore through symlinked directory: ${current}`);
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return;
+      }
+      throw err;
+    }
+  }
 }
 
 export async function writeMemoryBackupArchive(params: {
@@ -147,7 +169,7 @@ export async function writeMemoryBackupArchive(params: {
     }
     if (!params.overwrite) {
       try {
-        await fs.stat(outputPath);
+        await fs.lstat(outputPath);
         throw new Error(`Refusing to overwrite existing file: ${outputPath}`);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -155,7 +177,9 @@ export async function writeMemoryBackupArchive(params: {
         }
       }
     }
+    await assertNoSymlinkParents(targetDir, outputPath);
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await assertNoSymlinkParents(targetDir, outputPath);
     await fs.writeFile(outputPath, Buffer.from(file.data, "base64"), {
       mode: file.mode,
       flag: params.overwrite ? "w" : "wx",

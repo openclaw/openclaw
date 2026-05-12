@@ -30,6 +30,7 @@ overrides:
   yauzl: 3.2.1
   protobufjs: 7.5.6
   uuid: 14.0.0
+  libsodium-wrappers-sumo: 0.7.15
 
 packageExtensionsChecksum: sha256-oc/FAHkBR844HBfph1RZWyRMHHBpIFya25tyv5SGf6s=
 
@@ -89,6 +90,9 @@ importers:
       '@openclaw/proxyline':
         specifier: 0.2.0
         version: 0.2.0
+      age-encryption:
+        specifier: 0.1.5
+        version: 0.1.5
       ajv:
         specifier: 8.20.0
         version: 8.20.0
@@ -134,6 +138,9 @@ importers:
       kysely:
         specifier: 0.29.0
         version: 0.29.0
+      libsodium-wrappers-sumo:
+        specifier: 0.7.15
+        version: 0.7.15
       linkedom:
         specifier: 0.18.12
         version: 0.18.12
@@ -959,7 +966,7 @@ importers:
   extensions/memory-core:
     dependencies:
       age-encryption:
-        specifier: ^0.1.5
+        specifier: 0.1.5
         version: 0.1.5
       chokidar:
         specifier: 5.0.0
@@ -5993,8 +6000,8 @@ packages:
   libsodium-sumo@0.7.16:
     resolution: {integrity: sha512-x6atrz2AdXCJg6G709x9W9TTJRI6/0NcL5dD0l5GGVqNE48UJmDsjO4RUWYTeyXXUpg+NXZ2SHECaZnFRYzwGA==}
 
-  libsodium-wrappers-sumo@0.7.16:
-    resolution: {integrity: sha512-gR0JEFPeN3831lB9+ogooQk0KH4K5LSMIO5Prd5Q5XYR2wHFtZfPg0eP7t1oJIWq+UIzlU4WVeBxZ97mt28tXw==}
+  libsodium-wrappers-sumo@0.7.15:
+    resolution: {integrity: sha512-aSWY8wKDZh5TC7rMvEdTHoyppVq/1dTSAeAR7H6pzd6QRT3vQWcT5pGwCotLcpPEOLXX6VvqihSPkpEhYAjANA==}
 
   lie@3.3.0:
     resolution: {integrity: sha512-UaiMJzeWRlEujzAuw5LokY1L5ecNQYZKfmyZ9L7wDHb/p5etKaxXhohBcrw0EYby+G/NA52vRSN4N39dxHAIwQ==}
@@ -11320,7 +11327,7 @@ snapshots:
   age-encryption@0.1.5:
     dependencies:
       bech32-buffer: 0.2.1
-      libsodium-wrappers-sumo: 0.7.16
+      libsodium-wrappers-sumo: 0.7.15
 
   agent-base@7.1.4: {}
 
@@ -12826,7 +12833,7 @@ snapshots:
 
   libsodium-sumo@0.7.16: {}
 
-  libsodium-wrappers-sumo@0.7.16:
+  libsodium-wrappers-sumo@0.7.15:
     dependencies:
       libsodium-sumo: 0.7.16
 
