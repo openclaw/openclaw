@@ -632,6 +632,8 @@ describe("skill upload gateway handlers", () => {
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "rollback-demo", "SKILL.md"), "utf8"),
     ).resolves.toContain("first version");
+    const uploadStat = await fs.stat(path.join(stateDir, "tmp", "skill-uploads", forced.uploadId));
+    expect(uploadStat.isDirectory()).toBe(true);
     const retry = await call(handlers, "skills.install", {
       source: "upload",
       uploadId: forced.uploadId,
