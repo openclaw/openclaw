@@ -272,7 +272,6 @@ async function expectNextRunUsesTargetSession(
   const runParams = params.runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
     | Record<string, unknown>
     | undefined;
-  expect(runParams).toBeDefined();
   if (!runParams) {
     throw new Error("expected embedded PI agent call params");
   }

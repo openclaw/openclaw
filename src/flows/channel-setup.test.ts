@@ -86,14 +86,6 @@ function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, _type?: (
   return call[0] as T;
 }
 
-function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected mock call ${index}`);
-  }
-  return call;
-}
-
 function expectExternalCatalogInstallCall(index = 0) {
   const input = callArg<{
     entry?: { id?: string; install?: { npmSpec?: string } };
