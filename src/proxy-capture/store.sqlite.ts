@@ -1,48 +1,27 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable } from "kysely";
-import { sql } from "kysely";
 import {
+  clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { decodeCaptureBlobText, encodeCaptureBlob } from "./blob-store.js";
-import type { DB as ProxyCaptureKyselyDatabase } from "./db.generated.js";
-import { PROXY_CAPTURE_SCHEMA_SQL } from "./schema.generated.js";
 import type {
   CaptureBlobRecord,
   CaptureEventRecord,
   CaptureObservedDimension,
   CaptureQueryPreset,
   CaptureQueryRow,
+  CaptureQueryRowsByPreset,
   CaptureSessionCoverageSummary,
   CaptureSessionRecord,
   CaptureSessionSummary,
 } from "./types.js";
-
-function ensureParentDir(filePath: string) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-}
-
-type OpenedDatabase = {
-  db: DatabaseSync;
-  walMaintenance: SqliteWalMaintenance;
-};
-
-function openDatabase(dbPath: string): OpenedDatabase {
-  ensureParentDir(dbPath);
-  const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(dbPath);
-  const walMaintenance = configureSqliteWalMaintenance(db);
-  db.exec("PRAGMA busy_timeout = 5000");
-  db.exec(PROXY_CAPTURE_SCHEMA_SQL);
-  return { db, walMaintenance };
-}
 
 function serializeJson(value: unknown): string | null {
   return value == null ? null : JSON.stringify(value);
@@ -70,26 +49,8 @@ function sortObservedCounts(counts: Map<string, number>): CaptureObservedDimensi
     .toSorted((left, right) => right.count - left.count || left.value.localeCompare(right.value));
 }
 
-type CaptureSessionRow = {
-  id: string;
-  startedAt: number;
-  endedAt: number | null;
-  mode: string;
-  sourceProcess: string;
-  proxyUrl: string | null;
-  eventCount: number;
-};
-
-type BlobIdRow = {
-  blobId: string | null;
-};
-
-type CountRow = {
-  count: number;
-};
-
 function getCaptureKysely(db: DatabaseSync) {
-  return getNodeSqliteKysely<ProxyCaptureKyselyDatabase>(db);
+  return getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
 }
 
 function captureBlobRecordFromEncoded(
@@ -110,9 +71,11 @@ function countTable(
   table: "capture_blobs" | "capture_events" | "capture_sessions",
 ): number {
   return (
-    executeSqliteQueryTakeFirstSync<CountRow>(
+    executeSqliteQueryTakeFirstSync(
       db,
-      getCaptureKysely(db).selectFrom(table).select((eb) => eb.fn.countAll<number>().as("count")),
+      getCaptureKysely(db)
+        .selectFrom(table)
+        .select((eb) => eb.fn.countAll<number>().as("count")),
     )?.count ?? 0
   );
 }
@@ -123,24 +86,20 @@ function assertNeverCaptureQueryPreset(preset: never): never {
 
 export class DebugProxyCaptureStore {
   readonly db: DatabaseSync;
-  private readonly walMaintenance: SqliteWalMaintenance;
+  readonly stateDatabasePath: string;
   private closed = false;
 
-  constructor(
-    readonly dbPath: string,
-    readonly blobDir: string,
-  ) {
-    const opened = openDatabase(dbPath);
+  constructor() {
+    const opened = openOpenClawStateDatabase();
     this.db = opened.db;
-    this.walMaintenance = opened.walMaintenance;
+    this.stateDatabasePath = opened.path;
   }
 
   close(): void {
     if (this.closed) {
       return;
     }
-    this.walMaintenance.close();
-    this.db.close();
+    clearNodeSqliteKyselyCacheForDatabase(this.db);
     this.closed = true;
   }
 
@@ -161,8 +120,6 @@ export class DebugProxyCaptureStore {
           source_scope: session.sourceScope,
           source_process: session.sourceProcess,
           proxy_url: session.proxyUrl ?? null,
-          db_path: session.dbPath,
-          blob_dir: session.blobDir,
         })
         .onConflict((conflict) =>
           conflict.column("id").doUpdateSet({
@@ -186,7 +143,7 @@ export class DebugProxyCaptureStore {
 
   persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord {
     const encoded = encodeCaptureBlob({ data, contentType });
-    const row: Insertable<ProxyCaptureKyselyDatabase["capture_blobs"]> = {
+    const row: Insertable<OpenClawStateKyselyDatabase["capture_blobs"]> = {
       blob_id: encoded.blobId,
       content_type: encoded.contentType ?? null,
       encoding: encoded.encoding,
@@ -236,7 +193,7 @@ export class DebugProxyCaptureStore {
   }
 
   listSessions(limit = 50): CaptureSessionSummary[] {
-    const rows = executeSqliteQuerySync<CaptureSessionRow>(
+    const rows = executeSqliteQuerySync(
       this.db,
       getCaptureKysely(this.db)
         .selectFrom("capture_sessions as s")
@@ -266,7 +223,7 @@ export class DebugProxyCaptureStore {
   }
 
   getSessionEvents(sessionId: string, limit = 500): Array<Record<string, unknown>> {
-    return executeSqliteQuerySync<Record<string, unknown>>(
+    return executeSqliteQuerySync(
       this.db,
       getCaptureKysely(this.db)
         .selectFrom("capture_events")
@@ -301,7 +258,7 @@ export class DebugProxyCaptureStore {
   }
 
   summarizeSessionCoverage(sessionId: string): CaptureSessionCoverageSummary {
-    const rows = executeSqliteQuerySync<{ host: string | null; metaJson: string | null }>(
+    const rows = executeSqliteQuerySync(
       this.db,
       getCaptureKysely(this.db)
         .selectFrom("capture_events")
@@ -356,7 +313,7 @@ export class DebugProxyCaptureStore {
   }
 
   readBlob(blobId: string): string | null {
-    const row = executeSqliteQueryTakeFirstSync<{ data: Buffer }>(
+    const row = executeSqliteQueryTakeFirstSync(
       this.db,
       getCaptureKysely(this.db)
         .selectFrom("capture_blobs")
@@ -367,11 +324,15 @@ export class DebugProxyCaptureStore {
     return row ? decodeCaptureBlobText(Buffer.from(row.data)) : null;
   }
 
+  queryPreset<Preset extends CaptureQueryPreset>(
+    preset: Preset,
+    sessionId?: string,
+  ): CaptureQueryRowsByPreset[Preset][];
   queryPreset(preset: CaptureQueryPreset, sessionId?: string): CaptureQueryRow[] {
     const db = getCaptureKysely(this.db);
     switch (preset) {
       case "double-sends":
-        return executeSqliteQuerySync<CaptureQueryRow>(
+        return executeSqliteQuerySync(
           this.db,
           db
             .selectFrom("capture_events")
@@ -389,7 +350,7 @@ export class DebugProxyCaptureStore {
             .orderBy("host", "asc"),
         ).rows;
       case "retry-storms":
-        return executeSqliteQuerySync<CaptureQueryRow>(
+        return executeSqliteQuerySync(
           this.db,
           db
             .selectFrom("capture_events")
@@ -403,7 +364,7 @@ export class DebugProxyCaptureStore {
             .orderBy("host", "asc"),
         ).rows;
       case "cache-busting":
-        return executeSqliteQuerySync<CaptureQueryRow>(
+        return executeSqliteQuerySync(
           this.db,
           db
             .selectFrom("capture_events")
@@ -422,7 +383,7 @@ export class DebugProxyCaptureStore {
             .orderBy("host", "asc"),
         ).rows;
       case "ws-duplicate-frames":
-        return executeSqliteQuerySync<CaptureQueryRow>(
+        return executeSqliteQuerySync(
           this.db,
           db
             .selectFrom("capture_events")
@@ -442,7 +403,7 @@ export class DebugProxyCaptureStore {
           .where("kind", "=", "ws-frame")
           .where("direction", "=", "inbound")
           .$if(Boolean(sessionId), (qb) => qb.where("session_id", "=", sessionId ?? ""));
-        return executeSqliteQuerySync<CaptureQueryRow>(
+        return executeSqliteQuerySync(
           this.db,
           db
             .selectFrom("capture_events")
@@ -461,7 +422,7 @@ export class DebugProxyCaptureStore {
         ).rows;
       }
       case "error-bursts":
-        return executeSqliteQuerySync<CaptureQueryRow>(
+        return executeSqliteQuerySync(
           this.db,
           db
             .selectFrom("capture_events")
@@ -495,79 +456,79 @@ export class DebugProxyCaptureStore {
     if (uniqueSessionIds.length === 0) {
       return { sessions: 0, events: 0, blobs: 0 };
     }
-    const db = getCaptureKysely(this.db);
-    const blobRows = executeSqliteQuerySync<BlobIdRow>(
-      this.db,
-      db
-        .selectFrom("capture_events")
-        .select("data_blob_id as blobId")
-        .distinct()
-        .where("session_id", "in", uniqueSessionIds)
-        .where("data_blob_id", "is not", null),
-    ).rows;
-    const eventCount =
-      executeSqliteQueryTakeFirstSync<CountRow>(
+    return runSqliteImmediateTransactionSync(this.db, () => {
+      const db = getCaptureKysely(this.db);
+      const blobRows = executeSqliteQuerySync(
         this.db,
         db
           .selectFrom("capture_events")
-          .select(sql<number>`COUNT(*)`.as("count"))
-          .where("session_id", "in", uniqueSessionIds),
-      )?.count ?? 0;
-    const sessionCount =
-      executeSqliteQueryTakeFirstSync<CountRow>(
-        this.db,
-        db
-          .selectFrom("capture_sessions")
-          .select(sql<number>`COUNT(*)`.as("count"))
-          .where("id", "in", uniqueSessionIds),
-      )?.count ?? 0;
-    executeSqliteQuerySync(
-      this.db,
-      db.deleteFrom("capture_events").where("session_id", "in", uniqueSessionIds),
-    );
-    executeSqliteQuerySync(
-      this.db,
-      db.deleteFrom("capture_sessions").where("id", "in", uniqueSessionIds),
-    );
-    const candidateBlobIds = blobRows
-      .map((row) => row.blobId?.trim())
-      .filter((blobId): blobId is string => Boolean(blobId));
-    const remainingBlobRefs =
-      candidateBlobIds.length > 0
-        ? new Set(
-            executeSqliteQuerySync<BlobIdRow>(
-              this.db,
-              db
-                .selectFrom("capture_events")
-                .select("data_blob_id as blobId")
-                .distinct()
-                .where("data_blob_id", "in", candidateBlobIds)
-                .where("data_blob_id", "is not", null),
-            )
-              .rows.map((row) => row.blobId?.trim())
-              .filter((blobId): blobId is string => Boolean(blobId)),
-          )
-        : new Set<string>();
-    const orphanBlobIds = candidateBlobIds.filter((blobId) => !remainingBlobRefs.has(blobId));
-    if (orphanBlobIds.length > 0) {
+          .select("data_blob_id as blobId")
+          .distinct()
+          .where("session_id", "in", uniqueSessionIds)
+          .where("data_blob_id", "is not", null),
+      ).rows;
+      const eventCount =
+        executeSqliteQueryTakeFirstSync(
+          this.db,
+          db
+            .selectFrom("capture_events")
+            .select((eb) => eb.fn.countAll<number>().as("count"))
+            .where("session_id", "in", uniqueSessionIds),
+        )?.count ?? 0;
+      const sessionCount =
+        executeSqliteQueryTakeFirstSync(
+          this.db,
+          db
+            .selectFrom("capture_sessions")
+            .select((eb) => eb.fn.countAll<number>().as("count"))
+            .where("id", "in", uniqueSessionIds),
+        )?.count ?? 0;
       executeSqliteQuerySync(
         this.db,
-        db.deleteFrom("capture_blobs").where("blob_id", "in", orphanBlobIds),
+        db.deleteFrom("capture_events").where("session_id", "in", uniqueSessionIds),
       );
-    }
-    return { sessions: sessionCount, events: eventCount, blobs: orphanBlobIds.length };
+      executeSqliteQuerySync(
+        this.db,
+        db.deleteFrom("capture_sessions").where("id", "in", uniqueSessionIds),
+      );
+      const candidateBlobIds = blobRows
+        .map((row) => row.blobId?.trim())
+        .filter((blobId): blobId is string => Boolean(blobId));
+      const remainingBlobRefs =
+        candidateBlobIds.length > 0
+          ? new Set(
+              executeSqliteQuerySync(
+                this.db,
+                db
+                  .selectFrom("capture_events")
+                  .select("data_blob_id as blobId")
+                  .distinct()
+                  .where("data_blob_id", "in", candidateBlobIds)
+                  .where("data_blob_id", "is not", null),
+              )
+                .rows.map((row) => row.blobId?.trim())
+                .filter((blobId): blobId is string => Boolean(blobId)),
+            )
+          : new Set<string>();
+      const orphanBlobIds = candidateBlobIds.filter((blobId) => !remainingBlobRefs.has(blobId));
+      if (orphanBlobIds.length > 0) {
+        executeSqliteQuerySync(
+          this.db,
+          db.deleteFrom("capture_blobs").where("blob_id", "in", orphanBlobIds),
+        );
+      }
+      return { sessions: sessionCount, events: eventCount, blobs: orphanBlobIds.length };
+    });
   }
 }
 
 let cachedStore: DebugProxyCaptureStore | null = null;
-let cachedKey = "";
 let cachedStoreLeases = 0;
 
-export function getDebugProxyCaptureStore(dbPath: string, blobDir: string): DebugProxyCaptureStore {
-  const key = `${dbPath}:${blobDir}`;
-  if (!cachedStore || cachedStore.isClosed || cachedKey !== key) {
-    cachedStore = new DebugProxyCaptureStore(dbPath, blobDir);
-    cachedKey = key;
+export function getDebugProxyCaptureStore(): DebugProxyCaptureStore {
+  const stateDatabasePath = resolveOpenClawStateSqlitePath();
+  if (!cachedStore || cachedStore.isClosed || cachedStore.stateDatabasePath !== stateDatabasePath) {
+    cachedStore = new DebugProxyCaptureStore();
     cachedStoreLeases = 0;
   }
   return cachedStore;
@@ -579,16 +540,14 @@ export function closeDebugProxyCaptureStore(): void {
   }
   cachedStore.close();
   cachedStore = null;
-  cachedKey = "";
   cachedStoreLeases = 0;
 }
 
-export function acquireDebugProxyCaptureStore(
-  dbPath: string,
-  blobDir: string,
-): { store: DebugProxyCaptureStore; release: () => void } {
-  const store = getDebugProxyCaptureStore(dbPath, blobDir);
-  const key = cachedKey;
+export function acquireDebugProxyCaptureStore(): {
+  store: DebugProxyCaptureStore;
+  release: () => void;
+} {
+  const store = getDebugProxyCaptureStore();
   cachedStoreLeases += 1;
   let released = false;
   return {
@@ -599,7 +558,7 @@ export function acquireDebugProxyCaptureStore(
       }
       released = true;
       cachedStoreLeases = Math.max(0, cachedStoreLeases - 1);
-      if (cachedStoreLeases === 0 && cachedStore === store && cachedKey === key) {
+      if (cachedStoreLeases === 0 && cachedStore === store) {
         closeDebugProxyCaptureStore();
       }
     },
