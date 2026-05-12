@@ -23,6 +23,7 @@ import {
   resolveApnsAuthConfigFromEnv,
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
+import { refreshRemoteNodeBins } from "../../infra/skills-remote.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -750,6 +751,22 @@ export const nodeHandlers: GatewayRequestHandlers = {
         },
         { dropIfSlow: true },
       );
+      const connectedNode = context.nodeRegistry.get(approvedNode.nodeId);
+      if (connectedNode) {
+        void refreshRemoteNodeBins({
+          nodeId: connectedNode.nodeId,
+          platform: connectedNode.platform,
+          deviceFamily: connectedNode.deviceFamily,
+          commands: connectedNode.commands,
+          cfg: context.getRuntimeConfig(),
+        }).catch((err) =>
+          context.logGateway.warn(
+            `remote bin probe failed after node pairing approval for ${approvedNode.nodeId}: ${formatErrorMessage(
+              err,
+            )}`,
+          ),
+        );
+      }
       respond(true, approved, undefined);
     });
   },

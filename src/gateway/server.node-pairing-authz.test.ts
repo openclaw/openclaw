@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
@@ -6,6 +10,7 @@ import {
   listNodePairing,
   requestNodePairing,
 } from "../infra/node-pairing.js";
+import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   issueOperatorToken,
@@ -19,6 +24,7 @@ import {
   installGatewayTestHooks,
   rpcReq,
   startServerWithClient,
+  testState,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -319,6 +325,121 @@ describe("gateway node pairing authorization", () => {
       started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();
+    }
+  });
+
+  test("refreshes remote bins after approving a connected macOS node", async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-pair-skills-"));
+    const bin = `bin-${randomUUID()}`;
+    fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspaceDir, "remote-skill", "SKILL.md"),
+      [
+        "---",
+        "name: remote-skill",
+        "description: Needs a remote bin",
+        `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
+        "---",
+        "# Remote Skill",
+        "",
+      ].join("\n"),
+    );
+    testState.agentConfig = { workspace: workspaceDir };
+    const previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    let started: Awaited<ReturnType<typeof startServerWithClient>> | undefined;
+    let probeCount = 0;
+    let nodeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    try {
+      started = await startServerWithClient("secret");
+      const activeStarted = started;
+      const pairedNode = await pairDeviceIdentity({
+        name: "node-approval-refreshes-bins",
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+      });
+
+      await connectOk(activeStarted.ws, { token: "secret" });
+      nodeClient = await connectNodeClient({
+        port: activeStarted.port,
+        deviceIdentity: pairedNode.identity,
+        commands: ["system.run", "system.which"],
+        onEvent: (evt) => {
+          if (evt.event !== "node.invoke.request") {
+            return;
+          }
+          const payload = evt.payload as {
+            id?: unknown;
+            nodeId?: unknown;
+            command?: unknown;
+          };
+          if (payload.command !== "system.which") {
+            return;
+          }
+          const id = typeof payload.id === "string" ? payload.id : "";
+          const nodeId = typeof payload.nodeId === "string" ? payload.nodeId : "";
+          if (!id || !nodeId) {
+            return;
+          }
+          probeCount += 1;
+          void nodeClient?.request("node.invoke.result", {
+            id,
+            nodeId,
+            ok: true,
+            payloadJSON: JSON.stringify({ bins: { [bin]: `/usr/bin/${bin}` } }),
+          });
+        },
+      });
+
+      let requestId = "";
+      await vi.waitFor(
+        async () => {
+          const list = await rpcReq<{
+            pending?: Array<{ requestId?: string; nodeId?: string; commands?: string[] }>;
+          }>(activeStarted.ws, "node.pair.list", {});
+          const pending = list.payload?.pending?.find(
+            (entry) => entry.nodeId === pairedNode.identity.deviceId,
+          );
+          if (!pending?.requestId) {
+            throw new Error("expected pending node pairing request");
+          }
+          requestId = pending.requestId;
+        },
+        {
+          timeout: 5_000,
+          interval: 50,
+        },
+      );
+      expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
+
+      const approve = await rpcReq(activeStarted.ws, "node.pair.approve", { requestId });
+      expect(approve.ok).toBe(true);
+
+      await vi.waitFor(
+        () => {
+          if (probeCount !== 1 || !(getRemoteSkillEligibility()?.hasBin(bin) ?? false)) {
+            throw new Error("expected remote bin refresh after node approval");
+          }
+        },
+        {
+          timeout: 5_000,
+          interval: 50,
+        },
+      );
+    } finally {
+      await nodeClient?.stopAndWait();
+      started?.ws.close();
+      await started?.server.close();
+      started?.envSnapshot.restore();
+      if (previousMinimalGateway === undefined) {
+        delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+      } else {
+        process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
+      }
+      testState.agentConfig = undefined;
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
     }
   });
 
