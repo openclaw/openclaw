@@ -8,7 +8,7 @@ metadata:
       env: [AGENTGLOB_RUNTIME_URL, AGENTGLOB_RUNTIME_TOKEN]
 ---
 
-# Rain skill (V2 Phase A)
+# Rain skill (V2 Phase B)
 
 This skill is **optional prompt-level guidance** for agents that have the
 `rain` MCP server added (from the dashboard's Tools tab quick-setup). It
@@ -150,6 +150,12 @@ LP shares are redeemable via `rain_build_claim` once the market finalises — th
 ## Price history (`rain_get_price_history`)
 
 Use to surface price charts or inform limit-sell price selection. Returns OHLCV candles — `open`, `high`, `low`, `close`, `volume`, `trades` per candle. All numeric fields are serialized as strings (bigint). Available intervals: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`, `1w`.
+
+## Capability introspection (`rain_get_capabilities`)
+
+When the user asks "what Rain features do I have?" or "list everything you can do with Rain", call `rain_get_capabilities` and answer from its response. Do not answer from memory — the deployed tool surface is authoritative, and your training-time view may lag the current build.
+
+The response includes a `capabilityVersion` and `phase` tag. If the user reports a missing feature that this skill claims should exist, compare these against the values documented here — a mismatch means the gateway image is stale and needs to be redeployed.
 
 ## Capabilities NOT in this version
 

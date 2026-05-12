@@ -22,6 +22,14 @@ export interface ToolDef {
   handler: (client: RainRuntimeClient, args: Record<string, unknown>) => Promise<unknown>;
 }
 
+/**
+ * Bumped when the Rain MCP tool surface changes (add/remove/rename/contract
+ * change). Operators read this via rain_get_capabilities to detect stale
+ * gateway deploys without having to inspect git SHAs.
+ */
+const RAIN_CAPABILITY_VERSION = "2026-05-11";
+const RAIN_CAPABILITY_PHASE = "V2 Phase B";
+
 const MARKET_STATUSES = [
   "Live",
   "New",
@@ -596,5 +604,21 @@ export const RAIN_TOOLS: ToolDef[] = [
       client.getMarketTransactions(asString(args.marketAddress), {
         first: asOptionalNumber(args.first),
       }),
+  },
+  {
+    name: "rain_get_capabilities",
+    description:
+      "List every Rain MCP tool this worker exposes, with a capability version and phase tag. Use this when asked to enumerate available Rain features, or to verify a gateway deploy is current.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    handler: async () => ({
+      capabilityVersion: RAIN_CAPABILITY_VERSION,
+      phase: RAIN_CAPABILITY_PHASE,
+      toolCount: RAIN_TOOLS.length,
+      tools: RAIN_TOOLS.map(({ name, description }) => ({ name, description })),
+    }),
   },
 ];
