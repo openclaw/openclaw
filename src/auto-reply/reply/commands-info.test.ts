@@ -53,7 +53,7 @@ vi.mock("../status.js", async () => {
 
 function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
   expect(mock.mock.calls).toHaveLength(1);
-  const [arg] = mock.mock.calls.at(0) ?? [];
+  const [arg] = mock.mock.calls[0] ?? [];
   if (!arg) {
     throw new Error(`expected ${label} to receive arguments`);
   }
@@ -243,13 +243,11 @@ describe("info command handlers", () => {
     const statusResult = await handleStatusCommand(params, true);
 
     expect(statusResult?.shouldContinue).toBe(false);
-    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionEntry: expect.objectContaining({
-          sessionId: "status-session",
-        }),
-      }),
-    );
+    const statusReplyParams = firstMockArg(
+      vi.mocked(buildStatusReply),
+      "buildStatusReply",
+    ) as Parameters<typeof buildStatusReply>[0];
+    expect(statusReplyParams.sessionEntry?.sessionId).toBe("status-session");
   });
 
   it("prefers the target session entry when routing /status", async () => {
