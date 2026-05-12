@@ -5,7 +5,7 @@ import { readSqliteSessionRoutingInfo } from "../config/sessions/session-entries
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { logWarn } from "../logger.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -261,6 +261,32 @@ function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
   return [raw];
 }
 
+function resolveGroupContextFromParsedSessionKey(sessionKey?: string | null): {
+  channel?: string;
+  groupIds?: string[];
+} {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return {};
+  }
+  const parts = parsed.rest.split(":").filter(Boolean);
+  if (parts.length < 3) {
+    return {};
+  }
+  const [channel, kind, ...groupParts] = parts;
+  if (kind !== "group" && kind !== "channel") {
+    return {};
+  }
+  const groupId = groupParts.join(":").trim();
+  if (!groupId) {
+    return {};
+  }
+  return {
+    channel: normalizeLowercaseStringOrEmpty(channel),
+    groupIds: buildScopedGroupIdCandidates(groupId),
+  };
+}
+
 function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   channel?: string;
   groupIds?: string[];
@@ -276,15 +302,15 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
       sessionKey: raw,
     });
   } catch {
-    return {};
+    return resolveGroupContextFromParsedSessionKey(raw);
   }
   const kind = routingInfo?.conversationKind ?? routingInfo?.chatType;
   if (kind !== "group" && kind !== "channel") {
-    return {};
+    return resolveGroupContextFromParsedSessionKey(raw);
   }
   const groupId = routingInfo?.conversationPeerId?.trim();
   if (!groupId) {
-    return {};
+    return resolveGroupContextFromParsedSessionKey(raw);
   }
   return {
     channel: normalizeLowercaseStringOrEmpty(routingInfo?.channel),
