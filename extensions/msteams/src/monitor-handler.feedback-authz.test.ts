@@ -216,7 +216,7 @@ describe("msteams feedback invoke authz", () => {
           stateDir: tmpDir,
           sessionId: "msteams:direct:owner-aad",
         });
-        expect(Object.keys(event ?? {}).sort()).toEqual([
+        expect(Object.keys(event ?? {}).toSorted()).toEqual([
           "agentId",
           "comment",
           "conversationId",
@@ -274,7 +274,7 @@ describe("msteams feedback invoke authz", () => {
           stateDir: tmpDir,
           sessionId: "msteams:direct:owner-aad",
         });
-        expect(Object.keys(event ?? {}).sort()).toEqual([
+        expect(Object.keys(event ?? {}).toSorted()).toEqual([
           "agentId",
           "comment",
           "conversationId",
