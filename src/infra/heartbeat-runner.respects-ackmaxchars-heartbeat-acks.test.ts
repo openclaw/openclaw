@@ -79,7 +79,7 @@ describe("runHeartbeatOnce ack handling", () => {
 
   function expectTelegramMessageSend(
     send: ReturnType<typeof vi.fn>,
-    params: { to: string; text: string; cfg: OpenClawConfig },
+    params: { to: string; text: string; cfg: OpenClawConfig; accountId?: string },
   ) {
     expect(send.mock.calls).toEqual([
       [
@@ -88,7 +88,7 @@ describe("runHeartbeatOnce ack handling", () => {
         {
           verbose: false,
           cfg: params.cfg,
-          accountId: undefined,
+          accountId: params.accountId ?? "default",
         },
       ],
     ]);
@@ -96,7 +96,7 @@ describe("runHeartbeatOnce ack handling", () => {
 
   function expectWhatsAppMessageSend(
     send: ReturnType<typeof vi.fn>,
-    params: { to: string; text: string; cfg: OpenClawConfig },
+    params: { to: string; text: string; cfg: OpenClawConfig; accountId?: string },
   ) {
     expect(send.mock.calls).toEqual([
       [
@@ -105,7 +105,7 @@ describe("runHeartbeatOnce ack handling", () => {
         {
           verbose: false,
           cfg: params.cfg,
-          accountId: undefined,
+          accountId: params.accountId ?? "default",
           audioAsVoice: undefined,
           forceDocument: undefined,
           formatting: undefined,
@@ -282,7 +282,7 @@ describe("runHeartbeatOnce ack handling", () => {
     },
   ])("$title", async ({ replyText, messages, expectedCalls, expectedText }) => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, agentId, replySpy }) => {
-      const sendTelegram = await runTelegramHeartbeatWithDefaults({
+      const { sendTelegram, cfg } = await runTelegramHeartbeatWithDefaults({
         tmpDir,
         agentId,
         replySpy,
@@ -430,7 +430,7 @@ describe("runHeartbeatOnce ack handling", () => {
   async function expectTelegramHeartbeatAccountId(params: {
     heartbeat: Record<string, unknown>;
     telegram: Record<string, unknown>;
-    expectedAccountId: string | undefined;
+    expectedAccountId: string;
   }): Promise<void> {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, agentId, replySpy }) => {
       const cfg = createHeartbeatConfig({
@@ -466,20 +466,20 @@ describe("runHeartbeatOnce ack handling", () => {
 
   it.each([
     {
-      title: "passes through accountId for telegram heartbeats",
+      title: "passes through the default accountId for telegram heartbeats",
       heartbeat: { every: "5m", target: "telegram" },
       telegram: { botToken: "test-bot-token-123" },
-      expectedAccountId: undefined,
+      expectedAccountId: "default",
     },
     {
-      title: "does not pre-resolve telegram accountId (allows config-only account tokens)",
+      title: "uses the default accountId for config-only account tokens",
       heartbeat: { every: "5m", target: "telegram" },
       telegram: {
         accounts: {
           work: { botToken: "test-bot-token-123" },
         },
       },
-      expectedAccountId: undefined,
+      expectedAccountId: "default",
     },
     {
       title: "uses explicit heartbeat accountId for telegram delivery",
