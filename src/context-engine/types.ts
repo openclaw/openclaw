@@ -61,6 +61,69 @@ export type CompactResult = {
   };
 };
 
+/**
+ * Request payload for {@link ContextEngine.interceptCompaction}.
+ *
+ * Mirrors the fields the runtime supplies when emitting the
+ * `session_before_compact` event in {@link
+ * https://github.com/mariozechner/pi-coding-agent | pi-coding-agent} so engines
+ * can produce a replacement compaction without depending on the SDK event type
+ * directly.
+ */
+export type CompactionInterceptRequest = {
+  /** Session id of the conversation to intercept compaction for. */
+  sessionId: string;
+  /** Optional session key (agent:id:suffix form). */
+  sessionKey?: string;
+  /** On-disk path to the session jsonl. */
+  sessionFile: string;
+  /** Total context window in tokens (when known). */
+  tokenBudget?: number;
+  /** Best-effort current token estimate at the time of compaction. */
+  currentTokenCount?: number;
+  /** First entry id the runtime intends to keep verbatim (compaction boundary). */
+  firstKeptEntryId: string;
+  /** Pre-compaction token count reported by the runtime. */
+  tokensBefore: number;
+  /**
+   * Trigger source for the compaction request. Useful for routing/diagnostics
+   * (e.g. honoring different cadence policies for overflow vs in-attempt-auto).
+   */
+  trigger?: "in-attempt-auto" | "overflow" | "timeout" | "manual";
+  /** Abort signal honored before and during compaction. */
+  signal?: AbortSignal;
+};
+
+/**
+ * Result payload for {@link ContextEngine.interceptCompaction}.
+ *
+ * `handled: true` provides a replacement compaction that the runtime uses in
+ * place of its default GPT-driven path. `handled: false` opts out and the
+ * runtime falls back to its default (codex compaction or safeguard
+ * summarization, depending on configuration).
+ */
+export type CompactionInterceptResult =
+  | {
+      /** True when the engine produced a replacement compaction. */
+      handled: true;
+      /** Summary text to use in place of the runtime's default compaction. */
+      summary: string;
+      /** First entry id retained after compaction. */
+      firstKeptEntryId: string;
+      /** Token count before compaction (echoed from request). */
+      tokensBefore: number;
+      /** Estimated token count after compaction (diagnostic, optional). */
+      tokensAfter?: number;
+      /** Optional engine-specific diagnostic payload. */
+      details?: unknown;
+    }
+  | {
+      /** False when the engine declines to intercept; the caller falls back. */
+      handled: false;
+      /** Short reason code for diagnostics (e.g. "session-ignored"). */
+      reason: string;
+    };
+
 export type IngestResult = {
   /** Whether the message was ingested (false if duplicate or no-op) */
   ingested: boolean;
@@ -86,6 +149,20 @@ export type ContextEngineInfo = {
   version?: string;
   /** True when the engine manages its own compaction lifecycle. */
   ownsCompaction?: boolean;
+  /**
+   * True when the engine implements {@link ContextEngine.interceptCompaction}
+   * and intends to override the runtime's default `session_before_compact`
+   * compaction path with its own assembly.
+   *
+   * Distinct from {@link ownsCompaction}: engines that fully own compaction
+   * never see the runtime event at all, while engines that intercept run
+   * alongside the runtime and only replace the summarization step.
+   *
+   * The host treats this as authoritative for capability gating (e.g. it
+   * auto-zeroes Pi's `reserveTokensFloor` headroom reserve when this is true,
+   * because the engine takes responsibility for post-compaction headroom).
+   */
+  interceptsCompaction?: boolean;
   /**
    * Controls how turn-triggered maintenance should be executed.
    *
@@ -326,6 +403,26 @@ export interface ContextEngine {
      */
     abortSignal?: AbortSignal;
   }): Promise<CompactResult>;
+
+  /**
+   * Intercept the runtime's `session_before_compact` event and produce a
+   * replacement compaction summary in place of the default GPT-driven path.
+   *
+   * Engines that implement this MUST set `info.interceptsCompaction = true`
+   * so the host can apply intercept-aware capability gating (e.g. zeroing
+   * Pi's `reserveTokensFloor` headroom reserve).
+   *
+   * Return `{ handled: true, ... }` to supply a replacement compaction
+   * (runtime uses the summary, skips its default path). Return
+   * `{ handled: false, reason }` to opt out (runtime falls back to its
+   * default — codex compaction or safeguard summarization).
+   *
+   * This method MUST never throw across the call boundary — defensive
+   * engines should catch internal errors and return
+   * `{ handled: false, reason: "..." }`. The host treats a thrown error as
+   * `handled: false` and falls back to its default path.
+   */
+  interceptCompaction?(params: CompactionInterceptRequest): Promise<CompactionInterceptResult>;
 
   /**
    * Prepare context-engine-managed subagent state before the child run starts.
