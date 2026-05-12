@@ -38,7 +38,6 @@ import {
 import {
   formatIMessageChatTarget,
   isAllowedIMessageReplyContextSender,
-  isAllowedIMessageSender,
   normalizeIMessageHandle,
   parseIMessageAllowTarget,
 } from "../targets.js";
