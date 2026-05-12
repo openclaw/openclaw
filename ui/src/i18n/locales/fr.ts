@@ -81,6 +81,9 @@ export const fr: TranslationMap = {
     logout: "Se déconnecter",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "Santé du canal",
       subtitle: "Instantanés de l’état du canal depuis le gateway.",
@@ -439,6 +442,7 @@ export const fr: TranslationMap = {
     access: {
       title: "Accès Gateway",
       subtitle: "Où le tableau de bord se connecte et comment il s’authentifie.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "URL WebSocket",
       token: "Jeton Gateway",
       password: "Mot de passe (non enregistré)",
@@ -457,6 +461,7 @@ export const fr: TranslationMap = {
     snapshot: {
       title: "Capture",
       subtitle: "Dernières informations de handshake du Gateway.",
+      tick: "{seconds}s",
       status: "Statut",
       uptime: "Temps de fonctionnement",
       tickInterval: "Intervalle de tick",

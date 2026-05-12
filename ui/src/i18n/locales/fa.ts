@@ -81,6 +81,9 @@ export const fa: TranslationMap = {
     logout: "خروج",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "سلامت کانال",
       subtitle: "نماهای لحظه‌ای وضعیت کانال از Gateway.",
@@ -438,6 +441,7 @@ export const fa: TranslationMap = {
     access: {
       title: "دسترسی Gateway",
       subtitle: "محل اتصال داشبورد و روش احراز هویت آن.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "URL WebSocket",
       token: "توکن Gateway",
       password: "گذرواژه (ذخیره نمی‌شود)",
@@ -456,6 +460,7 @@ export const fa: TranslationMap = {
     snapshot: {
       title: "نما",
       subtitle: "آخرین اطلاعات دست‌دهی Gateway.",
+      tick: "{seconds}s",
       status: "وضعیت",
       uptime: "زمان کارکرد",
       tickInterval: "فاصله Tick",

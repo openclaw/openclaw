@@ -81,6 +81,9 @@ export const ar: TranslationMap = {
     logout: "تسجيل الخروج",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "صحة القنوات",
       subtitle: "لقطات حالة القنوات من Gateway.",
@@ -436,6 +439,7 @@ export const ar: TranslationMap = {
     access: {
       title: "الوصول إلى Gateway",
       subtitle: "مكان اتصال لوحة المعلومات وكيفية مصادقتها.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "عنوان URL لـ WebSocket",
       token: "رمز Gateway",
       password: "كلمة المرور (غير مخزنة)",
@@ -454,6 +458,7 @@ export const ar: TranslationMap = {
     snapshot: {
       title: "لقطة",
       subtitle: "أحدث معلومات مصافحة Gateway.",
+      tick: "{seconds}s",
       status: "الحالة",
       uptime: "مدة التشغيل",
       tickInterval: "فاصل النبض",

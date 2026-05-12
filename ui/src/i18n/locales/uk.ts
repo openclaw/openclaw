@@ -81,6 +81,9 @@ export const uk: TranslationMap = {
     logout: "Вийти",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "Стан каналу",
       subtitle: "Знімки стану каналу з Gateway.",
@@ -438,6 +441,7 @@ export const uk: TranslationMap = {
     access: {
       title: "Доступ до шлюзу",
       subtitle: "Куди підключається панель керування та як вона автентифікується.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "URL WebSocket",
       token: "Токен шлюзу",
       password: "Пароль (не зберігається)",
@@ -456,6 +460,7 @@ export const uk: TranslationMap = {
     snapshot: {
       title: "Знімок",
       subtitle: "Остання інформація рукостискання шлюзу.",
+      tick: "{seconds}s",
       status: "Статус",
       uptime: "Час роботи",
       tickInterval: "Інтервал тіку",

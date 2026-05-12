@@ -81,6 +81,9 @@ export const th: TranslationMap = {
     logout: "ออกจากระบบ",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "สถานะช่องทาง",
       subtitle: "ภาพรวมสถานะของช่องทางจากเกตเวย์",
@@ -435,6 +438,7 @@ export const th: TranslationMap = {
     access: {
       title: "การเข้าถึงเกตเวย์",
       subtitle: "ตำแหน่งที่แดชบอร์ดเชื่อมต่อและวิธีการยืนยันตัวตน",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "WebSocket URL",
       token: "Gateway Token",
       password: "รหัสผ่าน (ไม่จัดเก็บ)",
@@ -453,6 +457,7 @@ export const th: TranslationMap = {
     snapshot: {
       title: "ภาพรวมสถานะ",
       subtitle: "ข้อมูลการจับมือกับเกตเวย์ล่าสุด",
+      tick: "{seconds}s",
       status: "สถานะ",
       uptime: "เวลาทำงาน",
       tickInterval: "ช่วงเวลา Tick",

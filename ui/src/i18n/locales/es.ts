@@ -81,6 +81,9 @@ export const es: TranslationMap = {
     logout: "Cerrar sesión",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "Estado del canal",
       subtitle: "Instantáneas del estado del canal desde el Gateway.",
@@ -437,6 +440,7 @@ export const es: TranslationMap = {
     access: {
       title: "Acceso a la puerta de enlace",
       subtitle: "Dónde se conecta el panel y cómo se autentica.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "URL de WebSocket",
       token: "Token de la puerta de enlace",
       password: "Contraseña (no se guarda)",
@@ -455,6 +459,7 @@ export const es: TranslationMap = {
     snapshot: {
       title: "Instantánea",
       subtitle: "Información más reciente del saludo con la puerta de enlace.",
+      tick: "{seconds}s",
       status: "Estado",
       uptime: "Tiempo de actividad",
       tickInterval: "Intervalo de tick",

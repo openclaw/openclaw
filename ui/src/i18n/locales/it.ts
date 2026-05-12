@@ -81,6 +81,9 @@ export const it: TranslationMap = {
     logout: "Esci",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "Integrità canali",
       subtitle: "Snapshot dello stato dei canali dal gateway.",
@@ -439,6 +442,7 @@ export const it: TranslationMap = {
     access: {
       title: "Accesso Gateway",
       subtitle: "Dove si connette la dashboard e come si autentica.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "URL WebSocket",
       token: "Token Gateway",
       password: "Password (non memorizzata)",
@@ -457,6 +461,7 @@ export const it: TranslationMap = {
     snapshot: {
       title: "Snapshot",
       subtitle: "Informazioni più recenti sull'handshake del gateway.",
+      tick: "{seconds}s",
       status: "Stato",
       uptime: "Tempo di attività",
       tickInterval: "Intervallo tick",

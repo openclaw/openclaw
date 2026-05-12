@@ -99,7 +99,9 @@ export function renderOverview(props: OverviewProps) {
   const uptime = snapshot?.uptimeMs ? formatDurationHuman(snapshot.uptimeMs) : t("common.na");
   const tickIntervalMs = props.hello?.policy?.tickIntervalMs;
   const tick = tickIntervalMs
-    ? `${(tickIntervalMs / 1000).toFixed(tickIntervalMs % 1000 === 0 ? 0 : 1)}s`
+    ? t("overview.snapshot.tick", {
+        seconds: (tickIntervalMs / 1000).toFixed(tickIntervalMs % 1000 === 0 ? 0 : 1),
+      })
     : t("common.na");
   const authMode = snapshot?.authMode;
   const isTrustedProxy = authMode === "trusted-proxy";
@@ -155,8 +157,10 @@ export function renderOverview(props: OverviewProps) {
         <div class="muted" style="margin-top: 8px">
           ${t("overview.auth.required")}
           <div style="margin-top: 6px">
-            <span class="mono">openclaw dashboard --no-open</span> → tokenized URL<br />
-            <span class="mono">openclaw doctor --generate-gateway-token</span> → set token
+            <span class="mono">openclaw dashboard --no-open</span> →
+            ${t("overview.auth.tokenizedUrl")}<br />
+            <span class="mono">openclaw doctor --generate-gateway-token</span> →
+            ${t("overview.auth.setToken")}
           </div>
           <div style="margin-top: 6px">
             <a
@@ -241,10 +245,11 @@ export function renderOverview(props: OverviewProps) {
     }
     return html`
       <div class="muted" style="margin-top: 8px">
-        Auth token must be passed as a URL fragment:
-        <span class="mono">#token=&lt;token&gt;</span>. Query parameters (<span class="mono"
+        ${t("overview.auth.tokenFragment")}
+        <span class="mono">#token=&lt;token&gt;</span>. ${t("overview.auth.queryParams")} (<span
+          class="mono"
           >?token=</span
-        >) may appear in server logs.
+        >) ${t("overview.auth.serverLogs")}
       </div>
     `;
   })();
@@ -271,7 +276,7 @@ export function renderOverview(props: OverviewProps) {
                   token: v.trim() === props.settings.gatewayUrl.trim() ? props.settings.token : "",
                 });
               }}
-              placeholder="ws://100.x.y.z:18789"
+              placeholder=${t("overview.access.wsPlaceholder")}
             />
           </label>
           ${isTrustedProxy

@@ -81,6 +81,9 @@ export const ja_JP: TranslationMap = {
     logout: "ログアウト",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "チャネルの状態",
       subtitle: "Gateway からのチャネル状態スナップショット。",
@@ -440,6 +443,7 @@ export const ja_JP: TranslationMap = {
     access: {
       title: "Gateway アクセス",
       subtitle: "ダッシュボードの接続先と認証方法。",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "WebSocket URL",
       token: "Gateway トークン",
       password: "パスワード（保存されません）",
@@ -458,6 +462,7 @@ export const ja_JP: TranslationMap = {
     snapshot: {
       title: "スナップショット",
       subtitle: "最新の Gateway ハンドシェイク情報。",
+      tick: "{seconds}s",
       status: "ステータス",
       uptime: "稼働時間",
       tickInterval: "Tick 間隔",

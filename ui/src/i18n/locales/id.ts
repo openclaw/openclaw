@@ -81,6 +81,9 @@ export const id: TranslationMap = {
     logout: "Keluar",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "Kesehatan saluran",
       subtitle: "Snapshot status saluran dari gateway.",
@@ -437,6 +440,7 @@ export const id: TranslationMap = {
     access: {
       title: "Akses Gateway",
       subtitle: "Tempat dasbor terhubung dan cara autentikasinya.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "URL WebSocket",
       token: "Token Gateway",
       password: "Kata sandi (tidak disimpan)",
@@ -455,6 +459,7 @@ export const id: TranslationMap = {
     snapshot: {
       title: "Snapshot",
       subtitle: "Informasi handshake Gateway terbaru.",
+      tick: "{seconds}s",
       status: "Status",
       uptime: "Waktu aktif",
       tickInterval: "Interval Tick",

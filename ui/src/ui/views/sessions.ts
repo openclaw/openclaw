@@ -370,16 +370,20 @@ function formatRuntimeMs(runtimeMs: number | undefined): string | null {
   }
   const totalSeconds = Math.round(runtimeMs / 1000);
   if (totalSeconds < 60) {
-    return `${totalSeconds}s`;
+    return t("sessionsView.seconds", { count: String(totalSeconds) });
   }
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   if (minutes < 60) {
-    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+    return seconds > 0
+      ? t("sessionsView.minutesSeconds", { minutes: String(minutes), seconds: String(seconds) })
+      : t("sessionsView.minutes", { count: String(minutes) });
   }
   const hours = Math.floor(minutes / 60);
   const remainingMinutes = minutes % 60;
-  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+  return remainingMinutes > 0
+    ? t("sessionsView.hoursMinutes", { hours: String(hours), minutes: String(remainingMinutes) })
+    : t("sessionsView.hours", { count: String(hours) });
 }
 
 function sessionDetailItems(params: {
@@ -540,7 +544,7 @@ export function renderSessions(props: SessionsProps) {
               <div
                 id="sessions-filter-bar"
                 class="sessions-filter-bar"
-                aria-label="Session filters"
+                aria-label=${t("sessionsView.filters")}
               >
                 <div class="session-filter-primary-row">
                   <label class="session-filter-field" data-tooltip=${activeTooltip}>
@@ -732,7 +736,7 @@ export function renderSessions(props: SessionsProps) {
               <div class="data-table-pagination">
                 <div class="data-table-pagination__info">
                   ${page * props.pageSize + 1}-${Math.min((page + 1) * props.pageSize, totalRows)}
-                  of ${totalRows} row${totalRows === 1 ? "" : "s"}
+                  ${t("sessionsView.pagination.of", { count: String(totalRows) })}
                 </div>
                 <div class="data-table-pagination__controls">
                   <select
@@ -741,10 +745,15 @@ export function renderSessions(props: SessionsProps) {
                     @change=${(e: Event) =>
                       props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
                   >
-                    ${PAGE_SIZES.map((s) => html`<option value=${s}>${s} per page</option>`)}
+                    ${PAGE_SIZES.map(
+                      (s) =>
+                        html`<option value=${s}>
+                          ${t("sessionsView.perPage", { size: String(s) })}
+                        </option>`,
+                    )}
                   </select>
                   <button ?disabled=${page <= 0} @click=${() => props.onPageChange(page - 1)}>
-                    Previous
+                    ${t("common.back")}
                   </button>
                   <button
                     ?disabled=${page >= totalPages - 1}

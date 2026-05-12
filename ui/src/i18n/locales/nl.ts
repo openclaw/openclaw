@@ -81,6 +81,9 @@ export const nl: TranslationMap = {
     logout: "Uitloggen",
   },
   channels: {
+    refreshingBackground:
+      "Refreshing channel status in the background; showing the last successful snapshot.",
+    partialChecks: "Some channel checks did not finish before the UI budget.",
     health: {
       title: "Kanaalstatus",
       subtitle: "Momentopnamen van kanaalstatus vanuit de Gateway.",
@@ -439,6 +442,7 @@ export const nl: TranslationMap = {
     access: {
       title: "Gateway-toegang",
       subtitle: "Waarmee het dashboard verbinding maakt en hoe het zich authenticeert.",
+      wsPlaceholder: "ws://100.x.y.z:18789",
       wsUrl: "WebSocket-URL",
       token: "Gateway-token",
       password: "Wachtwoord (niet opgeslagen)",
@@ -457,6 +461,7 @@ export const nl: TranslationMap = {
     snapshot: {
       title: "Momentopname",
       subtitle: "Nieuwste Gateway-handshake-informatie.",
+      tick: "{seconds}s",
       status: "Status",
       uptime: "Uptime",
       tickInterval: "Tick-interval",
