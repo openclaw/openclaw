@@ -114,6 +114,7 @@ function createManagedNpmPlugin(params: {
   id: string;
   packageName: string;
   version: string;
+  peerDependencies?: Record<string, string>;
   packageLock?: boolean;
 }) {
   const npmRoot = path.join(params.stateDir, "npm");
@@ -164,6 +165,7 @@ function createManagedNpmPlugin(params: {
     JSON.stringify({
       name: params.packageName,
       version: params.version,
+      ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
       openclaw: {
         extensions: ["."],
       },
@@ -505,5 +507,39 @@ describe("maybeRepairPluginRegistryState", () => {
     expect(packageLock.packages).not.toHaveProperty("node_modules/@openclaw/google-meet");
     expect(packageLock.dependencies).not.toHaveProperty("@openclaw/google-meet");
     expect(packageLock.dependencies).toHaveProperty("other-plugin");
+  });
+
+  it("repairs managed npm openclaw peer links during registry repair", async () => {
+    const stateDir = makeTempDir();
+    const managed = createManagedNpmPlugin({
+      stateDir,
+      id: "codex",
+      packageName: "codex-plugin",
+      version: "2026.5.3",
+      peerDependencies: {
+        openclaw: ">=2026.5.3",
+      },
+    });
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithNpmRecord({
+        pluginId: "codex",
+        packageName: "codex-plugin",
+        packageDir: managed.packageDir,
+        version: "2026.5.3",
+      }),
+      { stateDir },
+    );
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      env: hermeticEnv(),
+      config: {},
+      prompter: { shouldRepair: true },
+    });
+
+    const linkPath = path.join(managed.packageDir, "node_modules", "openclaw");
+    expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(process.cwd()));
+    expect(vi.mocked(note).mock.calls.join("\n")).toContain("Repaired OpenClaw host peer link");
   });
 });
