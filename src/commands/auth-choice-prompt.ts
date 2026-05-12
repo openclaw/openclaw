@@ -1,6 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
+import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { buildAuthChoiceGroups } from "./auth-choice-options.js";
 import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
 import type { AuthChoice } from "./onboard-types.js";
@@ -20,6 +20,10 @@ function compareLabelsCaseInsensitive(a: string, b: string): number {
 
 function compareGroupsByLabel(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
   return compareLabelsCaseInsensitive(a.label, b.label);
+}
+
+function groupToOption(group: AuthChoiceGroup): WizardSelectOption {
+  return { value: group.value, label: group.label, hint: group.hint };
 }
 
 export async function promptAuthChoiceGrouped(params: {
@@ -48,17 +52,13 @@ export async function promptAuthChoiceGrouped(params: {
 
   const pickFromMore = async (): Promise<AuthChoiceOrBack> => {
     while (true) {
-      const options = moreGroups.map((group) => ({
-        value: group.value,
-        label: group.label,
-        ...(group.hint ? { hint: group.hint } : {}),
-      }));
+      const options: WizardSelectOption[] = moreGroups.map(groupToOption);
       options.push({ value: BACK_VALUE, label: "Back" });
-      const selection = (await params.prompter.select({
+      const selection = await params.prompter.select({
         message: "Model/auth provider",
         options,
         searchable: true,
-      })) as string;
+      });
       if (selection === BACK_VALUE) {
         return BACK_VALUE;
       }
@@ -76,21 +76,17 @@ export async function promptAuthChoiceGrouped(params: {
 
   // No featured groups available → fall back to the original flat list so we
   // never strand the user behind an empty "More…" indirection.
-  if (featuredGroups.length === 0) {
+  const runFlat = async (): Promise<AuthChoice> => {
     while (true) {
-      const flatOptions = [
-        ...moreGroups.map((group) => ({
-          value: group.value,
-          label: group.label,
-          ...(group.hint ? { hint: group.hint } : {}),
-        })),
-        ...(skipOption ? [{ value: skipOption.value, label: skipOption.label }] : []),
-      ];
-      const selection = (await params.prompter.select({
+      const flatOptions: WizardSelectOption[] = moreGroups.map(groupToOption);
+      if (skipOption) {
+        flatOptions.push({ value: skipOption.value, label: skipOption.label });
+      }
+      const selection = await params.prompter.select({
         message: "Model/auth provider",
         options: flatOptions,
         searchable: true,
-      })) as string;
+      });
       if (selection === "skip") {
         return "skip";
       }
@@ -108,25 +104,23 @@ export async function promptAuthChoiceGrouped(params: {
       }
       return method;
     }
+  };
+
+  if (featuredGroups.length === 0) {
+    return runFlat();
   }
 
   while (true) {
-    const topTier: Array<{ value: string; label: string; hint?: string }> = featuredGroups.map(
-      (group) => ({
-        value: group.value,
-        label: group.label,
-        ...(group.hint ? { hint: group.hint } : {}),
-      }),
-    );
+    const topTier: WizardSelectOption[] = featuredGroups.map(groupToOption);
     topTier.push({ value: MORE_VALUE, label: "More…" });
     if (skipOption) {
       topTier.push({ value: skipOption.value, label: skipOption.label });
     }
 
-    const topSelection = (await params.prompter.select({
+    const topSelection = await params.prompter.select({
       message: "Model/auth provider",
       options: topTier,
-    })) as string;
+    });
 
     if (topSelection === "skip") {
       return "skip";
