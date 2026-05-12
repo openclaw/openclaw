@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   isSilentReplyPrefixText,
+  isSilentReplyPayloadText,
   isSilentReplyText,
   startsWithSilentToken,
   stripLeadingSilentToken,
@@ -44,6 +45,25 @@ describe("isSilentReplyText", () => {
 
   it("returns false for token embedded in text", () => {
     expect(isSilentReplyText("Please NO_REPLY to this")).toBe(false);
+  });
+});
+
+describe("isSilentReplyPayloadText", () => {
+  it("returns true when leaked reasoning text ends in NO_REPLY", () => {
+    expect(
+      isSilentReplyPayloadText(
+        "think\nCav is talking about a follow-up conversation.\nI will stay quiet here.NO_REPLY",
+      ),
+    ).toBe(true);
+    expect(isSilentReplyPayloadText("<think>internal reasoning</think>\nNO_REPLY")).toBe(true);
+    expect(isSilentReplyPayloadText("<think>internal reasoning NO_REPLY")).toBe(true);
+  });
+
+  it("keeps substantive replies that also contain a trailing NO_REPLY token", () => {
+    expect(isSilentReplyPayloadText("Here is a helpful response.\n\nNO_REPLY")).toBe(false);
+    expect(
+      isSilentReplyPayloadText("<think>internal reasoning</think>\nHere is the answer.\nNO_REPLY"),
+    ).toBe(false);
   });
 });
 

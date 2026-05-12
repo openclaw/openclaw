@@ -71,11 +71,63 @@ function isSilentReplyEnvelopeText(
   }
 }
 
+const taggedReasoningPrefixRe =
+  /^\s*<\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>[\s\S]*?<\s*\/\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\s*>\s*/i;
+const openReasoningPrefixRe =
+  /^\s*<\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/i;
+const plainReasoningPrefixRe = /^\s*(?:think(?:ing)?|thought|analysis|reasoning)\s*:?\s*\r?\n/i;
+
+function stripLeadingReasoningBlocks(text: string): string {
+  let current = text;
+  while (true) {
+    const next = current.replace(taggedReasoningPrefixRe, "");
+    if (next === current) {
+      return current;
+    }
+    current = next;
+  }
+}
+
+function hasFinalSilentToken(text: string, token: string): boolean {
+  const escaped = escapeRegExp(token);
+  return new RegExp(`(?:^|[\\s*.])${escaped}\\s*$`, "i").test(text);
+}
+
+function isReasoningPrefixedSilentReplyText(
+  text: string | undefined,
+  token: string = SILENT_REPLY_TOKEN,
+): boolean {
+  if (!text) {
+    return false;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const withoutLeadingReasoningBlocks = stripLeadingReasoningBlocks(trimmed);
+  if (withoutLeadingReasoningBlocks !== trimmed) {
+    return isSilentReplyText(withoutLeadingReasoningBlocks, token);
+  }
+
+  if (openReasoningPrefixRe.test(trimmed)) {
+    return hasFinalSilentToken(trimmed, token);
+  }
+  if (!plainReasoningPrefixRe.test(trimmed)) {
+    return false;
+  }
+  return hasFinalSilentToken(trimmed, token);
+}
+
 export function isSilentReplyPayloadText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
 ): boolean {
-  return isSilentReplyText(text, token) || isSilentReplyEnvelopeText(text, token);
+  return (
+    isSilentReplyText(text, token) ||
+    isSilentReplyEnvelopeText(text, token) ||
+    isReasoningPrefixedSilentReplyText(text, token)
+  );
 }
 
 /**
