@@ -258,6 +258,39 @@ export function pruneQuotaSuspensions(params: {
   return { resumed, cleared };
 }
 
+/**
+ * Remove expired model-exhaustion records from `exhaustedModels`.
+ * Mutates `store` in-place.
+ */
+export function pruneExhaustedModels(params: {
+  store: Record<string, SessionEntry>;
+  now: number;
+  log?: boolean;
+}): number {
+  let cleared = 0;
+  for (const entry of Object.values(params.store)) {
+    const exhaustedModels = entry.exhaustedModels;
+    if (!exhaustedModels) {
+      continue;
+    }
+    let entryMutated = false;
+    for (const [key, expiresAt] of Object.entries(exhaustedModels)) {
+      if (params.now >= expiresAt) {
+        delete exhaustedModels[key];
+        entryMutated = true;
+        cleared++;
+      }
+    }
+    if (entryMutated && Object.keys(exhaustedModels).length === 0) {
+      delete entry.exhaustedModels;
+    }
+  }
+  if (cleared > 0 && params.log !== false) {
+    log.info("pruned expired model-exhaustion records", { cleared });
+  }
+  return cleared;
+}
+
 function getEntryUpdatedAt(entry?: SessionEntry): number {
   return entry?.updatedAt ?? Number.NEGATIVE_INFINITY;
 }
