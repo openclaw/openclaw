@@ -12,7 +12,11 @@ import {
   resetHeartbeatWakeStateForTests,
 } from "../infra/heartbeat-wake.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import {
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
@@ -536,6 +540,44 @@ describe("task-registry", () => {
         lastEventAt: 200,
         error: "Cancelled by operator.",
       });
+    });
+  });
+
+  it("clears terminal errors when explicitly updated without an error", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const task = createTaskRecord({
+        runtime: "cron",
+        ownerKey: "system:cron:test",
+        scopeKind: "system",
+        runId: "run-terminal-error-clear",
+        task: "Recover cron task",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      markTaskTerminalById({
+        taskId: task.taskId,
+        status: "failed",
+        endedAt: 200,
+        error: "backing session missing",
+      });
+      markTaskTerminalById({
+        taskId: task.taskId,
+        status: "succeeded",
+        endedAt: 250,
+        error: undefined,
+      });
+
+      const recoveredTask = getTaskById(task.taskId);
+      expect(recoveredTask).toMatchObject({
+        status: "succeeded",
+        endedAt: 250,
+      });
+      expect(recoveredTask).not.toHaveProperty("error");
     });
   });
 
@@ -1125,6 +1167,11 @@ describe("task-registry", () => {
       const events = peekSystemEvents("agent:main:main");
       expect(events).toHaveLength(1);
       expect(events[0]).toContain("Background task done: ACP background task");
+      expect(peekSystemEventEntries("agent:main:main")).toEqual([
+        expect.objectContaining({
+          trusted: false,
+        }),
+      ]);
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
   });
@@ -1156,6 +1203,14 @@ describe("task-registry", () => {
       expect(peekSystemEvents("agent:main:main")).toEqual([
         "Background task blocked: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
         "Task needs follow-up: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
+      ]);
+      expect(peekSystemEventEntries("agent:main:main")).toEqual([
+        expect.objectContaining({
+          trusted: false,
+        }),
+        expect.objectContaining({
+          trusted: false,
+        }),
       ]);
       expect(hasPendingHeartbeatWake()).toBe(true);
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
