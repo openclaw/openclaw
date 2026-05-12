@@ -2365,6 +2365,46 @@ describe("config cli", () => {
       );
     });
 
+    it("fails config unset --dry-run when provider removal breaks existing refs", async () => {
+      const resolved: OpenClawConfig = {
+        secrets: {
+          providers: {
+            vaultfile: { source: "file", path: "/tmp/secrets.json", mode: "json" },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              apiKey: {
+                source: "file",
+                provider: "vaultfile",
+                id: "/providers/search/apiKey",
+              },
+            },
+          },
+        } as never,
+      };
+      setSnapshot(resolved, resolved);
+      mockResolveSecretRefValue.mockRejectedValueOnce(new Error("provider mismatch"));
+
+      await expect(
+        runConfigCommand(["config", "unset", "secrets.providers.vaultfile", "--dry-run"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockResolveSecretRefValue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "vaultfile",
+          id: "/providers/search/apiKey",
+        }),
+        expect.any(Object),
+      );
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("Dry run failed: 1 SecretRef assignment(s) could not be resolved."),
+      );
+    });
+
     it("includes --dry-run in config unset help output", () => {
       const program = new Command();
       registerConfigCli(program);

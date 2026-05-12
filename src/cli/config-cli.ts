@@ -1027,12 +1027,16 @@ function pathKey(path: PathSegment[]): string {
 }
 
 function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {
+  const resolved = resolveConfigSecretTargetByPath(path);
+  const providerAlias = parseProviderAliasFromTargetPath(path);
   return {
     inputMode: "json",
     requestedPath: path,
     setPath: path,
     value: undefined,
     mutation: "delete",
+    ...(resolved ? { touchedSecretTargetPath: toDotPath(resolved.pathSegments) } : {}),
+    ...(providerAlias ? { touchedProviderAlias: providerAlias } : {}),
   };
 }
 
@@ -1794,7 +1798,14 @@ export async function runConfigUnset(opts: {
     const nextConfig = next as OpenClawConfig;
     if (cliOptions.dryRun) {
       const policyIssues = collectUnsupportedSecretRefPolicyIssues(nextConfig);
-      const errors = collectDryRunSchemaErrors({
+      const selectedDryRunRefs = selectDryRunRefsForResolution({
+        refs: collectDryRunRefs({
+          config: nextConfig,
+          operations: [operation],
+        }),
+        allowExecInDryRun: false,
+      });
+      const errors: ConfigSetDryRunError[] = collectDryRunSchemaErrors({
         config: nextConfig,
         operations: [operation],
       });
@@ -1805,9 +1816,26 @@ export async function runConfigUnset(opts: {
             .map((message) => ({ kind: "schema" as const, message })),
         );
       }
+      errors.push(
+        ...collectDryRunStaticErrorsForSkippedExecRefs({
+          refs: selectedDryRunRefs.skippedExecRefs,
+          config: nextConfig,
+        }),
+      );
+      errors.push(
+        ...(await collectDryRunResolvabilityErrors({
+          refs: selectedDryRunRefs.refsToResolve,
+          config: nextConfig,
+        })),
+      );
       const dedupedErrors = dedupeDryRunErrors(errors);
       if (dedupedErrors.length > 0) {
-        throw new Error(formatDryRunFailureMessage({ errors: dedupedErrors, skippedExecRefs: 0 }));
+        throw new Error(
+          formatDryRunFailureMessage({
+            errors: dedupedErrors,
+            skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
+          }),
+        );
       }
       runtime.log(
         info(`Dry run successful: removal of ${opts.path} validated against ${shortenHomePath(snapshot.path)}.`),
