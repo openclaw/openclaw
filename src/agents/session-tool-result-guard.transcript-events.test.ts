@@ -45,9 +45,11 @@ describe("guardSessionManager transcript updates", () => {
           role: "assistant",
           timestamp,
         },
+        messageId: expect.any(String),
         sessionId: "worker",
         sessionKey: "agent:main:worker",
       }),
     ]);
+    expect(updates[0]?.messageId).not.toBe("");
   });
 });
