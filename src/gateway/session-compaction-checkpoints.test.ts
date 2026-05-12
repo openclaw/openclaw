@@ -274,6 +274,14 @@ describe("session-compaction-checkpoints", () => {
       content: "before disk discovery",
       timestamp: Date.now(),
     });
+    session.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "checkpoint discovery fixture" }],
+      api: "responses",
+      provider: "openai",
+      model: "gpt-test",
+      timestamp: Date.now(),
+    } as AssistantMessage);
     const leafId = requireNonEmptyString(session.getLeafId(), "session leaf id missing");
     const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
     const snapshot = await captureCompactionCheckpointSnapshotAsync({
@@ -288,6 +296,8 @@ describe("session-compaction-checkpoints", () => {
       path.basename(checkpointFile).match(/\.checkpoint\.([^.]+)\.jsonl$/)?.[1],
       "expected checkpoint id",
     );
+    await fs.utimes(checkpointFile, 1_700_000_000.123, 1_700_000_001.789);
+    const expectedCreatedAt = Math.trunc((await fs.stat(checkpointFile)).mtimeMs);
 
     const checkpoints = await listSessionCompactionCheckpointsWithFilesAsync({
       entry: {
@@ -299,6 +309,8 @@ describe("session-compaction-checkpoints", () => {
     });
 
     expect(checkpoints).toHaveLength(1);
+    expect(Number.isInteger(checkpoints[0]?.createdAt)).toBe(true);
+    expect(checkpoints[0]?.createdAt).toBe(expectedCreatedAt);
     expect(checkpoints[0]).toMatchObject({
       checkpointId,
       sessionKey: "agent:main:main",
