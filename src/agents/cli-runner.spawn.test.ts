@@ -1630,6 +1630,209 @@ describe("runCliAgent spawn path", () => {
     expect(result.text).toBe("mixed-ok");
   });
 
+  it("denies Claude live native tool permission requests with MCP guidance", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdinWrites: string[] = [];
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        stdinWrites.push(data);
+        const parsed = requireRecord(JSON.parse(data), "stdin write");
+        if (parsed.type === "user") {
+          stdoutListener?.(
+            [
+              JSON.stringify({ type: "system", subtype: "init", session_id: "live-permission" }),
+              JSON.stringify({
+                type: "control_request",
+                request_id: "permission-1",
+                request: {
+                  subtype: "can_use_tool",
+                  tool_name: "Bash",
+                  input: { command: "tail -n 50 /var/log/syslog" },
+                  tool_use_id: "toolu_1",
+                },
+              }),
+            ].join("\n") + "\n",
+          );
+        } else if (parsed.type === "control_response") {
+          stdoutListener?.(
+            `${JSON.stringify({
+              type: "result",
+              session_id: "live-permission",
+              result: "permission-ok",
+            })}\n`,
+          );
+        }
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-permission",
+        backend: {
+          liveSession: "claude-stdio",
+        },
+      }),
+    );
+
+    expect(result.text).toBe("permission-ok");
+    const controlResponses = stdinWrites
+      .map((data) => requireRecord(JSON.parse(data), "stdin write"))
+      .filter((write) => write.type === "control_response");
+    expect(controlResponses).toHaveLength(1);
+    const response = requireRecord(controlResponses[0]?.response, "control response");
+    expect(response.subtype).toBe("success");
+    expect(response.request_id).toBe("permission-1");
+    const decision = requireRecord(response.response, "control response decision");
+    expect(decision.behavior).toBe("deny");
+    expect(decision.message).toContain("Bash");
+    expect(decision.message).toContain("OpenClaw MCP tools");
+    expect(decision.toolUseID).toBe("toolu_1");
+    expect(decision.decisionClassification).toBe("user_reject");
+  });
+
+  it("responds to unsupported Claude live control requests with an error frame", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdinWrites: string[] = [];
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        stdinWrites.push(data);
+        const parsed = requireRecord(JSON.parse(data), "stdin write");
+        if (parsed.type === "user") {
+          stdoutListener?.(
+            [
+              JSON.stringify({ type: "system", subtype: "init", session_id: "live-unsupported" }),
+              JSON.stringify({
+                type: "control_request",
+                request_id: "control-unsupported-1",
+                request: { subtype: "read_file" },
+              }),
+            ].join("\n") + "\n",
+          );
+        } else if (parsed.type === "control_response") {
+          stdoutListener?.(
+            `${JSON.stringify({
+              type: "result",
+              session_id: "live-unsupported",
+              result: "unsupported-ok",
+            })}\n`,
+          );
+        }
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-unsupported",
+        backend: {
+          liveSession: "claude-stdio",
+        },
+      }),
+    );
+
+    expect(result.text).toBe("unsupported-ok");
+    const controlResponses = stdinWrites
+      .map((data) => requireRecord(JSON.parse(data), "stdin write"))
+      .filter((write) => write.type === "control_response");
+    expect(controlResponses).toHaveLength(1);
+    const response = requireRecord(controlResponses[0]?.response, "control response");
+    expect(response.subtype).toBe("error");
+    expect(response.request_id).toBe("control-unsupported-1");
+    expect(response.error).toContain("Unsupported Claude control request subtype: read_file");
+  });
+
+  it("ignores malformed Claude live control requests without writing malformed responses", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdinWrites: string[] = [];
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        stdinWrites.push(data);
+        const parsed = requireRecord(JSON.parse(data), "stdin write");
+        if (parsed.type === "user") {
+          stdoutListener?.(
+            [
+              JSON.stringify({
+                type: "control_request",
+                request: {
+                  subtype: "can_use_tool",
+                  tool_name: "Bash",
+                  tool_use_id: "toolu_missing_request",
+                },
+              }),
+              JSON.stringify({
+                type: "result",
+                session_id: "live-malformed",
+                result: "malformed-ok",
+              }),
+            ].join("\n") + "\n",
+          );
+        }
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-malformed",
+        backend: {
+          liveSession: "claude-stdio",
+        },
+      }),
+    );
+
+    expect(result.text).toBe("malformed-ok");
+    const controlResponses = stdinWrites
+      .map((data) => requireRecord(JSON.parse(data), "stdin write"))
+      .filter((write) => write.type === "control_response");
+    expect(controlResponses).toHaveLength(0);
+  });
+
   it("fails Claude live turns on is_error results", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {

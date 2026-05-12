@@ -519,6 +519,63 @@ function createResultError(
   });
 }
 
+function createNativeToolDenyMessage(toolName: string): string {
+  const toolLabel = toolName ? ` ${toolName}` : "";
+  return `Denied by OpenClaw: Claude native tool${toolLabel} is not available in this bridge; use OpenClaw MCP tools instead.`;
+}
+
+function handleClaudeLiveControlRequest(
+  session: ClaudeLiveSession,
+  parsed: Record<string, unknown>,
+): boolean {
+  if (parsed.type !== "control_request") {
+    return false;
+  }
+  const requestId = typeof parsed.request_id === "string" ? parsed.request_id.trim() : "";
+  const request = isRecord(parsed.request) ? parsed.request : null;
+  if (!requestId) {
+    return false;
+  }
+  const subtype =
+    typeof request?.subtype === "string" && request.subtype.trim()
+      ? request.subtype.trim()
+      : "unknown";
+  if (!request || subtype !== "can_use_tool") {
+    void writeClaudeLiveJsonLine(session, {
+      type: "control_response",
+      response: {
+        subtype: "error",
+        request_id: requestId,
+        error: `Unsupported Claude control request subtype: ${subtype}`,
+      },
+    }).catch((error) => {
+      closeLiveSession(session, "abort", error);
+    });
+    return true;
+  }
+  const toolName = typeof request.tool_name === "string" ? request.tool_name.trim() : "";
+  const toolUseId = typeof request.tool_use_id === "string" ? request.tool_use_id.trim() : "";
+  const response: Record<string, unknown> = {
+    behavior: "deny",
+    message: createNativeToolDenyMessage(toolName),
+    decisionClassification: "user_reject",
+  };
+  if (toolUseId) {
+    response.toolUseID = toolUseId;
+  }
+  void writeClaudeLiveJsonLine(session, {
+    type: "control_response",
+    response: {
+      subtype: "success",
+      request_id: requestId,
+      response,
+    },
+  }).catch((error) => {
+    closeLiveSession(session, "abort", error);
+  });
+  return true;
+}
+
 function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   const turn = session.currentTurn;
   const trimmed = line.trim();
@@ -560,6 +617,9 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
   turn.rawLines.push(trimmed);
   turn.streamingParser.push(`${trimmed}\n`);
   turn.sessionId = parseSessionId(parsed) ?? turn.sessionId;
+  if (handleClaudeLiveControlRequest(session, parsed)) {
+    return;
+  }
   if (parsed.type !== "result") {
     return;
   }
@@ -662,6 +722,25 @@ function createClaudeUserInputMessage(content: string): string {
       content,
     },
   })}\n`;
+}
+
+async function writeClaudeLiveJsonLine(
+  session: ClaudeLiveSession,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const stdin = session.managedRun.stdin;
+  if (!stdin) {
+    throw new Error("Claude CLI live session stdin is unavailable");
+  }
+  await new Promise<void>((resolve, reject) => {
+    stdin.write(`${JSON.stringify(payload)}\n`, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
 async function writeTurnInput(session: ClaudeLiveSession, prompt: string): Promise<void> {
