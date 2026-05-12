@@ -723,7 +723,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     expect(typing.startTypingOnText).toHaveBeenCalledWith("chunk");
     expect(onBlockReply).toHaveBeenCalled();
-    const [blockPayload, blockOpts] = onBlockReply.mock.calls[0] ?? [];
+    const [blockPayload, blockOpts] = onBlockReply.mock.calls.at(0) ?? [];
     const blockPayloadRecord = requireRecord(blockPayload, "block payload");
     expect(blockPayloadRecord.text).toBe("chunk");
     expect(blockPayloadRecord.audioAsVoice).toBe(false);

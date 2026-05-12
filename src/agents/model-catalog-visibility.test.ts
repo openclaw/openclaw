@@ -32,7 +32,7 @@ describe("resolveVisibleModelCatalog", () => {
     });
 
     expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
-    const checkerOptions = createProviderAuthCheckerMock.mock.calls[0]?.[0];
+    const checkerOptions = createProviderAuthCheckerMock.mock.calls.at(0)?.[0];
     expect(checkerOptions?.cfg).toBe(cfg);
     expect(checkerOptions?.allowPluginSyntheticAuth).toBe(false);
     expect(checkerOptions?.discoverExternalCliAuth).toBe(false);
@@ -70,7 +70,7 @@ describe("resolveVisibleModelCatalog", () => {
     });
 
     expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
-    expect(createProviderAuthCheckerMock.mock.calls[0]?.[0]).toMatchObject({
+    expect(createProviderAuthCheckerMock.mock.calls.at(0)?.[0]).toMatchObject({
       allowPluginSyntheticAuth: true,
       discoverExternalCliAuth: true,
     });
@@ -105,7 +105,7 @@ describe("resolveVisibleModelCatalog", () => {
     });
 
     expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
-    expect(createProviderAuthCheckerMock.mock.calls[0]?.[0]).toMatchObject({
+    expect(createProviderAuthCheckerMock.mock.calls.at(0)?.[0]).toMatchObject({
       allowPluginSyntheticAuth: true,
       discoverExternalCliAuth: true,
     });

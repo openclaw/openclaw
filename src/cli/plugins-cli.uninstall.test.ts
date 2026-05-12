@@ -359,7 +359,9 @@ describe("plugins cli uninstall", () => {
       applyPluginUninstallDirectoryRemoval.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
     const refreshOrder =
       refreshPluginRegistry.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
-    expect(configWriteOrder).toBeGreaterThan(0);
+    expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(applyPluginUninstallDirectoryRemoval).toHaveBeenCalledTimes(1);
+    expect(refreshPluginRegistry).toHaveBeenCalledTimes(1);
     expect(deleteOrder).toBeGreaterThan(configWriteOrder);
     expect(refreshOrder).toBeGreaterThan(deleteOrder);
     expect(applyPluginUninstallDirectoryRemoval).toHaveBeenCalledWith({
