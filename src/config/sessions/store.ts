@@ -1,5 +1,9 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  DEFAULT_AGENT_ID,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -7,6 +11,8 @@ import {
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { ConversationIdentity } from "./conversation-identity.js";
+import { conversationIdentityFromMsgContext } from "./conversation-identity.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
   applySqliteSessionEntriesPatch,
@@ -14,7 +20,7 @@ import {
   listSqliteSessionEntries,
   readSqliteSessionEntry,
   replaceSqliteSessionEntry,
-} from "./store-backend.sqlite.js";
+} from "./session-entries.sqlite.js";
 import { normalizeSessionRowKey } from "./store-entry.js";
 import {
   mergeSessionEntry,
@@ -31,6 +37,19 @@ type SessionEntryRowOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
+function resolveSessionRowOptionsFromSessionKey(params: {
+  agentId?: string;
+  sessionKey: string;
+  env?: NodeJS.ProcessEnv;
+}): SessionEntryRowOptions {
+  const agentId =
+    params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey) ?? DEFAULT_AGENT_ID;
+  return {
+    agentId: normalizeAgentId(agentId),
+    ...(params.env ? { env: params.env } : {}),
+  };
+}
+
 export function getSessionEntry(
   options: SessionEntryRowOptions & { sessionKey: string },
 ): SessionEntry | undefined {
@@ -39,14 +58,12 @@ export function getSessionEntry(
     return direct;
   }
   const normalizedKey = normalizeSessionRowKey(options.sessionKey);
-  const normalized =
-    normalizedKey === options.sessionKey
-      ? undefined
-      : readSqliteSessionEntry({
-          ...options,
-          sessionKey: normalizedKey,
-        });
-  return normalized;
+  return normalizedKey === options.sessionKey
+    ? undefined
+    : readSqliteSessionEntry({
+        ...options,
+        sessionKey: normalizedKey,
+      });
 }
 
 export function listSessionEntries(
@@ -59,6 +76,7 @@ export function upsertSessionEntry(
   options: SessionEntryRowOptions & {
     sessionKey: string;
     entry: SessionEntry;
+    conversationIdentities?: readonly ConversationIdentity[];
   },
 ): void {
   replaceSqliteSessionEntry(options);
@@ -110,34 +128,22 @@ export async function patchSessionEntry(
   );
 }
 
-function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
-  if (!context || context.threadId == null) {
-    return context;
-  }
-  const next: DeliveryContext = { ...context };
-  delete next.threadId;
-  return next;
-}
-
 export function readSessionUpdatedAt(params: {
   agentId?: string;
   sessionKey: string;
 }): number | undefined {
   try {
-    const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-    if (!agentId) {
-      return undefined;
-    }
+    const options = resolveSessionRowOptionsFromSessionKey(params);
     const normalizedKey = normalizeSessionRowKey(params.sessionKey);
     const entry =
       readSqliteSessionEntry({
-        agentId,
+        ...options,
         sessionKey: normalizedKey,
       }) ??
       (normalizedKey === params.sessionKey
         ? undefined
         : readSqliteSessionEntry({
-            agentId,
+            ...options,
             sessionKey: params.sessionKey,
           }));
     return entry?.updatedAt;
@@ -146,17 +152,13 @@ export function readSessionUpdatedAt(params: {
   }
 }
 
-function resolveSessionRowOptionsFromSessionKey(params: {
-  agentId?: string;
-  sessionKey: string;
-}): SessionEntryRowOptions {
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-  if (!agentId) {
-    throw new Error(
-      `Session stores are SQLite-only; cannot resolve agent for ${params.sessionKey}`,
-    );
+function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
+  if (!context || context.threadId == null) {
+    return context;
   }
-  return { agentId };
+  const next: DeliveryContext = { ...context };
+  delete next.threadId;
+  return next;
 }
 
 export async function recordSessionMetaFromInbound(params: {
@@ -190,14 +192,18 @@ export async function recordSessionMetaFromInbound(params: {
     return null;
   }
   const next = existing
-    ? // Inbound metadata updates must not refresh activity timestamps;
-      // idle reset evaluation relies on updatedAt from actual session turns.
-      mergeSessionEntryPreserveActivity(existing, patch)
+    ? mergeSessionEntryPreserveActivity(existing, patch)
     : mergeSessionEntry(existing, patch);
   upsertSessionEntry({
     ...rowOptions,
     sessionKey: normalizedKey,
     entry: next,
+    conversationIdentities: [
+      conversationIdentityFromMsgContext({
+        ctx,
+        groupResolution: params.groupResolution,
+      }),
+    ].filter((entry) => entry !== null),
   });
   return next;
 }
@@ -205,7 +211,7 @@ export async function recordSessionMetaFromInbound(params: {
 export async function updateLastRoute(params: {
   agentId?: string;
   sessionKey: string;
-  channel?: SessionEntry["lastChannel"];
+  channel?: SessionEntry["channel"];
   to?: string;
   accountId?: string;
   threadId?: string | number;
@@ -267,14 +273,9 @@ export async function updateLastRoute(params: {
       })
     : null;
   const basePatch: Partial<SessionEntry> = {
+    channel: normalized.deliveryContext?.channel,
     deliveryContext: normalized.deliveryContext,
-    lastChannel: normalized.lastChannel,
-    lastTo: normalized.lastTo,
-    lastAccountId: normalized.lastAccountId,
-    lastThreadId: normalized.lastThreadId,
   };
-  // Route updates must not refresh activity timestamps; idle/daily reset
-  // evaluation relies on updatedAt from actual session turns (#49515).
   const next = mergeSessionEntryPreserveActivity(
     existing,
     metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
@@ -283,6 +284,15 @@ export async function updateLastRoute(params: {
     ...rowOptions,
     sessionKey: normalizedKey,
     entry: next,
+    conversationIdentities: ctx
+      ? [
+          conversationIdentityFromMsgContext({
+            ctx,
+            deliveryContext: normalized.deliveryContext,
+            groupResolution: params.groupResolution,
+          }),
+        ].filter((entry) => entry !== null)
+      : undefined,
   });
   return next;
 }

@@ -254,14 +254,12 @@ describe("SQLite session row backend", () => {
     });
 
     expect(getSessionEntry({ agentId: "ops", env, sessionKey: "discord:ops" })).toMatchObject({
+      channel: "discord",
       deliveryContext: {
         channel: "discord",
         to: "user:U2",
         accountId: "default",
       },
-      lastChannel: "discord",
-      lastTo: "user:U2",
-      lastAccountId: "default",
     });
   });
 
@@ -326,10 +324,6 @@ describe("SQLite session row backend", () => {
       status: "running",
       chatType: "direct",
       channel: "discord",
-      lastChannel: "discord",
-      lastTo: "user:U1",
-      lastAccountId: "work",
-      lastThreadId: "thread-1",
       deliveryContext: {
         channel: "discord",
         to: "user:U1",
@@ -346,14 +340,20 @@ describe("SQLite session row backend", () => {
       updatedAt: 200,
       chatType: "direct",
       channel: "discord",
-      lastTo: "user:U1",
+      deliveryContext: {
+        channel: "discord",
+        to: "user:U1",
+      },
     });
     expect(listSessionEntries({ agentId: "ops", env })[0]?.entry).toMatchObject({
       sessionId: "ops-session",
       updatedAt: 200,
       chatType: "direct",
       channel: "discord",
-      lastTo: "user:U1",
+      deliveryContext: {
+        channel: "discord",
+        to: "user:U1",
+      },
     });
   });
 
@@ -393,7 +393,6 @@ describe("SQLite session row backend", () => {
       updatedAt: 200,
       chatType: "direct",
       channel: "discord",
-      lastTo: "user:U1",
       deliveryContext: {
         channel: "discord",
         to: "user:U1",

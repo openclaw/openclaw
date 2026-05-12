@@ -5,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { sqliteNullableNumber, sqliteNullableText } from "../../infra/sqlite-row-values.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   type OpenClawAgentDatabase,
@@ -113,7 +114,15 @@ function parseSessionEntry(row: SessionEntryRow): SessionEntry | null {
   }
 }
 
-function clearCompatibilityRoutingShadow(entry: SessionEntry & { origin?: unknown }): void {
+function clearCompatibilityRoutingShadow(
+  entry: SessionEntry & {
+    origin?: unknown;
+    lastChannel?: unknown;
+    lastTo?: unknown;
+    lastAccountId?: unknown;
+    lastThreadId?: unknown;
+  },
+): void {
   delete entry.origin;
   delete entry.deliveryContext;
   delete entry.lastChannel;
@@ -164,12 +173,8 @@ function projectTypedSessionColumns(row: SessionEntryRow): SessionEntry | null {
   const channel = optionalString(row.typed_channel);
   if (channel) {
     next.channel = channel;
-    next.lastChannel = channel;
   }
   const accountId = optionalString(row.typed_account_id);
-  if (accountId) {
-    next.lastAccountId = accountId;
-  }
   const conversationChannel = optionalString(row.typed_conversation_channel);
   const conversationTo = optionalString(row.typed_conversation_peer_id);
   const conversationAccountId = optionalString(row.typed_conversation_account_id) ?? accountId;
@@ -178,10 +183,8 @@ function projectTypedSessionColumns(row: SessionEntryRow): SessionEntry | null {
   const nativeDirectUserId = optionalString(row.typed_conversation_native_direct_user_id);
   if (conversationChannel) {
     next.channel = channel ?? conversationChannel;
-    next.lastChannel = conversationChannel;
   }
   if (conversationTo) {
-    next.lastTo = conversationTo;
     next.deliveryContext = {
       ...(next.deliveryContext ?? {}),
       to: conversationTo,
@@ -189,12 +192,6 @@ function projectTypedSessionColumns(row: SessionEntryRow): SessionEntry | null {
       ...(conversationAccountId ? { accountId: conversationAccountId } : {}),
       ...(conversationThreadId ? { threadId: conversationThreadId } : {}),
     };
-  }
-  if (conversationAccountId) {
-    next.lastAccountId = conversationAccountId;
-  }
-  if (conversationThreadId) {
-    next.lastThreadId = conversationThreadId;
   }
   if (nativeChannelId) {
     next.nativeChannelId = nativeChannelId;
@@ -271,12 +268,8 @@ function serializeSessionEntry(sessionKey: string, entry: SessionEntry): string 
   return JSON.stringify(entries[sessionKey] ?? entry);
 }
 
-function nullableString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
 function optionalString(value: unknown): string | undefined {
-  return nullableString(value) ?? undefined;
+  return sqliteNullableText(value) ?? undefined;
 }
 
 function parseSessionStatus(value: unknown): SessionEntry["status"] | undefined {
@@ -293,18 +286,16 @@ function parseSessionStatus(value: unknown): SessionEntry["status"] | undefined 
 }
 
 function optionalThreadId(value: unknown): string | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-  return optionalString(value);
+  const number = sqliteNullableNumber(value);
+  return number == null ? optionalString(value) : String(number);
 }
 
 function sessionDisplayName(entry: SessionEntry): string | null {
-  return nullableString(entry.displayName) ?? nullableString(entry.label);
+  return sqliteNullableText(entry.displayName) ?? sqliteNullableText(entry.label);
 }
 
 function resolveSessionScope(params: { entry: SessionEntry; sessionKey: string }): string {
-  const chatType = nullableString(params.entry.chatType);
+  const chatType = sqliteNullableText(params.entry.chatType);
   const key = params.sessionKey.trim().toLowerCase();
   if (chatType === "direct" && (key === "main" || key.endsWith(":main"))) {
     return "shared-main";
@@ -330,7 +321,7 @@ function bindSessionRoot(params: {
   updatedAt: number;
   primaryConversation?: ConversationIdentity | null;
 }): Insertable<SessionsTable> {
-  const sessionId = nullableString(params.entry.sessionId) ?? params.sessionKey;
+  const sessionId = sqliteNullableText(params.entry.sessionId) ?? params.sessionKey;
   const updatedAt =
     typeof params.entry.updatedAt === "number" && Number.isFinite(params.entry.updatedAt)
       ? params.entry.updatedAt
@@ -349,18 +340,16 @@ function bindSessionRoot(params: {
       typeof params.entry.endedAt === "number" && Number.isFinite(params.entry.endedAt)
         ? params.entry.endedAt
         : null,
-    status: nullableString(params.entry.status),
-    chat_type: nullableString(params.entry.chatType),
-    channel: nullableString(params.entry.channel) ?? nullableString(params.entry.lastChannel),
-    account_id:
-      nullableString(params.primaryConversation?.accountId) ??
-      nullableString(params.entry.lastAccountId),
-    primary_conversation_id: nullableString(params.primaryConversation?.conversationId),
-    model_provider: nullableString(params.entry.modelProvider),
-    model: nullableString(params.entry.model),
-    agent_harness_id: nullableString(params.entry.agentHarnessId),
-    parent_session_key: nullableString(params.entry.parentSessionKey),
-    spawned_by: nullableString(params.entry.spawnedBy),
+    status: sqliteNullableText(params.entry.status),
+    chat_type: sqliteNullableText(params.entry.chatType),
+    channel: sqliteNullableText(params.entry.channel),
+    account_id: sqliteNullableText(params.primaryConversation?.accountId),
+    primary_conversation_id: sqliteNullableText(params.primaryConversation?.conversationId),
+    model_provider: sqliteNullableText(params.entry.modelProvider),
+    model: sqliteNullableText(params.entry.model),
+    agent_harness_id: sqliteNullableText(params.entry.agentHarnessId),
+    parent_session_key: sqliteNullableText(params.entry.parentSessionKey),
+    spawned_by: sqliteNullableText(params.entry.spawnedBy),
     display_name: sessionDisplayName(params.entry),
   };
 }
@@ -619,8 +608,8 @@ function upsertSessionEntries(
       .insertInto("session_entries")
       .values(rows.map((row) => row.entry))
       .onConflict((conflict) =>
-        conflict.column("session_id").doUpdateSet({
-          session_key: (eb) => eb.ref("excluded.session_key"),
+        conflict.column("session_key").doUpdateSet({
+          session_id: (eb) => eb.ref("excluded.session_id"),
           entry_json: (eb) => eb.ref("excluded.entry_json"),
           updated_at: (eb) => eb.ref("excluded.updated_at"),
         }),
