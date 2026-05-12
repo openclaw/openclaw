@@ -530,8 +530,10 @@ describe("exec approvals CLI", () => {
     expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "exec.approvals.set")).toBe(
       false,
     );
-    const saved = requireRecord(firstMockArg(saveExecApprovals), "saved approvals");
-    expect(saveExecApprovals).toHaveBeenCalledWith(saved);
+    expect(saveExecApprovals).toHaveBeenCalledWith(
+      requireRecord(saveExecApprovals.mock.calls[0]?.[0], "saved approvals"),
+    );
+    const saved = requireRecord(saveExecApprovals.mock.calls[0]?.[0], "saved approvals");
     if (requireRecord(saved.agents, "saved agents")["*"] === undefined) {
       throw new Error("Expected wildcard exec approval agent entry");
     }
