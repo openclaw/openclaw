@@ -112,6 +112,28 @@ function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPaylo
   );
 }
 
+function buildSilentFallbackFailurePayload(params: {
+  fallbackTransition: ReturnType<typeof resolveFallbackTransition>;
+  fallbackAttempts: readonly unknown[];
+  isHeartbeat: boolean;
+  silentExpected?: boolean;
+}): ReplyPayload | undefined {
+  if (
+    params.isHeartbeat ||
+    params.silentExpected === true ||
+    !params.fallbackTransition.fallbackActive ||
+    params.fallbackAttempts.length === 0
+  ) {
+    return undefined;
+  }
+  return markReplyPayloadForSourceSuppressionDelivery({
+    text:
+      `⚠️ I couldn't reach the configured model backend ${params.fallbackTransition.selectedModelRef}. ` +
+      `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`,
+    isError: true,
+  });
+}
+
 function buildInlinePluginStatusPayload(params: {
   entry: SessionEntry | undefined;
   includeTraceLines: boolean;
@@ -1548,6 +1570,22 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
+      const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
+        fallbackTransition,
+        fallbackAttempts,
+        isHeartbeat,
+        silentExpected: followupRun.run.silentExpected,
+      });
+      if (silentFallbackFailurePayload) {
+        replyOperation.fail(
+          "run_failed",
+          new Error(
+            `configured model backend ${fallbackTransition.selectedModelRef} failed and fallback ${fallbackTransition.activeModelRef} produced no visible reply`,
+          ),
+        );
+        await signalTypingIfNeeded([silentFallbackFailurePayload], typingSignals);
+        return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 
