@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Harden exported markdown link rendering [AI]. (#80902) Thanks @pgondhi987.
 - fix(gateway): honor minimal discovery mode for wide-area DNS-SD [AI]. (#80903) Thanks @pgondhi987.
 - slack: enforce reaction notification policy [AI]. (#80907) Thanks @pgondhi987.
 - Enforce gateway command scopes by caller context [AI]. (#80891) Thanks @pgondhi987.
