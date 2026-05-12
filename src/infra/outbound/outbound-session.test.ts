@@ -446,8 +446,11 @@ describe("ensureOutboundSessionEntry", () => {
     });
 
     expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalledOnce();
-    const metadata = mocks.recordSessionMetaFromInbound.mock.calls[0]?.[0];
-    expect(metadata?.agentId).toBe("main");
-    expect(metadata?.sessionKey).toBe("agent:main:workspace:channel:c1");
+    const metadata = firstMockArg(
+      mocks.recordSessionMetaFromInbound,
+      "recordSessionMetaFromInbound",
+    );
+    expect(metadata.agentId).toBe("main");
+    expect(metadata.sessionKey).toBe("agent:main:workspace:channel:c1");
   });
 });
