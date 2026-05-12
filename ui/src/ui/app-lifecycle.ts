@@ -142,7 +142,26 @@ export function handleDisconnected(host: LifecycleHost) {
   host.controlUiResponsivenessObserver = null;
 }
 
+// TODO(#51067): when gateway.controlUi.title (static instance-wide title) lands,
+// give it precedence over the per-agent assistantName below.
+export function syncDocumentTitleFromHost(host: LifecycleHost): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const name =
+    (typeof host.assistantName === "string" && host.assistantName.trim()) ||
+    (typeof host.assistantAgentId === "string" && host.assistantAgentId && host.assistantAgentId.trim()) ||
+    "Control";
+  const next = `${name} \u00b7 OpenClaw`;
+  if (document.title !== next) {
+    document.title = next;
+  }
+}
+
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
+  if (changed.has("assistantName") || changed.has("assistantAgentId")) {
+    syncDocumentTitleFromHost(host);
+  }
   if (host.tab === "chat" && host.chatManualRefreshInFlight) {
     return;
   }

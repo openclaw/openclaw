@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Features
+
+- Control UI: dynamically set `document.title` to the active agent's name (e.g. `Milly · OpenClaw`) so multi-agent operators can disambiguate Control UI tabs in the browser tab strip and Cmd-` switcher. Falls back to agent id, then `Control`, when no identity is loaded. Composes with the in-flight static `gateway.controlUi.title` work in PR #51067 (config title will take precedence once wired). Fixes #80942.
+
 ### Fixes
 
 - Build: skip copied metadata for bundled plugins that are excluded from build entries, preventing update/status rebuilds from advertising missing QQ Bot runtime files. (#80925)
