@@ -69,6 +69,23 @@ function resolveToken(explicit?: string, accountId?: string, cfg?: OpenClawConfi
   return token;
 }
 
+function normalizeSlackTimestamp(raw?: string): string | undefined {
+  if (!raw || !raw.trim()) {
+    return undefined;
+  }
+  if (/^\d+(\.\d+)?$/.test(raw)) {
+    return raw;
+  }
+  const parsed = Date.parse(raw);
+  if (!Number.isNaN(parsed)) {
+    const wholeSeconds = Math.floor(parsed / 1000);
+    const ms = parsed % 1000;
+    const fractional = String(ms).padStart(3, "0");
+    return `${wholeSeconds}.${fractional}`;
+  }
+  return raw;
+}
+
 function normalizeEmoji(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -271,6 +288,8 @@ export async function readSlackMessages(
   const client = await getClient(opts);
   const exactMessageId = opts.messageId?.trim();
   const readLimit = exactMessageId ? 1 : opts.limit;
+  const beforeTs = normalizeSlackTimestamp(opts.before);
+  const afterTs = normalizeSlackTimestamp(opts.after);
   const exactBounds = exactMessageId
     ? {
         inclusive: true,
@@ -278,8 +297,8 @@ export async function readSlackMessages(
         oldest: undefined,
       }
     : {
-        latest: opts.before,
-        oldest: opts.after,
+        latest: beforeTs,
+        oldest: afterTs,
       };
 
   // Use conversations.replies for thread messages, conversations.history for channel messages.

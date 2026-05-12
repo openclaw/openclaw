@@ -93,6 +93,70 @@ describe("readSlackMessages", () => {
     expect(result.messages.map((message) => message.ts)).toEqual(["1"]);
   });
 
+  it("normalizes ISO 8601 `after` to Slack epoch-seconds ts", async () => {
+    const client = createClient();
+    client.conversations.history.mockResolvedValueOnce({
+      messages: [{ ts: "1778500800.123456" }],
+      has_more: false,
+    });
+
+    await readSlackMessages("C1", {
+      client,
+      after: "2026-05-11T12:00:00Z",
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.history).toHaveBeenCalledWith({
+      channel: "C1",
+      limit: undefined,
+      latest: undefined,
+      oldest: "1778500800.000",
+    });
+  });
+
+  it("normalizes ISO 8601 `before` to Slack epoch-seconds ts", async () => {
+    const client = createClient();
+    client.conversations.history.mockResolvedValueOnce({
+      messages: [],
+      has_more: false,
+    });
+
+    await readSlackMessages("C1", {
+      client,
+      before: "2026-05-11T08:00:00-04:00",
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.history).toHaveBeenCalledWith({
+      channel: "C1",
+      limit: undefined,
+      latest: "1778500800.000",
+      oldest: undefined,
+    });
+  });
+
+  it("preserves plain numeric timestamps unchanged", async () => {
+    const client = createClient();
+    client.conversations.history.mockResolvedValueOnce({
+      messages: [{ ts: "1778500800.000000" }],
+      has_more: false,
+    });
+
+    await readSlackMessages("C1", {
+      client,
+      after: "1746936000",
+      before: "1747108800.123",
+      token: "xoxb-test",
+    });
+
+    expect(client.conversations.history).toHaveBeenCalledWith({
+      channel: "C1",
+      limit: undefined,
+      latest: "1747108800.123",
+      oldest: "1746936000",
+    });
+  });
+
   it("filters a specific channel message by messageId", async () => {
     const client = createClient();
     client.conversations.history.mockResolvedValueOnce({
