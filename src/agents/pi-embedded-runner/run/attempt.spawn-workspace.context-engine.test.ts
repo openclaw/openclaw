@@ -47,6 +47,55 @@ type ToolResultGuardInstallParams = {
 };
 
 type ContextEngineAttemptResult = Awaited<ReturnType<typeof createContextEngineAttemptRunner>>;
+type MockCallSource = {
+  mock: {
+    calls: ArrayLike<ReadonlyArray<unknown>>;
+  };
+};
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function requireRecords(value: unknown, label: string): Array<Record<string, unknown>> {
+  expect(value, label).toBeInstanceOf(Array);
+  return value as Array<Record<string, unknown>>;
+}
+
+function findRecord(
+  records: Array<Record<string, unknown>>,
+  predicate: (record: Record<string, unknown>) => boolean,
+  label: string,
+) {
+  const record = records.find(predicate);
+  if (!record) {
+    throw new Error(`expected record: ${label}`);
+  }
+  return record;
+}
+
+function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
+  const call = source.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call: ${label}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`expected mock call argument ${argIndex}: ${label}`);
+  }
+  return call[argIndex];
+}
+
+function mockParams(source: MockCallSource, callIndex: number, label: string) {
+  return requireRecord(mockArg(source, callIndex, 0, label), label);
+}
+
+function expectFields(actual: Record<string, unknown>, expected: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key], key).toEqual(value);
+  }
+}
 
 function createTestContextEngine(params: Partial<AttemptContextEngine>): AttemptContextEngine {
   return {
