@@ -109,9 +109,7 @@ export type SessionTranscriptScope = {
 export type PersistableSessionMessage = Exclude<
   AgentMessage,
   { role: "branchSummary" | "compactionSummary" }
-> & {
-  idempotencyKey?: string;
-};
+>;
 
 export type SessionManager = {
   isPersisted(): boolean;

@@ -23,8 +23,8 @@ describe("createAcpxProcessLeaseStore", () => {
   });
 
   it("serializes concurrent lease saves without dropping records", async () => {
-    await withOpenClawTestState({ label: "acpx-leases" }, async ({ stateDir }) => {
-      const store = createAcpxProcessLeaseStore({ stateDir });
+    await withOpenClawTestState({ label: "acpx-leases" }, async () => {
+      const store = createAcpxProcessLeaseStore();
       await Promise.all(Array.from({ length: 25 }, (_, index) => store.save(makeLease(index))));
 
       const leases = await store.listOpen("gateway-test");
