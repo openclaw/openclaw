@@ -33,7 +33,7 @@ const POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
   ...expandPowerShellSwitchPrefixForms("version", "v"),
   ...expandPowerShellSwitchPrefixForms("windowstyle", "w"),
   ...expandPowerShellSwitchPrefixForms("workingdirectory", "w"),
-  ...expandPowerShellSwitchForms(["ea", "ep", "of", "wd"]),
+  ...expandPowerShellSwitchForms(["ea", "ep", "if", "of", "wd"]),
 ]);
 
 const POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([

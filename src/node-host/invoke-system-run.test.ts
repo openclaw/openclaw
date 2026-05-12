@@ -770,6 +770,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             executablePath,
             "-win",
             "hidden",
+            "-if",
+            "XML",
             "/NoProfile",
             "/ec",
             "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
