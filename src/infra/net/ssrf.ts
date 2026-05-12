@@ -27,6 +27,7 @@ type LookupCallback = (
 ) => void;
 
 type LookupResult = LookupAddress | LookupAddress[];
+const DISPATCHER_CLOSE_TIMEOUT_MS = 100;
 
 export class SsrFBlockedError extends Error {
   constructor(message: string) {
@@ -94,6 +95,28 @@ export function ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl: string): SsrFP
       return undefined;
     }
     return { allowedHostnames: [parsed.hostname] };
+  } catch {
+    return undefined;
+  }
+}
+
+export function ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(
+  baseUrl: string,
+): SsrFPolicy | undefined {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    return {
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: [parsed.hostname],
+    };
   } catch {
     return undefined;
   }
@@ -322,6 +345,8 @@ export function createPinnedLookup(params: {
     address,
     family: address.includes(":") ? 6 : 4,
   }));
+  const ipv4Records = records.filter((entry) => entry.family === 4);
+  const automaticRecords = ipv4Records.length > 0 ? ipv4Records : records;
   let index = 0;
 
   return ((host: string, options?: unknown, callback?: unknown) => {
@@ -347,8 +372,8 @@ export function createPinnedLookup(params: {
     const candidates =
       requestedFamily === 4 || requestedFamily === 6
         ? records.filter((entry) => entry.family === requestedFamily)
-        : records;
-    const usable = candidates.length > 0 ? candidates : records;
+        : automaticRecords;
+    const usable = candidates.length > 0 ? candidates : automaticRecords;
     if (opts.all) {
       cb(null, usable as LookupAddress[]);
       return;
@@ -529,19 +554,55 @@ export function createPinnedDispatcher(
   );
 }
 
+type ClosableDispatcher = {
+  close?: () => Promise<void> | void;
+  destroy?: () => void;
+};
+
+function destroyDispatcher(candidate: ClosableDispatcher): void {
+  try {
+    candidate.destroy?.();
+  } catch {
+    // ignore dispatcher cleanup errors
+  }
+}
+
+async function waitForDispatcherClose(candidate: ClosableDispatcher): Promise<void> {
+  const close = candidate.close;
+  if (typeof close !== "function") {
+    destroyDispatcher(candidate);
+    return;
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve(close.call(candidate)),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(() => {
+          timeout = undefined;
+          destroyDispatcher(candidate);
+          resolve();
+        }, DISPATCHER_CLOSE_TIMEOUT_MS);
+        timeout.unref?.();
+      }),
+    ]);
+  } catch (err) {
+    destroyDispatcher(candidate);
+    throw err;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<void> {
   if (!dispatcher) {
     return;
   }
-  const candidate = dispatcher as { close?: () => Promise<void> | void; destroy?: () => void };
+  const candidate = dispatcher as ClosableDispatcher;
   try {
-    if (typeof candidate.close === "function") {
-      await candidate.close();
-      return;
-    }
-    if (typeof candidate.destroy === "function") {
-      candidate.destroy();
-    }
+    await waitForDispatcherClose(candidate);
   } catch {
     // ignore dispatcher cleanup errors
   }

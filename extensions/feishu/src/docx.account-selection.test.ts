@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
@@ -24,6 +24,12 @@ describe("feishu_doc account selection", () => {
 
   beforeAll(async () => {
     ({ registerFeishuDocTools } = await import("./docx.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.doUnmock("@larksuiteoapi/node-sdk");
+    vi.resetModules();
   });
 
   beforeEach(() => {
@@ -57,8 +63,8 @@ describe("feishu_doc account selection", () => {
     await docToolB.execute("call-b", { action: "list_blocks", doc_token: "d" });
 
     expect(createFeishuClientMock).toHaveBeenCalledTimes(2);
-    expect(createFeishuClientMock.mock.calls[0]?.[0]?.appId).toBe("app-a");
-    expect(createFeishuClientMock.mock.calls[1]?.[0]?.appId).toBe("app-b");
+    expect(createFeishuClientMock.mock.calls.at(0)?.[0]?.appId).toBe("app-a");
+    expect(createFeishuClientMock.mock.calls.at(1)?.[0]?.appId).toBe("app-b");
   });
 
   test("explicit accountId param overrides agentAccountId context", async () => {

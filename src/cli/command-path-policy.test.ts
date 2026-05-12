@@ -1,3 +1,4 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog.js";
 import {
@@ -16,6 +17,15 @@ const DEFAULT_EXPECTED_POLICY: CliCommandPathPolicy = {
   networkProxy: "default",
 };
 
+type NetworkProxyResolver = Extract<
+  CliCommandPathPolicy["networkProxy"],
+  (ctx: { argv: string[]; commandPath: string[] }) => unknown
+>;
+type LoadPluginsResolver = Extract<
+  CliCommandPathPolicy["loadPlugins"],
+  (ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => unknown
+>;
+
 function expectResolvedPolicy(
   commandPath: string[],
   expected: Partial<CliCommandPathPolicy>,
@@ -24,6 +34,18 @@ function expectResolvedPolicy(
     ...DEFAULT_EXPECTED_POLICY,
     ...expected,
   });
+}
+
+function expectNetworkProxyResolver(
+  policy: CliCommandPathPolicy,
+): asserts policy is CliCommandPathPolicy & { networkProxy: NetworkProxyResolver } {
+  expect(typeof policy.networkProxy).toBe("function");
+}
+
+function expectLoadPluginsResolver(
+  policy: CliCommandPathPolicy,
+): asserts policy is CliCommandPathPolicy & { loadPlugins: LoadPluginsResolver } {
+  expect(typeof policy.loadPlugins).toBe("function");
 }
 
 describe("command-path-policy", () => {
@@ -60,11 +82,26 @@ describe("command-path-policy", () => {
       pluginRegistry: { scope: "configured-channels" },
       networkProxy: "bypass",
     });
-    expectResolvedPolicy(["channels", "status"], {
+    const channelsStatusPolicy = resolveCliCommandPathPolicy(["channels", "status"]);
+    expect(channelsStatusPolicy).toEqual({
+      ...DEFAULT_EXPECTED_POLICY,
       loadPlugins: "never",
       pluginRegistry: { scope: "configured-channels" },
-      networkProxy: expect.any(Function),
+      networkProxy: channelsStatusPolicy.networkProxy,
     });
+    expectNetworkProxyResolver(channelsStatusPolicy);
+    expect(
+      channelsStatusPolicy.networkProxy({
+        argv: ["node", "openclaw", "channels", "status"],
+        commandPath: ["channels", "status"],
+      }),
+    ).toBe("bypass");
+    expect(
+      channelsStatusPolicy.networkProxy({
+        argv: ["node", "openclaw", "channels", "status", "--probe"],
+        commandPath: ["channels", "status"],
+      }),
+    ).toBe("default");
     expectResolvedPolicy(["channels", "list"], {
       loadPlugins: "never",
       pluginRegistry: { scope: "configured-channels" },
@@ -88,11 +125,48 @@ describe("command-path-policy", () => {
   });
 
   it("keeps config-only agent commands on config-only startup", () => {
-    expectResolvedPolicy(["agent"], {
-      loadPlugins: expect.any(Function),
+    const agentPolicy = resolveCliCommandPathPolicy(["agent"]);
+    expect(agentPolicy).toEqual({
+      ...DEFAULT_EXPECTED_POLICY,
+      loadPlugins: agentPolicy.loadPlugins,
       pluginRegistry: { scope: "all" },
-      networkProxy: expect.any(Function),
+      networkProxy: agentPolicy.networkProxy,
     });
+    expectLoadPluginsResolver(agentPolicy);
+    expectNetworkProxyResolver(agentPolicy);
+    expect(
+      agentPolicy.loadPlugins({
+        argv: ["node", "openclaw", "agent"],
+        commandPath: ["agent"],
+        jsonOutputMode: false,
+      }),
+    ).toBe(true);
+    expect(
+      agentPolicy.loadPlugins({
+        argv: ["node", "openclaw", "agent", "--json"],
+        commandPath: ["agent"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(false);
+    expect(
+      agentPolicy.loadPlugins({
+        argv: ["node", "openclaw", "agent", "--local"],
+        commandPath: ["agent"],
+        jsonOutputMode: true,
+      }),
+    ).toBe(true);
+    expect(
+      agentPolicy.networkProxy({
+        argv: ["node", "openclaw", "agent"],
+        commandPath: ["agent"],
+      }),
+    ).toBe("bypass");
+    expect(
+      agentPolicy.networkProxy({
+        argv: ["node", "openclaw", "agent", "--local"],
+        commandPath: ["agent"],
+      }),
+    ).toBe("default");
 
     for (const commandPath of [
       ["agents"],
@@ -201,13 +275,13 @@ describe("command-path-policy", () => {
       },
     ];
 
-    vi.resetModules();
     vi.doMock("./command-catalog.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./command-catalog.js")>();
       return { ...actual, cliCommandCatalog: catalog };
     });
-    const { resolveCliCatalogCommandPath, resolveCliNetworkProxyPolicy } =
-      await import("./command-path-policy.js");
+    const { resolveCliCatalogCommandPath, resolveCliNetworkProxyPolicy } = await importFreshModule<
+      typeof import("./command-path-policy.js")
+    >(import.meta.url, "./command-path-policy.js?catalog-overrides");
 
     expect(resolveCliCatalogCommandPath(["node", "openclaw", "nodes", "camera", "snap"])).toEqual([
       "nodes",

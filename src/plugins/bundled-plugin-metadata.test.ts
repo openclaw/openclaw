@@ -31,9 +31,11 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "active-memory",
   "bonjour",
   "browser",
+  "canvas",
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
+  "diffs",
   "file-transfer",
   "google-meet",
   "llm-task",
@@ -49,8 +51,8 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
 ] as const;
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",
-  "bonjour",
   "browser",
+  "canvas",
   "device-pair",
   "file-transfer",
   "memory-core",
@@ -114,14 +116,20 @@ function expectArtifactPresence(
   }
 }
 
+let repoBundledPluginMetadataCache: readonly BundledPluginMetadata[] | undefined;
+let repoBundledPluginManifestsCache:
+  | ReturnType<typeof listRepoBundledPluginManifestsUncached>
+  | undefined;
+
 function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
-  return listBundledPluginMetadata({
+  repoBundledPluginMetadataCache ??= listBundledPluginMetadata({
     rootDir: repoRoot,
     includeSyntheticChannelConfigs: false,
   });
+  return repoBundledPluginMetadataCache;
 }
 
-function listRepoBundledPluginManifests() {
+function listRepoBundledPluginManifestsUncached() {
   const bundledPluginsDir = path.join(repoRoot, "extensions");
   return fs
     .readdirSync(bundledPluginsDir, { withFileTypes: true })
@@ -130,6 +138,40 @@ function listRepoBundledPluginManifests() {
       const result = loadPluginManifest(path.join(bundledPluginsDir, entry.name), false);
       return result.ok ? [{ dirName: entry.name, manifest: result.manifest }] : [];
     });
+}
+
+function listRepoBundledPluginManifests() {
+  repoBundledPluginManifestsCache ??= listRepoBundledPluginManifestsUncached();
+  return repoBundledPluginManifestsCache;
+}
+
+function createRepoBundledManifestRegistry(): PluginManifestRegistry {
+  return {
+    plugins: listRepoBundledPluginManifests().map(({ manifest, dirName }) => ({
+      id: manifest.id,
+      name: manifest.name,
+      description: manifest.description,
+      version: manifest.version,
+      enabledByDefault: manifest.enabledByDefault === true ? true : undefined,
+      enabledByDefaultOnPlatforms: manifest.enabledByDefaultOnPlatforms,
+      kind: manifest.kind,
+      channels: manifest.channels ?? [],
+      providers: manifest.providers ?? [],
+      cliBackends: manifest.cliBackends ?? [],
+      syntheticAuthRefs: manifest.syntheticAuthRefs ?? [],
+      nonSecretAuthMarkers: manifest.nonSecretAuthMarkers ?? [],
+      skills: manifest.skills ?? [],
+      origin: "bundled",
+      rootDir: path.join(repoRoot, "extensions", dirName),
+      source: path.join(repoRoot, "extensions", dirName, "index.ts"),
+      manifestPath: path.join(repoRoot, "extensions", dirName, "openclaw.plugin.json"),
+      activation: manifest.activation,
+      setup: manifest.setup,
+      hooks: [],
+      contracts: manifest.contracts,
+    })),
+    diagnostics: [],
+  };
 }
 
 function readPackageManifest(pluginDir: string): PackageManifest | undefined {
@@ -186,6 +228,9 @@ function createInstalledPluginRecordForManifest(
     origin: record.origin,
     enabled: record.enabledByDefault === true,
     ...(record.enabledByDefault === true ? { enabledByDefault: true } : {}),
+    ...(record.enabledByDefaultOnPlatforms?.length
+      ? { enabledByDefaultOnPlatforms: record.enabledByDefaultOnPlatforms }
+      : {}),
     startup: {
       sidecar: record.activation?.onStartup === true,
       memory: hasPluginKind(record, "memory"),
@@ -270,17 +315,23 @@ describe("bundled plugin metadata", () => {
       contains: ["runtime-api.js"],
     });
     expect(discord?.manifest.id).toBe("discord");
-    expect(collectRepoBundledChannelConfigsForTest("discord")?.discord).toEqual(
-      expect.objectContaining({
-        schema: expect.objectContaining({ type: "object" }),
-      }),
-    );
+    const discordChannelConfig = collectRepoBundledChannelConfigsForTest("discord")?.discord as
+      | { schema?: { type?: unknown } }
+      | undefined;
+    expect(discordChannelConfig?.schema?.type).toBe("object");
   });
 
   it("keeps Slack's doctor contract sidecar on the bundled public surface", () => {
     const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
     expectArtifactPresence(slack?.publicSurfaceArtifacts, {
       contains: ["doctor-contract-api.js"],
+    });
+  });
+
+  it("keeps iMessage message-tool discovery on a narrow public surface", () => {
+    const imessage = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "imessage");
+    expectArtifactPresence(imessage?.publicSurfaceArtifacts, {
+      contains: ["message-tool-api.js"],
     });
   });
 
@@ -316,11 +367,10 @@ describe("bundled plugin metadata", () => {
   });
 
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
-    expect(collectRepoBundledChannelConfigsForTest("tlon")?.tlon).toEqual(
-      expect.objectContaining({
-        schema: expect.objectContaining({ type: "object" }),
-      }),
-    );
+    const tlonChannelConfig = collectRepoBundledChannelConfigsForTest("tlon")?.tlon as
+      | { schema?: { type?: unknown } }
+      | undefined;
+    expect(tlonChannelConfig?.schema?.type).toBe("object");
   });
 
   it("keeps bundled persisted-auth metadata on channel package manifests", () => {
@@ -403,7 +453,12 @@ describe("bundled plugin metadata", () => {
 
   it("keeps config schemas on all bundled plugin manifests", () => {
     for (const entry of listRepoBundledPluginMetadata()) {
-      expect(entry.manifest.configSchema).toEqual(expect.any(Object));
+      const { configSchema } = entry.manifest;
+      if (configSchema === null) {
+        throw new Error(`expected ${entry.manifest.id} config schema`);
+      }
+      expect(typeof configSchema).toBe("object");
+      expect(Array.isArray(configSchema)).toBe(false);
     }
   });
 
@@ -427,36 +482,27 @@ describe("bundled plugin metadata", () => {
       ({ manifest }) => manifest.id === "voice-call",
     );
 
-    expect(entry?.manifest.commandAliases).toContainEqual({ name: "voicecall" });
-    expect(entry?.manifest.activation?.onCommands).toContain("voicecall");
+    expect(entry?.manifest.commandAliases).toStrictEqual([{ name: "voicecall" }]);
+    expect(entry?.manifest.activation?.onCommands).toStrictEqual(["voicecall"]);
   });
 
   it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {
-    const manifestRegistry = {
-      plugins: listRepoBundledPluginManifests().map(({ manifest, dirName }) => ({
-        id: manifest.id,
-        name: manifest.name,
-        description: manifest.description,
-        version: manifest.version,
-        enabledByDefault: manifest.enabledByDefault === true ? true : undefined,
-        kind: manifest.kind,
-        channels: manifest.channels ?? [],
-        providers: manifest.providers ?? [],
-        cliBackends: manifest.cliBackends ?? [],
-        syntheticAuthRefs: manifest.syntheticAuthRefs ?? [],
-        nonSecretAuthMarkers: manifest.nonSecretAuthMarkers ?? [],
-        skills: manifest.skills ?? [],
-        origin: "bundled",
-        rootDir: path.join(repoRoot, "extensions", dirName),
-        source: path.join(repoRoot, "extensions", dirName, "index.ts"),
-        manifestPath: path.join(repoRoot, "extensions", dirName, "openclaw.plugin.json"),
-        activation: manifest.activation,
-        setup: manifest.setup,
-        hooks: [],
-        contracts: manifest.contracts,
-      })),
-      diagnostics: [],
-    } satisfies PluginManifestRegistry;
+    const manifestRegistry = createRepoBundledManifestRegistry();
+    const index = createInstalledPluginIndexForManifests(manifestRegistry);
+
+    expect(
+      resolveGatewayStartupPluginIdsFromRegistry({
+        config: {},
+        env: {},
+        index,
+        manifestRegistry,
+        platform: "linux",
+      }),
+    ).toEqual(EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS);
+  });
+
+  it("auto-starts Bonjour for empty-config macOS Gateway startup", () => {
+    const manifestRegistry = createRepoBundledManifestRegistry();
     const index = createInstalledPluginIndexForManifests(manifestRegistry);
 
     expect(
@@ -465,8 +511,24 @@ describe("bundled plugin metadata", () => {
         env: process.env,
         index,
         manifestRegistry,
+        platform: "darwin",
       }),
-    ).toEqual(EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS);
+    ).toContain("bonjour");
+  });
+
+  it("starts Bonjour when explicitly enabled", () => {
+    const manifestRegistry = createRepoBundledManifestRegistry();
+    const index = createInstalledPluginIndexForManifests(manifestRegistry);
+
+    expect(
+      resolveGatewayStartupPluginIdsFromRegistry({
+        config: { plugins: { entries: { bonjour: { enabled: true } } } },
+        env: process.env,
+        index,
+        manifestRegistry,
+        platform: "linux",
+      }),
+    ).toContain("bonjour");
   });
 
   it("prefers built generated paths when present and falls back to source paths", () => {
@@ -890,7 +952,7 @@ describe("bundled plugin metadata", () => {
     const channelConfigs = entries[0]?.manifest.channelConfigs as
       | Record<string, unknown>
       | undefined;
-    expect(channelConfigs?.alpha).toMatchObject({
+    expect(channelConfigs?.alpha).toEqual({
       schema: {
         type: "object",
         properties: {

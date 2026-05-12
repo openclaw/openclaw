@@ -30,6 +30,26 @@ async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<vo
   }
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    const statError = error as NodeJS.ErrnoException;
+    expect({
+      code: statError.code,
+      path: statError.path,
+      syscall: statError.syscall,
+    }).toEqual({
+      code: "ENOENT",
+      path: targetPath,
+      syscall: "stat",
+    });
+    return;
+  }
+  throw new Error(`Expected path to be missing: ${targetPath}`);
+}
+
 describe("restart sentinel", () => {
   it("writes and consumes a sentinel", async () => {
     await withRestartSentinelStateDir(async () => {
@@ -69,7 +89,7 @@ describe("restart sentinel", () => {
       const read = await readRestartSentinel();
       expect(read).toBeNull();
 
-      await expect(fs.stat(filePath)).rejects.toThrow();
+      await expectPathMissing(filePath);
     });
   });
 
@@ -80,7 +100,7 @@ describe("restart sentinel", () => {
       await fs.writeFile(filePath, JSON.stringify({ version: 2, payload: null }), "utf-8");
 
       await expect(readRestartSentinel()).resolves.toBeNull();
-      await expect(fs.stat(filePath)).rejects.toThrow();
+      await expectPathMissing(filePath);
     });
   });
 
@@ -189,10 +209,11 @@ describe("restart sentinel", () => {
 
   it("writes the running version back to update sentinels on startup", async () => {
     await withRestartSentinelStateDir(async () => {
+      const ts = Date.now();
       await writeRestartSentinel({
         kind: "update",
         status: "ok",
-        ts: Date.now(),
+        ts,
         stats: {
           after: { version: "expected-version" },
         },
@@ -200,9 +221,12 @@ describe("restart sentinel", () => {
 
       await finalizeUpdateRestartSentinelRunningVersion("actual-version");
 
-      await expect(readRestartSentinel()).resolves.toMatchObject({
+      await expect(readRestartSentinel()).resolves.toEqual({
+        version: 1,
         payload: {
           kind: "update",
+          status: "ok",
+          ts,
           stats: {
             after: {
               version: "actual-version",
@@ -215,19 +239,22 @@ describe("restart sentinel", () => {
 
   it("marks update restart failures with a stable reason", async () => {
     await withRestartSentinelStateDir(async () => {
+      const ts = Date.now();
       await writeRestartSentinel({
         kind: "update",
         status: "ok",
-        ts: Date.now(),
+        ts,
         stats: {},
       });
 
       await markUpdateRestartSentinelFailure("restart-unhealthy");
 
-      await expect(readRestartSentinel()).resolves.toMatchObject({
+      await expect(readRestartSentinel()).resolves.toEqual({
+        version: 1,
         payload: {
           kind: "update",
           status: "error",
+          ts,
           stats: {
             reason: "restart-unhealthy",
           },

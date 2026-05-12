@@ -1,11 +1,12 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { migrateSessionEntries, parseSessionEntries } from "@mariozechner/pi-coding-agent";
+import { migrateSessionEntries, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   limitAgentHookHistoryMessages,
@@ -26,6 +27,21 @@ type HistoryEntry = {
   message?: unknown;
   summary?: unknown;
 };
+
+type RawTranscriptReseedReason =
+  | "auth-profile"
+  | "auth-epoch"
+  | "system-prompt"
+  | "mcp"
+  | "missing-transcript"
+  | "session-expired";
+
+const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>([
+  "missing-transcript",
+  "system-prompt",
+  "mcp",
+  "session-expired",
+]);
 
 function coerceHistoryText(content: unknown): string {
   if (typeof content === "string") {
@@ -108,11 +124,6 @@ async function safeRealpath(filePath: string): Promise<string | undefined> {
   }
 }
 
-function isPathWithinBase(basePath: string, targetPath: string): boolean {
-  const relative = path.relative(basePath, targetPath);
-  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
-}
-
 function resolveSafeCliSessionFile(params: {
   sessionId: string;
   sessionFile: string;
@@ -155,7 +166,11 @@ async function loadCliSessionEntries(params: {
     }
     const realSessionsDir = (await safeRealpath(sessionsDir)) ?? path.resolve(sessionsDir);
     const realSessionFile = await safeRealpath(sessionFile);
-    if (!realSessionFile || !isPathWithinBase(realSessionsDir, realSessionFile)) {
+    if (
+      !realSessionFile ||
+      realSessionFile === realSessionsDir ||
+      !isPathInside(realSessionsDir, realSessionFile)
+    ) {
       return [];
     }
     const stat = await fsp.stat(realSessionFile);
@@ -190,20 +205,36 @@ export async function loadCliSessionReseedMessages(params: {
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
+  allowRawTranscriptReseed?: boolean;
+  rawTranscriptReseedReason?: RawTranscriptReseedReason;
 }): Promise<unknown[]> {
   const entries = await loadCliSessionEntries(params);
+  const loadRawTail = () => {
+    if (
+      params.allowRawTranscriptReseed !== true ||
+      !params.rawTranscriptReseedReason ||
+      !RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS.has(params.rawTranscriptReseedReason)
+    ) {
+      return [];
+    }
+    const rawTail = entries.flatMap((entry) => {
+      const candidate = entry as HistoryEntry;
+      return candidate.type === "message" ? [candidate.message] : [];
+    });
+    return limitAgentHookHistoryMessages(rawTail, MAX_CLI_SESSION_HISTORY_MESSAGES);
+  };
   const latestCompactionIndex = entries.findLastIndex((entry) => {
     const candidate = entry as HistoryEntry;
     return candidate.type === "compaction" && typeof candidate.summary === "string";
   });
   if (latestCompactionIndex < 0) {
-    return [];
+    return loadRawTail();
   }
 
   const compaction = entries[latestCompactionIndex] as HistoryEntry;
   const summary = typeof compaction.summary === "string" ? compaction.summary.trim() : "";
   if (!summary) {
-    return [];
+    return loadRawTail();
   }
 
   const tailMessages = entries.slice(latestCompactionIndex + 1).flatMap((entry) => {

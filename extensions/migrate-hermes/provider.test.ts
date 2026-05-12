@@ -1,10 +1,19 @@
+import os from "node:os";
 import path from "node:path";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveHomePath } from "./helpers.js";
 import pluginEntry from "./index.js";
 import { HERMES_REASON_INCLUDE_SECRETS } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import { cleanupTempRoots, makeContext, makeTempRoot, writeFile } from "./test/provider-helpers.js";
+
+function itemById(
+  items: Array<{ id: string; [key: string]: unknown }>,
+  id: string,
+): { id: string; [key: string]: unknown } | undefined {
+  return items.find((item) => item.id === id);
+}
 
 describe("Hermes migration provider", () => {
   afterEach(async () => {
@@ -15,6 +24,20 @@ describe("Hermes migration provider", () => {
     const captured = createCapturedPluginRegistration();
     pluginEntry.register(captured.api);
     expect(captured.migrationProviders.map((provider) => provider.id)).toEqual(["hermes"]);
+  });
+
+  it("resolves tilde source paths against the OS home when OPENCLAW_HOME is set", () => {
+    const previous = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = path.join(path.sep, "tmp", "openclaw-home");
+    try {
+      expect(resolveHomePath("~/.hermes")).toBe(path.join(os.homedir(), ".hermes"));
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previous;
+      }
+    }
   });
 
   it("detects Hermes sources supported by planning", async () => {
@@ -31,11 +54,9 @@ describe("Hermes migration provider", () => {
       }),
     );
 
-    expect(detected).toMatchObject({
-      found: true,
-      source,
-      confidence: "high",
-    });
+    expect(detected?.found).toBe(true);
+    expect(detected?.source).toBe(source);
+    expect(detected?.confidence).toBe("high");
   });
 
   it("detects archive-only Hermes sources", async () => {
@@ -52,11 +73,9 @@ describe("Hermes migration provider", () => {
       }),
     );
 
-    expect(detected).toMatchObject({
-      found: true,
-      source,
-      confidence: "high",
-    });
+    expect(detected?.found).toBe(true);
+    expect(detected?.source).toBe(source);
+    expect(detected?.confidence).toBe("high");
   });
 
   it("rejects missing Hermes sources before planning", async () => {
@@ -101,29 +120,25 @@ describe("Hermes migration provider", () => {
       }),
     );
 
-    expect(plan.summary).toMatchObject({ total: 8, conflicts: 2, sensitive: 1 });
-    expect(plan.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "config:default-model", status: "conflict" }),
-        expect.objectContaining({ id: "config:memory", status: "planned" }),
-        expect.objectContaining({ id: "config:memory-plugin-slot", status: "planned" }),
-        expect.objectContaining({ id: "config:model-providers", status: "planned" }),
-        expect.objectContaining({ id: "workspace:SOUL.md", status: "conflict" }),
-        expect.objectContaining({ id: "memory:MEMORY.md", action: "append", status: "planned" }),
-        expect.objectContaining({ id: "skill:ship-it", status: "planned" }),
-        expect.objectContaining({
-          id: "secret:openai",
-          sensitive: true,
-          status: "skipped",
-          reason: HERMES_REASON_INCLUDE_SECRETS,
-        }),
-      ]),
-    );
-    expect(plan.warnings).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Secrets were detected but skipped"),
-        expect.stringContaining("Conflicts were found"),
-      ]),
-    );
+    expect(plan.summary.total).toBe(8);
+    expect(plan.summary.conflicts).toBe(2);
+    expect(plan.summary.sensitive).toBe(1);
+    expect(itemById(plan.items, "config:default-model")?.status).toBe("conflict");
+    expect(itemById(plan.items, "config:memory")?.status).toBe("planned");
+    expect(itemById(plan.items, "config:memory-plugin-slot")?.status).toBe("planned");
+    expect(itemById(plan.items, "config:model-providers")?.status).toBe("planned");
+    expect(itemById(plan.items, "workspace:SOUL.md")?.status).toBe("conflict");
+    const memory = itemById(plan.items, "memory:MEMORY.md");
+    expect(memory?.action).toBe("append");
+    expect(memory?.status).toBe("planned");
+    expect(itemById(plan.items, "skill:ship-it")?.status).toBe("planned");
+    const secret = itemById(plan.items, "secret:openai");
+    expect(secret?.sensitive).toBe(true);
+    expect(secret?.status).toBe("skipped");
+    expect(secret?.reason).toBe(HERMES_REASON_INCLUDE_SECRETS);
+    expect(plan.warnings).toEqual([
+      "Secrets were detected but skipped. Re-run with --include-secrets to import supported API keys.",
+      "Conflicts were found. Re-run with --overwrite to replace conflicting targets after item-level backups.",
+    ]);
   });
 });

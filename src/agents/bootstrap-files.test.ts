@@ -89,8 +89,9 @@ async function createHeartbeatAgentsWorkspace() {
 }
 
 function expectHeartbeatExcludedAndAgentsKept(files: WorkspaceBootstrapFile[]) {
-  expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(false);
-  expect(files.some((file) => file.name === "AGENTS.md")).toBe(true);
+  const fileNames = files.map((file) => file.name);
+  expect(fileNames).not.toContain("HEARTBEAT.md");
+  expect(fileNames).toContain("AGENTS.md");
 }
 
 describe("resolveBootstrapFilesForRun", () => {
@@ -103,7 +104,8 @@ describe("resolveBootstrapFilesForRun", () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
-    expect(files.some((file) => file.path === path.join(workspaceDir, "EXTRA.md"))).toBe(true);
+    const filePaths = files.map((file) => file.path);
+    expect(filePaths).toContain(path.join(workspaceDir, "EXTRA.md"));
   });
 
   it("drops malformed hook files with missing/invalid paths", async () => {
@@ -116,9 +118,15 @@ describe("resolveBootstrapFilesForRun", () => {
       warn: (message) => warnings.push(message),
     });
 
-    expect(
-      files.every((file) => typeof file.path === "string" && file.path.trim().length > 0),
-    ).toBe(true);
+    expect(files.map((file) => path.relative(workspaceDir, file.path))).toEqual([
+      "AGENTS.md",
+      "SOUL.md",
+      "TOOLS.md",
+      "IDENTITY.md",
+      "USER.md",
+      "HEARTBEAT.md",
+      "BOOTSTRAP.md",
+    ]);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
   });
@@ -166,9 +174,11 @@ describe("resolveBootstrapContextForRun", () => {
 
     const result = await resolveBootstrapContextForRun({ workspaceDir });
 
-    expect(result.bootstrapFiles.some((file) => file.name === "BOOTSTRAP.md")).toBe(true);
-    expect(result.contextFiles.some((file) => file.path.endsWith("BOOTSTRAP.md"))).toBe(true);
-    expect(result.contextFiles.some((file) => file.path.endsWith("AGENTS.md"))).toBe(true);
+    const bootstrapFileNames = result.bootstrapFiles.map((file) => file.name);
+    expect(bootstrapFileNames).toContain("BOOTSTRAP.md");
+    const contextFileNames = new Set(result.contextFiles.map((file) => path.basename(file.path)));
+    expect(contextFileNames.has("BOOTSTRAP.md")).toBe(true);
+    expect(contextFileNames.has("AGENTS.md")).toBe(true);
   });
 
   it("uses heartbeat-only bootstrap files in lightweight heartbeat mode", async () => {
@@ -182,8 +192,8 @@ describe("resolveBootstrapContextForRun", () => {
       runKind: "heartbeat",
     });
 
-    expect(files.length).toBeGreaterThan(0);
-    expect(files.every((file) => file.name === "HEARTBEAT.md")).toBe(true);
+    expect(files.map((file) => file.name)).toStrictEqual(["HEARTBEAT.md"]);
+    expect(files[0]?.content).toBe("check inbox");
   });
 
   it("keeps bootstrap context empty in lightweight cron mode", async () => {
@@ -196,7 +206,7 @@ describe("resolveBootstrapContextForRun", () => {
       runKind: "cron",
     });
 
-    expect(files).toEqual([]);
+    expect(files).toStrictEqual([]);
   });
 
   it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat prompt section is disabled", async () => {
@@ -258,7 +268,8 @@ describe("resolveBootstrapContextForRun", () => {
       },
     });
 
-    expect(files.some((file) => file.name === "HEARTBEAT.md")).toBe(true);
+    const fileNames = files.map((file) => file.name);
+    expect(fileNames).toContain("HEARTBEAT.md");
   });
 });
 

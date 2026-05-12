@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, afterEach, vi } from "vitest";
 import {
   initializeGlobalHookRunner,
@@ -59,6 +59,14 @@ function getPersistedToolResult(sm: ReturnType<typeof SessionManager.inMemory>) 
   return messages.find((m) => (m as any).role === "toolResult") as any;
 }
 
+function requirePersistedToolResult(sm: ReturnType<typeof SessionManager.inMemory>) {
+  const toolResult = getPersistedToolResult(sm);
+  if (!toolResult) {
+    throw new Error("expected persisted toolResult message");
+  }
+  return toolResult;
+}
+
 function initializeTempPlugin(params: { tmpPrefix: string; id: string; body: string }) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix));
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
@@ -81,7 +89,7 @@ function initializeTempPlugin(params: { tmpPrefix: string; id: string; body: str
 }
 
 function expectPersistedToolResultTextCapped(sm: ReturnType<typeof SessionManager.inMemory>) {
-  const toolResult = getPersistedToolResult(sm);
+  const toolResult = requirePersistedToolResult(sm);
   const text = toolResult.content.find((block: { type: string }) => block.type === "text")?.text;
   expect(typeof text).toBe("string");
   expect(text.length).toBeLessThanOrEqual(120);
@@ -89,7 +97,7 @@ function expectPersistedToolResultTextCapped(sm: ReturnType<typeof SessionManage
 }
 
 function expectPersistedToolResultDetailsCapped(sm: ReturnType<typeof SessionManager.inMemory>) {
-  const toolResult = getPersistedToolResult(sm);
+  const toolResult = requirePersistedToolResult(sm);
   const details = toolResult.details as Record<string, unknown>;
   expect(details.persistedDetailsTruncated).toBe(true);
   expect(details.aggregated).toBeUndefined();
@@ -112,9 +120,12 @@ describe("tool_result_persist hook", () => {
       sessionKey: "main",
     });
     appendToolCallAndResult(sm);
-    const toolResult = getPersistedToolResult(sm);
-    expect(toolResult).toBeTruthy();
-    expect(toolResult.details).toBeTruthy();
+    const toolResult = requirePersistedToolResult(sm);
+    expect(toolResult.role).toBe("toolResult");
+    expect(toolResult.details.persistedDetailsTruncated).toBe(true);
+    expect(toolResult.details.originalDetailKeys).toEqual(["big"]);
+    expect(typeof toolResult.details.originalDetailsBytesAtLeast).toBe("number");
+    expect(toolResult.details.originalDetailsBytesAtLeast).toBeGreaterThan(8_192);
   });
 
   it("caps oversized toolResult details before persistence", () => {
@@ -250,9 +261,9 @@ describe("tool_result_persist hook", () => {
     const toolResult = getPersistedToolResult(sm);
     const details = toolResult.details as Record<string, unknown>;
     expect(details.persistedDetailsTruncated).toBe(true);
-    expect(details.originalDetailKeys).toEqual(
-      expect.arrayContaining(["status", "sessionId", "debug_0"]),
-    );
+    expect(details.originalDetailKeys).toContain("status");
+    expect(details.originalDetailKeys).toContain("sessionId");
+    expect(details.originalDetailKeys).toContain("debug_0");
   });
 
   it("falls back to a compact summary when sanitized details still exceed the cap", () => {
@@ -346,8 +357,7 @@ describe("tool_result_persist hook", () => {
     });
 
     appendToolCallAndResult(sm);
-    const toolResult = getPersistedToolResult(sm);
-    expect(toolResult).toBeTruthy();
+    const toolResult = requirePersistedToolResult(sm);
 
     // Hook registration should preserve a valid toolResult message shape.
     expect(toolResult.role).toBe("toolResult");

@@ -1,16 +1,15 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
-  authorizeUserForDm,
-  checkUserAllowed,
+  authorizeUserForDmWithIngress,
   RateLimiter,
   sanitizeInput,
   validateToken,
@@ -53,7 +52,32 @@ function createSynologySetupPrompter(params: { allowedUserIds?: string } = {}) {
   });
 }
 
+async function expectDmAuthorization(params: {
+  userId: string;
+  dmPolicy: "open" | "allowlist" | "disabled";
+  allowedUserIds: string[];
+  allowed: boolean;
+  reasonCode?: string;
+}): Promise<void> {
+  const auth = await authorizeUserForDmWithIngress({
+    accountId: "default",
+    userId: params.userId,
+    dmPolicy: params.dmPolicy,
+    allowedUserIds: params.allowedUserIds,
+  });
+
+  expect(auth.senderAccess.allowed).toBe(params.allowed);
+  if (params.reasonCode !== undefined) {
+    expect(auth.senderAccess.reasonCode).toBe(params.reasonCode);
+  }
+}
+
 describe("synology-chat core", () => {
+  afterAll(() => {
+    vi.unstubAllEnvs();
+    process.env = { ...originalEnv };
+  });
+
   beforeEach(() => {
     vi.unstubAllEnvs();
     process.env = { ...originalEnv };
@@ -75,7 +99,7 @@ describe("synology-chat core", () => {
   });
 
   it("keeps the schema open for plugin-specific passthrough fields", () => {
-    expect([true, {}]).toContainEqual(SynologyChatChannelConfigSchema.schema.additionalProperties);
+    expect(SynologyChatChannelConfigSchema.schema.additionalProperties).toEqual({});
   });
 
   it("isolates direct-message sessions by account and user", () => {
@@ -140,8 +164,8 @@ describe("synology-chat core", () => {
 
 describe("synology-chat account resolution", () => {
   it("lists no accounts when the channel is missing", () => {
-    expect(listAccountIds({})).toEqual([]);
-    expect(listAccountIds({ channels: {} })).toEqual([]);
+    expect(listAccountIds({})).toStrictEqual([]);
+    expect(listAccountIds({ channels: {} })).toStrictEqual([]);
   });
 
   it("lists the default account when base config has a token", () => {
@@ -312,32 +336,62 @@ describe("synology-chat security helpers", () => {
     expect(validateToken("short", "muchlongertoken")).toBe(false);
   });
 
-  it("enforces allowlists and DM policy decisions", () => {
-    expect(checkUserAllowed("user1", [])).toBe(false);
-    expect(checkUserAllowed("user1", ["user1", "user2"])).toBe(true);
-    expect(checkUserAllowed("user3", ["user1", "user2"])).toBe(false);
-
-    expect(authorizeUserForDm("user1", "open", [])).toEqual({
+  it("matches DM policy decisions through channel ingress", async () => {
+    await expectDmAuthorization({
+      userId: "user1",
+      dmPolicy: "open",
+      allowedUserIds: [],
       allowed: false,
-      reason: "not-allowlisted",
+      reasonCode: "dm_policy_not_allowlisted",
     });
-    expect(authorizeUserForDm("user1", "open", ["*"])).toEqual({ allowed: true });
-    expect(authorizeUserForDm("user1", "open", ["user1"])).toEqual({ allowed: true });
-    expect(authorizeUserForDm("user1", "disabled", ["user1"])).toEqual({
-      allowed: false,
-      reason: "disabled",
-    });
-    expect(authorizeUserForDm("user1", "allowlist", [])).toEqual({
-      allowed: false,
-      reason: "allowlist-empty",
-    });
-    expect(authorizeUserForDm("user9", "allowlist", ["user1"])).toEqual({
-      allowed: false,
-      reason: "not-allowlisted",
-    });
-    expect(authorizeUserForDm("user1", "allowlist", ["user1", "user2"])).toEqual({
+    await expectDmAuthorization({
+      userId: "user1",
+      dmPolicy: "open",
+      allowedUserIds: ["*"],
       allowed: true,
     });
+    await expectDmAuthorization({
+      userId: "user1",
+      dmPolicy: "disabled",
+      allowedUserIds: ["user1"],
+      allowed: false,
+      reasonCode: "dm_policy_disabled",
+    });
+    await expectDmAuthorization({
+      userId: "user1",
+      dmPolicy: "allowlist",
+      allowedUserIds: [],
+      allowed: false,
+      reasonCode: "dm_policy_not_allowlisted",
+    });
+    await expectDmAuthorization({
+      userId: "user9",
+      dmPolicy: "allowlist",
+      allowedUserIds: ["user1"],
+      allowed: false,
+      reasonCode: "dm_policy_not_allowlisted",
+    });
+    await expectDmAuthorization({
+      userId: "user1",
+      dmPolicy: "allowlist",
+      allowedUserIds: ["user1", "user2"],
+      allowed: true,
+    });
+  });
+
+  it("redacts Synology user IDs and allowlist entries from ingress state/decision", async () => {
+    const auth = await authorizeUserForDmWithIngress({
+      accountId: "default",
+      userId: "raw-sensitive-user-id",
+      dmPolicy: "allowlist",
+      allowedUserIds: ["raw-sensitive-user-id"],
+    });
+
+    const serialized = JSON.stringify({
+      state: auth.state,
+      decision: auth.ingress,
+    });
+    expect(serialized).not.toContain("raw-sensitive-user-id");
   });
 
   it("sanitizes prompt injection markers and long inputs", () => {

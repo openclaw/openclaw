@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   createStubSessionHarness,
@@ -8,6 +8,21 @@ import {
   extractAgentEventPayloads,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
+
+type ReplyMock = ReturnType<typeof vi.fn>;
+type ReplyPayload = { text?: string };
+
+function requireFirstReplyPayload(mock: ReplyMock): ReplyPayload {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected first reply call");
+  }
+  const payload = call[0];
+  if (!payload || typeof payload !== "object") {
+    throw new Error("expected first reply payload");
+  }
+  return payload as ReplyPayload;
+}
 
 describe("subscribeEmbeddedPiSession", () => {
   it("filters to <final> and suppresses output without a start tag", () => {
@@ -27,9 +42,9 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "<final>Hi there</final>" });
 
-    expect(onPartialReply).toHaveBeenCalled();
-    const firstPayload = onPartialReply.mock.calls[0][0];
-    expect(firstPayload.text).toBe("Hi there");
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    const firstPayload = requireFirstReplyPayload(onPartialReply);
+    expect(firstPayload?.text).toBe("Hi there");
 
     onPartialReply.mockClear();
 
@@ -76,8 +91,8 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta({ emit, delta: "<final>Hello world</final>" });
 
-    expect(onPartialReply).toHaveBeenCalled();
-    expect(onPartialReply.mock.calls[0][0].text).toBe("Hello world");
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(requireFirstReplyPayload(onPartialReply).text).toBe("Hello world");
   });
 
   it("strips final tags split across streamed deltas without emitting tag remnants", () => {
@@ -183,7 +198,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Answer ends with <fi");
+    expect(requireFirstReplyPayload(onBlockReply).text).toBe("Answer ends with <fi");
   });
 
   it("keeps a trailing final-tag prefix when synchronous message_end drains chunked text_end replies", async () => {
@@ -246,8 +261,8 @@ describe("subscribeEmbeddedPiSession", () => {
 
     emitAssistantTextDelta({ emit, delta: "Hello world" });
 
-    const payload = onPartialReply.mock.calls[0][0];
-    expect(payload.text).toBe("Hello world");
+    const payload = requireFirstReplyPayload(onPartialReply);
+    expect(payload?.text).toBe("Hello world");
   });
   it("emits block replies on message_end", async () => {
     const { session, emit } = createStubSessionHarness();
@@ -269,8 +284,8 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "message_end", message: assistantMessage });
     await Promise.resolve();
 
-    expect(onBlockReply).toHaveBeenCalled();
-    const payload = onBlockReply.mock.calls[0][0];
-    expect(payload.text).toBe("Hello block");
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const payload = requireFirstReplyPayload(onBlockReply);
+    expect(payload?.text).toBe("Hello block");
   });
 });

@@ -70,6 +70,14 @@ Note: isolated cron runs treat run-level agent failures as job errors even when
 no reply payload is produced, so model/provider failures still increment error
 counters and trigger failure notifications.
 
+If an isolated run times out before the first model request, `openclaw cron show`
+and `openclaw cron runs` include a phase-specific error such as
+`setup timed out before runner start` or
+`stalled before first model call (last phase: context-engine)`.
+For CLI-backed providers, the pre-model watchdog stays active until the external
+CLI turn starts, so session lookup, hook, auth, prompt, and CLI setup stalls are
+reported as pre-model cron failures.
+
 ## Scheduling
 
 ### One-shot jobs
@@ -211,11 +219,19 @@ Manual run and inspection:
 
 ```bash
 openclaw cron list
+openclaw cron list --agent ops
+openclaw cron get <job-id>
 openclaw cron show <job-id>
 openclaw cron run <job-id>
 openclaw cron run <job-id> --due
 openclaw cron runs --id <job-id> --limit 50
 ```
+
+`openclaw cron list` shows all matching jobs by default. Pass `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
+
+`openclaw cron get <job-id>` returns the stored job JSON directly. Use `cron show <job-id>` when you want the human-readable view with delivery-route preview.
+
+`cron list --json` and `cron show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. This mirrors the human-readable status column so external tooling can read job state without re-deriving it.
 
 `cron runs` entries include delivery diagnostics with the intended cron target, the resolved target, message-tool sends, fallback use, and delivered state.
 

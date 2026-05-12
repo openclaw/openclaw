@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { createAnthropicPayloadLogger } from "./anthropic-payload-log.js";
 
@@ -14,7 +14,7 @@ describe("createAnthropicPayloadLogger", () => {
         flush: async () => undefined,
       },
     });
-    expect(logger).not.toBeNull();
+    expect(typeof logger?.wrapStreamFn).toBe("function");
 
     const payload = {
       messages: [
@@ -41,7 +41,11 @@ describe("createAnthropicPayloadLogger", () => {
     }) as StreamFn;
 
     const wrapped = logger?.wrapStreamFn(streamFn);
-    await wrapped?.({ api: "anthropic-messages" } as never, { messages: [] } as never, {});
+    expect(typeof wrapped).toBe("function");
+    if (!wrapped) {
+      throw new Error("expected payload logger to wrap stream function");
+    }
+    await wrapped({ api: "anthropic-messages" } as never, { messages: [] } as never, {});
 
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
     const sanitizedPayload = (event.payload ?? {}) as Record<string, unknown>;
@@ -58,6 +62,6 @@ describe("createAnthropicPayloadLogger", () => {
     expect(source.data).toBe("<redacted>");
     expect(source.bytes).toBe(4);
     expect(source.sha256).toBe(crypto.createHash("sha256").update("QUJDRA==").digest("hex"));
-    expect(event.payloadDigest).toBeDefined();
+    expect(event.payloadDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
 });

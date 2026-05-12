@@ -506,7 +506,7 @@ describe("stripThoughtSignatures", () => {
     ]);
   });
   it("handles empty array", () => {
-    expect(stripThoughtSignatures([])).toEqual([]);
+    expect(stripThoughtSignatures([])).toStrictEqual([]);
   });
   it("handles null/undefined blocks in array", () => {
     const input = [null, undefined, { type: "text", text: "hello" }];
@@ -638,7 +638,7 @@ describe("downgradeOpenAIReasoningBlocks", () => {
       },
     ];
 
-    expect(downgradeOpenAIReasoningBlocks(input as any)).toEqual([]);
+    expect(downgradeOpenAIReasoningBlocks(input as any)).toStrictEqual([]);
   });
 
   it("keeps non-reasoning thinking signatures", () => {
@@ -797,6 +797,13 @@ describe("isMessagingToolDuplicate", () => {
       input: "Hello, this is a test message!",
       sentTexts: ['I sent the message: "Hello, this is a test message!"'],
       expected: true,
+    },
+    {
+      input: "v2ex hot topics delivered to telegram",
+      sentTexts: [
+        "1. some article title\n2. another title\nv2ex hot topics delivered to telegram\n3. yet another",
+      ],
+      expected: false,
     },
     {
       input: "This is completely different content.",

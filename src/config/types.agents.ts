@@ -2,7 +2,9 @@ import type { ChatType } from "../channels/chat-type.js";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
+  AgentModelEntryConfig,
   EmbeddedPiExecutionContract,
+  SubagentDelegationMode,
 } from "./types.agent-defaults.js";
 import type {
   AgentEmbeddedHarnessConfig,
@@ -86,10 +88,14 @@ export type AgentConfig = {
   /** @deprecated Use agentRuntime. */
   embeddedHarness?: AgentEmbeddedHarnessConfig;
   model?: AgentModelConfig;
+  /** Per-model metadata overrides for this agent. */
+  models?: Record<string, AgentModelEntryConfig>;
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Optional per-agent default verbosity level. */
   verboseDefault?: "off" | "on" | "full";
+  /** Optional per-agent tool progress detail mode. */
+  toolProgressDetail?: AgentDefaultsConfig["toolProgressDetail"];
   /** Optional per-agent default reasoning visibility. */
   reasoningDefault?: "on" | "off" | "stream";
   /** Optional per-agent default for fast mode. */
@@ -111,6 +117,8 @@ export type AgentConfig = {
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
   subagents?: {
+    /** Prompt-only guidance for how strongly this agent should delegate work. */
+    delegationMode?: SubagentDelegationMode;
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
@@ -118,6 +126,8 @@ export type AgentConfig = {
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };
+  /** Optional outer run loop retry boundaries. */
+  runRetries?: AgentDefaultsConfig["runRetries"];
   /** Optional per-agent embedded Pi overrides. */
   embeddedPi?: {
     /** Optional per-agent execution contract override. */

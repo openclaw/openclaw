@@ -601,7 +601,7 @@ describe("browser config", () => {
 
   it("defaults extraArgs to empty array when not provided", () => {
     const resolved = resolveBrowserConfig(undefined);
-    expect(resolved.extraArgs).toEqual([]);
+    expect(resolved.extraArgs).toStrictEqual([]);
   });
 
   it("passes through valid extraArgs strings", () => {
@@ -629,7 +629,7 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       extraArgs: "not-an-array" as unknown as string[],
     });
-    expect(resolved.extraArgs).toEqual([]);
+    expect(resolved.extraArgs).toStrictEqual([]);
   });
 
   it("resolves browser SSRF policy when configured", () => {
@@ -649,7 +649,7 @@ describe("browser config", () => {
 
   it("defaults browser SSRF policy to strict mode when unset", () => {
     const resolved = resolveBrowserConfig({});
-    expect(resolved.ssrfPolicy).toEqual({});
+    expect(resolved.ssrfPolicy).toStrictEqual({});
   });
 
   it("supports explicit strict mode by disabling private network access", () => {
@@ -692,7 +692,7 @@ describe("browser config", () => {
         },
       },
     });
-    expect(resolved.ssrfPolicy).toEqual({});
+    expect(resolved.ssrfPolicy).toStrictEqual({});
   });
 
   it("resolves existing-session profiles without cdpPort or cdpUrl", () => {
@@ -706,14 +706,22 @@ describe("browser config", () => {
       },
     });
     const profile = resolveProfile(resolved, "chrome-live");
-    expect(profile).not.toBeNull();
-    expect(profile?.driver).toBe("existing-session");
-    expect(profile?.attachOnly).toBe(true);
-    expect(profile?.cdpPort).toBe(0);
-    expect(profile?.cdpUrl).toBe("");
-    expect(profile?.cdpIsLoopback).toBe(true);
-    expect(profile?.userDataDir).toBeUndefined();
-    expect(profile?.color).toBe("#00AA00");
+    expect(profile).toStrictEqual({
+      name: "chrome-live",
+      driver: "existing-session",
+      attachOnly: true,
+      cdpPort: 0,
+      cdpUrl: "",
+      cdpHost: "",
+      cdpIsLoopback: true,
+      color: "#00AA00",
+      executablePath: undefined,
+      headless: false,
+      headlessSource: "default",
+      mcpArgs: undefined,
+      mcpCommand: undefined,
+      userDataDir: undefined,
+    });
   });
 
   it("expands tilde-prefixed userDataDir for existing-session profiles", () => {

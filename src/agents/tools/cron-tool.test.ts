@@ -105,10 +105,7 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { delivery?: TestDelivery };
-    };
-    return call?.params?.delivery;
+    return (readGatewayCall().params as { delivery?: TestDelivery } | undefined)?.delivery;
   }
 
   async function executeAddAndReadSessionKey(params: {
@@ -168,7 +165,7 @@ describe("cron tool", () => {
     callGatewayMock.mockResolvedValue({ ok: true });
   });
 
-  it("marks cron as owner-only", async () => {
+  it("marks cron as owner-only", () => {
     const tool = createTestCronTool();
     expect(tool.ownerOnly).toBe(true);
   });
@@ -193,21 +190,238 @@ describe("cron tool", () => {
         action: "remove",
         jobId: "job-other",
       }),
-    ).rejects.toThrow("Cron tool is restricted to removing the current cron job.");
+    ).rejects.toThrow("Cron tool is restricted to the current cron job.");
 
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("denies scoped isolated cron runs from using non-remove cron actions", async () => {
+  it("allows scoped isolated cron runs to read the current job run history", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      entries: [{ jobId: "job-current", status: "ok" }],
+      total: 1,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    });
     const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
 
-    await expect(
-      tool.execute("call-list", {
-        action: "list",
-      }),
-    ).rejects.toThrow("Cron tool is restricted to removing the current cron job.");
+    const result = await tool.execute("call-self-runs", {
+      action: "runs",
+      jobId: "job-current",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.runs");
+    expect(params).toEqual({ id: "job-current" });
+    expect(result.details).toEqual({
+      entries: [{ jobId: "job-current", status: "ok" }],
+      total: 1,
+      offset: 0,
+      limit: 50,
+      hasMore: false,
+      nextOffset: null,
+    });
+  });
+
+  it.each([
+    ["another job", { action: "runs", jobId: "job-other" }],
+    ["missing job id", { action: "runs" }],
+  ])("denies scoped isolated cron runs from reading %s run history", async (_label, args) => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await expect(tool.execute("call-runs-denied", args)).rejects.toThrow(
+      "Cron tool is restricted to the current cron job.",
+    );
 
     expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("allows scoped isolated cron runs to read cron scheduler status", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      enabled: true,
+      storePath: "/home/user/.openclaw/cron/jobs.json",
+      jobs: 37,
+      nextWakeAtMs: 1_234,
+    });
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    const result = await tool.execute("call-status", {
+      action: "status",
+      timeoutMs: 10_000,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.status");
+    expect(params).toStrictEqual({});
+    expect(result.details).toEqual({ enabled: true });
+  });
+
+  it("allows scoped isolated cron runs to get the current job", async () => {
+    callGatewayMock.mockResolvedValueOnce({ id: "job-current", name: "current" });
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    const result = await tool.execute("call-get", {
+      action: "get",
+      jobId: "job-current",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.get");
+    expect(params).toStrictEqual({ id: "job-current" });
+    expect(result.details).toEqual({ id: "job-current", name: "current" });
+  });
+
+  it.each([
+    ["another job", { action: "get", jobId: "job-other" }],
+    ["missing job id", { action: "get" }],
+  ])("denies scoped isolated cron runs from getting %s", async (_label, args) => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await expect(tool.execute("call-get-denied", args)).rejects.toThrow(
+      "Cron tool is restricted to the current cron job.",
+    );
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("allows scoped isolated cron runs to list only the current job", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      jobs: [
+        { id: "job-current", name: "current" },
+        { id: "job-other", name: "other" },
+      ],
+      total: 2,
+      offset: 0,
+      limit: 2,
+      hasMore: false,
+      nextOffset: null,
+      deliveryPreviews: {
+        "job-current": { label: "current", detail: "self" },
+        "job-other": { label: "other", detail: "hidden" },
+      },
+    });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:cron:job-current:run:abc",
+      selfRemoveOnlyJobId: "job-current",
+    });
+
+    const result = await tool.execute("call-list", {
+      action: "list",
+      agentId: "other-agent",
+      includeDisabled: true,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.list");
+    expect(params).toEqual({ includeDisabled: true, agentId: "agent-123", limit: 200, offset: 0 });
+    expect(result.details).toEqual({
+      jobs: [{ id: "job-current", name: "current" }],
+      total: 1,
+      offset: 0,
+      limit: 1,
+      hasMore: false,
+      nextOffset: null,
+      deliveryPreviews: {
+        "job-current": { label: "current", detail: "self" },
+      },
+    });
+  });
+
+  it("pages scoped isolated cron list until it finds the current job", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        jobs: Array.from({ length: 200 }, (_, index) => ({
+          id: `job-old-${index}`,
+          name: `old ${index}`,
+        })),
+        total: 201,
+        offset: 0,
+        limit: 200,
+        hasMore: true,
+        nextOffset: 200,
+        deliveryPreviews: {},
+      })
+      .mockResolvedValueOnce({
+        jobs: [{ id: "job-current", name: "current" }],
+        total: 201,
+        offset: 200,
+        limit: 200,
+        hasMore: false,
+        nextOffset: null,
+        deliveryPreviews: {
+          "job-current": { label: "current", detail: "self" },
+        },
+      });
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:cron:job-current:run:abc",
+      selfRemoveOnlyJobId: "job-current",
+    });
+
+    const result = await tool.execute("call-list-paged", {
+      action: "list",
+      includeDisabled: true,
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(2);
+    expect(readGatewayCall(0)).toEqual({
+      method: "cron.list",
+      params: { includeDisabled: true, agentId: "agent-123", limit: 200, offset: 0 },
+    });
+    expect(readGatewayCall(1)).toEqual({
+      method: "cron.list",
+      params: { includeDisabled: true, agentId: "agent-123", limit: 200, offset: 200 },
+    });
+    expect(result.details).toEqual({
+      jobs: [{ id: "job-current", name: "current" }],
+      total: 1,
+      offset: 0,
+      limit: 1,
+      hasMore: false,
+      nextOffset: null,
+      deliveryPreviews: {
+        "job-current": { label: "current", detail: "self" },
+      },
+    });
+  });
+
+  it.each([
+    ["add", { action: "add", job: buildReminderAgentTurnJob() }],
+    ["update", { action: "update", jobId: "job-current", patch: { enabled: false } }],
+    ["run", { action: "run", jobId: "job-current" }],
+    ["wake", { action: "wake", text: "wake up" }],
+  ])("denies scoped isolated cron runs from using %s", async (_action, args) => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await expect(tool.execute("call-denied", args)).rejects.toThrow(
+      "Cron tool is restricted to the current cron job.",
+    );
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("filters cron list by the requester agent session", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:telegram:direct:channing",
+    });
+
+    await tool.execute("call-list", {
+      action: "list",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.list");
+    expect(params).toEqual({ includeDisabled: false, agentId: "agent-123" });
+  });
+
+  it("prefers explicit cron list agent id over the requester session", async () => {
+    const tool = createTestCronTool({
+      agentSessionKey: "agent:agent-123:telegram:direct:channing",
+    });
+
+    await tool.execute("call-list-explicit", {
+      action: "list",
+      agentId: "ops",
+      includeDisabled: true,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.list");
+    expect(params).toEqual({ includeDisabled: true, agentId: "ops" });
   });
 
   it("documents deferred follow-up guidance in the tool description", () => {
@@ -247,6 +461,8 @@ describe("cron tool", () => {
     ["remove", { action: "remove", id: "job-2" }, { id: "job-2" }],
     ["run", { action: "run", jobId: "job-1" }, { id: "job-1", mode: "force" }],
     ["run", { action: "run", id: "job-2" }, { id: "job-2", mode: "force" }],
+    ["get", { action: "get", jobId: "job-1" }, { id: "job-1" }],
+    ["get", { action: "get", id: "job-2" }, { id: "job-2" }],
     ["runs", { action: "runs", jobId: "job-1" }, { id: "job-1" }],
     ["runs", { action: "runs", id: "job-2" }, { id: "job-2" }],
   ])("%s sends id to gateway", async (action, args, expectedParams) => {
@@ -315,10 +531,7 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { agentId?: unknown };
-    };
-    expect(call?.params?.agentId).toBeNull();
+    expect(readGatewayCall().params?.agentId).toBeNull();
   });
 
   it("infers session agentId when job.agentId is omitted", async () => {
@@ -502,10 +715,7 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      method?: string;
-      params?: { agentId?: string | null };
-    };
+    const call = readGatewayCall();
     expect(call.method).toBe("cron.add");
     expect(call.params?.agentId).toBeNull();
   });
@@ -847,11 +1057,9 @@ describe("cron tool", () => {
       name: "flat-name-should-be-ignored",
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: { name?: string; payload?: { text?: string } };
-    };
+    const call = readGatewayCall();
     expect(call?.params?.name).toBe("nested-job");
-    expect(call?.params?.payload?.text).toBe("from nested");
+    expect((call?.params?.payload as { text?: string } | undefined)?.text).toBe("from nested");
   });
 
   it("does not infer delivery when mode is none", async () => {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { resolveDefaultAgentDir } from "./agent-scope.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -44,6 +44,8 @@ vi.mock("./models-config.providers.js", async () => {
       providers: Record<string, ModelsProviderConfig>;
     }) => providers,
     normalizeProviders: ({ providers }: { providers: Record<string, ModelsProviderConfig> }) =>
+      providers,
+    normalizeProviderCatalogModelsForConfig: (providers: Record<string, ModelsProviderConfig>) =>
       providers,
     resolveImplicitProviders: async ({ env }: { env?: NodeJS.ProcessEnv }) => {
       const providers: Record<string, ModelsProviderConfig> = {
@@ -107,11 +109,10 @@ async function runEnvProviderCase(params: {
   try {
     await ensureOpenClawModelsJson({});
 
-    const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
+    const modelPath = path.join(resolveDefaultAgentDir({}), "models.json");
     const raw = await fs.readFile(modelPath, "utf8");
     const parsed = JSON.parse(raw) as { providers: Record<string, ParsedProviderConfig> };
     const provider = parsed.providers[params.providerKey];
-    expect(provider).toBeDefined();
     expect(provider?.apiKey).toBe(params.expectedApiKeyRef);
   } finally {
     if (previousValue === undefined) {
@@ -165,7 +166,12 @@ describe("models-config", () => {
         const parsed = JSON.parse(raw) as { providers: Record<string, ParsedProviderConfig> };
 
         expect(result.wrote).toBe(true);
-        expect(Object.keys(parsed.providers).length).toBeGreaterThan(0);
+        expect(Object.keys(parsed.providers)).toStrictEqual([
+          "chutes",
+          "deepseek",
+          "mistral",
+          "xai",
+        ]);
         expect(parsed.providers["openai"]).toBeUndefined();
         expect(parsed.providers["minimax"]).toBeUndefined();
         expect(parsed.providers["synthetic"]).toBeUndefined();
@@ -177,7 +183,7 @@ describe("models-config", () => {
     await withTempHome(async () => {
       await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
 
-      const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
+      const modelPath = path.join(resolveDefaultAgentDir({}), "models.json");
       const raw = await fs.readFile(modelPath, "utf8");
       const parsed = JSON.parse(raw) as {
         providers: Record<
@@ -193,10 +199,9 @@ describe("models-config", () => {
       };
 
       expect(parsed.providers["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
-      expect(parsed.providers["custom-proxy"]?.models?.[0]).toMatchObject({
-        id: "llama-3.1-8b",
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      });
+      const model = parsed.providers["custom-proxy"]?.models?.[0];
+      expect(model?.id).toBe("llama-3.1-8b");
+      expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
     });
   });
 

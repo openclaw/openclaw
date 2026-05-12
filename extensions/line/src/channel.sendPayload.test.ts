@@ -1,9 +1,28 @@
-import { describe, expect, it, vi } from "vitest";
+import {
+  verifyChannelMessageAdapterCapabilityProofs,
+  verifyChannelMessageReceiveAckPolicyAdapterProofs,
+} from "openclaw/plugin-sdk/channel-message";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../api.js";
+import { linePlugin } from "./channel.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { setLineRuntime } from "./runtime.js";
+import { createLineSendReceipt } from "./send-receipt.js";
+
+const ssrfMocks = vi.hoisted(() => ({
+  resolvePinnedHostnameWithPolicy: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
+}));
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
 
 type LineRuntimeMocks = {
   pushMessageLine: ReturnType<typeof vi.fn>;
@@ -20,19 +39,37 @@ type LineRuntimeMocks = {
   resolveTextChunkLimit: ReturnType<typeof vi.fn>;
 };
 
+beforeEach(() => {
+  vi.setSystemTime(1_800_000_000_000);
+  ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();
+  ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
+    hostname: "example.com",
+    addresses: ["93.184.216.34"],
+  });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+function lineResult(messageId: string, chatId = "c1") {
+  return {
+    messageId,
+    chatId,
+    receipt: createLineSendReceipt({ messageId, chatId, kind: "text" }),
+  };
+}
+
 function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
-  const pushMessageLine = vi.fn(async () => ({ messageId: "m-text", chatId: "c1" }));
-  const pushMessagesLine = vi.fn(async () => ({ messageId: "m-batch", chatId: "c1" }));
-  const pushFlexMessage = vi.fn(async () => ({ messageId: "m-flex", chatId: "c1" }));
-  const pushTemplateMessage = vi.fn(async () => ({ messageId: "m-template", chatId: "c1" }));
-  const pushLocationMessage = vi.fn(async () => ({ messageId: "m-loc", chatId: "c1" }));
-  const pushTextMessageWithQuickReplies = vi.fn(async () => ({
-    messageId: "m-quick",
-    chatId: "c1",
-  }));
+  const pushMessageLine = vi.fn(async () => lineResult("m-text"));
+  const pushMessagesLine = vi.fn(async () => lineResult("m-batch"));
+  const pushFlexMessage = vi.fn(async () => lineResult("m-flex"));
+  const pushTemplateMessage = vi.fn(async () => lineResult("m-template"));
+  const pushLocationMessage = vi.fn(async () => lineResult("m-loc"));
+  const pushTextMessageWithQuickReplies = vi.fn(async () => lineResult("m-quick"));
   const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
   const buildTemplateMessageFromPayload = vi.fn(() => ({ type: "buttons" }));
-  const sendMessageLine = vi.fn(async () => ({ messageId: "m-media", chatId: "c1" }));
+  const sendMessageLine = vi.fn(async () => lineResult("m-media"));
   const chunkMarkdownText = vi.fn((text: string) => [text]);
   const resolveTextChunkLimit = vi.fn(() => 123);
   const resolveLineAccount = vi.fn(
@@ -227,7 +264,41 @@ describe("line outbound sendPayload", () => {
       ["One", "Two"],
       { verbose: false, accountId: "default", cfg },
     );
-    expect(result).toEqual({ channel: "line", messageId: "m-quick", chatId: "c1" });
+    expect(result).toEqual({
+      channel: "line",
+      chatId: "c1",
+      messageId: "m-quick",
+      receipt: {
+        parts: [
+          {
+            index: 0,
+            kind: "text",
+            platformMessageId: "m-quick",
+            raw: {
+              channel: "line",
+              chatId: "c1",
+              conversationId: "c1",
+              messageId: "m-quick",
+              meta: { messageCount: 1 },
+            },
+            threadId: "c1",
+          },
+        ],
+        platformMessageIds: ["m-quick"],
+        primaryPlatformMessageId: "m-quick",
+        raw: [
+          {
+            channel: "line",
+            chatId: "c1",
+            conversationId: "c1",
+            messageId: "m-quick",
+            meta: { messageCount: 1 },
+          },
+        ],
+        sentAt: 1_800_000_000_000,
+        threadId: "c1",
+      },
+    });
   });
 
   it("sends media before quick-reply text so buttons stay visible", async () => {
@@ -253,16 +324,16 @@ describe("line outbound sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.sendMessageLine).toHaveBeenCalledWith(
-      "line:user:3",
-      "",
-      expect.objectContaining({
-        verbose: false,
-        mediaUrl: "https://example.com/img.jpg",
-        accountId: "default",
-        cfg,
-      }),
-    );
+    expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:3", "", {
+      verbose: false,
+      mediaUrl: "https://example.com/img.jpg",
+      mediaKind: undefined,
+      previewImageUrl: undefined,
+      durationMs: undefined,
+      trackingId: undefined,
+      accountId: "default",
+      cfg,
+    });
     expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
       "line:user:3",
       "Hello",
@@ -468,6 +539,82 @@ describe("line outbound sendPayload", () => {
         cfg,
       }),
     ).rejects.toThrow(/require previewimageurl/i);
+  });
+
+  it("declares message adapter durable text and media with receipt proofs", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    const proofResults = await verifyChannelMessageAdapterCapabilityProofs({
+      adapterName: "line",
+      adapter: linePlugin.message!,
+      proofs: {
+        text: async () => {
+          const result = await linePlugin.message?.send?.text?.({
+            cfg,
+            to: "line:user:U123",
+            text: "hello",
+            accountId: "primary",
+          });
+          expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:U123", "hello", {
+            verbose: false,
+            accountId: "primary",
+            cfg,
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["m-text"]);
+        },
+        media: async () => {
+          const result = await linePlugin.message?.send?.media?.({
+            cfg,
+            to: "line:user:U123",
+            text: "image",
+            mediaUrl: "https://example.com/image.jpg",
+            accountId: "primary",
+          });
+          expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:U123", "", {
+            verbose: false,
+            mediaUrl: "https://example.com/image.jpg",
+            accountId: "primary",
+            cfg,
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["m-media"]);
+        },
+        messageSendingHooks: () => {
+          expect(linePlugin.message?.send?.text).toBeTypeOf("function");
+        },
+      },
+    });
+
+    expect(proofResults.find((result) => result.capability === "text")?.status).toBe("verified");
+    expect(proofResults.find((result) => result.capability === "media")?.status).toBe("verified");
+    expect(proofResults.find((result) => result.capability === "messageSendingHooks")?.status).toBe(
+      "verified",
+    );
+  });
+
+  it("declares receive ack policies for deferred LINE webhook acknowledgement", async () => {
+    const proofResults = await verifyChannelMessageReceiveAckPolicyAdapterProofs({
+      adapterName: "line",
+      adapter: linePlugin.message!,
+      proofs: {
+        after_receive_record: () => {
+          expect(linePlugin.message?.receive?.supportedAckPolicies).toContain(
+            "after_receive_record",
+          );
+        },
+        after_agent_dispatch: () => {
+          expect(linePlugin.message?.receive?.defaultAckPolicy).toBe("after_agent_dispatch");
+        },
+      },
+    });
+
+    expect(proofResults.find((result) => result.policy === "after_receive_record")?.status).toBe(
+      "verified",
+    );
+    expect(proofResults.find((result) => result.policy === "after_agent_dispatch")?.status).toBe(
+      "verified",
+    );
   });
 });
 

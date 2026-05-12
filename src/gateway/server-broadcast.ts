@@ -32,6 +32,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   presence: [],
   shutdown: [],
   tick: [],
+  "talk.event": [READ_SCOPE],
   "talk.mode": [WRITE_SCOPE],
   "update.available": [],
   "voicewake.changed": [READ_SCOPE],
@@ -49,6 +50,13 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
 // scope would otherwise reject non-operator roles. Nodes act on these updates
 // (e.g. reconfiguring wake-word triggers).
 const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed", "voicewake.routing.changed"]);
+
+function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string {
+  const fieldJSON = JSON.stringify({ [name]: value });
+  const keyJSON = JSON.stringify(name);
+  const prefix = `{${keyJSON}:`;
+  return fieldJSON.startsWith(prefix) ? `,${keyJSON}:${fieldJSON.slice(prefix.length, -1)}` : "";
+}
 
 function hasEventScope(client: GatewayWsClient, event: string): boolean {
   const required = EVENT_SCOPE_GUARDS[event];
@@ -112,6 +120,26 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       }
       logWs("out", "event", logMeta);
     }
+    let frameBase:
+      | {
+          eventJSON: string;
+          payloadFragment: string;
+          stateVersionFragment: string;
+        }
+      | undefined;
+    const getFrameBase = () => {
+      if (!frameBase) {
+        frameBase = {
+          eventJSON: JSON.stringify(event),
+          payloadFragment: serializeFrameField("payload", payload),
+          stateVersionFragment:
+            opts?.stateVersion === undefined
+              ? ""
+              : serializeFrameField("stateVersion", opts.stateVersion),
+        };
+      }
+      return frameBase;
+    };
     for (const c of params.clients) {
       if (targetConnIds && !targetConnIds.has(c.connId)) {
         continue;
@@ -151,13 +179,9 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         if (!isTargeted) {
           clientSeq.set(c, nextSeq);
         }
-        const frame = JSON.stringify({
-          type: "event",
-          event,
-          payload,
-          seq: eventSeq,
-          stateVersion: opts?.stateVersion,
-        });
+        const base = getFrameBase();
+        const seqFragment = eventSeq === undefined ? "" : `,"seq":${eventSeq}`;
+        const frame = `{"type":"event","event":${base.eventJSON}${base.payloadFragment}${seqFragment}${base.stateVersionFragment}}`;
         c.socket.send(frame);
       } catch {
         /* ignore */

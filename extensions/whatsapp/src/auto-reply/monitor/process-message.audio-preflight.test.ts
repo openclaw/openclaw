@@ -64,7 +64,7 @@ vi.mock("./message-line.js", () => ({
 
 vi.mock("./runtime-api.js", () => ({
   buildHistoryContextFromEntries: (_p: { currentMessage: string }) => _p.currentMessage,
-  createChannelReplyPipeline: () => ({ onModelSelected: undefined }),
+  createChannelMessageReplyPipeline: () => ({ onModelSelected: undefined }),
   formatInboundEnvelope: (p: { body: string }) => p.body,
   logVerbose: () => {},
   normalizeE164: (v: string) => v,
@@ -200,6 +200,31 @@ function makeRemoveAckAfterReplyParams() {
   };
 }
 
+function firstTranscriptionContext(): Record<string, unknown> {
+  const call = transcribeFirstAudioMock.mock.calls.at(0)?.[0] as
+    | { ctx?: Record<string, unknown> }
+    | undefined;
+  if (!call?.ctx) {
+    throw new Error("expected transcribeFirstAudio ctx");
+  }
+  return call.ctx;
+}
+
+function firstDispatchContext(): Record<string, unknown> {
+  const calls = vi.mocked(dispatchWhatsAppBufferedReply).mock.calls as unknown[][];
+  const dispatch = calls[0]?.[0] as { context?: Record<string, unknown> } | undefined;
+  if (!dispatch?.context) {
+    throw new Error("expected WhatsApp dispatch context");
+  }
+  return dispatch.context;
+}
+
+function expectContextFields(context: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(context[key]).toEqual(value);
+  }
+}
+
 describe("processMessage audio preflight transcription", () => {
   beforeEach(() => {
     transcribeFirstAudioMock.mockReset();
@@ -216,17 +241,20 @@ describe("processMessage audio preflight transcription", () => {
     await processMessage(makeParams());
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          MediaPaths: ["/tmp/voice.ogg"],
-          MediaTypes: ["audio/ogg; codecs=opus"],
-        }),
-      }),
-    );
+    expectContextFields(firstTranscriptionContext(), {
+      AccountId: "default",
+      From: "+15550000002",
+      MediaPaths: ["/tmp/voice.ogg"],
+      MediaTypes: ["audio/ogg; codecs=opus"],
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "+15550000002",
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      To: "+15550000001",
+    });
 
-    const dispatchCall = vi.mocked(dispatchWhatsAppBufferedReply).mock.calls[0]?.[0];
-    expect(dispatchCall?.context).toMatchObject({
+    const context = firstDispatchContext();
+    expectContextFields(context, {
       Body: "okay let's test this voice message",
       BodyForAgent: "okay let's test this voice message",
       CommandBody: "<media:audio>",
@@ -236,7 +264,7 @@ describe("processMessage audio preflight transcription", () => {
     });
     // mediaPath and mediaType must be preserved so inboundAudio detection (used by
     // features like messages.tts.auto: "inbound") still recognises this as audio.
-    expect(dispatchCall?.context).toMatchObject({
+    expectContextFields(context, {
       MediaPath: "/tmp/voice.ogg",
       MediaType: "audio/ogg; codecs=opus",
     });
@@ -249,8 +277,7 @@ describe("processMessage audio preflight transcription", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
 
-    const dispatchCall = vi.mocked(dispatchWhatsAppBufferedReply).mock.calls[0]?.[0];
-    expect(dispatchCall?.context).toMatchObject({
+    expectContextFields(firstDispatchContext(), {
       Body: "<media:audio>",
       BodyForAgent: "<media:audio>",
     });
@@ -263,8 +290,7 @@ describe("processMessage audio preflight transcription", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
 
-    const dispatchCall = vi.mocked(dispatchWhatsAppBufferedReply).mock.calls[0]?.[0];
-    expect(dispatchCall?.context).toMatchObject({
+    expectContextFields(firstDispatchContext(), {
       Body: "<media:audio>",
       BodyForAgent: "<media:audio>",
     });
@@ -298,8 +324,7 @@ describe("processMessage audio preflight transcription", () => {
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
 
     // Body passes through as-is without a mediaType to confirm audio
-    const dispatchCall = vi.mocked(dispatchWhatsAppBufferedReply).mock.calls[0]?.[0];
-    expect(dispatchCall?.context).toMatchObject({
+    expectContextFields(firstDispatchContext(), {
       Body: "<media:audio>",
     });
   });
@@ -311,8 +336,7 @@ describe("processMessage audio preflight transcription", () => {
 
     expect(shouldComputeCommandBodies).toEqual(["<media:audio>"]);
 
-    const dispatchCall = vi.mocked(dispatchWhatsAppBufferedReply).mock.calls[0]?.[0];
-    expect(dispatchCall?.context).toMatchObject({
+    expectContextFields(firstDispatchContext(), {
       Body: "/new start a new session",
       BodyForAgent: "/new start a new session",
       CommandBody: "<media:audio>",
@@ -332,8 +356,7 @@ describe("processMessage audio preflight transcription", () => {
 
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
 
-    const dispatchCall = vi.mocked(dispatchWhatsAppBufferedReply).mock.calls[0]?.[0];
-    expect(dispatchCall?.context).toMatchObject({
+    expectContextFields(firstDispatchContext(), {
       Body: "pre-computed transcript from fan-out caller",
       BodyForAgent: "pre-computed transcript from fan-out caller",
       CommandBody: "<media:audio>",
@@ -412,8 +435,7 @@ describe("processMessage audio preflight transcription", () => {
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
 
     // Body falls back to the original <media:audio> placeholder, not retried transcript.
-    const dispatchCall = vi.mocked(dispatchWhatsAppBufferedReply).mock.calls[0]?.[0];
-    expect(dispatchCall?.context).toMatchObject({
+    expectContextFields(firstDispatchContext(), {
       Body: "<media:audio>",
     });
   });

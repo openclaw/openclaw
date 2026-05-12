@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDefaultMenuConfig,
   createGridLayout,
@@ -24,6 +24,11 @@ const { setRichMenuImageMock, MessagingApiBlobClientMock } = vi.hoisted(() => {
 vi.mock("@line/bot-sdk", () => ({
   messagingApi: { MessagingApiBlobClient: MessagingApiBlobClientMock },
 }));
+
+afterAll(() => {
+  vi.doUnmock("@line/bot-sdk");
+  vi.resetModules();
+});
 
 describe("messageAction", () => {
   it("creates message actions with explicit or default text", () => {
@@ -261,7 +266,7 @@ describe("uploadRichMenuImage", () => {
 
     expect(MessagingApiBlobClientMock).toHaveBeenCalledWith({ channelAccessToken: "line-token" });
     expect(setRichMenuImageMock).toHaveBeenCalledOnce();
-    const [richMenuId, blob] = setRichMenuImageMock.mock.calls[0] ?? [];
+    const [richMenuId, blob] = setRichMenuImageMock.mock.calls.at(0) ?? [];
     expect(richMenuId).toBe("rich-menu-1");
     expect(blob).toBeInstanceOf(Blob);
     expect((blob as Blob).type).toBe("image/png");
@@ -301,7 +306,7 @@ describe("uploadRichMenuImage", () => {
     });
 
     expect(setRichMenuImageMock).toHaveBeenCalledOnce();
-    const blob = setRichMenuImageMock.mock.calls[0]?.[1] as Blob;
+    const blob = setRichMenuImageMock.mock.calls.at(0)?.[1] as Blob;
     expect(blob.type).toBe("image/jpeg");
     await expect(blob.arrayBuffer()).resolves.toEqual(
       imageBytes.buffer.slice(imageBytes.byteOffset, imageBytes.byteOffset + imageBytes.byteLength),

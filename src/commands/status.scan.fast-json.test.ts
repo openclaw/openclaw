@@ -32,6 +32,14 @@ function configureFastJsonStatus() {
   });
 }
 
+function firstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  const arg = mock.mock.calls[0]?.[0];
+  if (arg === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return arg;
+}
+
 beforeAll(async () => {
   configureFastJsonStatus();
   ({ scanStatusJsonFast } = await loadStatusScanModuleForTest(mocks, { fastJson: true }));
@@ -55,6 +63,7 @@ describe("scanStatusJsonFast", () => {
 
     await scanStatusJsonFast({}, {} as never);
 
+    expect(mocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
   });
@@ -103,9 +112,11 @@ describe("scanStatusJsonFast", () => {
 
     await scanStatusJsonFast({}, {} as never);
 
-    expect(mocks.getStatusSummary).toHaveBeenCalledWith(
-      expect.objectContaining({ includeChannelSummary: false }),
-    );
+    expect(mocks.getStatusSummary).toHaveBeenCalledOnce();
+    const summaryOptions = firstCallArg(mocks.getStatusSummary, "status summary options") as {
+      includeChannelSummary?: unknown;
+    };
+    expect(summaryOptions.includeChannelSummary).toBe(false);
   });
 
   it("skips memory inspection for the lean status --json fast path", async () => {
@@ -113,7 +124,7 @@ describe("scanStatusJsonFast", () => {
 
     expect(result.memory).toBeNull();
     expect(mocks.hasPotentialConfiguredChannels).toHaveBeenCalledWith(
-      expect.any(Object),
+      createStatusMemorySearchConfig(),
       process.env,
       { includePersistedAuthState: false },
     );
@@ -124,16 +135,18 @@ describe("scanStatusJsonFast", () => {
   it("restores memory inspection when --all is requested", async () => {
     const result = await scanStatusJsonFast({ all: true }, {} as never);
 
-    expect(result.memory).toEqual(expect.objectContaining({ agentId: "main" }));
+    expect(result.memory).toStrictEqual({
+      agentId: "main",
+      files: 0,
+      chunks: 0,
+      dirty: false,
+    });
     expect(mocks.resolveMemorySearchConfig).toHaveBeenCalled();
-    expect(mocks.getMemorySearchManager).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            memorySearch: expect.any(Object),
-          }),
-        }),
-      }),
+    expect(mocks.getMemorySearchManager).toHaveBeenCalledOnce();
+    expect(
+      firstCallArg(mocks.getMemorySearchManager, "memory search manager options"),
+    ).toStrictEqual({
+      cfg: createStatusMemorySearchConfig(),
       agentId: "main",
       purpose: "status",
     });

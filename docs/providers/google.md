@@ -13,7 +13,7 @@ Gemini Grounding.
 - Provider: `google`
 - Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - API: Google Gemini API
-- Runtime option: `agents.defaults.agentRuntime.id: "google-gemini-cli"`
+- Runtime option: provider/model `agentRuntime.id: "google-gemini-cli"`
   reuses Gemini CLI OAuth while keeping model refs canonical as `google/*`.
 
 ## Getting started
@@ -226,8 +226,8 @@ The bundled `google` plugin also registers video generation through the shared
 
 - Default video model: `google/veo-3.1-fast-generate-preview`
 - Modes: text-to-video, image-to-video, and single-video reference flows
-- Supports `aspectRatio`, `resolution`, and `audio`
-- Current duration clamp: **4 to 8 seconds**
+- Supports `aspectRatio` (`16:9`, `9:16`) and `resolution` (`720P`, `1080P`); audio output is not supported by Veo today
+- Supported durations: **4, 6, or 8 seconds** (other values snap to the nearest allowed value)
 
 To use Google as the default video provider:
 
@@ -287,6 +287,11 @@ The bundled `google` speech provider uses the Gemini API TTS path with
 - Output: WAV for regular TTS attachments, Opus for voice-note targets, PCM for Talk/telephony
 - Voice-note output: Google PCM is wrapped as WAV and transcoded to 48 kHz Opus with `ffmpeg`
 
+Google's batch Gemini TTS path returns generated audio in the completed
+`generateContent` response. For lowest-latency spoken conversations, use the
+Google realtime voice provider backed by the Gemini Live API instead of batch
+TTS.
+
 To use Google as the default TTS provider:
 
 ```json5
@@ -343,6 +348,8 @@ Gemini Live API for backend audio bridges such as Voice Call and Google Meet.
 | Activity handling     | `...google.activityHandling`                                        | Google default, `start-of-activity-interrupts`                                        |
 | Turn coverage         | `...google.turnCoverage`                                            | Google default, `only-activity`                                                       |
 | Disable auto VAD      | `...google.automaticActivityDetectionDisabled`                      | `false`                                                                               |
+| Session resumption    | `...google.sessionResumption`                                       | `true`                                                                                |
+| Context compression   | `...google.contextWindowCompression`                                | `true`                                                                                |
 | API key               | `...google.apiKey`                                                  | Falls back to `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` |
 
 Example Voice Call realtime config:
@@ -391,9 +398,10 @@ Gateway relay transport, which keeps provider credentials on the Gateway.
 
 For maintainer live verification, run
 `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`.
-The Google leg mints the same constrained Live API token shape used by Control
-UI Talk, opens the browser WebSocket endpoint, sends the initial setup payload,
-and waits for `setupComplete`.
+The smoke also covers OpenAI backend/WebRTC paths; the Google leg mints the same
+constrained Live API token shape used by Control UI Talk, opens the browser
+WebSocket endpoint, sends the initial setup payload, and waits for
+`setupComplete`.
 
 ## Advanced configuration
 

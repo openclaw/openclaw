@@ -14,6 +14,23 @@ vi.mock("../terminal/note.js", () => ({
 
 import { noteSessionLockHealth } from "./doctor-session-locks.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.access(targetPath);
+    throw new Error(`expected missing path: ${targetPath}`);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+  }
+}
+
+function firstNoteCall(): [string, string] {
+  const call = note.mock.calls[0];
+  if (!call) {
+    throw new Error("expected note call");
+  }
+  return call as [string, string];
+}
+
 describe("noteSessionLockHealth", () => {
   let state: OpenClawTestState;
 
@@ -39,10 +56,14 @@ describe("noteSessionLockHealth", () => {
       "utf8",
     );
 
-    await noteSessionLockHealth({ shouldRepair: false, staleMs: 60_000 });
+    await noteSessionLockHealth({
+      shouldRepair: false,
+      staleMs: 60_000,
+      readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
+    });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const [message, title] = note.mock.calls[0] as [string, string];
+    const [message, title] = firstNoteCall();
     expect(title).toBe("Session locks");
     expect(message).toContain("Found 1 session lock file");
     expect(message).toContain(`pid=${process.pid} (alive)`);
@@ -68,14 +89,43 @@ describe("noteSessionLockHealth", () => {
       "utf8",
     );
 
-    await noteSessionLockHealth({ shouldRepair: true, staleMs: 30_000 });
+    await noteSessionLockHealth({
+      shouldRepair: true,
+      staleMs: 30_000,
+      readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
+    });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const [message] = note.mock.calls[0] as [string, string];
+    const [message] = firstNoteCall();
     expect(message).toContain("[removed]");
     expect(message).toContain("Removed 1 stale session lock file");
 
-    await expect(fs.access(staleLock)).rejects.toThrow();
+    await expectPathMissing(staleLock);
     await expect(fs.access(freshLock)).resolves.toBeUndefined();
+  });
+
+  it("removes fresh live locks when the owner is not an OpenClaw process", async () => {
+    const sessionsDir = state.sessionsDir();
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const falseLiveLock = path.join(sessionsDir, "false-live.jsonl.lock");
+    await fs.writeFile(
+      falseLiveLock,
+      JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }),
+      "utf8",
+    );
+
+    await noteSessionLockHealth({
+      shouldRepair: true,
+      staleMs: 60_000,
+      readOwnerProcessArgs: () => ["python", "worker.py"],
+    });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const [message] = firstNoteCall();
+    expect(message).toContain("stale=yes (non-openclaw-owner)");
+    expect(message).toContain("[removed]");
+    expect(message).toContain("Removed 1 stale session lock file");
+    await expect(fs.access(falseLiveLock)).rejects.toThrow();
   });
 });

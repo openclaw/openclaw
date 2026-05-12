@@ -10,6 +10,13 @@ import {
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
+function requireNonEmptyString(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   piSdkMock.enabled = true;
@@ -42,7 +49,10 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(created.payload?.entry?.providerOverride).toBe("openai");
   expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-  expect(created.payload?.entry?.sessionFile).toBeTruthy();
+  const sessionFile = requireNonEmptyString(
+    created.payload?.entry?.sessionFile,
+    "created session file",
+  );
   expect(created.payload?.sessionId).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
@@ -59,22 +69,19 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
     }
   >;
   const key = created.payload?.key as string;
-  expect(rawStore[key]).toMatchObject({
-    sessionId: created.payload?.sessionId,
-    label: "Dashboard Chat",
-    providerOverride: "openai",
-    modelOverride: "gpt-test-a",
-    parentSessionKey: "agent:main:main",
-  });
-  expect(created.payload?.entry?.sessionFile).toBe(rawStore[key]?.sessionFile);
+  expect(rawStore[key]?.sessionId).toBe(created.payload?.sessionId);
+  expect(rawStore[key]?.label).toBe("Dashboard Chat");
+  expect(rawStore[key]?.providerOverride).toBe("openai");
+  expect(rawStore[key]?.modelOverride).toBe("gpt-test-a");
+  expect(rawStore[key]?.parentSessionKey).toBe("agent:main:main");
+  expect(sessionFile).toBe(rawStore[key]?.sessionFile);
 
   const transcriptPath = path.join(dir, `${created.payload?.sessionId}.jsonl`);
   const transcript = await fs.readFile(transcriptPath, "utf-8");
   const [headerLine] = transcript.trim().split(/\r?\n/, 1);
-  expect(JSON.parse(headerLine) as { type?: string; id?: string }).toMatchObject({
-    type: "session",
-    id: created.payload?.sessionId,
-  });
+  const header = JSON.parse(headerLine) as { type?: string; id?: string };
+  expect(header.type).toBe("session");
+  expect(header.id).toBe(created.payload?.sessionId);
 });
 
 test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {
@@ -116,7 +123,7 @@ test("sessions.create scopes the main alias to the requested agent", async () =>
 
   expect(created.ok).toBe(true);
   expect(created.payload?.key).toBe("agent:longmemeval:main");
-  expect(created.payload?.entry?.sessionFile).toBeTruthy();
+  requireNonEmptyString(created.payload?.entry?.sessionFile, "longmemeval session file");
 
   const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
@@ -144,7 +151,7 @@ test("sessions.create preserves global and unknown sentinel keys", async () => {
 
   expect(globalCreated.ok).toBe(true);
   expect(globalCreated.payload?.key).toBe("global");
-  expect(globalCreated.payload?.entry?.sessionFile).toBeTruthy();
+  requireNonEmptyString(globalCreated.payload?.entry?.sessionFile, "global session file");
 
   const unknownCreated = await directSessionReq<{
     key?: string;
@@ -159,7 +166,7 @@ test("sessions.create preserves global and unknown sentinel keys", async () => {
 
   expect(unknownCreated.ok).toBe(true);
   expect(unknownCreated.payload?.key).toBe("unknown");
-  expect(unknownCreated.payload?.entry?.sessionFile).toBeTruthy();
+  requireNonEmptyString(unknownCreated.payload?.entry?.sessionFile, "unknown session file");
 
   const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
@@ -212,7 +219,7 @@ test("sessions.create can start the first agent turn from an initial task", asyn
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
   expect(created.payload?.runStarted).toBe(true);
-  expect(created.payload?.runId).toBeTruthy();
+  requireNonEmptyString(created.payload?.runId, "started run id");
   expect(created.payload?.messageSeq).toBe(1);
 
   ws.close();

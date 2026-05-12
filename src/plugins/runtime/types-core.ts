@@ -4,6 +4,7 @@ import type { MediaUnderstandingRuntime } from "../../media-understanding/runtim
 import type {
   ListSpeechVoices,
   TextToSpeech,
+  TextToSpeechStream,
   TextToSpeechTelephony,
 } from "../../plugin-sdk/tts-runtime.types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
@@ -85,6 +86,53 @@ export type RunHeartbeatOnceOptions = {
   sessionKey?: string;
   /** Override heartbeat config (e.g. `{ target: "last" }` to deliver to the last active channel). */
   heartbeat?: { target?: string };
+};
+
+export type LlmCompleteMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
+
+export type LlmCompleteCaller = {
+  kind: "plugin" | "context-engine" | "host" | "unknown";
+  id?: string;
+  name?: string;
+};
+
+export type LlmCompleteUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+};
+
+export type LlmCompleteParams = {
+  messages: LlmCompleteMessage[];
+  /** Model ref (e.g. "anthropic/claude-sonnet-4-6"); defaults to the target agent's configured model. */
+  model?: string;
+  maxTokens?: number;
+  temperature?: number;
+  systemPrompt?: string;
+  signal?: AbortSignal;
+  /** Human-readable reason for audit/debug output. */
+  purpose?: string;
+  /** Agent whose model/credentials to use. Session-bound capabilities may disallow overrides. */
+  agentId?: string;
+};
+
+export type LlmCompleteResult = {
+  text: string;
+  provider: string;
+  model: string;
+  agentId: string;
+  usage: LlmCompleteUsage;
+  audit: {
+    caller: LlmCompleteCaller;
+    purpose?: string;
+    sessionKey?: string;
+  };
 };
 
 type RuntimeRunEmbeddedPiAgent = (
@@ -190,6 +238,7 @@ export type PluginRuntimeCore = {
   };
   tts: {
     textToSpeech: TextToSpeech;
+    textToSpeechStream: TextToSpeechStream;
     textToSpeechTelephony: TextToSpeechTelephony;
     listVoices: ListSpeechVoices;
   };
@@ -197,6 +246,7 @@ export type PluginRuntimeCore = {
     runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
     describeImageFile: MediaUnderstandingRuntime["describeImageFile"];
     describeImageFileWithModel: MediaUnderstandingRuntime["describeImageFileWithModel"];
+    extractStructuredWithModel: MediaUnderstandingRuntime["extractStructuredWithModel"];
     describeVideoFile: MediaUnderstandingRuntime["describeVideoFile"];
     transcribeAudioFile: MediaUnderstandingRuntime["transcribeAudioFile"];
   };
@@ -261,16 +311,19 @@ export type PluginRuntimeCore = {
   };
   /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
   taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
+  llm: {
+    complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
+  };
   modelAuth: {
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
-      model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
+      model: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
     /** Resolve request-ready auth for a model, including provider runtime exchanges. */
     getRuntimeAuthForModel: (params: {
-      model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
+      model: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;

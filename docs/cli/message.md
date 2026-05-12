@@ -27,7 +27,7 @@ Channel selection:
 Target formats (`--target`):
 
 - WhatsApp: E.164, group JID, or WhatsApp Channel/Newsletter JID (`...@newsletter`)
-- Telegram: chat id or `@username`
+- Telegram: chat id, `@username`, or forum topic target (`-1001234567890:topic:42`, or `--thread-id 42`)
 - Discord: `channel:<id>` or `user:<id>` (or `<@id>` mention; raw numeric ids are treated as channels)
 - Google Chat: `spaces/<spaceId>` or `users/<userId>`
 - Slack: `channel:<id>` or `user:<id>` (raw channel id is accepted)
@@ -72,7 +72,7 @@ Name lookup:
   - Optional: `--media`, `--presentation`, `--delivery`, `--pin`, `--reply-to`, `--thread-id`, `--gif-playback`, `--force-document`, `--silent`
   - Shared presentation payloads: `--presentation` sends semantic blocks (`text`, `context`, `divider`, `buttons`, `select`) that core renders through the selected channel's declared capabilities. See [Message Presentation](/plugins/message-presentation).
   - Generic delivery preferences: `--delivery` accepts delivery hints such as `{ "pin": true }`; `--pin` is shorthand for pinned delivery when the channel supports it.
-  - Telegram only: `--force-document` (send images and GIFs as documents to avoid Telegram compression)
+  - Telegram only: `--force-document` (send images, GIFs, and videos as documents to avoid Telegram compression)
   - Telegram only: `--thread-id` (forum topic id)
   - Slack only: `--thread-id` (thread timestamp; `--reply-to` uses the same field)
   - Telegram + Discord: `--silent`

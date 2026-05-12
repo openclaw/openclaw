@@ -57,6 +57,115 @@ type ChannelStopPayload = {
 const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;
 const CHANNEL_STATUS_PROBE_CONCURRENCY = 5;
 
+function channelStatusTimeoutPayload(step: string, timeoutMs: number): Record<string, unknown> {
+  return {
+    ok: false,
+    timedOut: true,
+    error: `${step} timed out after ${timeoutMs}ms`,
+  };
+}
+
+type TimeoutRaceResult<T> =
+  | { kind: "value"; value: T }
+  | { kind: "error"; error: unknown }
+  | { kind: "timeout" };
+
+async function raceWithTimeout<T>(params: {
+  timeoutMs: number;
+  run: () => Promise<T> | T;
+}): Promise<TimeoutRaceResult<T>> {
+  const timeoutMs = params.timeoutMs;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+    if (typeof timer === "object" && "unref" in timer) {
+      timer.unref();
+    }
+  });
+  const result = await Promise.race([
+    Promise.resolve()
+      .then(params.run)
+      .then(
+        (value) => ({ kind: "value" as const, value }),
+        (error) => ({ kind: "error" as const, error }),
+      ),
+    timeout,
+  ]);
+  if (timer) {
+    clearTimeout(timer);
+  }
+  return result;
+}
+
+async function runChannelStatusHook(params: {
+  accountId: string;
+  channelId: ChannelId;
+  step: "audit" | "probe";
+  timeoutMs: number;
+  warnings: string[];
+  run: () => Promise<unknown>;
+}): Promise<unknown> {
+  const timeoutMs = Math.max(1, params.timeoutMs);
+  const result = await raceWithTimeout({
+    timeoutMs,
+    run: params.run,
+  });
+  if (result.kind === "value") {
+    return result.value;
+  }
+  const warningPrefix = `${params.channelId}:${params.accountId} ${params.step}`;
+  if (result.kind === "timeout") {
+    params.warnings.push(`${warningPrefix} timed out after ${timeoutMs}ms`);
+    return channelStatusTimeoutPayload(params.step, timeoutMs);
+  }
+  const message = formatForLog(result.error);
+  params.warnings.push(`${warningPrefix} failed: ${message}`);
+  return {
+    ok: false,
+    error: message,
+  };
+}
+
+type ChannelStatusSummaryOutcome =
+  | { ok: true; value: unknown }
+  | { ok: false; error: string; timedOut?: boolean };
+
+async function runChannelStatusSummary(params: {
+  channelId: ChannelId;
+  timeoutMs: number;
+  warnings: string[];
+  run: () => unknown;
+}): Promise<ChannelStatusSummaryOutcome> {
+  const timeoutMs = Math.max(1, params.timeoutMs);
+  const result = await raceWithTimeout({
+    timeoutMs,
+    run: params.run,
+  });
+  const warningPrefix = `${params.channelId} summary`;
+  if (result.kind === "value") {
+    return { ok: true, value: result.value };
+  }
+  if (result.kind === "timeout") {
+    const error = `summary timed out after ${timeoutMs}ms`;
+    params.warnings.push(`${warningPrefix} timed out after ${timeoutMs}ms`);
+    return { ok: false, timedOut: true, error };
+  }
+  const message = formatForLog(result.error);
+  params.warnings.push(`${warningPrefix} failed: ${message}`);
+  return { ok: false, error: message };
+}
+
+function channelStatusFailureMessage(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.ok !== false || typeof record.error !== "string" || record.error.length === 0) {
+    return null;
+  }
+  return record.error;
+}
+
 function resolveChannelsStatusTimeoutMs(params: { probe: boolean; timeoutMsRaw: unknown }): number {
   const fallback = params.probe ? CHANNEL_STATUS_MAX_TIMEOUT_MS : 10_000;
   if (typeof params.timeoutMsRaw !== "number" || !Number.isFinite(params.timeoutMsRaw)) {
@@ -189,15 +298,30 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const probe = (params as { probe?: boolean }).probe === true;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs = resolveChannelsStatusTimeoutMs({ probe, timeoutMsRaw });
+    const rawChannel = (params as { channel?: unknown }).channel;
+    const requestedChannel =
+      typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : undefined;
     const cfg = applyPluginAutoEnable({
       config: context.getRuntimeConfig(),
       env: process.env,
     }).config;
     const runtime = context.getRuntimeSnapshot();
     const plugins = listChannelPlugins();
+    const selectedPlugins = requestedChannel
+      ? plugins.filter((plugin) => plugin.id === requestedChannel)
+      : plugins;
+    if (rawChannel !== undefined && !requestedChannel) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `unknown channel: ${formatForLog(rawChannel)}`),
+      );
+      return;
+    }
     const pluginMap = new Map<ChannelId, ChannelPlugin>(
-      plugins.map((plugin) => [plugin.id, plugin]),
+      selectedPlugins.map((plugin) => [plugin.id, plugin]),
     );
+    const statusWarnings: string[] = [];
 
     const resolveRuntimeSnapshot = (
       channelId: ChannelId,
@@ -237,10 +361,18 @@ export const channelsHandlers: GatewayRequestHandlers = {
           configured = await plugin.config.isConfigured(account, cfg);
         }
         if (configured) {
-          probeResult = await plugin.status.probeAccount({
-            account,
+          probeResult = await runChannelStatusHook({
+            channelId,
+            accountId,
+            step: "probe",
             timeoutMs,
-            cfg,
+            warnings: statusWarnings,
+            run: () =>
+              plugin.status!.probeAccount!({
+                account,
+                timeoutMs,
+                cfg,
+              }),
           });
           lastProbeAt = Date.now();
         }
@@ -252,11 +384,19 @@ export const channelsHandlers: GatewayRequestHandlers = {
           configured = await plugin.config.isConfigured(account, cfg);
         }
         if (configured) {
-          auditResult = await plugin.status.auditAccount({
-            account,
+          auditResult = await runChannelStatusHook({
+            channelId,
+            accountId,
+            step: "audit",
             timeoutMs,
-            cfg,
-            probe: probeResult,
+            warnings: statusWarnings,
+            run: () =>
+              plugin.status!.auditAccount!({
+                account,
+                timeoutMs,
+                cfg,
+                probe: probeResult,
+              }),
           });
         }
       }
@@ -269,6 +409,11 @@ export const channelsHandlers: GatewayRequestHandlers = {
         probe: probeResult,
         audit: auditResult,
       });
+      const hookError =
+        channelStatusFailureMessage(auditResult) ?? channelStatusFailureMessage(probeResult);
+      if (hookError && !snapshot.lastError) {
+        snapshot.lastError = hookError;
+      }
       if (lastProbeAt) {
         snapshot.lastProbeAt = lastProbeAt;
       }
@@ -330,7 +475,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return { accounts, defaultAccountId, defaultAccount, resolvedAccounts };
     };
 
-    const uiCatalog = buildChannelUiCatalog(plugins);
+    const uiCatalog = buildChannelUiCatalog(selectedPlugins);
     const payload: Record<string, unknown> = {
       ts: Date.now(),
       channelOrder: uiCatalog.order,
@@ -347,28 +492,38 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const accountsMap = payload.channelAccounts as Record<string, unknown>;
     const defaultAccountIdMap = payload.channelDefaultAccountId as Record<string, unknown>;
     const { results: channelResults } = await runTasksWithConcurrency({
-      tasks: plugins.map((plugin) => async () => {
+      tasks: selectedPlugins.map((plugin) => async () => {
         const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
           await buildChannelAccounts(plugin.id);
         const fallbackAccount =
           resolvedAccounts[defaultAccountId] ?? plugin.config.resolveAccount(cfg, defaultAccountId);
-        const summary = plugin.status?.buildChannelSummary
-          ? await plugin.status.buildChannelSummary({
-              account: fallbackAccount,
-              cfg,
-              defaultAccountId,
-              snapshot:
-                defaultAccount ??
-                ({
-                  accountId: defaultAccountId,
-                } as ChannelAccountSnapshot),
-            })
-          : {
-              configured: defaultAccount?.configured ?? false,
-            };
+        const fallbackSummary = (lastError?: string) => ({
+          configured: defaultAccount?.configured ?? false,
+          ...(lastError ? { lastError } : {}),
+        });
+        let summary: unknown = fallbackSummary();
+        if (plugin.status?.buildChannelSummary) {
+          const summaryResult = await runChannelStatusSummary({
+            channelId: plugin.id,
+            timeoutMs,
+            warnings: statusWarnings,
+            run: () =>
+              plugin.status!.buildChannelSummary!({
+                account: fallbackAccount,
+                cfg,
+                defaultAccountId,
+                snapshot:
+                  defaultAccount ??
+                  ({
+                    accountId: defaultAccountId,
+                  } as ChannelAccountSnapshot),
+              }),
+          });
+          summary = summaryResult.ok ? summaryResult.value : fallbackSummary(summaryResult.error);
+        }
         return { pluginId: plugin.id, summary, accounts, defaultAccountId };
       }),
-      limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : plugins.length || 1,
+      limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : selectedPlugins.length || 1,
     });
     for (const result of channelResults) {
       if (result) {
@@ -376,6 +531,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
         accountsMap[result.pluginId] = result.accounts;
         defaultAccountIdMap[result.pluginId] = result.defaultAccountId;
       }
+    }
+    if (statusWarnings.length > 0) {
+      payload.partial = true;
+      payload.warnings = statusWarnings.slice(0, 50);
     }
 
     respond(true, payload, undefined);

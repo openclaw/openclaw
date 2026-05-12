@@ -83,6 +83,11 @@ const createConfig = (overrides: VoiceCallConfigInput = {}): VoiceCallConfig => 
         ...overrides.realtime?.fastContext,
         sources: overrides.realtime?.fastContext?.sources ?? base.realtime.fastContext.sources,
       },
+      agentContext: {
+        ...base.realtime.agentContext,
+        ...overrides.realtime?.agentContext,
+        files: overrides.realtime?.agentContext?.files ?? base.realtime.agentContext.files,
+      },
       providers: overrides.realtime?.providers ?? base.realtime.providers,
     },
   };
@@ -137,6 +142,14 @@ function requireBoundRequestUrl(server: VoiceCallWebhookServer, baseUrl: string)
   const requestUrl = new URL(baseUrl);
   requestUrl.port = String(address.port);
   return requestUrl;
+}
+
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
 }
 
 function expectWebhookUrl(url: string, expectedPath: string) {
@@ -214,7 +227,73 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       await server.start();
       expect(mocks.getRealtimeTranscriptionProvider).not.toHaveBeenCalled();
       expect(mocks.listRealtimeTranscriptionProviders).toHaveBeenCalledWith(null);
-      expect(server.getMediaStreamHandler()).toBeTruthy();
+      const mediaStreamHandler = server.getMediaStreamHandler();
+      if (!mediaStreamHandler) {
+        throw new Error("expected media stream handler");
+      }
+      expect(mediaStreamHandler.handleUpgrade).toBeTypeOf("function");
+      expect(mediaStreamHandler.sendAudio).toBeTypeOf("function");
+      expect(mediaStreamHandler.closeAll).toBeTypeOf("function");
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("records media stream Talk events on the active call metadata", async () => {
+    const call = createCall(Date.now());
+    const manager = {
+      getActiveCalls: () => [call],
+      getCallByProviderCallId: (providerCallId: string) =>
+        providerCallId === "provider-call-1" ? call : undefined,
+      endCall: vi.fn(async () => ({ success: true })),
+      processEvent: vi.fn(),
+      speakInitialMessage: vi.fn(async () => {}),
+    } as unknown as CallManager;
+    const config = createConfig({
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        providers: {
+          openai: {
+            apiKey: "sk-test", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+    try {
+      await server.start();
+      const mediaHandler = server.getMediaStreamHandler() as unknown as {
+        config: {
+          onTalkEvent?: NonNullable<import("./media-stream.js").MediaStreamConfig["onTalkEvent"]>;
+        };
+      };
+      mediaHandler.config.onTalkEvent?.("provider-call-1", "MZ-talk", {
+        id: "voice-call:provider-call-1:MZ-talk:1",
+        type: "transcript.done",
+        sessionId: "voice-call:provider-call-1:MZ-talk",
+        turnId: "MZ-talk:turn:1",
+        seq: 1,
+        timestamp: "2026-05-05T06:00:00.000Z",
+        mode: "stt-tts",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        provider: "openai",
+        final: true,
+        payload: { text: "hello", role: "user" },
+      });
+
+      expect(call.metadata?.lastTalkEventAt).toBe("2026-05-05T06:00:00.000Z");
+      expect(call.metadata?.lastTalkEventType).toBe("transcript.done");
+      expect(call.metadata?.recentTalkEvents).toEqual([
+        {
+          at: "2026-05-05T06:00:00.000Z",
+          type: "transcript.done",
+          sessionId: "voice-call:provider-call-1:MZ-talk",
+          turnId: "MZ-talk:turn:1",
+        },
+      ]);
     } finally {
       await server.stop();
     }
@@ -900,7 +979,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
 
       expect(response.status).toBe(200);
       expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
-      const parseOptions = parseWebhookEvent.mock.calls[0]?.[1];
+      const parseOptions = requireFirstMockCall(parseWebhookEvent.mock.calls, "webhook parse")[1];
       if (!parseOptions) {
         throw new Error("webhook server did not pass verified parse options");
       }
@@ -908,7 +987,9 @@ describe("VoiceCallWebhookServer replay handling", () => {
         verifiedRequestKey: "verified:req:123",
       });
       expect(processEvent).toHaveBeenCalledTimes(1);
-      const firstEvent = processEvent.mock.calls[0]?.[0];
+      const firstEvent = requireFirstMockCall(processEvent.mock.calls, "processed event")[0] as
+        | NormalizedEvent
+        | undefined;
       if (!firstEvent) {
         throw new Error("webhook server did not forward the parsed event");
       }
@@ -1008,14 +1089,19 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
 
     let enteredReads = 0;
-    let releaseReads!: () => void;
-    let unblockReadBodies!: () => void;
+    let releaseReads: (() => void) | undefined;
+    let unblockReadBodies: (() => void) | undefined;
     const enteredEightReads = new Promise<void>((resolve) => {
       releaseReads = resolve;
     });
     const unblockReads = new Promise<void>((resolve) => {
       unblockReadBodies = resolve;
     });
+    if (!releaseReads || !unblockReadBodies) {
+      throw new Error("Expected webhook read gates to be initialized");
+    }
+    const releaseEnteredReads = releaseReads;
+    const unblockStartedReads = unblockReadBodies;
     const readBodySpy = vi.spyOn(
       server as unknown as {
         readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
@@ -1025,7 +1111,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     readBodySpy.mockImplementation(async () => {
       enteredReads += 1;
       if (enteredReads === 8) {
-        releaseReads();
+        releaseEnteredReads();
       }
       if (enteredReads <= 8) {
         await unblockReads;
@@ -1045,12 +1131,12 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       expect(rejected.status).toBe(429);
       expect(await rejected.text()).toBe("Too Many Requests");
 
-      unblockReadBodies();
+      unblockStartedReads();
 
       const settled = await Promise.all(inFlightRequests);
-      expect(settled.every((response) => response.status === 200)).toBe(true);
+      expect(settled.map((response) => response.status)).toEqual(Array(8).fill(200));
     } finally {
-      unblockReadBodies();
+      unblockStartedReads();
       readBodySpy.mockRestore();
       await server.stop();
     }
@@ -1075,14 +1161,19 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     ).runWebhookPipeline.bind(server);
 
     let enteredReads = 0;
-    let releaseReads!: () => void;
-    let unblockReadBodies!: () => void;
+    let releaseReads: (() => void) | undefined;
+    let unblockReadBodies: (() => void) | undefined;
     const enteredEightReads = new Promise<void>((resolve) => {
       releaseReads = resolve;
     });
     const unblockReads = new Promise<void>((resolve) => {
       unblockReadBodies = resolve;
     });
+    if (!releaseReads || !unblockReadBodies) {
+      throw new Error("Expected webhook read gates to be initialized");
+    }
+    const releaseEnteredReads = releaseReads;
+    const unblockStartedReads = unblockReadBodies;
     const readBodySpy = vi.spyOn(
       server as unknown as {
         readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
@@ -1092,7 +1183,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     readBodySpy.mockImplementation(async () => {
       enteredReads += 1;
       if (enteredReads === 8) {
-        releaseReads();
+        releaseEnteredReads();
       }
       await unblockReads;
       return "CallSid=CA123&SpeechResult=hello";
@@ -1120,12 +1211,12 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       expect(rejected.body).toBe("Too Many Requests");
       expect(readBodySpy).toHaveBeenCalledTimes(8);
 
-      unblockReadBodies();
+      unblockStartedReads();
 
       const settled = await Promise.all(inFlightRequests);
-      expect(settled.every((response) => response.statusCode === 200)).toBe(true);
+      expect(settled.map((response) => response.statusCode)).toEqual(Array(8).fill(200));
     } finally {
-      unblockReadBodies();
+      unblockStartedReads();
       readBodySpy.mockRestore();
     }
   });
@@ -1213,8 +1304,7 @@ describe("VoiceCallWebhookServer start idempotency", () => {
     const config = createConfig();
     const server = new VoiceCallWebhookServer(config, manager, provider);
 
-    // Should not throw
-    await server.stop();
+    await expect(server.stop()).resolves.toBeUndefined();
   });
 });
 
@@ -1397,8 +1487,10 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
       expect(handleInboundResponse).toHaveBeenCalledTimes(1);
       expect(processEvent).toHaveBeenCalledTimes(1);
-      const [calledCallId, calledTranscript] = (handleInboundResponse.mock.calls[0] ??
-        []) as unknown as [string | undefined, string | undefined];
+      const [calledCallId, calledTranscript] = requireFirstMockCall(
+        handleInboundResponse.mock.calls,
+        "inbound response",
+      ) as [string | undefined, string | undefined];
       expect(calledCallId).toBe(call.callId);
       expect(calledTranscript).toBe("hello after greeting");
     } finally {
@@ -1453,15 +1545,18 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       media.config.onSpeechStart?.("CA-inbound");
       media.config.onTranscript?.("CA-inbound", "hello");
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
-      expect(processEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "call.speech",
-          callId: "call-inbound",
-          providerCallId: "CA-inbound",
-          transcript: "hello",
-          isFinal: true,
-        }),
-      );
+      expect(processEvent).toHaveBeenCalledTimes(1);
+      const event = requireFirstMockCall(processEvent.mock.calls, "inbound processed event")[0] as
+        | NormalizedEvent
+        | undefined;
+      expect(event?.type).toBe("call.speech");
+      if (event?.type !== "call.speech") {
+        throw new Error("expected media transcript callback to emit a speech event");
+      }
+      expect(event.callId).toBe("call-inbound");
+      expect(event.providerCallId).toBe("CA-inbound");
+      expect(event.transcript).toBe("hello");
+      expect(event.isFinal).toBe(true);
       expect(handleInboundResponse).toHaveBeenCalledWith("call-inbound", "hello");
     } finally {
       await server.stop();

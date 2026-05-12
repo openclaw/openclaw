@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   consultRealtimeVoiceAgent,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -20,6 +21,7 @@ import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
+import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
@@ -60,8 +62,9 @@ type RealtimeVoiceRuntimeModule = typeof import("./realtime-voice.runtime.js");
 type RealtimeHandlerModule = typeof import("./webhook/realtime-handler.js");
 
 const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
-  "You are a behind-the-scenes consultant for a live phone voice agent.",
-  "Prioritize a fast, speakable answer over exhaustive investigation.",
+  "You are the configured OpenClaw agent receiving delegated requests from a live phone voice bridge.",
+  "Act on behalf of the caller using the normal available tools when the caller asks you to do work.",
+  "Prioritize completing the user's request and returning a fast, speakable result over exhaustive investigation.",
   "For tool-backed status checks, prefer one or two bounded read-only queries before answering.",
   "Do not print secret values or dump environment variables; only check whether required configuration is present.",
   "Be accurate, brief, and speakable.",
@@ -185,17 +188,10 @@ function createRuntimeResourceLifecycle(params: {
   };
 }
 
-function isLoopbackBind(bind: string | undefined): boolean {
-  if (!bind) {
-    return false;
-  }
-  return bind === "127.0.0.1" || bind === "::1" || bind === "localhost";
-}
-
 async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvider> {
   const allowNgrokFreeTierLoopbackBypass =
     config.tunnel?.provider === "ngrok" &&
-    isLoopbackBind(config.serve?.bind) &&
+    isLoopbackHost(config.serve?.bind ?? "") &&
     (config.tunnel?.allowNgrokFreeTierLoopbackBypass ?? false);
 
   switch (config.provider) {
@@ -317,8 +313,15 @@ export async function createVoiceCallRuntime(params: {
   );
   if (realtimeProvider) {
     const { RealtimeCallHandler } = await loadRealtimeHandler();
+    const realtimeInstructions = await buildRealtimeVoiceInstructions({
+      baseInstructions: config.realtime.instructions,
+      config,
+      coreConfig,
+      agentRuntime,
+    });
     const realtimeConfig = {
       ...config.realtime,
+      instructions: realtimeInstructions,
       tools: resolveRealtimeVoiceAgentConsultTools(
         config.realtime.toolPolicy,
         config.realtime.tools,
@@ -331,6 +334,7 @@ export async function createVoiceCallRuntime(params: {
       realtimeProvider.provider,
       realtimeProvider.providerConfig,
       config.serve.path,
+      cfg,
     );
     if (config.realtime.toolPolicy !== "none") {
       realtimeHandler.registerToolHandler(
@@ -350,6 +354,10 @@ export async function createVoiceCallRuntime(params: {
             ...call,
             config: effectiveConfig,
           });
+          const requesterSessionKey =
+            typeof call.metadata?.requesterSessionKey === "string"
+              ? call.metadata.requesterSessionKey
+              : undefined;
           const fastContext = await resolveRealtimeFastContextConsult({
             cfg,
             agentId,
@@ -365,11 +373,13 @@ export async function createVoiceCallRuntime(params: {
             voiceConfig: effectiveConfig,
             agentRuntime,
           });
-          const thinkLevel = agentRuntime.resolveThinkingDefault({
-            cfg,
-            provider: agentProvider,
-            model,
-          });
+          const thinkLevel =
+            effectiveConfig.realtime.consultThinkingLevel ??
+            agentRuntime.resolveThinkingDefault({
+              cfg,
+              provider: agentProvider,
+              model,
+            });
           return await consultRealtimeVoiceAgent({
             cfg,
             agentRuntime,
@@ -388,7 +398,10 @@ export async function createVoiceCallRuntime(params: {
             provider: agentProvider,
             model,
             thinkLevel,
+            fastMode: effectiveConfig.realtime.consultFastMode,
             timeoutMs: effectiveConfig.responseTimeoutMs,
+            spawnedBy: requesterSessionKey,
+            contextMode: requesterSessionKey ? "fork" : undefined,
             toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(
               effectiveConfig.realtime.toolPolicy,
             ),
@@ -444,11 +457,16 @@ export async function createVoiceCallRuntime(params: {
       );
     }
 
-    if (publicUrl && provider.name === "twilio") {
-      (provider as TwilioProvider).setPublicUrl(publicUrl);
+    if (publicUrl) {
+      provider.setPublicUrl?.(publicUrl);
     }
     if (publicUrl && realtimeProvider) {
       webhookServer.getRealtimeHandler()?.setPublicUrl(publicUrl);
+    }
+
+    const realtimeHandler = webhookServer.getRealtimeHandler();
+    if (realtimeHandler) {
+      manager.streamSessionIssuer = (request) => realtimeHandler.issueStreamSession(request);
     }
 
     if (provider.name === "twilio" && config.streaming?.enabled) {

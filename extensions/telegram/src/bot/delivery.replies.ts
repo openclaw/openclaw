@@ -1,6 +1,6 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-types";
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-types";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { fireAndForgetHook } from "openclaw/plugin-sdk/hook-runtime";
 import { createInternalHookEvent, triggerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import {
@@ -28,7 +28,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import type { TelegramInlineButtons } from "../button-types.js";
+import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
   markdownToTelegramChunks,
@@ -36,6 +36,7 @@ import {
   renderTelegramHtmlText,
   wrapFileReferencesInHtml,
 } from "../format.js";
+import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
@@ -667,7 +668,7 @@ export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams):
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
-  cfg?: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
+  cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
   chatId: string;
   accountId?: string;
   sessionKeyForInternalHooks?: string;
@@ -701,6 +702,7 @@ export async function deliverReplies(params: {
   replyQuoteByMessageId?: TelegramNativeQuoteCandidateByMessageId;
   /** Override media loader (tests). */
   mediaLoader?: typeof loadWebMedia;
+  transcriptMirror?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
 }): Promise<{ delivered: boolean }> {
   const progress: DeliveryProgress = {
     hasReplied: false,
@@ -708,6 +710,8 @@ export async function deliverReplies(params: {
     deliveredCount: 0,
   };
   const mediaLoader = params.mediaLoader ?? loadWebMedia;
+  const transcriptMirror = params.transcriptMirror;
+  const deliveredContents: Array<{ text: string; mediaUrls: string[] }> = [];
   const hookRunner = getGlobalHookRunner();
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
@@ -751,7 +755,17 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const hasMedia = mediaList.length > 0;
-    if (!reply?.text && !hasMedia) {
+    const resolvedReplyText =
+      resolveTelegramInteractiveTextFallback({
+        text: reply?.text,
+        interactive: reply?.interactive,
+      }) ??
+      reply?.text ??
+      "";
+    if (reply && resolvedReplyText !== (reply.text ?? "")) {
+      reply = { ...reply, text: resolvedReplyText };
+    }
+    if (!resolvedReplyText && !hasMedia) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
         continue;
@@ -760,7 +774,7 @@ export async function deliverReplies(params: {
       continue;
     }
 
-    const rawContent = reply.text || "";
+    const rawContent = resolvedReplyText;
     const replyToId =
       params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
     const replyQuote = resolveReplyQuoteForSend({
@@ -803,7 +817,12 @@ export async function deliverReplies(params: {
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
-      const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
+      const replyMarkup = buildInlineKeyboard(
+        resolveTelegramInlineButtons({
+          buttons: telegramData?.buttons,
+          interactive: reply.interactive,
+        }),
+      );
       let firstDeliveredMessageId: number | undefined;
       if (mediaList.length === 0) {
         firstDeliveredMessageId = await deliverTextReply({
@@ -857,6 +876,10 @@ export async function deliverReplies(params: {
         firstDeliveredMessageId,
       });
 
+      if (progress.deliveredCount > deliveredCountBeforeReply && transcriptMirror) {
+        deliveredContents.push({ text: contentForSentHook, mediaUrls: mediaList });
+      }
+
       emitMessageSentHooks({
         hookRunner,
         enabled: hasMessageSentHooks,
@@ -883,6 +906,24 @@ export async function deliverReplies(params: {
         groupId: params.mirrorGroupId,
       });
       throw error;
+    }
+  }
+
+  if (progress.hasDelivered && transcriptMirror) {
+    const text = deliveredContents
+      .map((content) => content.text)
+      .filter(Boolean)
+      .join("\n\n");
+    const mediaUrls = deliveredContents.flatMap((content) => content.mediaUrls);
+    if (text || mediaUrls.length > 0) {
+      try {
+        await transcriptMirror({
+          text: text || undefined,
+          mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+        });
+      } catch (mirrorErr) {
+        logVerbose(`telegram transcriptMirror failed: ${formatErrorMessage(mirrorErr)}`);
+      }
     }
   }
 

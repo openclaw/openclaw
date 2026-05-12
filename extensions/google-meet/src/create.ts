@@ -1,5 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 import {
   createGoogleMeetSpace,
@@ -16,7 +16,10 @@ function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {
 }
 
 function normalizeMode(value: unknown): GoogleMeetMode | undefined {
-  return value === "realtime" || value === "transcribe" ? value : undefined;
+  if (value === "realtime") {
+    return "agent";
+  }
+  return value === "agent" || value === "bidi" || value === "transcribe" ? value : undefined;
 }
 
 function normalizeGoogleMeetAccessType(value: unknown): GoogleMeetAccessType | undefined {
@@ -143,6 +146,7 @@ export async function createAndJoinMeetFromParams(params: {
     pin: normalizeOptionalString(params.raw.pin),
     dtmfSequence: normalizeOptionalString(params.raw.dtmfSequence),
     message: normalizeOptionalString(params.raw.message),
+    requesterSessionKey: normalizeOptionalString(params.raw.requesterSessionKey),
   });
   return {
     ...created,

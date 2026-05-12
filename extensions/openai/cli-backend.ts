@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/cli-backend";
 
 const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.5";
+const CODEX_CLI_NPM_PACKAGE = "@openai/codex@0.129.0";
 
 export function buildOpenAICodexCliBackend(): CliBackendPlugin {
   return {
@@ -14,7 +15,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
       defaultImageProbe: true,
       defaultMcpProbe: true,
       docker: {
-        npmPackage: "@openai/codex@0.128.0",
+        npmPackage: CODEX_CLI_NPM_PACKAGE,
         binaryName: "codex",
       },
     },

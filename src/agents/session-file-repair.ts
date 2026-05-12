@@ -1,6 +1,11 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { replaceFileAtomic } from "../infra/replace-file.js";
+import { makeMissingToolResult } from "./session-transcript-repair.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
+import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 /** Placeholder for blank user messages — preserves the user turn so strict
  * providers that require at least one user message don't reject the transcript. */
@@ -12,6 +17,7 @@ type RepairReport = {
   rewrittenAssistantMessages?: number;
   droppedBlankUserMessages?: number;
   rewrittenUserMessages?: number;
+  insertedToolResults?: number;
   backupPath?: string;
   reason?: string;
 };
@@ -31,6 +37,31 @@ function isSessionHeader(entry: unknown): entry is { type: string; id: string } 
   }
   const record = entry as { type?: unknown; id?: unknown };
   return record.type === "session" && typeof record.id === "string" && record.id.length > 0;
+}
+
+/**
+ * Detect a `type: "message"` entry whose `message.role` is missing, `null`, or
+ * not a non-empty string. Such entries surface in the wild as "null role"
+ * JSONL corruption (e.g. #77228 reported transcripts that contained 935+
+ * entries with null roles after an earlier failure). They cannot be replayed
+ * to any provider — every provider router branches on `message.role` — and
+ * preserving them through repair just relocates the corruption from the
+ * original file into the post-repair file. Treat them as malformed lines:
+ * drop during repair so the cleaned transcript no longer carries them.
+ */
+function isStructurallyInvalidMessageEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { type?: unknown; message?: unknown };
+  if (record.type !== "message") {
+    return false;
+  }
+  if (!record.message || typeof record.message !== "object") {
+    return true;
+  }
+  const role = (record.message as { role?: unknown }).role;
+  return typeof role !== "string" || role.trim().length === 0;
 }
 
 function isAssistantEntryWithEmptyContent(entry: unknown): entry is SessionMessageEntry {
@@ -140,6 +171,7 @@ function buildRepairSummaryParts(params: {
   rewrittenAssistantMessages: number;
   droppedBlankUserMessages: number;
   rewrittenUserMessages: number;
+  insertedToolResults: number;
 }): string {
   const parts: string[] = [];
   if (params.droppedLines > 0) {
@@ -154,7 +186,109 @@ function buildRepairSummaryParts(params: {
   if (params.rewrittenUserMessages > 0) {
     parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
   }
+  if (params.insertedToolResults > 0) {
+    parts.push(`inserted ${params.insertedToolResults} missing tool result(s)`);
+  }
   return parts.length > 0 ? parts.join(", ") : "no changes";
+}
+
+function isCodeModeToolCallRepairCandidate(entry: unknown): entry is SessionMessageEntry {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { type?: unknown; message?: unknown };
+  if (record.type !== "message" || !record.message || typeof record.message !== "object") {
+    return false;
+  }
+  const message = record.message as {
+    role?: unknown;
+    api?: unknown;
+    provider?: unknown;
+    stopReason?: unknown;
+  };
+  return (
+    message.role === "assistant" &&
+    message.api === "openai-codex-responses" &&
+    message.provider === "openai-codex" &&
+    message.stopReason !== "error" &&
+    message.stopReason !== "aborted"
+  );
+}
+
+function collectPersistedToolResultIds(entries: unknown[]): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as { type?: unknown; message?: unknown };
+    if (record.type !== "message" || !record.message || typeof record.message !== "object") {
+      continue;
+    }
+    const message = record.message as AgentMessage;
+    if (message.role !== "toolResult") {
+      continue;
+    }
+    const id = extractToolResultId(message);
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
+function makeSyntheticToolResultEntry(params: {
+  parent: SessionMessageEntry;
+  toolCallId: string;
+  toolName?: string;
+}): SessionMessageEntry {
+  const message = makeMissingToolResult({
+    toolCallId: params.toolCallId,
+    toolName: params.toolName,
+    text: "aborted",
+  });
+  return {
+    type: "message",
+    id: `repair-${randomUUID()}`,
+    parentId: typeof params.parent.id === "string" ? params.parent.id : undefined,
+    timestamp: new Date().toISOString(),
+    message: message as unknown as SessionMessageEntry["message"],
+  };
+}
+
+function insertMissingCodeModeToolResults(entries: unknown[]): {
+  entries: unknown[];
+  insertedToolResults: number;
+} {
+  const resultIds = collectPersistedToolResultIds(entries);
+  let insertedToolResults = 0;
+  const out: unknown[] = [];
+
+  for (const entry of entries) {
+    out.push(entry);
+    if (!isCodeModeToolCallRepairCandidate(entry)) {
+      continue;
+    }
+    const toolCalls = extractToolCallsFromAssistant(
+      entry.message as unknown as Extract<AgentMessage, { role: "assistant" }>,
+    );
+    for (const toolCall of toolCalls) {
+      if (resultIds.has(toolCall.id)) {
+        continue;
+      }
+      out.push(
+        makeSyntheticToolResultEntry({
+          parent: entry,
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+        }),
+      );
+      resultIds.add(toolCall.id);
+      insertedToolResults += 1;
+    }
+  }
+
+  return { entries: insertedToolResults > 0 ? out : entries, insertedToolResults };
 }
 
 export async function repairSessionFileIfNeeded(params: {
@@ -186,6 +320,7 @@ export async function repairSessionFileIfNeeded(params: {
   let rewrittenAssistantMessages = 0;
   let droppedBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
+  let insertedToolResults = 0;
 
   for (const line of lines) {
     if (!line.trim()) {
@@ -193,6 +328,15 @@ export async function repairSessionFileIfNeeded(params: {
     }
     try {
       const entry: unknown = JSON.parse(line);
+      if (isStructurallyInvalidMessageEntry(entry)) {
+        // Drop "null role" / missing-role message entries the same way we
+        // drop unparseable JSONL: they cannot be replayed to any provider
+        // and preserving them through repair just relocates the corruption
+        // into the post-repair file (#77228: 935+ null-role entries
+        // surviving the auto-repair pass).
+        droppedLines += 1;
+        continue;
+      }
       if (isAssistantEntryWithEmptyContent(entry)) {
         entries.push(rewriteAssistantEntryWithEmptyContent(entry));
         rewrittenAssistantMessages += 1;
@@ -239,33 +383,35 @@ export async function repairSessionFileIfNeeded(params: {
     droppedBlankUserMessages === 0 &&
     rewrittenUserMessages === 0
   ) {
-    return { repaired: false, droppedLines: 0 };
+    const repairedToolResults = insertMissingCodeModeToolResults(entries);
+    insertedToolResults = repairedToolResults.insertedToolResults;
+    if (insertedToolResults === 0) {
+      return { repaired: false, droppedLines: 0 };
+    }
+    entries.splice(0, entries.length, ...repairedToolResults.entries);
+  } else {
+    const repairedToolResults = insertMissingCodeModeToolResults(entries);
+    insertedToolResults = repairedToolResults.insertedToolResults;
+    if (insertedToolResults > 0) {
+      entries.splice(0, entries.length, ...repairedToolResults.entries);
+    }
   }
 
   const cleaned = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
   const backupPath = `${sessionFile}.bak-${process.pid}-${Date.now()}`;
-  const tmpPath = `${sessionFile}.repair-${process.pid}-${Date.now()}.tmp`;
   try {
     const stat = await fs.stat(sessionFile).catch(() => null);
     await fs.writeFile(backupPath, content, "utf-8");
     if (stat) {
       await fs.chmod(backupPath, stat.mode);
     }
-    await fs.writeFile(tmpPath, cleaned, "utf-8");
-    if (stat) {
-      await fs.chmod(tmpPath, stat.mode);
-    }
-    await fs.rename(tmpPath, sessionFile);
+    await replaceFileAtomic({
+      filePath: sessionFile,
+      content: cleaned,
+      preserveExistingMode: true,
+      tempPrefix: `${path.basename(sessionFile)}.repair`,
+    });
   } catch (err) {
-    try {
-      await fs.unlink(tmpPath);
-    } catch (cleanupErr) {
-      params.warn?.(
-        `session file repair cleanup failed: ${cleanupErr instanceof Error ? cleanupErr.message : "unknown error"} (${path.basename(
-          tmpPath,
-        )})`,
-      );
-    }
     return {
       repaired: false,
       droppedLines,
@@ -282,6 +428,7 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      insertedToolResults,
     })} (${path.basename(sessionFile)})`,
   );
   return {
@@ -290,6 +437,7 @@ export async function repairSessionFileIfNeeded(params: {
     rewrittenAssistantMessages,
     droppedBlankUserMessages,
     rewrittenUserMessages,
+    insertedToolResults,
     backupPath,
   };
 }

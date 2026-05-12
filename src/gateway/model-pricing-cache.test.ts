@@ -8,7 +8,15 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/ma
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 
 const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() =>
-  vi.fn<typeof normalizeProviderModelIdWithRuntime>(({ context }) => context.modelId),
+  vi.fn<typeof normalizeProviderModelIdWithRuntime>(({ provider, context }) => {
+    if (
+      provider === "google" &&
+      (context.modelId === "gemini-3-pro" || context.modelId === "gemini-3-pro-preview")
+    ) {
+      return "gemini-3.1-pro-preview";
+    }
+    return context.modelId;
+  }),
 );
 const pluginManifestRegistryMocks = vi.hoisted(() => ({
   manifestRegistry: undefined as PluginManifestRegistry | undefined,
@@ -49,6 +57,7 @@ vi.mock("../plugins/manifest-metadata-scan.js", async (importOriginal) => {
   };
 });
 
+import { getGatewayModelPricingHealth } from "./model-pricing-cache-state.js";
 import {
   __resetGatewayModelPricingCacheForTest,
   collectConfiguredModelPricingRefs,
@@ -56,6 +65,35 @@ import {
   refreshGatewayModelPricingCache,
   startGatewayModelPricingRefresh,
 } from "./model-pricing-cache.js";
+
+type CachedModelPricing = NonNullable<ReturnType<typeof getCachedGatewayModelPricing>>;
+
+function requirePricing(
+  pricing: ReturnType<typeof getCachedGatewayModelPricing>,
+  label: string,
+): CachedModelPricing {
+  if (!pricing) {
+    throw new Error(`expected ${label} pricing`);
+  }
+  return pricing;
+}
+
+function requireTieredPricing(
+  pricing: CachedModelPricing,
+  label: string,
+): NonNullable<CachedModelPricing["tieredPricing"]> {
+  if (!pricing.tieredPricing) {
+    throw new Error(`expected ${label} tiered pricing`);
+  }
+  return pricing.tieredPricing;
+}
+
+function requireAbortSignal(signal: RequestInit["signal"] | undefined): AbortSignal {
+  if (!signal) {
+    throw new Error("expected pricing fetch abort signal");
+  }
+  return signal;
+}
 
 describe("model-pricing-cache", () => {
   beforeEach(() => {
@@ -125,20 +163,20 @@ describe("model-pricing-cache", () => {
       modelKey(ref.provider, ref.model),
     );
 
-    expect(refs).toEqual(
-      expect.arrayContaining([
-        "openai/gpt-5.4",
-        "anthropic/claude-sonnet-4-6",
-        "google/gemini-3-pro-preview",
-        "anthropic/claude-opus-4-6",
-        "xai/grok-4",
-        "openrouter/anthropic/claude-opus-4-6",
-        "openrouter/auto",
-        "zai/glm-5",
-        "anthropic/claude-haiku-4-5",
-        "google/gemini-2.5-pro",
-      ]),
-    );
+    for (const expectedRef of [
+      "openai/gpt-5.4",
+      "anthropic/claude-sonnet-4-6",
+      "google/gemini-3.1-pro-preview",
+      "anthropic/claude-opus-4-6",
+      "xai/grok-4",
+      "openrouter/anthropic/claude-opus-4-6",
+      "openrouter/auto",
+      "zai/glm-5",
+      "anthropic/claude-haiku-4-5",
+      "google/gemini-2.5-pro",
+    ]) {
+      expect(refs).toContain(expectedRef);
+    }
     expect(new Set(refs).size).toBe(refs.length);
   });
 
@@ -358,6 +396,136 @@ describe("model-pricing-cache", () => {
     expect(
       getCachedGatewayModelPricing({ provider: "ollama", model: "llama3.2:latest" }),
     ).toBeUndefined();
+  });
+
+  it("records and clears remote pricing source failures for health surfaces", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-remote" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "gpt-remote" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const failingFetch = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        throw new TypeError("fetch failed");
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl: failingFetch });
+
+    const failedHealth = getGatewayModelPricingHealth();
+    expect(failedHealth.state).toBe("degraded");
+    expect(failedHealth.sources).toHaveLength(1);
+    expect(failedHealth.sources[0]?.source).toBe("openrouter");
+    expect(failedHealth.sources[0]?.state).toBe("degraded");
+    expect(failedHealth.sources[0]?.detail).toContain("OpenRouter pricing fetch failed");
+
+    const successfulFetch = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const body = url.includes("openrouter.ai") ? { data: [] } : {};
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl: successfulFetch });
+
+    expect(getGatewayModelPricingHealth()).toEqual({
+      state: "ok",
+      sources: [],
+    });
+  });
+
+  it("records and clears scheduled refresh rejections for health surfaces", async () => {
+    vi.useFakeTimers();
+    try {
+      const manifestRegistry: PluginManifestRegistry = { diagnostics: [], plugins: [] };
+      let failManifestRead = false;
+      const pluginMetadataSnapshot = {
+        index: { plugins: [] } as never,
+        get manifestRegistry() {
+          if (failManifestRead) {
+            throw new Error("manifest metadata failed");
+          }
+          return manifestRegistry;
+        },
+      };
+      const config = {
+        agents: {
+          defaults: {
+            model: { primary: "custom/gpt-remote" },
+          },
+        },
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://models.example/v1",
+              api: "openai-completions",
+              models: [{ id: "gpt-remote" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        return new Response(JSON.stringify(url.includes("openrouter.ai") ? { data: [] } : {}), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+
+      await refreshGatewayModelPricingCache({
+        config,
+        fetchImpl,
+        pluginMetadataSnapshot,
+      });
+      expect(getGatewayModelPricingHealth()).toEqual({
+        state: "ok",
+        sources: [],
+      });
+
+      failManifestRead = true;
+      await vi.runOnlyPendingTimersAsync();
+
+      const failedHealth = getGatewayModelPricingHealth();
+      expect(failedHealth.state).toBe("degraded");
+      expect(failedHealth.sources).toHaveLength(1);
+      expect(failedHealth.sources[0]?.source).toBe("refresh");
+      expect(failedHealth.sources[0]?.state).toBe("degraded");
+      expect(failedHealth.sources[0]?.detail).toBe(
+        "pricing refresh failed: Error: manifest metadata failed",
+      );
+
+      failManifestRead = false;
+      await refreshGatewayModelPricingCache({
+        config,
+        fetchImpl,
+        pluginMetadataSnapshot,
+      });
+      expect(getGatewayModelPricingHealth()).toEqual({
+        state: "ok",
+        sources: [],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("seeds pricing from explicit configured model cost without external catalog fetches", async () => {
@@ -602,21 +770,22 @@ describe("model-pricing-cache", () => {
       provider: "volcengine",
       model: "doubao-seed-2-0-pro",
     });
+    const cached = requirePricing(pricing, "volcengine doubao-seed-2-0-pro");
+    const tiers = requireTieredPricing(cached, "volcengine doubao-seed-2-0-pro");
 
-    expect(pricing).toBeDefined();
-    expect(pricing!.input).toBeCloseTo(0.46);
-    expect(pricing!.output).toBeCloseTo(2.3);
-    expect(pricing!.cacheWrite).toBeCloseTo(0.92);
-    expect(pricing!.tieredPricing).toHaveLength(3);
-    expect(pricing!.tieredPricing![0]).toEqual({
+    expect(cached.input).toBeCloseTo(0.46);
+    expect(cached.output).toBeCloseTo(2.3);
+    expect(cached.cacheWrite).toBeCloseTo(0.92);
+    expect(tiers).toHaveLength(3);
+    expect(tiers[0]).toEqual({
       input: expect.closeTo(0.46),
       output: expect.closeTo(2.3),
       cacheRead: 0,
       cacheWrite: expect.closeTo(0.092),
       range: [0, 32000],
     });
-    expect(pricing!.tieredPricing![2].cacheWrite).toBeCloseTo(0.28);
-    expect(pricing!.tieredPricing![2].range).toEqual([128000, 256000]);
+    expect(tiers[2].cacheWrite).toBeCloseTo(0.28);
+    expect(tiers[2].range).toEqual([128000, 256000]);
   });
 
   it("normalizes LiteLLM open-ended range [start] to [start, Infinity]", async () => {
@@ -670,12 +839,15 @@ describe("model-pricing-cache", () => {
       provider: "volcengine",
       model: "doubao-open",
     });
+    const tiers = requireTieredPricing(
+      requirePricing(pricing, "volcengine doubao-open"),
+      "volcengine doubao-open",
+    );
 
-    expect(pricing).toBeDefined();
-    expect(pricing!.tieredPricing).toHaveLength(2);
-    expect(pricing!.tieredPricing![0].range).toEqual([0, 32000]);
-    expect(pricing!.tieredPricing![1].range).toEqual([32000, Infinity]);
-    expect(pricing!.tieredPricing![1].cacheWrite).toBeCloseTo(0.14);
+    expect(tiers).toHaveLength(2);
+    expect(tiers[0].range).toEqual([0, 32000]);
+    expect(tiers[1].range).toEqual([32000, Infinity]);
+    expect(tiers[1].cacheWrite).toBeCloseTo(0.14);
   });
 
   it("merges OpenRouter flat pricing with LiteLLM tiered pricing", async () => {
@@ -743,15 +915,16 @@ describe("model-pricing-cache", () => {
       provider: "dashscope",
       model: "qwen-plus",
     });
+    const cached = requirePricing(pricing, "dashscope qwen-plus");
+    const tiers = requireTieredPricing(cached, "dashscope qwen-plus");
 
-    expect(pricing).toBeDefined();
     // OpenRouter base flat pricing is used
-    expect(pricing!.input).toBeCloseTo(0.4);
-    expect(pricing!.output).toBeCloseTo(2.4);
+    expect(cached.input).toBeCloseTo(0.4);
+    expect(cached.output).toBeCloseTo(2.4);
     // LiteLLM tiered pricing is merged in
-    expect(pricing!.tieredPricing).toHaveLength(2);
-    expect(pricing!.tieredPricing![1].range).toEqual([256000, 1000000]);
-    expect(pricing!.tieredPricing![1].cacheWrite).toBeCloseTo(0.1);
+    expect(tiers).toHaveLength(2);
+    expect(tiers[1].range).toEqual([256000, 1000000]);
+    expect(tiers[1].cacheWrite).toBeCloseTo(0.1);
   });
 
   it("falls back gracefully when LiteLLM fetch fails", async () => {
@@ -850,9 +1023,8 @@ describe("model-pricing-cache", () => {
           new Promise<Response>((_resolve, reject) => {
             const url =
               typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-            const signal = init?.signal;
-            expect(signal).toBeDefined();
-            signal?.addEventListener(
+            const signal = requireAbortSignal(init?.signal);
+            signal.addEventListener(
               "abort",
               () => {
                 abortedUrls.push(url);
@@ -873,7 +1045,8 @@ describe("model-pricing-cache", () => {
       await vi.waitFor(() => expect(abortedUrls).toHaveLength(2));
       await vi.dynamicImportSettled();
 
-      expect(setTimeoutSpy.mock.calls.some(([, delay]) => delay === 24 * 60 * 60_000)).toBe(false);
+      const scheduledDelays = setTimeoutSpy.mock.calls.map(([, delay]) => delay);
+      expect(scheduledDelays).not.toContain(24 * 60 * 60_000);
       expect(
         getCachedGatewayModelPricing({ provider: "anthropic", model: "claude-opus-4-6" }),
       ).toBeUndefined();
@@ -943,16 +1116,20 @@ describe("model-pricing-cache", () => {
 
     await refreshGatewayModelPricingCache({ config, fetchImpl });
 
-    expect(warnings).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining(
+    expect(
+      warnings.some((message) =>
+        message.includes(
           "OpenRouter pricing fetch failed (timeout 60s): TimeoutError: The operation was aborted due to timeout",
         ),
-        expect.stringContaining(
+      ),
+    ).toBe(true);
+    expect(
+      warnings.some((message) =>
+        message.includes(
           "LiteLLM pricing fetch failed (timeout 60s): TimeoutError: The operation was aborted due to timeout",
         ),
-      ]),
-    );
+      ),
+    ).toBe(true);
   });
 
   it("treats oversized LiteLLM catalog responses as source failures", async () => {

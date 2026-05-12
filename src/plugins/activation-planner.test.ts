@@ -210,7 +210,11 @@ describe("activation planner", () => {
           command: "demo-tools",
         },
       }),
-    ).toMatchObject({
+    ).toEqual({
+      trigger: {
+        kind: "command",
+        command: "demo-tools",
+      },
       pluginIds: ["demo-channel"],
       entries: [
         {
@@ -372,6 +376,6 @@ describe("activation planner", () => {
         },
         onlyPluginIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

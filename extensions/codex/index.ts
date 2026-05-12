@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createCodexAppServerAgentHarness } from "./harness.js";
@@ -29,7 +29,7 @@ export default definePluginEntry({
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );
-    api.registerMigrationProvider(buildCodexMigrationProvider());
+    api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
     api.registerCommand(createCodexCommand({ pluginConfig: api.pluginConfig }));
     api.on("inbound_claim", (event, ctx) =>
       handleCodexConversationInboundClaim(event, ctx, {

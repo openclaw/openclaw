@@ -21,6 +21,11 @@ type ActiveTool = {
   lastProgressAt: number;
 };
 
+type DiagnosticToolStartedActivityEvent = Pick<
+  Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
+  "runId" | "sessionId" | "sessionKey" | "toolName" | "toolCallId"
+>;
+
 export type DiagnosticSessionActivitySnapshot = {
   activeWorkKind?: DiagnosticSessionActiveWorkKind;
   activeToolName?: string;
@@ -46,34 +51,86 @@ function sessionRefs(params: { sessionId?: string; sessionKey?: string }): strin
   return refs;
 }
 
+function registerSessionActivityRefs(
+  activity: SessionActivity,
+  params: { sessionId?: string; sessionKey?: string; runId?: string },
+): void {
+  activity.sessionId ??= params.sessionId;
+  activity.sessionKey ??= params.sessionKey;
+  for (const ref of sessionRefs(params)) {
+    activityByRef.set(ref, activity);
+  }
+  if (params.runId) {
+    activityByRunId.set(params.runId, activity);
+  }
+}
+
+function replaceSessionActivityReferences(source: SessionActivity, target: SessionActivity): void {
+  for (const [ref, activity] of activityByRef) {
+    if (activity === source) {
+      activityByRef.set(ref, target);
+    }
+  }
+  for (const [runId, activity] of activityByRunId) {
+    if (activity === source) {
+      activityByRunId.set(runId, target);
+    }
+  }
+}
+
+function mergeSessionActivity(target: SessionActivity, source: SessionActivity): void {
+  target.sessionId ??= source.sessionId;
+  target.sessionKey ??= source.sessionKey;
+  target.activeEmbeddedRun ||= source.activeEmbeddedRun;
+  for (const [key, tool] of source.activeTools) {
+    target.activeTools.set(key, tool);
+  }
+  for (const call of source.activeModelCalls) {
+    target.activeModelCalls.add(call);
+  }
+  if (source.lastProgressAt > target.lastProgressAt) {
+    target.lastProgressAt = source.lastProgressAt;
+    target.lastProgressReason = source.lastProgressReason;
+  }
+  replaceSessionActivityReferences(source, target);
+}
+
 function resolveSessionActivity(params: {
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
   create?: boolean;
 }): SessionActivity | undefined {
+  let activity: SessionActivity | undefined;
   if (params.runId) {
     const byRun = activityByRunId.get(params.runId);
     if (byRun) {
-      return byRun;
+      activity = byRun;
     }
   }
 
   for (const ref of sessionRefs(params)) {
-    const activity = activityByRef.get(ref);
-    if (activity) {
-      if (params.runId) {
-        activityByRunId.set(params.runId, activity);
-      }
-      return activity;
+    const byRef = activityByRef.get(ref);
+    if (!byRef) {
+      continue;
     }
+    if (!activity) {
+      activity = byRef;
+    } else if (activity !== byRef) {
+      mergeSessionActivity(activity, byRef);
+    }
+  }
+
+  if (activity) {
+    registerSessionActivityRefs(activity, params);
+    return activity;
   }
 
   if (!params.create) {
     return undefined;
   }
 
-  const activity: SessionActivity = {
+  const created: SessionActivity = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     activeEmbeddedRun: false,
@@ -81,13 +138,8 @@ function resolveSessionActivity(params: {
     activeModelCalls: new Set(),
     lastProgressAt: Date.now(),
   };
-  for (const ref of sessionRefs(params)) {
-    activityByRef.set(ref, activity);
-  }
-  if (params.runId) {
-    activityByRunId.set(params.runId, activity);
-  }
-  return activity;
+  registerSessionActivityRefs(created, params);
+  return created;
 }
 
 function touchSessionActivity(activity: SessionActivity, reason: string, now = Date.now()): void {
@@ -111,9 +163,7 @@ function modelCallKey(event: { runId?: string; provider?: string; model?: string
   return `${event.runId ?? "unknown"}:${event.provider ?? "provider"}:${event.model ?? "model"}`;
 }
 
-function recordToolStarted(
-  event: Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
-): void {
+function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
   const activity = resolveSessionActivity({ ...event, create: true });
   if (!activity) {
     return;
@@ -245,6 +295,29 @@ export function getDiagnosticSessionActivitySnapshot(
     lastProgressAgeMs: Math.max(0, now - activity.lastProgressAt),
     lastProgressReason: activity.lastProgressReason,
   };
+}
+
+export function markDiagnosticRunProgressForTest(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+  reason: string;
+}): void {
+  const activity = resolveSessionActivity({ ...params, create: true });
+  if (!activity) {
+    return;
+  }
+  touchSessionActivity(activity, params.reason);
+}
+
+export function markDiagnosticToolStartedForTest(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+  toolName: string;
+  toolCallId?: string;
+}): void {
+  recordToolStarted(params);
 }
 
 export function resetDiagnosticRunActivityForTest(): void {

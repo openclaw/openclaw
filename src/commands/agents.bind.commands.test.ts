@@ -118,6 +118,14 @@ describe("agents bind/unbind commands", () => {
     pluginRegistryMocks.listPluginContributionIds.mockClear();
   });
 
+  function firstWrittenConfig(): { bindings?: unknown } {
+    const call = writeConfigFileMock.mock.calls[0];
+    if (!call) {
+      throw new Error("expected config write");
+    }
+    return call[0] as { bindings?: unknown };
+  }
+
   it("lists all bindings by default", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       ...baseConfigSnapshot,
@@ -131,9 +139,8 @@ describe("agents bind/unbind commands", () => {
 
     await agentsBindingsCommand({}, runtime);
 
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("main <- matrix"));
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("ops <- telegram accountId=work"),
+      ["Routing bindings:", "- main <- matrix", "- ops <- telegram accountId=work"].join("\n"),
     );
   });
 
@@ -145,11 +152,11 @@ describe("agents bind/unbind commands", () => {
 
     await agentsBindCommand({ bind: ["telegram"] }, runtime);
 
-    expect(writeConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bindings: [{ type: "route", agentId: "main", match: { channel: "telegram" } }],
-      }),
-    );
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    const writtenConfig = firstWrittenConfig();
+    expect(writtenConfig?.bindings).toStrictEqual([
+      { type: "route", agentId: "main", match: { channel: "telegram" } },
+    ]);
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
@@ -161,17 +168,15 @@ describe("agents bind/unbind commands", () => {
 
     await agentsBindCommand({ bind: ["external-chat:work"] }, runtime);
 
-    expect(writeConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bindings: [
-          {
-            type: "route",
-            agentId: "main",
-            match: { channel: "external-chat", accountId: "work" },
-          },
-        ],
-      }),
-    );
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    const writtenConfig = firstWrittenConfig();
+    expect(writtenConfig?.bindings).toStrictEqual([
+      {
+        type: "route",
+        agentId: "main",
+        match: { channel: "external-chat", accountId: "work" },
+      },
+    ]);
     expect(pluginRegistryMocks.loadPluginRegistrySnapshot).toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
@@ -190,11 +195,11 @@ describe("agents bind/unbind commands", () => {
 
     await agentsUnbindCommand({ agent: "ops", all: true }, runtime);
 
-    expect(writeConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bindings: [{ agentId: "main", match: { channel: "matrix" } }],
-      }),
-    );
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    const writtenConfig = firstWrittenConfig();
+    expect(writtenConfig?.bindings).toStrictEqual([
+      { agentId: "main", match: { channel: "matrix" } },
+    ]);
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 

@@ -26,6 +26,10 @@ const replyDispatchCtx = {
   markIdle: () => {},
 };
 
+function firstErrorLog(logger: { error: ReturnType<typeof vi.fn> }) {
+  return logger.error.mock.calls[0];
+}
+
 describe("reply_dispatch hook runner", () => {
   it("stops at the first handler that claims reply dispatch", async () => {
     const first = vi.fn().mockResolvedValue({
@@ -80,9 +84,10 @@ describe("reply_dispatch hook runner", () => {
       queuedFinal: false,
       counts: { tool: 1, block: 0, final: 0 },
     });
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("reply_dispatch handler from test-plugin failed: boom"),
-    );
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(firstErrorLog(logger)).toEqual([
+      "[hooks] reply_dispatch handler from test-plugin failed: boom",
+    ]);
     expect(succeeding).toHaveBeenCalledTimes(1);
   });
 
@@ -116,11 +121,10 @@ describe("reply_dispatch hook runner", () => {
         queuedFinal: false,
         counts: { tool: 1, block: 0, final: 0 },
       });
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "reply_dispatch handler from test-plugin failed: timed out after 5ms",
-        ),
-      );
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(firstErrorLog(logger)).toEqual([
+        "[hooks] reply_dispatch handler from test-plugin failed: timed out after 5ms",
+      ]);
       expect(succeeding).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();

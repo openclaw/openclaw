@@ -5,7 +5,7 @@ import {
   normalizeResolvedSecretInputString,
   type SecretInput,
 } from "openclaw/plugin-sdk/secret-input";
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
@@ -227,6 +227,7 @@ const VoiceCallRealtimeProvidersConfigSchema = z
   .default({});
 
 const VoiceCallRealtimeToolPolicySchema = z.enum(REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES);
+const VoiceCallRealtimeConsultPolicySchema = z.enum(["auto", "substantive", "always"]);
 
 const VoiceCallRealtimeFastContextSourceSchema = z.enum(["memory", "sessions"]);
 
@@ -258,6 +259,48 @@ export type VoiceCallRealtimeFastContextConfig = z.infer<
   typeof VoiceCallRealtimeFastContextConfigSchema
 >;
 
+const VoiceCallRealtimeAgentContextConfigSchema = z
+  .object({
+    /** Inject a compact agent persona/context capsule into realtime voice instructions. */
+    enabled: z.boolean().default(false),
+    /** Maximum number of characters from the generated capsule to append. */
+    maxChars: z.number().int().positive().default(6000),
+    /** Include configured agent identity fields. */
+    includeIdentity: z.boolean().default(true),
+    /** Include agents.defaults/list systemPromptOverride when configured. */
+    includeSystemPrompt: z.boolean().default(true),
+    /** Include selected workspace files such as SOUL.md and IDENTITY.md. */
+    includeWorkspaceFiles: z.boolean().default(true),
+    /** Workspace-relative files to include, bounded by maxChars. */
+    files: z.array(z.string().min(1)).default(["SOUL.md", "IDENTITY.md", "USER.md"]),
+  })
+  .strict()
+  .default({
+    enabled: false,
+    maxChars: 6000,
+    includeIdentity: true,
+    includeSystemPrompt: true,
+    includeWorkspaceFiles: true,
+    files: ["SOUL.md", "IDENTITY.md", "USER.md"],
+  });
+export type VoiceCallRealtimeAgentContextConfig = z.infer<
+  typeof VoiceCallRealtimeAgentContextConfigSchema
+>;
+
+export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "adaptive",
+  "max",
+]);
+export type VoiceCallRealtimeConsultThinkingLevel = z.infer<
+  typeof VoiceCallRealtimeConsultThinkingLevelSchema
+>;
+
 const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .default({});
@@ -274,10 +317,18 @@ const VoiceCallRealtimeConfigSchema = z
     instructions: z.string().default(DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS),
     /** Tool policy for the shared OpenClaw agent consult tool. */
     toolPolicy: VoiceCallRealtimeToolPolicySchema.default("safe-read-only"),
+    /** Guidance for when the realtime model should call the OpenClaw agent consult tool. */
+    consultPolicy: VoiceCallRealtimeConsultPolicySchema.default("auto"),
+    /** Optional thinking level override for the regular agent behind realtime consults. */
+    consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional(),
+    /** Optional fast mode override for the regular agent behind realtime consults. */
+    consultFastMode: z.boolean().optional(),
     /** Tool definitions exposed to the realtime provider. */
     tools: z.array(RealtimeToolSchema).default([]),
     /** Low-latency memory/session context for the consult tool. */
     fastContext: VoiceCallRealtimeFastContextConfigSchema,
+    /** Bounded agent persona/context injection for the fast realtime voice path. */
+    agentContext: VoiceCallRealtimeAgentContextConfigSchema,
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: VoiceCallRealtimeProvidersConfigSchema,
   })
@@ -286,6 +337,7 @@ const VoiceCallRealtimeConfigSchema = z
     enabled: false,
     instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
     toolPolicy: "safe-read-only",
+    consultPolicy: "auto",
     tools: [],
     fastContext: {
       enabled: false,
@@ -293,6 +345,14 @@ const VoiceCallRealtimeConfigSchema = z
       maxResults: 3,
       sources: ["memory", "sessions"],
       fallbackToConsult: false,
+    },
+    agentContext: {
+      enabled: false,
+      maxChars: 6000,
+      includeIdentity: true,
+      includeSystemPrompt: true,
+      includeWorkspaceFiles: true,
+      files: ["SOUL.md", "IDENTITY.md", "USER.md"],
     },
     providers: {},
   });
@@ -606,6 +666,11 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     ...config.realtime?.fastContext,
     sources: config.realtime?.fastContext?.sources ?? defaults.realtime.fastContext.sources,
   };
+  const realtimeAgentContext = {
+    ...defaults.realtime.agentContext,
+    ...config.realtime?.agentContext,
+    files: config.realtime?.agentContext?.files ?? defaults.realtime.agentContext.files,
+  };
   return {
     ...defaults,
     ...config,
@@ -639,7 +704,12 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
         defaultRealtimeStreamPathForServePath(serve.path ?? defaults.serve.path),
       tools:
         (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
+      consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional().parse(
+        config.realtime?.consultThinkingLevel ?? defaults.realtime.consultThinkingLevel,
+      ),
+      consultFastMode: config.realtime?.consultFastMode ?? defaults.realtime.consultFastMode,
       fastContext: realtimeFastContext,
+      agentContext: realtimeAgentContext,
       providers: realtimeProviders,
     },
     tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
@@ -798,9 +868,14 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     );
   }
 
-  if (config.realtime.enabled && config.provider && config.provider !== "twilio") {
+  if (
+    config.realtime.enabled &&
+    config.provider &&
+    config.provider !== "twilio" &&
+    config.provider !== "telnyx"
+  ) {
     errors.push(
-      'plugins.entries.voice-call.config.provider must be "twilio" when realtime.enabled is true',
+      'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
     );
   }
 

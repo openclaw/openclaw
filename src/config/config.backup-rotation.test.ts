@@ -14,6 +14,20 @@ import {
 import { withTempHome } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 
+async function expectRegularFile(filePath: string): Promise<void> {
+  expect((await fs.stat(filePath)).isFile()).toBe(true);
+}
+
+async function expectPathMissing(filePath: string): Promise<void> {
+  let error: { code?: unknown } | undefined;
+  try {
+    await fs.stat(filePath);
+  } catch (err) {
+    error = err as { code?: unknown };
+  }
+  expect(error?.code).toBe("ENOENT");
+}
+
 describe("config backup rotation", () => {
   it("keeps a 5-deep backup ring for config writes", async () => {
     await withTempHome(async () => {
@@ -51,7 +65,7 @@ describe("config backup rotation", () => {
       await expect(readName(".bak.2")).resolves.toBe("v3");
       await expect(readName(".bak.3")).resolves.toBe("v2");
       await expect(readName(".bak.4")).resolves.toBe("v1");
-      await expect(fs.stat(`${configPath}.bak.5`)).rejects.toThrow();
+      await expectPathMissing(`${configPath}.bak.5`);
     });
   });
 
@@ -92,14 +106,14 @@ describe("config backup rotation", () => {
       await cleanOrphanBackups(configPath, fs);
 
       // Valid backups preserved
-      await expect(fs.stat(`${configPath}.bak`)).resolves.toBeDefined();
-      await expect(fs.stat(`${configPath}.bak.1`)).resolves.toBeDefined();
-      await expect(fs.stat(`${configPath}.bak.2`)).resolves.toBeDefined();
+      await expectRegularFile(`${configPath}.bak`);
+      await expectRegularFile(`${configPath}.bak.1`);
+      await expectRegularFile(`${configPath}.bak.2`);
 
       // Orphans removed
-      await expect(fs.stat(`${configPath}.bak.1772352289`)).rejects.toThrow();
-      await expect(fs.stat(`${configPath}.bak.before-marketing`)).rejects.toThrow();
-      await expect(fs.stat(`${configPath}.bak.99`)).rejects.toThrow();
+      await expectPathMissing(`${configPath}.bak.1772352289`);
+      await expectPathMissing(`${configPath}.bak.before-marketing`);
+      await expectPathMissing(`${configPath}.bak.99`);
 
       // Main config untouched
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe("current");
@@ -128,7 +142,7 @@ describe("config backup rotation", () => {
         expectPosixMode(primaryBackupStat.mode, 0o600);
       }
       // Out-of-ring orphan gets pruned.
-      await expect(fs.stat(`${configPath}.bak.orphan`)).rejects.toThrow();
+      await expectPathMissing(`${configPath}.bak.orphan`);
     });
   });
 });

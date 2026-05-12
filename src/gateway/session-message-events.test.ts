@@ -119,21 +119,30 @@ async function emitTranscriptUpdateAndCollectEvents(params: {
 
 async function expectNoMessageWithin(params: {
   action?: () => Promise<void> | void;
-  watch: () => Promise<unknown>;
+  watch: (timeoutMs: number) => Promise<unknown>;
   timeoutMs?: number;
 }): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 300;
-  let received = false;
-  const watch = params
-    .watch()
-    .then(() => {
-      received = true;
-    })
-    .catch(() => undefined);
+  const received = params.watch(timeoutMs).then(
+    () => true,
+    () => false,
+  );
   await params.action?.();
-  await new Promise((resolve) => setTimeout(resolve, timeoutMs));
-  expect(received).toBe(false);
-  await watch;
+  await expect(received).resolves.toBe(false);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
+  const record = requireRecord(value, "record");
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key]).toEqual(expectedValue);
+  }
 }
 
 describe("session.message websocket events", () => {
@@ -172,7 +181,7 @@ describe("session.message websocket events", () => {
       });
 
       const event = await changedEvent;
-      expect(event.payload).toMatchObject({
+      expectRecordFields(event.payload, {
         sessionKey: "agent:main:child",
         reason: "reactivated",
         spawnedBy: "agent:main:parent",
@@ -221,21 +230,25 @@ describe("session.message websocket events", () => {
         storePath,
       });
       expect(appended.ok).toBe(true);
-      await expect(subscribedEvent).resolves.toBeTruthy();
+      const event = await subscribedEvent;
+      expectRecordFields(event, {
+        type: "event",
+        event: "session.message",
+      });
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             unsubscribedWs,
             (message) => message.type === "event" && message.event === "session.message",
-            300,
+            timeoutMs,
           ),
       });
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             nodeWs,
             (message) => message.type === "event" && message.event === "session.message",
-            300,
+            timeoutMs,
           ),
       });
     } finally {
@@ -268,22 +281,110 @@ describe("session.message websocket events", () => {
       if (!appended.ok) {
         throw new Error(`append failed: ${appended.reason}`);
       }
-      expect(emitSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionFile: appended.sessionFile,
-          sessionKey: "agent:main:main",
-          messageId: appended.messageId,
-          message: expect.objectContaining({
-            role: "assistant",
-            content: [{ type: "text", text: "live websocket message" }],
-          }),
-        }),
-      );
+      const emitParams = requireRecord(emitSpy.mock.calls.at(0)?.[0], "transcript update params");
+      expect(emitParams.sessionFile).toBe(appended.sessionFile);
+      expect(emitParams.sessionKey).toBe("agent:main:main");
+      expect(emitParams.messageId).toBe(appended.messageId);
+      expectRecordFields(emitParams.message, {
+        role: "assistant",
+        content: [{ type: "text", text: "live websocket message" }],
+      });
       const transcript = await fs.readFile(appended.sessionFile, "utf-8");
       expect(transcript).toContain('"live websocket message"');
     } finally {
       emitSpy.mockRestore();
     }
+  });
+
+  test("strips blocked original content from live session.message events", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      JSON.stringify({ type: "session", version: 1, id: "sess-main" }) + "\n",
+      "utf-8",
+    );
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const { messageEvent } = await emitTranscriptUpdateAndCollectEvents({
+        ws,
+        sessionKey: "agent:main:main",
+        sessionFile: transcriptPath,
+        messageId: "blocked-1",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "The agent cannot read this message." }],
+          __openclaw: {
+            beforeAgentRunBlocked: { blockedBy: "policy-plugin", blockedAt: 1 },
+          },
+        },
+      });
+
+      const payload = messageEvent.payload as {
+        message?: { content?: unknown; __openclaw?: { beforeAgentRunBlocked?: unknown } };
+      };
+      expect(payload.message?.content).toEqual([
+        { type: "text", text: "The agent cannot read this message." },
+      ]);
+      expect(JSON.stringify(payload.message)).not.toContain("secret blocked prompt");
+      expect(JSON.stringify(payload.message)).not.toContain("contains protected content");
+    });
+  });
+
+  test("broadcasts redacted blocked user appends to live session listeners", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
+      emitSessionTranscriptUpdate({
+        sessionFile: path.join(path.dirname(storePath), "sess-main.jsonl"),
+        sessionKey: "agent:main:main",
+        messageId: "blocked-message",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "The agent cannot read this message." }],
+          __openclaw: {
+            beforeAgentRunBlocked: {
+              blockedBy: "policy-plugin",
+              blockedAt: Date.now(),
+            },
+          },
+        },
+      });
+
+      const messageEvent = await messageEventPromise;
+      const payload = messageEvent.payload as {
+        message?: {
+          role?: unknown;
+          content?: unknown;
+          __openclaw?: { beforeAgentRunBlocked?: unknown };
+        };
+      };
+      expect(payload.message?.role).toBe("user");
+      expect(payload.message?.content).toEqual([
+        { type: "text", text: "The agent cannot read this message." },
+      ]);
+      expect(JSON.stringify(payload.message)).not.toContain("secret blocked prompt");
+      expect(JSON.stringify(payload.message)).not.toContain("contains protected content");
+    });
   });
 
   test("includes live usage metadata on session.message and sessions.changed transcript events", async () => {
@@ -334,7 +435,7 @@ describe("session.message websocket events", () => {
         message: transcriptMessage,
         messageId: "msg-usage",
       });
-      expect(messageEvent.payload).toMatchObject({
+      expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:main",
         messageId: "msg-usage",
         messageSeq: 1,
@@ -345,7 +446,7 @@ describe("session.message websocket events", () => {
         modelProvider: "openai",
         model: "gpt-5.4",
       });
-      expect(changedEvent.payload).toMatchObject({
+      expectRecordFields(changedEvent.payload, {
         sessionKey: "agent:main:main",
         phase: "message",
         messageId: "msg-usage",
@@ -429,7 +530,7 @@ describe("session.message websocket events", () => {
         messageEventPromise,
         changedEventPromise,
       ]);
-      expect(messageEvent.payload).toMatchObject({
+      expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:child",
         spawnedBy: "agent:main:main",
         spawnedWorkspaceDir: "/tmp/subagent-workspace",
@@ -439,7 +540,7 @@ describe("session.message websocket events", () => {
         subagentControlScope: "children",
         parentSessionKey: "agent:main:main",
       });
-      expect(changedEvent.payload).toMatchObject({
+      expectRecordFields(changedEvent.payload, {
         sessionKey: "agent:main:child",
         phase: "message",
         spawnedBy: "agent:main:main",
@@ -494,14 +595,14 @@ describe("session.message websocket events", () => {
         message: transcriptMessage,
         messageId: "msg-thread",
       });
-      expect(messageEvent.payload).toMatchObject({
+      expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:main",
         lastChannel: "telegram",
         lastTo: "-100123",
         lastAccountId: "acct-1",
         lastThreadId: 42,
       });
-      expect(changedEvent.payload).toMatchObject({
+      expectRecordFields(changedEvent.payload, {
         sessionKey: "agent:main:main",
         phase: "message",
         lastChannel: "telegram",
@@ -550,7 +651,7 @@ describe("session.message websocket events", () => {
       expect(mainAppend.ok).toBe(true);
 
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             ws,
             (message) =>
@@ -558,7 +659,7 @@ describe("session.message websocket events", () => {
               message.event === "session.message" &&
               (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
                 "agent:main:worker",
-            300,
+            timeoutMs,
           ),
         action: async () => {
           const workerAppend = await appendAssistantMessageToSessionTranscript({
@@ -577,7 +678,7 @@ describe("session.message websocket events", () => {
       expect(unsubscribeRes.payload?.subscribed).toBe(false);
 
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             ws,
             (message) =>
@@ -585,7 +686,7 @@ describe("session.message websocket events", () => {
               message.event === "session.message" &&
               (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
                 "agent:main:main",
-            300,
+            timeoutMs,
           ),
         action: async () => {
           const hiddenAppend = await appendAssistantMessageToSessionTranscript({
@@ -649,7 +750,7 @@ describe("session.message websocket events", () => {
       });
 
       const messageEvent = await messageEventPromise;
-      expect(messageEvent.payload).toMatchObject({
+      expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:newer",
         messageId: "msg-shared",
         messageSeq: 1,

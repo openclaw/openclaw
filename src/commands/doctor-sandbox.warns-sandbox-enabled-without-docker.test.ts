@@ -6,6 +6,8 @@ import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 
 const runExec = vi.fn();
 const note = vi.fn();
+const inspectLegacySandboxRegistryFiles = vi.fn();
+const migrateLegacySandboxRegistryFiles = vi.fn();
 
 vi.mock("../process/exec.js", () => ({
   runExec,
@@ -19,11 +21,17 @@ vi.mock("../agents/sandbox.js", () => ({
   resolveSandboxScope: vi.fn(() => "shared"),
 }));
 
+vi.mock("../agents/sandbox/registry.js", () => ({
+  inspectLegacySandboxRegistryFiles,
+  migrateLegacySandboxRegistryFiles,
+}));
+
 vi.mock("../terminal/note.js", () => ({
   note,
 }));
 
-const { maybeRepairSandboxImages } = await import("./doctor-sandbox.js");
+const { maybeRepairSandboxImages, maybeRepairSandboxRegistryFiles } =
+  await import("./doctor-sandbox.js");
 
 describe("maybeRepairSandboxImages", () => {
   const mockRuntime: RuntimeEnv = {
@@ -45,6 +53,8 @@ describe("maybeRepairSandboxImages", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    inspectLegacySandboxRegistryFiles.mockResolvedValue([]);
+    migrateLegacySandboxRegistryFiles.mockResolvedValue([]);
   });
 
   function createSandboxConfig(mode: "off" | "all" | "non-main"): OpenClawConfig {
@@ -71,12 +81,20 @@ describe("maybeRepairSandboxImages", () => {
     await maybeRepairSandboxImages(createSandboxConfig(params.mode), mockRuntime, mockPrompter);
   }
 
+  function firstNoteCall() {
+    const noteCall = note.mock.calls[0];
+    if (noteCall === undefined) {
+      throw new Error("expected sandbox warning note");
+    }
+    return noteCall;
+  }
+
   it("warns when sandbox mode is enabled but Docker is not available", async () => {
     await runSandboxRepair({ mode: "non-main", dockerAvailable: false });
 
     // The warning should clearly indicate sandbox is enabled but won't work
     expect(note).toHaveBeenCalled();
-    const noteCall = note.mock.calls[0];
+    const noteCall = firstNoteCall();
     const message = noteCall[0] as string;
 
     // The message should warn that sandbox mode won't function, not just "skipping checks"
@@ -89,7 +107,7 @@ describe("maybeRepairSandboxImages", () => {
     await runSandboxRepair({ mode: "all", dockerAvailable: false });
 
     expect(note).toHaveBeenCalled();
-    const noteCall = note.mock.calls[0];
+    const noteCall = firstNoteCall();
     const message = noteCall[0] as string;
 
     // Should warn about the impact on sandbox functionality
@@ -112,5 +130,75 @@ describe("maybeRepairSandboxImages", () => {
         typeof call[0] === "string" && call[0].toLowerCase().includes("docker not available"),
     );
     expect(dockerUnavailableWarning).toBeUndefined();
+  });
+});
+
+describe("maybeRepairSandboxRegistryFiles", () => {
+  const mockPrompter = {
+    shouldRepair: false,
+  } as DoctorPrompter;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    inspectLegacySandboxRegistryFiles.mockResolvedValue([]);
+    migrateLegacySandboxRegistryFiles.mockResolvedValue([]);
+  });
+
+  it("warns about legacy registry files without migrating outside doctor --fix", async () => {
+    inspectLegacySandboxRegistryFiles.mockResolvedValue([
+      {
+        kind: "containers",
+        registryPath: "/tmp/openclaw/sandbox/containers.json",
+        shardedDir: "/tmp/openclaw/sandbox/containers",
+        exists: true,
+        valid: true,
+        entries: 2,
+      },
+    ]);
+
+    await maybeRepairSandboxRegistryFiles(mockPrompter);
+
+    expect(migrateLegacySandboxRegistryFiles).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      [
+        "Legacy sandbox registry files detected.",
+        "- containers: /tmp/openclaw/sandbox/containers.json (2 entries)",
+        "Run openclaw doctor --fix to migrate them to sharded registry files.",
+      ].join("\n"),
+      "Sandbox",
+    );
+  });
+
+  it("migrates legacy registry files during doctor --fix", async () => {
+    inspectLegacySandboxRegistryFiles.mockResolvedValue([
+      {
+        kind: "containers",
+        registryPath: "/tmp/openclaw/sandbox/containers.json",
+        shardedDir: "/tmp/openclaw/sandbox/containers",
+        exists: true,
+        valid: true,
+        entries: 2,
+      },
+    ]);
+    migrateLegacySandboxRegistryFiles.mockResolvedValue([
+      {
+        kind: "containers",
+        registryPath: "/tmp/openclaw/sandbox/containers.json",
+        shardedDir: "/tmp/openclaw/sandbox/containers",
+        status: "migrated",
+        entries: 2,
+      },
+    ]);
+
+    await maybeRepairSandboxRegistryFiles({
+      ...mockPrompter,
+      shouldRepair: true,
+    } as DoctorPrompter);
+
+    expect(migrateLegacySandboxRegistryFiles).toHaveBeenCalledTimes(1);
+    expect(note).toHaveBeenCalledWith(
+      "- Migrated containers registry from /tmp/openclaw/sandbox/containers.json into 2 shards.",
+      "Doctor changes",
+    );
   });
 });

@@ -4,7 +4,7 @@ import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 // Unit tests: don't pay the runtime cost of loading/parsing the real skills loader.
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   loadSkillsFromDir: () => ({ skills: [] }),
   formatSkillsForPrompt: () => "",
 }));
@@ -378,17 +378,15 @@ describe("skills-cli", () => {
         notInjected: Array<{ name: string; reason: string }>;
         missingRequirements: Array<{ name: string }>;
       };
-      expect(parsed.summary).toMatchObject({
-        total: 7,
-        eligible: 4,
-        modelVisible: 2,
-        commandVisible: 2,
-        disabled: 1,
-        blocked: 1,
-        agentFiltered: 1,
-        notInjected: 1,
-        missingRequirements: 1,
-      });
+      expect(parsed.summary.total).toBe(7);
+      expect(parsed.summary.eligible).toBe(4);
+      expect(parsed.summary.modelVisible).toBe(2);
+      expect(parsed.summary.commandVisible).toBe(2);
+      expect(parsed.summary.disabled).toBe(1);
+      expect(parsed.summary.blocked).toBe(1);
+      expect(parsed.summary.agentFiltered).toBe(1);
+      expect(parsed.summary.notInjected).toBe(1);
+      expect(parsed.summary.missingRequirements).toBe(1);
       expect(parsed.modelVisible).toEqual(["ready", "slash-hidden"]);
       expect(parsed.commandVisible).toEqual(["ready", "prompt-hidden"]);
       expect(parsed.agentFiltered).toEqual(["agent-filtered"]);
