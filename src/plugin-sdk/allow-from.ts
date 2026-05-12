@@ -81,7 +81,7 @@ type ParsedChatAllowTarget =
   | { kind: "chat_identifier"; chatIdentifier: string }
   | { kind: "handle"; handle: string };
 
-/** Match chat-aware allowlist entries against sender, chat id, guid, or identifier fields. */
+/** Match sender allowlist entries against normalized sender handles. */
 export function isAllowedParsedChatSender(params: {
   allowFrom: Array<string | number>;
   sender: string;
