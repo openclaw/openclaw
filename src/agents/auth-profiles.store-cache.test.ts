@@ -2,9 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
-import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -32,14 +30,11 @@ async function withAgentDirEnv(prefix: string, run: (agentDir: string) => void |
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
   const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   try {
     process.env.OPENCLAW_AGENT_DIR = agentDir;
     process.env.PI_CODING_AGENT_DIR = agentDir;
-    process.env.OPENCLAW_STATE_DIR = path.join(agentDir, ".openclaw-state");
     await run(agentDir);
   } finally {
-    closeOpenClawStateDatabaseForTest();
     if (previousAgentDir === undefined) {
       delete process.env.OPENCLAW_AGENT_DIR;
     } else {
@@ -49,11 +44,6 @@ async function withAgentDirEnv(prefix: string, run: (agentDir: string) => void |
       delete process.env.PI_CODING_AGENT_DIR;
     } else {
       process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
     fs.rmSync(agentDir, { recursive: true, force: true });
   }
@@ -120,7 +110,7 @@ describe("auth profile store cache", () => {
     });
   });
 
-  it("refreshes the cached auth store after SQLite auth store changes", async () => {
+  it("refreshes the cached auth store after auth-profiles.json changes", async () => {
     await withAgentDirEnv("openclaw-auth-store-refresh-", async (agentDir) => {
       writeAuthStore(agentDir, "sk-test-1");
 
@@ -162,7 +152,7 @@ describe("auth profile store cache", () => {
     structuredCloneSpy.mockRestore();
   });
 
-  it("keeps runtime-only external auth out of persisted SQLite auth profiles", async () => {
+  it("keeps runtime-only external auth out of persisted auth-profiles.json files", async () => {
     mocks.resolveExternalCliAuthProfiles.mockReturnValue([createRuntimeOnlyOverlay("access-1")]);
 
     await withAgentDirEnv("openclaw-auth-store-missing-", (agentDir) => {
@@ -171,9 +161,7 @@ describe("auth profile store cache", () => {
       expect((store.profiles["openai-codex:default"] as OAuthCredential | undefined)?.access).toBe(
         "access-1",
       );
-      expect(
-        loadPersistedAuthProfileStore(agentDir)?.profiles["openai-codex:default"],
-      ).toBeUndefined();
+      expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
     });
   });
 });
