@@ -7,11 +7,16 @@ import {
   listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
   registerMemoryEmbeddingProvider as registerAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { replaceSqliteSessionTranscriptEvents } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { replaceSqliteSessionTranscriptEvents } from "../../../../src/config/sessions/transcript-store.sqlite.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
@@ -154,9 +159,6 @@ describe("memory index", () => {
   let fixtureRoot = "";
   let workspaceDir = "";
   let memoryDir = "";
-  let indexVectorPath = "";
-  let indexMainPath = "";
-  let indexMultimodalPath = "";
 
   const managersForCleanup = new Set<MemoryIndexManager>();
 
@@ -164,9 +166,6 @@ describe("memory index", () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fixtures-"));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
-    indexMainPath = path.join(workspaceDir, "index-main.sqlite");
-    indexVectorPath = path.join(workspaceDir, "index-vector.sqlite");
-    indexMultimodalPath = path.join(workspaceDir, "index-multimodal.sqlite");
   });
 
   afterAll(async () => {
@@ -182,13 +181,11 @@ describe("memory index", () => {
     closeOpenClawStateDatabaseForTest();
     clearRegistry();
     managersForCleanup.clear();
+    vi.unstubAllEnvs();
   });
 
   beforeEach(async () => {
     vi.useRealTimers();
-    // Perf: most suites don't need atomic swap behavior for full reindexes.
-    // Keep atomic reindex tests on the safe path.
-    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "1");
     clearRegistry();
     registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
     embedBatchCalls = 0;
@@ -198,6 +195,7 @@ describe("memory index", () => {
 
     rmSync(workspaceDir, { recursive: true, force: true });
     mkdirSync(memoryDir, { recursive: true });
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state-memory-index"));
     await fs.writeFile(
       path.join(memoryDir, "2026-01-12.md"),
       "# Log\nAlpha memory line.\nZebra memory line.",
@@ -218,9 +216,9 @@ describe("memory index", () => {
     (manager as unknown as { resetIndex: () => void }).resetIndex();
     const embeddingCacheTable = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get("embedding_cache");
-    if (embeddingCacheTable?.name === "embedding_cache") {
-      db.exec("DELETE FROM embedding_cache");
+      .get("memory_embedding_cache");
+    if (embeddingCacheTable?.name === "memory_embedding_cache") {
+      db.exec("DELETE FROM memory_embedding_cache");
     }
     (manager as unknown as { dirty: boolean }).dirty = true;
     (manager as unknown as { sessionsDirty: boolean }).sessionsDirty = false;
@@ -229,7 +227,6 @@ describe("memory index", () => {
   type TestCfg = Parameters<typeof getMemorySearchManager>[0]["cfg"];
 
   function createCfg(params: {
-    storePath: string;
     extraPaths?: string[];
     sources?: Array<"memory" | "sessions">;
     sessionMemory?: boolean;
@@ -255,7 +252,7 @@ describe("memory index", () => {
             provider: params.provider ?? "openai",
             model: params.model ?? "mock-embed",
             outputDimensionality: params.outputDimensionality,
-            store: { path: params.storePath, vector: { enabled: params.vectorEnabled ?? false } },
+            store: { vector: { enabled: params.vectorEnabled ?? false } },
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
             chunking: { tokens: 4000, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: params.onSearch ?? true },
@@ -317,12 +314,10 @@ describe("memory index", () => {
 
   async function getFtsSessionManager(params: {
     stateDirName: string;
-    storeFileName: string;
   }): Promise<MemoryIndexManager | null> {
     forceNoProvider = true;
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, params.stateDirName));
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, params.storeFileName),
       sources: ["memory", "sessions"],
       sessionMemory: true,
       minScore: 0,
@@ -339,24 +334,17 @@ describe("memory index", () => {
     sessionId: string;
     events: unknown[];
     now?: number;
-  }): string {
-    const transcriptPath = path.join(
-      resolveSessionTranscriptsDirForAgent("main"),
-      `${params.sessionId}.jsonl`,
-    );
+  }): void {
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: params.sessionId,
-      transcriptPath,
       events: params.events,
       now: () => params.now ?? Date.now(),
     });
-    return transcriptPath;
   }
 
   it("indexes memory files and searches", async () => {
     const cfg = createCfg({
-      storePath: indexMainPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getFreshManager(cfg);
@@ -378,6 +366,50 @@ describe("memory index", () => {
     }
   });
 
+  it("reindexes the default memory tables in place inside the per-agent database", async () => {
+    const stateDir = path.join(workspaceDir, "managed-memory-state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const agentDbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const agentDb = openOpenClawAgentDatabase({ agentId: "main" });
+    agentDb.db
+      .prepare("INSERT INTO session_entries (session_key, entry_json, updated_at) VALUES (?, ?, ?)")
+      .run("agent:main:test", JSON.stringify({ sessionId: "keep-me", updatedAt: 1 }), 1);
+    closeOpenClawAgentDatabasesForTest();
+
+    const cfg: TestCfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { vector: { enabled: false } },
+            chunking: { tokens: 4000, overlap: 0 },
+            sync: { watch: false, onSessionStart: false, onSearch: true },
+            query: { minScore: 0, hybrid: { enabled: false } },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test", force: true });
+      expect(manager.status().dbPath).toBe(agentDbPath);
+    } finally {
+      await manager.close?.();
+    }
+
+    const reopened = openOpenClawAgentDatabase({ agentId: "main" });
+    expect(
+      reopened.db
+        .prepare("SELECT entry_json FROM session_entries WHERE session_key = ?")
+        .get("agent:main:test"),
+    ).toEqual({
+      entry_json: JSON.stringify({ sessionId: "keep-me", updatedAt: 1 }),
+    });
+  });
+
   it("indexes multimodal image and audio files from extra paths with Gemini structured inputs", async () => {
     const mediaDir = path.join(workspaceDir, "media-memory");
     await fs.mkdir(mediaDir, { recursive: true });
@@ -385,7 +417,6 @@ describe("memory index", () => {
     await fs.writeFile(path.join(mediaDir, "meeting.wav"), Buffer.from("wav"));
 
     const cfg = createCfg({
-      storePath: indexMultimodalPath,
       provider: "gemini",
       model: "gemini-embedding-2-preview",
       extraPaths: [mediaDir],
@@ -406,7 +437,6 @@ describe("memory index", () => {
   it("finds keyword matches via hybrid search when query embedding is zero", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
-        storePath: indexMainPath,
         hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
       }),
     );
@@ -415,7 +445,6 @@ describe("memory index", () => {
   it("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
-        storePath: indexMainPath,
         minScore: 0.35,
         hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
       }),
@@ -423,7 +452,7 @@ describe("memory index", () => {
   });
 
   it("reports vector availability after probe", async () => {
-    const cfg = createCfg({ storePath: indexVectorPath, vectorEnabled: true });
+    const cfg = createCfg({ vectorEnabled: true });
     const manager = await getPersistentManager(cfg);
     const available = await manager.probeVectorAvailability();
     const status = manager.status();
@@ -437,7 +466,6 @@ describe("memory index", () => {
   it("probes sqlite vector store availability without initializing embeddings", async () => {
     forceNoProvider = true;
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-vector-store-only.sqlite"),
       vectorEnabled: true,
     });
     const manager = await getPersistentManager(cfg);
@@ -453,7 +481,7 @@ describe("memory index", () => {
   });
 
   it("caches embedding probe readiness across transient status managers", async () => {
-    const cfg = createCfg({ storePath: path.join(workspaceDir, "index-probe-cache.sqlite") });
+    const cfg = createCfg({});
     const first = requireManager(
       await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
     );
@@ -497,30 +525,16 @@ describe("memory index", () => {
     );
   });
 
-  it("streams embedding cache rows during safe reindex", async () => {
-    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
-    type EmbeddingCacheRow = {
-      provider: string;
-      model: string;
-      provider_key: string;
-      hash: string;
-      embedding: string;
-      dims: number | null;
-      updated_at: number;
+  it("preserves embedding cache rows during in-place reindex", async () => {
+    type CountStatement = {
+      get: () => { count: number } | undefined;
     };
-    type StatementWithAll = {
-      all: () => EmbeddingCacheRow[];
-    };
-
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-cache-seed-stream.sqlite"),
       cacheEnabled: true,
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
-    // Safe reindex streams cache rows from the original database and writes
-    // them into a temporary database, so the SELECT spy belongs on this handle.
     const sourceDb = (
       manager as unknown as {
         db: {
@@ -529,45 +543,25 @@ describe("memory index", () => {
       }
     ).db;
     const originalPrepare = sourceDb.prepare.bind(sourceDb);
-    const cachedRows = (
-      originalPrepare(
-        "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
-      ) as StatementWithAll
-    ).all();
-    expect(cachedRows.length).toBeGreaterThan(0);
+    const readCacheCount = () =>
+      (
+        originalPrepare("SELECT COUNT(*) AS count FROM memory_embedding_cache") as CountStatement
+      ).get()?.count ?? 0;
+    const cachedRows = readCacheCount();
+    expect(cachedRows).toBeGreaterThan(0);
 
     const beforeCalls = embedBatchCalls;
-    const prepareSpy = vi.spyOn(sourceDb, "prepare").mockImplementation((sql: string) => {
-      if (
-        sql.includes(
-          "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
-        )
-      ) {
-        return {
-          all: () => {
-            throw new Error("embedding cache seed must stream rows via iterate()");
-          },
-          iterate: () => cachedRows[Symbol.iterator](),
-        };
-      }
-      return originalPrepare(sql);
-    });
-
-    try {
-      (manager as unknown as { dirty: boolean }).dirty = true;
-      await manager.sync({ reason: "test", force: true });
-    } finally {
-      prepareSpy.mockRestore();
-    }
+    (manager as unknown as { dirty: boolean }).dirty = true;
+    await manager.sync({ reason: "test", force: true });
 
     expect(embedBatchCalls).toBe(beforeCalls);
+    expect(readCacheCount()).toBe(cachedRows);
   });
 
   it("builds FTS index and returns search results when no embedding provider is available", async () => {
     forceNoProvider = true;
 
     const cfg = createCfg({
-      storePath: path.join(workspaceDir, "index-fts-only.sqlite"),
       minScore: 0.35,
       hybrid: { enabled: true },
     });
@@ -601,7 +595,6 @@ describe("memory index", () => {
     try {
       const manager = await getFtsSessionManager({
         stateDirName: ".state-session-ranking",
-        storeFileName: "index-fts-session-ranking.sqlite",
       });
       if (!manager) {
         return;
@@ -658,7 +651,6 @@ describe("memory index", () => {
     try {
       const manager = await getFtsSessionManager({
         stateDirName: ".state-session-bootstrap",
-        storeFileName: "index-fts-session-bootstrap.sqlite",
       });
       if (!manager) {
         return;
