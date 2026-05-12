@@ -1225,6 +1225,20 @@ describe("runCodexAppServerAttempt", () => {
         }),
       ]),
     );
+    expect(onExecutionPhase).toHaveBeenCalledWith({
+      phase: "turn_accepted",
+      provider: "codex",
+      model: "gpt-5.4-codex",
+      backend: "codex-app-server",
+    });
+    expect(onExecutionPhase).toHaveBeenCalledWith({
+      phase: "tool_execution_started",
+      provider: "codex",
+      model: "gpt-5.4-codex",
+      backend: "codex-app-server",
+      tool: "message",
+      toolCallId: "call-1",
+    });
   });
 
   it("releases the session when Codex never completes after a dynamic tool response", async () => {
@@ -2909,7 +2923,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("refreshes Codex account rate limits when turn/start omits reset details", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionId = "session";
     const workspaceDir = path.join(tempDir, "workspace");
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
     const harness = createStartedThreadHarness(async (method) => {
@@ -2924,7 +2938,7 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    const runError = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir)).catch(
+    const runError = runCodexAppServerAttempt(createParams(sessionId, workspaceDir)).catch(
       (error: unknown) => error,
     );
     await harness.waitForMethod("account/rateLimits/read");
@@ -2958,7 +2972,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("refreshes Codex account rate limits when a failed turn omits reset details", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionId = "session";
     const workspaceDir = path.join(tempDir, "workspace");
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
     const harness = createStartedThreadHarness(async (method) => {
@@ -2968,7 +2982,7 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const run = runCodexAppServerAttempt(createParams(sessionId, workspaceDir));
     await harness.waitForMethod("turn/start");
     await harness.notify({
       method: "turn/completed",
@@ -4769,7 +4783,9 @@ describe("runCodexAppServerAttempt", () => {
       hooks: { PreToolUse: [] },
       ...createPluginAppConfigPatch(),
     });
-    await expect(readCodexAppServerBinding({ sessionKey: params.sessionKey, sessionId })).resolves.toMatchObject({
+    await expect(
+      readCodexAppServerBinding({ sessionKey: params.sessionKey, sessionId }),
+    ).resolves.toMatchObject({
       threadId: "thread-plugins",
       pluginAppsFingerprint: "plugin-apps-config-1",
       pluginAppsInputFingerprint: "plugin-apps-input-1",
@@ -4906,7 +4922,9 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
     });
-    await expect(readCodexAppServerBinding({ sessionKey: params.sessionKey, sessionId })).resolves.toMatchObject({
+    await expect(
+      readCodexAppServerBinding({ sessionKey: params.sessionKey, sessionId }),
+    ).resolves.toMatchObject({
       threadId: "thread-revalidated",
       pluginAppsFingerprint: "plugin-apps-empty",
       pluginAppPolicyContext: emptyPolicyContext,
