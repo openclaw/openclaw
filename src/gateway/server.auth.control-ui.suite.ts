@@ -1028,6 +1028,10 @@ export function registerControlUiAndPairingSuite(): void {
         "operator.talk.secrets",
         "operator.write",
       ]);
+      expect(pending[0]?.bootstrapProfile).toEqual({
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      });
       expect(pending[0]?.silent).toBe(false);
       expect(await getPairedDevice(identity.deviceId)).toBeNull();
 
@@ -1063,6 +1067,10 @@ export function registerControlUiAndPairingSuite(): void {
         "operator.talk.secrets",
         "operator.write",
       ]);
+      expect(retryPending[0]?.bootstrapProfile).toEqual({
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      });
       expect(await getPairedDevice(identity.deviceId)).toBeNull();
       wsRetry.close();
 
@@ -1073,12 +1081,7 @@ export function registerControlUiAndPairingSuite(): void {
       }
       await expect(
         approveDevicePairing(requestId, {
-          callerScopes: [
-            "operator.approvals",
-            "operator.read",
-            "operator.talk.secrets",
-            "operator.write",
-          ],
+          callerScopes: ["operator.pairing"],
         }),
       ).resolves.toMatchObject({
         status: "approved",

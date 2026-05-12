@@ -1052,7 +1052,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               publicKey: devicePublicKey,
               ...clientPairingMetadata,
               ...(bootstrapPairingProfile
-                ? { roles: bootstrapPairingRoles, scopes: bootstrapPairingScopes }
+                ? {
+                    roles: bootstrapPairingRoles,
+                    scopes: bootstrapPairingScopes,
+                    bootstrapProfile: bootstrapPairingProfile,
+                  }
                 : {}),
               silent:
                 reason === "scope-upgrade" || authMethod === "bootstrap-token"
