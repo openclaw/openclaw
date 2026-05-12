@@ -113,9 +113,6 @@ importers:
       file-type:
         specifier: 22.0.1
         version: 22.0.1
-      global-agent:
-        specifier: 4.1.3
-        version: 4.1.3
       grammy:
         specifier: 1.42.0
         version: 1.42.0

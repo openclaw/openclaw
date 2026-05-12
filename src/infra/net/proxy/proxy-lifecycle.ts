@@ -7,8 +7,7 @@
  * restores the previous process state on shutdown.
  */
 
-import { isIP } from "node:net";
-import { installGlobalProxy, type ProxylineHandle } from "@jesse-merhi/proxyline";
+import { installGlobalProxy, type ProxylineHandle } from "@openclaw/proxyline";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 
 export type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
@@ -258,22 +257,6 @@ function getGatewayControlPlaneNoProxyAuthority(value: string): string | null {
     return null;
   }
   return url.port ? `${url.hostname}:${url.port}` : url.hostname;
-}
-
-function unbracketHost(hostname: string): string {
-  return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-}
-
-function isGatewayControlPlaneIpv6LoopbackUrl(value: string): boolean {
-  const url = parseGatewayControlPlaneUrl(value);
-  if (
-    url === null ||
-    !isGatewayControlPlaneProtocol(url.protocol) ||
-    !isGatewayControlPlaneLoopbackHost(url.hostname)
-  ) {
-    return false;
-  }
-  return isIP(unbracketHost(url.hostname)) === 6;
 }
 
 function readGlobalAgentNoProxy(): string {

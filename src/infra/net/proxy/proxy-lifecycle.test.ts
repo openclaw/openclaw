@@ -12,7 +12,7 @@ const { installGlobalProxyMock, proxylineStopMock } = vi.hoisted(() => {
   };
 });
 
-vi.mock("@jesse-merhi/proxyline", () => ({
+vi.mock("@openclaw/proxyline", () => ({
   installGlobalProxy: installGlobalProxyMock,
 }));
 
