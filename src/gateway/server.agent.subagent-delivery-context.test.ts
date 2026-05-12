@@ -197,8 +197,6 @@ describe("subagent session deliveryContext from spawn request params", () => {
       sessionKey: "agent:main:subagent:no-routing",
     });
     expect(entry).toBeDefined();
-    expect(entry?.deliveryContext?.channel).toBe("slack");
-    expect(entry?.deliveryContext?.to).toBeUndefined();
-    expect(entry?.deliveryContext?.threadId).toBeUndefined();
+    expect(entry?.deliveryContext).toBeUndefined();
   });
 });

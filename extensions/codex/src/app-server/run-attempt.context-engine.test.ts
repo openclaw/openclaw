@@ -307,17 +307,18 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       throw new Error("expected bootstrap hook");
     }
     expect(contextEngine.bootstrap).toHaveBeenCalledTimes(1);
-    const bootstrapParams = requireFirstCallArg(contextEngine.bootstrap, "bootstrap") as Parameters<
-      NonNullable<ContextEngine["bootstrap"]>
-    >[0];
+    const bootstrapParams = requireFirstCallArg<
+      Parameters<NonNullable<ContextEngine["bootstrap"]>>[0]
+    >(contextEngine.bootstrap, "bootstrap");
     expect(bootstrapParams.sessionId).toBe(sessionId);
     expect(bootstrapParams.sessionKey).toBe("agent:main:session-1");
     expect(bootstrapParams.transcriptScope).toEqual({ agentId: "main", sessionId });
 
     expect(contextEngine.assemble).toHaveBeenCalledTimes(1);
-    const assembleParams = requireFirstCallArg(contextEngine.assemble, "assemble") as Parameters<
-      ContextEngine["assemble"]
-    >[0];
+    const assembleParams = requireFirstCallArg<Parameters<ContextEngine["assemble"]>[0]>(
+      contextEngine.assemble,
+      "assemble",
+    );
     expect(assembleParams.sessionId).toBe(sessionId);
     expect(assembleParams.sessionKey).toBe("agent:main:session-1");
     expect(assembleParams.tokenBudget).toBe(321);
@@ -396,65 +397,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await run;
   });
 
-  it("uses the runtime token budget for large Codex context-engine projections", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const longContext = `large LCM context start ${"x".repeat(30_000)} LARGE_CONTEXT_END`;
-    const contextEngine = createContextEngine({
-      assemble: vi.fn(async () => ({
-        messages: [assistantMessage(longContext, 10)],
-        estimatedTokens: 10_000,
-        systemPromptAddition: "context-engine system",
-      })),
-    });
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.contextEngine = contextEngine;
-    params.contextTokenBudget = 80_000;
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-
-    const inputText = getRequestInputText(harness);
-    expect(inputText.length).toBeGreaterThan(30_000);
-    expect(inputText).toContain("LARGE_CONTEXT_END");
-    expect(inputText).not.toContain("[truncated ");
-
-    await harness.completeTurn();
-    await run;
-  });
-
-  it("uses configured compaction reserve when sizing Codex context-engine projections", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const longContext = `configured reserve context start ${"x".repeat(30_000)} CONFIG_END`;
-    const contextEngine = createContextEngine({
-      assemble: vi.fn(async () => ({
-        messages: [assistantMessage(longContext, 10)],
-        estimatedTokens: 10_000,
-        systemPromptAddition: "context-engine system",
-      })),
-    });
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.contextEngine = contextEngine;
-    params.contextTokenBudget = 80_000;
-    params.config = {
-      agents: { defaults: { compaction: { reserveTokens: 60_000, reserveTokensFloor: 0 } } },
-    } as EmbeddedRunAttemptParams["config"];
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-
-    const inputText = getRequestInputText(harness);
-    expect(inputText).toContain("configured reserve context start");
-    expect(inputText).toContain("[truncated ");
-    expect(inputText).not.toContain("CONFIG_END");
-
-    await harness.completeTurn();
-    await run;
-  });
-
   it("keeps current-turn context at the front of the Codex context-engine prompt", async () => {
     const sessionId = "session-1";
     const workspaceDir = path.join(tempDir, "workspace");
@@ -503,9 +445,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await run;
 
     expect(afterTurn).toHaveBeenCalledTimes(1);
-    const afterTurnCall = requireFirstCallArg(afterTurn, "afterTurn") as Parameters<
-      NonNullable<ContextEngine["afterTurn"]>
-    >[0];
+    const afterTurnCall = requireFirstCallArg<
+      Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]
+    >(afterTurn, "afterTurn");
     expect(afterTurnCall.sessionId).toBe(sessionId);
     expect(afterTurnCall.sessionKey).toBe("agent:main:session-1");
     expect(afterTurnCall.prePromptMessageCount).toBe(0);

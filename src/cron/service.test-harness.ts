@@ -139,7 +139,6 @@ export function createFinishedBarrier() {
 }
 
 export function createStartedCronServiceWithFinishedBarrier(params: {
-  storeKey?: string;
   storePath?: string;
   logger: ReturnType<typeof createNoopLogger>;
 }): {
@@ -152,7 +151,7 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
   const requestHeartbeat = vi.fn();
   const finished = createFinishedBarrier();
   const cron = new CronService({
-    storeKey: params.storeKey ?? params.storePath ?? "default",
+    storeKey: params.storePath ?? "default",
     cronEnabled: true,
     log: params.logger,
     enqueueSystemEvent,
@@ -200,7 +199,6 @@ export async function withCronServiceForTest(
 }
 
 export function createRunningCronServiceState(params: {
-  storeKey?: string;
   storePath?: string;
   log: ReturnType<typeof createNoopLogger>;
   nowMs: () => number;
@@ -208,7 +206,7 @@ export function createRunningCronServiceState(params: {
 }) {
   const state = createCronServiceState({
     cronEnabled: true,
-    storeKey: params.storeKey ?? params.storePath ?? "default",
+    storeKey: params.storePath ?? "default",
     log: params.log,
     nowMs: params.nowMs,
     enqueueSystemEvent: vi.fn(),

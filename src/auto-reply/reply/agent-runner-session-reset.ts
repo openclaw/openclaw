@@ -48,8 +48,7 @@ export async function resetReplyRunSession(params: {
   if (!params.sessionKey) {
     return false;
   }
-  const agentId =
-    params.followupRun.run.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey) ?? "main";
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey) ?? "main";
   const prevEntry =
     params.activeSessionStore?.[params.sessionKey] ??
     params.activeSessionEntry ??

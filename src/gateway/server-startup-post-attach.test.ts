@@ -615,22 +615,14 @@ describe("startGatewayPostAttachRuntime", () => {
     });
 
     expect(hoisted.resolveDefaultAgentDir).toHaveBeenCalledWith(cfg);
-    expect(hoisted.ensureOpenClawModelCatalog).toHaveBeenCalledTimes(1);
-    const ensureCall = hoisted.ensureOpenClawModelCatalog.mock.calls[0] as unknown as
-      | [
-          unknown,
-          string,
-          {
-            workspaceDir?: string;
-            providerDiscoveryProviderIds?: string[];
-          },
-        ]
-      | undefined;
-    expect(ensureCall?.[0]).toBe(cfg);
-    expect(ensureCall?.[1]).toBe("/tmp/openclaw-state/agents/ops/agent");
-    const options = ensureCall?.[2];
-    expect(options?.workspaceDir).toBe("/tmp/openclaw-workspace");
-    expect(options?.providerDiscoveryProviderIds).toEqual(["openai"]);
+    expect(hoisted.ensureOpenClawModelCatalog).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/openclaw-state/agents/ops/agent",
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-workspace",
+        providerDiscoveryProviderIds: ["openai"],
+      }),
+    );
   });
 
   it("starts channels without waiting for primary model prewarm completion", async () => {
