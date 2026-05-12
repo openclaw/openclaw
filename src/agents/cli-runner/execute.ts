@@ -2,11 +2,13 @@ import crypto from "node:crypto";
 import { shouldLogVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
+import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   createCliJsonlStreamingParser,
@@ -268,6 +270,31 @@ export async function executePreparedCliRun(
   if (params.abortSignal?.aborted) {
     throw createCliAbortError();
   }
+  // Wire the runtime trajectory recorder so pure CLI runs (notably the
+  // claude-cli live-session path) emit the same lifecycle events as the
+  // embedded provider dispatch. Without this, sessions that stay on the
+  // CLI executor for their entire lifetime never produce a trajectory
+  // sidecar even though the pointer file is written (#80667).
+  const trajectoryRecorder = createTrajectoryRuntimeRecorder({
+    cfg: params.config,
+    runId: params.runId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionFile: params.sessionFile,
+    provider: params.provider,
+    modelId: context.modelId,
+    workspaceDir: params.workspaceDir,
+  });
+  trajectoryRecorder?.recordEvent("session.started", {
+    trigger: params.trigger,
+    sessionFile: params.sessionFile,
+    workspaceDir: params.workspaceDir,
+    agentId: params.agentId,
+    messageProvider: params.messageProvider,
+    messageChannel: params.messageChannel,
+    backend: context.backendResolved.id,
+    cliSessionId: cliSessionIdToUse,
+  });
   const backend = context.preparedBackend.backend;
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
     backend,
@@ -309,6 +336,14 @@ export async function executePreparedCliRun(
     images: params.images,
   });
   prompt = promptWithImages;
+
+  trajectoryRecorder?.recordEvent("prompt.submitted", {
+    prompt,
+    systemPrompt: context.systemPrompt,
+    useResume,
+    cliSessionId: cliSessionIdToUse,
+    imagesCount: params.images?.length ?? 0,
+  });
 
   const { argsPrompt, stdin } = resolvePromptInput({
     backend,
@@ -359,8 +394,9 @@ export async function executePreparedCliRun(
     cliSessionId: useResume ? resolvedSessionId : undefined,
   });
 
+  let runResult: CliOutput;
   try {
-    return await enqueueCliRun(queueKey, async () => {
+    runResult = await enqueueCliRun(queueKey, async () => {
       const restoreSkillEnv = params.skillsSnapshot
         ? applySkillEnvOverridesFromSnapshot({
             snapshot: params.skillsSnapshot,
@@ -754,6 +790,15 @@ export async function executePreparedCliRun(
         restoreSkillEnv?.();
       }
     });
+  } catch (error) {
+    if (trajectoryRecorder) {
+      trajectoryRecorder.recordEvent("session.ended", {
+        status: "error",
+        error: formatErrorMessage(error),
+      });
+      await trajectoryRecorder.flush();
+    }
+    throw error;
   } finally {
     if (!claudeSkillsPluginCleanupOwned) {
       await claudeSkillsPlugin.cleanup();
@@ -765,4 +810,15 @@ export async function executePreparedCliRun(
       await cleanupImages();
     }
   }
+  if (trajectoryRecorder) {
+    trajectoryRecorder.recordEvent("model.completed", {
+      usage: runResult.usage,
+      cliSessionId: runResult.sessionId,
+      assistantTexts: runResult.text ? [runResult.text] : [],
+      finalPromptText: runResult.finalPromptText,
+    });
+    trajectoryRecorder.recordEvent("session.ended", { status: "success" });
+    await trajectoryRecorder.flush();
+  }
+  return runResult;
 }
