@@ -7,6 +7,19 @@
 
 ## Last Session
 
+- **Date**: 2026-05-12 (projectmanager wallet chat access)
+- **What changed**:
+  - Gateway branch `codex/fix-wallet-chat-access`: added `skills/wallet/SKILL.md` so deployed agents can use the AgentGlob wallet runtime from chat.
+  - Dashboard branch `codex/fix-wallet-chat-access`: deploy now syncs selected/platform-native skills on every redeploy, not only first bootstrap; Wallet tab now warns that redeploy is required for chat access after setting/replacing the key.
+  - Live repair target: `projectmanager` on 2ndClaw needs redeploy/restart after the dashboard + gateway changes ship so `AGENTGLOB_RUNTIME_URL`, `AGENTGLOB_RUNTIME_TOKEN`, and `workspace/skills/wallet/SKILL.md` are present.
+- **Validation**:
+  - Dashboard: `npx tsc --noEmit`, `npm run build`
+  - Gateway: `pnpm build`
+
+---
+
+## Last Session (prev)
+
 - **Date**: 2026-05-05 (handover note)
 - **What changed**:
   - Added repo-root `HANDOVER.md` as the front-door handoff note for future Claude/Codex sessions

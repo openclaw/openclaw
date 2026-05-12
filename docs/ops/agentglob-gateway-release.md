@@ -132,7 +132,7 @@ What this does, per host:
 > "is the container running?" It does **not** HTTP-probe the gateway. A
 > crash-looping process inside a still-running container may slip past.
 > After deploy, do an explicit smoke-test (Step 3) before declaring success.
-
+>
 > **Compose error suppression.** `deploy.sh` runs the compose command with
 > `|| true`, so a failed `compose up` does not abort the script. The
 > only signal is the post-roll health check. Read the script's per-agent
