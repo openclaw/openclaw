@@ -4,7 +4,6 @@ import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
-import type { CurrentTurnPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
@@ -917,7 +916,8 @@ export async function runPreparedReply(
               isNewSession,
             });
         preparedSessionState = resolvePreparedSessionState();
-        ({ prefixedCommandBody, queuedBody, transcriptCommandBody } = await rebuildPromptBodies());
+        ({ prefixedCommandBody, queuedBody, transcriptCommandBody, currentTurnContext } =
+          await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
       },
       resolveBusyState: resolveQueueBusyState,
     });

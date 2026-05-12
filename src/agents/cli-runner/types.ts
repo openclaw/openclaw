@@ -9,7 +9,10 @@ import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { ImageContent } from "../pi-ai-contract.js";
-import type { EmbeddedRunTrigger } from "../pi-embedded-runner/run/params.js";
+import type {
+  CurrentTurnPromptContext,
+  EmbeddedRunTrigger,
+} from "../pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../skills.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
