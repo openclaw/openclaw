@@ -29,7 +29,7 @@ path_is_testish() {
 path_is_maintainer_workflow_only() {
   local path="$1"
   case "$path" in
-    .agents/*|scripts/pr|scripts/pr-*|docs/subagent.md)
+    .agents/*|scripts/pr|scripts/pr-*|scripts/pr-lib/*|docs/subagent.md)
       return 0
       ;;
   esac

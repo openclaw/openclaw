@@ -54,7 +54,7 @@ prepare_gates() {
   fi
 
   if [ "$changelog_required" = "true" ] && [ "$has_changelog_update" = "false" ]; then
-    echo "Missing changelog update. Add CHANGELOG.md changes."
+    echo "Missing maintainer changelog update. Maintainer prep must add CHANGELOG.md changes before landing; contributor PR authors should not add it unless explicitly asked."
     exit 1
   fi
 

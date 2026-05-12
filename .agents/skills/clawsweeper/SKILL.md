@@ -257,7 +257,7 @@ loop. The router:
   checks are green, GitHub says mergeable, no human-review label is present,
   the PR is not draft, and both merge gates are open.
 
-Missing changelog is not a review finding or merge blocker. If repairing a user-facing change, add/update changelog automatically when practical; never ask or block solely on it.
+Missing changelog is not a review finding or merge blocker. Contributor PR authors should not be asked to add `CHANGELOG.md` entries. When doing maintainer-authorized repair for a user-facing change, add/update changelog automatically when practical; never ask or block solely on it.
 
 If ClawSweeper passes while merge gates are closed, it labels
 `clawsweeper:merge-ready` and comments instead of merging. `@clawsweeper stop`

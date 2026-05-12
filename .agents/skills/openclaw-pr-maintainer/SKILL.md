@@ -114,7 +114,7 @@ Issue triage is review/prove/patch-local by default:
 
 Do not batch unrelated issue fixes into one commit. Do not publish, comment, close, or label during the review/prove phase.
 
-Missing changelog is not a PR review finding or merge blocker. If landing/fixing a user-visible change, add/update changelog automatically when practical; never ask or block solely on it.
+Missing changelog is not a PR review finding or merge blocker. Contributor PR authors should not be asked to add `CHANGELOG.md` entries. When doing maintainer-authorized landing/fixing for a user-visible change, add/update changelog automatically when practical; never ask or block solely on it.
 
 Only list candidates that pass all gates:
 

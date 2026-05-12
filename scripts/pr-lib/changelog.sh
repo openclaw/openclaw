@@ -194,7 +194,7 @@ validate_changelog_entry_for_pr() {
   local with_pr
   with_pr=$(printf '%s\n' "$added_lines" | rg -in "$pr_pattern" || true)
   if [ -z "$with_pr" ]; then
-    echo "CHANGELOG.md update must reference PR #$pr (for example, (#$pr))."
+    echo "Maintainer changelog update must reference PR #$pr (for example, (#$pr))."
     exit 1
   fi
 
@@ -332,7 +332,7 @@ END {
     local with_pr_and_thanks
     with_pr_and_thanks=$(printf '%s\n' "$added_lines" | rg -in "$pr_pattern" | rg -i "thanks @$contrib" || true)
     if [ -z "$with_pr_and_thanks" ]; then
-      echo "CHANGELOG.md update must include both PR #$pr and thanks @$contrib on the changelog entry line."
+      echo "Maintainer changelog update must include both PR #$pr and thanks @$contrib on the changelog entry line."
       exit 1
     fi
     echo "changelog validated: found PR #$pr + thanks @$contrib"
