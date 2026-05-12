@@ -138,7 +138,7 @@ function rowToRecord(row: CurrentConversationBindingRow): SessionBindingRecord |
   const parsedMetadata = parseJsonRecord(row.metadata_json);
   const metadata =
     row.target_session_id && parsedMetadata?.targetSessionId == null
-      ? { ...(parsedMetadata ?? {}), targetSessionId: row.target_session_id }
+      ? { ...parsedMetadata, targetSessionId: row.target_session_id }
       : parsedMetadata;
   const conversation = normalizeConversationRef({
     channel: row.channel,

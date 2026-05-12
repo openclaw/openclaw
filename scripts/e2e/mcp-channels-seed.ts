@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { upsertSessionEntry } from "../../src/config/sessions/store.ts";
-import { replaceSqliteSessionTranscriptEvents } from "../../src/config/sessions/transcript-store.sqlite.ts";
-import { resolveOpenClawAgentSqlitePath } from "../../src/state/openclaw-agent-db.ts";
+import { upsertSessionEntry } from "../../dist/config/sessions/store.js";
+import { replaceSqliteSessionTranscriptEvents } from "../../dist/config/sessions/transcript-store.sqlite.js";
+import { resolveOpenClawAgentSqlitePath } from "../../dist/state/openclaw-agent-db.js";
 import { applyDockerOpenAiProviderConfig, type OpenClawConfig } from "./docker-openai-seed.ts";
 
 async function main() {

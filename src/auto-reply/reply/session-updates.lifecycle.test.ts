@@ -14,6 +14,7 @@ const hookRunnerMocks = vi.hoisted(() => ({
   runSessionEnd: vi.fn<HookRunner["runSessionEnd"]>(),
   runSessionStart: vi.fn<HookRunner["runSessionStart"]>(),
 }));
+const legacySessionFileProperty = ["session", "File"].join("");
 
 let incrementCompactionCount: typeof import("./session-updates.js").incrementCompactionCount;
 const tempDirs: string[] = [];
@@ -112,7 +113,7 @@ describe("session-updates lifecycle hooks", () => {
     expect(endEvent?.sessionId).toBe("s1");
     expect(endEvent?.sessionKey).toBe(sessionKey);
     expect(endEvent?.reason).toBe("compaction");
-    expect(endEvent).not.toHaveProperty(`session${"File"}`);
+    expect(endEvent).not.toHaveProperty(legacySessionFileProperty);
     expect(endEvent).not.toHaveProperty("transcriptArchived");
     expect(endContext?.sessionId).toBe("s1");
     expect(endContext?.sessionKey).toBe(sessionKey);

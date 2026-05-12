@@ -199,7 +199,7 @@ function projectTypedSessionColumns(row: SessionEntryRow): SessionEntry | null {
   }
   if (conversationTo) {
     next.deliveryContext = {
-      ...(next.deliveryContext ?? {}),
+      ...next.deliveryContext,
       to: conversationTo,
       ...((conversationChannel ?? channel) ? { channel: conversationChannel ?? channel } : {}),
       ...(conversationAccountId ? { accountId: conversationAccountId } : {}),

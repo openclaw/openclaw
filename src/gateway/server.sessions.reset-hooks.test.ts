@@ -17,6 +17,7 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { seedActiveMainSession } = setupGatewaySessionsTestHarness();
+const legacySessionFileProperty = ["session", "File"].join("");
 
 type HookEventRecord = Record<string, unknown> & {
   context?: Record<string, unknown> & {
@@ -220,7 +221,7 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(endEvent.sessionId).toBe("sess-main");
   expect(endEvent.sessionKey).toBe("agent:main:main");
   expect(endEvent.reason).toBe("new");
-  expect(endEvent).not.toHaveProperty(`session${"File"}`);
+  expect(endEvent).not.toHaveProperty(legacySessionFileProperty);
   expect(endEvent).not.toHaveProperty("transcriptArchived");
   expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
   expectMainHookContext(endContext, "sess-main");

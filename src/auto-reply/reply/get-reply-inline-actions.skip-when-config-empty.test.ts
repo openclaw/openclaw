@@ -19,6 +19,7 @@ const { buildStatusReplyMock, createOpenClawToolsMock, getChannelPluginMock, han
 type HandleInlineActionsInput = Parameters<
   typeof import("./get-reply-inline-actions.js").handleInlineActions
 >[0];
+const legacyStorePathProperty = ["store", "Path"].join("");
 
 vi.mock("./commands.runtime.js", () => ({
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
@@ -135,7 +136,7 @@ async function runInlineStatusAction(legacyStore?: string) {
       overrides: {
         allowTextCommands: true,
         inlineStatusRequested: true,
-        ...(legacyStore ? { [`store${"Path"}`]: legacyStore } : {}),
+        ...(legacyStore ? { [legacyStorePathProperty]: legacyStore } : {}),
       },
     }),
   );
@@ -295,7 +296,7 @@ describe("handleInlineActions", () => {
     const { result } = await runInlineStatusAction("/tmp/inline-status-store.json");
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(buildStatusReplyMock.mock.calls[0]?.[0]).not.toHaveProperty(`store${"Path"}`);
+    expect(buildStatusReplyMock.mock.calls[0]?.[0]).not.toHaveProperty(legacyStorePathProperty);
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 

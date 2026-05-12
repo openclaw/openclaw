@@ -20,6 +20,19 @@ type TranscriptEntry = {
     content?: unknown;
   };
 };
+type SqliteTranscriptStoreModule = {
+  appendSqliteSessionTranscriptEvent: (params: {
+    agentId: string;
+    sessionId: string;
+    event: unknown;
+    now?: () => number;
+    parentMode?: "database-tail";
+  }) => void;
+  loadSqliteSessionTranscriptEvents: (params: {
+    agentId: string;
+    sessionId: string;
+  }) => Array<{ event: unknown }>;
+};
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -45,7 +58,7 @@ function messageText(content: unknown): string {
 
 async function verifyRuntimeContextTranscriptShape(root: string) {
   const { appendSqliteSessionTranscriptEvent, loadSqliteSessionTranscriptEvents } =
-    (await import("../../dist/config/sessions/transcript-store.sqlite.js")) as typeof import("../../src/config/sessions/transcript-store.sqlite.js");
+    (await import("../../dist/config/sessions/transcript-store.sqlite.js")) as SqliteTranscriptStoreModule;
   const agentId = "main";
   const sessionId = "runtime";
   let now = Date.now();
@@ -250,7 +263,7 @@ async function verifyDoctorRepair(root: string) {
     () => undefined,
   );
   const { loadSqliteSessionTranscriptEvents } =
-    (await import("../../dist/config/sessions/transcript-store.sqlite.js")) as typeof import("../../src/config/sessions/transcript-store.sqlite.js");
+    (await import("../../dist/config/sessions/transcript-store.sqlite.js")) as SqliteTranscriptStoreModule;
   const entries = loadSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "broken-session",

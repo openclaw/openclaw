@@ -16,6 +16,7 @@ const listSkillCommandsForAgentsMock = vi.hoisted(() => vi.fn(() => []));
 const buildCommandsMessagePaginatedMock = vi.hoisted(() =>
   vi.fn(() => ({ text: "/commands", currentPage: 1, totalPages: 1 })),
 );
+const legacyStorePathProperty = ["store", "Path"].join("");
 
 vi.mock("./commands-context-report.js", () => ({
   buildContextReply: buildContextReplyMock,
@@ -247,7 +248,7 @@ describe("info command handlers", () => {
       vi.mocked(buildStatusReply),
       "buildStatusReply",
     ) as Parameters<typeof buildStatusReply>[0];
-    expect(statusReplyParams).not.toHaveProperty(`store${"Path"}`);
+    expect(statusReplyParams).not.toHaveProperty(legacyStorePathProperty);
   });
 
   it("prefers the target session entry when routing /status", async () => {

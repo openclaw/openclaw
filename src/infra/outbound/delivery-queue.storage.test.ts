@@ -235,7 +235,7 @@ describe("delivery-queue storage", () => {
         recoveryState: "unknown_after_send",
         retryCount: 99,
         session: {
-          ...((replayJson.session as Record<string, unknown> | undefined) ?? {}),
+          ...(replayJson.session as Record<string, unknown> | undefined),
           key: "agent:json:main",
         },
         to: "json-target",

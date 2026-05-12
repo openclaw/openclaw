@@ -18,6 +18,7 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionFixtureDir, openClient } = setupGatewaySessionsTestHarness();
+const legacySessionFileProperty = ["session", "File"].join("");
 
 function expectObject(value: unknown) {
   if (!value || typeof value !== "object") {
@@ -227,7 +228,7 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
     "agent:main:discord:group:delete",
   );
   expect((event as { reason?: string } | undefined)?.reason).toBe("deleted");
-  expect(event).not.toHaveProperty(`session${"File"}`);
+  expect(event).not.toHaveProperty(legacySessionFileProperty);
   expect(event).not.toHaveProperty("transcriptArchived");
   expect((event as { nextSessionId?: string } | undefined)?.nextSessionId).toBeUndefined();
   expect((context as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");

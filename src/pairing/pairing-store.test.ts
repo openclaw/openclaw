@@ -116,7 +116,7 @@ function readChannelPairingTestState(stateDir: string, channel: string): Channel
   return readChannelPairingStateSnapshot(channel, {
     ...process.env,
     OPENCLAW_STATE_DIR: stateDir,
-  }) as ChannelPairingTestState;
+  });
 }
 
 function writeChannelPairingTestState(

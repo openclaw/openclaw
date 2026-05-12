@@ -147,11 +147,8 @@ async function verifyExtractionStoresMetadataOnly() {
 
     const store = await loadCommitmentStore();
     assert(store.commitments.length === 1, `unexpected store size ${store.commitments.length}`);
-    assert(!("sourceUserText" in store.commitments[0]!), "source user text was persisted");
-    assert(
-      !("sourceAssistantText" in store.commitments[0]!),
-      "source assistant text was persisted",
-    );
+    assert(!("sourceUserText" in store.commitments[0]), "source user text was persisted");
+    assert(!("sourceAssistantText" in store.commitments[0]), "source assistant text was persisted");
     const raw = JSON.stringify(await loadCommitmentStore());
     assert(!raw.includes("CALL_TOOL"), "raw source text leaked into commitment store");
   });

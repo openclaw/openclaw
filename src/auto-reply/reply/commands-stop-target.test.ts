@@ -18,6 +18,7 @@ const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn(async () => true));
 const replyRunAbortMock = vi.hoisted(() => vi.fn());
 const resolveSessionIdMock = vi.hoisted(() => vi.fn(() => undefined));
 const stopSubagentsForRequesterMock = vi.hoisted(() => vi.fn(() => ({ stopped: 0 })));
+const legacyStorePathProperty = ["store", "Path"].join("");
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: abortEmbeddedPiRunMock,
@@ -165,7 +166,7 @@ describe("handleStopCommand target fallback", () => {
     expect(persistAbortTargetParams?.key).toBe("agent:target:telegram:direct:123");
     expect(persistAbortTargetParams?.entry).toBeUndefined();
     expect(persistAbortTargetParams?.sessionStore).toBe(params.sessionStore);
-    expect(persistAbortTargetParams).not.toHaveProperty(`store${"Path"}`);
+    expect(persistAbortTargetParams).not.toHaveProperty(legacyStorePathProperty);
     const [[stopSubagentsParams]] = stopSubagentsForRequesterMock.mock.calls as unknown as Array<
       [{ cfg?: unknown; requesterSessionKey?: string }]
     >;

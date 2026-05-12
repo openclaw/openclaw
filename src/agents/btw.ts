@@ -5,7 +5,6 @@ import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import type { StreamFn } from "./agent-core-contract.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { readBtwTranscriptMessages } from "./btw-transcript.js";
@@ -500,7 +499,7 @@ export async function runBtwSideQuestion(
     await blockEmitChain;
   };
 
-  const btwStream = (providerStreamFn ?? streamSimple) as StreamFn;
+  const btwStream = providerStreamFn ?? streamSimple;
   const stream = await streamWithPayloadPatch(
     btwStream,
     runtimeModel,

@@ -12,6 +12,7 @@ const sqliteTranscriptMocks = vi.hoisted(() => ({
   hasSqliteSessionTranscriptEvents: vi.fn(() => false),
   loadSqliteSessionTranscriptEvents: vi.fn<() => SqliteSessionTranscriptEvent[]>(() => []),
 }));
+const legacySessionFileProperty = ["session", "File"].join("");
 
 vi.mock("../../config/sessions/transcript-store.sqlite.js", () => ({
   hasSqliteSessionTranscriptEvents: sqliteTranscriptMocks.hasSqliteSessionTranscriptEvents,
@@ -130,7 +131,7 @@ describe("emitResetCommandHooks", () => {
       Record<string, unknown>,
       Record<string, unknown>,
     ];
-    expect(event).not.toHaveProperty(`session${"File"}`);
+    expect(event).not.toHaveProperty(legacySessionFileProperty);
     expect(event.messages).toEqual([]);
     expect(event.reason).toBe("new");
     expect(ctx.sessionId).toBe("prev-session");
