@@ -2,7 +2,12 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { collectPolicyEvidence, policyDocumentHash, policyWorkspaceHash } from "./policy-state.js";
+import {
+  collectPolicyEvidence,
+  createPolicyAttestation,
+  policyDocumentHash,
+  policyWorkspaceHash,
+} from "./policy-state.js";
 import {
   evaluatePolicyTrustedToolCall,
   registerPolicyTrustedToolPolicy,
@@ -30,12 +35,35 @@ async function evaluate(
 ) {
   return evaluatePolicyTrustedToolCall(
     { toolName, params: {} },
-    { toolName },
+    {},
     {
       cwd: workspaceDir,
       readConfig: () => cfg(settings, entryEnabled),
     },
   );
+}
+
+function acceptedAttestationHash(params: {
+  readonly policy: unknown;
+  readonly toolsRaw: string;
+  readonly settings?: Record<string, unknown>;
+}): string {
+  const policyHash = policyDocumentHash(params.policy);
+  const evidence = collectPolicyEvidence(cfg(params.settings ?? {}) as Record<string, unknown>, {
+    toolsRaw: params.toolsRaw,
+  });
+  const attestationHash = createPolicyAttestation({
+    ok: true,
+    checkedAt: "2026-05-12T00:00:00.000Z",
+    policyPath: "policy.jsonc",
+    policyHash,
+    evidence,
+    findings: [],
+  }).attestationHash;
+  if (attestationHash === undefined) {
+    throw new Error("expected policy attestation hash");
+  }
+  return attestationHash;
 }
 
 describe("policy trusted tool runtime", () => {
@@ -274,6 +302,63 @@ describe("policy trusted tool runtime", () => {
           policy: {
             path: "policy.jsonc",
             hash: policyDocumentHash(policy),
+          },
+          workspace: {
+            scope: "policy",
+            hash: expect.stringMatching(/^sha256:/),
+          },
+          target: "oc://TOOLS.md/tools/deploy",
+        },
+      },
+    });
+  });
+
+  it("blocks when watched tool evidence no longer matches the accepted attestation", async () => {
+    const policy = {
+      tools: { requireMetadata: ["risk"] },
+    };
+    const acceptedTools = "## Tools\n\n### deploy risk:low sensitivity:internal\n";
+    const expectedAttestationHash = acceptedAttestationHash({
+      policy,
+      toolsRaw: acceptedTools,
+    });
+    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "TOOLS.md"),
+      "## Tools\n\n### deploy risk:critical sensitivity:internal\n",
+      "utf-8",
+    );
+
+    const result = await evaluate("deploy", { expectedAttestationHash });
+
+    expect(result).toMatchObject({
+      block: true,
+      blockReason: expect.stringContaining(
+        `policy.jsonc no longer matches the accepted policy attestation`,
+      ),
+    });
+    expect((result as { blockReason?: string }).blockReason).toContain(
+      `expected ${expectedAttestationHash}`,
+    );
+  });
+
+  it("includes matching attestation metadata in runtime approvals", async () => {
+    const policy = {
+      tools: { requireMetadata: ["risk"] },
+    };
+    const toolsRaw =
+      "## Tools\n\n### deploy risk:critical sensitivity:internal IRREVERSIBLE_EXTERNAL\n";
+    const expectedAttestationHash = acceptedAttestationHash({ policy, toolsRaw });
+    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+    await fs.writeFile(join(workspaceDir, "TOOLS.md"), toolsRaw, "utf-8");
+
+    await expect(evaluate("deploy", { expectedAttestationHash })).resolves.toMatchObject({
+      requireApproval: {
+        metadata: {
+          source: "policy",
+          attestation: {
+            hash: expectedAttestationHash,
+            expectedHash: expectedAttestationHash,
           },
           workspace: {
             scope: "policy",
