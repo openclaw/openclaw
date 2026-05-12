@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- fix(node-pairing): replace changed pending requests [AI]. (#80894) Thanks @pgondhi987.
 - Rate limit Google Chat webhook requests [AI]. (#80974) Thanks @pgondhi987.
 - fix(feishu): normalize webhook rate-limit client keys [AI]. (#80975) Thanks @pgondhi987.
 - fix(auth): prevent bootstrap pairing scope changes [AI]. (#80976) Thanks @pgondhi987.
