@@ -301,6 +301,8 @@ import {
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   resolvePromptSubmissionSkipReason,
+  resolveSuppressedCurrentUserTranscriptContext,
+  resolveTrailingUserPromptRepair,
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
@@ -380,6 +382,7 @@ export {
   resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  resolveTrailingUserPromptRepair,
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
@@ -1893,6 +1896,18 @@ export async function runEmbeddedAttempt(
         applySystemPromptOverrideToSession(activeSession, "");
         systemPromptText = "";
       }
+      const eagerUserTranscriptSuppression = resolveSuppressedCurrentUserTranscriptContext({
+        messages: activeSession.agent.state.messages,
+        leafEntry: isRawModelRun ? undefined : sessionManager.getLeafEntry(),
+        suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
+        suppressNextUserMessagePersistenceEntryId: params.suppressNextUserMessagePersistenceEntryId,
+      });
+      if (eagerUserTranscriptSuppression.suppressed) {
+        // The gateway already persisted this WebChat user turn. Keep the JSONL
+        // leaf so Pi appends the assistant below it, but don't replay that same
+        // user turn in history while also submitting it as the current prompt.
+        activeSession.agent.state.messages = eagerUserTranscriptSuppression.messages;
+      }
       if (typeof activeSession.agent.convertToLlm === "function") {
         const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
         activeSession.agent.convertToLlm = async (messages) =>
@@ -3046,7 +3061,36 @@ export async function runEmbeddedAttempt(
         );
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
         const leafEntry = isRawModelRun ? null : sessionManager.getLeafEntry();
-        if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
+        if (eagerUserTranscriptSuppression.suppressed) {
+          const orphanPromptMerge = resolveTrailingUserPromptRepair({
+            prompt: effectivePrompt,
+            trigger: params.trigger,
+            messages: activeSession.agent.state.messages,
+            mergeOrphanedTrailingUserPrompt:
+              resolveMessageMergeStrategy().mergeOrphanedTrailingUserPrompt,
+          });
+          if (orphanPromptMerge.repaired) {
+            effectivePrompt = orphanPromptMerge.prompt;
+            activeSession.agent.state.messages = orphanPromptMerge.messages;
+            const orphanRepairMessage =
+              `${
+                orphanPromptMerge.removeMessage
+                  ? orphanPromptMerge.merged
+                    ? "Merged and removed"
+                    : "Removed already-queued"
+                  : "Preserved"
+              } orphaned user message` +
+              (orphanPromptMerge.removeMessage
+                ? " from model history while preserving the eager session leaf. "
+                : " without changing model history. ") +
+              `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`;
+            if (shouldWarnOnOrphanedUserRepair(params.trigger)) {
+              log.warn(orphanRepairMessage);
+            } else {
+              log.debug(orphanRepairMessage);
+            }
+          }
+        } else if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
           const orphanPromptMerge = resolveMessageMergeStrategy().mergeOrphanedTrailingUserPrompt({
             prompt: effectivePrompt,
             trigger: params.trigger,

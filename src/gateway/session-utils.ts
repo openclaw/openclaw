@@ -699,7 +699,7 @@ export function resolveDeletedAgentIdFromSessionKey(
   return agentId;
 }
 
-export function loadSessionEntry(sessionKey: string) {
+export function loadSessionEntry(sessionKey: string, opts: { skipCache?: boolean } = {}) {
   const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTarget({
@@ -707,7 +707,7 @@ export function loadSessionEntry(sessionKey: string) {
     key,
   });
   const storePath = target.storePath;
-  const store = loadSessionStore(storePath);
+  const store = loadSessionStore(storePath, opts.skipCache ? { skipCache: true } : undefined);
   const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
   const legacyKey = freshestMatch?.key !== target.canonicalKey ? freshestMatch?.key : undefined;
   return {

@@ -965,7 +965,28 @@ export async function runEmbeddedPiAgent(
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
       let activeSessionId = params.sessionId;
       let activeSessionFile = params.sessionFile;
-      let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
+      const suppressionSessionId = normalizeOptionalString(
+        params.suppressNextUserMessagePersistenceSessionId,
+      );
+      let suppressNextUserMessagePersistence =
+        params.suppressNextUserMessagePersistence === true &&
+        (!suppressionSessionId || suppressionSessionId === params.sessionId);
+      let suppressNextUserMessagePersistenceEntryId = suppressNextUserMessagePersistence
+        ? normalizeOptionalString(params.suppressNextUserMessagePersistenceEntryId)
+        : undefined;
+      if (
+        params.suppressNextUserMessagePersistence === true &&
+        suppressionSessionId &&
+        suppressionSessionId !== params.sessionId
+      ) {
+        log.warn(
+          `ignored eager user transcript suppression after session rollover: sessionKey=${sanitizeForLog(
+            params.sessionKey ?? "",
+          )} persistedSessionId=${redactRunIdentifier(
+            sanitizeForLog(suppressionSessionId),
+          )} activeSessionId=${redactRunIdentifier(sanitizeForLog(params.sessionId))}`,
+        );
+      }
       // Pi owns JSONL persistence; this marker only lets the outer retry avoid
       // replaying the same inbound channel message after overflow compaction.
       let lastPersistedCurrentMessageId: string | number | undefined;
@@ -980,6 +1001,7 @@ export async function runEmbeddedPiAgent(
       const continueFromCurrentTranscript = () => {
         nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
         suppressNextUserMessagePersistence = true;
+        suppressNextUserMessagePersistenceEntryId = undefined;
       };
       const maybeEscalateRateLimitProfileFallback = (params: {
         failoverProvider: string;
@@ -1372,6 +1394,7 @@ export async function runEmbeddedPiAgent(
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
             suppressNextUserMessagePersistence,
+            suppressNextUserMessagePersistenceEntryId,
             onUserMessagePersisted,
           })
             .catch((err: unknown): never => {
@@ -1887,6 +1910,7 @@ export async function runEmbeddedPiAgent(
                   // compacted transcript and suppress the next user append.
                   nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
                   suppressNextUserMessagePersistence = true;
+                  suppressNextUserMessagePersistenceEntryId = undefined;
                 }
                 continue;
               }

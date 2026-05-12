@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   ContextEnginePromptCacheInfo,
@@ -452,6 +453,83 @@ export function mergeOrphanedTrailingUserPrompt(params: {
     merged: true,
     removeLeaf: true,
   };
+}
+
+export function resolveTrailingUserPromptRepair(params: {
+  prompt: string;
+  trigger: EmbeddedRunAttemptParams["trigger"];
+  messages: AgentMessage[];
+  mergeOrphanedTrailingUserPrompt?: typeof mergeOrphanedTrailingUserPrompt;
+}): {
+  prompt: string;
+  messages: AgentMessage[];
+  repaired: boolean;
+  merged: boolean;
+  removeMessage: boolean;
+} {
+  const trailingMessage = params.messages.at(-1);
+  if (!isUserMessage(trailingMessage)) {
+    return {
+      prompt: params.prompt,
+      messages: params.messages,
+      repaired: false,
+      merged: false,
+      removeMessage: false,
+    };
+  }
+  const promptMerge = (params.mergeOrphanedTrailingUserPrompt ?? mergeOrphanedTrailingUserPrompt)({
+    prompt: params.prompt,
+    trigger: params.trigger,
+    leafMessage: trailingMessage,
+  });
+  return {
+    prompt: promptMerge.prompt,
+    messages: promptMerge.removeLeaf ? params.messages.slice(0, -1) : params.messages,
+    repaired: true,
+    merged: promptMerge.merged,
+    removeMessage: promptMerge.removeLeaf,
+  };
+}
+
+function isUserMessage(value: unknown): value is Extract<AgentMessage, { role: "user" }> {
+  return Boolean(
+    value && typeof value === "object" && (value as { role?: unknown }).role === "user",
+  );
+}
+
+export function resolveSuppressedCurrentUserTranscriptContext(params: {
+  messages: AgentMessage[];
+  leafEntry?: {
+    id?: string;
+    type?: string;
+    message?: AgentMessage;
+  };
+  suppressNextUserMessagePersistence?: boolean;
+  suppressNextUserMessagePersistenceEntryId?: string;
+}): { messages: AgentMessage[]; suppressed: boolean } {
+  if (params.suppressNextUserMessagePersistence !== true) {
+    return { messages: params.messages, suppressed: false };
+  }
+  if (!params.suppressNextUserMessagePersistenceEntryId) {
+    return { messages: params.messages, suppressed: false };
+  }
+  const leafEntry = params.leafEntry;
+  if (leafEntry?.type !== "message" || !isUserMessage(leafEntry.message)) {
+    return { messages: params.messages, suppressed: false };
+  }
+  if (leafEntry.id !== params.suppressNextUserMessagePersistenceEntryId) {
+    return { messages: params.messages, suppressed: false };
+  }
+  const lastMessage = params.messages.at(-1);
+  if (!isUserMessage(lastMessage)) {
+    return { messages: params.messages, suppressed: false };
+  }
+  const leafText = extractUserMessagePromptText(leafEntry.message.content);
+  const lastText = extractUserMessagePromptText(lastMessage.content);
+  if (lastMessage !== leafEntry.message && (!leafText || leafText !== lastText)) {
+    return { messages: params.messages, suppressed: false };
+  }
+  return { messages: params.messages.slice(0, -1), suppressed: true };
 }
 
 export function resolveAttemptFsWorkspaceOnly(params: {

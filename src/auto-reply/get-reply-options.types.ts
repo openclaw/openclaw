@@ -45,6 +45,12 @@ export type GetReplyOptions = {
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
   imageOrder?: PromptImageOrderEntry[];
+  /** If true, Pi should not persist the next user message because the caller already did. */
+  suppressNextUserMessagePersistence?: boolean;
+  /** Session id that already owns the eagerly persisted user message. */
+  suppressNextUserMessagePersistenceSessionId?: string;
+  /** Transcript entry id that already owns the eagerly persisted user message. */
+  suppressNextUserMessagePersistenceEntryId?: string;
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;
   onReplyStart?: () => Promise<void> | void;

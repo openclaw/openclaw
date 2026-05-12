@@ -1051,6 +1051,10 @@ export async function runPreparedReply(
       extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
+      suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
+      suppressNextUserMessagePersistenceSessionId:
+        opts?.suppressNextUserMessagePersistenceSessionId,
+      suppressNextUserMessagePersistenceEntryId: opts?.suppressNextUserMessagePersistenceEntryId,
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, {
         config: cfg,
