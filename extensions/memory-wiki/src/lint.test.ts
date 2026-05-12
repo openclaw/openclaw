@@ -50,6 +50,53 @@ describe("lintMemoryWikiVault", () => {
     expect(result.issues.some((issue) => issue.code === "broken-wikilink")).toBe(false);
   });
 
+  it("accepts Obsidian wikilinks that target page titles or aliases", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-title-links-",
+      config: {
+        vault: { renderMode: "obsidian" },
+      },
+    });
+    await Promise.all(
+      ["sources"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "video-length-research-for-educational-marketing-videos.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.video-length-research",
+          title: "Video Length Research for Educational Marketing Videos",
+          aliases: ["Educational Marketing Video Length Research"],
+        },
+        body: "# Video Length Research for Educational Marketing Videos\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "super-ai-coach-video-script-skill-implementation-plan.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.super-ai-coach-video-script-skill-implementation-plan",
+          title: "Super AI Coach Video Script Skill Implementation Plan",
+        },
+        body:
+          "# Super AI Coach Video Script Skill Implementation Plan\n\n" +
+          "[[Video Length Research for Educational Marketing Videos]]\n\n" +
+          "[[Video Length Research for Educational Marketing Videos#Findings]]\n\n" +
+          "[[Educational Marketing Video Length Research]]\n\n" +
+          "[[./sources/video-length-research-for-educational-marketing-videos.md#Summary]]\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(result.issues.some((issue) => issue.code === "broken-wikilink")).toBe(false);
+  });
+
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-",

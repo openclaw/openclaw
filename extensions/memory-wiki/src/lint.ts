@@ -4,6 +4,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assessPageFreshness,
   buildClaimContradictionClusters,
@@ -50,19 +51,43 @@ function toExpectedPageType(page: WikiPageSummary): string {
   return page.kind;
 }
 
+function normalizeLintLinkTarget(value: string): string {
+  return normalizeLowercaseStringOrEmpty(
+    value
+      .trim()
+      .replace(/\\/g, "/")
+      .split("#")[0]
+      .split("?")[0]
+      .replace(/\.md$/i, "")
+      .replace(/^\.\/+/, "")
+      .replace(/\/+$/, ""),
+  );
+}
+
 function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
   const validTargets = new Set<string>();
+  const addValidTarget = (target: string | undefined) => {
+    const normalized = target ? normalizeLintLinkTarget(target) : "";
+    if (normalized) {
+      validTargets.add(normalized);
+    }
+  };
+
   for (const page of pages) {
     const withoutExtension = page.relativePath.replace(/\.md$/i, "");
-    validTargets.add(page.relativePath);
-    validTargets.add(withoutExtension);
-    validTargets.add(path.basename(withoutExtension));
+    addValidTarget(page.relativePath);
+    addValidTarget(withoutExtension);
+    addValidTarget(path.basename(withoutExtension));
+    addValidTarget(page.title);
+    for (const alias of page.aliases) {
+      addValidTarget(alias);
+    }
   }
 
   const issues: MemoryWikiLintIssue[] = [];
   for (const page of pages) {
     for (const linkTarget of page.linkTargets) {
-      if (!validTargets.has(linkTarget)) {
+      if (!validTargets.has(normalizeLintLinkTarget(linkTarget))) {
         issues.push({
           severity: "warning",
           category: "links",
