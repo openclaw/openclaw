@@ -399,6 +399,7 @@ function matchExecutableAllowlistForSegment(params: {
   inlineCommand: string | null;
   isShellWrapperInvocation: boolean;
   isPositionalCarrierInvocation: boolean;
+  allowlistTargetIsExecutionTarget: boolean;
 }): ExecAllowlistEntry | null {
   if (params.isPositionalCarrierInvocation) {
     return null;
@@ -413,12 +414,27 @@ function matchExecutableAllowlistForSegment(params: {
     typeof match?.argPattern === "string" && match.argPattern.trim().length > 0;
   const isBareWildcardMatch = match?.pattern?.trim() === "*" && !hasBoundArgPattern;
   const requiresBoundArgPattern =
-    params.inlineCommand !== null ||
-    (params.isShellWrapperInvocation && params.effectiveArgv.length > 1);
+    params.allowlistTargetIsExecutionTarget &&
+    (params.inlineCommand !== null ||
+      (params.isShellWrapperInvocation && params.effectiveArgv.length > 1));
   if (requiresBoundArgPattern && !hasBoundArgPattern && !isBareWildcardMatch) {
     return null;
   }
   return match;
+}
+
+function executableResolutionsReferToSameTarget(
+  left: ExecutableResolution | null,
+  right: ExecutableResolution | null,
+): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  return (
+    left.rawExecutable === right.rawExecutable &&
+    left.resolvedPath === right.resolvedPath &&
+    left.executableName === right.executableName
+  );
 }
 
 function resolveShellWrapperScriptArgv(params: {
@@ -507,6 +523,7 @@ function resolveSegmentAllowlistMatch(params: {
       ? params.segment
       : { ...params.segment, argv: effectiveArgv };
   const executableResolution = resolvePolicyTargetResolution(params.segment.resolution);
+  const executionResolution = resolveExecutionTargetResolution(params.segment.resolution);
   const candidatePath = resolvePolicyTargetCandidatePath(
     params.segment.resolution,
     params.context.cwd,
@@ -531,6 +548,10 @@ function resolveSegmentAllowlistMatch(params: {
     inlineCommand,
     isShellWrapperInvocation,
     isPositionalCarrierInvocation,
+    allowlistTargetIsExecutionTarget: executableResolutionsReferToSameTarget(
+      executableResolution,
+      executionResolution,
+    ),
   });
   const shellPositionalArgvCandidatePath =
     inlineCommand !== null
