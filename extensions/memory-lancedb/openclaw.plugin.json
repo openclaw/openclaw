@@ -1,9 +1,14 @@
 {
   "id": "memory-lancedb",
+  "commandAliases": [{ "name": "ltm" }],
   "activation": {
-    "onStartup": false
+    "onStartup": false,
+    "onCommands": ["ltm"]
   },
   "kind": "memory",
+  "contracts": {
+    "tools": ["memory_forget", "memory_recall", "memory_store"]
+  },
   "uiHints": {
     "embedding.apiKey": {
       "label": "Embedding API Key",
@@ -123,7 +128,6 @@
           "type": "string"
         }
       }
-    },
-    "required": ["embedding"]
+    }
   }
 }

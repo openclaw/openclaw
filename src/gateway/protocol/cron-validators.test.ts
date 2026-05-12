@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   validateCronAddParams,
+  validateCronGetParams,
   validateCronListParams,
   validateCronRemoveParams,
   validateCronRunParams,
@@ -52,6 +53,13 @@ describe("cron protocol validators", () => {
   it("accepts update params for id and jobId selectors", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: { enabled: false } })).toBe(true);
     expect(validateCronUpdateParams({ jobId: "job-2", patch: { enabled: true } })).toBe(true);
+  });
+
+  it("accepts get params for id and jobId selectors", () => {
+    expect(validateCronGetParams({ id: "job-1" })).toBe(true);
+    expect(validateCronGetParams({ jobId: "job-2" })).toBe(true);
+    expect(validateCronGetParams({})).toBe(false);
+    expect(validateCronGetParams({ id: "" })).toBe(false);
   });
 
   it("accepts delivery threadId on add and update params", () => {
@@ -111,9 +119,11 @@ describe("cron protocol validators", () => {
         enabled: "all",
         sortBy: "nextRunAtMs",
         sortDir: "asc",
+        agentId: "ops",
       }),
     ).toBe(true);
     expect(validateCronListParams({ offset: -1 })).toBe(false);
+    expect(validateCronListParams({ agentId: "" })).toBe(false);
   });
 
   it("enforces runs limit minimum for id and jobId selectors", () => {

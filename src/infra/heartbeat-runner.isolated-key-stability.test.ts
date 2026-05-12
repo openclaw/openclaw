@@ -12,7 +12,8 @@ import {
 } from "./system-events.js";
 
 vi.mock("./outbound/deliver.js", () => ({
-  deliverOutboundPayloads: vi.fn().mockResolvedValue(undefined),
+  deliverOutboundPayloads: vi.fn().mockResolvedValue([]),
+  deliverOutboundPayloadsInternal: vi.fn().mockResolvedValue([]),
 }));
 
 afterEach(() => {
@@ -24,7 +25,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
   /**
    * Simulates the wake-request feedback loop:
    *   1. Normal heartbeat tick produces sessionKey "agent:main:main:heartbeat"
-   *   2. An exec/subagent event during that tick calls requestHeartbeatNow()
+   *   2. An exec/subagent event during that tick calls requestHeartbeat()
    *      with the already-suffixed key "agent:main:main:heartbeat"
    *   3. The wake handler passes that key back into runHeartbeatOnce(sessionKey: ...)
    *
@@ -179,9 +180,9 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         { heartbeatIsolatedBaseSessionKey?: string }
       >;
       expect(store[deeplyAccumulatedKey]).toBeUndefined();
-      expect(store[`${baseSessionKey}:heartbeat`]).toMatchObject({
-        heartbeatIsolatedBaseSessionKey: baseSessionKey,
-      });
+      expect(store[`${baseSessionKey}:heartbeat`]?.heartbeatIsolatedBaseSessionKey).toBe(
+        baseSessionKey,
+      );
     });
   });
 
@@ -225,7 +226,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         },
       });
 
-      expect(peekSystemEventEntries(baseSessionKey)).toEqual([]);
+      expect(peekSystemEventEntries(baseSessionKey)).toStrictEqual([]);
 
       await runHeartbeatOnce({
         cfg,

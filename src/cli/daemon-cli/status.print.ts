@@ -11,6 +11,7 @@ import {
 } from "../../daemon/systemd-hints.js";
 import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailable.js";
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
+import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import { colorize } from "../../terminal/theme.js";
@@ -59,6 +60,13 @@ function formatCapabilityLabel(capability?: string) {
     return null;
   }
   return capability.replaceAll("_", "-");
+}
+
+function formatCliVersionLine(cli: DaemonStatus["cli"]): string | null {
+  if (!cli) {
+    return null;
+  }
+  return cli.entrypoint ? `${cli.version} (${shortenHomePath(cli.entrypoint)})` : cli.version;
 }
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
@@ -124,6 +132,14 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         );
       }
     }
+    if (status.config.cli.warnings?.length) {
+      defaultRuntime.error(warnText("Config warnings:"));
+      for (const warning of status.config.cli.warnings.slice(0, 5)) {
+        defaultRuntime.error(
+          warnText(formatConfigIssueLine(warning, "-", { normalizeRoot: true })),
+        );
+      }
+    }
     if (status.config.daemon) {
       const daemonCfg = `${shortenHomePath(status.config.daemon.path)}${status.config.daemon.exists ? "" : " (missing)"}${status.config.daemon.valid ? "" : " (invalid)"}`;
       defaultRuntime.log(`${label("Config (service):")} ${infoText(daemonCfg)}`);
@@ -131,6 +147,18 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         for (const issue of status.config.daemon.issues.slice(0, 5)) {
           defaultRuntime.error(
             `${errorText("Service config issue:")} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
+          );
+        }
+      }
+      if (status.config.daemon !== status.config.cli && status.config.daemon.warnings?.length) {
+        const warningsLabel =
+          status.config.daemon.path === status.config.cli.path
+            ? "Config warnings:"
+            : "Service config warnings:";
+        defaultRuntime.error(warnText(warningsLabel));
+        for (const warning of status.config.daemon.warnings.slice(0, 5)) {
+          defaultRuntime.error(
+            warnText(formatConfigIssueLine(warning, "-", { normalizeRoot: true })),
           );
         }
       }
@@ -175,10 +203,35 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
+  const gatewayVersion = rpc?.server?.version?.trim();
+  const cliVersionLine = formatCliVersionLine(status.cli);
+  if (gatewayVersion) {
+    if (cliVersionLine) {
+      defaultRuntime.log(`${label("CLI version:")} ${infoText(cliVersionLine)}`);
+    }
+    defaultRuntime.log(`${label("Gateway version:")} ${infoText(gatewayVersion)}`);
+    if (status.cli?.version && status.cli.version !== gatewayVersion) {
+      defaultRuntime.error(
+        warnText(
+          `Warning: this OpenClaw command is version ${status.cli.version}, but the running Gateway is version ${gatewayVersion}.`,
+        ),
+      );
+      defaultRuntime.error(
+        warnText(
+          "Check `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`; if this mismatch is unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
+        ),
+      );
+    }
+    spacer();
+  }
+
   const runtimeLine = formatRuntimeStatus(service.runtime);
   if (runtimeLine) {
     const runtimeColor = resolveRuntimeStatusColor(service.runtime?.status);
     defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
+  }
+  if (service.restartHandoff) {
+    defaultRuntime.log(infoText(formatGatewayRestartHandoffDiagnostic(service.restartHandoff)));
   }
 
   if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {

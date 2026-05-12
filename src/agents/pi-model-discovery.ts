@@ -1,10 +1,10 @@
 import path from "node:path";
-import type { Api, Model } from "@mariozechner/pi-ai";
-import * as PiCodingAgent from "@mariozechner/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import * as PiCodingAgent from "@earendil-works/pi-coding-agent";
 import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   applyProviderResolvedModelCompatWithPlugins,
@@ -222,7 +222,8 @@ export function discoverAuthStorage(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
 ): PiAuthStorage {
-  const credentials = resolvePiCredentialsForDiscovery(agentDir, options);
+  const credentials =
+    options?.skipCredentials === true ? {} : resolvePiCredentialsForDiscovery(agentDir, options);
   const authPath = path.join(agentDir, "auth.json");
   if (options?.readOnly !== true) {
     scrubLegacyStaticAuthJsonEntriesForDiscovery(authPath);

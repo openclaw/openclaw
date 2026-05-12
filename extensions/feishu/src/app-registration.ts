@@ -167,7 +167,7 @@ export async function pollAppRegistration(params: {
   expireIn: number;
   initialDomain?: FeishuDomain;
   abortSignal?: AbortSignal;
-  /** Registration type parameter: "ob_user" for user mode, "ob_app" for bot mode. */
+  /** Registration type parameter. The CLI bot QR flow uses "ob_cli_app". */
   tp?: string;
 }): Promise<PollOutcome> {
   const { deviceCode, expireIn, initialDomain = "feishu", abortSignal, tp } = params;

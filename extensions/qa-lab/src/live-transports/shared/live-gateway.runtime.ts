@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   startQaGatewayChild,
   type QaCliBackendAuthMode,
@@ -51,8 +51,16 @@ function prepareLiveTransportGatewayConfig(cfg: OpenClawConfig): OpenClawConfig 
           ...cfg.plugins,
           allow: cfg.plugins.allow?.filter((pluginId) => pluginId !== "memory-core"),
           entries: omitMemoryCoreEntry(cfg.plugins.entries),
+          slots: {
+            ...cfg.plugins.slots,
+            memory: "none",
+          },
         }
-      : cfg.plugins,
+      : {
+          slots: {
+            memory: "none",
+          },
+        },
     agents: {
       ...cfg.agents,
       defaults: {

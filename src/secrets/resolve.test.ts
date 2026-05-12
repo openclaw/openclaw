@@ -28,11 +28,7 @@ async function writeSecureFile(filePath: string, content: string, mode = 0o600):
 describe("secret ref resolver", () => {
   const isWindows = process.platform === "win32";
   function itPosix(name: string, fn: () => Promise<void> | void) {
-    if (isWindows) {
-      it.skip(name, fn);
-      return;
-    }
-    it(name, fn);
+    it.skipIf(isWindows)(name, fn);
   }
   let fixtureRoot = "";
   let caseId = 0;
@@ -400,16 +396,14 @@ describe("secret ref resolver", () => {
       }),
     );
 
-    const originalReadFile = fs.readFile.bind(fs);
-    const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation(((
-      targetPath: Parameters<typeof fs.readFile>[0],
-      options?: Parameters<typeof fs.readFile>[1],
-    ) => {
-      if (typeof targetPath === "string" && targetPath === filePath) {
-        return new Promise<Buffer>(() => {});
-      }
-      return originalReadFile(targetPath, options);
-    }) as typeof fs.readFile);
+    const sampleHandle = await fs.open(filePath, "r");
+    const fileHandlePrototype = Object.getPrototypeOf(sampleHandle) as {
+      readFile: typeof sampleHandle.readFile;
+    };
+    await sampleHandle.close();
+    const readFileSpy = vi
+      .spyOn(fileHandlePrototype, "readFile")
+      .mockImplementation(() => new Promise<Buffer>(() => {}) as never);
 
     try {
       await expect(

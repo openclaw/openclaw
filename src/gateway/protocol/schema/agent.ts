@@ -30,6 +30,7 @@ export const AgentEventSchema = Type.Object(
     seq: Type.Integer({ minimum: 0 }),
     stream: NonEmptyString,
     ts: Type.Integer({ minimum: 0 }),
+    spawnedBy: Type.Optional(NonEmptyString),
     data: Type.Record(Type.String(), Type.Unknown()),
   },
   { additionalProperties: false },
@@ -90,6 +91,7 @@ export const SendParamsSchema = Type.Object(
     message: Type.Optional(Type.String()),
     mediaUrl: Type.Optional(Type.String()),
     mediaUrls: Type.Optional(Type.Array(Type.String())),
+    asVoice: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
     channel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),
@@ -99,6 +101,12 @@ export const SendParamsSchema = Type.Object(
     replyToId: Type.Optional(Type.String()),
     /** Thread id (channel-specific meaning, e.g. Telegram forum topic id). */
     threadId: Type.Optional(Type.String()),
+    /** Force document-style media sends where supported. */
+    forceDocument: Type.Optional(Type.Boolean()),
+    /** Send silently (no notification) where supported. */
+    silent: Type.Optional(Type.Boolean()),
+    /** Channel-specific parse mode for formatted text. */
+    parseMode: Type.Optional(Type.Literal("HTML")),
     /** Optional session key for mirroring delivered output back into the transcript. */
     sessionKey: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
@@ -167,6 +175,7 @@ export const AgentParamsSchema = Type.Object(
       Type.Union([Type.Literal("default"), Type.Literal("heartbeat"), Type.Literal("cron")]),
     ),
     acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
+    internalRuntimeHandoffId: Type.Optional(NonEmptyString),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
     voiceWakeTrigger: Type.Optional(Type.String()),
@@ -209,6 +218,9 @@ export const WakeParamsSchema = Type.Object(
   {
     mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),
     text: NonEmptyString,
+    // Typed field; misspelled variants remain opaque metadata because wake
+    // senders already rely on additionalProperties.
+    sessionKey: Type.Optional(NonEmptyString),
   },
   { additionalProperties: true }, // external wake senders may attach opaque metadata
 );

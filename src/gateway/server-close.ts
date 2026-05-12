@@ -2,17 +2,18 @@ import type { Server as HttpServer } from "node:http";
 import type { WebSocketServer } from "ws";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
-import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { closePluginStateSqliteStore } from "../plugin-state/plugin-state-store.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 1_000;
 const GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS = 1_000;
+const ACTIVE_SESSIONS_SHUTDOWN_DRAIN_TIMEOUT_MS = 2_000;
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
@@ -171,9 +172,8 @@ function isServerNotRunningError(err: unknown): boolean {
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
   tailscaleCleanup: (() => Promise<void>) | null;
-  canvasHost: CanvasHostHandler | null;
-  canvasHostServer: CanvasHostServer | null;
   releasePluginRouteRegistry?: (() => void) | null;
+  channelIds?: readonly ChannelId[];
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
   pluginServices: PluginServicesHandle | null;
   disposeSessionMcpRuntimes?: () => Promise<void>;
@@ -181,7 +181,7 @@ export function createGatewayCloseHandler(params: {
   cron: { stop: () => void };
   heartbeatRunner: HeartbeatRunner;
   updateCheckStop?: (() => void) | null;
-  stopTaskRegistryMaintenance?: (() => void) | null;
+  stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
   nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   tickInterval: ReturnType<typeof setInterval>;
@@ -198,6 +198,10 @@ export function createGatewayCloseHandler(params: {
   wss: WebSocketServer;
   httpServer: HttpServer;
   httpServers?: HttpServer[];
+  drainActiveSessionsForShutdown?: (params: {
+    reason: "shutdown" | "restart";
+    totalTimeoutMs?: number;
+  }) => Promise<{ emittedSessionIds: string[]; timedOut: boolean }>;
 }) {
   return async (opts?: {
     reason?: string;
@@ -257,20 +261,35 @@ export function createGatewayCloseHandler(params: {
           warnings,
         );
       }
+      if (params.drainActiveSessionsForShutdown) {
+        await shutdownStep(
+          "session-end-drain",
+          async () => {
+            const drainReason: "shutdown" | "restart" =
+              restartExpectedMs !== null ? "restart" : "shutdown";
+            const result = await params.drainActiveSessionsForShutdown!({
+              reason: drainReason,
+              totalTimeoutMs: ACTIVE_SESSIONS_SHUTDOWN_DRAIN_TIMEOUT_MS,
+            });
+            if (result.timedOut) {
+              shutdownLog.warn(
+                `session-end-drain timed out after ${ACTIVE_SESSIONS_SHUTDOWN_DRAIN_TIMEOUT_MS}ms after ${result.emittedSessionIds.length} sessions; continuing shutdown`,
+              );
+              recordShutdownWarning(warnings, "session-end-drain");
+            }
+          },
+          warnings,
+        );
+      }
       if (params.bonjourStop) {
         await shutdownStep("bonjour", () => params.bonjourStop!(), warnings);
       }
       if (params.tailscaleCleanup) {
         await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
       }
-      if (params.canvasHost) {
-        await shutdownStep("canvas-host", () => params.canvasHost!.close(), warnings);
-      }
-      if (params.canvasHostServer) {
-        await shutdownStep("canvas-host-server", () => params.canvasHostServer!.close(), warnings);
-      }
-      for (const plugin of listChannelPlugins()) {
-        await shutdownStep(`channel/${plugin.id}`, () => params.stopChannel(plugin.id), warnings);
+      const channelIds = params.channelIds ?? listChannelPlugins().map((plugin) => plugin.id);
+      for (const channelId of channelIds) {
+        await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId), warnings);
       }
       await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
       await Promise.all([
@@ -290,6 +309,7 @@ export function createGatewayCloseHandler(params: {
       if (params.pluginServices) {
         await shutdownStep("plugin-services", () => params.pluginServices!.stop(), warnings);
       }
+      await shutdownStep("plugin-state-store", () => closePluginStateSqliteStore(), warnings);
       await shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings);
       params.cron.stop();
       params.heartbeatRunner.stop();

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -52,6 +53,17 @@ type UnsafeRuntimeInvocationCase = {
   command: string[];
   setup?: (tmp: string) => void;
 };
+
+function requirePathToken(pathToken: PathTokenSetup | null): PathTokenSetup {
+  if (!pathToken) {
+    throw new Error("Expected PATH token fixture");
+  }
+  return pathToken;
+}
+
+function sha256FileSync(filePath: string): string {
+  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
 
 function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): ScriptOperandFixture {
   if (fixture) {
@@ -203,7 +215,7 @@ function expectMutableFileOperandApprovalPlan(fixture: ScriptOperandFixture, cwd
   expect(prepared.plan.mutableFileOperand).toEqual({
     argvIndex: fixture.expectedArgvIndex,
     path: fs.realpathSync(fixture.scriptPath),
-    sha256: expect.any(String),
+    sha256: sha256FileSync(fixture.scriptPath),
   });
 }
 
@@ -386,7 +398,7 @@ describe("hardenApprovedExecutionPaths", () => {
       argv: ["poccmd", "SAFE"],
       shellCommand: null,
       withPathToken: true,
-      expectedArgv: ({ pathToken }) => [pathToken!.expected, "SAFE"],
+      expectedArgv: ({ pathToken }) => [requirePathToken(pathToken).expected, "SAFE"],
       expectedArgvChanged: true,
     },
     {
@@ -403,7 +415,7 @@ describe("hardenApprovedExecutionPaths", () => {
       mode: "build-plan",
       argv: ["poccmd", "hello"],
       withPathToken: true,
-      expectedArgv: ({ pathToken }) => [pathToken!.expected, "hello"],
+      expectedArgv: ({ pathToken }) => [requirePathToken(pathToken).expected, "hello"],
       checkRawCommandMatchesArgv: true,
       expectedCommandPreview: null,
     },
@@ -832,11 +844,14 @@ describe("hardenApprovedExecutionPaths", () => {
             if (!prepared.ok) {
               throw new Error("unreachable");
             }
-            expect(prepared.plan.mutableFileOperand).toBeDefined();
+            const mutableFileOperand = prepared.plan.mutableFileOperand;
+            if (mutableFileOperand == null) {
+              throw new Error("expected mutable file operand snapshot");
+            }
             fs.writeFileSync(fixture.scriptPath, 'console.log("PWNED");\n');
             expect(
               revalidateApprovedMutableFileOperand({
-                snapshot: prepared.plan.mutableFileOperand!,
+                snapshot: mutableFileOperand,
                 argv: prepared.plan.argv,
                 cwd: prepared.plan.cwd ?? tmp,
               }),
@@ -944,7 +959,7 @@ describe("hardenApprovedExecutionPaths", () => {
       snapshot: {
         argvIndex: 3,
         path: fs.realpathSync(scriptPath),
-        sha256: expect.any(String),
+        sha256: sha256FileSync(scriptPath),
       },
     });
   });

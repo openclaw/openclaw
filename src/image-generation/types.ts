@@ -1,5 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { MediaNormalizationEntry } from "../media-generation/normalization.types.js";
 
 export type GeneratedImageAsset = {
@@ -33,7 +34,7 @@ export type ImageGenerationProviderOptions = {
   openai?: ImageGenerationOpenAIOptions;
 };
 
-export type ImageGenerationIgnoredOverrideKey =
+type ImageGenerationIgnoredOverrideKey =
   | "size"
   | "aspectRatio"
   | "resolution"
@@ -75,6 +76,7 @@ export type ImageGenerationRequest = {
   background?: ImageGenerationBackground;
   inputImages?: ImageGenerationSourceImage[];
   providerOptions?: ImageGenerationProviderOptions;
+  ssrfPolicy?: SsrFPolicy;
 };
 
 export type ImageGenerationResult = {
@@ -83,25 +85,25 @@ export type ImageGenerationResult = {
   metadata?: Record<string, unknown>;
 };
 
-export type ImageGenerationModeCapabilities = {
+type ImageGenerationModeCapabilities = {
   maxCount?: number;
   supportsSize?: boolean;
   supportsAspectRatio?: boolean;
   supportsResolution?: boolean;
 };
 
-export type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
+type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
   enabled: boolean;
   maxInputImages?: number;
 };
 
-export type ImageGenerationGeometryCapabilities = {
+type ImageGenerationGeometryCapabilities = {
   sizes?: string[];
   aspectRatios?: string[];
   resolutions?: ImageGenerationResolution[];
 };
 
-export type ImageGenerationOutputCapabilities = {
+type ImageGenerationOutputCapabilities = {
   qualities?: ImageGenerationQuality[];
   formats?: ImageGenerationOutputFormat[];
   backgrounds?: ImageGenerationBackground[];

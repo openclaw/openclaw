@@ -2,6 +2,18 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
 describe("config schema regressions", () => {
+  it("accepts session write-lock acquire timeout", () => {
+    const res = validateConfigObject({
+      session: {
+        writeLock: {
+          acquireTimeoutMs: 60_000,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
       agents: {
@@ -202,7 +214,9 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((issue) => issue.path.includes("agents.defaults.pdfMax"))).toBe(true);
+      const issuePaths = res.issues.map((issue) => issue.path);
+      expect(issuePaths).toContain("agents.defaults.pdfMaxBytesMb");
+      expect(issuePaths).toContain("agents.defaults.pdfMaxPages");
     }
   });
 
@@ -242,6 +256,45 @@ describe("config schema regressions", () => {
     const res = validateConfigObject({
       browser: {
         extraArgs: "--proxy-server=http://127.0.0.1:7890" as unknown,
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("accepts browser.tabCleanup overrides", () => {
+    const res = validateConfigObject({
+      browser: {
+        tabCleanup: {
+          enabled: true,
+          idleMinutes: 10,
+          maxTabsPerSession: 10,
+          sweepMinutes: 5,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects browser.tabCleanup.sweepMinutes when not positive", () => {
+    const res = validateConfigObject({
+      browser: {
+        tabCleanup: {
+          sweepMinutes: 0,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects unknown keys under browser.tabCleanup", () => {
+    const res = validateConfigObject({
+      browser: {
+        tabCleanup: {
+          unknownKey: true as unknown,
+        },
       },
     });
 

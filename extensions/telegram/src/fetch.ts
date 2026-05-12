@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import * as dns from "node:dns";
-import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-types";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createPinnedLookup,
-  hasEnvHttpProxyConfigured,
+  hasEnvHttpProxyAgentConfigured,
+  resolveEnvHttpProxyAgentOptions,
   resolveFetch,
   type PinnedDispatcherPolicy,
 } from "openclaw/plugin-sdk/fetch-runtime";
@@ -14,7 +15,7 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import {
@@ -40,6 +41,10 @@ const TELEGRAM_DISPATCHER_KEEP_ALIVE_TIMEOUT_MS = 30_000;
 const TELEGRAM_DISPATCHER_KEEP_ALIVE_MAX_TIMEOUT_MS = 600_000;
 const TELEGRAM_DISPATCHER_CONNECTIONS_PER_ORIGIN = 10;
 const TELEGRAM_DISPATCHER_PIPELINING = 1;
+const TELEGRAM_STICKY_FALLBACK_PRIMARY_PROBE_SUCCESS_THRESHOLD = 5;
+const TELEGRAM_TRANSPORT_ATTEMPT_FAILURE_THRESHOLD = 5;
+const TELEGRAM_TRANSPORT_ATTEMPT_INITIAL_COOLDOWN_MS = 10_000;
+const TELEGRAM_TRANSPORT_ATTEMPT_MAX_COOLDOWN_MS = 60_000;
 
 type TelegramAgentPoolOptions = {
   allowH2: false;
@@ -74,7 +79,14 @@ type TelegramDispatcherAttempt = {
 type TelegramTransportAttempt = {
   createDispatcher: () => TelegramDispatcher;
   exportAttempt: TelegramDispatcherAttempt;
+  logLevel?: "debug" | "warn";
   logMessage?: string;
+};
+
+type TelegramTransportAttemptHealth = {
+  consecutiveFailures: number;
+  cooldownMs: number;
+  unhealthyUntilMs: number;
 };
 
 type TelegramDnsResultOrder = "ipv4first" | "verbatim";
@@ -106,22 +118,6 @@ type TelegramTransportFallbackContext = {
   message: string;
   codes: Set<string>;
 };
-
-type TelegramTransportFallbackRule = {
-  name: string;
-  matches: (ctx: TelegramTransportFallbackContext) => boolean;
-};
-
-const TELEGRAM_TRANSPORT_FALLBACK_RULES: readonly TelegramTransportFallbackRule[] = [
-  {
-    name: "fetch-failed-envelope",
-    matches: ({ message }) => message.includes("fetch failed"),
-  },
-  {
-    name: "known-network-code",
-    matches: ({ codes }) => FALLBACK_RETRY_ERROR_CODES.some((code) => codes.has(code)),
-  },
-];
 
 function normalizeDnsResultOrder(value: string | null): TelegramDnsResultOrder | null {
   if (value === "ipv4first" || value === "verbatim") {
@@ -225,7 +221,14 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
 }
 
 function hasEnvHttpProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
-  return hasEnvHttpProxyConfigured("https", env);
+  return hasEnvHttpProxyAgentConfigured(env);
+}
+
+function resolveOpenClawProxyUrlForTelegram(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const proxyUrl = env.OPENCLAW_PROXY_URL?.trim();
+  return proxyUrl ? proxyUrl : undefined;
 }
 
 function resolveTelegramDispatcherPolicy(params: {
@@ -325,6 +328,7 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
     const proxyTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
     const proxyOptions = {
       ...poolOptions,
+      ...resolveEnvHttpProxyAgentOptions(),
       ...(connectOptions ? { connect: connectOptions } : {}),
       ...(proxyTlsOptions ? { proxyTls: proxyTlsOptions } : {}),
     } satisfies ConstructorParameters<typeof EnvHttpProxyAgent>[0];
@@ -400,8 +404,9 @@ function collectErrorCodes(err: unknown): Set<string> {
   const queue: unknown[] = [err];
   const seen = new Set<unknown>();
 
-  while (queue.length > 0) {
-    const current = queue.shift();
+  let queueIndex = 0;
+  while (queueIndex < queue.length) {
+    const current = queue[queueIndex++];
     if (!current || seen.has(current)) {
       continue;
     }
@@ -434,7 +439,18 @@ function formatErrorCodes(err: unknown): string {
   return codes.length > 0 ? codes.join(",") : "none";
 }
 
+class TelegramTransportAttemptUnhealthyError extends Error {
+  constructor(unhealthyUntilMs: number) {
+    const remainingMs = Math.max(0, unhealthyUntilMs - Date.now());
+    super(`telegram transport attempt temporarily unhealthy; retry after ${remainingMs}ms`);
+    this.name = "TelegramTransportAttemptUnhealthyError";
+  }
+}
+
 function shouldUseTelegramTransportFallback(err: unknown): boolean {
+  if (err instanceof TelegramTransportAttemptUnhealthyError) {
+    return true;
+  }
   const ctx: TelegramTransportFallbackContext = {
     message:
       err && typeof err === "object" && "message" in err
@@ -442,12 +458,9 @@ function shouldUseTelegramTransportFallback(err: unknown): boolean {
         : "",
     codes: collectErrorCodes(err),
   };
-  for (const rule of TELEGRAM_TRANSPORT_FALLBACK_RULES) {
-    if (!rule.matches(ctx)) {
-      return false;
-    }
-  }
-  return true;
+  const hasFetchFailedEnvelope = ctx.message.includes("fetch failed");
+  const hasKnownNetworkCode = FALLBACK_RETRY_ERROR_CODES.some((code) => ctx.codes.has(code));
+  return hasKnownNetworkCode || (hasFetchFailedEnvelope && ctx.codes.size === 0);
 }
 
 export function shouldRetryTelegramTransportFallback(err: unknown): boolean {
@@ -509,6 +522,7 @@ function createTelegramTransportAttempts(params: {
       return ipv4Dispatcher;
     },
     exportAttempt: { dispatcherPolicy: fallbackPolicy },
+    logLevel: "debug",
     logMessage: "fetch fallback: enabling sticky IPv4-only dispatcher",
   });
 
@@ -533,6 +547,7 @@ function createTelegramTransportAttempts(params: {
       return fallbackIpDispatcher;
     },
     exportAttempt: { dispatcherPolicy: fallbackIpPolicy },
+    logLevel: "warn",
     logMessage: "fetch fallback: DNS-resolved IP unreachable; trying alternative Telegram API IP",
   });
 
@@ -580,8 +595,12 @@ export function resolveTelegramTransport(
   const explicitProxyUrl = effectiveProxyFetch
     ? getProxyUrlFromFetch(effectiveProxyFetch)
     : undefined;
+  const hasEnvProxy = !explicitProxyUrl && hasEnvHttpProxyForTelegramApi();
+  const managedProxyUrl =
+    !effectiveProxyFetch && !hasEnvProxy ? resolveOpenClawProxyUrlForTelegram() : undefined;
+  const resolvedExplicitProxyUrl = explicitProxyUrl ?? managedProxyUrl;
   const undiciSourceFetch = resolveWrappedFetch(undiciFetch as unknown as typeof fetch);
-  const sourceFetch = explicitProxyUrl
+  const sourceFetch = resolvedExplicitProxyUrl
     ? undiciSourceFetch
     : effectiveProxyFetch
       ? resolveWrappedFetch(effectiveProxyFetch)
@@ -592,13 +611,13 @@ export function resolveTelegramTransport(
     return { fetch: sourceFetch, sourceFetch, close: async () => {} };
   }
 
-  const useEnvProxy = !explicitProxyUrl && hasEnvHttpProxyForTelegramApi();
+  const useEnvProxy = !resolvedExplicitProxyUrl && hasEnvProxy;
   const defaultDispatcherResolution = resolveTelegramDispatcherPolicy({
     autoSelectFamily: autoSelectDecision.value,
     dnsResultOrder,
     useEnvProxy,
     forceIpv4: false,
-    proxyUrl: explicitProxyUrl,
+    proxyUrl: resolvedExplicitProxyUrl,
   });
   const defaultDispatcher = createTelegramDispatcher(defaultDispatcherResolution.policy);
   const shouldBypassEnvProxy = shouldBypassEnvProxyForTelegramApi();
@@ -611,7 +630,7 @@ export function resolveTelegramTransport(
         dnsResultOrder: "ipv4first",
         useEnvProxy: defaultDispatcher.mode === "env-proxy",
         forceIpv4: true,
-        proxyUrl: explicitProxyUrl,
+        proxyUrl: resolvedExplicitProxyUrl,
       }).policy
     : undefined;
   const ownedDispatchers = new Set<TelegramDispatcher>();
@@ -623,6 +642,48 @@ export function resolveTelegramTransport(
   });
 
   let stickyAttemptIndex = 0;
+  let stickySuccessCount = 0;
+  let primaryProbeDue = false;
+  const attemptHealth = transportAttempts.map<TelegramTransportAttemptHealth>(() => ({
+    consecutiveFailures: 0,
+    cooldownMs: TELEGRAM_TRANSPORT_ATTEMPT_INITIAL_COOLDOWN_MS,
+    unhealthyUntilMs: 0,
+  }));
+
+  const resetStickyRecoveryProbe = (): void => {
+    stickySuccessCount = 0;
+    primaryProbeDue = false;
+  };
+
+  const getAttemptCooldownError = (attemptIndex: number): Error | null => {
+    const health = attemptHealth[attemptIndex];
+    if (health.unhealthyUntilMs <= Date.now()) {
+      return null;
+    }
+    return new TelegramTransportAttemptUnhealthyError(health.unhealthyUntilMs);
+  };
+
+  const recordAttemptFailure = (attemptIndex: number, err: unknown): void => {
+    if (!shouldUseTelegramTransportFallback(err)) {
+      return;
+    }
+    const health = attemptHealth[attemptIndex];
+    health.consecutiveFailures += 1;
+    if (health.consecutiveFailures < TELEGRAM_TRANSPORT_ATTEMPT_FAILURE_THRESHOLD) {
+      return;
+    }
+    const cooldownMs = Math.min(
+      TELEGRAM_TRANSPORT_ATTEMPT_MAX_COOLDOWN_MS,
+      Math.max(TELEGRAM_TRANSPORT_ATTEMPT_INITIAL_COOLDOWN_MS, health.cooldownMs),
+    );
+    health.consecutiveFailures = 0;
+    health.cooldownMs = Math.min(TELEGRAM_TRANSPORT_ATTEMPT_MAX_COOLDOWN_MS, cooldownMs * 2);
+    health.unhealthyUntilMs = Date.now() + cooldownMs;
+    log.warn(
+      `telegram transport attempt marked temporarily unhealthy for ${cooldownMs}ms (codes=${formatErrorCodes(err)})`,
+    );
+  };
+
   const promoteStickyAttempt = (nextIndex: number, err: unknown, reason?: string): boolean => {
     if (nextIndex <= stickyAttemptIndex || nextIndex >= transportAttempts.length) {
       return false;
@@ -630,52 +691,112 @@ export function resolveTelegramTransport(
     const nextAttempt = transportAttempts[nextIndex];
     if (nextAttempt.logMessage) {
       const reasonText = reason ? `, reason=${reason}` : "";
-      log.warn(`${nextAttempt.logMessage} (codes=${formatErrorCodes(err)}${reasonText})`);
+      const logLine = `${nextAttempt.logMessage} (codes=${formatErrorCodes(err)}${reasonText})`;
+      if (nextAttempt.logLevel === "debug") {
+        log.debug(logLine);
+      } else {
+        log.warn(logLine);
+      }
     }
     stickyAttemptIndex = nextIndex;
+    resetStickyRecoveryProbe();
     return true;
+  };
+
+  const recordSuccessfulAttempt = (attemptIndex: number): void => {
+    const health = attemptHealth[attemptIndex];
+    health.consecutiveFailures = 0;
+    health.cooldownMs = TELEGRAM_TRANSPORT_ATTEMPT_INITIAL_COOLDOWN_MS;
+    health.unhealthyUntilMs = 0;
+
+    if (stickyAttemptIndex === 0) {
+      resetStickyRecoveryProbe();
+      return;
+    }
+
+    if (attemptIndex < stickyAttemptIndex) {
+      log.debug(
+        `fetch fallback: recovered from attempt ${stickyAttemptIndex} to attempt ${attemptIndex}`,
+      );
+      stickyAttemptIndex = attemptIndex;
+      resetStickyRecoveryProbe();
+      return;
+    }
+
+    if (attemptIndex !== stickyAttemptIndex) {
+      return;
+    }
+
+    stickySuccessCount += 1;
+    if (stickySuccessCount >= TELEGRAM_STICKY_FALLBACK_PRIMARY_PROBE_SUCCESS_THRESHOLD) {
+      stickySuccessCount = 0;
+      primaryProbeDue = true;
+      log.debug("fetch fallback: scheduling primary dispatcher recovery probe");
+    }
   };
 
   const resolvedFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const callerProvidedDispatcher = Boolean(
       (init as RequestInitWithDispatcher | undefined)?.dispatcher,
     );
-    const startIndex = Math.min(stickyAttemptIndex, transportAttempts.length - 1);
+    const stickyStartIndex = Math.min(stickyAttemptIndex, transportAttempts.length - 1);
+    const stickyCooldownError = callerProvidedDispatcher
+      ? null
+      : getAttemptCooldownError(stickyStartIndex);
+    const primaryProbe =
+      !callerProvidedDispatcher &&
+      stickyStartIndex > 0 &&
+      (primaryProbeDue || stickyCooldownError !== null);
+    const startIndex = primaryProbe ? 0 : stickyStartIndex;
+    if (primaryProbe) {
+      primaryProbeDue = false;
+      log.debug(
+        stickyCooldownError
+          ? "fetch fallback: re-probing primary dispatcher while sticky fallback is cooling down"
+          : "fetch fallback: re-probing primary dispatcher after sticky fallback successes",
+      );
+    }
     let err: unknown;
 
-    try {
-      const response = await sourceFetch(
-        input,
-        withDispatcherIfMissing(init, transportAttempts[startIndex].createDispatcher()),
-      );
-      captureHttpExchange({
-        url: resolveRequestUrl(input),
-        method: init?.method ?? "GET",
-        requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-        requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
-        response,
-        flowId: randomUUID(),
-        meta: { subsystem: "telegram-fetch" },
-      });
-      return response;
-    } catch (caught) {
-      err = caught;
-    }
-
-    if (!shouldUseTelegramTransportFallback(err)) {
-      throw err;
-    }
     if (callerProvidedDispatcher) {
-      return sourceFetch(input, init ?? {});
+      try {
+        const response = await sourceFetch(input, init);
+        captureHttpExchange({
+          url: resolveRequestUrl(input),
+          method: init?.method ?? "GET",
+          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+          response,
+          flowId: randomUUID(),
+          meta: { subsystem: "telegram-fetch" },
+        });
+        return response;
+      } catch (caught) {
+        if (!shouldUseTelegramTransportFallback(caught)) {
+          throw caught;
+        }
+        return sourceFetch(input, init ?? {});
+      }
     }
 
-    for (let nextIndex = startIndex + 1; nextIndex < transportAttempts.length; nextIndex += 1) {
-      const nextAttempt = transportAttempts[nextIndex];
-      promoteStickyAttempt(nextIndex, err);
+    for (
+      let attemptIndex = startIndex;
+      attemptIndex < transportAttempts.length;
+      attemptIndex += 1
+    ) {
+      const attempt = transportAttempts[attemptIndex];
+      if (attemptIndex > startIndex) {
+        promoteStickyAttempt(attemptIndex, err);
+      }
+      const cooldownError = getAttemptCooldownError(attemptIndex);
+      if (cooldownError) {
+        err = cooldownError;
+        continue;
+      }
       try {
         const response = await sourceFetch(
           input,
-          withDispatcherIfMissing(init, nextAttempt.createDispatcher()),
+          withDispatcherIfMissing(init, attempt.createDispatcher()),
         );
         captureHttpExchange({
           url: resolveRequestUrl(input),
@@ -684,14 +805,19 @@ export function resolveTelegramTransport(
           requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
           response,
           flowId: randomUUID(),
-          meta: { subsystem: "telegram-fetch", fallbackAttempt: nextIndex },
+          meta:
+            attemptIndex === startIndex
+              ? { subsystem: "telegram-fetch" }
+              : { subsystem: "telegram-fetch", fallbackAttempt: attemptIndex },
         });
+        recordSuccessfulAttempt(attemptIndex);
         return response;
       } catch (caught) {
         err = caught;
         if (!shouldUseTelegramTransportFallback(err)) {
           throw err;
         }
+        recordAttemptFailure(attemptIndex, err);
       }
     }
 

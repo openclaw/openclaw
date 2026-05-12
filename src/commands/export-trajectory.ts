@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
@@ -8,14 +8,16 @@ import {
 import { loadSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { pathExists } from "../infra/fs-safe.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   exportTrajectoryForCommand,
   formatTrajectoryCommandExportSummary,
+  type TrajectoryCommandExportSummary,
 } from "../trajectory/command-export.js";
 
-export type ExportTrajectoryCommandOptions = {
+type ExportTrajectoryCommandOptions = {
   sessionKey?: string;
   output?: string;
   store?: string;
@@ -85,7 +87,9 @@ export async function exportTrajectoryCommand(
   }
   const sessionKey = resolvedOpts.sessionKey?.trim();
   if (!sessionKey) {
-    runtime.error("--session-key is required");
+    runtime.error(
+      `--session-key is required. Run ${formatCliCommand("openclaw sessions")} to choose a session.`,
+    );
     runtime.exit(1);
     return;
   }
@@ -96,7 +100,9 @@ export async function exportTrajectoryCommand(
   const store = loadSessionStore(storePath, { skipCache: true });
   const entry = store[sessionKey] as SessionEntry | undefined;
   if (!entry?.sessionId) {
-    runtime.error(`Session not found: ${sessionKey}`);
+    runtime.error(
+      `Session not found: ${sessionKey}. Run ${formatCliCommand("openclaw sessions")} to see available sessions.`,
+    );
     runtime.exit(1);
     return;
   }
@@ -113,15 +119,17 @@ export async function exportTrajectoryCommand(
     runtime.exit(1);
     return;
   }
-  if (!fs.existsSync(sessionFile)) {
-    runtime.error("Session file not found.");
+  if (!(await pathExists(sessionFile))) {
+    runtime.error(
+      `Session file not found for ${sessionKey}. Run ${formatCliCommand("openclaw doctor")} to inspect session storage.`,
+    );
     runtime.exit(1);
     return;
   }
 
-  let summary: ReturnType<typeof exportTrajectoryForCommand>;
+  let summary: TrajectoryCommandExportSummary;
   try {
-    summary = exportTrajectoryForCommand({
+    summary = await exportTrajectoryForCommand({
       outputPath: resolvedOpts.output,
       sessionFile,
       sessionId: entry.sessionId,

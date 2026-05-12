@@ -1,12 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import {
-  buildAllowedModelSet,
-  modelKey,
-  parseModelRef,
-  resolveDefaultModelForAgent,
-} from "../agents/model-selection.js";
+import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -36,7 +32,7 @@ export {
 export const OPENCLAW_MODEL_ID = "openclaw";
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
 
-export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
+function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   const raw =
     normalizeOptionalString(getHeader(req, "x-openclaw-agent-id")) ||
     normalizeOptionalString(getHeader(req, "x-openclaw-agent")) ||
@@ -96,14 +92,14 @@ export async function resolveOpenAiCompatModelOverride(params: {
   }
 
   const catalog = await loadGatewayModelCatalog();
-  const allowed = buildAllowedModelSet({
+  const policy = createModelVisibilityPolicy({
     cfg,
     catalog,
     defaultProvider,
     agentId: params.agentId,
   });
   const normalized = modelKey(parsed.provider, parsed.model);
-  if (!allowed.allowAny && !allowed.allowedKeys.has(normalized)) {
+  if (!policy.allowsKey(normalized)) {
     return {
       errorMessage: `Model '${normalized}' is not allowed for agent '${params.agentId}'.`,
     };
@@ -126,7 +122,7 @@ export function resolveAgentIdForRequest(params: {
   return fromModel ?? resolveDefaultAgentId(cfg);
 }
 
-export function resolveSessionKey(params: {
+function resolveSessionKey(params: {
   req: IncomingMessage;
   agentId: string;
   user?: string | undefined;

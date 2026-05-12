@@ -12,7 +12,14 @@ export type OAuthCredentials = {
   enterpriseUrl?: string;
   projectId?: string;
   accountId?: string;
+  chatgptPlanType?: string;
   idToken?: string;
+};
+
+export type OAuthCredentialRef = {
+  source: "openclaw-credentials";
+  provider: "openai-codex";
+  id: string;
 };
 
 export type ApiKeyCredential = {
@@ -20,6 +27,8 @@ export type ApiKeyCredential = {
   provider: string;
   key?: string;
   keyRef?: SecretRef;
+  /** Explicit opt-out for copying this profile when creating another agent. */
+  copyToAgents?: boolean;
   email?: string;
   displayName?: string;
   /** Optional provider-specific metadata (e.g., account IDs, gateway IDs). */
@@ -35,6 +44,8 @@ export type TokenCredential = {
   provider: string;
   token?: string;
   tokenRef?: SecretRef;
+  /** Explicit opt-out for copying this profile when creating another agent. */
+  copyToAgents?: boolean;
   /** Optional expiry timestamp (ms since epoch). */
   expires?: number;
   email?: string;
@@ -45,8 +56,14 @@ export type OAuthCredential = OAuthCredentials & {
   type: "oauth";
   provider: string;
   clientId?: string;
+  /**
+   * OAuth refresh tokens are not portable by default. Provider-owned flows may
+   * set this only when copying refresh material across agents is known safe.
+   */
+  copyToAgents?: boolean;
   email?: string;
   displayName?: string;
+  oauthRef?: OAuthCredentialRef;
 };
 
 export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;
@@ -66,9 +83,16 @@ export type AuthProfileFailureReason =
   | "unclassified"
   | "unknown";
 
+export type AuthProfileBlockedReason = "subscription_limit";
+export type AuthProfileBlockedSource = "codex_rate_limits" | "wham";
+
 /** Per-profile usage statistics for round-robin and cooldown tracking */
 export type ProfileUsageStats = {
   lastUsed?: number;
+  blockedUntil?: number;
+  blockedReason?: AuthProfileBlockedReason;
+  blockedSource?: AuthProfileBlockedSource;
+  blockedModel?: string;
   cooldownUntil?: number;
   cooldownReason?: AuthProfileFailureReason;
   cooldownModel?: string;

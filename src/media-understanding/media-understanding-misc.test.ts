@@ -2,6 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fsSafe from "../infra/fs-safe.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { MediaAttachmentCache } from "./attachments.js";
@@ -54,6 +55,14 @@ describe("media understanding attachments SSRF", () => {
     vi.restoreAllMocks();
   });
 
+  function requireFirstOpenCall(openSpy: ReturnType<typeof vi.spyOn>): unknown[] {
+    const [call] = openSpy.mock.calls;
+    if (!call) {
+      throw new Error("expected fs.open call");
+    }
+    return call;
+  }
+
   it("blocks private IP URLs before fetching", async () => {
     const fetchSpy = vi.fn();
     globalThis.fetch = withFetchPreconnect(fetchSpy);
@@ -84,9 +93,17 @@ describe("media understanding attachments SSRF", () => {
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
 
-    await expect(
-      allowedCache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 }),
-    ).resolves.toMatchObject({ mime: "image/jpeg" });
+    const result = await allowedCache.getBuffer({
+      attachmentIndex: 0,
+      maxBytes: 1024,
+      timeoutMs: 1000,
+    });
+    expect(result).toStrictEqual({
+      buffer: Buffer.from("image"),
+      mime: "image/jpeg",
+      fileName: "file.jpg",
+      size: 5,
+    });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -203,7 +220,7 @@ describe("media understanding attachments SSRF", () => {
         await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });
 
         expect(openSpy).toHaveBeenCalled();
-        const [openedPath, openedFlags] = openSpy.mock.calls[0] ?? [];
+        const [openedPath, openedFlags] = requireFirstOpenCall(openSpy);
         expect(await fs.realpath(String(openedPath)).catch(() => String(openedPath))).toBe(
           canonicalAttachmentPath,
         );
@@ -222,13 +239,11 @@ describe("media understanding attachments SSRF", () => {
       const cache = new MediaAttachmentCache([{ index: 0, path: attachmentPath }], {
         localPathRoots: [allowedRoot],
       });
-      const originalRealpath = fs.realpath.bind(fs);
-
-      vi.spyOn(fs, "realpath").mockImplementation(async (candidatePath) => {
-        if (String(candidatePath) === attachmentPath) {
+      vi.spyOn(fsSafe, "openLocalFileSafely").mockImplementation(async (params) => {
+        if (params.filePath === attachmentPath) {
           throw new Error("EACCES");
         }
-        return await originalRealpath(candidatePath);
+        throw new Error(`Unexpected attachment path: ${params.filePath}`);
       });
 
       await expect(

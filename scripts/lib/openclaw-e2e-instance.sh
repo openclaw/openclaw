@@ -9,6 +9,74 @@ openclaw_e2e_resolve_entrypoint() {
   echo "OpenClaw entrypoint not found under dist/" >&2
   return 1
 }
+openclaw_e2e_package_root() {
+  local prefix="${1:-}"
+  if [ -n "$prefix" ]; then
+    printf '%s/lib/node_modules/openclaw\n' "$prefix"
+    return 0
+  fi
+  printf '%s/openclaw\n' "$(npm root -g)"
+}
+openclaw_e2e_package_entrypoint() {
+  local root="${1:?missing package root}"
+  local entry
+  for entry in "$root/dist/index.mjs" "$root/dist/index.js"; do
+    [ -f "$entry" ] && { printf '%s\n' "$entry"; return 0; }
+  done
+  echo "OpenClaw package entrypoint not found under $root/dist/" >&2
+  return 1
+}
+openclaw_e2e_install_package() {
+  local log_file="$1"
+  local label="${2:-mounted OpenClaw package}"
+  local prefix="${3:-}"
+  local package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
+  local args=(-g)
+  if [ -n "$prefix" ]; then
+    args+=("--prefix" "$prefix")
+  fi
+  echo "Installing $label..."
+  if ! npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1; then
+    echo "npm install failed for $label" >&2
+    cat "$log_file" >&2 || true
+    exit 1
+  fi
+}
+openclaw_e2e_assert_package_extensions() {
+  local root="$1"
+  shift
+  local extension
+  for extension in "$@"; do
+    [ -d "$root/dist/extensions/$extension" ] || {
+      echo "Missing packaged extension: $extension" >&2
+      exit 1
+    }
+  done
+}
+openclaw_e2e_find_dep_package() {
+  local dep_path="$1"
+  shift
+  find "$@" -path "*/node_modules/$dep_path/package.json" -print -quit 2>/dev/null || true
+}
+openclaw_e2e_assert_dep_absent() {
+  local dep_path="$1"
+  shift
+  if [ -n "$(openclaw_e2e_find_dep_package "$dep_path" "$@")" ]; then
+    echo "$dep_path should not be installed" >&2
+    find "$@" -path "*/node_modules/$dep_path/package.json" -print 2>/dev/null >&2 || true
+    exit 1
+  fi
+}
+openclaw_e2e_assert_dep_present() {
+  local dep_path="$1"
+  shift
+  if [ -n "$(openclaw_e2e_find_dep_package "$dep_path" "$@")" ]; then
+    return 0
+  fi
+  echo "$dep_path was not installed on demand" >&2
+  find "$@" -maxdepth 6 -type d -name node_modules -print 2>/dev/null >&2 || true
+  exit 1
+}
 openclaw_e2e_write_state_env() {
   local target="${1:-/tmp/openclaw-test-state-env}"
   {
@@ -48,6 +116,35 @@ openclaw_e2e_stop_process() {
   done
   kill -9 "$pid" >/dev/null 2>&1 || true
   wait "$pid" >/dev/null 2>&1 || true
+}
+openclaw_e2e_terminate_gateways() {
+  local pid="${1:-}" _
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+  fi
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -f "[o]penclaw-gateway" 2>/dev/null || true
+  fi
+  for _ in $(seq 1 100); do
+    local alive=0
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      alive=1
+    fi
+    if command -v pgrep >/dev/null 2>&1 && pgrep -f "[o]penclaw-gateway" >/dev/null 2>&1; then
+      alive=1
+    fi
+    [ "$alive" = "0" ] && break
+    sleep 0.1
+  done
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -KILL -f "[o]penclaw-gateway" 2>/dev/null || true
+  fi
+  if [ -n "$pid" ]; then
+    wait "$pid" 2>/dev/null || true
+  fi
 }
 openclaw_e2e_start_mock_openai() { MOCK_PORT="$1" node scripts/e2e/mock-openai-server.mjs >"$2" 2>&1 & printf '%s\n' "$!"; }
 openclaw_e2e_wait_mock_openai() {

@@ -297,6 +297,71 @@ describe("agent wait dedupe helper", () => {
     });
   });
 
+  it("preserves an RPC cancel snapshot when late completion writes the same key", () => {
+    const dedupe = new Map();
+    const runId = "run-cancel-wins";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 100,
+      payload: { runId, status: "timeout", stopReason: "rpc", endedAt: 100 },
+    });
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 200,
+      payload: { runId, status: "ok", endedAt: 200 },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      endedAt: 100,
+      error: undefined,
+      stopReason: "rpc",
+    });
+  });
+
+  it("preserves an RPC cancel snapshot when late rejection writes the same chat key", () => {
+    const dedupe = new Map();
+    const runId = "run-cancel-chat-error";
+
+    setRunEntry({
+      dedupe,
+      kind: "chat",
+      runId,
+      ts: 100,
+      payload: { runId, status: "timeout", stopReason: "rpc", endedAt: 100 },
+    });
+    setRunEntry({
+      dedupe,
+      kind: "chat",
+      runId,
+      ts: 200,
+      ok: false,
+      payload: { runId, status: "error", summary: "late failure", endedAt: 200 },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      endedAt: 100,
+      error: undefined,
+      stopReason: "rpc",
+    });
+  });
+
   it("resolves multiple waiters for the same run id", async () => {
     const dedupe = new Map();
     const runId = "run-multi";
@@ -321,16 +386,15 @@ describe("agent wait dedupe helper", () => {
       payload: { runId, status: "ok" },
     });
 
-    await expect(first).resolves.toEqual(
-      expect.objectContaining({
-        status: "ok",
-      }),
-    );
-    await expect(second).resolves.toEqual(
-      expect.objectContaining({
-        status: "ok",
-      }),
-    );
+    const firstResult = await first;
+    const secondResult = await second;
+    if (!firstResult || !secondResult) {
+      throw new Error("expected waiters to resolve");
+    }
+    expect(firstResult.status).toBe("ok");
+    expect(firstResult.error).toBeUndefined();
+    expect(secondResult.status).toBe("ok");
+    expect(secondResult.error).toBeUndefined();
     expect(__testing.getWaiterCount(runId)).toBe(0);
   });
 

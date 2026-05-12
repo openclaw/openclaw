@@ -167,7 +167,7 @@ import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
 import { defaultRuntime } from "../../runtime.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
-import { readRegistry, updateRegistry } from "./registry.js";
+import { readRegistryEntry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
@@ -272,23 +272,48 @@ export async function readDockerPort(containerName: string, port: number) {
   return Number.isFinite(mapped) ? mapped : null;
 }
 
-async function dockerImageExists(image: string) {
+const DOCKER_DAEMON_UNAVAILABLE_MARKERS = [
+  "cannot connect to the docker daemon",
+  "dial unix",
+  "docker daemon is not running",
+  "connection refused",
+];
+
+export function isDockerDaemonUnavailable(stderr: string): boolean {
+  return DOCKER_DAEMON_UNAVAILABLE_MARKERS.some((marker) => stderr.toLowerCase().includes(marker));
+}
+
+export function formatDockerDaemonUnavailableError(stderr: string): string {
+  const detail = stderr.trim();
+  return [
+    "Sandbox mode requires Docker, but the Docker daemon is not available.",
+    "Start Docker, or set `agents.defaults.sandbox.mode=off` to disable sandboxing.",
+    detail ? `Docker said: ${detail}` : undefined,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join(" ");
+}
+
+async function inspectDockerImage(image: string): Promise<"exists" | "missing"> {
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
   });
   if (result.code === 0) {
-    return true;
+    return "exists";
   }
   const stderr = result.stderr.trim();
-  if (stderr.includes("No such image")) {
-    return false;
+  if (stderr.toLowerCase().includes("no such image")) {
+    return "missing";
+  }
+  if (isDockerDaemonUnavailable(stderr)) {
+    throw new Error(formatDockerDaemonUnavailableError(stderr));
   }
   throw new Error(`Failed to inspect sandbox image: ${stderr}`);
 }
 
 export async function ensureDockerImage(image: string) {
-  const exists = await dockerImageExists(image);
-  if (exists) {
+  const imageState = await inspectDockerImage(image);
+  if (imageState === "exists") {
     return;
   }
   if (image === DEFAULT_SANDBOX_IMAGE) {
@@ -555,8 +580,7 @@ export async function ensureSandboxContainer(params: {
       }
     | undefined;
   if (hasContainer) {
-    const registry = await readRegistry();
-    registryEntry = registry.entries.find((entry) => entry.containerName === containerName);
+    registryEntry = (await readRegistryEntry(containerName)) ?? undefined;
     currentHash = await readContainerConfigHash(containerName);
     if (!currentHash) {
       currentHash = registryEntry?.configHash ?? null;

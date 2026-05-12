@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawPluginApi,
+  OpenClawConfig,
   ProviderAuthContext,
   ProviderAuthResult,
   ProviderCatalogContext,
@@ -15,7 +16,7 @@ import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-aut
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { MINIMAX_FAST_MODE_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
 import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
@@ -66,6 +67,14 @@ function apiModelRef(modelId: string): string {
 
 function portalModelRef(modelId: string): string {
   return `${PORTAL_PROVIDER_ID}/${modelId}`;
+}
+
+function getProviderBaseUrl(cfg: OpenClawConfig, providerId: string): string | undefined {
+  return normalizeOptionalString(cfg.models?.providers?.[providerId]?.baseUrl);
+}
+
+function resolveMinimaxUsageBaseUrl(cfg: OpenClawConfig): string | undefined {
+  return getProviderBaseUrl(cfg, PORTAL_PROVIDER_ID) ?? getProviderBaseUrl(cfg, API_PROVIDER_ID);
 }
 
 function buildPortalProviderCatalog(params: { baseUrl: string; apiKey: string }) {
@@ -255,7 +264,9 @@ export function registerMinimaxProviders(api: OpenClawPluginApi) {
     ...MINIMAX_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
     fetchUsageSnapshot: async (ctx) =>
-      await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
+      await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, {
+        baseUrl: resolveMinimaxUsageBaseUrl(ctx.config),
+      }),
   });
 
   api.registerProvider({

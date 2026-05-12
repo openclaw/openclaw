@@ -285,6 +285,7 @@ export OPENCLAW_DISABLE_BONJOUR="${OPENCLAW_DISABLE_BONJOUR:-}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
+export OPENCLAW_INSTALL_BROWSER="${OPENCLAW_INSTALL_BROWSER:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
 export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}"
@@ -482,6 +483,7 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_HOME_VOLUME \
   OPENCLAW_DOCKER_APT_PACKAGES \
   OPENCLAW_EXTENSIONS \
+  OPENCLAW_INSTALL_BROWSER \
   OPENCLAW_SANDBOX \
   OPENCLAW_DOCKER_SOCKET \
   DOCKER_GID \
@@ -503,6 +505,7 @@ if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   run_docker_build \
     --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
+    --build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
     -t "$IMAGE_NAME" \
     -f "$ROOT_DIR/Dockerfile" \
@@ -576,15 +579,15 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   echo ""
   echo "==> Sandbox setup"
 
-  # Build sandbox image if Dockerfile.sandbox exists.
-  if [[ -f "$ROOT_DIR/Dockerfile.sandbox" ]]; then
+  sandbox_dockerfile="$ROOT_DIR/scripts/docker/sandbox/Dockerfile"
+  if [[ -f "$sandbox_dockerfile" ]]; then
     echo "Building sandbox image: openclaw-sandbox:bookworm-slim"
     run_docker_build \
       -t "openclaw-sandbox:bookworm-slim" \
-      -f "$ROOT_DIR/Dockerfile.sandbox" \
+      -f "$sandbox_dockerfile" \
       "$ROOT_DIR"
   else
-    echo "WARNING: Dockerfile.sandbox not found in $ROOT_DIR" >&2
+    echo "WARNING: sandbox Dockerfile not found at $sandbox_dockerfile" >&2
     echo "  Sandbox config will be applied but no sandbox image will be built." >&2
     echo "  Agent exec may fail if the configured sandbox image does not exist." >&2
   fi

@@ -15,6 +15,7 @@ const hoisted = vi.hoisted(() => ({
   readAcpSessionEntryMock: vi.fn(),
   resolveConversationBindingContextMock: vi.fn(),
   resolveFocusTargetSessionMock: vi.fn(),
+  resolveStoredSubagentCapabilitiesMock: vi.fn(),
   sessionBindingCapabilitiesMock: vi.fn(),
   sessionBindingBindMock: vi.fn(),
   sessionBindingResolveByConversationMock: vi.fn(),
@@ -76,7 +77,7 @@ vi.mock("../../channels/thread-bindings-policy.js", () => ({
   formatThreadBindingDisabledError: (params: { channel: string }) =>
     `channels.${params.channel}.threadBindings.enabled=true required`,
   formatThreadBindingSpawnDisabledError: (params: { channel: string }) =>
-    `channels.${params.channel}.threadBindings.spawnSubagentSessions=true`,
+    `channels.${params.channel}.threadBindings.spawnSessions=true`,
   resolveThreadBindingIdleTimeoutMsForChannel: () => 24 * 60 * 60 * 1000,
   resolveThreadBindingMaxAgeMsForChannel: () => undefined,
   resolveThreadBindingPlacementForCurrentContext: (params: {
@@ -91,15 +92,21 @@ vi.mock("../../channels/thread-bindings-policy.js", () => ({
     const settings = params.cfg.channels?.[params.channel]?.threadBindings;
     return {
       enabled: settings?.enabled !== false,
-      spawnEnabled: settings?.spawnSubagentSessions === true,
+      spawnEnabled: settings?.spawnSessions !== false,
       channel: params.channel,
       accountId: params.accountId,
+      defaultSpawnContext: "fork",
     };
   },
 }));
 
 vi.mock("../../infra/outbound/session-binding-service.js", () => ({
   getSessionBindingService: () => buildFocusSessionBindingService(),
+}));
+
+vi.mock("../../agents/subagent-capabilities.js", () => ({
+  resolveStoredSubagentCapabilities: (sessionKey: string, options: unknown) =>
+    hoisted.resolveStoredSubagentCapabilitiesMock(sessionKey, options),
 }));
 
 vi.mock("./conversation-binding-input.js", () => ({
@@ -153,6 +160,39 @@ function createSessionBindingCapabilities() {
   };
 }
 
+type FocusTargetSessionParams = {
+  requesterKey?: string;
+};
+
+type SessionBindingBindInput = {
+  placement: "current" | "child";
+  targetKind: "session" | "agent";
+  targetSessionKey: string;
+  conversation: {
+    channel: string;
+    accountId: string;
+    conversationId: string;
+    parentConversationId?: string;
+  };
+  metadata?: Record<string, unknown>;
+};
+
+function firstFocusTargetSessionParams(): FocusTargetSessionParams {
+  const firstCall = hoisted.resolveFocusTargetSessionMock.mock.calls[0];
+  if (!firstCall) {
+    throw new Error("Expected focus target session call");
+  }
+  return firstCall[0] as FocusTargetSessionParams;
+}
+
+function firstSessionBindingBindInput(): SessionBindingBindInput {
+  const firstCall = hoisted.sessionBindingBindMock.mock.calls[0];
+  if (!firstCall) {
+    throw new Error("Expected session binding bind call");
+  }
+  return firstCall[0] as SessionBindingBindInput;
+}
+
 function buildCommandParams(params?: {
   cfg?: OpenClawConfig;
   chatType?: string;
@@ -195,6 +235,7 @@ function buildFocusContext(params?: {
   chatType?: string;
   senderId?: string;
   token?: string;
+  requesterKey?: string;
 }) {
   return {
     params: buildCommandParams({
@@ -203,7 +244,7 @@ function buildFocusContext(params?: {
       senderId: params?.senderId,
     }),
     handledPrefix: "/focus",
-    requesterKey: "agent:main:main",
+    requesterKey: params?.requesterKey ?? "agent:main:main",
     runs: [],
     restTokens: [params?.token ?? "codex-acp"],
   } satisfies Parameters<typeof handleSubagentsFocusAction>[0];
@@ -224,6 +265,9 @@ function buildUnfocusContext(params?: { senderId?: string }) {
 describe("focus actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    hoisted.resolveStoredSubagentCapabilitiesMock.mockReturnValue({
+      controlScope: "children",
+    });
     hoisted.sessionBindingCapabilitiesMock.mockReturnValue(createSessionBindingCapabilities());
     hoisted.sessionBindingResolveByConversationMock.mockReturnValue(null);
     hoisted.resolveFocusTargetSessionMock.mockResolvedValue({
@@ -278,17 +322,36 @@ describe("focus actions", () => {
 
     expect(result.reply?.text).toContain("bound this conversation");
     expect(result.reply?.text).toContain("(acp)");
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        placement: "current",
-        targetKind: "session",
-        targetSessionKey: "agent:codex-acp:session-1",
-        conversation: expect.objectContaining({
-          channel: THREAD_CHANNEL,
-          conversationId: "thread-1",
-        }),
+    expect(firstFocusTargetSessionParams().requesterKey).toBe("agent:main:main");
+    const bindInput = firstSessionBindingBindInput();
+    expect(bindInput.placement).toBe("current");
+    expect(bindInput.targetKind).toBe("session");
+    expect(bindInput.targetSessionKey).toBe("agent:codex-acp:session-1");
+    expect(bindInput.conversation.channel).toBe(THREAD_CHANNEL);
+    expect(bindInput.conversation.conversationId).toBe("thread-1");
+  });
+
+  it("rejects /focus from a leaf subagent", async () => {
+    hoisted.resolveStoredSubagentCapabilitiesMock.mockReturnValue({
+      controlScope: "none",
+    });
+    hoisted.resolveConversationBindingContextMock.mockReturnValue({
+      channel: THREAD_CHANNEL,
+      accountId: "default",
+      conversationId: "thread-1",
+      parentConversationId: "parent-1",
+      threadId: "thread-1",
+    });
+
+    const result = await handleSubagentsFocusAction(
+      buildFocusContext({
+        requesterKey: "agent:main:subagent:leaf-a",
       }),
     );
+
+    expect(result.reply?.text).toContain("Leaf subagents cannot control other sessions.");
+    expect(hoisted.resolveFocusTargetSessionMock).not.toHaveBeenCalled();
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 
   it("binds topic-chat topics as current conversations", async () => {
@@ -303,15 +366,10 @@ describe("focus actions", () => {
     const result = await handleSubagentsFocusAction(buildFocusContext());
 
     expect(result.reply?.text).toContain("bound this conversation");
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        placement: "current",
-        conversation: expect.objectContaining({
-          channel: TOPIC_CHANNEL,
-          conversationId: "-100200300:topic:77",
-        }),
-      }),
-    );
+    const bindInput = firstSessionBindingBindInput();
+    expect(bindInput.placement).toBe("current");
+    expect(bindInput.conversation.channel).toBe(TOPIC_CHANNEL);
+    expect(bindInput.conversation.conversationId).toBe("-100200300:topic:77");
   });
 
   it("creates a room-chat child thread from a top-level room when spawning is enabled", async () => {
@@ -329,7 +387,7 @@ describe("focus actions", () => {
             [ROOM_CHANNEL]: {
               threadBindings: {
                 enabled: true,
-                spawnSubagentSessions: true,
+                spawnSessions: true,
               },
             },
           } as OpenClawConfig["channels"],
@@ -338,15 +396,10 @@ describe("focus actions", () => {
     );
 
     expect(result.reply?.text).toContain("created child conversation thread-created and bound it");
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        placement: "child",
-        conversation: expect.objectContaining({
-          channel: ROOM_CHANNEL,
-          conversationId: "!room:example.org",
-        }),
-      }),
-    );
+    const bindInput = firstSessionBindingBindInput();
+    expect(bindInput.placement).toBe("child");
+    expect(bindInput.conversation.channel).toBe(ROOM_CHANNEL);
+    expect(bindInput.conversation.conversationId).toBe("!room:example.org");
   });
 
   it("treats a room thread turn as the current thread", async () => {
@@ -361,19 +414,14 @@ describe("focus actions", () => {
     const result = await handleSubagentsFocusAction(buildFocusContext());
 
     expect(result.reply?.text).toContain("bound this conversation");
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        placement: "current",
-        conversation: expect.objectContaining({
-          channel: ROOM_CHANNEL,
-          conversationId: "$root",
-          parentConversationId: "!room:example.org",
-        }),
-      }),
-    );
+    const bindInput = firstSessionBindingBindInput();
+    expect(bindInput.placement).toBe("current");
+    expect(bindInput.conversation.channel).toBe(ROOM_CHANNEL);
+    expect(bindInput.conversation.conversationId).toBe("$root");
+    expect(bindInput.conversation.parentConversationId).toBe("!room:example.org");
   });
 
-  it("rejects room top-level thread creation when spawnSubagentSessions is disabled", async () => {
+  it("rejects room top-level thread creation when spawnSessions is disabled", async () => {
     hoisted.resolveConversationBindingContextMock.mockReturnValue({
       channel: ROOM_CHANNEL,
       accountId: "default",
@@ -388,6 +436,7 @@ describe("focus actions", () => {
             [ROOM_CHANNEL]: {
               threadBindings: {
                 enabled: true,
+                spawnSessions: false,
               },
             },
           } as OpenClawConfig["channels"],
@@ -396,7 +445,7 @@ describe("focus actions", () => {
     );
 
     expect(result.reply?.text).toContain(
-      `channels.${ROOM_CHANNEL}.threadBindings.spawnSubagentSessions=true`,
+      `channels.${ROOM_CHANNEL}.threadBindings.spawnSessions=true`,
     );
     expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
@@ -420,27 +469,11 @@ describe("focus actions", () => {
 
     await handleSubagentsFocusAction(buildFocusContext());
 
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          introText: expect.stringContaining("agent session id: codex-123"),
-        }),
-      }),
-    );
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          introText: expect.stringContaining("acpx session id: acpx-456"),
-        }),
-      }),
-    );
-    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          introText: expect.stringContaining("codex resume codex-123"),
-        }),
-      }),
-    );
+    const introText = firstSessionBindingBindInput().metadata?.introText;
+    expect(typeof introText).toBe("string");
+    expect(introText).toContain("agent session id: codex-123");
+    expect(introText).toContain("acpx session id: acpx-456");
+    expect(introText).toContain("codex resume codex-123");
   });
 
   it("rejects rebinding when another user owns the thread", async () => {

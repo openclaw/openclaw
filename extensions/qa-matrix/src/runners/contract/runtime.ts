@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
 import type { QaReportCheck } from "../../report.js";
@@ -352,7 +352,7 @@ function getMatrixQaScenarioRestartReadyTimeoutMs(scenario: { timeoutMs: number 
   return scenario.timeoutMs;
 }
 
-export type MatrixQaRunResult = {
+type MatrixQaRunResult = {
   observedEventsPath: string;
   outputDir: string;
   reportPath: string;

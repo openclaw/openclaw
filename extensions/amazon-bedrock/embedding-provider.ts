@@ -4,13 +4,14 @@ import {
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 
 // ---------------------------------------------------------------------------
 // Types & constants
 // ---------------------------------------------------------------------------
 
-export type BedrockEmbeddingClient = {
+type BedrockEmbeddingClient = {
   region: string;
   model: string;
   dimensions?: number;
@@ -162,7 +163,7 @@ async function loadCredentialProviderSdk(): Promise<AwsCredentialProviderSdk | n
 const MODEL_PREFIX_RE = /^(?:bedrock|amazon-bedrock|aws)\//;
 const REGION_RE = /bedrock-runtime\.([a-z0-9-]+)\./;
 
-export function normalizeBedrockEmbeddingModel(model: string): string {
+function normalizeBedrockEmbeddingModel(model: string): string {
   const trimmed = model.trim();
   return trimmed ? trimmed.replace(MODEL_PREFIX_RE, "") : DEFAULT_BEDROCK_EMBEDDING_MODEL;
 }
@@ -263,7 +264,6 @@ export async function createBedrockEmbeddingProvider(
 ): Promise<{ provider: MemoryEmbeddingProvider; client: BedrockEmbeddingClient }> {
   const client = resolveBedrockEmbeddingClient(options);
   const { BedrockRuntimeClient, InvokeModelCommand } = await loadSdk();
-  const sdk = new BedrockRuntimeClient({ region: client.region });
   const spec = resolveSpec(client.model);
   const family = spec?.family ?? inferFamily(client.model);
 
@@ -275,15 +275,21 @@ export async function createBedrockEmbeddingProvider(
   });
 
   const invoke = async (body: string): Promise<string> => {
-    const res = await sdk.send(
-      new InvokeModelCommand({
-        modelId: client.model,
-        body,
-        contentType: "application/json",
-        accept: "application/json",
-      }),
-    );
-    return new TextDecoder().decode(res.body);
+    await refreshAwsSharedConfigCacheForBedrock();
+    const sdk = new BedrockRuntimeClient({ region: client.region });
+    try {
+      const res = await sdk.send(
+        new InvokeModelCommand({
+          modelId: client.model,
+          body,
+          contentType: "application/json",
+          accept: "application/json",
+        }),
+      );
+      return new TextDecoder().decode(res.body);
+    } finally {
+      sdk.destroy();
+    }
   };
 
   const isCohere = family === "cohere-v3" || family === "cohere-v4";
@@ -337,7 +343,7 @@ export async function createBedrockEmbeddingProvider(
 // Client resolution
 // ---------------------------------------------------------------------------
 
-export function resolveBedrockEmbeddingClient(
+function resolveBedrockEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): BedrockEmbeddingClient {
   const model = normalizeBedrockEmbeddingModel(options.model);

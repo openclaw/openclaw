@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { buildBrowserDoctorReport } from "./doctor.js";
 
+function collectWarningCheckIds(checks: readonly { id: string; status: string }[]): string[] {
+  const ids: string[] = [];
+  for (const check of checks) {
+    if (check.status === "warn") {
+      ids.push(check.id);
+    }
+  }
+  return ids;
+}
+
 describe("buildBrowserDoctorReport", () => {
   it("reports stopped managed browsers as launchable diagnostics", () => {
     const report = buildBrowserDoctorReport({
@@ -32,10 +42,9 @@ describe("buildBrowserDoctorReport", () => {
     });
 
     expect(report.ok).toBe(true);
-    expect(report.checks.find((check) => check.id === "cdp-websocket")).toMatchObject({
-      status: "info",
-      summary: "Browser is launchable but not running",
-    });
+    const websocketCheck = report.checks.find((check) => check.id === "cdp-websocket");
+    expect(websocketCheck?.status).toBe("info");
+    expect(websocketCheck?.summary).toBe("Browser is launchable but not running");
   });
 
   it("fails when Chrome MCP attach is not ready", () => {
@@ -65,9 +74,8 @@ describe("buildBrowserDoctorReport", () => {
     });
 
     expect(report.ok).toBe(false);
-    expect(report.checks.find((check) => check.id === "attach-target")).toMatchObject({
-      status: "fail",
-    });
+    const attachCheck = report.checks.find((check) => check.id === "attach-target");
+    expect(attachCheck?.status).toBe("fail");
   });
 
   it("keeps managed launch warnings non-fatal", () => {
@@ -101,10 +109,15 @@ describe("buildBrowserDoctorReport", () => {
     });
 
     expect(report.ok).toBe(true);
-    expect(report.checks.some((check) => check.status === "warn")).toBe(true);
-    expect(report.checks.find((check) => check.id === "display")).toMatchObject({
-      summary: "No DISPLAY or WAYLAND_DISPLAY is set while headed mode is selected (config)",
-    });
+    expect(collectWarningCheckIds(report.checks)).toEqual([
+      "managed-executable",
+      "display",
+      "linux-sandbox",
+    ]);
+    const displayCheck = report.checks.find((check) => check.id === "display");
+    expect(displayCheck?.summary).toBe(
+      "No DISPLAY or WAYLAND_DISPLAY is set while headed mode is selected (config)",
+    );
   });
 
   it("reports Linux no-display fallback without a display warning", () => {
@@ -137,9 +150,8 @@ describe("buildBrowserDoctorReport", () => {
       },
     });
 
-    expect(report.checks.find((check) => check.id === "headless-mode")).toMatchObject({
-      status: "pass",
-    });
+    const headlessCheck = report.checks.find((check) => check.id === "headless-mode");
+    expect(headlessCheck?.status).toBe("pass");
     expect(report.checks.find((check) => check.id === "display")).toBeUndefined();
   });
 });

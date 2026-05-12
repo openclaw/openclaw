@@ -2,9 +2,20 @@ services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     build: .
+    env_file:
+      - path: .env
+        required: false
     environment:
       HOME: /home/node
       TERM: xterm-256color
+      # Pin container-side workspace and config paths so host values written to
+      # `.env` (used by Compose for the bind-mount source below) cannot leak
+      # into runtime code that resolves these env vars inside the container.
+      # Without this override, a macOS host path like /Users/<you>/.openclaw/...
+      # imported from .env caused first-reply `mkdir '/Users'` EACCES failures
+      # in Linux Docker (#77436).
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       # Empty means auto: Bonjour disables itself in detected containers.
@@ -23,12 +34,10 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
-      OPENCLAW_PLUGIN_STAGE_DIR: /var/lib/openclaw/plugin-runtime-deps
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
       - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
-      - openclaw-plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
@@ -40,6 +49,11 @@ services:
     # Let bundled local-model providers reach host-side LM Studio/Ollama via
     # http://host.docker.internal:<port>. Docker Desktop usually provides this
     # alias; the host-gateway mapping makes it work on Linux Docker Engine too.
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -73,6 +87,9 @@ services:
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     network_mode: "service:openclaw-gateway"
+    env_file:
+      - path: .env
+        required: false
     cap_drop:
       - NET_RAW
       - NET_ADMIN
@@ -81,24 +98,23 @@ services:
     environment:
       HOME: /home/node
       TERM: xterm-256color
+      # Pin container-side workspace and config paths so host values written to
+      # `.env` cannot leak into runtime code via the env_file import (#77436).
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       BROWSER: echo
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
-      OPENCLAW_PLUGIN_STAGE_DIR: /var/lib/openclaw/plugin-runtime-deps
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
       - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
-      - openclaw-plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
     stdin_open: true
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
     depends_on:
       - openclaw-gateway
-
-volumes:
-  openclaw-plugin-runtime-deps:

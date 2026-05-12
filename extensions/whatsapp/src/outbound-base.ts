@@ -8,10 +8,9 @@ import {
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
-import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 import {
   normalizeWhatsAppOutboundPayload,
   normalizeWhatsAppPayloadText,
@@ -90,6 +89,7 @@ type WhatsAppOutboundBaseCore = Pick<
   | "chunkerMode"
   | "textChunkLimit"
   | "sanitizeText"
+  | "deliveryCapabilities"
   | "pollMaxOptions"
   | "resolveTarget"
   | "sendText"
@@ -112,6 +112,7 @@ export function createWhatsAppOutboundBase({
   | "chunkerMode"
   | "textChunkLimit"
   | "sanitizeText"
+  | "deliveryCapabilities"
   | "pollMaxOptions"
   | "resolveTarget"
   | "sendPayload"
@@ -145,6 +146,13 @@ export function createWhatsAppOutboundBase({
     chunkerMode: "text",
     textChunkLimit: 4000,
     sanitizeText: ({ text }) => normalizeText(text),
+    deliveryCapabilities: {
+      durableFinal: {
+        text: true,
+        replyTo: true,
+        messageSendingHooks: true,
+      },
+    },
     pollMaxOptions: 12,
     resolveTarget,
     ...createAttachedChannelResultAdapter({
@@ -220,11 +228,7 @@ export function createWhatsAppOutboundBase({
   return {
     ...outbound,
     sendPayload: async (ctx) => {
-      if (
-        ctx.payload.isError === true &&
-        resolveMergedWhatsAppAccountConfig({ cfg: ctx.cfg, accountId: ctx.accountId })
-          .exposeErrorText === false
-      ) {
+      if (ctx.payload.isError === true) {
         return { channel: "whatsapp", messageId: "" };
       }
       const payload = normalizeWhatsAppOutboundPayload(ctx.payload, { normalizeText });

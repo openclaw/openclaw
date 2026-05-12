@@ -10,10 +10,10 @@ OpenClaw supports Grok as a `web_search` provider, using xAI web-grounded
 responses to produce AI-synthesized answers backed by live search results
 with citations.
 
-The same `XAI_API_KEY` can also power the built-in `x_search` tool for X
-(formerly Twitter) post search. If you store the key under
-`plugins.entries.xai.config.webSearch.apiKey`, OpenClaw now reuses it as a
-fallback for the bundled xAI model provider too.
+The same xAI API key can also power the built-in `x_search` tool for X
+(formerly Twitter) post search and the `code_execution` tool. If you store the
+key under `plugins.entries.xai.config.webSearch.apiKey`, OpenClaw now reuses it
+as a fallback for the bundled xAI model provider too.
 
 For post-level X metrics such as reposts, replies, bookmarks, or views, prefer
 `x_search` with the exact post URL or status ID instead of a broad search
@@ -61,6 +61,7 @@ If you skip it, you can enable or change `x_search` later in config.
         config: {
           webSearch: {
             apiKey: "xai-...", // optional if XAI_API_KEY is set
+            baseUrl: "https://api.x.ai/v1", // optional Responses API proxy/base URL override
           },
         },
       },
@@ -92,6 +93,18 @@ Grok search supports `query`.
 returns one synthesized answer with citations rather than an N-result list.
 
 Provider-specific filters are not currently supported.
+
+Grok uses a provider-specific 60 second default timeout because xAI Responses
+web-grounded searches can run longer than the shared `web_search` default. Set
+`tools.web.search.timeoutSeconds` to override it.
+
+## Base URL overrides
+
+Set `plugins.entries.xai.config.webSearch.baseUrl` when Grok web search should
+route through an operator proxy or xAI-compatible Responses endpoint. OpenClaw
+posts to `<baseUrl>/responses` after trimming trailing slashes. `x_search`
+uses the same `webSearch.baseUrl` fallback unless
+`plugins.entries.xai.config.xSearch.baseUrl` is set.
 
 ## Related
 

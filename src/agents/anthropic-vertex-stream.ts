@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-loader.js";
 
 type AnthropicVertexStreamFacade = {
@@ -18,18 +18,6 @@ function loadAnthropicVertexStreamFacade(): AnthropicVertexStreamFacade {
     dirName: "anthropic-vertex",
     artifactBasename: "api.js",
   });
-}
-
-export function createAnthropicVertexStreamFn(
-  projectId: string | undefined,
-  region: string,
-  baseURL?: string,
-): StreamFn {
-  return loadAnthropicVertexStreamFacade().createAnthropicVertexStreamFn(
-    projectId,
-    region,
-    baseURL,
-  );
 }
 
 export function createAnthropicVertexStreamFnForModel(

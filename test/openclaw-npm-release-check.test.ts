@@ -32,36 +32,58 @@ const REQUIRED_PACKED_PATHS = [
 
 describe("parseReleaseVersion", () => {
   it("parses stable CalVer releases", () => {
-    expect(parseReleaseVersion("2026.3.10")).toMatchObject({
+    expect(parseReleaseVersion("2026.3.10")).toStrictEqual({
       version: "2026.3.10",
       baseVersion: "2026.3.10",
       channel: "stable",
       year: 2026,
       month: 3,
       day: 10,
+      alphaNumber: undefined,
+      betaNumber: undefined,
+      date: new Date(Date.UTC(2026, 2, 10)),
     });
   });
 
   it("parses beta CalVer releases", () => {
-    expect(parseReleaseVersion("2026.3.10-beta.2")).toMatchObject({
+    expect(parseReleaseVersion("2026.3.10-beta.2")).toStrictEqual({
       version: "2026.3.10-beta.2",
       baseVersion: "2026.3.10",
       channel: "beta",
       year: 2026,
       month: 3,
       day: 10,
+      alphaNumber: undefined,
       betaNumber: 2,
+      date: new Date(Date.UTC(2026, 2, 10)),
+    });
+  });
+
+  it("parses alpha CalVer releases", () => {
+    expect(parseReleaseVersion("2026.3.10-alpha.2")).toStrictEqual({
+      version: "2026.3.10-alpha.2",
+      baseVersion: "2026.3.10",
+      channel: "alpha",
+      year: 2026,
+      month: 3,
+      day: 10,
+      alphaNumber: 2,
+      betaNumber: undefined,
+      date: new Date(Date.UTC(2026, 2, 10)),
     });
   });
 
   it("parses stable correction releases", () => {
-    expect(parseReleaseVersion("2026.3.10-1")).toMatchObject({
+    expect(parseReleaseVersion("2026.3.10-1")).toStrictEqual({
       version: "2026.3.10-1",
       baseVersion: "2026.3.10",
       channel: "stable",
       year: 2026,
       month: 3,
       day: 10,
+      alphaNumber: undefined,
+      betaNumber: undefined,
+      date: new Date(Date.UTC(2026, 2, 10)),
       correctionNumber: 1,
     });
   });
@@ -77,11 +99,12 @@ describe("parseReleaseVersion", () => {
 
 describe("parseReleaseTagVersion", () => {
   it("accepts correction release tags", () => {
-    expect(parseReleaseTagVersion("2026.3.10-2")).toMatchObject({
+    expect(parseReleaseTagVersion("2026.3.10-2")).toStrictEqual({
       version: "2026.3.10-2",
       packageVersion: "2026.3.10-2",
       baseVersion: "2026.3.10",
       channel: "stable",
+      date: new Date(Date.UTC(2026, 2, 10)),
       correctionNumber: 2,
     });
   });
@@ -97,6 +120,14 @@ describe("resolveNpmPublishPlan", () => {
     expect(resolveNpmPublishPlan("2026.3.29-beta.2")).toEqual({
       channel: "beta",
       publishTag: "beta",
+      mirrorDistTags: [],
+    });
+  });
+
+  it("publishes alpha prereleases to alpha only", () => {
+    expect(resolveNpmPublishPlan("2026.3.29-alpha.2", undefined, "alpha")).toEqual({
+      channel: "alpha",
+      publishTag: "alpha",
       mirrorDistTags: [],
     });
   });
@@ -125,6 +156,14 @@ describe("resolveNpmPublishPlan", () => {
     });
   });
 
+  it("can publish stable correction releases directly to latest when requested", () => {
+    expect(resolveNpmPublishPlan("2026.3.29-1", undefined, "latest")).toEqual({
+      channel: "stable",
+      publishTag: "latest",
+      mirrorDistTags: [],
+    });
+  });
+
   it("ignores current beta dist-tag state for stable publishes", () => {
     expect(resolveNpmPublishPlan("2026.3.29", "2026.4.1-beta.1")).toEqual({
       channel: "stable",
@@ -136,6 +175,15 @@ describe("resolveNpmPublishPlan", () => {
   it("rejects publishing beta prereleases to latest", () => {
     expect(() => resolveNpmPublishPlan("2026.3.29-beta.2", undefined, "latest")).toThrow(
       "Beta prereleases must publish to the beta dist-tag.",
+    );
+  });
+
+  it("rejects publishing alpha prereleases to beta or latest", () => {
+    expect(() => resolveNpmPublishPlan("2026.3.29-alpha.2")).toThrow(
+      "Alpha prereleases must publish to the alpha dist-tag.",
+    );
+    expect(() => resolveNpmPublishPlan("2026.3.29-alpha.2", undefined, "latest")).toThrow(
+      "Alpha prereleases must publish to the alpha dist-tag.",
     );
   });
 });
@@ -203,6 +251,10 @@ describe("shouldSkipPackedTarballValidation", () => {
 describe("compareReleaseVersions", () => {
   it("treats stable as newer than same-day beta", () => {
     expect(compareReleaseVersions("2026.3.29", "2026.3.29-beta.2")).toBe(1);
+  });
+
+  it("orders alpha before beta on the same day", () => {
+    expect(compareReleaseVersions("2026.3.29-alpha.2", "2026.3.29-beta.1")).toBe(-1);
   });
 
   it("treats a newer beta day as newer than an older stable day", () => {
@@ -311,7 +363,7 @@ describe("collectControlUiPackErrors", () => {
         "dist/control-ui/assets/index-Bu8rSoJV.js",
         "dist/control-ui/assets/index-BK0yXA_h.css",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 
@@ -445,7 +497,7 @@ describe("collectPackedTestCargoErrors", () => {
         "dist/extensions/whatsapp/node_modules/pino/lib/proto.js",
         "dist/extensions/webhooks/node_modules/zod/v4/core/api.js",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("allows legitimate package roots named test under node_modules", () => {
@@ -454,7 +506,7 @@ describe("collectPackedTestCargoErrors", () => {
         "dist/extensions/fixture-plugin/node_modules/direct/node_modules/test/index.js",
         "dist/extensions/fixture-plugin/node_modules/direct/node_modules/@scope/tests/index.js",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("allows leaf runtime filenames named test or tests", () => {
@@ -463,7 +515,7 @@ describe("collectPackedTestCargoErrors", () => {
         "dist/extensions/fixture-plugin/node_modules/direct/bin/test",
         "dist/extensions/fixture-plugin/node_modules/direct/bin/tests",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("normalizes Windows or mixed separators before classifying test cargo", () => {
@@ -488,7 +540,7 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10",
         now: new Date("2026-03-11T12:00:00Z"),
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("rejects versions outside the two-day CalVer window", () => {
@@ -498,7 +550,9 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10",
         now: new Date("2026-03-13T00:00:00Z"),
       }),
-    ).toContainEqual(expect.stringContaining("must be within 2 days"));
+    ).toStrictEqual([
+      "Release version 2026.3.10 is 3 days away from current UTC date 2026-03-13; release CalVer date 2026-03-10 must be within 2 days.",
+    ]);
   });
 
   it("accepts fallback correction tags for stable package versions", () => {
@@ -508,7 +562,7 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10-1",
         now: new Date("2026-03-10T00:00:00Z"),
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("accepts correction package versions paired with matching correction tags", () => {
@@ -518,7 +572,7 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10-1",
         now: new Date("2026-03-10T00:00:00Z"),
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("rejects beta package versions paired with fallback correction tags", () => {
@@ -528,7 +582,9 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10-1",
         now: new Date("2026-03-10T00:00:00Z"),
       }),
-    ).toContainEqual(expect.stringContaining("does not match package.json version"));
+    ).toStrictEqual([
+      "Release tag v2026.3.10-1 does not match package.json version 2026.3.10-beta.1; expected v2026.3.10-beta.1.",
+    ]);
   });
 });
 
@@ -542,7 +598,7 @@ describe("collectReleasePackageMetadataErrors", () => {
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
         bin: { openclaw: "openclaw.mjs" },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("rejects node-llama-cpp as a peer dependency", () => {
@@ -573,6 +629,21 @@ describe("collectReleasePackageMetadataErrors", () => {
         dependencies: { "node-llama-cpp": "3.18.1" },
       }),
     ).toContain('package.json dependencies["node-llama-cpp"] must be omitted; keep it optional.');
+  });
+
+  it("rejects local fs-safe dependency specs for npm release", () => {
+    expect(
+      collectReleasePackageMetadataErrors({
+        name: "openclaw",
+        description: "Multi-channel AI gateway with extensible messaging integrations",
+        license: "MIT",
+        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
+        bin: { openclaw: "openclaw.mjs" },
+        dependencies: { "@openclaw/fs-safe": "link:../fs-safe" },
+      }),
+    ).toContain(
+      'package.json dependencies["@openclaw/fs-safe"] must use a published semver range before npm release; found "link:../fs-safe".',
+    );
   });
 
   it("rejects node-llama-cpp as an optional dependency", () => {

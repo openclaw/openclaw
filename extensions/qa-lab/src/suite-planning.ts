@@ -1,10 +1,9 @@
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import type { QaProviderMode } from "./model-selection.js";
 import { getQaProvider } from "./providers/index.js";
-import type { QaTransportId } from "./qa-transport-registry.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
@@ -270,10 +269,7 @@ export {
   normalizeQaSuiteConcurrency,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
-  scenarioMatchesLiveLane,
   scenarioRequiresControlUi,
   selectQaSuiteScenarios,
   splitModelRef,
 };
-
-export type { QaTransportId };

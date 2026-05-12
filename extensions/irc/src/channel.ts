@@ -33,6 +33,7 @@ import {
 import { IrcChannelConfigSchema } from "./config-schema.js";
 import { collectIrcMutableAllowlistWarnings } from "./doctor.js";
 import { startIrcGatewayAccount } from "./gateway.js";
+import { ircMessageAdapter } from "./message-adapter.js";
 import {
   isChannelTarget,
   looksLikeIrcTargetId,
@@ -233,12 +234,14 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       },
     },
     messaging: {
+      targetPrefixes: ["irc"],
       normalizeTarget: normalizeIrcMessagingTarget,
       targetResolver: {
         looksLikeId: looksLikeIrcTargetId,
         hint: "<#channel|nick>",
       },
     },
+    message: ircMessageAdapter,
     resolver: {
       resolveTargets: async ({ inputs, kind }) => {
         return inputs.map((input) => {

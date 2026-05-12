@@ -15,7 +15,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
 
 <Steps>
   <Step title="Existing config detection">
-    - If `~/.openclaw/openclaw.json` exists, choose **Keep / Modify / Reset**.
+    - If `~/.openclaw/openclaw.json` exists, choose **Keep current values**, **Review and update**, or **Reset before setup**.
     - Re-running onboarding does **not** wipe anything unless you explicitly choose **Reset**
       (or pass `--reset`).
     - CLI `--reset` defaults to `config+creds+sessions`; use `--reset-scope full`
@@ -33,9 +33,9 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - **Anthropic API key**: preferred Anthropic assistant choice in onboarding/configure.
     - **Anthropic setup-token**: still available in onboarding/configure, though OpenClaw now prefers Claude CLI reuse when available.
     - **OpenAI Code (Codex) subscription (OAuth)**: browser flow; paste the `code#state`.
-      - Sets `agents.defaults.model` to `openai-codex/gpt-5.5` when model is unset or already OpenAI-family.
+      - Sets `agents.defaults.model` to `openai/gpt-5.5` through the Codex runtime when model is unset or already OpenAI-family.
     - **OpenAI Code (Codex) subscription (device pairing)**: browser pairing flow with a short-lived device code.
-      - Sets `agents.defaults.model` to `openai-codex/gpt-5.5` when model is unset or already OpenAI-family.
+      - Sets `agents.defaults.model` to `openai/gpt-5.5` through the Codex runtime when model is unset or already OpenAI-family.
     - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then stores it in auth profiles.
       - Sets `agents.defaults.model` to `openai/gpt-5.5` when model is unset, `openai/*`, or `openai-codex/*`.
     - **xAI (Grok) API key**: prompts for `XAI_API_KEY` and configures xAI as a model provider.
@@ -92,7 +92,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
       - Requires a non-empty env var in the onboarding process environment.
       - Cannot be combined with `--gateway-token`.
     - Disable auth only if you fully trust every local process.
-    - Non‑loopback binds still require auth.
+    - Non-loopback binds still require auth.
 
   </Step>
   <Step title="Channels">
@@ -102,8 +102,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - [Google Chat](/channels/googlechat): service account JSON + webhook audience.
     - [Mattermost](/channels/mattermost) (plugin): bot token + base URL.
     - [Signal](/channels/signal): optional `signal-cli` install + account config.
-    - [BlueBubbles](/channels/bluebubbles): **recommended for iMessage**; server URL + password + webhook.
-    - [iMessage](/channels/imessage): legacy `imsg` CLI path + DB access.
+    - [iMessage](/channels/imessage): `imsg` CLI path + Messages DB access; use an SSH wrapper when the Gateway runs off-Mac.
     - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
 
   </Step>
@@ -138,7 +137,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
 
   </Step>
   <Step title="Finish">
-    - Summary + next steps, including iOS/Android/macOS apps for extra features.
+    - Summary + next steps, including the **How do you want to hatch your agent?** prompt for Terminal, Browser, or later.
 
   </Step>
 </Steps>
@@ -164,7 +163,7 @@ openclaw onboard --non-interactive \
   --skip-skills
 ```
 
-Add `--json` for a machine‑readable summary.
+Add `--json` for a machine-readable summary.
 
 Gateway token SecretRef in non-interactive mode:
 
@@ -200,7 +199,7 @@ openclaw agents add work \
 ## Gateway wizard RPC
 
 The Gateway exposes the onboarding flow over RPC (`wizard.start`, `wizard.next`, `wizard.cancel`, `wizard.status`).
-Clients (macOS app, Control UI) can render steps without re‑implementing onboarding logic.
+Clients (macOS app, Control UI) can render steps without re-implementing onboarding logic.
 
 ## Signal setup (signal-cli)
 
@@ -249,5 +248,5 @@ will prompt to install it (npm or a local path) before it can be configured.
 - Onboarding overview: [Onboarding (CLI)](/start/wizard)
 - macOS app onboarding: [Onboarding](/start/onboarding)
 - Config reference: [Gateway configuration](/gateway/configuration)
-- Providers: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord), [Google Chat](/channels/googlechat), [Signal](/channels/signal), [BlueBubbles](/channels/bluebubbles) (iMessage), [iMessage](/channels/imessage) (legacy)
+- Providers: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord), [Google Chat](/channels/googlechat), [Signal](/channels/signal), [iMessage](/channels/imessage)
 - Skills: [Skills](/tools/skills), [Skills config](/tools/skills-config)

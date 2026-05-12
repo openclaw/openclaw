@@ -14,6 +14,7 @@ import {
   hasDurableExecApproval,
   maxAsk,
   minSecurity,
+  requireValidExecTarget,
   type ExecApprovalsFile,
   normalizeExecAsk,
   normalizeExecHost,
@@ -21,6 +22,16 @@ import {
   normalizeExecSecurity,
   requiresExecApproval,
 } from "./exec-approvals.js";
+
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
 
 function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
   const approvals = {
@@ -44,7 +55,7 @@ function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
     agentId: "runner",
   });
 
-  expect(summary.ask).toMatchObject({
+  expectFields(summary.ask, {
     requested: "off",
     host: "always",
     hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
@@ -71,6 +82,18 @@ describe("exec approvals policy helpers", () => {
     { raw: "ssh", expected: null },
   ])("normalizes exec target value %j", ({ raw, expected }) => {
     expect(normalizeExecTarget(raw)).toBe(expected);
+  });
+
+  it("requires direct exec target requests to use the closed host set", () => {
+    expect(requireValidExecTarget(" gateway ")).toBe("gateway");
+    expect(requireValidExecTarget("")).toBe(null);
+    expect(requireValidExecTarget(undefined)).toBe(null);
+    expect(() => requireValidExecTarget("spark-ff13")).toThrow(
+      'Invalid exec host "spark-ff13". Allowed values: auto, sandbox, gateway, node.',
+    );
+    expect(() => requireValidExecTarget(42)).toThrow(
+      "Invalid exec host value type number. Allowed values: auto, sandbox, gateway, node.",
+    );
   });
 
   it.each([
@@ -228,10 +251,9 @@ describe("exec approvals policy helpers", () => {
     });
 
     expect(result.allowlistSatisfied).toBe(false);
-    expect(result.segmentAllowlistEntries).toEqual([
-      expect.objectContaining({ pattern: "/usr/bin/echo" }),
-      null,
-    ]);
+    expect(result.segmentAllowlistEntries).toHaveLength(2);
+    expectFields(result.segmentAllowlistEntries[0], { pattern: "/usr/bin/echo" });
+    expect(result.segmentAllowlistEntries[1]).toBeNull();
     expect(
       hasDurableExecApproval({
         analysisOk: true,
@@ -259,14 +281,14 @@ describe("exec approvals policy helpers", () => {
       scopeLabel: "tools.exec",
     });
 
-    expect(summary.security).toMatchObject({
+    expectFields(summary.security, {
       requested: "full",
       host: "allowlist",
       effective: "allowlist",
       hostSource: "~/.openclaw/exec-approvals.json defaults.security",
       note: "stricter host security wins",
     });
-    expect(summary.ask).toMatchObject({
+    expectFields(summary.ask, {
       requested: "off",
       host: "always",
       effective: "always",
@@ -321,7 +343,7 @@ describe("exec approvals policy helpers", () => {
       scopeLabel: "tools.exec",
     });
 
-    expect(summary.ask).toMatchObject({
+    expectFields(summary.ask, {
       requested: "always",
       host: "off",
       effective: "always",
@@ -391,11 +413,11 @@ describe("exec approvals policy helpers", () => {
       agentId: "runner",
     });
 
-    expect(summary.security).toMatchObject({
+    expectFields(summary.security, {
       host: "allowlist",
       hostSource: "~/.openclaw/exec-approvals.json agents.*.security",
     });
-    expect(summary.ask).toMatchObject({
+    expectFields(summary.ask, {
       host: "always",
       hostSource: "~/.openclaw/exec-approvals.json agents.*.ask",
     });
@@ -425,13 +447,13 @@ describe("exec approvals policy helpers", () => {
       agentId: "runner",
     });
 
-    expect(summary.security).toMatchObject({
+    expectFields(summary.security, {
       requested: "full",
       requestedSource: "tools.exec.security",
       host: "allowlist",
       effective: "allowlist",
     });
-    expect(summary.ask).toMatchObject({
+    expectFields(summary.ask, {
       requested: "off",
       requestedSource: "tools.exec.ask",
       host: "always",
@@ -486,13 +508,13 @@ describe("exec approvals policy helpers", () => {
       "agent:batch",
       "agent:runner",
     ]);
-    expect(snapshots[1]?.ask).toMatchObject({
+    expectFields(snapshots[1]?.ask, {
       requested: "off",
       requestedSource: "tools.exec.ask",
       host: "always",
       effective: "always",
     });
-    expect(snapshots[2]?.security).toMatchObject({
+    expectFields(snapshots[2]?.security, {
       requested: "full",
       requestedSource: "tools.exec.security",
       host: "allowlist",
@@ -522,11 +544,11 @@ describe("exec approvals policy helpers", () => {
     });
 
     expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec"]);
-    expect(snapshots[0]?.security).toMatchObject({
+    expectFields(snapshots[0]?.security, {
       host: "allowlist",
       hostSource: "~/.openclaw/exec-approvals.json agents.main.security",
     });
-    expect(snapshots[0]?.ask).toMatchObject({
+    expectFields(snapshots[0]?.ask, {
       host: "always",
       hostSource: "~/.openclaw/exec-approvals.json agents.main.ask",
     });
@@ -560,7 +582,7 @@ describe("exec approvals policy helpers", () => {
     });
 
     expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec", "agent:main"]);
-    expect(snapshots[1]?.ask).toMatchObject({
+    expectFields(snapshots[1]?.ask, {
       requested: "always",
       requestedSource: "agents.list.main.tools.exec.ask",
     });

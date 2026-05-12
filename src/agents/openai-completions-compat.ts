@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import type { ProviderEndpointClass, ProviderRequestCapabilities } from "./provider-attribution.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 
@@ -11,7 +11,7 @@ type OpenAICompletionsCompatDefaultsInput = {
   usesExplicitProxyLikeEndpoint?: boolean;
 };
 
-export type OpenAICompletionsCompatDefaults = {
+type OpenAICompletionsCompatDefaults = {
   supportsStore: boolean;
   supportsDeveloperRole: boolean;
   supportsReasoningEffort: boolean;
@@ -22,7 +22,7 @@ export type OpenAICompletionsCompatDefaults = {
   supportsStrictMode: boolean;
 };
 
-export type DetectedOpenAICompletionsCompat = {
+type DetectedOpenAICompletionsCompat = {
   capabilities: ProviderRequestCapabilities;
   defaults: OpenAICompletionsCompatDefaults;
 };
@@ -97,7 +97,7 @@ export function resolveOpenAICompletionsCompatDefaults(
   };
 }
 
-export function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
+function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
   input: Pick<
     ProviderRequestCapabilities,
     | "endpointClass"

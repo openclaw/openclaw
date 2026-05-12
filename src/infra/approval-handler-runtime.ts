@@ -4,7 +4,6 @@ import type {
 } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveApprovalOverGateway } from "./approval-gateway-resolver.js";
 import {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createLazyChannelApprovalNativeRuntimeAdapter,
@@ -29,8 +28,6 @@ import {
   buildResolvedApprovalView,
 } from "./approval-view-model.js";
 import type {
-  ApprovalActionView,
-  ApprovalMetadataView,
   ExpiredApprovalView,
   PendingApprovalView,
   ResolvedApprovalView,
@@ -52,16 +49,12 @@ export type {
   PluginApprovalResolvedView,
   ResolvedApprovalView,
 } from "./approval-view-model.types.js";
-export { resolveApprovalOverGateway };
 export {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createLazyChannelApprovalNativeRuntimeAdapter,
 };
 export type {
-  ApprovalRequest,
-  ApprovalResolved,
   ChannelApprovalCapabilityHandlerContext,
-  ChannelApprovalKind,
   ChannelApprovalNativeAvailabilityAdapter,
   ChannelApprovalNativeFinalAction,
   ChannelApprovalNativeInteractionAdapter,
@@ -305,7 +298,7 @@ export function createChannelApprovalNativeRuntimeAdapter<
   };
 }
 
-export type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> = {
+type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> = {
   label: string;
   clientDisplayName: string;
   cfg: OpenClawConfig;
@@ -321,7 +314,7 @@ export type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> 
   nowMs?: () => number;
 };
 
-export type ChannelApprovalHandlerContentSpec<
+type ChannelApprovalHandlerContentSpec<
   TPendingContent,
   TRequest extends ApprovalRequest = ApprovalRequest,
 > = {
@@ -332,14 +325,14 @@ export type ChannelApprovalHandlerContentSpec<
   }) => TPendingContent | Promise<TPendingContent>;
 };
 
-export type ChannelApprovalHandlerTransportSpec<
+type ChannelApprovalHandlerTransportSpec<
   TPendingEntry,
   TPreparedTarget,
   TPendingContent,
   TRequest extends ApprovalRequest = ApprovalRequest,
 > = ChannelNativeApprovalTransportSpec<TPendingEntry, TPreparedTarget, TPendingContent, TRequest>;
 
-export type ChannelApprovalHandlerLifecycleSpec<
+type ChannelApprovalHandlerLifecycleSpec<
   TPendingEntry,
   TPreparedTarget,
   TPendingContent,

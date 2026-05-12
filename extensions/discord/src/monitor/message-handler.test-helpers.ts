@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { vi } from "vitest";
 import type { createDiscordMessageHandler } from "./message-handler.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
@@ -43,6 +43,7 @@ export function createDiscordHandlerParams(overrides?: {
     textLimit: 2_000,
     replyToMode: "off" as const,
     dmEnabled: true,
+    dmPolicy: "pairing",
     groupDmEnabled: false,
     threadBindings: createNoopThreadBindingManager("default"),
     setStatus: overrides?.setStatus,

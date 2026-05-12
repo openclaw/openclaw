@@ -16,6 +16,36 @@ type TestLog = {
   error: (...args: unknown[]) => void;
 };
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function deliveredMessage(deliver: ReturnType<typeof vi.fn>) {
+  expect(deliver).toHaveBeenCalledTimes(1);
+  const message = deliver.mock.calls[0]?.[0] as
+    | {
+        accountId?: unknown;
+        body?: unknown;
+        chatType?: unknown;
+        chatUserId?: unknown;
+        commandAuthorized?: unknown;
+        from?: unknown;
+        provider?: unknown;
+        senderName?: unknown;
+      }
+    | undefined;
+  if (!message) {
+    throw new Error("expected delivered Synology Chat message");
+  }
+  return message;
+}
+
 function makeAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
 ): ResolvedSynologyChatAccount {
@@ -160,9 +190,10 @@ describe("createWebhookHandler", () => {
   }
 
   async function runValidReply(params: { accountIdSuffix: string; reply?: string }) {
-    const { deliver, handler } = makeTestHandler({
+    const deliver = vi.fn().mockResolvedValue(params.reply ?? "Bot reply");
+    const { handler } = makeTestHandler({
       accountIdSuffix: params.accountIdSuffix,
-      deliver: vi.fn().mockResolvedValue(params.reply ?? "Bot reply"),
+      deliver,
     });
     const res = await postToWebhook(handler);
     expect(res._status).toBe(204);
@@ -237,11 +268,9 @@ describe("createWebhookHandler", () => {
     const responses = requests.map(() => makeRes());
     const runs = requests.map((req, index) => handler(req, responses[index]));
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
     // Default maxInFlightPerKey is 8; 12 total requests leaves 4 rejected with 429.
-    expect(responses.filter((res) => res._status === 0)).toHaveLength(8);
-    expect(responses.filter((res) => res._status === 429)).toHaveLength(4);
+    expect(countMatching(responses, (res) => res._status === 0)).toBe(8);
+    expect(countMatching(responses, (res) => res._status === 429)).toBe(4);
 
     for (const req of requests) {
       req.emit("end");
@@ -410,14 +439,14 @@ describe("createWebhookHandler", () => {
     await handler(req, res);
 
     expect(res._status).toBe(204);
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: "Hello from json",
-        from: "123",
-        senderName: "json-user",
-        commandAuthorized: true,
-      }),
-    );
+    const message = deliveredMessage(deliver);
+    expect(message.body).toBe("Hello from json");
+    expect(message.from).toBe("123");
+    expect(message.senderName).toBe("json-user");
+    expect(message.provider).toBe("synology-chat");
+    expect(message.chatType).toBe("direct");
+    expect(message.commandAuthorized).toBe(true);
+    expect(message.chatUserId).toBe("123");
   });
 
   it("accepts token from query when body token is absent", async () => {
@@ -517,33 +546,28 @@ describe("createWebhookHandler", () => {
 
     expect(res._status).toBe(204);
     // deliver should have been called with the stripped text
-    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ body: "Hello there" }));
+    expect(deliveredMessage(deliver).body).toBe("Hello there");
   });
 
   it("responds 204 immediately and delivers async", async () => {
     const { deliver, res } = await runValidReply({ accountIdSuffix: "async-test" });
     expect(res._body).toBe("");
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: "Hello bot",
-        from: "123",
-        senderName: "testuser",
-        provider: "synology-chat",
-        chatType: "direct",
-        commandAuthorized: true,
-      }),
-    );
+    const message = deliveredMessage(deliver);
+    expect(message.body).toBe("Hello bot");
+    expect(message.from).toBe("123");
+    expect(message.senderName).toBe("testuser");
+    expect(message.provider).toBe("synology-chat");
+    expect(message.chatType).toBe("direct");
+    expect(message.commandAuthorized).toBe(true);
+    expect(message.chatUserId).toBe("123");
   });
 
   it("keeps replies bound to payload.user_id by default", async () => {
     const { deliver } = await runValidReply({ accountIdSuffix: "stable-id-test" });
     expect(resolveLegacyWebhookNameToChatUserId).not.toHaveBeenCalled();
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        from: "123",
-        chatUserId: "123",
-      }),
-    );
+    const message = deliveredMessage(deliver);
+    expect(message.from).toBe("123");
+    expect(message.chatUserId).toBe("123");
     expectBotReplySentTo("123");
   });
 
@@ -552,12 +576,9 @@ describe("createWebhookHandler", () => {
       resolvedChatUserId: 456,
       accountIdSuffix: "dangerous-name-match-test",
     });
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        from: "123",
-        chatUserId: "456",
-      }),
-    );
+    const message = deliveredMessage(deliver);
+    expect(message.from).toBe("123");
+    expect(message.chatUserId).toBe("456");
     expectBotReplySentTo("456");
   });
 
@@ -568,12 +589,9 @@ describe("createWebhookHandler", () => {
     expect(log.warn).toHaveBeenCalledWith(
       'Could not resolve Chat API user_id for "testuser" — falling back to webhook user_id 123. Reply delivery may fail.',
     );
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        from: "123",
-        chatUserId: "123",
-      }),
-    );
+    const message = deliveredMessage(deliver);
+    expect(message.from).toBe("123");
+    expect(message.chatUserId).toBe("123");
     expectBotReplySentTo("123");
   });
 
@@ -596,11 +614,8 @@ describe("createWebhookHandler", () => {
     const res = makeRes();
     await handler(req, res);
 
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.stringContaining("[FILTERED]"),
-        commandAuthorized: true,
-      }),
-    );
+    const message = deliveredMessage(deliver);
+    expect(String(message.body)).toContain("[FILTERED]");
+    expect(message.commandAuthorized).toBe(true);
   });
 });

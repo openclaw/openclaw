@@ -1,10 +1,10 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { browserCloseTab } from "./client.js";
 
-export type TrackedSessionBrowserTab = {
+type TrackedSessionBrowserTab = {
   sessionKey: string;
   targetId: string;
   baseUrl?: string;

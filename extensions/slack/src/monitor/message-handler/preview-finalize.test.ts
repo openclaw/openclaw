@@ -70,13 +70,14 @@ describe("finalizeSlackPreviewEdit", () => {
 
     expect(
       client.conversations.replies as unknown as ReturnType<typeof vi.fn>,
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "C123",
-        ts: "170000.111",
-        latest: "171234.567",
-      }),
-    );
+    ).toHaveBeenCalledWith({
+      token: "xoxb-test",
+      channel: "C123",
+      ts: "170000.111",
+      latest: "171234.567",
+      inclusive: true,
+      limit: 100,
+    });
   });
 
   it("rethrows when readback does not match the expected final text", async () => {
@@ -96,7 +97,7 @@ describe("finalizeSlackPreviewEdit", () => {
     ).rejects.toThrow("socket closed");
   });
 
-  it("requires matching blocks when finalizing a blocks-only edit", async () => {
+  it("requires matching blocks when finalizing a blocks-only edit", () => {
     const blocks = [{ type: "section", text: { type: "mrkdwn", text: "*Done*" } }] as const;
 
     expect(
@@ -107,5 +108,42 @@ describe("finalizeSlackPreviewEdit", () => {
         >[0]["blocks"],
       }),
     ).toBe("*Done*");
+  });
+
+  it("matches truncated fallback text for long blocks-only edit readback", async () => {
+    const longContextText = "a".repeat(3000);
+    const blocks = [
+      {
+        type: "context",
+        elements: [
+          { type: "mrkdwn", text: longContextText },
+          { type: "mrkdwn", text: longContextText },
+          { type: "mrkdwn", text: longContextText },
+        ],
+      },
+    ] as const;
+    const expectedText = __testing.buildExpectedSlackEditText({
+      text: "",
+      blocks: blocks as unknown as Parameters<
+        typeof __testing.buildExpectedSlackEditText
+      >[0]["blocks"],
+    });
+    const client = createClient({
+      historyMessages: [{ ts: "171234.567", text: expectedText, blocks }],
+    });
+
+    expect(expectedText).toHaveLength(8000);
+    await expect(
+      __testing.didSlackPreviewEditApplyAfterError({
+        client,
+        token: "xoxb-test",
+        channelId: "C123",
+        messageId: "171234.567",
+        text: "",
+        blocks: blocks as unknown as Parameters<
+          typeof __testing.didSlackPreviewEditApplyAfterError
+        >[0]["blocks"],
+      }),
+    ).resolves.toBe(true);
   });
 });

@@ -19,6 +19,7 @@ env:
 
 jobs:
   build-artifacts:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     permissions:
       contents: read
     name: "build-artifacts"
@@ -146,6 +147,8 @@ jobs:
 
       - name: Build dist on cache miss
         if: steps.dist-cache.outputs.cache-hit != 'true'
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
       - name: Build Control UI on cache miss

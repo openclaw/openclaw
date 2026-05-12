@@ -18,6 +18,7 @@ const listChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((_opts?: unknown)
 const listChatChannels = vi.hoisted(() => vi.fn((): unknown[] => []));
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 const loadPluginRegistrySnapshot = vi.hoisted(() => vi.fn());
+const loadPluginRegistrySnapshotWithMetadata = vi.hoisted(() => vi.fn());
 const listPluginContributionIds = vi.hoisted(() => vi.fn((_params?: unknown): string[] => []));
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn(({ config }: { config: unknown }) => ({
@@ -35,6 +36,7 @@ vi.mock("../../channels/plugins/catalog.js", () => ({
 }));
 vi.mock("../../channels/registry.js", () => ({
   listChatChannels: () => listChatChannels(),
+  normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase() ?? null,
 }));
 vi.mock("../../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...a: unknown[]) => loadPluginManifestRegistry(...a),
@@ -43,6 +45,8 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
     loadPluginManifestRegistry(...args),
   loadPluginRegistrySnapshot: (...args: unknown[]) => loadPluginRegistrySnapshot(...args),
+  loadPluginRegistrySnapshotWithMetadata: (...args: unknown[]) =>
+    loadPluginRegistrySnapshotWithMetadata(...args),
   listPluginContributionIds: (...args: unknown[]) => listPluginContributionIds(...args),
 }));
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -72,6 +76,11 @@ beforeEach(() => {
     plugins: [],
     diagnostics: [],
   });
+  loadPluginRegistrySnapshotWithMetadata.mockImplementation((...args: unknown[]) => ({
+    snapshot: loadPluginRegistrySnapshot(...args),
+    source: "derived",
+    diagnostics: [],
+  }));
   listPluginContributionIds.mockReturnValue([]);
   listChatChannels.mockReturnValue([]);
 });
@@ -156,7 +165,9 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
     const fallbackCall = listChannelPluginCatalogEntries.mock.calls.find(
       ([opts]) => (opts as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace === true,
     );
-    expect(fallbackCall).toBeTruthy();
+    expect(
+      (fallbackCall?.[0] as { excludeWorkspace?: boolean } | undefined)?.excludeWorkspace,
+    ).toBe(true);
   });
 
   it("still returns bundled-origin entries", () => {
@@ -317,6 +328,6 @@ describe("resolveChannelSetupEntries workspace shadow exclusion (GHSA-2qrv-rc5x-
       installedPlugins: [],
     });
 
-    expect(result.installedCatalogEntries).toEqual([]);
+    expect(result.installedCatalogEntries).toStrictEqual([]);
   });
 });

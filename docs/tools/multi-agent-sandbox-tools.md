@@ -21,7 +21,7 @@ Each agent in a multi-agent setup can override the global sandbox and tool polic
 </CardGroup>
 
 <Warning>
-Auth is per-agent: each agent reads from its own `agentDir` auth store at `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`. Credentials are **not** shared between agents. Never reuse `agentDir` across agents. If you want to share creds, copy `auth-profiles.json` into the other agent's `agentDir`.
+Auth is scoped by agent: each agent has its own `agentDir` auth store at `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`. Never reuse `agentDir` across agents. Agents can read through to the default/main agent's auth profiles when they do not have a local profile, but OAuth refresh tokens are not cloned into secondary agent stores. If you copy credentials manually, copy only portable static `api_key` or `token` profiles.
 </Warning>
 
 ---
@@ -50,8 +50,14 @@ Auth is per-agent: each agent reads from its own `agentDir` auth store at `~/.op
               "scope": "agent"
             },
             "tools": {
-              "allow": ["read"],
-              "deny": ["exec", "write", "edit", "apply_patch", "process", "browser"]
+              "allow": ["read", "message"],
+              "deny": ["exec", "write", "edit", "apply_patch", "process", "browser"],
+              "message": {
+                "crossContext": {
+                  "allowWithinProvider": false,
+                  "allowAcrossProviders": false
+                }
+              }
             }
           }
         ]
@@ -75,7 +81,7 @@ Auth is per-agent: each agent reads from its own `agentDir` auth store at `~/.op
     **Result:**
 
     - `main` agent: runs on host, full tool access.
-    - `family` agent: runs in Docker (one container per agent), only `read` tool.
+    - `family` agent: runs in Docker (one container per agent), only `read` and current-conversation message sends.
 
   </Accordion>
   <Accordion title="Example 2: Work agent with shared sandbox">
@@ -300,7 +306,7 @@ Legacy `agent.*` configs are migrated by `openclaw doctor`; prefer `agents.defau
     }
     ```
   </Tab>
-  <Tab title="Safe execution (no file modifications)">
+  <Tab title="Shell execution with filesystem tools disabled">
     ```json
     {
       "tools": {
@@ -309,6 +315,11 @@ Legacy `agent.*` configs are migrated by `openclaw doctor`; prefer `agents.defau
       }
     }
     ```
+
+    <Warning>
+    This policy disables OpenClaw filesystem tools, but `exec` is still a shell and can write files wherever the selected host or sandbox filesystem allows. For a read-only agent, deny `exec` and `process`, or combine shell access with sandbox filesystem controls such as `agents.defaults.sandbox.workspaceAccess: "ro"` or `"none"`.
+    </Warning>
+
   </Tab>
   <Tab title="Communication-only">
     ```json
