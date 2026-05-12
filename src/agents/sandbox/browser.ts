@@ -21,7 +21,11 @@ import {
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
-import { DEFAULT_SANDBOX_BROWSER_IMAGE, SANDBOX_BROWSER_SECURITY_HASH_EPOCH } from "./constants.js";
+import {
+  DEFAULT_SANDBOX_BROWSER_IMAGE,
+  SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH,
+  SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
+} from "./constants.js";
 import {
   buildSandboxCreateArgs,
   dockerContainerState,
@@ -50,6 +54,7 @@ import { appendWorkspaceMountArgs, SANDBOX_MOUNT_FORMAT_VERSION } from "./worksp
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
 const CDP_AUTH_TOKEN_ENV_KEY = "OPENCLAW_BROWSER_CDP_AUTH_TOKEN";
+const SANDBOX_BROWSER_IMAGE_CONTRACT_LABEL = "org.openclaw.sandbox-browser.contract";
 
 function buildSandboxCdpAuthHeader(token: string): string {
   return `Basic ${Buffer.from(`openclaw:${token}`).toString("base64")}`;
@@ -148,11 +153,25 @@ function buildSandboxBrowserResolvedConfig(params: {
 }
 
 async function ensureSandboxBrowserImage(image: string) {
-  const result = await execDocker(["image", "inspect", image], {
-    allowFailure: true,
-  });
+  const result = await execDocker(
+    [
+      "image",
+      "inspect",
+      "-f",
+      `{{ index .Config.Labels "${SANDBOX_BROWSER_IMAGE_CONTRACT_LABEL}" }}`,
+      image,
+    ],
+    { allowFailure: true },
+  );
   if (result.code === 0) {
-    return;
+    const contract = result.stdout.trim();
+    if (contract === SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH) {
+      return;
+    }
+    const actual = contract && contract !== "<no value>" ? contract : "missing";
+    throw new Error(
+      `Sandbox browser image ${image} is stale or incompatible (contract=${actual}, expected=${SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH}). Rebuild it with scripts/sandbox-browser-setup.sh.`,
+    );
   }
   const stderr = result.stderr.trim();
   if (isDockerDaemonUnavailable(stderr)) {

@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH } from "./constants.js";
 import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
@@ -196,7 +197,7 @@ describe("ensureSandboxBrowser create args", () => {
     dockerMocks.dockerContainerState.mockResolvedValue({ exists: false, running: false });
     dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
       if (args[0] === "image" && args[1] === "inspect") {
-        return { stdout: "[]", stderr: "", code: 0 };
+        return { stdout: `${SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH}\n`, stderr: "", code: 0 };
       }
       return { stdout: "", stderr: "", code: 0 };
     });
@@ -227,6 +228,28 @@ describe("ensureSandboxBrowser create args", () => {
       },
     });
     bridgeMocks.stopBrowserBridgeServer.mockResolvedValue(undefined);
+  });
+
+  it("rejects stale sandbox browser images without the relay auth contract", async () => {
+    dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
+      if (args[0] === "image" && args[1] === "inspect") {
+        return { stdout: "<no value>\n", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    });
+
+    await expect(
+      ensureTestSandboxBrowser({
+        scopeKey: "session:test",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg: buildConfig(false),
+      }),
+    ).rejects.toThrow(
+      "Sandbox browser image openclaw-sandbox-browser:bookworm-slim is stale or incompatible",
+    );
+
+    expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create")).toBeUndefined();
   });
 
   it("publishes noVNC on loopback and injects noVNC password env", async () => {
