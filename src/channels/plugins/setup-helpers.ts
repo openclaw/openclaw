@@ -1,8 +1,8 @@
 import { z, type ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { requireActivePluginChannelRegistry } from "../../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { getChannelSetupPlugin } from "./setup-registry.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
 
@@ -103,7 +103,11 @@ function asPromotionSurface(setup: unknown): ChannelSetupPromotionSurface | null
 }
 
 function getChannelSetupPromotionSurface(channelKey: string): ChannelSetupPromotionSurface | null {
-  return asPromotionSurface(getChannelSetupPlugin(channelKey)?.setup);
+  const registry = requireActivePluginChannelRegistry();
+  const plugin = (registry.channelSetups ?? []).find(
+    (entry) => entry.plugin.id === channelKey,
+  )?.plugin;
+  return asPromotionSurface(plugin?.setup);
 }
 
 function channelHasAccounts(cfg: OpenClawConfig, channelKey: string): boolean {
