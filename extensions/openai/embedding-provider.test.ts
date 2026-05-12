@@ -98,4 +98,30 @@ describe("OpenAI embedding provider", () => {
       dimensions: 512,
     });
   });
+
+  it("forwards a custom provider id through resolveRemoteEmbeddingClient (#47884)", async () => {
+    await createOpenAiEmbeddingProvider(
+      createOptions({ provider: "bailian-embedding", model: "text-embedding-v3" }),
+    );
+
+    const calls = mocks.resolveRemoteEmbeddingClient.mock.calls as unknown as Array<
+      [{ provider?: string }]
+    >;
+    const [args] = calls.at(-1) ?? [];
+    expect(args?.provider).toBe("bailian-embedding");
+  });
+
+  it("falls back to 'openai' when no provider id is supplied (#47884)", async () => {
+    await createOpenAiEmbeddingProvider({
+      config: {} as MemoryEmbeddingProviderCreateOptions["config"],
+      model: "text-embedding-3-small",
+      fallback: "none",
+    });
+
+    const calls = mocks.resolveRemoteEmbeddingClient.mock.calls as unknown as Array<
+      [{ provider?: string }]
+    >;
+    const [args] = calls.at(-1) ?? [];
+    expect(args?.provider).toBe("openai");
+  });
 });

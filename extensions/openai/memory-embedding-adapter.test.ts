@@ -79,4 +79,48 @@ describe("OpenAI memory embedding adapter", () => {
       input_type: "document",
     });
   });
+
+  it("preserves the caller's custom provider id when creating the embedding client (#47884)", async () => {
+    await openAiMemoryEmbeddingProviderAdapter.create({
+      config: {} as never,
+      provider: "bailian-embedding",
+      model: "text-embedding-v3",
+      fallback: "none",
+    });
+
+    const createCalls = mocks.createOpenAiEmbeddingProvider.mock.calls as unknown as Array<
+      [{ provider?: string; fallback?: string; model?: string }]
+    >;
+    const [opts] = createCalls.at(-1) ?? [];
+    expect(opts?.provider).toBe("bailian-embedding");
+    expect(opts?.fallback).toBe("none");
+    expect(opts?.model).toBe("text-embedding-v3");
+  });
+
+  it("propagates the custom provider id into the embedding runtime cache key (#47884)", async () => {
+    const result = await openAiMemoryEmbeddingProviderAdapter.create({
+      config: {} as never,
+      provider: "bailian-embedding",
+      model: "text-embedding-v3",
+      fallback: "none",
+    });
+
+    expect(result.runtime?.cacheKeyData).toMatchObject({
+      provider: "bailian-embedding",
+    });
+  });
+
+  it("defaults the lookup id to 'openai' when no provider is supplied (#47884)", async () => {
+    await openAiMemoryEmbeddingProviderAdapter.create({
+      config: {} as never,
+      model: "text-embedding-3-small",
+      fallback: "none",
+    });
+
+    const createCalls = mocks.createOpenAiEmbeddingProvider.mock.calls as unknown as Array<
+      [{ provider?: string }]
+    >;
+    const [opts] = createCalls.at(-1) ?? [];
+    expect(opts?.provider).toBe("openai");
+  });
 });

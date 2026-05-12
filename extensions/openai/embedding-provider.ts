@@ -89,8 +89,14 @@ export async function createOpenAiEmbeddingProvider(
 async function resolveOpenAiEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<OpenAiEmbeddingClient> {
+  // Honour the caller-provided custom provider ID so the remote client looks
+  // up `models.providers[<id>]` for the user's custom `baseUrl`, API key, and
+  // headers. The adapter still defaults to `"openai"` when nothing custom is
+  // configured; this only differs when memory-search was pointed at an
+  // OpenAI-compatible custom provider entry such as `bailian-embedding`.
+  // See #47884.
   const client = await resolveRemoteEmbeddingClient({
-    provider: "openai",
+    provider: options.provider ?? "openai",
     options,
     defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
     normalizeModel: normalizeOpenAiModel,

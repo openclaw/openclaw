@@ -19,9 +19,19 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
   allowExplicitWhenConfiguredAuto: true,
   shouldContinueAutoSelection: isMissingEmbeddingApiKeyError,
   create: async (options) => {
+    // Preserve the caller's custom provider ID (e.g. `bailian-embedding`)
+    // so the downstream remote-client resolves `models.providers[<id>]` for
+    // its `baseUrl`, API key, and headers. Forcing `"openai"` here dropped
+    // that custom ID and routed every memory-embedding call back at the
+    // default OpenAI endpoint with OpenAI auth, which is what made
+    // `bailian-embedding` (and every other OpenAI-compatible custom
+    // provider) fail with `fetch failed`. See #47884. The adapter id
+    // itself stays `"openai"` — only the *provider-config lookup key* is
+    // preserved.
+    const resolvedProviderId = options.provider ?? "openai";
     const { provider, client } = await createOpenAiEmbeddingProvider({
       ...options,
-      provider: "openai",
+      provider: resolvedProviderId,
       fallback: "none",
     });
     return {
@@ -29,7 +39,7 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
       runtime: {
         id: "openai",
         cacheKeyData: {
-          provider: "openai",
+          provider: resolvedProviderId,
           baseUrl: client.baseUrl,
           model: client.model,
           outputDimensionality: client.outputDimensionality,
