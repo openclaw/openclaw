@@ -48,6 +48,21 @@ type AuthRequestCall = {
   store?: unknown;
 };
 
+function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`Expected ${label} call`);
+  }
+  return call;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
 vi.mock("../agents/pi-ai-contract.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/pi-ai-contract.js")>(
     "../agents/pi-ai-contract.js",
