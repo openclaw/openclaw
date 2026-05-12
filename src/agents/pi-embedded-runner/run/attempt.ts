@@ -1997,6 +1997,14 @@ export async function runEmbeddedAttempt(
               workspaceDir: effectiveWorkspace,
               agentDir,
               tokenBudget: params.contextTokenBudget,
+              // Mid-tool-loop the next model call has no new user prompt — the
+              // continuation is driven by tool results that are already in
+              // `messages`. Estimate against messages + system prompt only.
+              currentTokenCount: estimatePrePromptTokens({
+                messages,
+                systemPrompt: systemPromptText,
+                prompt: "",
+              }),
               promptCache:
                 promptCache ??
                 buildLoopPromptCacheInfo({
