@@ -32,10 +32,16 @@ describe("whatsapp setup entry", () => {
         stateDir: "/tmp/openclaw-state",
       }),
     ).toStrictEqual([]);
-    expect(setupEntry.loadDoctorSessionMigrationSurface?.()).toEqual({
-      canonicalizeLegacySessionKey: expect.any(Function),
-      isLegacyGroupSessionKey: expect.any(Function),
-    });
+    const doctorSessionMigrationSurface = setupEntry.loadDoctorSessionMigrationSurface?.();
+    if (!doctorSessionMigrationSurface) {
+      throw new Error("expected WhatsApp doctor session migration surface");
+    }
+    expect(Object.keys(doctorSessionMigrationSurface).sort()).toEqual([
+      "canonicalizeLegacySessionKey",
+      "isLegacyGroupSessionKey",
+    ]);
+    expect(doctorSessionMigrationSurface.canonicalizeLegacySessionKey).toBeTypeOf("function");
+    expect(doctorSessionMigrationSurface.isLegacyGroupSessionKey).toBeTypeOf("function");
   });
 
   it("loads the delegated setup wizard without importing runtime dependencies", async () => {
