@@ -128,7 +128,7 @@ if (remaining !== undefined && estimateTokens(additionContent) > remaining) {
 }
 ```
 
-OpenClaw's own preemptive-compaction runs *before* assemble, so it does not catch overflow caused by the engine's injection. Sizing the addition against `remaining` is the engine's responsibility.
+OpenClaw's own preemptive-compaction runs _before_ assemble, so it does not catch overflow caused by the engine's injection. Sizing the addition against `remaining` is the engine's responsibility.
 
 ## The legacy engine
 
