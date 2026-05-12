@@ -436,8 +436,11 @@ export async function createVoiceCallRuntime(params: {
             extraSystemPrompt: REALTIME_VOICE_CONSULT_SYSTEM_PROMPT,
           };
 
+          const emailDeliveryEnabled =
+            effectiveConfig.realtime.backgroundEmailDeliveryEnabled === true;
+
           // --- Email-first path: user explicitly asked for email delivery ---
-          if (parsedArgs.deliveryPreference === "email") {
+          if (emailDeliveryEnabled && parsedArgs.deliveryPreference === "email") {
             log.info(
               `[voice-call] Email-first path: caller requested email delivery for call=${callId}, agent=${agentId}, session=${sessionKey}`,
             );
@@ -479,7 +482,7 @@ export async function createVoiceCallRuntime(params: {
 
           // --- Timeout path: race consult against backgroundConsultTimeoutMs ---
           const bgTimeout = effectiveConfig.realtime.backgroundConsultTimeoutMs;
-          if (bgTimeout) {
+          if (emailDeliveryEnabled && bgTimeout) {
             log.info(
               `[voice-call] Timeout path: racing consult against ${bgTimeout}ms for call=${callId}, agent=${agentId}, session=${sessionKey}`,
             );

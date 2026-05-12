@@ -213,9 +213,14 @@
       "label": "Realtime Provider Config",
       "advanced": true
     },
+    "realtime.backgroundEmailDeliveryEnabled": {
+      "label": "Background Email Delivery",
+      "help": "Enable background email delivery for voice consults (email-first and timeout paths).",
+      "advanced": true
+    },
     "realtime.backgroundConsultTimeoutMs": {
       "label": "Background Consult Timeout (ms)",
-      "help": "If the consult agent takes longer than this, return an ack and email the result.",
+      "help": "If the consult agent takes longer than this, return an ack and email the result. Requires Background Email Delivery enabled.",
       "advanced": true
     },
     "realtime.backgroundEmailPrompt": {
@@ -651,6 +656,10 @@
               "type": "object",
               "additionalProperties": true
             }
+          },
+          "backgroundEmailDeliveryEnabled": {
+            "type": "boolean",
+            "default": false
           },
           "backgroundConsultTimeoutMs": {
             "type": "number",
