@@ -766,7 +766,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           preferMacAppExecHost: false,
           security: "allowlist",
           ask: "on-miss",
-          command: [executablePath, "-ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+          command: [executablePath, "-en", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
         });
 
         expect(runCommand).not.toHaveBeenCalled();

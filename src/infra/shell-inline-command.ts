@@ -1,16 +1,21 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
+
+function expandPowerShellSwitchPrefixForms(match: string, smallestMatch: string): string[] {
+  const forms: string[] = [];
+  for (let length = smallestMatch.length; length <= match.length; length += 1) {
+    const prefix = match.slice(0, length);
+    forms.push(`-${prefix}`, `--${prefix}`, `/${prefix}`);
+  }
+  return forms;
+}
+
 export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
-  "-c",
-  "-command",
-  "--command",
-  "-f",
-  "-file",
-  "-encodedcommand",
-  "-enc",
-  "-e",
-  "-ec",
+  ...expandPowerShellSwitchPrefixForms("command", "c"),
+  ...expandPowerShellSwitchPrefixForms("file", "f"),
+  ...expandPowerShellSwitchPrefixForms("encodedcommand", "e"),
+  ...expandPowerShellSwitchPrefixForms("ec", "e"),
 ]);
 
 const POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
