@@ -1,3 +1,4 @@
+import { readSqliteSessionRoutingInfo } from "../config/sessions/session-entries.sqlite.js";
 import { getSessionEntry } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -45,13 +46,15 @@ function resolvePersistedApprovalRequestSessionBinding(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
 }): ApprovalRequestSessionBinding | null {
-  const persisted = resolvePersistedApprovalRequestSessionEntry(params);
-  if (!persisted) {
+  const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
+  if (!sessionKey) {
     return null;
   }
-  const { entry } = persisted;
-  const channel = normalizeOptionalChannel(entry.lastChannel ?? entry.channel);
-  const accountId = normalizeOptionalAccountId(entry.lastAccountId);
+  const parsed = parseAgentSessionKey(sessionKey);
+  const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
+  const routingInfo = readSqliteSessionRoutingInfo({ agentId, sessionKey });
+  const channel = normalizeOptionalChannel(routingInfo?.channel);
+  const accountId = normalizeOptionalAccountId(routingInfo?.accountId);
   return channel || accountId ? { channel, accountId } : null;
 }
 

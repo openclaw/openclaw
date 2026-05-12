@@ -206,10 +206,11 @@ describe("delivery context helpers", () => {
   it("derives delivery context from a session entry", () => {
     expect(
       deliveryContextFromSession({
-        channel: "webchat",
-        lastChannel: " demo-channel ",
-        lastTo: " +1777 ",
-        lastAccountId: " acct-9 ",
+        channel: "demo-channel",
+        deliveryContext: {
+          to: " +1777 ",
+          accountId: " acct-9 ",
+        },
       }),
     ).toEqual({
       channel: "demo-channel",
@@ -220,8 +221,10 @@ describe("delivery context helpers", () => {
     expect(
       deliveryContextFromSession({
         channel: "demo-channel",
-        lastTo: " 123 ",
-        lastThreadId: " 999 ",
+        deliveryContext: {
+          to: " 123 ",
+          threadId: " 999 ",
+        },
       }),
     ).toEqual({
       channel: "demo-channel",
@@ -233,8 +236,10 @@ describe("delivery context helpers", () => {
     expect(
       deliveryContextFromSession({
         channel: "demo-channel",
-        lastTo: " -1001 ",
-        lastThreadId: 42,
+        deliveryContext: {
+          to: " -1001 ",
+          threadId: 42,
+        },
       }),
     ).toEqual({
       channel: "demo-channel",
@@ -246,8 +251,7 @@ describe("delivery context helpers", () => {
     expect(
       deliveryContextFromSession({
         channel: "demo-channel",
-        lastTo: " -1001 ",
-        deliveryContext: { threadId: " 777 " },
+        deliveryContext: { to: " -1001 ", threadId: " 777 " },
       }),
     ).toEqual({
       channel: "demo-channel",
@@ -257,26 +261,21 @@ describe("delivery context helpers", () => {
     });
   });
 
-  it("normalizes delivery fields, mirrors session fields, and avoids cross-channel carryover", () => {
+  it("normalizes delivery fields without route shadow mirrors", () => {
     const normalized = normalizeSessionDeliveryFields({
       deliveryContext: {
-        channel: " demo-fallback ",
+        channel: " demo-primary ",
         to: " channel:1 ",
         accountId: " acct-2 ",
         threadId: " 444 ",
       },
-      lastChannel: " demo-primary ",
-      lastTo: " +1555 ",
     });
 
     expect(normalized.deliveryContext).toEqual({
       channel: "demo-primary",
-      to: "+1555",
-      accountId: undefined,
+      to: "channel:1",
+      accountId: "acct-2",
+      threadId: "444",
     });
-    expect(normalized.lastChannel).toBe("demo-primary");
-    expect(normalized.lastTo).toBe("+1555");
-    expect(normalized.lastAccountId).toBeUndefined();
-    expect(normalized.lastThreadId).toBeUndefined();
   });
 });

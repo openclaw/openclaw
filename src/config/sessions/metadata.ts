@@ -8,28 +8,15 @@ import {
 } from "../../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
-import type { GroupKeyResolution, SessionChatType, SessionEntry } from "./types.js";
+import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
-export type SessionRouteMetadata = {
-  label?: string;
-  provider?: string;
-  surface?: string;
-  chatType?: SessionChatType;
-  from?: string;
-  to?: string;
-  nativeChannelId?: string;
-  nativeDirectUserId?: string;
-  accountId?: string;
-  threadId?: string | number;
-};
-
-export function deriveSessionRouteMetadata(
+export function deriveSessionOrigin(
   ctx: MsgContext,
-  opts?: { skipSystemEventRoute?: boolean },
-): SessionRouteMetadata | undefined {
+  opts?: { skipSystemEventOrigin?: boolean },
+): SessionOrigin | undefined {
   const isSystemEventProvider =
     ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
-  if (opts?.skipSystemEventRoute && isSystemEventProvider) {
+  if (opts?.skipSystemEventOrigin && isSystemEventProvider) {
     return undefined;
   }
   const label = normalizeOptionalString(resolveConversationLabel(ctx));
@@ -49,39 +36,39 @@ export function deriveSessionRouteMetadata(
   const accountId = normalizeOptionalString(ctx.AccountId);
   const threadId = ctx.MessageThreadId ?? undefined;
 
-  const route: SessionRouteMetadata = {};
+  const origin: SessionOrigin = {};
   if (label) {
-    route.label = label;
+    origin.label = label;
   }
   if (provider) {
-    route.provider = provider;
+    origin.provider = provider;
   }
   if (surface) {
-    route.surface = surface;
+    origin.surface = surface;
   }
   if (chatType) {
-    route.chatType = chatType;
+    origin.chatType = chatType;
   }
   if (from) {
-    route.from = from;
+    origin.from = from;
   }
   if (to) {
-    route.to = to;
+    origin.to = to;
   }
   if (nativeChannelId) {
-    route.nativeChannelId = nativeChannelId;
+    origin.nativeChannelId = nativeChannelId;
   }
   if (nativeDirectUserId) {
-    route.nativeDirectUserId = nativeDirectUserId;
+    origin.nativeDirectUserId = nativeDirectUserId;
   }
   if (accountId) {
-    route.accountId = accountId;
+    origin.accountId = accountId;
   }
   if (threadId != null && threadId !== "") {
-    route.threadId = threadId;
+    origin.threadId = threadId;
   }
 
-  return Object.keys(route).length > 0 ? route : undefined;
+  return Object.keys(origin).length > 0 ? origin : undefined;
 }
 
 export function deriveGroupSessionPatch(params: {
@@ -148,14 +135,14 @@ export function deriveSessionMetaPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
-  skipSystemEventRoute?: boolean;
+  skipSystemEventOrigin?: boolean;
 }): Partial<SessionEntry> | null {
   const groupPatch = deriveGroupSessionPatch(params);
   const isSystemEventProvider =
     params.ctx.Provider === "heartbeat" ||
     params.ctx.Provider === "cron-event" ||
     params.ctx.Provider === "exec-event";
-  if (params.skipSystemEventRoute && isSystemEventProvider) {
+  if (params.skipSystemEventOrigin && isSystemEventProvider) {
     return groupPatch && Object.keys(groupPatch).length > 0 ? { ...groupPatch } : null;
   }
 

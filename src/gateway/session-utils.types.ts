@@ -84,10 +84,6 @@ export type GatewaySessionRow = {
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   deliveryContext?: DeliveryContext;
-  lastChannel?: SessionEntry["lastChannel"];
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: SessionEntry["lastThreadId"];
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   pluginExtensions?: PluginSessionExtensionProjection[];

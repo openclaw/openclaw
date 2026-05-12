@@ -44,27 +44,16 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
 
 export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSource): {
   deliveryContext?: DeliveryContext;
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
 } {
   if (!source) {
     return {
       deliveryContext: undefined,
-      lastChannel: undefined,
-      lastTo: undefined,
-      lastAccountId: undefined,
-      lastThreadId: undefined,
     };
   }
 
   const merged = mergeDeliveryContext(
     normalizeDeliveryContext({
-      channel: source.lastChannel ?? source.channel,
-      to: source.lastTo,
-      accountId: source.lastAccountId,
-      threadId: source.lastThreadId,
+      channel: source.channel,
     }),
     normalizeDeliveryContext(source.deliveryContext),
   );
@@ -72,37 +61,18 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
   if (!merged) {
     return {
       deliveryContext: undefined,
-      lastChannel: undefined,
-      lastTo: undefined,
-      lastAccountId: undefined,
-      lastThreadId: undefined,
     };
   }
 
   return {
     deliveryContext: merged,
-    lastChannel: merged.channel,
-    lastTo: merged.to,
-    lastAccountId: merged.accountId,
-    lastThreadId: merged.threadId,
   };
 }
 
 export function deliveryContextFromSession(
   entry?: DeliveryContextSessionSource,
 ): DeliveryContext | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  const source: DeliveryContextSessionSource = {
-    channel: entry.channel,
-    lastChannel: entry.lastChannel,
-    lastTo: entry.lastTo,
-    lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId,
-    deliveryContext: entry.deliveryContext,
-  };
-  return normalizeSessionDeliveryFields(source).deliveryContext;
+  return normalizeSessionDeliveryFields(entry).deliveryContext;
 }
 
 export function mergeDeliveryContext(
