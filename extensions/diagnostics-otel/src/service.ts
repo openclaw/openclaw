@@ -15,6 +15,7 @@ import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
@@ -167,6 +168,71 @@ function errorCategory(err: unknown): string {
   } catch {
     return "unknown";
   }
+}
+
+function collectNestedErrorCandidates(err: unknown): unknown[] {
+  const queue: unknown[] = [err];
+  const seen = new Set<unknown>();
+  const candidates: unknown[] = [];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current == null || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    candidates.push(current);
+
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        if (item != null && !seen.has(item)) {
+          queue.push(item);
+        }
+      }
+      continue;
+    }
+    if (typeof current !== "object") {
+      continue;
+    }
+
+    const record = current as Record<string, unknown>;
+    for (const nested of [record.cause, record.reason, record.original, record.error]) {
+      if (nested != null && !seen.has(nested)) {
+        queue.push(nested);
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function readErrorName(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const name = (err as { name?: unknown }).name;
+  return typeof name === "string" && name.trim() ? name : undefined;
+}
+
+function readErrorCode(err: unknown): string | number | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const code = (err as { code?: unknown }).code;
+  return typeof code === "string" || typeof code === "number" ? code : undefined;
+}
+
+function findOtlpExporterError(reason: unknown): object | undefined {
+  for (const candidate of collectNestedErrorCandidates(reason)) {
+    if (
+      readErrorName(candidate) === "OTLPExporterError" &&
+      candidate &&
+      typeof candidate === "object"
+    ) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 function redactOtelAttributes(attributes: Record<string, string | number | boolean>) {
@@ -524,18 +590,22 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   let logProvider: LoggerProvider | null = null;
   let unsubscribe: (() => void) | null = null;
   let stopActiveTrustedSpans: (() => void) | null = null;
+  let unregisterUnhandledRejectionHandler: (() => void) | null = null;
 
   const stopStarted = async () => {
     const currentUnsubscribe = unsubscribe;
     const currentLogProvider = logProvider;
     const currentSdk = sdk;
     const currentStopActiveTrustedSpans = stopActiveTrustedSpans;
+    const currentUnregisterUnhandledRejectionHandler = unregisterUnhandledRejectionHandler;
 
     unsubscribe = null;
     logProvider = null;
     sdk = null;
     stopActiveTrustedSpans = null;
+    unregisterUnhandledRejectionHandler = null;
 
+    currentUnregisterUnhandledRejectionHandler?.();
     currentUnsubscribe?.();
     currentStopActiveTrustedSpans?.();
     if (currentLogProvider) {
@@ -599,6 +669,18 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ctx.logger.warn(`diagnostics-otel: unsupported protocol ${protocol}`);
         return;
       }
+
+      unregisterUnhandledRejectionHandler = registerUnhandledRejectionHandler((reason) => {
+        const otlpError = findOtlpExporterError(reason);
+        if (!otlpError) {
+          return false;
+        }
+        const code = readErrorCode(otlpError) ?? "unknown";
+        ctx.logger.warn(
+          `diagnostics-otel: suppressed OTLP exporter unhandled rejection (code=${String(code)})`,
+        );
+        return true;
+      });
 
       const endpoint = normalizeEndpoint(
         otel.endpoint ?? process.env[OTEL_EXPORTER_OTLP_ENDPOINT_ENV],
