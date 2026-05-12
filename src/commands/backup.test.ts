@@ -97,18 +97,27 @@ describe("backup commands", () => {
   function expectWorkspaceCoveredByState(
     plan: Awaited<ReturnType<typeof resolveBackupPlanFromDisk>>,
   ) {
-    expect(plan.included).toHaveLength(1);
+    expect(plan.included).toStrictEqual([expect.objectContaining({ kind: "state" })]);
     const [included] = plan.included;
-    expect(included).toMatchObject({ kind: "state" });
-    expect(plan.skipped).toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: "workspace", reason: "covered" })]),
-    );
+    if (!included) {
+      throw new Error("Expected state asset to be included");
+    }
+    expect(plan.skipped).toStrictEqual([
+      expect.objectContaining({
+        kind: "workspace",
+        reason: "covered",
+        coveredBy: included.displayPath,
+      }),
+    ]);
+    const [skipped] = plan.skipped;
+    if (!skipped) {
+      throw new Error("Expected covered workspace skip entry");
+    }
+    expect(path.relative(included.sourcePath, skipped.sourcePath).startsWith("..")).toBe(false);
   }
 
   function expectOnlyAssetKind(assets: Array<{ kind: string }>, kind: string) {
-    expect(assets).toHaveLength(1);
-    const [asset] = assets;
-    expect(asset).toMatchObject({ kind });
+    expect(assets).toStrictEqual([expect.objectContaining({ kind })]);
   }
 
   it("collapses default config, credentials, and workspace into the state backup root", async () => {
