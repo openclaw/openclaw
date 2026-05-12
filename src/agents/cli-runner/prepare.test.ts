@@ -324,7 +324,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("prepends current-turn context after prompt-build hooks without changing hook or transcript prompt", async () => {
-    const { dir, sessionFile } = createSessionFile();
+    const { dir } = createTranscriptStateFixture();
     try {
       const hookRunner = {
         hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
@@ -341,7 +341,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sessionKey: "agent:main:test",
         agentId: "main",
         trigger: "user",
-        sessionFile,
         workspaceDir: dir,
         prompt: "latest ask",
         transcriptPrompt: "latest ask",
