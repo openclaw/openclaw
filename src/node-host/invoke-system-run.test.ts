@@ -758,6 +758,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         security: "allowlist",
         ask: "off",
         command: ["/bin/sh", "-lc", "head -c${IFS}16${IFS}${OPENCLAW_CONFIG_PATH}"],
+        rawCommand: "head -c${IFS}16${IFS}${OPENCLAW_CONFIG_PATH}",
       });
 
       expect(runCommand).not.toHaveBeenCalled();
@@ -779,6 +780,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           security: "allowlist",
           ask: "off",
           command: ["/bin/sh", "-lc", "head -c 16"],
+          rawCommand: "head -c 16",
         });
 
         expect(requireFirstRunCommandArgs(runCommand)).toEqual([
@@ -814,6 +816,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           security: "allowlist",
           ask: "off",
           command: ["/bin/sh", "-lc", "sh -c 'tr a b && head -c 16'"],
+          rawCommand: "sh -c 'tr a b && head -c 16'",
         });
 
         const payload = requireFirstRunCommandArgs(runCommand)[2] ?? "";
