@@ -1,3 +1,4 @@
+import { getBundledChannelPlugin } from "../bundled.js";
 import type { ChannelId } from "../channel-id.types.js";
 import type { ChannelOutboundAdapter } from "../outbound.types.js";
 import { createChannelRegistryLoader } from "../registry-loader.js";
@@ -15,7 +16,7 @@ const loadOutboundAdapterFromRegistry = createChannelRegistryLoader<ChannelOutbo
 export async function loadChannelOutboundAdapter(
   id: ChannelId,
 ): Promise<ChannelOutboundAdapter | undefined> {
-  return loadOutboundAdapterFromRegistry(id);
+  return (await loadOutboundAdapterFromRegistry(id)) ?? getBundledChannelPlugin(id)?.outbound;
 }
 
 export type { LoadChannelOutboundAdapter };
