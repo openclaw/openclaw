@@ -223,7 +223,11 @@ describe("config form renderer", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Plugin Enabled");
+    const label = expectElement(
+      container.querySelector(".cfg-toggle-row__label"),
+      "plugin enabled label",
+    );
+    expect(label.textContent?.trim()).toBe("Plugin Enabled");
   });
 
   it("renders tags from uiHints metadata", () => {
@@ -263,8 +267,16 @@ describe("config form renderer", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Gateway");
-    expect(container.textContent).toContain("Token");
+    const sectionTitle = expectElement(
+      container.querySelector(".config-section-card__title"),
+      "tag-filtered section title",
+    );
+    expect(sectionTitle.textContent?.trim()).toBe("Gateway");
+    const fieldLabel = expectElement(
+      container.querySelector(".cfg-field__label"),
+      "tag-filtered field label",
+    );
+    expect(fieldLabel.textContent?.trim()).toBe("Token");
     expect(container.textContent).not.toContain("Allow From");
     expect(container.textContent).not.toContain("Mode");
   });

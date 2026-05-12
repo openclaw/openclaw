@@ -161,7 +161,7 @@ describe("feishu setup wizard", () => {
 
     expect(initAppRegistrationMock).toHaveBeenCalledWith("lark");
     expect(beginAppRegistrationMock).toHaveBeenCalledWith("lark");
-    const [pollOptions] = pollAppRegistrationMock.mock.calls[0] ?? [];
+    const [pollOptions] = pollAppRegistrationMock.mock.calls.at(0) ?? [];
     expect(pollOptions?.deviceCode).toBe("device-code");
     expect(pollOptions?.initialDomain).toBe("lark");
     expect(pollOptions?.tp).toBe("ob_cli_app");

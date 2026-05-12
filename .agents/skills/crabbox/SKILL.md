@@ -251,6 +251,31 @@ Keep it efficient:
 - Include `--timing-json` on broad or flaky runs when command duration or sync
   behavior matters.
 
+Before/after PR proof on delegated Testbox:
+
+- For PRs that should prove "broken before, fixed after", compare base and PR
+  on the same Testbox when practical. Fetch both refs, create detached temp
+  worktrees under `/tmp`, install in each, then run the same harness twice.
+- Do not checkout base/PR refs in the synced repo root. Delegated Testbox sync
+  may leave the root dirty with local files; `git checkout` can abort or mix
+  proof state.
+- Temp harness files under `/tmp` do not resolve repo packages by default. Put
+  the harness inside the worktree, or in ESM use
+  `createRequire(path.join(process.cwd(), "package.json"))` before requiring
+  workspace deps such as `@lydell/node-pty`.
+- For full-screen TUI/CLI bugs, a PTY harness is stronger than helper-only
+  assertions. Use a real PTY, wait for visible lifecycle markers, send input,
+  then send control keys and assert process exit/stuck behavior.
+- When validating a rebased local branch before push, remember delegated sync
+  usually validates synced file content on a detached dirty checkout, not a
+  remote commit object. Record the local head SHA, changed files, Testbox id,
+  and final success markers; after pushing, ensure the pushed SHA has the same
+  file content.
+- If GitHub CI is still queued but the exact changed content passed Testbox
+  `pnpm check:changed`, `pnpm check:test-types`, and the real E2E proof, it is
+  reasonable to merge once required checks allow it. Note any still-running
+  unrelated shards in the proof comment instead of waiting forever.
+
 Interactive CLI/onboarding:
 
 - For full-screen or prompt-heavy CLI flows, run the target command inside tmux

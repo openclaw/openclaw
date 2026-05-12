@@ -2268,7 +2268,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(effectiveExtraParams.transport).toBe("websocket");
     expect(effectiveExtraParams.hookApplied).toBe(true);
     expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(1);
-    const hookCall = resolveProviderExtraParamsForTransport.mock.calls[0]?.[0] as
+    const hookCall = resolveProviderExtraParamsForTransport.mock.calls.at(0)?.[0] as
       | {
           provider?: string;
           context?: {
@@ -2394,7 +2394,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(effectiveExtraParams.transport).toBe("auto");
     expect(effectiveExtraParams.hookApplied).toBe(true);
     expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(1);
-    const hookCall = resolveProviderExtraParamsForTransport.mock.calls[0]?.[0] as
+    const hookCall = resolveProviderExtraParamsForTransport.mock.calls.at(0)?.[0] as
       | { context?: { transport?: string } }
       | undefined;
     expect(hookCall?.context?.transport).toBe("websocket");

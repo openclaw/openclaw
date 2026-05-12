@@ -208,7 +208,7 @@ describe("group runtime loading", () => {
         },
       }),
     ).resolves.toBe(false);
-    expect(groupsRuntimeLoads).toHaveBeenCalled();
+    expect(groupsRuntimeLoads).toHaveBeenCalledTimes(1);
 
     await expect(
       isolatedGroups.resolveGroupRequireMention({
@@ -274,6 +274,7 @@ describe("group runtime loading", () => {
         },
       }),
     ).resolves.toBe(false);
+    expect(groupsRuntimeLoads).toHaveBeenCalledTimes(1);
     vi.doUnmock("./groups.runtime.js");
   });
 });

@@ -164,8 +164,10 @@ describe("agents tools panel (browser)", () => {
     const group = container.querySelector<HTMLDetailsElement>(".agent-tools-group");
     const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
 
-    expect(group?.classList.contains("agent-tools-group")).toBe(true);
-    expect(tool?.classList.contains("agent-tool-card")).toBe(true);
+    expect(group).toBeInstanceOf(HTMLDetailsElement);
+    expect(tool).toBeInstanceOf(HTMLDetailsElement);
+    expect(group ? [...group.classList] : []).toEqual(["agent-tools-group"]);
+    expect(tool ? [...tool.classList] : []).toEqual(["agent-tool-card"]);
 
     if (!group || !tool) {
       throw new Error("expected agent tool group and card");
@@ -319,8 +321,10 @@ describe("agents tools panel (browser)", () => {
       '.agent-tools-runtime-chip[href="#agent-tool-read"]',
     );
 
-    expect(group?.classList.contains("agent-tools-group")).toBe(true);
-    expect(tool?.classList.contains("agent-tool-card")).toBe(true);
+    expect(group).toBeInstanceOf(HTMLDetailsElement);
+    expect(tool).toBeInstanceOf(HTMLDetailsElement);
+    expect(group ? [...group.classList] : []).toEqual(["agent-tools-group"]);
+    expect(tool ? [...tool.classList] : []).toEqual(["agent-tool-card"]);
     expect(chip?.getAttribute("href")).toBe("#agent-tool-read");
 
     if (!group || !tool || !chip) {

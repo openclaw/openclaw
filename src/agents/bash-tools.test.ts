@@ -400,7 +400,9 @@ async function expectNotifyOnExitWake(tool: ExecToolInstance, expected: Record<s
   );
   try {
     await startBackgroundCommand(tool, shellEcho("notify"));
-    await expect.poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS).toEqual(expected);
+    await expect
+      .poll(() => wakeHandler.mock.calls.at(0)?.[0], NOTIFY_POLL_OPTIONS)
+      .toEqual(expected);
   } finally {
     dispose();
   }

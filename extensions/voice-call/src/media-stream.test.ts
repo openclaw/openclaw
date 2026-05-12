@@ -77,6 +77,14 @@ const requireRecord = (value: unknown, label: string): Record<string, unknown> =
   return value as Record<string, unknown>;
 };
 
+const requireFirstMockCall = <T extends unknown[]>(calls: readonly T[], label: string): T => {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call;
+};
+
 const requireTalkEvent = (events: TalkEvent[], type: TalkEvent["type"]) => {
   const event = events.find((candidate) => candidate.type === type);
   if (!event) {
@@ -571,10 +579,10 @@ describe("MediaStreamHandler security hardening", () => {
     }
     completeUpgrade({} as WebSocket);
     expect(fakeWss.emit).toHaveBeenCalledOnce();
-    const emitCall = fakeWss.emit.mock.calls[0];
-    if (emitCall === undefined) {
-      throw new Error("Expected websocket connection emit call");
-    }
+    const emitCall = requireFirstMockCall(
+      fakeWss.emit.mock.calls,
+      "websocket connection emit call",
+    );
     expect(emitCall[0]).toBe("connection");
     if (!emitCall[1]) {
       throw new Error("Expected websocket connection argument");
@@ -659,10 +667,11 @@ describe("MediaStreamHandler security hardening", () => {
       await vi.waitFor(() => {
         expect(shouldAcceptStream).toHaveBeenCalledOnce();
       });
-      const acceptedStream = requireRecord(
-        shouldAcceptStream.mock.calls[0]?.[0],
-        "accepted stream params",
+      const acceptedStreamCall = requireFirstMockCall(
+        shouldAcceptStream.mock.calls,
+        "accepted stream call",
       );
+      const acceptedStream = requireRecord(acceptedStreamCall[0], "accepted stream params");
       expect(acceptedStream.callId).toBe("CA123");
       expect(acceptedStream.streamSid).toBe("MZ123");
       expect(acceptedStream.token).toBe("token-123");

@@ -882,7 +882,7 @@ describe("session_status tool", () => {
     expect(details.model).toBe("claude-sonnet-4-6");
     expect(details.modelProvider).toBe("anthropic");
     expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
-    expect(updateSessionStoreMock).toHaveBeenCalled();
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
       string,
       Record<string, SessionEntry>,
@@ -907,7 +907,7 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
-    expect(updateSessionStoreMock).toHaveBeenCalled();
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
       string,
       Record<string, SessionEntry>,
@@ -1671,7 +1671,7 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:main");
-    expect(updateSessionStoreMock).toHaveBeenCalled();
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
   });
 
   it("blocks unsandboxed sessionId session_status outside tree visibility before mutation", async () => {
@@ -1980,7 +1980,7 @@ describe("session_status tool", () => {
     const result = await tool.execute("call3", { model: "default" });
     const details = result.details as { modelOverride?: string | null };
     expect(details.modelOverride).toBeNull();
-    expect(updateSessionStoreMock).toHaveBeenCalled();
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
       string,
       Record<string, unknown>,

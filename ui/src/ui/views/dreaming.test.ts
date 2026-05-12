@@ -225,7 +225,9 @@ describe("dreaming view", () => {
     );
     expect(phases).toEqual(["Light", "Deep", "Rem"]);
     expect(container.querySelectorAll(".dreams__phase").length).toBe(3);
-    expect(container.querySelector(".dreams__phase--off")?.textContent).toContain("off");
+    expect(container.querySelector(".dreams__phase--off .dreams__phase-next")?.textContent).toBe(
+      "off",
+    );
 
     const buttons = [...container.querySelectorAll("button")].map((node) =>
       node.textContent?.trim(),
@@ -241,10 +243,7 @@ describe("dreaming view", () => {
     const detail = container.querySelector(".dreams__status-detail span");
     expect(detail?.textContent).toContain("4:00 AM");
     const tabs = container.querySelectorAll(".dreams__tab");
-    expect(tabs.length).toBe(3);
-    expect(tabs[0]?.textContent).toContain("Scene");
-    expect(tabs[1]?.textContent).toContain("Diary");
-    expect(tabs[2]?.textContent).toContain("Advanced");
+    expect([...tabs].map((tab) => tab.textContent?.trim())).toEqual(["Scene", "Diary", "Advanced"]);
   });
 
   it("renders idle and unavailable scene states", () => {

@@ -190,7 +190,7 @@ describe("tool-cards", () => {
 
     const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
     expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
-    expect(sidebarButton?.classList.contains("chat-tool-card__action-btn")).toBe(true);
+    expect([...sidebarButton!.classList]).toEqual(["chat-tool-card__action-btn"]);
     sidebarButton!.click();
 
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");

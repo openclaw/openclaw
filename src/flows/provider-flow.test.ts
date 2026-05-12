@@ -48,6 +48,14 @@ vi.mock("../plugins/providers.runtime.js", () => ({
 let resolveProviderSetupFlowContributions: ResolveProviderSetupFlowContributions;
 let resolveProviderModelPickerFlowContributions: ResolveProviderModelPickerFlowContributions;
 
+function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("provider flow install catalog contributions", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -107,8 +115,13 @@ describe("provider flow install catalog contributions", () => {
       },
     ]);
     expect(resolveManifestProviderAuthChoices).toHaveBeenCalledTimes(1);
+    const [authChoiceOptions] = requireFirstMockCall(
+      resolveManifestProviderAuthChoices,
+      "manifest auth choices",
+    );
     expect(
-      resolveManifestProviderAuthChoices.mock.calls[0]?.[0]?.includeUntrustedWorkspacePlugins,
+      (authChoiceOptions as { includeUntrustedWorkspacePlugins?: boolean })
+        .includeUntrustedWorkspacePlugins,
     ).toBe(false);
     expect(resolveProviderWizardOptions).not.toHaveBeenCalled();
     expect(resolvePluginProviders).not.toHaveBeenCalled();
@@ -201,8 +214,13 @@ describe("provider flow install catalog contributions", () => {
       },
     ]);
     expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledTimes(1);
+    const [installCatalogOptions] = requireFirstMockCall(
+      resolveProviderInstallCatalogEntries,
+      "provider install catalog",
+    );
     expect(
-      resolveProviderInstallCatalogEntries.mock.calls[0]?.[0]?.includeUntrustedWorkspacePlugins,
+      (installCatalogOptions as { includeUntrustedWorkspacePlugins?: boolean })
+        .includeUntrustedWorkspacePlugins,
     ).toBe(false);
   });
 

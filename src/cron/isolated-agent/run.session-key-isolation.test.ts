@@ -17,7 +17,7 @@ import {
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 function requireFirstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
-  const arg = mock.mock.calls[0]?.[0];
+  const arg = mock.mock.calls.at(0)?.[0];
   if (arg === undefined) {
     throw new Error(`Expected ${label} to be called with a first argument`);
   }

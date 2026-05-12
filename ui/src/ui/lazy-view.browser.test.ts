@@ -29,7 +29,9 @@ describe("lazy view rendering", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Loading panel");
+    expect(
+      container.querySelector(".lazy-view-state--loading .card-title")?.textContent?.trim(),
+    ).toBe("Loading panel");
 
     await flushPromises();
     render(
@@ -60,8 +62,12 @@ describe("lazy view rendering", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Panel failed to load");
-    expect(container.textContent).toContain("chunk 404");
+    expect(
+      container.querySelector(".lazy-view-state--error .card-title")?.textContent?.trim(),
+    ).toBe("Panel failed to load");
+    expect(container.querySelector(".lazy-view-state--error .callout")?.textContent?.trim()).toBe(
+      "chunk 404",
+    );
 
     const retry = expectButtonWithText(container, "Retry");
     retry.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));

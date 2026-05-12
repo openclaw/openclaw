@@ -92,8 +92,8 @@ test("exec falls back when PTY spawn fails", async () => {
   expect(outcome.status).toBe("completed");
   expect(outcome.aggregated).toContain("ok");
   expect(warnings.join("\n")).toContain("PTY spawn failed");
-  const firstSpawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as SpawnInput | undefined;
-  const secondSpawnInput = supervisorSpawnMock.mock.calls[1]?.[0] as SpawnInput | undefined;
+  const firstSpawnInput = supervisorSpawnMock.mock.calls.at(0)?.[0] as SpawnInput | undefined;
+  const secondSpawnInput = supervisorSpawnMock.mock.calls.at(1)?.[0] as SpawnInput | undefined;
   expect(firstSpawnInput?.mode).toBe("pty");
   expect(secondSpawnInput?.mode).toBe("child");
 });

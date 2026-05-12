@@ -181,7 +181,7 @@ describe("custom theme import helpers", () => {
     expect(imported.label).toBe("Light Green");
     const fetchMock = vi.mocked(fetchImpl);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [fetchUrl, fetchOptions] = fetchMock.mock.calls[0] as [
+    const [fetchUrl, fetchOptions] = fetchMock.mock.calls.at(0) as [
       string,
       { headers?: unknown; redirect?: unknown; signal?: unknown },
     ];
@@ -323,10 +323,12 @@ describe("custom theme import helpers", () => {
     } as unknown as Document;
     vi.stubGlobal("document", documentStub);
 
-    syncCustomThemeStyleTag(createImportedTheme());
+    const theme = createImportedTheme();
+    syncCustomThemeStyleTag(theme);
 
     expect(appendChild).toHaveBeenCalledWith(style);
-    expect(style.textContent).toContain(':root[data-theme="custom"]');
+    expect(style.id).toBe("openclaw-custom-theme");
+    expect(style.textContent).toBe(buildCustomThemeStyles(theme));
 
     vi.stubGlobal("document", {
       head: documentStub.head,

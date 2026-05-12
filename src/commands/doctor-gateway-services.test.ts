@@ -510,10 +510,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
     await runRepair({ gateway: {} });
 
     expect(mocks.install).toHaveBeenCalledOnce();
-    const installOptions = mocks.install.mock.calls[0]?.[0];
-    expect(installOptions?.environment).toStrictEqual({});
-    expect(Object.hasOwn(installOptions?.environment ?? {}, "HTTP_PROXY")).toBe(false);
-    expect(Object.hasOwn(installOptions?.environment ?? {}, "HTTPS_PROXY")).toBe(false);
+    const installOptions = requireRecord(callArg(mocks.install, 0, "gateway install"), "install");
+    const environment = requireRecord(installOptions.environment, "install environment");
+    expect(environment).toStrictEqual({});
+    expect(Object.hasOwn(environment, "HTTP_PROXY")).toBe(false);
+    expect(Object.hasOwn(environment, "HTTPS_PROXY")).toBe(false);
   });
 
   it("uses OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
