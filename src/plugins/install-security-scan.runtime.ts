@@ -19,6 +19,7 @@ import {
   getPackageManifestMetadata,
   type PackageManifest as OpenClawPackageManifest,
 } from "./manifest.js";
+import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
 
 type InstallScanLogger = {
   warn?: (message: string) => void;
@@ -611,12 +612,22 @@ async function collectPackageExecutableScanEntries(params: {
   extensions: string[];
   packageDir: string;
 }): Promise<string[]> {
-  const entries = [...params.extensions];
+  const entries: string[] = [];
   const manifest = await tryReadJson<PackageInstallScanManifest>(
     path.join(params.packageDir, "package.json"),
   );
   const metadata = getPackageManifestMetadata(manifest ?? undefined);
-  entries.push(...readStringList(metadata?.runtimeExtensions));
+  const runtimeExtensions = readStringList(metadata?.runtimeExtensions);
+  for (const [index, extensionEntry] of params.extensions.entries()) {
+    entries.push(extensionEntry);
+    const runtimeEntry = runtimeExtensions[index];
+    if (runtimeEntry) {
+      entries.push(runtimeEntry);
+      continue;
+    }
+    entries.push(...listBuiltRuntimeEntryCandidates(extensionEntry));
+  }
+
   const setupEntry = normalizeOptionalString(metadata?.setupEntry);
   if (setupEntry) {
     entries.push(setupEntry);
@@ -624,6 +635,8 @@ async function collectPackageExecutableScanEntries(params: {
   const runtimeSetupEntry = normalizeOptionalString(metadata?.runtimeSetupEntry);
   if (runtimeSetupEntry) {
     entries.push(runtimeSetupEntry);
+  } else if (setupEntry) {
+    entries.push(...listBuiltRuntimeEntryCandidates(setupEntry));
   }
   return [...new Set(entries)];
 }
