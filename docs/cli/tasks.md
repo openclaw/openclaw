@@ -45,6 +45,23 @@ openclaw tasks list [--runtime <name>] [--status <name>] [--json]
 
 Lists tracked background tasks newest first.
 
+Human-readable output annotates stale active records distinctly (`stale-run` /
+`stale-q`) while preserving the canonical lifecycle status in the task record.
+JSON output includes a `health` object on each task so Control UI and SDK
+consumers can surface the same distinction without parsing audit text:
+
+```json
+{
+  "status": "running",
+  "health": {
+    "displayStatus": "stale-run",
+    "stale": true,
+    "auditCodes": ["stale_running"],
+    "maxAgeMs": 2400000
+  }
+}
+```
+
 ### `show`
 
 ```bash
