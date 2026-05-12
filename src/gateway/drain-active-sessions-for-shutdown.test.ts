@@ -8,7 +8,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 // configured total timeout, and must propagate the reason ("shutdown" or
 // "restart") into the plugin hook payload.
 
-const runSessionEndMock = vi.fn(async () => undefined);
+type SessionEndHookEvent = {
+  reason?: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
+
+const runSessionEndMock = vi.fn(async (_event: SessionEndHookEvent) => undefined);
 const hasHooksMock = vi.fn((name: string) => name === "session_end");
 const getGlobalHookRunnerMock = vi.fn(() => ({
   hasHooks: hasHooksMock,
@@ -74,7 +80,7 @@ describe("drainActiveSessionsForShutdown", () => {
     const result = await drainActiveSessionsForShutdown({ reason: "shutdown" });
 
     expect(result.timedOut).toBe(false);
-    expect(result.emittedSessionIds.sort()).toEqual(["sess-A", "sess-B"]);
+    expect(result.emittedSessionIds.toSorted()).toEqual(["sess-A", "sess-B"]);
     expect(runSessionEndMock).toHaveBeenCalledTimes(2);
     const reasons = runSessionEndMock.mock.calls.map(
       ([event]) => (event as { reason?: string }).reason,
@@ -162,8 +168,8 @@ describe("drainActiveSessionsForShutdown", () => {
   });
 
   it("returns timedOut=true while still starting later emissions when one handler hangs", async () => {
-    runSessionEndMock.mockImplementation(async (event) => {
-      if ((event as { sessionId?: string }).sessionId === "sess-A") {
+    runSessionEndMock.mockImplementation(async (event: SessionEndHookEvent) => {
+      if (event.sessionId === "sess-A") {
         await new Promise<void>(() => undefined);
       }
     });
@@ -184,7 +190,7 @@ describe("drainActiveSessionsForShutdown", () => {
     });
 
     expect(result.timedOut).toBe(true);
-    expect(result.emittedSessionIds.sort()).toEqual(["sess-A", "sess-B"]);
+    expect(result.emittedSessionIds.toSorted()).toEqual(["sess-A", "sess-B"]);
     expect(runSessionEndMock).toHaveBeenCalledTimes(2);
     expect(
       runSessionEndMock.mock.calls.map(([event]) => (event as { sessionId?: string }).sessionId),

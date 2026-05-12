@@ -194,7 +194,7 @@ describe("createGatewayCloseHandler", () => {
   });
 
   it("drains the active-session tracker with reason=shutdown on SIGTERM/SIGINT close", async () => {
-    const drainActiveSessionsForShutdown = vi.fn(async () => ({
+    const drainActiveSessionsForShutdown = vi.fn<DrainActiveSessionsForShutdown>(async () => ({
       emittedSessionIds: ["session-A", "session-B"],
       timedOut: false,
     }));
@@ -211,7 +211,7 @@ describe("createGatewayCloseHandler", () => {
   });
 
   it("drains the active-session tracker with reason=restart when restartExpectedMs is set", async () => {
-    const drainActiveSessionsForShutdown = vi.fn(async () => ({
+    const drainActiveSessionsForShutdown = vi.fn<DrainActiveSessionsForShutdown>(async () => ({
       emittedSessionIds: ["session-A"],
       timedOut: false,
     }));
@@ -228,7 +228,7 @@ describe("createGatewayCloseHandler", () => {
   });
 
   it("records a warning and continues shutdown when the session-end drain reports a timeout", async () => {
-    const drainActiveSessionsForShutdown = vi.fn(async () => ({
+    const drainActiveSessionsForShutdown = vi.fn<DrainActiveSessionsForShutdown>(async () => ({
       emittedSessionIds: ["session-A"],
       timedOut: true,
     }));
