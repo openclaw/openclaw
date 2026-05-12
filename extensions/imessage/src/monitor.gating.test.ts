@@ -59,6 +59,7 @@ async function resolveDispatchDecision(params: {
   groupHistories?: Parameters<typeof resolveIMessageInboundDecision>[0]["groupHistories"];
   allowFrom?: string[];
   groupAllowFrom?: string[];
+  allowLegacyConversationAllowFromForGroup?: boolean;
   groupPolicy?: "open" | "allowlist" | "disabled";
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
 }) {
@@ -72,6 +73,7 @@ async function resolveDispatchDecision(params: {
     bodyText: params.message.text ?? "",
     allowFrom: params.allowFrom ?? ["*"],
     groupAllowFrom: params.groupAllowFrom ?? [],
+    allowLegacyConversationAllowFromForGroup: params.allowLegacyConversationAllowFromForGroup,
     groupPolicy: params.groupPolicy ?? "open",
     dmPolicy: params.dmPolicy ?? "open",
     storeAllowFrom: [],
@@ -534,10 +536,46 @@ describe("imessage monitor gating + envelope builders", () => {
       },
       allowFrom: ["chat_id:101"],
       groupAllowFrom: [],
+      allowLegacyConversationAllowFromForGroup: true,
       groupPolicy: "allowlist",
     });
 
     expect(decision.kind).toBe("dispatch");
+  });
+
+  it("does not use legacy conversation allowFrom entries when groupAllowFrom is explicitly empty", async () => {
+    const cfg = baseCfg();
+    cfg.channels ??= {};
+    cfg.channels.imessage ??= {};
+    cfg.channels.imessage.groupPolicy = "allowlist";
+
+    const decision = await resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: {
+        id: 38,
+        chat_id: 101,
+        sender: "+15550003333",
+        is_from_me: false,
+        text: "@openclaw ok",
+        is_group: true,
+      },
+      opts: {},
+      messageText: "@openclaw ok",
+      bodyText: "@openclaw ok",
+      allowFrom: ["chat_id:101"],
+      groupAllowFrom: [],
+      groupPolicy: "allowlist",
+      dmPolicy: "pairing",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+
+    expect(decision).toEqual({
+      kind: "drop",
+      reason: "groupPolicy allowlist (empty groupAllowFrom)",
+    });
   });
 
   it("does not merge legacy conversation allowFrom entries when groupAllowFrom is configured", async () => {
@@ -626,6 +664,7 @@ describe("imessage monitor gating + envelope builders", () => {
       bodyText: "/status",
       allowFrom: ["chat_id:101"],
       groupAllowFrom: [],
+      allowLegacyConversationAllowFromForGroup: true,
       groupPolicy: "allowlist",
       dmPolicy: "pairing",
       storeAllowFrom: [],

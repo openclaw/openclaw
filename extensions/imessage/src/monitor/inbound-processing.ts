@@ -185,8 +185,9 @@ function isIMessageConversationAllowTarget(entry: string): boolean {
 function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
   groupAllowFrom: string[];
   allowFrom: string[];
+  allowLegacyConversationTargets?: boolean;
 }): string[] {
-  if (params.groupAllowFrom.length > 0) {
+  if (params.groupAllowFrom.length > 0 || !params.allowLegacyConversationTargets) {
     return params.groupAllowFrom;
   }
   const legacyChatTargets = params.allowFrom.filter((entry) =>
@@ -433,6 +434,7 @@ export async function resolveIMessageInboundDecision(params: {
   bodyText: string;
   allowFrom: string[];
   groupAllowFrom: string[];
+  allowLegacyConversationAllowFromForGroup?: boolean;
   groupPolicy: string;
   dmPolicy: string;
   storeAllowFrom: string[];
@@ -469,6 +471,7 @@ export async function resolveIMessageInboundDecision(params: {
   const groupAllowFromWithLegacyChatTargets = mergeIMessageGroupAllowFromWithLegacyChatTargets({
     groupAllowFrom: params.groupAllowFrom,
     allowFrom: params.allowFrom,
+    allowLegacyConversationTargets: params.allowLegacyConversationAllowFromForGroup,
   });
   const groupListPolicy = groupIdCandidate
     ? resolveChannelGroupPolicy({
