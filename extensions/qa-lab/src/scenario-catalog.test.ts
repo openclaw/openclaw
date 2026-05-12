@@ -282,12 +282,16 @@ describe("qa scenario catalog", () => {
       const config = readQaScenarioExecutionConfig(scenarioId) as
         | {
             requiredProvider?: string;
+            runtimeParityComparison?: string;
+            knownHarnessGap?: { issue?: string; reason?: string };
             prompt?: string;
           }
         | undefined;
 
       expect(scenario.sourcePath).toBe(`qa/scenarios/runtime/${scenarioId}.md`);
       expect(config?.requiredProvider).toBe("mock-openai");
+      expect(config?.runtimeParityComparison).toBe("codex-native-workspace");
+      expect(config?.knownHarnessGap?.reason).toContain("Codex owns");
       expect(config?.prompt).toContain("check");
       expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
     }

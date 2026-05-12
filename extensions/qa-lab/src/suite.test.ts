@@ -238,6 +238,43 @@ describe("qa suite", () => {
     ).toContain("Codex-native approval/read behavior requires native/live proof");
   });
 
+  it("keeps mock fault-injection native workspace rows report-only when mock cannot drive Codex native tools", () => {
+    const scenario = readQaScenarioById("reasoning-only-recovery-replay-safe-read");
+    const result: RuntimeParityResult = {
+      scenarioId: scenario.id,
+      drift: "failure-mode",
+      driftDetails: "scenario status differs (pass vs fail)",
+      cells: {
+        pi: {
+          runtime: "pi",
+          transcriptBytes: "",
+          toolCalls: [{ tool: "read", argsHash: "a", resultHash: "r" }],
+          finalText: "REASONING-RECOVERED-OK",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+        codex: {
+          runtime: "codex",
+          transcriptBytes: "",
+          toolCalls: [],
+          finalText: "",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          runtimeErrorClass: "timeout",
+          bootStateLines: [],
+        },
+      },
+    };
+
+    expect(
+      qaSuiteProgressTesting.runtimeParityReportOnlyReason({
+        scenario,
+        result,
+      }),
+    ).toContain("Codex owns read natively");
+  });
+
   it("hard-gates OpenClaw dynamic integration drift in direct loading mode", () => {
     const scenario = readQaScenarioById("runtime-tool-web-search");
     const result: RuntimeParityResult = {
