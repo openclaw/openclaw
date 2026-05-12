@@ -5,9 +5,11 @@ read_when:
   - Understanding plugin discovery and load rules
   - Working with Codex/Claude-compatible plugin bundles
 title: "Plugins"
-sidebarTitle: "Install and Configure"
+sidebarTitle: "Getting Started"
 doc-schema-version: 1
 ---
+
+## Overview
 
 Plugins extend OpenClaw with channels, model providers, agent harnesses, tools,
 skills, speech, realtime transcription, voice, media understanding, generation,
@@ -18,6 +20,16 @@ that the runtime loaded it, and route common setup failures. For command-only
 examples, see [Manage plugins](/plugins/manage-plugins). For the full generated
 inventory of bundled, official external, and source-only plugins, see
 [Plugin inventory](/plugins/plugin-inventory).
+
+## Requirements
+
+Before installing a plugin, make sure you have:
+
+- an OpenClaw checkout or installation with the `openclaw` CLI available
+- network access to the selected source, such as ClawHub, npm, or a git host
+- any plugin-specific credentials, config keys, or operating-system tools named
+  by that plugin's setup docs
+- permission to restart the Gateway that serves your channels
 
 ## Quick start
 
@@ -93,7 +105,9 @@ inventory of bundled, official external, and source-only plugins, see
   </Step>
 </Steps>
 
-## Choose an install source
+## Configuration
+
+### Choose an install source
 
 | Source      | Use when                                                                       | Example                                                        |
 | ----------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------- |
@@ -111,21 +125,7 @@ ordinary bare package specs install through npm during the launch cutover. Use
 selection. See [`openclaw plugins`](/cli/plugins#install) for the full command
 contract.
 
-## Understand plugin formats
-
-OpenClaw recognizes two plugin formats:
-
-| Format                 | How it loads                                                                 | Use when                                                               |
-| ---------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Native OpenClaw plugin | `openclaw.plugin.json` plus a runtime module loaded in process               | You are installing or building OpenClaw-specific runtime capabilities  |
-| Compatible bundle      | Codex, Claude, or Cursor plugin layout mapped into OpenClaw plugin inventory | You are reusing compatible skills, commands, hooks, or bundle metadata |
-
-Both formats appear in `openclaw plugins list`, `openclaw plugins inspect`,
-`openclaw plugins enable`, and `openclaw plugins disable`. See
-[Plugin bundles](/plugins/bundles) for the bundle compatibility boundary and
-[Building plugins](/plugins/building-plugins) for native plugin authoring.
-
-## Configure plugin policy
+### Configure plugin policy
 
 The common plugin config shape is:
 
@@ -159,7 +159,23 @@ Key policy rules:
 Run `openclaw doctor` or `openclaw doctor --fix` when config validation reports
 stale plugin ids, allowlist/tool mismatches, or legacy bundled plugin paths.
 
-## Verify the active Gateway
+## Subtopics
+
+### Understand plugin formats
+
+OpenClaw recognizes two plugin formats:
+
+| Format                 | How it loads                                                                 | Use when                                                               |
+| ---------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Native OpenClaw plugin | `openclaw.plugin.json` plus a runtime module loaded in process               | You are installing or building OpenClaw-specific runtime capabilities  |
+| Compatible bundle      | Codex, Claude, or Cursor plugin layout mapped into OpenClaw plugin inventory | You are reusing compatible skills, commands, hooks, or bundle metadata |
+
+Both formats appear in `openclaw plugins list`, `openclaw plugins inspect`,
+`openclaw plugins enable`, and `openclaw plugins disable`. See
+[Plugin bundles](/plugins/bundles) for the bundle compatibility boundary and
+[Building plugins](/plugins/building-plugins) for native plugin authoring.
+
+### Verify the active Gateway
 
 `openclaw plugins list` and plain `openclaw plugins inspect` read cold config,
 manifest, and registry state. They do not prove that an already-running Gateway
