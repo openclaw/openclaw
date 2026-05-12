@@ -213,7 +213,7 @@ describe("commandsEqual", () => {
 describe("DiscordCommandDeployer cache scoping (multi-application)", () => {
   class StaticCommand extends BaseCommand {
     name: string;
-    description = "ping the bot";
+    override description = "ping the bot";
     type = ApplicationCommandType.ChatInput;
     constructor(name: string) {
       super();
