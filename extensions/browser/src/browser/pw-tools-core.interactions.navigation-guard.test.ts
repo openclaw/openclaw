@@ -555,7 +555,20 @@ describe("pw-tools-core interaction navigation guard", () => {
       await rejection;
       expect(
         getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely,
-      ).not.toHaveBeenCalled();
+      ).toHaveBeenCalledTimes(1);
+      expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
+        {
+          cdpUrl: "http://127.0.0.1:18792",
+          page,
+          response: null,
+          ssrfPolicy: { allowPrivateNetwork: false },
+          targetId: "T1",
+        },
+      );
+      expect(
+        getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely.mock
+          .invocationCallOrder[0],
+      ).toBeLessThan(page.evaluate.mock.invocationCallOrder[0]);
     } finally {
       vi.useRealTimers();
     }
