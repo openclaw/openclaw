@@ -169,8 +169,8 @@ export type PluginControlUiDescriptor = {
   /**
    * Predicate that drives mounting on a `chat-*` surface. The predicate is
    * evaluated client-side against the plugin's projected session-extension
-   * state (see `registerSessionExtension`). Ignored for the static surfaces
-   * (`session` | `tool` | `run` | `settings`).
+   * state (see `registerSessionExtension`). Static surfaces (`session` |
+   * `tool` | `run` | `settings`) cannot declare `activeWhen`.
    */
   activeWhen?: PluginControlUiActiveWhen;
 };

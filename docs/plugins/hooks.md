@@ -349,7 +349,7 @@ generation.
 
 Plugins that want inline UI in the chat-stream view — plan cards rendered
 between agent messages, an input-bar contribution that owns the composer while
-an approval is pending, or a header chip showing the active execution mode —
+an approval is pending, or a toolbar chip showing the active execution mode —
 register Control UI descriptors with one of the chat-stream surfaces in
 addition to the existing static slots:
 
