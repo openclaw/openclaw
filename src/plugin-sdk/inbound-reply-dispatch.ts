@@ -7,6 +7,12 @@ import {
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type {
+  PluginHookBeforeRouteInboundMessageContext,
+  PluginHookBeforeRouteInboundMessageEvent,
+  PluginHookBeforeRouteInboundMessageResult,
+} from "../plugins/hook-message.types.js";
 import {
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
@@ -151,6 +157,60 @@ export async function dispatchChannelMessageReplyWithBase(
       "deliver" | "durable" | "onRecordError" | "onDispatchError" | "replyOptions"
     >,
 ): Promise<void> {
+  // ── before_route_inbound_message hook ──────────────────────────────
+  // Fire before building the dispatch base. Plugins (e.g. channel-bridge)
+  // can redirect to a different session or suppress delivery.
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner) {
+    const bodyText = String(params.ctxPayload.Body ?? params.ctxPayload.BodyForAgent ?? "");
+    const isGroup =
+      params.ctxPayload.ChatType === "group" ||
+      params.ctxPayload.ChatType === "supergroup";
+
+    const hookCtx: PluginHookBeforeRouteInboundMessageContext = {
+      channelId: params.channel,
+      accountId: params.accountId,
+      conversationId: params.ctxPayload.NativeChannelId ?? params.ctxPayload.OriginatingTo,
+      parentConversationId: params.ctxPayload.MessageThreadId
+        ? String(params.ctxPayload.MessageThreadId)
+        : undefined,
+      sessionKey: params.route.sessionKey,
+    };
+
+    const hookEvent: PluginHookBeforeRouteInboundMessageEvent = {
+      channel: params.channel,
+      accountId: params.accountId,
+      conversationId: hookCtx.conversationId,
+      parentConversationId: hookCtx.parentConversationId,
+      body: bodyText,
+      isGroup,
+      senderId: params.ctxPayload.From,
+      originalSessionKey: params.route.sessionKey,
+    };
+
+    const hookResult = await hookRunner.runBeforeRouteInboundMessage(
+      hookEvent,
+      hookCtx,
+    );
+
+    if (hookResult?.handled) {
+      // Redirect: override the route session key
+      if (
+        hookResult.redirectSessionKey &&
+        hookResult.redirectSessionKey !== params.route.sessionKey
+      ) {
+        params = {
+          ...params,
+          route: { ...params.route, sessionKey: hookResult.redirectSessionKey },
+        };
+      }
+      // Suppress: drop the message entirely
+      if (hookResult.suppressDelivery) {
+        return;
+      }
+    }
+  }
+
   const dispatchBase = buildInboundReplyDispatchBase(params);
   await recordChannelMessageReplyDispatch({
     ...dispatchBase,
