@@ -261,6 +261,9 @@ export async function ensureSandboxBrowser(params: {
     cdpAuthToken =
       (await readDockerContainerEnvVar(containerName, CDP_AUTH_TOKEN_ENV_KEY)) ?? undefined;
     if (!cdpAuthToken) {
+      defaultRuntime.log(
+        `Removing stale sandbox browser container ${containerName} because it lacks the current CDP relay auth contract; it will be recreated.`,
+      );
       await execDocker(["rm", "-f", containerName], { allowFailure: true });
       hasContainer = false;
       running = false;

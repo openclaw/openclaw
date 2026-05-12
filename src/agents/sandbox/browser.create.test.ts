@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH } from "./constants.js";
 import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
@@ -250,6 +251,18 @@ describe("ensureSandboxBrowser create args", () => {
     );
 
     expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create")).toBeUndefined();
+  });
+
+  it("keeps the browser Dockerfile contract label aligned with the runtime constant", () => {
+    const dockerfile = readFileSync(
+      new URL("../../../scripts/docker/sandbox/Dockerfile.browser", import.meta.url),
+      "utf8",
+    );
+    const label = dockerfile.match(
+      /^LABEL org\.openclaw\.sandbox-browser\.contract="([^"]+)"$/m,
+    )?.[1];
+
+    expect(label).toBe(SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH);
   });
 
   it("publishes noVNC on loopback and injects noVNC password env", async () => {

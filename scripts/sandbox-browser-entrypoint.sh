@@ -224,9 +224,9 @@ def has_auth(header_bytes):
         name, sep, value = line.partition(":")
         if sep and name.strip().lower() == "authorization":
             auth = value.strip()
-            return hmac.compare_digest(auth, EXPECTED_BASIC) or hmac.compare_digest(
-                auth, EXPECTED_BEARER
-            )
+            basic_ok = hmac.compare_digest(auth, EXPECTED_BASIC)
+            bearer_ok = hmac.compare_digest(auth, EXPECTED_BEARER)
+            return basic_ok or bearer_ok
     return False
 
 
