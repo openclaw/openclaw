@@ -105,6 +105,10 @@ async function sendCoreMessage(params: {
     queuePolicy: params.queuePolicy,
     deps: params.ctx.deps,
     gateway: params.ctx.gateway,
+    idempotencyKey:
+      typeof params.ctx.params.idempotencyKey === "string"
+        ? params.ctx.params.idempotencyKey
+        : undefined,
     mirror: params.ctx.mirror,
     abortSignal: params.ctx.abortSignal,
     silent: params.ctx.silent,

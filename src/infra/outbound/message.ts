@@ -399,6 +399,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       silent: params.silent,
       mediaAccess: params.mediaAccess,
       formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
+      idempotencyKey: params.idempotencyKey,
       mirror: params.mirror
         ? {
             ...params.mirror,

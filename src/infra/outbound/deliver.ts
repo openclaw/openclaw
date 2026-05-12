@@ -81,6 +81,7 @@ import {
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
 import { stripInternalRuntimeScaffolding } from "./sanitize-text.js";
 import { type OutboundSendDeps } from "./send-deps.js";
+import { buildOutboundSendIdempotencyKey, runOutboundSendOnce } from "./send-idempotency.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
@@ -646,6 +647,8 @@ type DeliverOutboundPayloadsCoreParams = {
   mirror?: DeliveryMirror;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** Stable key for idempotent explicit sends across same-run replay/retry. */
+  idempotencyKey?: string;
 };
 
 type DeliverOutboundPayloadsCoreRuntimeParams = DeliverOutboundPayloadsCoreParams & {
@@ -1196,57 +1199,78 @@ export async function deliverOutboundPayloadsInternal(
     ? createRenderedMessageBatchPlan(queuePayloads)
     : renderedBatchPlan;
 
-  // Write-ahead delivery queue: persist before sending, remove after success.
-  const queueId = params.skipQueue
-    ? null
-    : await enqueueDelivery({
-        channel,
-        to,
-        accountId: params.accountId,
-        payloads: queuePayloads,
-        renderedBatchPlan: queueRenderedBatchPlan,
-        threadId: params.threadId,
-        replyToId: params.replyToId,
-        replyToMode: params.replyToMode,
-        formatting: params.formatting,
-        identity: params.identity,
-        bestEffort: params.bestEffort,
-        gifPlayback: params.gifPlayback,
-        forceDocument: params.forceDocument,
-        silent: params.silent,
-        mirror: params.mirror,
-        session: params.session,
-        gatewayClientScopes: params.gatewayClientScopes,
-      }).catch((err: unknown) => {
-        if (queuePolicy === "required") {
-          throw err;
-        }
-        return null;
-      }); // Best-effort delivery falls back to direct send if the queue write fails.
+  const idempotencyKey = buildOutboundSendIdempotencyKey({
+    idempotencyKey: params.idempotencyKey,
+    channel,
+    to,
+    accountId: params.accountId,
+    threadId: params.threadId,
+    replyToId: params.replyToId,
+    replyToMode: params.replyToMode,
+    payloads: queuePayloads,
+    renderedBatchPlan: queueRenderedBatchPlan,
+  });
 
-  if (queueId) {
-    params.onDeliveryIntent?.({
-      id: queueId,
-      channel,
-      to,
-      ...(params.accountId ? { accountId: params.accountId } : {}),
-      queuePolicy,
-    });
-  }
+  const delivery = await runOutboundSendOnce({
+    key: idempotencyKey,
+    duplicateValue: [] as OutboundDeliveryResult[],
+    shouldRemember: (results) => results.length > 0,
+    run: async () => {
+      // Write-ahead delivery queue: persist before sending, remove after success.
+      const queueId = params.skipQueue
+        ? null
+        : await enqueueDelivery({
+            channel,
+            to,
+            accountId: params.accountId,
+            payloads: queuePayloads,
+            renderedBatchPlan: queueRenderedBatchPlan,
+            threadId: params.threadId,
+            replyToId: params.replyToId,
+            replyToMode: params.replyToMode,
+            formatting: params.formatting,
+            identity: params.identity,
+            bestEffort: params.bestEffort,
+            gifPlayback: params.gifPlayback,
+            forceDocument: params.forceDocument,
+            silent: params.silent,
+            mirror: params.mirror,
+            session: params.session,
+            gatewayClientScopes: params.gatewayClientScopes,
+          }).catch((err: unknown) => {
+            if (queuePolicy === "required") {
+              throw err;
+            }
+            return null;
+          }); // Best-effort delivery falls back to direct send if the queue write fails.
 
-  if (!queueId) {
-    return await deliverOutboundPayloadsWithQueueCleanup(params, null);
-  }
+      if (queueId) {
+        params.onDeliveryIntent?.({
+          id: queueId,
+          channel,
+          to,
+          ...(params.accountId ? { accountId: params.accountId } : {}),
+          queuePolicy,
+        });
+      }
 
-  // Hold the same in-process claim used by recovery/drain while the live send
-  // owns this queue entry.
-  const claimResult = await withActiveDeliveryClaim(queueId, () =>
-    deliverOutboundPayloadsWithQueueCleanup(params, queueId),
-  );
-  if (claimResult.status === "claimed-by-other-owner") {
-    return [];
-  }
-  return claimResult.value;
+      if (!queueId) {
+        return await deliverOutboundPayloadsWithQueueCleanup(params, null);
+      }
+
+      // Hold the same in-process claim used by recovery/drain while the live send
+      // owns this queue entry.
+      const claimResult = await withActiveDeliveryClaim(queueId, () =>
+        deliverOutboundPayloadsWithQueueCleanup(params, queueId),
+      );
+      if (claimResult.status === "claimed-by-other-owner") {
+        return [];
+      }
+      return claimResult.value;
+    },
+  });
+
+  return delivery.value;
 }
 
 async function deliverOutboundPayloadsWithQueueCleanup(

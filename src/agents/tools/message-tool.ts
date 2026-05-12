@@ -967,7 +967,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     displaySummary: "Send and manage messages across configured channels.",
     description,
     parameters: schema,
-    execute: async (_toolCallId, args, signal) => {
+    execute: async (toolCallId, args, signal) => {
       // Check if already aborted before doing any work
       if (signal?.aborted) {
         const err = new Error("Message send aborted");
@@ -976,6 +976,24 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
+      if (typeof params.idempotencyKey !== "string" || !params.idempotencyKey.trim()) {
+        const toolCallKey = typeof toolCallId === "string" ? toolCallId.trim() : "";
+        if (toolCallKey) {
+          const scope = [
+            options?.agentSessionKey,
+            options?.sessionId,
+            options?.currentChannelProvider,
+            options?.currentChannelId,
+            currentThreadTs,
+            options?.currentMessageId == null ? undefined : String(options.currentMessageId),
+          ]
+            .filter(
+              (value): value is string => typeof value === "string" && value.trim().length > 0,
+            )
+            .join(":");
+          params.idempotencyKey = `tool:${scope || "global"}:${toolCallKey}`;
+        }
+      }
 
       // Strip reasoning tags from text fields — models may include <think>…</think>
       // in tool arguments, and the messaging tool send path has no other tag filtering.

@@ -265,6 +265,18 @@ describe("sendMessage", () => {
     );
   });
 
+  it("propagates the send idempotency key into direct durable delivery", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+      idempotencyKey: "idem-send-1",
+    });
+
+    expectDeliveryCallFields({ idempotencyKey: "idem-send-1" });
+  });
+
   it("maps voice media sends onto outbound audioAsVoice payloads", async () => {
     await sendMessage({
       cfg: {},

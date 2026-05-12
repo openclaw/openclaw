@@ -26,6 +26,7 @@ import {
   type DiagnosticEventPayload,
 } from "../diagnostic-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
+import { resetOutboundSendIdempotencyForTest } from "./send-idempotency.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
@@ -287,6 +288,7 @@ describe("deliverOutboundPayloads", () => {
 
   beforeEach(() => {
     resetDiagnosticEventsForTest();
+    resetOutboundSendIdempotencyForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(defaultRegistry);
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
@@ -358,6 +360,92 @@ describe("deliverOutboundPayloads", () => {
       gifPlayback: undefined,
     });
     expect(results).toEqual([{ channel: "matrix", messageId: "m1", roomId: "!room:example" }]);
+  });
+
+  it("dedupes replayed identical idempotent explicit sends to the same route", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+    const request = {
+      cfg: matrixChunkConfig,
+      channel: "matrix" as const,
+      to: "!room:example",
+      payloads: [{ text: "hello replay" }],
+      deps: { matrix: sendMatrix },
+      idempotencyKey: "tool:run-1:call-1",
+    };
+
+    const first = await deliverOutboundPayloads(request);
+    const replay = await deliverOutboundPayloads(request);
+
+    expect(first).toHaveLength(1);
+    expect(replay).toStrictEqual([]);
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dedupe a different message on the same route and idempotency scope", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "m1", roomId: "!room:example" })
+      .mockResolvedValueOnce({ messageId: "m2", roomId: "!room:example" });
+    const base = {
+      cfg: matrixChunkConfig,
+      channel: "matrix" as const,
+      to: "!room:example",
+      deps: { matrix: sendMatrix },
+      idempotencyKey: "tool:run-1:call-1",
+    };
+
+    await deliverOutboundPayloads({ ...base, payloads: [{ text: "first visible message" }] });
+    await deliverOutboundPayloads({ ...base, payloads: [{ text: "legitimate follow-up" }] });
+
+    expect(sendMatrix.mock.calls.map((call) => call[1])).toEqual([
+      "first visible message",
+      "legitimate follow-up",
+    ]);
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledTimes(2);
+  });
+
+  it("dedupes replayed split batch content as one idempotent send", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "m1", roomId: "!room:example" })
+      .mockResolvedValueOnce({ messageId: "m2", roomId: "!room:example" });
+    const request = {
+      cfg: { channels: { matrix: { textChunkLimit: 2 } } } as OpenClawConfig,
+      channel: "matrix" as const,
+      to: "!room:example",
+      payloads: [{ text: "abcd" }],
+      deps: { matrix: sendMatrix },
+      idempotencyKey: "tool:run-1:split-call",
+    };
+
+    const first = await deliverOutboundPayloads(request);
+    const replay = await deliverOutboundPayloads(request);
+
+    expect(first.map((result) => result.messageId)).toEqual(["m1", "m2"]);
+    expect(replay).toStrictEqual([]);
+    expect(sendMatrix.mock.calls.map((call) => call[1])).toEqual(["ab", "cd"]);
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps non-idempotent repeated sends visible", async () => {
+    const sendMatrix = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "m1", roomId: "!room:example" })
+      .mockResolvedValueOnce({ messageId: "m2", roomId: "!room:example" });
+    const request = {
+      cfg: matrixChunkConfig,
+      channel: "matrix" as const,
+      to: "!room:example",
+      payloads: [{ text: "repeat me intentionally" }],
+      deps: { matrix: sendMatrix },
+    };
+
+    await deliverOutboundPayloads(request);
+    await deliverOutboundPayloads(request);
+
+    expect(sendMatrix).toHaveBeenCalledTimes(2);
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledTimes(2);
   });
 
   it("reports unsupported durable final delivery when required capabilities are missing", async () => {
