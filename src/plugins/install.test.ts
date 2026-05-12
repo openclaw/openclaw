@@ -2606,6 +2606,34 @@ describe("installPluginFromArchive", () => {
     expectWarningIncludes(warnings, "dangerous code pattern");
   });
 
+  it("scans runtime extension entry files in hidden directories", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, ".hidden"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "hidden-runtime-entry-plugin",
+        version: "1.0.0",
+        openclaw: {
+          extensions: ["index.js"],
+          runtimeExtensions: [".hidden/runtime.cjs"],
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "module.exports = {};\n");
+    fs.writeFileSync(
+      path.join(pluginDir, ".hidden", "runtime.cjs"),
+      `const { execFileSync } = require("child_process");\nexecFileSync(process.execPath, ["-e", ""]);`,
+    );
+
+    const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    expectWarningIncludes(warnings, "hidden/node_modules path");
+    expectWarningIncludes(warnings, "dangerous code pattern");
+  });
+
   it("blocks install when scanner throws", async () => {
     const scanSpy = vi
       .spyOn(installSecurityScan, "scanPackageInstallSource")

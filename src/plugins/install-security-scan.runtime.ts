@@ -4,6 +4,7 @@ import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   findBlockedPackageDirectoryInPath,
   findBlockedPackageFileAliasInPath,
@@ -14,6 +15,10 @@ import {
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
+import {
+  getPackageManifestMetadata,
+  type PackageManifest as OpenClawPackageManifest,
+} from "./manifest.js";
 
 type InstallScanLogger = {
   warn?: (message: string) => void;
@@ -44,6 +49,8 @@ type PackageManifest = {
   overrides?: unknown;
   peerDependencies?: Record<string, string>;
 };
+
+type PackageInstallScanManifest = PackageManifest & OpenClawPackageManifest;
 
 type PackageManifestTraversalLimits = {
   maxDepth: number;
@@ -591,6 +598,36 @@ async function scanDirectoryTarget(params: {
   }
 }
 
+function readStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => normalizeOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+async function collectPackageExecutableScanEntries(params: {
+  extensions: string[];
+  packageDir: string;
+}): Promise<string[]> {
+  const entries = [...params.extensions];
+  const manifest = await tryReadJson<PackageInstallScanManifest>(
+    path.join(params.packageDir, "package.json"),
+  );
+  const metadata = getPackageManifestMetadata(manifest ?? undefined);
+  entries.push(...readStringList(metadata?.runtimeExtensions));
+  const setupEntry = normalizeOptionalString(metadata?.setupEntry);
+  if (setupEntry) {
+    entries.push(setupEntry);
+  }
+  const runtimeSetupEntry = normalizeOptionalString(metadata?.runtimeSetupEntry);
+  if (runtimeSetupEntry) {
+    entries.push(runtimeSetupEntry);
+  }
+  return [...new Set(entries)];
+}
+
 function buildBlockedScanResult(params: {
   builtinScan: BuiltinInstallScan;
   dangerouslyForceUnsafeInstall?: boolean;
@@ -824,17 +861,21 @@ export async function scanPackageInstallSourceRuntime(
   }
 
   const forcedScanEntries: string[] = [];
-  for (const entry of params.extensions) {
+  const executableEntries = await collectPackageExecutableScanEntries({
+    extensions: params.extensions,
+    packageDir: params.packageDir,
+  });
+  for (const entry of executableEntries) {
     const resolvedEntry = path.resolve(params.packageDir, entry);
     if (!isPathInside(params.packageDir, resolvedEntry)) {
       params.logger.warn?.(
-        `extension entry escapes plugin directory and will not be scanned: ${entry}`,
+        `plugin executable entry escapes plugin directory and will not be scanned: ${entry}`,
       );
       continue;
     }
     if (extensionUsesSkippedScannerPath(entry)) {
       params.logger.warn?.(
-        `extension entry is in a hidden/node_modules path and will receive targeted scan coverage: ${entry}`,
+        `plugin executable entry is in a hidden/node_modules path and will receive targeted scan coverage: ${entry}`,
       );
     }
     forcedScanEntries.push(resolvedEntry);
