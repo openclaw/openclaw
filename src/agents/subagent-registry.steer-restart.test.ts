@@ -728,7 +728,7 @@ describe("subagent registry steer restarts", () => {
     expect(countMatching(childRunIds, (id) => id === "run-child")).toBe(1);
   });
 
-  it("retries completion-mode announce delivery with backoff and then gives up after retry limit", async () => {
+  it("retries completion-mode announce delivery past the regular retry limit", async () => {
     {
       vi.useFakeTimers();
       try {
@@ -759,8 +759,9 @@ describe("subagent registry steer restarts", () => {
         expect(listMainRuns()[0]?.announceRetryCount).toBe(3);
 
         await vi.advanceTimersByTimeAsync(4_001);
-        expect(announceSpy).toHaveBeenCalledTimes(3);
-        expect(listMainRuns()[0]?.cleanupCompletedAt).toBeTypeOf("number");
+        expect(announceSpy).toHaveBeenCalledTimes(4);
+        expect(listMainRuns()[0]?.pendingFinalDelivery).toBe(true);
+        expect(listMainRuns()[0]?.cleanupCompletedAt).toBeUndefined();
       } finally {
         vi.useRealTimers();
       }

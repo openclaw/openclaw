@@ -15,6 +15,13 @@ import { retireSessionMcpRuntimeForSessionKey } from "./pi-bundle-mcp-tools.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
+  recordFinalDeliveryFailure,
+  recordFinalDeliverySuccess,
+  writeFinalDeliveryState,
+  type FinalDeliveryError,
+  type FinalDeliveryTerminalReason,
+} from "./subagent-final-delivery-state.js";
+import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
@@ -327,6 +334,7 @@ export function createSubagentRegistryLifecycleController(params: {
     entry.pendingFinalDeliveryLastAttemptAt = undefined;
     entry.pendingFinalDeliveryAttemptCount = undefined;
     entry.pendingFinalDeliveryLastError = undefined;
+    entry.pendingFinalDeliveryLastRetryable = undefined;
     entry.pendingFinalDeliveryPayload = undefined;
   };
 
@@ -360,24 +368,73 @@ export function createSubagentRegistryLifecycleController(params: {
     };
   };
 
-  const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {
+  const markPendingFinalDelivery = (args: {
+    entry: SubagentRunRecord;
+    error: FinalDeliveryError;
+    retryDelayMs: number;
+  }) => {
     const now = Date.now();
     const payload: PendingFinalDeliveryPayload = loadPendingFinalDeliveryPayload(args.entry);
 
-    args.entry.pendingFinalDelivery = true;
-    args.entry.pendingFinalDeliveryCreatedAt ??= now;
-    args.entry.pendingFinalDeliveryLastAttemptAt = now;
-    args.entry.pendingFinalDeliveryAttemptCount =
-      (args.entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
-    args.entry.pendingFinalDeliveryLastError = args.error ?? null;
+    recordFinalDeliveryFailure({
+      entry: args.entry,
+      now,
+      hardExpiryMs: ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
+      retryDelayMs: args.retryDelayMs,
+      error: args.error,
+    });
     args.entry.pendingFinalDeliveryPayload = payload;
+  };
+
+  const buildStoredFinalDeliveryError = (
+    entry: SubagentRunRecord,
+    fallbackMessage: string,
+  ): FinalDeliveryError => {
+    const retryability =
+      entry.lastAnnounceDeliveryRetryable === false
+        ? "permanent"
+        : entry.lastAnnounceDeliveryRetryable === true
+          ? "transient"
+          : "unknown";
+    return {
+      message: entry.lastAnnounceDeliveryError ?? fallbackMessage,
+      retryability,
+      path: "none",
+    };
+  };
+
+  const deleteChildSessionForTerminalCleanup = async (args: {
+    runId: string;
+    entry: SubagentRunRecord;
+  }) => {
+    if (args.entry.cleanup !== "delete") {
+      return;
+    }
+    await deleteSubagentSessionForCleanup({
+      callGateway: params.callGateway,
+      childSessionKey: args.entry.childSessionKey,
+      spawnMode: args.entry.spawnMode,
+      onError: (error) =>
+        params.warn("sessions.delete failed during terminal subagent cleanup", {
+          error: buildSafeLifecycleErrorMeta(error),
+          runId: maskRunId(args.runId),
+          childSessionKey: maskSessionKey(args.entry.childSessionKey),
+        }),
+    });
   };
 
   const finalizeResumedAnnounceGiveUp = async (giveUpParams: {
     runId: string;
     entry: SubagentRunRecord;
-    reason: "retry-limit" | "expiry";
+    reason: "retry-limit" | FinalDeliveryTerminalReason;
   }) => {
+    if (giveUpParams.entry.expectsCompletionMessage === true && giveUpParams.reason === "expiry") {
+      writeFinalDeliveryState(
+        giveUpParams.entry,
+        { kind: "expired", expiredAt: Date.now() },
+        Date.now(),
+      );
+    }
     clearPendingFinalDelivery(giveUpParams.entry);
     safeSetSubagentTaskDeliveryStatus({
       runId: giveUpParams.runId,
@@ -393,6 +450,10 @@ export function createSubagentRegistryLifecycleController(params: {
     if (shouldDeleteAttachments) {
       await safeRemoveAttachmentsDir(giveUpParams.entry);
     }
+    await deleteChildSessionForTerminalCleanup({
+      runId: giveUpParams.runId,
+      entry: giveUpParams.entry,
+    });
     const completionReason = resolveCleanupCompletionReason(giveUpParams.entry);
     logAnnounceGiveUp(giveUpParams.entry, giveUpParams.reason);
     // Retry-limit / expiry give-up should not leave cleanup stuck behind the
@@ -545,7 +606,11 @@ export function createSubagentRegistryLifecycleController(params: {
         entry.completionAnnouncedAt = Date.now();
         params.persist();
       }
-      clearPendingFinalDelivery(entry);
+      if (entry.expectsCompletionMessage === true) {
+        recordFinalDeliverySuccess(entry, entry.completionAnnouncedAt ?? Date.now());
+      } else {
+        clearPendingFinalDelivery(entry);
+      }
       if (!options?.skipDeliveryStatus) {
         safeSetSubagentTaskDeliveryStatus({
           runId,
@@ -598,12 +663,40 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
 
-    if (deferredDecision.retryCount != null) {
+    if (deferredDecision.retryCount != null && entry.expectsCompletionMessage !== true) {
       entry.announceRetryCount = deferredDecision.retryCount;
       entry.lastAnnounceRetryAt = now;
     }
 
     if (deferredDecision.kind === "give-up") {
+      if (entry.expectsCompletionMessage === true && deferredDecision.reason === "expiry") {
+        writeFinalDeliveryState(
+          entry,
+          {
+            kind: "expired",
+            expiredAt: now,
+            lastError: buildStoredFinalDeliveryError(entry, "completion final delivery expired"),
+          },
+          now,
+        );
+      }
+      if (
+        entry.expectsCompletionMessage === true &&
+        deferredDecision.reason === "permanent-failure"
+      ) {
+        writeFinalDeliveryState(
+          entry,
+          {
+            kind: "terminal_failed",
+            reason: "permanent-failure",
+            error: buildStoredFinalDeliveryError(
+              entry,
+              "completion final delivery permanently failed",
+            ),
+          },
+          now,
+        );
+      }
       clearPendingFinalDelivery(entry);
       safeSetSubagentTaskDeliveryStatus({
         runId,
@@ -618,6 +711,7 @@ export function createSubagentRegistryLifecycleController(params: {
       if (shouldDeleteAttachments) {
         await safeRemoveAttachmentsDir(entry);
       }
+      await deleteChildSessionForTerminalCleanup({ runId, entry });
       const completionReason = resolveCleanupCompletionReason(entry);
       logAnnounceGiveUp(entry, deferredDecision.reason);
       // Giving up on announce delivery is terminal for cleanup even if the
@@ -634,7 +728,10 @@ export function createSubagentRegistryLifecycleController(params: {
 
     markPendingFinalDelivery({
       entry,
-      error: didAnnounce ? undefined : "announce deferred or direct delivery failed",
+      error: buildStoredFinalDeliveryError(entry, "announce deferred or direct delivery failed"),
+      retryDelayMs:
+        deferredDecision.resumeDelayMs ??
+        resolveAnnounceRetryDelayMs(deferredDecision.retryCount ?? entry.announceRetryCount ?? 0),
     });
     entry.cleanupHandled = false;
     params.resumedRuns.delete(runId);
@@ -738,14 +835,19 @@ export function createSubagentRegistryLifecycleController(params: {
           if (delivery.delivered) {
             if (entry.lastAnnounceDeliveryError !== undefined) {
               entry.lastAnnounceDeliveryError = undefined;
+              entry.lastAnnounceDeliveryRetryable = undefined;
               params.persist();
             }
             latestDeliveryError = undefined;
             return;
           }
           latestDeliveryError = formatAnnounceDeliveryError(delivery);
-          if (entry.lastAnnounceDeliveryError !== latestDeliveryError) {
+          if (
+            entry.lastAnnounceDeliveryError !== latestDeliveryError ||
+            entry.lastAnnounceDeliveryRetryable !== delivery.retryable
+          ) {
             entry.lastAnnounceDeliveryError = latestDeliveryError;
+            entry.lastAnnounceDeliveryRetryable = delivery.retryable;
             params.persist();
           }
         },

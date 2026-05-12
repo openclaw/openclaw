@@ -1,5 +1,6 @@
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import type { FinalDeliveryState } from "./subagent-final-delivery-state.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
@@ -51,6 +52,8 @@ export type SubagentRunRecord = {
   announceRetryCount?: number;
   lastAnnounceRetryAt?: number;
   lastAnnounceDeliveryError?: string;
+  lastAnnounceDeliveryRetryable?: boolean;
+  finalDeliveryState?: FinalDeliveryState;
   endedReason?: SubagentLifecycleEndedReason;
   pauseReason?: "sessions_yield";
   wakeOnDescendantSettle?: boolean;
@@ -66,6 +69,7 @@ export type SubagentRunRecord = {
   pendingFinalDeliveryLastAttemptAt?: number;
   pendingFinalDeliveryAttemptCount?: number;
   pendingFinalDeliveryLastError?: string | null;
+  pendingFinalDeliveryLastRetryable?: boolean;
   pendingFinalDeliveryPayload?: PendingFinalDeliveryPayload;
   completionAnnouncedAt?: number;
   attachmentsDir?: string;

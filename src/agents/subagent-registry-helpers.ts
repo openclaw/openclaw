@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { withSubagentOutcomeTiming } from "./subagent-announce-output.js";
+import { hasRetryablePendingFinalDeliveryPayload } from "./subagent-final-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -64,7 +65,10 @@ export function resolveAnnounceRetryDelayMs(retryCount: number) {
   return Math.min(baseDelay, MAX_ANNOUNCE_RETRY_DELAY_MS);
 }
 
-export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "expiry") {
+export function logAnnounceGiveUp(
+  entry: SubagentRunRecord,
+  reason: "retry-limit" | "expiry" | "permanent-failure",
+) {
   const retryCount = entry.announceRetryCount ?? 0;
   const endedAgoMs =
     typeof entry.endedAt === "number" ? Math.max(0, Date.now() - entry.endedAt) : undefined;
@@ -325,6 +329,15 @@ export function reconcileOrphanedRestoredRuns(params: {
       now,
     });
     if (!orphanReason) {
+      continue;
+    }
+    if (
+      hasRetryablePendingFinalDeliveryPayload({
+        entry,
+        now,
+        hardExpiryMs: ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
+      })
+    ) {
       continue;
     }
     if (

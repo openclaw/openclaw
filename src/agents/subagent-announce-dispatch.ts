@@ -6,6 +6,7 @@ export type SubagentAnnounceDeliveryResult = {
   delivered: boolean;
   path: SubagentDeliveryPath;
   error?: string;
+  retryable?: boolean;
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
 
@@ -16,6 +17,7 @@ type SubagentAnnounceDispatchPhaseResult = {
   delivered: boolean;
   path: SubagentDeliveryPath;
   error?: string;
+  retryable?: boolean;
 };
 
 export function mapQueueOutcomeToDeliveryResult(
@@ -50,12 +52,16 @@ export async function runSubagentAnnounceDispatch(params: {
     phase: SubagentAnnounceDispatchPhase,
     result: SubagentAnnounceDeliveryResult,
   ) => {
-    phases.push({
+    const phaseResult: SubagentAnnounceDispatchPhaseResult = {
       phase,
       delivered: result.delivered,
       path: result.path,
       error: result.error,
-    });
+    };
+    if (result.retryable !== undefined) {
+      phaseResult.retryable = result.retryable;
+    }
+    phases.push(phaseResult);
   };
   const withPhases = (result: SubagentAnnounceDeliveryResult): SubagentAnnounceDeliveryResult => ({
     ...result,

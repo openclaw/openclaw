@@ -116,6 +116,7 @@ describe("runSubagentAnnounceDispatch", () => {
       delivered: false,
       path: "direct" as const,
       error: "failed",
+      retryable: false,
     }));
 
     const result = await runSubagentAnnounceDispatch({
@@ -127,8 +128,15 @@ describe("runSubagentAnnounceDispatch", () => {
     expect(result.delivered).toBe(false);
     expect(result.path).toBe("direct");
     expect(result.error).toBe("failed");
+    expect(result.retryable).toBe(false);
     expect(result.phases).toEqual([
-      { phase: "direct-primary", delivered: false, path: "direct", error: "failed" },
+      {
+        phase: "direct-primary",
+        delivered: false,
+        path: "direct",
+        error: "failed",
+        retryable: false,
+      },
       { phase: "queue-fallback", delivered: false, path: "none", error: undefined },
     ]);
   });

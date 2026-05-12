@@ -1,4 +1,9 @@
 import {
+  finalDeliveryTerminalReason,
+  loadFinalDeliveryState,
+  type FinalDeliveryTerminalReason,
+} from "./subagent-final-delivery-state.js";
+import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
@@ -11,7 +16,7 @@ type DeferredCleanupDecision =
     }
   | {
       kind: "give-up";
-      reason: "retry-limit" | "expiry";
+      reason: "retry-limit" | FinalDeliveryTerminalReason;
       retryCount?: number;
     }
   | {
@@ -44,6 +49,17 @@ export function resolveDeferredCleanupDecision(params: {
   const isCompletionMessageFlow = params.entry.expectsCompletionMessage === true;
   const completionHardExpiryExceeded =
     isCompletionMessageFlow && endedAgo > params.announceCompletionHardExpiryMs;
+  if (isCompletionMessageFlow) {
+    const finalDeliveryState = loadFinalDeliveryState({
+      entry: params.entry,
+      now: params.now,
+      hardExpiryMs: params.announceCompletionHardExpiryMs,
+    });
+    const terminalReason = finalDeliveryTerminalReason(finalDeliveryState);
+    if (terminalReason) {
+      return { kind: "give-up", reason: terminalReason };
+    }
+  }
   if (isCompletionMessageFlow && params.activeDescendantRuns > 0) {
     if (completionHardExpiryExceeded) {
       return { kind: "give-up", reason: "expiry" };
@@ -55,7 +71,10 @@ export function resolveDeferredCleanupDecision(params: {
   const expiryExceeded = isCompletionMessageFlow
     ? completionHardExpiryExceeded
     : endedAgo > params.announceExpiryMs;
-  if (retryCount >= params.maxAnnounceRetryCount || expiryExceeded) {
+  if (isCompletionMessageFlow && expiryExceeded) {
+    return { kind: "give-up", reason: "expiry", retryCount };
+  }
+  if (!isCompletionMessageFlow && (retryCount >= params.maxAnnounceRetryCount || expiryExceeded)) {
     return {
       kind: "give-up",
       reason: retryCount >= params.maxAnnounceRetryCount ? "retry-limit" : "expiry",

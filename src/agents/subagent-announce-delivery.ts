@@ -255,6 +255,13 @@ function isPermanentAnnounceDeliveryError(error: unknown): boolean {
   );
 }
 
+function resolveAnnounceDeliveryRetryable(error: unknown): boolean {
+  if (isPermanentAnnounceDeliveryError(error)) {
+    return false;
+  }
+  return true;
+}
+
 async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
   if (ms <= 0) {
     return;
@@ -719,6 +726,7 @@ async function sendSubagentAnnounceDirectly(params: {
             "active requester session could not be woken",
             wakeOutcome,
           ),
+          retryable: true,
         };
       }
     }
@@ -798,6 +806,7 @@ async function sendSubagentAnnounceDirectly(params: {
         delivered: false,
         path: "direct",
         error: "completion agent did not deliver through the message tool",
+        retryable: true,
       };
     }
     const directDeliveryFailure = shouldDeliverAgentFinal
@@ -808,6 +817,7 @@ async function sendSubagentAnnounceDirectly(params: {
         delivered: false,
         path: "direct",
         error: directDeliveryFailure,
+        retryable: resolveAnnounceDeliveryRetryable(directDeliveryFailure),
       };
     }
     if (
@@ -819,6 +829,7 @@ async function sendSubagentAnnounceDirectly(params: {
         delivered: false,
         path: "direct",
         error: "completion agent did not produce a visible reply",
+        retryable: true,
       };
     }
 
@@ -831,6 +842,7 @@ async function sendSubagentAnnounceDirectly(params: {
       delivered: false,
       path: "direct",
       error: summarizeDeliveryError(err),
+      retryable: resolveAnnounceDeliveryRetryable(err),
     };
   }
 }

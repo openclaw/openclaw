@@ -294,6 +294,38 @@ describe("subagent announce seam flow", () => {
     });
   });
 
+  it("deletes delete-mode completion child sessions after ANNOUNCE_SKIP", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-session-delete-skip",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "thread-bound cleanup",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "ANNOUNCE_SKIP",
+      spawnMode: "session",
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).not.toHaveBeenCalled();
+    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
+    expect(sessionsDeleteSpy).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:subagent:test",
+        deleteTranscript: true,
+        emitLifecycleHooks: true,
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
   it("keeps lifecycle hooks enabled when deleting a completed session-mode child session", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
@@ -323,6 +355,35 @@ describe("subagent announce seam flow", () => {
       },
       timeoutMs: 10_000,
     });
+  });
+
+  it("does not delete delete-mode completion child sessions after transient failed delivery", async () => {
+    agentSpy.mockRejectedValueOnce(new Error("gateway timeout after 120000ms"));
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-session-delete-transient-failure",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "-100123",
+        accountId: "default",
+      },
+      task: "thread-bound cleanup",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "completed",
+      spawnMode: "session",
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(false);
+    expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });
 
   it("uses origin.provider for channel-specific queue settings in active announce delivery", async () => {

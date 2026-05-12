@@ -21,6 +21,10 @@ import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from 
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import {
+  hasRetryablePendingFinalDeliveryPayload,
+  resolveFinalDeliveryResumeDecision,
+} from "./subagent-final-delivery-state.js";
+import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
@@ -31,6 +35,7 @@ import {
   resolveLifecycleOutcomeFromRunOutcome,
 } from "./subagent-registry-completion.js";
 import {
+  ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
   MAX_ANNOUNCE_RETRY_COUNT,
   reconcileOrphanedRestoredRuns,
@@ -594,7 +599,41 @@ function resumeSubagentRun(runId: string) {
     return;
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
-  if ((entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT) {
+  if (entry.expectsCompletionMessage === true && typeof entry.endedAt === "number") {
+    const finalDeliveryDecision = resolveFinalDeliveryResumeDecision({
+      entry,
+      now: Date.now(),
+      hardExpiryMs: ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
+    });
+    if (finalDeliveryDecision.kind === "complete") {
+      if (finalDeliveryDecision.reason) {
+        void finalizeResumedAnnounceGiveUp({
+          runId,
+          entry,
+          reason: finalDeliveryDecision.reason,
+        });
+        return;
+      }
+    } else if (finalDeliveryDecision.kind === "schedule") {
+      const scheduledEntry = entry;
+      const timer = setTimeout(() => {
+        resumeRetryTimers.delete(timer);
+        if (subagentRuns.get(runId) !== scheduledEntry) {
+          return;
+        }
+        resumedRuns.delete(runId);
+        resumeSubagentRun(runId);
+      }, finalDeliveryDecision.delayMs);
+      timer.unref?.();
+      resumeRetryTimers.add(timer);
+      resumedRuns.add(runId);
+      return;
+    }
+  }
+  if (
+    entry.expectsCompletionMessage !== true &&
+    (entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT
+  ) {
     void finalizeResumedAnnounceGiveUp({
       runId,
       entry,
@@ -641,7 +680,12 @@ function resumeSubagentRun(runId: string) {
 
   if (typeof entry.endedAt === "number" && entry.endedAt > 0) {
     const orphanReason = resolveSubagentRunOrphanReason({ entry });
-    if (orphanReason) {
+    const canRetryFinalDeliveryFromPayload = hasRetryablePendingFinalDeliveryPayload({
+      entry,
+      now,
+      hardExpiryMs: ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
+    });
+    if (orphanReason && !canRetryFinalDeliveryFromPayload) {
       if (
         reconcileOrphanedRun({
           runId,

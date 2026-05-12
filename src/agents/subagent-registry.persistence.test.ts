@@ -645,6 +645,63 @@ describe("subagent registry persistence", () => {
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
+  it("does not prune retryable pending completion delivery when child session is missing on restore", async () => {
+    const now = Date.now();
+    const registryPath = await writePersistedRegistry(
+      {
+        version: 2,
+        runs: {
+          "run-pending-final-delivery": {
+            runId: "run-pending-final-delivery",
+            childSessionKey: "agent:main:subagent:missing-child",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "retry final delivery",
+            cleanup: "delete",
+            createdAt: now - 2_000,
+            startedAt: now - 1_000,
+            endedAt: now,
+            outcome: { status: "ok" },
+            expectsCompletionMessage: true,
+            pendingFinalDelivery: true,
+            pendingFinalDeliveryPayload: {
+              requesterSessionKey: "agent:main:main",
+              requesterDisplayKey: "main",
+              childSessionKey: "agent:main:subagent:missing-child",
+              childRunId: "run-pending-final-delivery",
+              task: "retry final delivery",
+              endedAt: now,
+              outcome: { status: "ok" },
+              expectsCompletionMessage: true,
+              frozenResultText: "final output",
+            },
+          },
+        },
+      },
+      { seedChildSessions: false },
+    );
+
+    announceSpy.mockResolvedValueOnce(false);
+    restartRegistry();
+    await waitForRegistryWork(async () => announceSpy.mock.calls.length === 1);
+
+    const announceCalls = announceSpy.mock.calls as unknown as Array<
+      [{ childSessionKey?: string; cleanup?: string; expectsCompletionMessage?: boolean }]
+    >;
+    const announceParams = announceCalls[0]?.[0];
+    expectFields(announceParams, {
+      childSessionKey: "agent:main:subagent:missing-child",
+      cleanup: "delete",
+      expectsCompletionMessage: true,
+    });
+    const after = await readPersistedRun<{
+      pendingFinalDelivery?: boolean;
+      cleanupCompletedAt?: number;
+    }>(registryPath, "run-pending-final-delivery");
+    expect(after?.pendingFinalDelivery).toBe(true);
+    expect(after?.cleanupCompletedAt).toBeUndefined();
+  });
+
   it("reconciles stale unended restored runs that are not restart-recoverable", async () => {
     const now = Date.now();
     const runId = "run-stale-unended-restore";

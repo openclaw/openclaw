@@ -252,6 +252,7 @@ export async function runSubagentAnnounceFlow(params: {
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
   const announceType = params.announceType ?? "subagent task";
   let shouldDeleteChildSession = params.cleanup === "delete";
+  let shouldSuppressDeleteForFailedCompletionDelivery = false;
   try {
     let targetRequesterSessionKey = params.requesterSessionKey;
     let targetRequesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
@@ -541,32 +542,43 @@ export async function runSubagentAnnounceFlow(params: {
           })
         : targetRequesterOrigin;
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
-    const delivery = await deliverSubagentAnnouncement({
-      requesterSessionKey: targetRequesterSessionKey,
-      announceId,
-      triggerMessage,
-      steerMessage: triggerMessage,
-      internalEvents,
-      summaryLine: taskLabel,
-      requesterSessionOrigin: targetRequesterOrigin,
-      requesterOrigin:
-        expectsCompletionMessage && !requesterIsSubagent
-          ? completionDirectOrigin
-          : targetRequesterOrigin,
-      completionDirectOrigin,
-      directOrigin,
-      sourceSessionKey: params.childSessionKey,
-      sourceChannel: INTERNAL_MESSAGE_CHANNEL,
-      sourceTool: "subagent_announce",
-      targetRequesterSessionKey,
-      requesterIsSubagent,
-      expectsCompletionMessage: expectsCompletionMessage,
-      bestEffortDeliver: params.bestEffortDeliver,
-      directIdempotencyKey,
-      signal: params.signal,
-    });
+    let delivery: SubagentAnnounceDeliveryResult;
+    try {
+      delivery = await deliverSubagentAnnouncement({
+        requesterSessionKey: targetRequesterSessionKey,
+        announceId,
+        triggerMessage,
+        steerMessage: triggerMessage,
+        internalEvents,
+        summaryLine: taskLabel,
+        requesterSessionOrigin: targetRequesterOrigin,
+        requesterOrigin:
+          expectsCompletionMessage && !requesterIsSubagent
+            ? completionDirectOrigin
+            : targetRequesterOrigin,
+        completionDirectOrigin,
+        directOrigin,
+        sourceSessionKey: params.childSessionKey,
+        sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+        sourceTool: "subagent_announce",
+        targetRequesterSessionKey,
+        requesterIsSubagent,
+        expectsCompletionMessage: expectsCompletionMessage,
+        bestEffortDeliver: params.bestEffortDeliver,
+        directIdempotencyKey,
+        signal: params.signal,
+      });
+    } catch (err) {
+      if (expectsCompletionMessage) {
+        shouldSuppressDeleteForFailedCompletionDelivery = true;
+      }
+      throw err;
+    }
     params.onDeliveryResult?.(delivery);
     didAnnounce = delivery.delivered;
+    if (expectsCompletionMessage && !delivery.delivered) {
+      shouldSuppressDeleteForFailedCompletionDelivery = true;
+    }
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.error?.(
         `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
@@ -587,6 +599,9 @@ export async function runSubagentAnnounceFlow(params: {
       } catch {
         // Best-effort
       }
+    }
+    if (shouldSuppressDeleteForFailedCompletionDelivery) {
+      shouldDeleteChildSession = false;
     }
     if (shouldDeleteChildSession) {
       await deleteSubagentSessionForCleanup({

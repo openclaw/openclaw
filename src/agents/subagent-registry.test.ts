@@ -559,7 +559,7 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
-  it("deletes delete-mode completion runs when announce cleanup gives up after retry limit", async () => {
+  it("keeps delete-mode completion runs retryable past the announce retry limit", async () => {
     mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
     const endedAt = Date.parse("2026-03-24T12:00:00Z");
     mocks.callGateway.mockResolvedValueOnce({
@@ -595,15 +595,20 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(3);
 
     await vi.advanceTimersByTimeAsync(4_000);
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(3);
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(4);
     expect(
       mod
         .listSubagentRunsForRequester("agent:main:main")
         .find((entry) => entry.runId === "run-delete-give-up"),
-    ).toBeUndefined();
+    ).toMatchObject({
+      runId: "run-delete-give-up",
+      cleanup: "delete",
+      pendingFinalDelivery: true,
+    });
   });
 
-  it("finalizes retry-budgeted completion delete runs during resume", async () => {
+  it("retries retry-budgeted completion delete runs during resume", async () => {
+    mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
     const endedHookRunner = {
       hasHooks: (hookName: string) => hookName === "subagent_ended",
       runSubagentEnded: mocks.runSubagentEnded,
@@ -634,22 +639,23 @@ describe("subagent registry seam flow", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
     await waitForFast(() => {
-      expect(mocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     });
-    await waitForFast(() => {
-      expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
-        childSessionKey: "agent:main:subagent:child",
-        reason: "deleted",
-        workspaceDir: undefined,
-      });
+    expect(mocks.runSubagentEnded).not.toHaveBeenCalled();
+    expect(mocks.onSubagentEnded).not.toHaveBeenCalledWith({
+      childSessionKey: "agent:main:subagent:child",
+      reason: "deleted",
+      workspaceDir: undefined,
     });
     expect(
       mod
         .listSubagentRunsForRequester("agent:main:main")
         .find((entry) => entry.runId === "run-resume-delete"),
-    ).toBeUndefined();
+    ).toMatchObject({
+      runId: "run-resume-delete",
+      pendingFinalDelivery: true,
+    });
   });
 
   it("finalizes expired delete-mode parents when descendant cleanup retriggers deferred announce handling", async () => {

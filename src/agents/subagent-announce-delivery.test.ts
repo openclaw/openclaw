@@ -783,6 +783,37 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("reports permanent requester-agent delivery errors structurally", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("chat not found");
+    }) as unknown as typeof runtimeCallGateway;
+
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "telegram completion",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "chat not found",
+      retryable: false,
+    });
+  });
+
   it("does not raw-send grouped child results when requester-agent output is empty", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -1011,6 +1042,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           path: "direct",
           error:
             "active requester session could not be woken: queue_message_failed reason=not_streaming sessionId=requester-session-telegram gatewayHealth=live",
+          retryable: true,
         },
         {
           phase: "queue-fallback",
