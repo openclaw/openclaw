@@ -105,21 +105,6 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string): void {
   );
 }
 
-export function ensureOpenClawAgentDatabaseSchema(
-  db: DatabaseSync,
-  options: { agentId: string; path?: string; env?: NodeJS.ProcessEnv; register?: boolean },
-): void {
-  const agentId = normalizeAgentId(options.agentId);
-  db.exec("PRAGMA foreign_keys = ON;");
-  ensureAgentSchema(db, agentId);
-  if (options.path) {
-    ensureOpenClawAgentDatabasePermissions(options.path);
-    if (options.register) {
-      registerAgentDatabase({ agentId, path: options.path, env: options.env });
-    }
-  }
-}
-
 function registerAgentDatabase(params: {
   agentId: string;
   path: string;
@@ -198,7 +183,9 @@ export function openOpenClawAgentDatabase(
   });
   db.exec("PRAGMA synchronous = NORMAL;");
   db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-  ensureOpenClawAgentDatabaseSchema(db, { agentId, path: pathname, env: options.env });
+  db.exec("PRAGMA foreign_keys = ON;");
+  ensureAgentSchema(db, agentId);
+  ensureOpenClawAgentDatabasePermissions(pathname);
   const database = { agentId, db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
   registerAgentDatabase({ agentId, path: pathname, env: options.env });
