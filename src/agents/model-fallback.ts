@@ -44,7 +44,8 @@ import {
 } from "./model-selection-resolve.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers/errors.js";
 import type { FailoverReason } from "./pi-embedded-helpers/types.js";
-import { resolveStoredSessionKeyForSessionId, updateSessionStoreEntry } from "../config/sessions.js";
+import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
+import { updateSessionStoreEntry } from "../config/sessions.js";
 import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");

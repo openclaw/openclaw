@@ -87,6 +87,7 @@ export async function resetReplyRunSession(params: {
     modelHealthModel: undefined,
     modelHealthReason: undefined,
     modelHealthExpiresAt: undefined,
+    exhaustedModels: undefined,
   };
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const nextSessionFile = resolveSessionTranscriptPath(
