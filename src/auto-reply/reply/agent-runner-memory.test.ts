@@ -251,6 +251,89 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.main.memoryFlushAt).toBe(1_700_000_000_000);
   });
 
+  it("reports memory-flush error payloads for visible delivery", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [
+        { text: "normal silent maintenance reply" },
+        {
+          text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
+          isError: true,
+        },
+      ],
+      meta: {},
+    });
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onVisibleErrorPayloads: (payloads) => {
+        visibleErrorPayloads.push(...payloads);
+      },
+    });
+
+    expect(visibleErrorPayloads).toEqual([
+      {
+        text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
+        isError: true,
+      },
+    ]);
+  });
+
+  it("reports restricted memory-flush write failures for visible delivery", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error(
+        "write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
+      ),
+    );
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onVisibleErrorPayloads: (payloads) => {
+        visibleErrorPayloads.push(...payloads);
+      },
+    });
+
+    expect(visibleErrorPayloads).toEqual([
+      {
+        text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
+        isError: true,
+      },
+    ]);
+  });
+
   it("runs memory flush on the configured maintenance model without active fallbacks", async () => {
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
@@ -540,7 +623,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
+    const compactCall = compactEmbeddedPiSessionMock.mock.calls.at(0)?.[0] as {
       currentTokenCount?: number;
     };
     expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
@@ -649,7 +732,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
+    const compactCall = compactEmbeddedPiSessionMock.mock.calls.at(0)?.[0] as {
       currentTokenCount?: number;
     };
     expect(compactCall.currentTokenCount).toBeGreaterThan(100_000);
@@ -708,7 +791,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
+    const compactCall = compactEmbeddedPiSessionMock.mock.calls.at(0)?.[0] as {
       currentTokenCount?: number;
     };
     expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(96_000);

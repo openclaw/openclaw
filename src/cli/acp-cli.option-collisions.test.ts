@@ -77,7 +77,10 @@ describe("acp cli option collisions", () => {
     });
 
     expect(runAcpClientInteractive).toHaveBeenCalledTimes(1);
-    expect(runAcpClientInteractive.mock.calls[0]?.[0]?.verbose).toBe(true);
+    const clientOptions = runAcpClientInteractive.mock.calls.at(0)?.[0] as
+      | { verbose?: boolean }
+      | undefined;
+    expect(clientOptions?.verbose).toBe(true);
   });
 
   it("loads gateway token/password from files", async () => {
@@ -96,7 +99,9 @@ describe("acp cli option collisions", () => {
     );
 
     expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    const [gatewayOptions] = serveAcpGateway.mock.calls[0] ?? [];
+    const gatewayOptions = serveAcpGateway.mock.calls.at(0)?.[0] as
+      | { gatewayPassword?: string; gatewayToken?: string }
+      | undefined;
     expect(gatewayOptions?.gatewayToken).toBe("tok_file");
     expect(gatewayOptions?.gatewayPassword).toBe("pw_file"); // pragma: allowlist secret
   });
@@ -145,7 +150,10 @@ describe("acp cli option collisions", () => {
     });
 
     expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    expect(serveAcpGateway.mock.calls[0]?.[0]?.gatewayToken).toBe("tok_file");
+    const gatewayOptions = serveAcpGateway.mock.calls.at(0)?.[0] as
+      | { gatewayToken?: string }
+      | undefined;
+    expect(gatewayOptions?.gatewayToken).toBe("tok_file");
   });
 
   it("reports missing token-file read errors", async () => {

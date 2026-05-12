@@ -116,17 +116,23 @@ describe("sweepCronRunSessions", () => {
     expect(result.pruned).toBe(2);
 
     const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
-    expect(updated["agent:main:cron:job1"]).toMatchObject({ sessionId: "base-session" });
-    expect(updated["agent:main:cron:job1:run:old-run"]).toBeUndefined();
-    expect(updated["agent:main:cron:job1:run:old-run:subagent:worker"]).toBeUndefined();
-    expect(updated["agent:main:cron:job1:run:recent-run"]).toMatchObject({
-      sessionId: "recent-run",
-    });
-    expect(updated["agent:main:cron:job1:run:recent-run:thread:reply"]).toMatchObject({
-      sessionId: "recent-run-thread",
-    });
-    expect(updated["agent:main:telegram:dm:123"]).toMatchObject({
-      sessionId: "regular-session",
+    expect(updated).toEqual({
+      "agent:main:cron:job1": {
+        sessionId: "base-session",
+        updatedAt: now,
+      },
+      "agent:main:cron:job1:run:recent-run": {
+        sessionId: "recent-run",
+        updatedAt: now - 1 * 3_600_000,
+      },
+      "agent:main:cron:job1:run:recent-run:thread:reply": {
+        sessionId: "recent-run-thread",
+        updatedAt: now - 1 * 3_600_000,
+      },
+      "agent:main:telegram:dm:123": {
+        sessionId: "regular-session",
+        updatedAt: now - 100 * 3_600_000,
+      },
     });
   });
 

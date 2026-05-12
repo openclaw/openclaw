@@ -129,10 +129,7 @@ describe("channelsRemoveCommand", () => {
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining('Channel plugin "external-chat" is not installed. Run '),
-    );
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("channels add --channel external-chat"),
+      'Channel plugin "external-chat" is not installed. Run openclaw channels add --channel external-chat first.',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
@@ -174,7 +171,7 @@ describe("channelsRemoveCommand", () => {
 
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
     expect(registryRefreshMocks.refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
-    const writtenConfig = configMocks.writeConfigFile.mock.calls[0]?.[0] as
+    const writtenConfig = configMocks.writeConfigFile.mock.calls.at(0)?.[0] as
       | { channels?: Record<string, unknown> }
       | undefined;
     expect(writtenConfig?.channels?.["external-chat"]).toBeUndefined();
@@ -240,7 +237,7 @@ describe("channelsRemoveCommand", () => {
       clientName: "gateway-client",
       deviceIdentity: null,
     });
-    const writtenConfig = configMocks.writeConfigFile.mock.calls[0]?.[0] as
+    const writtenConfig = configMocks.writeConfigFile.mock.calls.at(0)?.[0] as
       | { channels?: Record<string, unknown> }
       | undefined;
     expect(writtenConfig?.channels?.["external-chat"]).toBeUndefined();

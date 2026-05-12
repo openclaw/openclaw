@@ -25,23 +25,30 @@ describe("toSanitizedMarkdownHtml", () => {
   describe("www autolinks", () => {
     it("links www.example.com", () => {
       const html = toSanitizedMarkdownHtml("Visit www.example.com today");
-      expect(html).toContain('<a href="http://www.example.com"');
-      expect(html).toContain("www.example.com</a>");
+      expect(html).toBe(
+        '<p>Visit <a href="http://www.example.com" rel="noreferrer noopener" target="_blank">www.example.com</a> today</p>\n',
+      );
     });
 
     it("links www.example.com with path, query, and fragment", () => {
       const html = toSanitizedMarkdownHtml("See www.example.com/path?a=1#section");
-      expect(html).toContain('<a href="http://www.example.com/path?a=1#section"');
+      expect(html).toBe(
+        '<p>See <a href="http://www.example.com/path?a=1#section" rel="noreferrer noopener" target="_blank">www.example.com/path?a=1#section</a></p>\n',
+      );
     });
 
     it("links www.example.com with port", () => {
       const html = toSanitizedMarkdownHtml("Visit www.example.com:8080/foo");
-      expect(html).toContain('<a href="http://www.example.com:8080/foo"');
+      expect(html).toBe(
+        '<p>Visit <a href="http://www.example.com:8080/foo" rel="noreferrer noopener" target="_blank">www.example.com:8080/foo</a></p>\n',
+      );
     });
 
     it("links www.localhost and other single-label hosts", () => {
       const html = toSanitizedMarkdownHtml("Visit www.localhost:3000/path for dev");
-      expect(html).toContain('<a href="http://www.localhost:3000/path"');
+      expect(html).toBe(
+        '<p>Visit <a href="http://www.localhost:3000/path" rel="noreferrer noopener" target="_blank">www.localhost:3000/path</a> for dev</p>\n',
+      );
     });
 
     it("links Unicode/IDN domains like www.münich.de", () => {
@@ -63,83 +70,92 @@ describe("toSanitizedMarkdownHtml", () => {
 
     it("strips trailing punctuation from links", () => {
       const html1 = toSanitizedMarkdownHtml("Check www.example.com/help.");
-      expect(html1).toContain('href="http://www.example.com/help"');
-      expect(html1).not.toContain('href="http://www.example.com/help."');
+      expect(html1).toBe(
+        '<p>Check <a href="http://www.example.com/help" rel="noreferrer noopener" target="_blank">www.example.com/help</a>.</p>\n',
+      );
 
       const html2 = toSanitizedMarkdownHtml("See www.example.com!");
-      expect(html2).toContain('href="http://www.example.com"');
-      expect(html2).not.toContain('href="http://www.example.com!"');
+      expect(html2).toBe(
+        '<p>See <a href="http://www.example.com" rel="noreferrer noopener" target="_blank">www.example.com</a>!</p>\n',
+      );
     });
 
     it("strips entity-like suffixes per GFM spec", () => {
       // &hl; looks like an entity reference, so strip it
       const html1 = toSanitizedMarkdownHtml("www.google.com/search?q=commonmark&hl;");
-      expect(html1).toContain('href="http://www.google.com/search?q=commonmark"');
-      expect(html1).toContain("&amp;hl;"); // Entity shown outside link
+      expect(html1).toBe(
+        '<p><a href="http://www.google.com/search?q=commonmark" rel="noreferrer noopener" target="_blank">www.google.com/search?q=commonmark</a>&amp;hl;</p>\n',
+      );
 
       // &amp; is also entity-like
       const html2 = toSanitizedMarkdownHtml("www.example.com/path&amp;");
-      expect(html2).toContain('href="http://www.example.com/path"');
+      expect(html2).toBe(
+        '<p><a href="http://www.example.com/path" rel="noreferrer noopener" target="_blank">www.example.com/path</a>&amp;</p>\n',
+      );
     });
 
     it("handles quotes with balance checking", () => {
       // Quoted URL — trailing unbalanced " is stripped
       const html1 = toSanitizedMarkdownHtml('"www.example.com"');
-      expect(html1).toContain('href="http://www.example.com"');
-      expect(html1).not.toContain('href="http://www.example.com%22"');
+      expect(html1).toBe(
+        '<p>"<a href="http://www.example.com" rel="noreferrer noopener" target="_blank">www.example.com</a>"</p>\n',
+      );
 
       // Balanced quotes inside path — preserved
       const html2 = toSanitizedMarkdownHtml('www.example.com/path"with"quotes');
-      expect(html2).toContain('www.example.com/path"with"quotes</a>');
+      expect(html2).toBe(
+        '<p><a href="http://www.example.com/path%22with%22quotes" rel="noreferrer noopener" target="_blank">www.example.com/path"with"quotes</a></p>\n',
+      );
 
       // Trailing unbalanced " — stripped
       const html3 = toSanitizedMarkdownHtml('www.example.com/path"');
-      expect(html3).toContain('href="http://www.example.com/path"');
-      expect(html3).not.toContain('path%22"');
+      expect(html3).toBe(
+        '<p><a href="http://www.example.com/path" rel="noreferrer noopener" target="_blank">www.example.com/path</a>"</p>\n',
+      );
     });
 
     it("does NOT link www. domains starting with non-ASCII", () => {
       const html1 = toSanitizedMarkdownHtml("Visit www.ünich.de");
-      expect(html1).not.toContain("<a");
-      expect(html1).toContain("www.ünich.de");
+      expect(html1).toBe("<p>Visit www.ünich.de</p>\n");
 
       const html2 = toSanitizedMarkdownHtml("Visit www.ñoño.com");
-      expect(html2).not.toContain("<a");
+      expect(html2).toBe("<p>Visit www.ñoño.com</p>\n");
     });
 
     it("handles balanced parentheses in URLs", () => {
       const html = toSanitizedMarkdownHtml("(see www.example.com/foo(bar))");
-      expect(html).toContain('href="http://www.example.com/foo(bar)"');
+      expect(html).toBe(
+        '<p>(see <a href="http://www.example.com/foo(bar)" rel="noreferrer noopener" target="_blank">www.example.com/foo(bar)</a>)</p>\n',
+      );
     });
 
     it("stops at < character", () => {
       // Stops at < character
       const html1 = toSanitizedMarkdownHtml("Visit www.example.com/path<test");
-      expect(html1).toContain('href="http://www.example.com/path"');
-      expect(html1).toContain("&lt;test");
+      expect(html1).toBe(
+        '<p>Visit <a href="http://www.example.com/path" rel="noreferrer noopener" target="_blank">www.example.com/path</a>&lt;test</p>\n',
+      );
 
       // <tag> pattern — stops before <
       const html2 = toSanitizedMarkdownHtml("Visit www.example.com/<token> here");
-      expect(html2).toContain('href="http://www.example.com/"');
-      expect(html2).toContain("&lt;token&gt;");
+      expect(html2).toBe(
+        '<p>Visit <a href="http://www.example.com/" rel="noreferrer noopener" target="_blank">www.example.com/</a>&lt;token&gt; here</p>\n',
+      );
     });
 
     it("does NOT link bare domains without www", () => {
       const html = toSanitizedMarkdownHtml("Visit google.com today");
-      expect(html).not.toContain("<a");
-      expect(html).toContain("google.com");
+      expect(html).toBe("<p>Visit google.com today</p>\n");
     });
 
     it("does NOT link filenames with TLD-like extensions", () => {
       const html = toSanitizedMarkdownHtml("Check README.md and config.json");
-      expect(html).not.toContain("<a");
-      expect(html).toContain("README.md");
+      expect(html).toBe("<p>Check README.md and config.json</p>\n");
     });
 
     it("does NOT link IP addresses", () => {
       const html = toSanitizedMarkdownHtml("Check 127.0.0.1:8080");
-      expect(html).not.toContain("<a");
-      expect(html).toContain("127.0.0.1:8080");
+      expect(html).toBe("<p>Check 127.0.0.1:8080</p>\n");
     });
 
     it("keeps adjacent trailing CJK text outside www auto-links", () => {
@@ -543,8 +559,13 @@ describe("renderMarkdownSidebar", () => {
       container,
     );
 
+    expect(container.querySelector(".sidebar-title")?.textContent?.trim()).toBe("Markdown Preview");
+    expect(container.querySelector(".sidebar-markdown-shell__eyebrow span")?.textContent).toBe(
+      "Rendered Markdown",
+    );
     expect(container.querySelector(".sidebar-markdown strong")?.textContent).toBe("world");
-    expect(container.textContent).toContain("Rendered Markdown");
-    expect(container.textContent).toContain("View Raw Text");
+    expect(
+      Array.from(container.querySelectorAll("button")).map((button) => button.textContent?.trim()),
+    ).toEqual(["", "View Raw Text"]);
   });
 });

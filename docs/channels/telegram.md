@@ -395,7 +395,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Outbound text uses Telegram `parse_mode: "HTML"`.
 
     - Markdown-ish text is rendered to Telegram-safe HTML.
-    - Raw model HTML is escaped to reduce Telegram parse failures.
+    - Supported Telegram HTML tags are preserved; unsupported HTML is escaped.
     - If Telegram rejects parsed HTML, OpenClaw retries as plain text.
 
     Link previews are enabled by default and can be disabled with `channels.telegram.linkPreview: false`.
@@ -840,7 +840,7 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 
     - `--presentation` with `buttons` blocks for inline keyboards when `channels.telegram.capabilities.inlineButtons` allows it
     - `--pin` or `--delivery '{"pin":true}'` to request pinned delivery when the bot can pin in that chat
-    - `--force-document` to send outbound images and GIFs as documents instead of compressed photo or animated-media uploads
+    - `--force-document` to send outbound images, GIFs, and videos as documents instead of compressed photo, animated-media, or video uploads
 
     Action gating:
 

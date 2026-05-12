@@ -57,10 +57,10 @@ function createSpawnedProcess() {
 }
 
 async function waitForSpawnCount(count: number) {
-  while (spawnMock.mock.calls.length < count) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await vi.waitFor(() => {
+    expect(spawnMock).toHaveBeenCalledTimes(count);
+  });
+  await Promise.resolve();
 }
 
 describe("qa suite runtime agent process helpers", () => {
@@ -94,7 +94,7 @@ describe("qa suite runtime agent process helpers", () => {
     child.emit("exit", 0);
 
     await expect(pending).resolves.toBe("ok");
-    const spawnCall = spawnMock.mock.calls[0];
+    const spawnCall = spawnMock.mock.calls.at(0);
     expect(spawnCall?.[0]).toBe("/usr/bin/node");
     expect(spawnCall?.[1]).toEqual([path.join("/repo", "dist", "index.js"), "qa", "suite"]);
     expect((spawnCall?.[2] as { cwd?: string; env?: unknown } | undefined)?.cwd).toBe(
@@ -132,7 +132,7 @@ describe("qa suite runtime agent process helpers", () => {
     child.emit("exit", 0);
 
     await expect(pending).resolves.toBe("ok");
-    const spawnCall = spawnMock.mock.calls[0];
+    const spawnCall = spawnMock.mock.calls.at(0);
     expect(spawnCall?.[0]).toBe("/usr/bin/node");
     expect(spawnCall?.[1]).toEqual([
       path.join("/repo", "dist", "index.js"),
@@ -253,7 +253,7 @@ describe("qa suite runtime agent process helpers", () => {
         message: "hello",
       }),
     ).resolves.toEqual({ runId: "run-1" });
-    const gatewayArgs = gatewayCall.mock.calls[0] as unknown as
+    const gatewayArgs = gatewayCall.mock.calls.at(0) as unknown as
       | [string, unknown, unknown]
       | undefined;
     expect(gatewayArgs?.[0]).toBe("agent");
@@ -271,7 +271,7 @@ describe("qa suite runtime agent process helpers", () => {
     expect(agentPayload?.channel).toBe("qa-channel");
     expect(agentPayload?.replyChannel).toBe("reply-channel");
     expect(agentPayload?.replyTo).toBe("reply-target");
-    expect(gatewayArgs?.[2]).toEqual(expect.any(Object));
+    expect(gatewayArgs?.[2]).toBeTypeOf("object");
   });
 
   it("finds managed dreaming cron jobs across legacy and current payload contracts", () => {

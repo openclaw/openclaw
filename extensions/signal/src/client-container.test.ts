@@ -288,7 +288,9 @@ describe("containerRestRequest", () => {
 
     // The timeout is enforced via AbortController, so we verify the call was made with a signal
     expect(mockFetch).toHaveBeenCalled();
-    expect(requireFetchCall()[1].signal).toBeDefined();
+    if (requireFetchCall()[1].signal === undefined) {
+      throw new Error("expected fetch call to include an abort signal");
+    }
   });
 });
 
@@ -375,7 +377,10 @@ describe("containerSendMessage", () => {
       textStyles: [{ start: 0, length: 4, style: "BOLD" }],
     });
 
-    const callArgs = mockFetch.mock.calls[0];
+    const callArgs = mockFetch.mock.calls.at(0);
+    if (callArgs === undefined) {
+      throw new Error("expected container fetch call");
+    }
     const body = JSON.parse(callArgs[1].body);
     expect(body.message).toBe("**Bold** \\* not italic");
   });
@@ -395,7 +400,10 @@ describe("containerSendMessage", () => {
       textStyles: [{ start: 0, length: 4, style: "BOLD" }],
     });
 
-    const callArgs = mockFetch.mock.calls[0];
+    const callArgs = mockFetch.mock.calls.at(0);
+    if (callArgs === undefined) {
+      throw new Error("expected container fetch call");
+    }
     const body = JSON.parse(callArgs[1].body);
     expect(body.message).toBe("**Bold** C:\\Temp\\file and /foo\\bar/");
   });
@@ -425,10 +433,15 @@ describe("containerSendMessage", () => {
       attachments: [tmpFile],
     });
 
-    const callArgs = mockFetch.mock.calls[0];
+    const callArgs = mockFetch.mock.calls.at(0);
+    if (callArgs === undefined) {
+      throw new Error("expected container fetch call");
+    }
     const body = JSON.parse(callArgs[1].body);
     expect(body.attachments).toBeUndefined();
-    expect(body.base64_attachments).toBeDefined();
+    if (!Array.isArray(body.base64_attachments)) {
+      throw new Error("expected base64 attachments array");
+    }
     expect(body.base64_attachments).toHaveLength(1);
     expect(body.base64_attachments[0]).toMatch(
       /^data:image\/jpeg;filename=test-image\.jpg;base64,/,
