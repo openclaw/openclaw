@@ -20,6 +20,11 @@ import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
+import {
+  NOOP_PRESENCE_INDICATOR,
+  type PresenceCtx,
+  type PresenceIndicator,
+} from "./presence-indicator.js";
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
@@ -45,6 +50,8 @@ type TelegramMessageProcessorDeps = Omit<
   textLimit: number;
   telegramDeps: TelegramBotDeps;
   opts: Pick<TelegramBotOptions, "token">;
+  /** Optional presence indicator — defaults to a no-op when omitted. */
+  presence?: PresenceIndicator;
 };
 
 export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDeps) => {
@@ -72,6 +79,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     telegramDeps,
     opts,
   } = deps;
+  const presence: PresenceIndicator = deps.presence ?? NOOP_PRESENCE_INDICATOR;
 
   return async (
     primaryCtx: TelegramContext,
@@ -144,6 +152,18 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         mediaType: allMedia[0]?.contentType,
       }),
     );
+    const presenceCtx: PresenceCtx | null =
+      primaryCtx.message.message_id != null
+        ? {
+            chatId: context.chatId,
+            messageId: primaryCtx.message.message_id,
+            threadId:
+              (primaryCtx.message as { message_thread_id?: number }).message_thread_id ?? undefined,
+          }
+        : null;
+    if (presenceCtx) {
+      await presence.onProcessingStart(presenceCtx).catch(() => undefined);
+    }
     try {
       await dispatchTelegramMessage({
         context,
@@ -172,6 +192,10 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           buildTelegramThreadParams(context.threadSpec),
         );
       } catch {}
+    } finally {
+      if (presenceCtx) {
+        await presence.onProcessingEnd(presenceCtx).catch(() => undefined);
+      }
     }
   };
 };

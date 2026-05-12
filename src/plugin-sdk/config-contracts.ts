@@ -47,6 +47,7 @@ export type {
   TelegramGroupConfig,
   TelegramInlineButtonsScope,
   TelegramNetworkConfig,
+  TelegramPresenceConfig,
   TelegramTopicConfig,
   TtsAutoMode,
   TtsConfig,

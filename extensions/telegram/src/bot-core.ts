@@ -38,6 +38,7 @@ import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { tagTelegramNetworkError } from "./network-errors.js";
+import { createTelegramPresenceIndicator } from "./presence-indicator.js";
 import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
@@ -566,6 +567,27 @@ export function createTelegramBotCore(
     minIntervalMs: TELEGRAM_TYPING_COALESCE_MS,
   });
 
+  // Presence indicator (👀 on receive, 👨‍💻 + typing while working, cleared on done).
+  // Shares the same sendChatAction handler as the rest of the channel so that
+  // 401 circuit-breaker state stays consistent.
+  //
+  // grammY narrows reaction emoji to a literal union from Bot API 7.0; we
+  // accept any string (validated by config). Cast preserves runtime behaviour.
+  const setMessageReactionFn = bot.api.setMessageReaction
+    ? (bot.api.setMessageReaction.bind(bot.api) as unknown as (
+        chatId: number | string,
+        messageId: number,
+        reactions: Array<{ type: "emoji"; emoji: string }>,
+      ) => Promise<unknown>)
+    : null;
+  const presenceIndicator = createTelegramPresenceIndicator({
+    setMessageReaction: setMessageReactionFn,
+    sendChatAction: (chatId, action, threadParams) =>
+      sendChatActionHandler.sendChatAction(chatId, action, threadParams),
+    config: telegramCfg.presence,
+    logger: (_level, message) => logVerbose(`telegram: ${message}`),
+  });
+
   const processMessage = createTelegramMessageProcessor({
     bot,
     cfg,
@@ -589,6 +611,7 @@ export function createTelegramBotCore(
     textLimit,
     opts,
     telegramDeps,
+    presence: presenceIndicator,
   });
 
   registerTelegramNativeCommands({
@@ -627,6 +650,7 @@ export function createTelegramBotCore(
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
     processMessage,
+    presence: presenceIndicator,
     logger,
     telegramDeps,
   });
