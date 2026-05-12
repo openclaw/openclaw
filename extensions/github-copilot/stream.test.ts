@@ -14,6 +14,18 @@ function requireStreamFn(streamFn: ReturnType<typeof wrapCopilotProviderStream>)
   return streamFn;
 }
 
+function requireFirstStreamOptions(mock: ReturnType<typeof vi.fn>, label: string) {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  const options = call[2];
+  if (!options || typeof options !== "object") {
+    throw new Error(`expected ${label} options`);
+  }
+  return options as { headers?: Record<string, unknown>; onPayload?: unknown };
+}
+
 describe("wrapCopilotAnthropicStream", () => {
   it("adds Copilot headers and Anthropic cache markers for Claude payloads", () => {
     const payloads: Array<{
@@ -65,11 +77,16 @@ describe("wrapCopilotAnthropicStream", () => {
     );
 
     expect(baseStreamFn).toHaveBeenCalledOnce();
-    expect(baseStreamFn.mock.calls[0]?.[2]).toMatchObject({
+    const options = requireFirstStreamOptions(baseStreamFn, "Copilot Anthropic stream");
+    if (!options?.onPayload) {
+      throw new Error("expected Copilot Anthropic stream options");
+    }
+    expect(options).toEqual({
       headers: {
         ...expectedCopilotHeaders,
         "X-Test": "1",
       },
+      onPayload: options.onPayload,
     });
     expect(payloads[0]?.messages).toEqual([
       {
@@ -142,11 +159,17 @@ describe("wrapCopilotAnthropicStream", () => {
       { headers: { "X-Test": "1" } },
     );
 
-    expect(baseStreamFn.mock.calls[0]?.[2]).toMatchObject({
+    expect(baseStreamFn).toHaveBeenCalledOnce();
+    const options = requireFirstStreamOptions(baseStreamFn, "Copilot Responses stream");
+    if (!options?.onPayload) {
+      throw new Error("expected Copilot Responses stream options");
+    }
+    expect(options).toEqual({
       headers: {
         ...expectedCopilotHeaders,
         "X-Test": "1",
       },
+      onPayload: options.onPayload,
     });
     expect(payloads[0]?.input[0]?.id).toBe(reasoningId);
     expect(payloads[0]?.input[1]?.id).toMatch(/^msg_[a-f0-9]{16}$/);

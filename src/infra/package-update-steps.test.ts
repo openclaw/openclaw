@@ -42,6 +42,16 @@ function createPnpmTarget(globalRoot: string): ResolvedGlobalInstallTarget {
   };
 }
 
+async function expectPathMissing(filePath: string): Promise<void> {
+  try {
+    await fs.access(filePath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`Expected missing path: ${filePath}`);
+}
+
 function createRootRunner(globalRoot: string): CommandRunner {
   return async (argv) => {
     if (argv.join(" ") === "npm root -g") {
@@ -119,9 +129,9 @@ describe("runGlobalPackageUpdateSteps", () => {
       await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
         '"version":"2.0.0"',
       );
-      await expect(
-        fs.access(path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js")),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expectPathMissing(
+        path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"),
+      );
       await expect(fs.readlink(path.join(prefix, "bin", "openclaw"))).resolves.toBe(
         "../lib/node_modules/openclaw/dist/index.js",
       );
@@ -258,7 +268,10 @@ describe("runGlobalPackageUpdateSteps", () => {
           throw new Error(`unexpected step ${name}`);
         }
         expect(argv[0]).toBe("npm");
-        expect(argv).toEqual(expect.arrayContaining(["i", "-g", "--prefix", "openclaw@2.0.0"]));
+        expect(argv).toContain("i");
+        expect(argv).toContain("-g");
+        expect(argv).toContain("--prefix");
+        expect(argv).toContain("openclaw@2.0.0");
         expect(argv).not.toContain("pnpm");
         const prefixIndex = argv.indexOf("--prefix");
         const stagePrefix = argv[prefixIndex + 1];
@@ -291,7 +304,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         "global update",
         "global install swap",
       ]);
-      await expect(fs.access(staleChunk)).rejects.toMatchObject({ code: "ENOENT" });
+      await expectPathMissing(staleChunk);
     });
   });
 
@@ -533,7 +546,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       if (stagePrefix === undefined) {
         throw new Error("expected staged install prefix");
       }
-      await expect(fs.access(stagePrefix)).rejects.toMatchObject({ code: "ENOENT" });
+      await expectPathMissing(stagePrefix);
     });
   });
 });

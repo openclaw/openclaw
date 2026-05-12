@@ -2060,8 +2060,7 @@ describe("config cli", () => {
       const errorKinds = (payload.errors ?? []).map((entry) => entry.kind);
       expect(errorKinds).toContain("resolvability");
       const errorRefs = (payload.errors ?? []).map((entry) => entry.ref ?? "");
-      const discordTokenRefs = errorRefs.filter((ref) => ref.includes("default:DISCORD_BOT_TOKEN"));
-      expect(discordTokenRefs.length).toBeGreaterThan(0);
+      expect(errorRefs).toContain("env:default:DISCORD_BOT_TOKEN");
     });
 
     it("keeps distinct resolvability failures when messages are identical but refs differ", async () => {
@@ -2138,8 +2137,7 @@ describe("config cli", () => {
       expect(errorKinds).toContain("schema");
       expect(errorKinds).toContain("resolvability");
       const errorRefs = (payload.errors ?? []).map((entry) => entry.ref ?? "");
-      const discordTokenRefs = errorRefs.filter((ref) => ref.includes("default:DISCORD_BOT_TOKEN"));
-      expect(discordTokenRefs.length).toBeGreaterThan(0);
+      expect(errorRefs).toContain("env:default:DISCORD_BOT_TOKEN");
     });
 
     it("fails dry-run when provider updates make existing refs unresolvable", async () => {

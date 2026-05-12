@@ -17,11 +17,20 @@ function expectFalJsonPost(params: { call: number; url: string; body: Record<str
   }
   expect(request.url).toBe(params.url);
   expect(request.auditContext).toBe("fal-image-generate");
+  expect(request.policy).toBeUndefined();
   expect(request.init?.method).toBe("POST");
   const headers = new Headers(request.init?.headers);
   expect(headers.get("authorization")).toBe("Key fal-test-key");
   expect(headers.get("content-type")).toBe("application/json");
   expect(JSON.parse(String(request.init?.body))).toEqual(params.body);
+}
+
+function expectFalDownload(params: { call: number; url: string }) {
+  expect(fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0]).toEqual({
+    url: params.url,
+    policy: undefined,
+    auditContext: "fal-image-download",
+  });
 }
 
 describe("fal image-generation provider", () => {
@@ -91,14 +100,7 @@ describe("fal image-generation provider", () => {
         output_format: "jpeg",
       },
     });
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        url: "https://v3.fal.media/files/example/generated.png",
-        auditContext: "fal-image-download",
-        policy: undefined,
-      }),
-    );
+    expectFalDownload({ call: 2, url: "https://v3.fal.media/files/example/generated.png" });
     expect(releaseRequest).toHaveBeenCalledTimes(1);
     expect(releaseDownload).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
@@ -614,14 +616,10 @@ describe("fal image-generation provider", () => {
       }),
     ).rejects.toThrow(blocked.message);
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
-        auditContext: "fal-image-download",
-        policy: undefined,
-      }),
-    );
+    expectFalDownload({
+      call: 2,
+      url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+    });
   });
 
   it("does not auto-whitelist trusted private relay hosts from a configured baseUrl", async () => {
@@ -669,21 +667,15 @@ describe("fal image-generation provider", () => {
       },
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        url: "http://relay.internal:8080/fal-ai/flux/dev",
-        auditContext: "fal-image-generate",
-        policy: undefined,
-      }),
-    );
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        url: "http://media.relay.internal/files/generated.png",
-        auditContext: "fal-image-download",
-        policy: undefined,
-      }),
-    );
+    expectFalJsonPost({
+      call: 1,
+      url: "http://relay.internal:8080/fal-ai/flux/dev",
+      body: {
+        prompt: "draw a cat",
+        num_images: 1,
+        output_format: "png",
+      },
+    });
+    expectFalDownload({ call: 2, url: "http://media.relay.internal/files/generated.png" });
   });
 });

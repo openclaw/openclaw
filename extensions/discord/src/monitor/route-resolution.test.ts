@@ -110,9 +110,13 @@ describe("discord route resolution helpers", () => {
         memberRoleIds: [],
         peer: { kind: "channel", id: "c1" },
       }),
-    ).toMatchObject({
+    ).toEqual({
       agentId: "worker",
+      channel: "discord",
+      accountId: "default",
       sessionKey: "agent:worker:discord:channel:c1",
+      mainSessionKey: "agent:worker:main",
+      lastRoutePolicy: "session",
       matchedBy: "binding.peer",
     });
   });
@@ -131,9 +135,13 @@ describe("discord route resolution helpers", () => {
         boundSessionKey: "agent:worker:discord:direct:user-1",
         matchedBy: "binding.channel",
       }),
-    ).toMatchObject({
+    ).toEqual({
       agentId: "worker",
+      channel: "discord",
+      accountId: "default",
       sessionKey: "agent:worker:discord:direct:user-1",
+      mainSessionKey: "agent:worker:main",
+      lastRoutePolicy: "session",
       matchedBy: "binding.channel",
     });
   });

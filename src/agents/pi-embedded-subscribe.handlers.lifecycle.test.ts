@@ -376,11 +376,20 @@ describe("handleAgentEnd", () => {
 
     await handleAgentEnd(ctx);
 
-    const blockReplyOrder =
-      (vi.mocked(ctx.emitBlockReply).mock.invocationCallOrder[0] as number | undefined) ?? 0;
+    const blockReplyOrder = vi.mocked(ctx.emitBlockReply).mock.invocationCallOrder[0] as
+      | number
+      | undefined;
     const lifecycleOrder = onAgentEvent.mock.invocationCallOrder[0] as number | undefined;
 
-    expect(blockReplyOrder).toBeGreaterThan(0);
+    expect(ctx.emitBlockReply).toHaveBeenCalledTimes(1);
+    expect(ctx.emitBlockReply).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(blockReplyOrder).toBeTypeOf("number");
+    if (typeof blockReplyOrder !== "number") {
+      throw new Error("Expected orphaned media block reply call order.");
+    }
     expect(lifecycleOrder).toBeGreaterThan(blockReplyOrder);
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
