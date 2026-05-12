@@ -133,6 +133,9 @@ describe("createPersistCronSessionEntry", () => {
 
     expect(cronSession.store["agent:main:cron:completed"]).toEqual({
       sessionId: "run-session-id",
+      label: "Cron: completed",
+      updatedAt: 1000,
+      systemSent: true,
     });
   });
 
