@@ -3,6 +3,14 @@ import { Stream } from "openai/streaming";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
+type ProviderRequestPolicyConfigMockResult = {
+  allowPrivateNetwork: boolean;
+  privateNetworkExplicitlyDenied?: boolean;
+  policy?: {
+    endpointClass?: string;
+  };
+};
+
 const {
   buildProviderRequestDispatcherPolicyMock,
   fetchWithSsrFGuardMock,
@@ -21,7 +29,11 @@ const {
     ...current,
     ...overrides,
   })),
-  resolveProviderRequestPolicyConfigMock: vi.fn(() => ({ allowPrivateNetwork: false })),
+  resolveProviderRequestPolicyConfigMock: vi.fn<() => ProviderRequestPolicyConfigMockResult>(
+    () => ({
+      allowPrivateNetwork: false,
+    }),
+  ),
   shouldUseEnvHttpProxyForUrlMock: vi.fn(() => false),
   withTrustedEnvProxyGuardedFetchModeMock: vi.fn((params: Record<string, unknown>) => ({
     ...params,
