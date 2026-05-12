@@ -22,27 +22,19 @@ function expandPowerShellSwitchForms(names: readonly string[]): string[] {
   return names.flatMap((name) => [`-${name}`, `--${name}`, `/${name}`]);
 }
 
-const POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set(
-  expandPowerShellSwitchForms([
-    "configurationfile",
-    "encodedarguments",
-    "ea",
-    "executionpolicy",
-    "ep",
-    "inputformat",
-    "of",
-    "outputformat",
-    "pscf",
-    "psconsolefile",
-    "settingsfile",
-    "v",
-    "version",
-    "w",
-    "wd",
-    "windowstyle",
-    "workingdirectory",
-  ]),
-);
+const POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
+  ...expandPowerShellSwitchPrefixForms("configurationfile", "conf"),
+  ...expandPowerShellSwitchPrefixForms("encodedarguments", "encodeda"),
+  ...expandPowerShellSwitchPrefixForms("executionpolicy", "ex"),
+  ...expandPowerShellSwitchPrefixForms("inputformat", "inp"),
+  ...expandPowerShellSwitchPrefixForms("outputformat", "o"),
+  ...expandPowerShellSwitchPrefixForms("psconsolefile", "pscf"),
+  ...expandPowerShellSwitchPrefixForms("settingsfile", "settings"),
+  ...expandPowerShellSwitchPrefixForms("version", "v"),
+  ...expandPowerShellSwitchPrefixForms("windowstyle", "w"),
+  ...expandPowerShellSwitchPrefixForms("workingdirectory", "w"),
+  ...expandPowerShellSwitchForms(["ea", "ep", "of", "wd"]),
+]);
 
 const POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
   "--init-file",

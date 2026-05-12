@@ -768,6 +768,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           ask: "on-miss",
           command: [
             executablePath,
+            "-win",
+            "hidden",
             "/NoProfile",
             "/ec",
             "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",

@@ -127,6 +127,22 @@ describe("resolveInlineCommandMatch", () => {
       expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 4 },
     },
     {
+      name: "skips abbreviated PowerShell window style values before slash encoded command",
+      argv: ["pwsh", "-win", "hidden", "/ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 4 },
+    },
+    {
+      name: "skips abbreviated PowerShell working directory values before slash encoded command",
+      argv: [
+        "pwsh",
+        "-WorkingDir",
+        "/tmp/project",
+        "/ec",
+        "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+      ],
+      expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 4 },
+    },
+    {
       name: "extracts PowerShell slash switch forms before script file binding",
       argv: ["pwsh", "/ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
       expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 2 },
