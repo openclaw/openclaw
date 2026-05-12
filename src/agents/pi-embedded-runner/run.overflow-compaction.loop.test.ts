@@ -305,6 +305,45 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("continues from transcript after pre-compaction truncation when the current inbound message was persisted", async () => {
+    const overflowError = makeOverflowError();
+
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (attemptParams) => {
+        (
+          attemptParams as {
+            onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
+          }
+        ).onUserMessagePersisted?.({ role: "user", content: baseParams.prompt });
+        return makeAttemptResult({
+          promptError: overflowError,
+          messagesSnapshot: [
+            {
+              role: "toolResult",
+              content: [{ type: "text", text: "x".repeat(80_000) }],
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          ],
+        });
+      })
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(true);
+    mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
+      truncated: true,
+      truncatedCount: 1,
+    });
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      currentMessageId: "telegram-msg-51026",
+    });
+
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expectRetryContinuesFromTranscript();
+    expect(result.meta.error).toBeUndefined();
+  });
+
   it("retries compaction when pre-compaction tool-result truncation does not help", async () => {
     queueOverflowAttemptWithOversizedToolOutput(mockedRunEmbeddedAttempt, makeOverflowError());
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
