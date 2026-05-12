@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -83,7 +83,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
-    const attemptInput = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as
+    const attemptInput = mockedRunEmbeddedAttempt.mock.calls.at(0)?.[0] as
       | { allowGatewaySubagentBinding?: boolean }
       | undefined;
     expect(attemptInput?.allowGatewaySubagentBinding).toBe(true);
@@ -110,7 +110,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       senderE164: "+15551234567",
     });
 
-    const attemptInput = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as
+    const attemptInput = mockedRunEmbeddedAttempt.mock.calls.at(0)?.[0] as
       | {
           senderId?: string;
           senderName?: string;
@@ -143,7 +143,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       memoryFlushWritePath: "memory/2026-03-10.md",
     });
 
-    const attemptInput = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as
+    const attemptInput = mockedRunEmbeddedAttempt.mock.calls.at(0)?.[0] as
       | { trigger?: string; memoryFlushWritePath?: string }
       | undefined;
     expect(attemptInput?.trigger).toBe("memory");

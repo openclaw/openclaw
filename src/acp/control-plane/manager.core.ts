@@ -14,6 +14,7 @@ import {
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
   AcpRuntimeError,
+  formatAcpErrorChain,
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
@@ -160,7 +161,6 @@ type BackgroundTaskContext = {
 
 export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
-  private readonly actorTailBySession = this.actorQueue.getTailMapForTesting();
   private readonly runtimeCache = new RuntimeCache();
   private readonly activeTurnBySession = new Map<string, ActiveTurnState>();
   private readonly turnLatencyStats: TurnLatencyStats = {
@@ -914,7 +914,7 @@ export class AcpSessionManager {
                 status: resolveBackgroundTaskFailureStatus(acpError),
                 endedAt: Date.now(),
                 lastEventAt: Date.now(),
-                error: acpError.message,
+                error: formatAcpErrorChain(acpError),
                 progressSummary: taskProgressSummary || null,
                 terminalSummary: null,
               });
@@ -923,7 +923,7 @@ export class AcpSessionManager {
               cfg: input.cfg,
               sessionKey,
               state: "error",
-              lastError: acpError.message,
+              lastError: formatAcpErrorChain(acpError),
             });
             throw acpError;
           } finally {

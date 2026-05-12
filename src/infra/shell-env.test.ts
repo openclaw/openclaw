@@ -94,6 +94,14 @@ describe("shell env fallback", () => {
     }
   }
 
+  function requireExecCall(exec: ReturnType<typeof vi.fn>): unknown[] {
+    const call = exec.mock.calls.at(0);
+    if (!call) {
+      throw new Error("expected shell env exec call");
+    }
+    return call;
+  }
+
   function getShellPathTwiceWithExec(params: {
     exec: ReturnType<typeof vi.fn>;
     platform: NodeJS.Platform;
@@ -114,11 +122,10 @@ describe("shell env fallback", () => {
 
   function expectBinShFallbackExec(exec: ReturnType<typeof vi.fn>) {
     expect(exec).toHaveBeenCalledTimes(1);
-    expect(exec).toHaveBeenCalledWith(
-      "/bin/sh",
-      ["-l", "-c", "env -0"],
-      expect.objectContaining({ windowsHide: true }),
-    );
+    const [shell, args, options] = requireExecCall(exec);
+    expect(shell).toBe("/bin/sh");
+    expect(args).toStrictEqual(["-l", "-c", "env -0"]);
+    expect((options as { windowsHide?: unknown } | undefined)?.windowsHide).toBe(true);
   }
 
   it("is disabled by default", () => {
@@ -285,15 +292,14 @@ describe("shell env fallback", () => {
     });
 
     for (let i = 0; i < 2; i += 1) {
-      expect(
-        loadShellEnvFallback({
-          enabled: true,
-          env,
-          expectedKeys: ["OPENAI_API_KEY"],
-          exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
-          logger,
-        }),
-      ).toMatchObject({
+      const result = loadShellEnvFallback({
+        enabled: true,
+        env,
+        expectedKeys: ["OPENAI_API_KEY"],
+        exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+        logger,
+      });
+      expect(result).toEqual({
         ok: false,
         applied: [],
         error: "shell unavailable",
@@ -347,7 +353,7 @@ describe("shell env fallback", () => {
         exec: failureExec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
         logger: { warn: vi.fn() },
       }),
-    ).toMatchObject({
+    ).toEqual({
       ok: false,
       applied: [],
       error: "boom",
@@ -429,11 +435,10 @@ describe("shell env fallback", () => {
 
       expect(res.ok).toBe(true);
       expect(exec).toHaveBeenCalledTimes(1);
-      expect(exec).toHaveBeenCalledWith(
-        trustedShell,
-        ["-l", "-c", "env -0"],
-        expect.objectContaining({ windowsHide: true }),
-      );
+      const [shell, args, options] = requireExecCall(exec);
+      expect(shell).toBe(trustedShell);
+      expect(args).toStrictEqual(["-l", "-c", "env -0"]);
+      expect((options as { windowsHide?: unknown } | undefined)?.windowsHide).toBe(true);
     });
   });
 

@@ -177,6 +177,41 @@ describe("buildChannelTurnContext", () => {
     }
   });
 
+  it("uses resolved command authorization instead of recomputing authorizers", () => {
+    const ctx = buildChannelTurnContext(
+      createBaseContextParams({
+        access: {
+          commands: {
+            authorized: false,
+            shouldBlockControlCommand: true,
+            reasonCode: "control_command_unauthorized",
+            allowTextCommands: true,
+            useAccessGroups: true,
+            authorizers: [{ configured: true, allowed: true }],
+          },
+        },
+      }),
+    );
+
+    expect(ctx.CommandAuthorized).toBe(false);
+  });
+
+  it("keeps legacy command authorization fallback for authorizer arrays", () => {
+    const ctx = buildChannelTurnContext(
+      createBaseContextParams({
+        access: {
+          commands: {
+            allowTextCommands: true,
+            useAccessGroups: true,
+            authorizers: [{ configured: true, allowed: true }],
+          },
+        },
+      }),
+    );
+
+    expect(ctx.CommandAuthorized).toBe(true);
+  });
+
   it("filters supplemental context with channel visibility policy", () => {
     const ctx = buildChannelTurnContext(
       createBaseContextParams({

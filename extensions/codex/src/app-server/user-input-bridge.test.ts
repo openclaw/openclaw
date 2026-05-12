@@ -15,7 +15,7 @@ function expectFirstBlockReplyText(params: EmbeddedRunAttemptParams): string {
   if (onBlockReply === undefined) {
     throw new Error("Expected onBlockReply callback");
   }
-  const payload = vi.mocked(onBlockReply).mock.calls[0]?.[0];
+  const payload = vi.mocked(onBlockReply).mock.calls.at(0)?.[0];
   if (typeof payload?.text !== "string") {
     throw new Error("Expected first block reply text");
   }
@@ -54,9 +54,7 @@ describe("Codex app-server user input bridge", () => {
     });
 
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
-    expect(params.onBlockReply).toHaveBeenCalledWith({
-      text: expect.stringContaining("Pick a mode"),
-    });
+    expect(expectFirstBlockReplyText(params)).toContain("Pick a mode");
     expect(bridge.handleQueuedMessage("2")).toBe(true);
 
     await expect(response).resolves.toEqual({

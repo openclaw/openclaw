@@ -85,10 +85,12 @@ describe("loadIMessageCatchupCursor / saveIMessageCatchupCursor", () => {
       lastSeenRowid: 42,
     });
     const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor).not.toBeNull();
-    expect(cursor?.lastSeenMs).toBe(1_700_000_000_000);
-    expect(cursor?.lastSeenRowid).toBe(42);
-    expect(cursor?.failureRetries).toBeUndefined();
+    if (!cursor) {
+      throw new Error("expected iMessage catchup cursor");
+    }
+    expect(cursor.lastSeenMs).toBe(1_700_000_000_000);
+    expect(cursor.lastSeenRowid).toBe(42);
+    expect(cursor.failureRetries).toBeUndefined();
   });
 
   it("round-trips a cursor with failureRetries", async () => {
@@ -450,7 +452,7 @@ describe("performIMessageCatchup", () => {
     expect(summary.querySucceeded).toBe(false);
     expect(summary.replayed).toBe(0);
     expect(dispatch).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/fetch failed/));
+    expect(warn).toHaveBeenCalledWith("imessage catchup: fetch failed: Error: imsg rpc closed");
 
     const cursor = await loadIMessageCatchupCursor("primary");
     expect(cursor?.lastSeenRowid).toBe(7);

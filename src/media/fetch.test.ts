@@ -45,6 +45,14 @@ function makeLookupFn(): LookupFn {
   return vi.fn(async () => ({ address: "149.154.167.220", family: 4 })) as unknown as LookupFn;
 }
 
+function requireFetchGuardRequest(): unknown {
+  const [call] = fetchWithSsrFGuardMock.mock.calls;
+  if (!call) {
+    throw new Error("expected fetchWithSsrFGuard call");
+  }
+  return call[0];
+}
+
 async function expectRemoteMediaMaxBytesError(params: {
   fetchImpl: Parameters<typeof fetchRemoteMedia>[0]["fetchImpl"];
   maxBytes: number;
@@ -62,7 +70,7 @@ async function expectRemoteMediaMaxBytesError(params: {
 async function expectRedactedBotTokenFetchError(params: {
   botFileUrl: string;
   botToken: string;
-  redactedBotToken: string;
+  expectedErrorText: string;
   fetchImpl: Parameters<typeof fetchRemoteMedia>[0]["fetchImpl"];
 }) {
   const error = await fetchRemoteMedia({
@@ -79,7 +87,7 @@ async function expectRedactedBotTokenFetchError(params: {
   expect(error).toBeInstanceOf(Error);
   const errorText = error instanceof Error ? String(error) : "";
   expect(errorText).not.toContain(params.botToken);
-  expect(errorText).toContain(`bot${params.redactedBotToken}`);
+  expect(errorText).toBe(params.expectedErrorText);
 }
 
 async function expectFetchRemoteMediaRejected(params: {
@@ -258,16 +266,18 @@ describe("fetchRemoteMedia", () => {
       fetchImpl: vi.fn(async () => {
         throw new Error(`dial failed for ${botFileUrl}`);
       }),
+      expectedErrorText: `MediaFetchError: Failed to fetch media from https://files.example.test/file/bot${redactedBotToken}/photos/1.jpg: dial failed for https://files.example.test/file/bot${redactedBotToken}/photos/1.jpg`,
     },
     {
       name: "redacts bot tokens from HTTP error messages",
       fetchImpl: vi.fn(async () => new Response("unauthorized", { status: 401 })),
+      expectedErrorText: `MediaFetchError: Failed to fetch media from https://files.example.test/file/bot${redactedBotToken}/photos/1.jpg: HTTP 401; body: unauthorized`,
     },
-  ] as const)("$name", async ({ fetchImpl }) => {
+  ] as const)("$name", async ({ fetchImpl, expectedErrorText }) => {
     await expectRedactedBotTokenFetchError({
       botFileUrl,
       botToken,
-      redactedBotToken,
+      expectedErrorText,
       fetchImpl,
     });
   });
@@ -342,7 +352,7 @@ describe("fetchRemoteMedia", () => {
     });
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).toStrictEqual({
+    expect(requireFetchGuardRequest()).toStrictEqual({
       url: "https://files.example.test/file/bot123/photos/test.jpg",
       fetchImpl,
       init: undefined,

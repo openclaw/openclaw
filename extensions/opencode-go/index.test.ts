@@ -1,4 +1,4 @@
-import { getModels } from "@mariozechner/pi-ai";
+import { getModels } from "@earendil-works/pi-ai";
 import {
   registerProviderPlugin,
   registerSingleProviderPlugin,
@@ -42,11 +42,13 @@ describe("opencode-go provider plugin", () => {
     });
 
     const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode-go");
-    expect(mediaProvider).toBeDefined();
-    expect(mediaProvider?.capabilities).toEqual(["image"]);
-    expect(mediaProvider?.defaultModels).toEqual({ image: "kimi-k2.6" });
-    expect(typeof mediaProvider?.describeImage).toBe("function");
-    expect(typeof mediaProvider?.describeImages).toBe("function");
+    if (!mediaProvider) {
+      throw new Error("Expected opencode-go media provider");
+    }
+    expect(mediaProvider.capabilities).toEqual(["image"]);
+    expect(mediaProvider.defaultModels).toEqual({ image: "kimi-k2.6" });
+    expect(typeof mediaProvider.describeImage).toBe("function");
+    expect(typeof mediaProvider.describeImages).toBe("function");
   });
 
   it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {

@@ -8,11 +8,16 @@ const prompt = process.env.OPENWEBUI_PROMPT ?? "";
 const modelAttempts = Number.parseInt(process.env.OPENWEBUI_MODEL_ATTEMPTS ?? "72", 10);
 const modelRetryMs = Number.parseInt(process.env.OPENWEBUI_MODEL_RETRY_MS ?? "5000", 10);
 const fetchTimeoutMs = Number.parseInt(process.env.OPENWEBUI_FETCH_TIMEOUT_MS ?? "720000", 10);
+const smokeMode =
+  process.env.OPENWEBUI_SMOKE_MODE ?? process.env.OPENCLAW_OPENWEBUI_SMOKE_MODE ?? "chat";
 
 setGlobalDispatcher(new Agent({ bodyTimeout: fetchTimeoutMs, headersTimeout: fetchTimeoutMs }));
 
 if (!baseUrl || !email || !password || !expectedNonce || !prompt) {
   throw new Error("Missing required OPENWEBUI_* environment variables");
+}
+if (smokeMode !== "models" && smokeMode !== "chat") {
+  throw new Error(`Unsupported OPENWEBUI_SMOKE_MODE: ${smokeMode}`);
 }
 
 function getCookieHeader(res) {
@@ -104,6 +109,10 @@ if (!targetModel) {
   throw new Error(
     `openclaw model missing from Open WebUI model list after retry: ${JSON.stringify(modelIds)} (${lastModelsError})`,
   );
+}
+if (smokeMode === "models") {
+  console.log(JSON.stringify({ ok: true, mode: smokeMode, model: targetModel }, null, 2));
+  process.exit(0);
 }
 
 const chatRes = await fetch(`${baseUrl}/api/chat/completions`, {

@@ -32,7 +32,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
@@ -61,10 +61,12 @@ import {
 } from "./group-allowlist-warnings.js";
 import {
   buildIMessageInboundContext,
+  resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { parseIMessageNotification } from "./parse-notification.js";
+import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
@@ -73,34 +75,21 @@ import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
 const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
 
-/**
- * Try to detect remote host from an SSH wrapper script like:
- *   exec ssh -T openclaw@192.168.64.3 /opt/homebrew/bin/imsg "$@"
- *   exec ssh -T mac-mini imsg "$@"
- * Returns the user@host or host portion if found, undefined otherwise.
- */
 async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | undefined> {
   try {
-    // Expand ~ to home directory
     const expanded = cliPath.startsWith("~")
       ? cliPath.replace(/^~/, process.env.HOME ?? "")
       : cliPath;
     const content = await fs.readFile(expanded, "utf8");
 
-    // Match user@host pattern first (e.g., openclaw@192.168.64.3)
     const userHostMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/);
     if (userHostMatch) {
       return userHostMatch[1];
     }
 
-    // Fallback: match host-only before imsg command (e.g., ssh -T mac-mini imsg)
     const hostOnlyMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z][a-zA-Z0-9._-]*)\s+\S*\bimsg\b/);
     return hostOnlyMatch?.[1];
   } catch (err) {
-    // ENOENT / ENOTDIR are expected for non-script cliPaths (just an
-    // executable on disk). Anything else (EACCES, broken symlink) is
-    // worth flagging — silent failure means attachments will fail to find
-    // remote media because remoteHost stays undefined.
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code !== "ENOENT" && code !== "ENOTDIR") {
       logVerbose(
@@ -111,7 +100,6 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
   }
 }
 
-/** One-shot warning when typing/read are gated off due to old imsg build. */
 const warnIfImsgUpgradeNeeded = (() => {
   let fired = false;
   return {
@@ -141,16 +129,6 @@ function isRetriableWatchSubscribeStartupError(error: unknown): boolean {
   return /imsg rpc timeout \(watch\.subscribe\)|imsg rpc (closed|exited|not running)/i.test(
     String(error),
   );
-}
-
-function formatIMessageReactionText(message: IMessagePayload): string | undefined {
-  if (!message.is_reaction) {
-    return undefined;
-  }
-  const action = message.is_reaction_add === false ? "removed" : "added";
-  const emoji = message.reaction_emoji?.trim() || message.reaction_type?.trim() || "reaction";
-  const target = message.reacted_to_guid?.trim();
-  return target ? `${action} ${emoji} reaction to [id:${target}]` : `${action} ${emoji} reaction`;
 }
 
 async function waitForWatchSubscribeRetryDelay(params: {
@@ -296,6 +274,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     },
     shouldDebounce: (entry) => {
       const msg = entry.message;
+      if (resolveIMessageReactionContext(msg, (msg.text ?? "").trim())) {
+        return false;
+      }
       // From-me messages are cached, not processed — never debounce.
       if (msg.is_from_me === true) {
         return false;
@@ -350,8 +331,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   };
 
   async function handleMessageNow(message: IMessagePayload) {
-    const reactionText = formatIMessageReactionText(message);
-    const messageText = (reactionText ?? message.text ?? "").trim();
+    const messageText = (message.text ?? "").trim();
 
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
@@ -385,7 +365,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       process.env,
       accountInfo.accountId,
     ).catch(() => []);
-    const decision = resolveIMessageInboundDecision({
+    const decision = await resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
       message,
@@ -401,6 +381,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       groupHistories,
       echoCache: sentMessageCache,
       selfChatCache,
+      reactionNotifications: imessageCfg.reactionNotifications,
       logVerbose,
     });
 
@@ -483,6 +464,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           runtime.error?.(`imessage pairing reply failed for ${decision.senderId}: ${String(err)}`);
         },
       });
+      return;
+    }
+
+    if (decision.kind === "reaction") {
+      enqueueIMessageReactionSystemEvent({ decision, runtime, logVerbose });
       return;
     }
 
@@ -883,9 +869,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         // Catchup bypasses the inbound debouncer so each row is awaited
         // serially and dispatch failure can hold the cursor. Split-sends
         // from before the gateway gap therefore arrive as separate turns
-        // rather than coalesced — same behavior the retired BlueBubbles
-        // catchup had. Live notifications continue to flow through the
-        // debouncer.
+        // rather than coalesced. Live notifications continue to flow through
+        // the debouncer.
         dispatchPayload: (message) => handleMessageNow(message),
         runtime,
       });

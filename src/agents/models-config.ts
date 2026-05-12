@@ -20,6 +20,7 @@ import {
 } from "./agent-scope.js";
 import { MODELS_JSON_STATE, type ContentHashOutcome } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
+import { stableStringify } from "./stable-stringify.js";
 
 export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
 
@@ -379,21 +380,6 @@ function modelsContentOutcomesMatch(a: ContentHashOutcome, b: ContentHashOutcome
     return a.hash === b.hash;
   }
   return false;
-}
-
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
-  }
-  const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) =>
-    a.localeCompare(b),
-  );
-  return `{${entries
-    .map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`)
-    .join(",")}}`;
 }
 
 function buildModelsJsonFingerprint(params: {

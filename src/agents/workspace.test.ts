@@ -54,25 +54,20 @@ async function expectBootstrapSeeded(dir: string) {
   expect(state.bootstrapSeededAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
 }
 
+async function expectPathMissing(filePath: string): Promise<void> {
+  await expect(fs.access(filePath)).rejects.toHaveProperty("code", "ENOENT");
+}
+
 async function expectCompletedWithoutBootstrap(dir: string) {
   await expect(fs.access(path.join(dir, DEFAULT_IDENTITY_FILENAME))).resolves.toBeUndefined();
-  await expect(fs.access(path.join(dir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
+  await expectPathMissing(path.join(dir, DEFAULT_BOOTSTRAP_FILENAME));
   const state = await readWorkspaceState(dir);
   expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
 }
 
 function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   const names = files.map((file) => file.name);
-  expect(names).toContain("AGENTS.md");
-  expect(names).toContain("TOOLS.md");
-  expect(names).toContain("SOUL.md");
-  expect(names).toContain("IDENTITY.md");
-  expect(names).toContain("USER.md");
-  expect(names).not.toContain("HEARTBEAT.md");
-  expect(names).not.toContain("BOOTSTRAP.md");
-  expect(names).not.toContain("MEMORY.md");
+  expect(names).toStrictEqual(["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md"]);
 }
 
 describe("ensureAgentWorkspace", () => {
@@ -104,9 +99,7 @@ describe("ensureAgentWorkspace", () => {
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
-    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
     await expect(fs.access(path.join(tempDir, DEFAULT_TOOLS_FILENAME))).resolves.toBeUndefined();
     const state = await readWorkspaceState(tempDir);
     expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
@@ -119,9 +112,7 @@ describe("ensureAgentWorkspace", () => {
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
-    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
     const state = await readWorkspaceState(tempDir);
     expect(state.bootstrapSeededAt).toBeUndefined();
     expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
@@ -136,9 +127,7 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     await expect(fs.access(path.join(tempDir, DEFAULT_IDENTITY_FILENAME))).resolves.toBeUndefined();
-    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
     const state = await readWorkspaceState(tempDir);
     expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
     const memoryContent = await fs.readFile(path.join(tempDir, "MEMORY.md"), "utf-8");
@@ -180,9 +169,7 @@ describe("ensureAgentWorkspace", () => {
       DEFAULT_USER_FILENAME,
       DEFAULT_HEARTBEAT_FILENAME,
     ]) {
-      await expect(fs.access(path.join(tempDir, fileName))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectPathMissing(path.join(tempDir, fileName));
     }
   });
 
@@ -197,9 +184,7 @@ describe("ensureAgentWorkspace", () => {
       skipOptionalBootstrapFiles: [DEFAULT_IDENTITY_FILENAME, DEFAULT_USER_FILENAME],
     });
 
-    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
     const state = await readWorkspaceState(tempDir);
     expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
@@ -260,13 +245,10 @@ describe("ensureAgentWorkspace", () => {
       content: "# IDENTITY.md\n\n- **Name:** Example\n",
     });
 
-    await expect(reconcileWorkspaceBootstrapCompletion(tempDir)).resolves.toMatchObject({
-      repaired: true,
-      bootstrapExists: false,
-    });
-    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    const result = await reconcileWorkspaceBootstrapCompletion(tempDir);
+    expect(result.repaired).toBe(true);
+    expect(result.bootstrapExists).toBe(false);
+    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
     const state = await readWorkspaceState(tempDir);
     expect(state.bootstrapSeededAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
     expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
@@ -283,13 +265,10 @@ describe("ensureAgentWorkspace", () => {
       content: "# SOUL.md\n\nUse a concise, practical voice.\n",
     });
 
-    await expect(reconcileWorkspaceBootstrapCompletion(tempDir)).resolves.toMatchObject({
-      repaired: true,
-      bootstrapExists: false,
-    });
-    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    const result = await reconcileWorkspaceBootstrapCompletion(tempDir);
+    expect(result.repaired).toBe(true);
+    expect(result.bootstrapExists).toBe(false);
+    await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
   });
 
   it("does not treat git alone as stale bootstrap completion evidence", async () => {
@@ -298,10 +277,9 @@ describe("ensureAgentWorkspace", () => {
     await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });
     await fs.writeFile(path.join(tempDir, ".git", "HEAD"), "ref: refs/heads/main\n");
 
-    await expect(reconcileWorkspaceBootstrapCompletion(tempDir)).resolves.toMatchObject({
-      repaired: false,
-      bootstrapExists: true,
-    });
+    const result = await reconcileWorkspaceBootstrapCompletion(tempDir);
+    expect(result.repaired).toBe(false);
+    expect(result.bootstrapExists).toBe(true);
     await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
     await expect(
       fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME)),
@@ -419,12 +397,12 @@ describe("filterBootstrapFilesForSession", () => {
 
   it("returns all files for main session (no sessionKey)", () => {
     const result = filterBootstrapFilesForSession(mockFiles);
-    expect(result).toHaveLength(mockFiles.length);
+    expect(result).toStrictEqual(mockFiles);
   });
 
   it("returns all files for normal (non-subagent, non-cron) session key", () => {
     const result = filterBootstrapFilesForSession(mockFiles, "agent:default:chat:main");
-    expect(result).toHaveLength(mockFiles.length);
+    expect(result).toStrictEqual(mockFiles);
   });
 
   it("filters to allowlist for subagent sessions", () => {

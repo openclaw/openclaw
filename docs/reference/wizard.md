@@ -15,7 +15,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
 
 <Steps>
   <Step title="Existing config detection">
-    - If `~/.openclaw/openclaw.json` exists, choose **Keep / Modify / Reset**.
+    - If `~/.openclaw/openclaw.json` exists, choose **Keep current values**, **Review and update**, or **Reset before setup**.
     - Re-running onboarding does **not** wipe anything unless you explicitly choose **Reset**
       (or pass `--reset`).
     - CLI `--reset` defaults to `config+creds+sessions`; use `--reset-scope full`
@@ -137,7 +137,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
 
   </Step>
   <Step title="Finish">
-    - Summary + next steps, including iOS/Android/macOS apps for extra features.
+    - Summary + next steps, including the **How do you want to hatch your agent?** prompt for Terminal, Browser, or later.
 
   </Step>
 </Steps>

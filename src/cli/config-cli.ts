@@ -60,6 +60,7 @@ import {
   type ConfigSetOptions,
 } from "./config-set-input.js";
 import { resolveConfigSetMode } from "./config-set-parser.js";
+import { formatStrictJsonParseFailure } from "./error-format.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 
 type PathSegment = string;
@@ -139,6 +140,16 @@ function normalizeConfigMutationModelRefs(cfg: OpenClawConfig): OpenClawConfig {
       },
     },
   };
+}
+
+function normalizeConfigMutationExplicitSetPath(path: PathSegment[]): PathSegment[] {
+  if (path.length >= 4 && path[0] === "agents" && path[1] === "defaults" && path[2] === "models") {
+    const normalizedModelId = normalizeAgentModelRefForConfig(path[3]);
+    return normalizedModelId === path[3]
+      ? path
+      : [...path.slice(0, 3), normalizedModelId, ...path.slice(4)];
+  }
+  return path;
 }
 
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
@@ -266,7 +277,7 @@ function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
     try {
       return JSON.parse(trimmed);
     } catch (err) {
-      throw new Error(`Failed to parse JSON value: ${String(err)}`, { cause: err });
+      throw new Error(formatStrictJsonParseFailure({ value: raw, cause: err }), { cause: err });
     }
   }
 
@@ -1447,12 +1458,14 @@ async function runConfigOperations(params: {
   // This prevents runtime defaults from leaking into the written config file (issue #6070)
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
   const unsetPaths: PathSegment[][] = [];
+  const explicitSetPaths: PathSegment[][] = [];
   for (const operation of operations) {
     if (operation.mutation === "delete") {
       unsetAtPath(next, operation.setPath);
       unsetPaths.push(operation.setPath);
       continue;
     }
+    explicitSetPaths.push(operation.setPath);
     if (operation.mutation === "merge" || (options.merge && operation.mutation !== "replace")) {
       mergeAtPath(next, operation.setPath, operation.value);
     } else {
@@ -1470,6 +1483,7 @@ async function runConfigOperations(params: {
     operations,
   });
   const nextConfig = normalizeConfigMutationModelRefs(next as OpenClawConfig);
+  const normalizedExplicitSetPaths = explicitSetPaths.map(normalizeConfigMutationExplicitSetPath);
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(nextConfig);
   const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
     (line) => line.trim(),
@@ -1582,7 +1596,16 @@ async function runConfigOperations(params: {
   await replaceConfigFile({
     nextConfig,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    ...(unsetPaths.length > 0 ? { writeOptions: { unsetPaths } } : {}),
+    ...(unsetPaths.length > 0 || explicitSetPaths.length > 0
+      ? {
+          writeOptions: {
+            ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
+            ...(normalizedExplicitSetPaths.length > 0
+              ? { explicitSetPaths: normalizedExplicitSetPaths }
+              : {}),
+          },
+        }
+      : {}),
   });
   if (removedGatewayAuthPaths.length > 0) {
     runtime.log(
