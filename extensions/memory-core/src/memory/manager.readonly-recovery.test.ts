@@ -4,7 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { openMemoryDatabaseAtPath } from "./manager-db.js";
+import { MEMORY_SQLITE_BUSY_TIMEOUT_MS, openMemoryDatabaseAtPath } from "./manager-db.js";
 import {
   _createMemorySyncControlConfigForTests,
   enqueueMemoryTargetedSessionSync,
@@ -14,7 +14,7 @@ import {
 
 type ReadonlyRecoveryHarness = MemoryReadonlyRecoveryState & {
   syncing: Promise<void> | null;
-  queuedSessionTranscripts: Set<string>;
+  queuedSessionTranscriptScopes: Map<string, { agentId: string; sessionId: string }>;
   queuedSessionSync: Promise<void> | null;
   vectorDegradedWriteWarningShown: boolean;
   ensureProviderInitialized: ReturnType<typeof vi.fn>;
@@ -32,11 +32,11 @@ describe("memory manager readonly recovery", () => {
   let indexPath = "";
 
   function createQueuedSyncHarness(syncing: Promise<void>) {
-    const queuedSessionTranscripts = new Set<string>();
+    const queuedSessionTranscriptScopes = new Map<string, { agentId: string; sessionId: string }>();
     let queuedSessionSync: Promise<void> | null = null;
     const sync = vi.fn(async () => {});
     return {
-      queuedSessionTranscripts,
+      queuedSessionTranscriptScopes,
       get queuedSessionSync() {
         return queuedSessionSync;
       },
@@ -44,7 +44,7 @@ describe("memory manager readonly recovery", () => {
       state: {
         isClosed: () => false,
         getSyncing: () => syncing,
-        getQueuedSessionTranscripts: () => queuedSessionTranscripts,
+        getQueuedSessionTranscriptScopes: () => queuedSessionTranscriptScopes,
         getQueuedSessionSync: () => queuedSessionSync,
         setQueuedSessionSync: (value: Promise<void> | null) => {
           queuedSessionSync = value;
@@ -66,7 +66,7 @@ describe("memory manager readonly recovery", () => {
     const harness: ReadonlyRecoveryHarness = {
       closed: false,
       syncing: null,
-      queuedSessionTranscripts: new Set<string>(),
+      queuedSessionTranscriptScopes: new Map<string, { agentId: string; sessionId: string }>(),
       queuedSessionSync: null,
       db: initialDb,
       vector: {
@@ -102,7 +102,11 @@ describe("memory manager readonly recovery", () => {
 
   async function runSyncWithReadonlyRecovery(
     harness: ReadonlyRecoveryHarness,
-    params?: { reason?: string; force?: boolean; sessionTranscripts?: string[] },
+    params?: {
+      reason?: string;
+      force?: boolean;
+      sessionTranscriptScopes?: Array<{ agentId: string; sessionId: string }>;
+    },
   ) {
     return await runMemorySyncWithReadonlyRecovery(harness, params);
   }
@@ -213,17 +217,25 @@ describe("memory manager readonly recovery", () => {
     expect(harness.vector.dims).toBe(768);
   });
 
-  it("sets busy_timeout on memory sqlite connections", () => {
+  it("sets expected pragmas on memory sqlite connections", () => {
     const db = openMemoryDatabaseAtPath(indexPath, false);
-    const row = db.prepare("PRAGMA busy_timeout").get() as
+    const busyTimeoutRow = db.prepare("PRAGMA busy_timeout").get() as
       | { busy_timeout?: number; timeout?: number }
       | undefined;
-    const busyTimeout = row?.busy_timeout ?? row?.timeout;
-    expect(busyTimeout).toBe(5000);
+    const busyTimeout = busyTimeoutRow?.busy_timeout ?? busyTimeoutRow?.timeout;
+    const foreignKeysRow = db.prepare("PRAGMA foreign_keys").get() as
+      | { foreign_keys?: number }
+      | undefined;
+    const synchronousRow = db.prepare("PRAGMA synchronous").get() as
+      | { synchronous?: number }
+      | undefined;
+    expect(busyTimeout).toBe(MEMORY_SQLITE_BUSY_TIMEOUT_MS);
+    expect(foreignKeysRow?.foreign_keys).toBe(1);
+    expect(synchronousRow?.synchronous).toBe(1);
     db.close();
   });
 
-  it("queues targeted session transcripts behind an in-flight sync", async () => {
+  it("queues targeted session scopes behind an in-flight sync", async () => {
     let releaseSync = () => {};
     const pendingSync = new Promise<void>((resolve) => {
       releaseSync = () => resolve();
@@ -231,9 +243,9 @@ describe("memory manager readonly recovery", () => {
     const harness = createQueuedSyncHarness(pendingSync);
 
     const queued = enqueueMemoryTargetedSessionSync(harness.state, [
-      "  /tmp/first.jsonl ",
-      "",
-      "/tmp/second.jsonl",
+      { agentId: "main", sessionId: "first" },
+      { agentId: "", sessionId: "" },
+      { agentId: "main", sessionId: "second" },
     ]);
 
     expect(harness.sync).not.toHaveBeenCalled();
@@ -243,8 +255,11 @@ describe("memory manager readonly recovery", () => {
 
     expect(harness.sync).toHaveBeenCalledTimes(1);
     expect(harness.sync).toHaveBeenCalledWith({
-      reason: "queued-session-transcripts",
-      sessionTranscripts: ["/tmp/first.jsonl", "/tmp/second.jsonl"],
+      reason: "queued-session-scopes",
+      sessionTranscriptScopes: [
+        { agentId: "main", sessionId: "first" },
+        { agentId: "main", sessionId: "second" },
+      ],
     });
     expect(harness.queuedSessionSync).toBeNull();
   });
@@ -257,12 +272,12 @@ describe("memory manager readonly recovery", () => {
     const harness = createQueuedSyncHarness(pendingSync);
 
     const first = enqueueMemoryTargetedSessionSync(harness.state, [
-      "/tmp/first.jsonl",
-      "/tmp/second.jsonl",
+      { agentId: "main", sessionId: "first" },
+      { agentId: "main", sessionId: "second" },
     ]);
     const second = enqueueMemoryTargetedSessionSync(harness.state, [
-      "/tmp/second.jsonl",
-      "/tmp/third.jsonl",
+      { agentId: "main", sessionId: "second" },
+      { agentId: "main", sessionId: "third" },
     ]);
 
     expect(first).toBe(second);
@@ -272,19 +287,26 @@ describe("memory manager readonly recovery", () => {
 
     expect(harness.sync).toHaveBeenCalledTimes(1);
     expect(harness.sync).toHaveBeenCalledWith({
-      reason: "queued-session-transcripts",
-      sessionTranscripts: ["/tmp/first.jsonl", "/tmp/second.jsonl", "/tmp/third.jsonl"],
+      reason: "queued-session-scopes",
+      sessionTranscriptScopes: [
+        { agentId: "main", sessionId: "first" },
+        { agentId: "main", sessionId: "second" },
+        { agentId: "main", sessionId: "third" },
+      ],
     });
   });
 
-  it("falls back to the active sync when no usable session transcripts were queued", async () => {
+  it("falls back to the active sync when no usable session scopes were queued", async () => {
     let releaseSync = () => {};
     const pendingSync = new Promise<void>((resolve) => {
       releaseSync = () => resolve();
     });
     const harness = createQueuedSyncHarness(pendingSync);
 
-    const queued = enqueueMemoryTargetedSessionSync(harness.state, ["", "   "]);
+    const queued = enqueueMemoryTargetedSessionSync(harness.state, [
+      { agentId: "", sessionId: "" },
+      { agentId: "   ", sessionId: "   " },
+    ]);
 
     expect(queued).toBe(pendingSync);
     releaseSync();
