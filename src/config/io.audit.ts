@@ -416,10 +416,37 @@ type ConfigAuditAppendParams = ConfigAuditAppendContext &
 
 function resolveConfigAuditAppendRecord(params: ConfigAuditAppendParams): ConfigAuditRecord {
   if ("record" in params) {
-    return redactSecrets(params.record);
+    return params.record;
   }
   const { fs: _fs, env: _env, homedir: _homedir, ...record } = params;
-  return redactSecrets(record as ConfigAuditRecord);
+  return record as ConfigAuditRecord;
+}
+
+function resolveConfigAuditStoreEnv(params: {
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+}): NodeJS.ProcessEnv {
+  return {
+    ...params.env,
+    OPENCLAW_STATE_DIR: resolveStateDir(params.env, params.homedir),
+  };
+}
+
+function openConfigAuditStore(env: NodeJS.ProcessEnv) {
+  return createCorePluginStateSyncKeyedStore<ConfigAuditRecord>({
+    ownerId: CONFIG_AUDIT_OWNER_ID,
+    namespace: CONFIG_AUDIT_NAMESPACE,
+    maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+    env,
+  });
+}
+
+function configAuditEntryKey(record: ConfigAuditRecord): string {
+  return `${record.ts}:${record.event}:${randomUUID()}`;
+}
+
+function toStoredConfigAuditRecord(record: ConfigAuditRecord): ConfigAuditRecord {
+  return JSON.parse(JSON.stringify(record)) as ConfigAuditRecord;
 }
 
 function resolveConfigAuditStoreEnv(params: {

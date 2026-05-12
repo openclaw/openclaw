@@ -956,7 +956,6 @@ function buildCurrentConversationKey(record: SessionBindingRecord): string | nul
   return [
     conversation.channel,
     conversation.accountId,
-    normalizeCurrentConversationKind(conversation.conversationKind),
     conversation.parentConversationId ?? "",
     conversation.conversationId,
   ].join("\u241f");
@@ -1035,6 +1034,7 @@ function importLegacyCurrentConversationBindingsToSqlite(
               expires_at: normalized.expiresAt ?? null,
               metadata_json:
                 normalized.metadata == null ? null : JSON.stringify(normalized.metadata),
+              record_json: JSON.stringify(normalized),
               updated_at: updatedAt,
             })
             .onConflict((conflict) =>
@@ -1053,6 +1053,7 @@ function importLegacyCurrentConversationBindingsToSqlite(
                 bound_at: (eb) => eb.ref("excluded.bound_at"),
                 expires_at: (eb) => eb.ref("excluded.expires_at"),
                 metadata_json: (eb) => eb.ref("excluded.metadata_json"),
+                record_json: (eb) => eb.ref("excluded.record_json"),
                 updated_at: (eb) => eb.ref("excluded.updated_at"),
               }),
             ),
