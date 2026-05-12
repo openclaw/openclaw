@@ -1342,7 +1342,9 @@ describe("matrix live qa scenarios", () => {
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });
-    expect(waitForOptionalRoomEvent.mock.calls.at(0)?.[0]?.roomId).toBe("!main:matrix-qa.test");
+    expect(mockObjectArg(waitForOptionalRoomEvent, "waitForOptionalRoomEvent").roomId).toBe(
+      "!main:matrix-qa.test",
+    );
   });
 
   it("ignores stale Matrix SUT replies before a no-reply trigger", async () => {
@@ -1497,8 +1499,10 @@ describe("matrix live qa scenarios", () => {
         restartDelayMs: MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS,
       },
     );
-    expect(sendTextMessage.mock.calls.at(0)?.[0]?.mentionUserIds).toEqual(["@sut:matrix-qa.test"]);
-    expect(sendTextMessage.mock.calls.at(0)?.[0]?.roomId).toBe("!main:matrix-qa.test");
+    expect(mockObjectArg(sendTextMessage, "sendTextMessage").mentionUserIds).toEqual([
+      "@sut:matrix-qa.test",
+    ]);
+    expect(mockObjectArg(sendTextMessage, "sendTextMessage").roomId).toBe("!main:matrix-qa.test");
     expect(sendTextMessage.mock.calls.at(1)?.[0]?.mentionUserIds).toEqual(["@sut:matrix-qa.test"]);
     expect(sendTextMessage.mock.calls.at(1)?.[0]?.roomId).toBe("!main:matrix-qa.test");
   });
@@ -1690,8 +1694,9 @@ describe("matrix live qa scenarios", () => {
       "send:fresh",
       "wait:fresh",
     ]);
-    expect(waitForOptionalRoomEvent.mock.calls.at(0)?.[0]?.roomId).toBe("!restart:matrix-qa.test");
-    expect(waitForOptionalRoomEvent.mock.calls.at(0)?.[0]?.timeoutMs).toBe(8000);
+    const firstOptionalWait = mockObjectArg(waitForOptionalRoomEvent, "waitForOptionalRoomEvent");
+    expect(firstOptionalWait.roomId).toBe("!restart:matrix-qa.test");
+    expect(firstOptionalWait.timeoutMs).toBe(8000);
   });
 
   it("forces a stale persisted Matrix sync cursor and expects inbound dedupe to absorb replay", async () => {
@@ -2040,9 +2045,9 @@ describe("matrix live qa scenarios", () => {
         mentionUserIds: ["@sync-gateway:matrix-qa.test"],
         roomId: "!recovery:matrix-qa.test",
       });
-      const waitParams = rawWaitForRoomEvent.mock.calls.at(0)?.[0];
-      expect(waitParams?.roomId).toBe("!recovery:matrix-qa.test");
-      expect(waitParams?.since).toBe("raw-driver-sync-start");
+      const waitParams = mockObjectArg(rawWaitForRoomEvent, "rawWaitForRoomEvent");
+      expect(waitParams.roomId).toBe("!recovery:matrix-qa.test");
+      expect(waitParams.since).toBe("raw-driver-sync-start");
       const finalConfig = JSON.parse(await readFile(gatewayConfigPath, "utf8")) as {
         channels: {
           matrix: {
@@ -2290,12 +2295,15 @@ describe("matrix live qa scenarios", () => {
       });
       expect(observerJoinRoom).toHaveBeenCalledWith("!isolated-restart:matrix-qa.test");
       expect(sutJoinRoom).toHaveBeenCalledWith("!isolated-restart:matrix-qa.test");
-      const clientOptions = createMatrixQaE2eeScenarioClient.mock.calls.at(0)?.[0];
-      expect(clientOptions?.accessToken).toBe("isolated-driver-token");
-      expect(clientOptions?.actorId).toBe("driver-restart-resume");
-      expect(clientOptions?.deviceId).toBe("ISOLATEDDRIVER");
-      expect(clientOptions?.password).toBe("isolated-driver-password");
-      expect(clientOptions?.userId).toBe("@isolated-driver:matrix-qa.test");
+      const clientOptions = mockObjectArg(
+        createMatrixQaE2eeScenarioClient,
+        "createMatrixQaE2eeScenarioClient",
+      );
+      expect(clientOptions.accessToken).toBe("isolated-driver-token");
+      expect(clientOptions.actorId).toBe("driver-restart-resume");
+      expect(clientOptions.deviceId).toBe("ISOLATEDDRIVER");
+      expect(clientOptions.password).toBe("isolated-driver-password");
+      expect(clientOptions.userId).toBe("@isolated-driver:matrix-qa.test");
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }
@@ -2376,7 +2384,7 @@ describe("matrix live qa scenarios", () => {
       bodyIncludes: "reply with only this exact marker:",
       roomId: "!dm:matrix-qa.test",
     });
-    expect(waitForRoomEvent.mock.calls.at(0)?.[0]?.roomId).toBe("!dm:matrix-qa.test");
+    expect(mockObjectArg(waitForRoomEvent, "waitForRoomEvent").roomId).toBe("!dm:matrix-qa.test");
   });
 
   it("uses room thread override scenarios against the main room", async () => {
@@ -2520,11 +2528,11 @@ describe("matrix live qa scenarios", () => {
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });
-    expect(waitForRoomEvent.mock.calls.at(0)?.[0]?.since).toBe("driver-sync-start");
-    const completionWaitOptions = waitForRoomEvent.mock.calls.at(1)?.[0];
+    expect(mockObjectArg(waitForRoomEvent, "waitForRoomEvent").since).toBe("driver-sync-start");
+    const completionWaitOptions = mockObjectArg(waitForRoomEvent, "waitForRoomEvent", 1);
     expect(typeof completionWaitOptions?.predicate).toBe("function");
-    expect(completionWaitOptions?.since).toBe("driver-sync-intro");
-    const introPredicate = waitForRoomEvent.mock.calls.at(0)?.[0]?.predicate as
+    expect(completionWaitOptions.since).toBe("driver-sync-intro");
+    const introPredicate = mockObjectArg(waitForRoomEvent, "waitForRoomEvent").predicate as
       | ((event: MatrixQaObservedEvent) => boolean)
       | undefined;
     expect(() =>
@@ -2683,10 +2691,10 @@ describe("matrix live qa scenarios", () => {
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!main:matrix-qa.test",
     });
-    expect(waitForRoomEvent.mock.calls.at(0)?.[0]?.since).toBe("driver-sync-start");
-    const finalWaitOptions = waitForRoomEvent.mock.calls.at(1)?.[0];
+    expect(mockObjectArg(waitForRoomEvent, "waitForRoomEvent").since).toBe("driver-sync-start");
+    const finalWaitOptions = mockObjectArg(waitForRoomEvent, "waitForRoomEvent", 1);
     expect(typeof finalWaitOptions?.predicate).toBe("function");
-    expect(finalWaitOptions?.since).toBe("driver-sync-preview");
+    expect(finalWaitOptions.since).toBe("driver-sync-preview");
   });
 
   it("captures partial preview text messages before the finalized Matrix reply", async () => {
@@ -3041,7 +3049,10 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.reply?.relatesTo?.eventId).toBe("$tool-progress-error-preview");
     expect(artifacts.reply?.relatesTo?.relType).toBe("m.replace");
 
-    expect(waitForRoomEvent.mock.calls.at(0)?.[0].predicate(progressEvent)).toBe(true);
+    const progressWait = mockObjectArg(waitForRoomEvent, "waitForRoomEvent");
+    expect(
+      (progressWait.predicate as (event: MatrixQaObservedEvent) => boolean)(progressEvent),
+    ).toBe(true);
     expectSentTextMessage(sendTextMessage, {
       bodyIncludes: "Tool progress error QA check",
       mentionUserIds: ["@sut:matrix-qa.test"],
@@ -3347,14 +3358,16 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.driverEventId).toBe("$image-understanding-trigger");
     expect(artifacts.reply?.eventId).toBe("$sut-image-reply");
 
-    const mediaMessage = sendMediaMessage.mock.calls.at(0)?.[0];
-    expect(String(mediaMessage?.body)).toContain("Image understanding check");
-    expect(mediaMessage?.contentType).toBe("image/png");
-    expect(mediaMessage?.fileName).toBe("red-top-blue-bottom.png");
-    expect(mediaMessage?.kind).toBe("image");
-    expect(mediaMessage?.mentionUserIds).toEqual(["@sut:matrix-qa.test"]);
-    expect(mediaMessage?.roomId).toBe("!media:matrix-qa.test");
-    expect(waitForRoomEvent.mock.calls.at(1)?.[0]?.since).toBe("driver-sync-attachment");
+    const mediaMessage = mockObjectArg(sendMediaMessage, "sendMediaMessage");
+    expect(String(mediaMessage.body)).toContain("Image understanding check");
+    expect(mediaMessage.contentType).toBe("image/png");
+    expect(mediaMessage.fileName).toBe("red-top-blue-bottom.png");
+    expect(mediaMessage.kind).toBe("image");
+    expect(mediaMessage.mentionUserIds).toEqual(["@sut:matrix-qa.test"]);
+    expect(mediaMessage.roomId).toBe("!media:matrix-qa.test");
+    expect(mockObjectArg(waitForRoomEvent, "waitForRoomEvent", 1).since).toBe(
+      "driver-sync-attachment",
+    );
   });
 
   it("waits for a real Matrix image attachment after image generation", async () => {
@@ -3785,7 +3798,9 @@ describe("matrix live qa scenarios", () => {
       bodyIncludes: "reply with only this exact marker:",
       roomId: "!dm-shared:matrix-qa.test",
     });
-    expect(waitSecondaryNotice.mock.calls.at(0)?.[0]?.roomId).toBe("!dm-shared:matrix-qa.test");
+    expect(mockObjectArg(waitSecondaryNotice, "waitSecondaryNotice").roomId).toBe(
+      "!dm-shared:matrix-qa.test",
+    );
   });
 
   it("suppresses the shared DM notice when sessionScope is per-room", async () => {
@@ -4054,7 +4069,9 @@ describe("matrix live qa scenarios", () => {
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!secondary:matrix-qa.test",
     });
-    expect(waitForRoomEvent.mock.calls.at(0)?.[0]?.roomId).toBe("!secondary:matrix-qa.test");
+    expect(mockObjectArg(waitForRoomEvent, "waitForRoomEvent").roomId).toBe(
+      "!secondary:matrix-qa.test",
+    );
   });
 
   it("ignores stale E2EE replies when checking a verification notice", async () => {
@@ -4162,7 +4179,9 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.roomId).toBe("!e2ee:matrix-qa.test");
 
     expect(noticeToken).toMatch(/^MATRIX_QA_E2EE_VERIFY_NOTICE_[A-Z0-9]+$/);
-    expect(waitForOptionalRoomEvent.mock.calls.at(0)?.[0]?.roomId).toBe("!e2ee:matrix-qa.test");
+    expect(mockObjectArg(waitForOptionalRoomEvent, "waitForOptionalRoomEvent").roomId).toBe(
+      "!e2ee:matrix-qa.test",
+    );
   });
 
   it("applies a recovery key before restoring backed up room keys", async () => {
@@ -4430,10 +4449,18 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.restoreTotal).toBe(1);
     expect(artifacts.verificationSuccess).toBe(false);
 
-    const proxyArgs = startMatrixQaFaultProxy.mock.calls.at(0)?.[0];
-    if (!proxyArgs) {
-      throw new Error("expected Matrix QA fault proxy to start");
-    }
+    const proxyArgs = mockObjectArg(startMatrixQaFaultProxy, "startMatrixQaFaultProxy") as {
+      rules: Array<{
+        match: (params: {
+          bearerToken?: string;
+          headers: Record<string, string>;
+          method: string;
+          path: string;
+          search: string;
+        }) => boolean;
+      }>;
+      targetBaseUrl?: unknown;
+    };
     const [faultRule] = proxyArgs.rules;
     if (!faultRule) {
       throw new Error("expected Matrix QA fault proxy rule");
@@ -4741,12 +4768,15 @@ describe("matrix live qa scenarios", () => {
         password: "cli-owner-password",
         userId: "@cli-owner:matrix-qa.test",
       });
-      const e2eeClientOptions = createMatrixQaE2eeScenarioClient.mock.calls.at(0)?.[0];
-      expect(e2eeClientOptions?.accessToken).toBe("cli-owner-token");
-      expect(e2eeClientOptions?.deviceId).toBe("OWNERDEVICE");
-      expect(e2eeClientOptions?.password).toBe("cli-owner-password");
-      expect(e2eeClientOptions?.scenarioId).toBe("matrix-e2ee-cli-self-verification");
-      expect(e2eeClientOptions?.userId).toBe("@cli-owner:matrix-qa.test");
+      const e2eeClientOptions = mockObjectArg(
+        createMatrixQaE2eeScenarioClient,
+        "createMatrixQaE2eeScenarioClient",
+      );
+      expect(e2eeClientOptions.accessToken).toBe("cli-owner-token");
+      expect(e2eeClientOptions.deviceId).toBe("OWNERDEVICE");
+      expect(e2eeClientOptions.password).toBe("cli-owner-password");
+      expect(e2eeClientOptions.scenarioId).toBe("matrix-e2ee-cli-self-verification");
+      expect(e2eeClientOptions.userId).toBe("@cli-owner:matrix-qa.test");
       expect(runMatrixQaOpenClawCli).toHaveBeenCalledTimes(2);
       expect(runMatrixQaOpenClawCli.mock.calls.map(([params]) => params.args)).toEqual([
         [
@@ -4761,7 +4791,9 @@ describe("matrix live qa scenarios", () => {
         ],
         ["matrix", "verify", "status", "--account", "cli", "--json"],
       ]);
-      expect(runMatrixQaOpenClawCli.mock.calls.at(0)?.[0].stdin).toBe("encoded-recovery-key\n");
+      expect(mockObjectArg(runMatrixQaOpenClawCli, "runMatrixQaOpenClawCli").stdin).toBe(
+        "encoded-recovery-key\n",
+      );
       const cliEnv = mockObjectArg(startMatrixQaOpenClawCli, "startMatrixQaOpenClawCli")
         .env as Record<string, unknown>;
       expect(cliEnv?.OPENCLAW_STATE_DIR).toContain("openclaw-matrix-cli-qa-");
@@ -5299,10 +5331,18 @@ describe("matrix live qa scenarios", () => {
       expect(artifacts.faultHitCount).toBe(1);
       expect(artifacts.faultRuleId).toBe("room-key-backup-version-unavailable");
 
-      const proxyArgs = startMatrixQaFaultProxy.mock.calls.at(0)?.[0];
-      if (!proxyArgs) {
-        throw new Error("expected Matrix QA fault proxy to start");
-      }
+      const proxyArgs = mockObjectArg(startMatrixQaFaultProxy, "startMatrixQaFaultProxy") as {
+        rules: Array<{
+          match: (params: {
+            bearerToken?: string;
+            headers: Record<string, string>;
+            method: string;
+            path: string;
+            search: string;
+          }) => boolean;
+        }>;
+        targetBaseUrl?: unknown;
+      };
       const [faultRule] = proxyArgs.rules;
       if (!faultRule) {
         throw new Error("expected Matrix QA fault proxy rule");
@@ -6033,18 +6073,21 @@ describe("matrix live qa scenarios", () => {
       expect(joinRoom).toHaveBeenCalledWith("!isolated-e2ee:matrix-qa.test");
       expect(patchGatewayConfig).not.toHaveBeenCalled();
       expect(restartGatewayAfterStateMutation).toHaveBeenCalledTimes(2);
-      const driverMessage = driverClient.sendTextMessage.mock.calls.at(0)?.[0];
-      expect(driverMessage?.mentionUserIds).toEqual(["@cli-gateway:matrix-qa.test"]);
-      expect(driverMessage?.roomId).toBe("!isolated-e2ee:matrix-qa.test");
+      const driverMessage = mockObjectArg(driverClient.sendTextMessage, "sendTextMessage");
+      expect(driverMessage.mentionUserIds).toEqual(["@cli-gateway:matrix-qa.test"]);
+      expect(driverMessage.roomId).toBe("!isolated-e2ee:matrix-qa.test");
       expect(driverClient.waitForJoinedMember).toHaveBeenCalledWith({
         roomId: "!isolated-e2ee:matrix-qa.test",
         timeoutMs: 8_000,
         userId: "@cli-gateway:matrix-qa.test",
       });
-      const e2eeClientOptions = createMatrixQaE2eeScenarioClient.mock.calls.at(0)?.[0];
-      expect(e2eeClientOptions?.accessToken).toBe("cli-driver-token");
-      expect(e2eeClientOptions?.deviceId).toBe("CLIDRIVERDEVICE");
-      expect(e2eeClientOptions?.userId).toBe("@cli-driver:matrix-qa.test");
+      const e2eeClientOptions = mockObjectArg(
+        createMatrixQaE2eeScenarioClient,
+        "createMatrixQaE2eeScenarioClient",
+      );
+      expect(e2eeClientOptions.accessToken).toBe("cli-driver-token");
+      expect(e2eeClientOptions.deviceId).toBe("CLIDRIVERDEVICE");
+      expect(e2eeClientOptions.userId).toBe("@cli-driver:matrix-qa.test");
       expect(waitGatewayAccountReady).toHaveBeenCalledWith("cli-setup-gateway", {
         timeoutMs: 8_000,
       });
@@ -6150,10 +6193,18 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.faultHitCount).toBe(1);
     expect(artifacts.faultRuleId).toBe("room-key-backup-version-unavailable");
 
-    const proxyArgs = startMatrixQaFaultProxy.mock.calls.at(0)?.[0];
-    if (!proxyArgs) {
-      throw new Error("expected Matrix QA fault proxy to start");
-    }
+    const proxyArgs = mockObjectArg(startMatrixQaFaultProxy, "startMatrixQaFaultProxy") as {
+      rules: Array<{
+        match: (params: {
+          bearerToken?: string;
+          headers: Record<string, string>;
+          method: string;
+          path: string;
+          search: string;
+        }) => boolean;
+      }>;
+      targetBaseUrl?: unknown;
+    };
     const [faultRule] = proxyArgs.rules;
     if (!faultRule) {
       throw new Error("expected Matrix QA fault proxy rule");

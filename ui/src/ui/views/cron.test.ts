@@ -278,7 +278,7 @@ describe("cron view", () => {
     expect(onLoadRuns).toHaveBeenNthCalledWith(2, "job-1");
 
     const link = container.querySelector("a.session-link");
-    expect(link?.getAttribute("href")).toContain(
+    expect(link?.getAttribute("href")).toBe(
       "/ui/chat?session=agent%3Amain%3Acron%3Ajob-1%3Arun%3Aabc",
     );
 
@@ -312,10 +312,17 @@ describe("cron view", () => {
       container,
     );
 
-    const options = Array.from(container.querySelectorAll("option")).map((opt) =>
-      (opt.textContent ?? "").trim(),
-    );
-    expect(options).toContain("Webhook POST");
+    const deliveryMode = container.querySelector<HTMLSelectElement>("#cron-delivery-mode");
+    expect(Array.from(deliveryMode?.options ?? []).map((opt) => opt.value)).toEqual([
+      "announce",
+      "webhook",
+      "none",
+    ]);
+    expect(Array.from(deliveryMode?.options ?? []).map((opt) => opt.textContent?.trim())).toEqual([
+      "Announce summary (default)",
+      "Webhook POST",
+      "None (internal)",
+    ]);
 
     render(
       renderCron(
@@ -331,12 +338,16 @@ describe("cron view", () => {
       container,
     );
 
-    const normalizedOptions = Array.from(container.querySelectorAll("option")).map((opt) =>
-      (opt.textContent ?? "").trim(),
-    );
-    expect(normalizedOptions).not.toContain("Announce summary (default)");
-    expect(normalizedOptions).toContain("Webhook POST");
-    expect(normalizedOptions).toContain("None (internal)");
+    const normalizedDeliveryMode =
+      container.querySelector<HTMLSelectElement>("#cron-delivery-mode");
+    expect(normalizedDeliveryMode?.value).toBe("none");
+    expect(Array.from(normalizedDeliveryMode?.options ?? []).map((opt) => opt.value)).toEqual([
+      "webhook",
+      "none",
+    ]);
+    expect(
+      Array.from(normalizedDeliveryMode?.options ?? []).map((opt) => opt.textContent?.trim()),
+    ).toEqual(["Webhook POST", "None (internal)"]);
     expect(container.querySelector('input[placeholder="https://example.com/cron"]')).toBeNull();
   });
 
@@ -678,7 +689,7 @@ describe("cron view", () => {
       Array.from(everyAdvanced.querySelectorAll(".field-checkbox__label")).map((label) =>
         label.textContent?.trim(),
       ),
-    ).not.toContain("Best effort delivery");
+    ).toEqual(["Delete after run", "Clear agent override"]);
   });
 
   it("renders inline validation errors, disabled submit, and required aria bindings", () => {
@@ -844,27 +855,27 @@ describe("cron view", () => {
       container,
     );
 
-    expect(Array.from(container.querySelectorAll("datalist")).map((node) => node.id)).toEqual([
+    const suggestionListIds = [
       "cron-agent-suggestions",
       "cron-model-suggestions",
       "cron-thinking-suggestions",
       "cron-tz-suggestions",
       "cron-delivery-to-suggestions",
       "cron-delivery-account-suggestions",
-    ]);
+    ];
+    expect(Array.from(container.querySelectorAll("datalist")).map((node) => node.id)).toEqual(
+      suggestionListIds,
+    );
     const inputLists = Array.from(container.querySelectorAll("input[list]")).map((node) =>
       node.getAttribute("list"),
     );
-    for (const expectedList of [
+    expect(inputLists).toEqual([
       "cron-agent-suggestions",
-      "cron-model-suggestions",
-      "cron-thinking-suggestions",
       "cron-tz-suggestions",
       "cron-delivery-to-suggestions",
       "cron-delivery-account-suggestions",
-    ]) {
-      expect(inputLists).toContain(expectedList);
-    }
-    expect(container.querySelectorAll("input[list]")).toHaveLength(6);
+      "cron-model-suggestions",
+      "cron-thinking-suggestions",
+    ]);
   });
 });

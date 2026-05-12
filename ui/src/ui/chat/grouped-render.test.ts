@@ -952,7 +952,11 @@ describe("grouped chat rendering", () => {
   it("renders allowed transcript and content image variants", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      expect(url).toContain("meta=1");
+      const mediaUrl = new URL(url, "http://control.test");
+      expect(mediaUrl.pathname).toBe("/openclaw/__openclaw__/assistant-media");
+      expect([...mediaUrl.searchParams.keys()].sort()).toEqual(["meta", "source"]);
+      expect(mediaUrl.searchParams.get("meta")).toBe("1");
+      expect(mediaUrl.searchParams.get("source")).toMatch(/^\/tmp\/openclaw\/.+\.(png|jpg)$/u);
       const headers = init?.headers as Headers;
       expect(headers.get("Authorization")).toBe("Bearer session-token");
       return {

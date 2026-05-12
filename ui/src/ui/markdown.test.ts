@@ -25,23 +25,30 @@ describe("toSanitizedMarkdownHtml", () => {
   describe("www autolinks", () => {
     it("links www.example.com", () => {
       const html = toSanitizedMarkdownHtml("Visit www.example.com today");
-      expect(html).toContain('<a href="http://www.example.com"');
-      expect(html).toContain("www.example.com</a>");
+      expect(html).toBe(
+        '<p>Visit <a href="http://www.example.com" rel="noreferrer noopener" target="_blank">www.example.com</a> today</p>\n',
+      );
     });
 
     it("links www.example.com with path, query, and fragment", () => {
       const html = toSanitizedMarkdownHtml("See www.example.com/path?a=1#section");
-      expect(html).toContain('<a href="http://www.example.com/path?a=1#section"');
+      expect(html).toBe(
+        '<p>See <a href="http://www.example.com/path?a=1#section" rel="noreferrer noopener" target="_blank">www.example.com/path?a=1#section</a></p>\n',
+      );
     });
 
     it("links www.example.com with port", () => {
       const html = toSanitizedMarkdownHtml("Visit www.example.com:8080/foo");
-      expect(html).toContain('<a href="http://www.example.com:8080/foo"');
+      expect(html).toBe(
+        '<p>Visit <a href="http://www.example.com:8080/foo" rel="noreferrer noopener" target="_blank">www.example.com:8080/foo</a></p>\n',
+      );
     });
 
     it("links www.localhost and other single-label hosts", () => {
       const html = toSanitizedMarkdownHtml("Visit www.localhost:3000/path for dev");
-      expect(html).toContain('<a href="http://www.localhost:3000/path"');
+      expect(html).toBe(
+        '<p>Visit <a href="http://www.localhost:3000/path" rel="noreferrer noopener" target="_blank">www.localhost:3000/path</a> for dev</p>\n',
+      );
     });
 
     it("links Unicode/IDN domains like www.münich.de", () => {

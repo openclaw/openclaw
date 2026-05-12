@@ -341,9 +341,7 @@ describe("config view", () => {
     const tabs = Array.from(container.querySelectorAll(".config-top-tabs__tab")).map((tab) =>
       tab.textContent?.trim(),
     );
-    expect(tabs).toContain("Settings");
-    expect(tabs).toContain("Agents");
-    expect(tabs).toContain("Gateway");
+    expect(tabs).toEqual(["Settings", "Agents", "Gateway", "Theme"]);
 
     const btn = findButtonByText(container, "Gateway");
     btn.click();
@@ -523,7 +521,11 @@ describe("config view", () => {
       },
     });
 
-    expect(container.querySelectorAll(".config-section-card__header").length).toBeGreaterThan(0);
+    expect(
+      [...container.querySelectorAll(".config-section-card__title")].map((title) =>
+        title.textContent?.trim(),
+      ),
+    ).toEqual(["Authentication", "Gateway"]);
   });
 
   it("clears the active search query", () => {
@@ -559,17 +561,25 @@ describe("config view", () => {
       onRawChange,
     });
 
-    const text = normalizedText(container);
-    expect(text).toContain("1 secret redacted");
-    expect(text).toContain("Use the reveal button above to edit the raw config.");
-    expect(text).not.toContain("supersecret");
+    expect(
+      queryRequired(container, ".config-raw-field .pill", HTMLElement)
+        .textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe("1 secret redacted");
+    expect(
+      queryRequired(container, ".config-raw-field .callout.info", HTMLElement)
+        .textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe("1 sensitive value hidden. Use the reveal button above to edit the raw config.");
     expect(container.querySelector("textarea")).toBeNull();
 
     const revealButton = queryRequired(container, ".config-raw-toggle", HTMLButtonElement);
+    expect(revealButton.getAttribute("title")).toBe("Reveal sensitive values");
+    expect(revealButton.getAttribute("aria-pressed")).toBe("false");
     revealButton.click();
 
     const textarea = queryRequired(container, "textarea", HTMLTextAreaElement);
-    expect(textarea.value).toContain("supersecret");
+    expect(textarea.value).toBe('{\n  "openai": { "apiKey": "supersecret" }\n}\n');
     textarea.value = textarea.value.replace("supersecret", "updatedsecret");
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onRawChange).toHaveBeenCalledWith(textarea.value);
@@ -832,11 +842,16 @@ describe("config view", () => {
     details.open = true;
     details.dispatchEvent(new Event("toggle"));
 
-    const text = normalizedText(container);
-    expect(text).toContain("integrations.foo.bar.credential");
-    expect(text).toContain("[redacted - click reveal to view]");
-    expect(text).not.toContain("TOKEN_BEFORE");
-    expect(text).not.toContain("TOKEN_AFTER");
+    const item = queryRequired(container, ".config-diff__item", HTMLElement);
+    expect(item.querySelector(".config-diff__path")?.textContent?.trim()).toBe(
+      "integrations.foo.bar.credential",
+    );
+    expect(item.querySelector(".config-diff__from")?.textContent?.trim()).toBe(
+      "[redacted - click reveal to view]",
+    );
+    expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe(
+      "[redacted - click reveal to view]",
+    );
   });
 
   it("removes the raw pending changes panel after raw changes clear", () => {
@@ -989,9 +1004,9 @@ describe("config view", () => {
     const input = container.querySelector<HTMLInputElement>(".cfg-input");
     expect(input).toBeInstanceOf(HTMLInputElement);
     expect(input?.readOnly).toBe(false);
-    expect(input?.value).toContain("malformed");
+    expect(input?.value).toBe('{  "malformed": true}');
     expect(input?.value).not.toBe("[object Object]");
-    expect(input?.placeholder).not.toContain("Structured value (SecretRef)");
+    expect(input?.placeholder).toBe("");
 
     if (!input) {
       return;

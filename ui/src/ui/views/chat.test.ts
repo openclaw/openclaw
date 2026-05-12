@@ -592,9 +592,6 @@ describe("chat voice controls", () => {
       "marin",
       "cedar",
     ]);
-    expect(voiceOptions).not.toContain("nova");
-    expect(voiceOptions).not.toContain("onyx");
-    expect(voiceOptions).not.toContain("fable");
     expect(reasoningOptions).toEqual(["", "minimal", "low", "medium", "high"]);
     if (model === null) {
       throw new Error("expected Talk model input");
@@ -725,7 +722,14 @@ describe("chat slash menu accessibility", () => {
     if (!announcementText) {
       throw new Error("Expected command navigation to update the live announcement");
     }
-    expect(announcementText).toContain(activeOption?.textContent?.trim().split(/\s+/u)[0]);
+    const expectedAnnouncement = [
+      activeOption?.querySelector(".slash-menu-name")?.textContent?.trim(),
+      activeOption?.querySelector(".slash-menu-args")?.textContent?.trim(),
+      activeOption?.querySelector(".slash-menu-desc")?.textContent?.trim(),
+    ]
+      .filter(Boolean)
+      .join(" ");
+    expect(announcementText).toBe(expectedAnnouncement);
   });
 
   it("wires fixed argument suggestions with command-and-argument option ids", () => {
@@ -999,22 +1003,13 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    requireElement(
-      container,
-      `[aria-label="${t("chat.selectors.session")}"]`,
-      "localized session selector",
-    );
-    requireElement(
-      container,
-      `[aria-label="${t("chat.selectors.model")}"]`,
-      "localized model selector",
-    );
-    requireElement(
-      container,
-      `[aria-label="${t("chat.selectors.thinkingLevel")}"]`,
-      "localized thinking level selector",
-    );
-    expect(container.innerHTML).not.toContain("Chat session");
+    expect(
+      [...container.querySelectorAll("select")].map((select) => select.getAttribute("aria-label")),
+    ).toEqual([
+      t("chat.selectors.session"),
+      t("chat.selectors.model"),
+      t("chat.selectors.thinkingLevel"),
+    ]);
   });
 
   it("falls back to the selected agent's main session when no sessions exist yet", () => {
@@ -1197,16 +1192,17 @@ describe("chat session controls", () => {
     const thinkingSelect = container.querySelector<HTMLSelectElement>(
       'select[data-chat-thinking-select="true"]',
     );
-    const options = [...(thinkingSelect?.options ?? [])].map((option) => option.value);
 
-    expect(options).toContain("adaptive");
-    expect(options).toContain("xhigh");
-    expect(options).toContain("max");
+    expect([...(thinkingSelect?.options ?? [])].map((option) => option.value)).toEqual([
+      "",
+      "off",
+      "adaptive",
+      "xhigh",
+      "max",
+    ]);
     expect(
-      [...(thinkingSelect?.options ?? [])]
-        .find((option) => option.value === "max")
-        ?.textContent?.trim(),
-    ).toBe("Override: maximum");
+      [...(thinkingSelect?.options ?? [])].map((option) => option.textContent?.trim()),
+    ).toEqual(["Off", "Off", "Override: adaptive", "Override: xhigh", "Override: maximum"]);
   });
 
   it("labels chat thinking default from the active session row", () => {

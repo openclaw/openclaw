@@ -304,10 +304,8 @@ describe("context notice", () => {
     expect(notice!.querySelector(".context-notice__detail")?.textContent).toBe("190k / 200k");
     expect([...notice!.classList]).toEqual(["context-notice", "context-notice--warning"]);
     expect(notice!.getAttribute("title")).toBe("Session context usage: 190k / 200k (95%)");
-    expect(notice!.style.getPropertyValue("--ctx-color")).toContain("rgb(");
-    expect(notice!.style.getPropertyValue("--ctx-color")).toContain("4, 5, 6");
-    expect(notice!.style.getPropertyValue("--ctx-color")).not.toContain("NaN");
-    expect(notice!.style.getPropertyValue("--ctx-bg")).not.toContain("NaN");
+    expect(notice!.style.getPropertyValue("--ctx-color")).toBe("rgb(4, 5, 6)");
+    expect(notice!.style.getPropertyValue("--ctx-bg")).toBe("rgba(4, 5, 6, 0.15999999999999998)");
 
     const icon = container.querySelector<SVGElement>(".context-notice__icon");
     expect(icon).toBeInstanceOf(SVGElement);
