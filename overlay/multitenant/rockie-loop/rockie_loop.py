@@ -119,7 +119,14 @@ def _build_request(
 ) -> urllib.request.Request:
     base_url = base or DEFAULT_API_BASE
     url = f"{base_url.rstrip('/')}{path}"
-    headers = {"Accept": "application/json"}
+    # Cloudflare in front of api.rockielab.com bot-blocks Python's
+    # default `Python-urllib/3.x` User-Agent (Error 1010: browser
+    # signature banned), which silently breaks lab discovery and every
+    # subsequent /loop-state call. Identify as a real client.
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "rockie-loop/1.0",
+    }
     token = token if token is not None else TENANT_TOKEN
     if token:
         headers["X-Tenant-Token"] = token
