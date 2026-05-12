@@ -116,6 +116,53 @@ function refreshPendingNodePairingRequest(
   };
 }
 
+function normalizeApprovalSurfaceList(value: string[] | undefined): string[] {
+  return normalizeArrayBackedTrimmedStringList(value) ?? [];
+}
+
+function sameApprovalSurfaceList(left: string[] | undefined, right: string[] | undefined): boolean {
+  const normalizedLeft = normalizeApprovalSurfaceList(left);
+  const normalizedRight = normalizeApprovalSurfaceList(right);
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return false;
+  }
+  return normalizedLeft.every((entry, index) => entry === normalizedRight[index]);
+}
+
+function samePermissions(
+  left: Record<string, boolean> | undefined,
+  right: Record<string, boolean> | undefined,
+): boolean {
+  const leftEntries = Object.entries(left ?? {}).toSorted(([leftKey], [rightKey]) =>
+    leftKey.localeCompare(rightKey),
+  );
+  const rightEntries = Object.entries(right ?? {}).toSorted(([leftKey], [rightKey]) =>
+    leftKey.localeCompare(rightKey),
+  );
+  if (leftEntries.length !== rightEntries.length) {
+    return false;
+  }
+  return leftEntries.every(([key, value], index) => {
+    const rightEntry = rightEntries[index];
+    return rightEntry?.[0] === key && rightEntry[1] === value;
+  });
+}
+
+function samePendingApprovalSurface(
+  existing: NodePairingPendingRequest,
+  incoming: NodePairingRequestInput,
+): boolean {
+  const incomingCaps = normalizeArrayBackedTrimmedStringList(incoming.caps) ?? existing.caps;
+  const incomingCommands =
+    normalizeArrayBackedTrimmedStringList(incoming.commands) ?? existing.commands;
+  const incomingPermissions = incoming.permissions ?? existing.permissions;
+  return (
+    sameApprovalSurfaceList(existing.caps, incomingCaps) &&
+    sameApprovalSurfaceList(existing.commands, incomingCommands) &&
+    samePermissions(existing.permissions, incomingPermissions)
+  );
+}
+
 function resolveNodeApprovalRequiredScopes(
   pending: NodePairingPendingRequest,
 ): NodeApprovalScope[] {
@@ -207,7 +254,7 @@ export async function requestNodePairing(
         ...req,
         nodeId,
       },
-      canRefreshSingle: () => true,
+      canRefreshSingle: (existing, incoming) => samePendingApprovalSurface(existing, incoming),
       refreshSingle: (existing, incoming) => refreshPendingNodePairingRequest(existing, incoming),
       buildReplacement: ({ existing, incoming }) =>
         buildPendingNodePairingRequest({

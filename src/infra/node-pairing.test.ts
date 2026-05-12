@@ -66,7 +66,7 @@ describe("node pairing tokens", () => {
     await tempDirs.cleanup();
   });
 
-  test("reuses and refreshes pending requests", async () => {
+  test("reuses pending requests for metadata refreshes", async () => {
     await withNodePairingDir(async (baseDir) => {
       const first = await requestNodePairing(
         {
@@ -101,30 +101,15 @@ describe("node pairing tokens", () => {
           nodeId: "node-2",
           platform: "darwin",
           displayName: "Updated Node",
-          commands: ["canvas.snapshot", "system.run"],
-        },
-        baseDir,
-      );
-      const commandThird = await requestNodePairing(
-        {
-          nodeId: "node-2",
-          platform: "darwin",
-          displayName: "Updated Node",
-          commands: ["canvas.snapshot", "system.run", "system.which"],
+          commands: ["canvas.snapshot"],
         },
         baseDir,
       );
 
       expect(commandSecond.created).toBe(false);
       expect(commandSecond.request.requestId).toBe(commandFirst.request.requestId);
-      expect(commandThird.created).toBe(false);
-      expect(commandThird.request.requestId).toBe(commandSecond.request.requestId);
-      expect(commandThird.request.displayName).toBe("Updated Node");
-      expect(commandThird.request.commands).toEqual([
-        "canvas.snapshot",
-        "system.run",
-        "system.which",
-      ]);
+      expect(commandSecond.request.displayName).toBe("Updated Node");
+      expect(commandSecond.request.commands).toEqual(["canvas.snapshot"]);
 
       await requestNodePairing(
         {
@@ -140,6 +125,92 @@ describe("node pairing tokens", () => {
       expect(pendingNode.commands).toEqual(["canvas.present"]);
       expect(pendingNode.requiredApproveScopes).toEqual(["operator.pairing", "operator.write"]);
       expect(pairing.paired).toEqual([]);
+    });
+  });
+
+  test("supersedes pending requests when the approval surface changes", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const first = await requestNodePairing(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          commands: ["canvas.snapshot"],
+        },
+        baseDir,
+      );
+      const second = await requestNodePairing(
+        {
+          nodeId: "node-1",
+          platform: "darwin",
+          commands: ["canvas.snapshot", "system.run"],
+        },
+        baseDir,
+      );
+
+      expect(second.created).toBe(true);
+      expect(second.request.requestId).not.toBe(first.request.requestId);
+
+      const list = await listNodePairing(baseDir);
+      expect(list.pending).toHaveLength(1);
+      expect(list.pending[0]?.requestId).toBe(second.request.requestId);
+      expect(list.pending[0]?.commands).toEqual(["canvas.snapshot", "system.run"]);
+
+      await expect(
+        approveNodePairing(
+          first.request.requestId,
+          { callerScopes: ["operator.pairing", "operator.admin"] },
+          baseDir,
+        ),
+      ).resolves.toBeNull();
+
+      const approved = await approveNodePairing(
+        second.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.admin"] },
+        baseDir,
+      );
+      const approvedRecord = requireRecord(approved);
+      const approvedNode = requireRecord(approvedRecord.node);
+      expect(approvedRecord.requestId).toBe(second.request.requestId);
+      expect(approvedNode.commands).toEqual(["canvas.snapshot", "system.run"]);
+
+      const capsFirst = await requestNodePairing(
+        {
+          nodeId: "node-2",
+          platform: "darwin",
+          caps: ["camera"],
+        },
+        baseDir,
+      );
+      const capsSecond = await requestNodePairing(
+        {
+          nodeId: "node-2",
+          platform: "darwin",
+          caps: ["camera", "screen"],
+        },
+        baseDir,
+      );
+      expect(capsSecond.created).toBe(true);
+      expect(capsSecond.request.requestId).not.toBe(capsFirst.request.requestId);
+
+      const permissionsFirst = await requestNodePairing(
+        {
+          nodeId: "node-3",
+          platform: "darwin",
+          permissions: { camera: true },
+        },
+        baseDir,
+      );
+      const permissionsSecond = await requestNodePairing(
+        {
+          nodeId: "node-3",
+          platform: "darwin",
+          permissions: { camera: true, screen: true },
+        },
+        baseDir,
+      );
+
+      expect(permissionsSecond.created).toBe(true);
+      expect(permissionsSecond.request.requestId).not.toBe(permissionsFirst.request.requestId);
     });
   });
 
