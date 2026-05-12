@@ -4,6 +4,7 @@ import { hasCommittedMessagingToolDeliveryEvidence } from "./delivery-evidence.j
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedBuildEmbeddedRunPayloads,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedLog,
@@ -1181,6 +1182,37 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toBeNull();
   });
 
+  it("uses current attempt assistant state instead of stale lastAssistant for incomplete-turn detection (#80918)", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Compression complete and verified. Here is the summary."],
+        toolMetas: [{ toolName: "update_plan" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openrouter",
+          model: "deepseek/deepseek-v4-pro",
+          content: [{ type: "tool_use", id: "tool_1", name: "update_plan", input: {} }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openrouter",
+          model: "deepseek/deepseek-v4-pro",
+          content: [
+            { type: "thinking", thinking: "update_plan returned successfully" },
+            { type: "text", text: "Compression complete and verified. Here is the summary." },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
   it("surfaces an error for tool-use terminal turn with pre-tool text via runEmbeddedPiAgent (#76477)", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -1210,6 +1242,56 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("couldn't generate a response");
     expectWarnMessageWith("incomplete turn detected");
+  });
+
+  it("preserves final assistant text when lastAssistant is stale after update_plan (#80918)", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedBuildEmbeddedRunPayloads.mockReturnValueOnce([
+      { text: "Compression complete and verified. Here is the summary." },
+    ]);
+    const currentAttemptAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openrouter",
+      model: "deepseek/deepseek-v4-pro",
+      content: [
+        { type: "thinking", thinking: "update_plan returned successfully" },
+        { type: "text", text: "Compression complete and verified. Here is the summary." },
+      ],
+    } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"];
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Compression complete and verified. Here is the summary."],
+        toolMetas: [{ toolName: "update_plan" }],
+        lastAssistant: {
+          stopReason: "toolUse",
+          provider: "openrouter",
+          model: "deepseek/deepseek-v4-pro",
+          content: [{ type: "tool_use", id: "tool_1", name: "update_plan", input: {} }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        currentAttemptAssistant,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openrouter",
+      model: "deepseek/deepseek-v4-pro",
+      runId: "run-update-plan-stale-last-assistant",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedBuildEmbeddedRunPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ lastAssistant: currentAttemptAssistant }),
+    );
+    expect(result.payloads?.[0]).toMatchObject({
+      text: "Compression complete and verified. Here is the summary.",
+    });
+    expect(result.payloads?.[0]?.isError).not.toBe(true);
+    expectNoWarnMessageWith("incomplete turn detected");
+    expect(result.meta?.finalAssistantVisibleText).toBe(
+      "Compression complete and verified. Here is the summary.",
+    );
   });
 
   it("treats missing replay metadata as replay-invalid", () => {

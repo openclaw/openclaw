@@ -2470,13 +2470,16 @@ export async function runEmbeddedPiAgent(
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
             compactionTokensAfter: lastCompactionTokensAfter,
           };
-          const finalAssistantVisibleText = resolveFinalAssistantVisibleText(sessionLastAssistant);
-          const finalAssistantRawText = resolveFinalAssistantRawText(sessionLastAssistant);
+          const terminalAssistantForPayloads = currentAttemptAssistant ?? sessionLastAssistant;
+          const finalAssistantVisibleText = resolveFinalAssistantVisibleText(
+            terminalAssistantForPayloads,
+          );
+          const finalAssistantRawText = resolveFinalAssistantRawText(terminalAssistantForPayloads);
 
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             toolMetas: attempt.toolMetas,
-            lastAssistant: attempt.lastAssistant,
+            lastAssistant: terminalAssistantForPayloads,
             lastToolError: attempt.lastToolError,
             config: params.config,
             isCronTrigger: params.trigger === "cron",

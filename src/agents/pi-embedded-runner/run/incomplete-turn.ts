@@ -231,7 +231,8 @@ export function resolveIncompleteTurnPayloadText(params: {
   // Pre-tool text alone (payloadCount > 0) must not suppress the incomplete-
   // turn check in that case — the final post-tool response was never
   // produced. (#76477)
-  const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
+  const terminalAssistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  const toolUseTerminal = terminalAssistant?.stopReason === "toolUse";
 
   if (
     (params.payloadCount !== 0 && !toolUseTerminal) ||
@@ -256,7 +257,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   const stopReason = params.attempt.lastAssistant?.stopReason;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText: params.payloadCount > 0,
-    lastAssistant: params.attempt.lastAssistant,
+    lastAssistant: terminalAssistant,
   });
   const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(
     params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
