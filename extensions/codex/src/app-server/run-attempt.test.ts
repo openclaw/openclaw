@@ -311,14 +311,14 @@ function expectResumeRequest(
   requests: Array<{ method: string; params: unknown }>,
   params: Record<string, unknown>,
 ) {
-  expect(requests).toEqual(
-    expect.arrayContaining([
-      {
-        method: "thread/resume",
-        params: expect.objectContaining(params),
-      },
-    ]),
-  );
+  const request = requests.find((entry) => entry.method === "thread/resume");
+  if (!request) {
+    throw new Error("Expected thread/resume request");
+  }
+  const requestParams = request.params as Record<string, unknown> | undefined;
+  for (const [key, value] of Object.entries(params)) {
+    expect(requestParams?.[key]).toEqual(value);
+  }
 }
 
 function createResumeHarness() {
