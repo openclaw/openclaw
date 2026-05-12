@@ -899,8 +899,7 @@ describe("session_status tool", () => {
         liveModelSwitchPending: true,
       }),
     );
-    expect(saved.sessionId).toBeTypeOf("string");
-    expect(saved.sessionId.trim().length).toBeGreaterThan(0);
+    expect(saved.sessionId).toMatch(UUID_RE);
   });
 
   it("materializes a valid persisted session entry when the default implicit current fallback mutates model state", async () => {
@@ -925,8 +924,7 @@ describe("session_status tool", () => {
         liveModelSwitchPending: true,
       }),
     );
-    expect(saved.sessionId).toBeTypeOf("string");
-    expect(saved.sessionId.trim().length).toBeGreaterThan(0);
+    expect(saved.sessionId).toMatch(UUID_RE);
   });
 
   it("does not synthesize a current fallback for unknown non-literal session keys", async () => {
