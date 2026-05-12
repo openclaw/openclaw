@@ -500,26 +500,22 @@ async function collectInstalledPackageScanRoots(params: {
       continue;
     }
     for (const dependencyName of collectManifestRuntimeDependencyNames(manifest)) {
-      const candidates: Array<InstalledPackageScanRoot | undefined> = [
-        await resolveInstalledPackageScanRoot({
-          boundaryRealPath,
-          dependencyName,
-          packageDir: current.packageDir,
-        }),
-      ];
-      if (params.dependencyScanRootDir) {
-        candidates.push(
-          await resolveInstalledPackageScanRoot({
-            boundaryRealPath,
-            dependencyName,
-            packageDir: params.dependencyScanRootDir,
-          }),
-        );
-      }
-      for (const candidate of candidates) {
-        if (candidate && !visitedRealPaths.has(candidate.realPath)) {
-          queue.push(candidate);
-        }
+      const nestedCandidate = await resolveInstalledPackageScanRoot({
+        boundaryRealPath,
+        dependencyName,
+        packageDir: current.packageDir,
+      });
+      const candidate =
+        nestedCandidate ??
+        (params.dependencyScanRootDir
+          ? await resolveInstalledPackageScanRoot({
+              boundaryRealPath,
+              dependencyName,
+              packageDir: params.dependencyScanRootDir,
+            })
+          : undefined);
+      if (candidate && !visitedRealPaths.has(candidate.realPath)) {
+        queue.push(candidate);
       }
     }
   }

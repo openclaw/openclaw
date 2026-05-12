@@ -3137,6 +3137,66 @@ describe("installPluginFromDir", () => {
     }
   });
 
+  it("prefers nested managed npm dependencies over pre-existing root fallbacks", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(caseDir, "npm-root");
+    const pluginDir = path.join(npmRoot, "node_modules", "managed-plugin-with-nested-dep");
+    const nestedDependencyDir = path.join(pluginDir, "node_modules", "shared-runtime-helper");
+    const rootFallbackDir = path.join(npmRoot, "node_modules", "shared-runtime-helper");
+    fs.mkdirSync(nestedDependencyDir, { recursive: true });
+    fs.mkdirSync(rootFallbackDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "managed-plugin-with-nested-dep",
+        version: "1.0.0",
+        dependencies: {
+          "shared-runtime-helper": "2.0.0",
+        },
+        openclaw: { extensions: ["index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(nestedDependencyDir, "package.json"),
+      JSON.stringify({
+        name: "shared-runtime-helper",
+        version: "2.0.0",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(nestedDependencyDir, "index.cjs"),
+      "module.exports = {};\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(rootFallbackDir, "package.json"),
+      JSON.stringify({
+        name: "shared-runtime-helper",
+        version: "1.0.0",
+        main: "index.cjs",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(rootFallbackDir, "index.cjs"),
+      `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+      "utf-8",
+    );
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: pluginDir,
+      dependencyScanRootDir: npmRoot,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("managed-plugin-with-nested-dep");
+    }
+  });
+
   it("does not double-count nested dependency files against the installed tree scan cap", async () => {
     vi.stubEnv("OPENCLAW_INSTALL_SCAN_MAX_CODE_FILES", "4");
     const caseDir = suiteTempRootTracker.makeTempDir();
