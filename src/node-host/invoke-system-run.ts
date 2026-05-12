@@ -594,6 +594,8 @@ async function executeSystemRunPhase(
     shellCommand: phase.shellPayload,
     segments: phase.segments,
     segmentSatisfiedBy: phase.segmentSatisfiedBy,
+    cwd: phase.cwd,
+    env: phase.env,
   });
   if (!execArgv) {
     await sendSystemRunDenied(opts, phase.execution, {

@@ -120,7 +120,13 @@ export type ExecAllowlistEvaluation = {
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
-export type ExecSegmentSatisfiedBy = "allowlist" | "safeBins" | "skills" | "skillPrelude" | null;
+export type ExecSegmentSatisfiedBy =
+  | "allowlist"
+  | "safeBins"
+  | "inlineChain"
+  | "skills"
+  | "skillPrelude"
+  | null;
 export type SkillBinTrustEntry = {
   name: string;
   resolvedPath: string;
@@ -374,7 +380,7 @@ const MAX_SHELL_WRAPPER_INLINE_EVAL_DEPTH = 3;
 
 type InlineChainAllowlistEvaluation = {
   matches: ExecAllowlistEntry[];
-  satisfiedBy: "allowlist";
+  satisfiedBy: "allowlist" | "inlineChain";
 };
 
 type SegmentMatchEvaluation = {
@@ -560,6 +566,7 @@ function evaluateShellWrapperInlineChain(params: {
   }
 
   const matches: ExecAllowlistEntry[] = [];
+  const segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
   for (const part of chainParts) {
     const analysis = analyzeShellCommand({
       command: part,
@@ -575,8 +582,12 @@ function evaluateShellWrapperInlineChain(params: {
       return null;
     }
     matches.push(...result.matches);
+    segmentSatisfiedBy.push(...result.segmentSatisfiedBy);
   }
-  return { matches, satisfiedBy: "allowlist" };
+  const hasLiteralizedInnerSegment = segmentSatisfiedBy.some(
+    (entry) => entry === "safeBins" || entry === "inlineChain",
+  );
+  return { matches, satisfiedBy: hasLiteralizedInnerSegment ? "inlineChain" : "allowlist" };
 }
 function evaluateSegments(
   segments: ExecCommandSegment[],

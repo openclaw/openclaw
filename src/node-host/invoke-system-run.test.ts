@@ -797,6 +797,40 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "rewrites nested safe-bin shell chains before execution in allowlist mode",
+    async () => {
+      const oldPath = process.env.PATH;
+      process.env.PATH = "/usr/bin:/bin";
+      try {
+        const expectedTrPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/tr") ? "/usr/bin/tr" : "/bin/tr",
+        );
+        const expectedHeadPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/head") ? "/usr/bin/head" : "/bin/head",
+        );
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          security: "allowlist",
+          ask: "off",
+          command: ["/bin/sh", "-lc", "sh -c 'tr a b && head -c 16'"],
+        });
+
+        const payload = requireFirstRunCommandArgs(runCommand)[2] ?? "";
+        expect(payload).not.toContain("tr a b && head -c 16");
+        expect(payload).toContain(expectedTrPath);
+        expect(payload).toContain(expectedHeadPath);
+        expectInvokeOk(sendInvokeResult);
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
+    },
+  );
+
   it("denies abbreviated PowerShell encoded payloads even when the wrapper is allowlisted", async () => {
     const binDir = createFixtureDir("openclaw-pwsh-allowlist-");
     const executablePath = createTempExecutable({ dir: binDir, name: "pwsh" });

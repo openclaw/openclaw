@@ -130,6 +130,8 @@ export function resolveSystemRunExecArgv(params: {
   shellCommand: string | null;
   segments: ExecCommandSegment[];
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
+  cwd: string | undefined;
+  env: Record<string, string> | undefined;
 }): string[] | null {
   let execArgv = params.plannedAllowlistArgv ?? params.argv;
   if (
@@ -151,12 +153,14 @@ export function resolveSystemRunExecArgv(params: {
     params.shellCommand &&
     params.policy.analysisOk &&
     params.policy.allowlistSatisfied &&
-    params.segmentSatisfiedBy.includes("safeBins")
+    params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain")
   ) {
     const rebuilt = buildSafeBinsShellCommand({
       command: params.shellCommand,
       segments: params.segments,
       segmentSatisfiedBy: params.segmentSatisfiedBy,
+      cwd: params.cwd,
+      env: params.env,
       platform: process.platform,
     });
     if (!rebuilt.ok || !rebuilt.command) {
