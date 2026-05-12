@@ -172,16 +172,20 @@ without exceptions outside doctor/import/export/debug boundaries.
       File: `scripts/e2e/session-runtime-context-docker-client.ts`.
       Proof: `rg -n 'sessions\\.json|sessionFile|\\.jsonl' scripts/e2e/session-runtime-context-docker-client.ts` shows only
       `seedBrokenLegacySessionForDoctorMigration`.
-- [ ] Keep Kysely generated types aligned after any schema change.
+- [x] Keep Kysely generated types aligned after any schema change.
       Files: `src/state/openclaw-state-schema.sql`,
       `src/state/openclaw-agent-schema.sql`,
       `src/state/*generated*`.
-      Proof: `pnpm db:kysely:gen`; `pnpm db:kysely:check`; `pnpm lint:kysely`.
+      Proof: no schema change in this pass; `pnpm db:kysely:check`;
+      `pnpm lint:kysely`.
 - [x] Re-run focused tests for touched stores, commands, and scripts.
       Proof: `pnpm test src/cron/service/store.test.ts src/cron/store.test.ts src/cron/service.heartbeat-ok-summary-suppressed.test.ts src/cron/service.main-job-passes-heartbeat-target-last.test.ts src/cron/service.every-jobs-fire.test.ts src/cron/service.persists-delivered-status.test.ts src/cron/service.runs-one-shot-main-job-disables-it.test.ts src/cron/service/ops.test.ts src/cron/service/timer.regression.test.ts src/auto-reply/reply/commands-export-trajectory.test.ts extensions/telegram/src/thread-bindings.test.ts extensions/slack/src/monitor/message-handler/prepare.test.ts src/acp/translator.session-lineage-meta.test.ts`; `git diff --check`.
 - [ ] Before declaring `done`, run the changed gate or remote broad proof.
       Proof: `pnpm check:changed` for narrow local scope, or Crabbox/Testbox run id
-      for broad/E2E proof.
+      for broad/E2E proof. Current blocker: `pnpm check:changed --timed -- <changed paths>`
+      on Crabbox run `run_4daa0a4c5427` reaches `tsgo:core:test`, then fails
+      on branch-wide core test type errors outside the residual legacy-store
+      guard.
 
 ### Do not regress
 
