@@ -59,7 +59,11 @@ import {
 import { createQaSuiteScenarioFlowApi } from "./suite-runtime-flow.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
-import { countQaSuiteFailedScenarios, type QaSuiteSummaryJson } from "./suite-summary.js";
+import {
+  countQaSuiteFailedScenarios,
+  countQaSuiteSkippedScenarios,
+  type QaSuiteSummaryJson,
+} from "./suite-summary.js";
 import { closeQaWebSessions } from "./web-runtime.js";
 
 type QaSuiteStep = {
@@ -561,6 +565,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
     counts: {
       total: params.scenarios.length,
       passed: params.scenarios.filter((scenario) => scenario.status === "pass").length,
+      skipped: countQaSuiteSkippedScenarios(params.scenarios),
       failed: countQaSuiteFailedScenarios(params.scenarios),
     },
     ...(params.metrics ? { metrics: params.metrics } : {}),
@@ -1154,6 +1159,8 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       );
       await artifactWriteQueue;
       const finishedAt = new Date();
+      const passedCount = scenarios.filter((scenario) => scenario.status === "pass").length;
+      const skippedCount = scenarios.filter((scenario) => scenario.status === "skip").length;
       const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
       lab.setScenarioRun({
         kind: "suite",
@@ -1191,7 +1198,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       } satisfies QaLabLatestReport);
       writeQaSuiteProgress(
         progressEnabled,
-        `run complete: passed=${scenarios.length - failedCount} failed=${failedCount} total=${scenarios.length}`,
+        `run complete: passed=${passedCount} skipped=${skippedCount} failed=${failedCount} total=${scenarios.length}`,
       );
       return {
         outputDir,
@@ -1374,6 +1381,8 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       gatewayProcessRssStartBytes,
       gatewayProcessRssEndBytes: gateway.getProcessRssBytes?.() ?? null,
     });
+    const passedCount = scenarios.filter((scenario) => scenario.status === "pass").length;
+    const skippedCount = scenarios.filter((scenario) => scenario.status === "skip").length;
     const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
     if (scenarios.some((scenario) => scenario.status === "fail")) {
       preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
@@ -1413,7 +1422,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     lab.setLatestReport(latestReport);
     writeQaSuiteProgress(
       progressEnabled,
-      `run complete: passed=${scenarios.length - failedCount} failed=${failedCount} total=${scenarios.length}`,
+      `run complete: passed=${passedCount} skipped=${skippedCount} failed=${failedCount} total=${scenarios.length}`,
     );
 
     return {

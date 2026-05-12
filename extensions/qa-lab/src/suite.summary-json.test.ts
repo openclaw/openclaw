@@ -108,6 +108,7 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.counts).toEqual({
       total: 2,
       passed: 1,
+      skipped: 0,
       failed: 1,
     });
   });

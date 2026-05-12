@@ -15,6 +15,7 @@ export type QaSuiteSummaryJson = {
   counts: {
     total: number;
     passed: number;
+    skipped: number;
     failed: number;
   };
   metrics?: {
@@ -55,6 +56,18 @@ export function countQaSuiteFailedScenarios(
     }
   }
   return failed;
+}
+
+export function countQaSuiteSkippedScenarios(
+  scenarios: ReadonlyArray<QaSuiteScenarioStatus>,
+): number {
+  let skipped = 0;
+  for (const scenario of scenarios) {
+    if (scenario.status === "skip") {
+      skipped += 1;
+    }
+  }
+  return skipped;
 }
 
 export function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): number | null {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   countQaSuiteFailedScenarios,
+  countQaSuiteSkippedScenarios,
   readQaSuiteFailedScenarioCountFromSummary,
 } from "./suite-summary.js";
 
@@ -9,6 +10,12 @@ describe("qa suite summary helpers", () => {
     expect(
       countQaSuiteFailedScenarios([{ status: "pass" }, { status: "fail" }, { status: "fail" }]),
     ).toBe(2);
+  });
+
+  it("counts skipped scenarios from scenario statuses", () => {
+    expect(
+      countQaSuiteSkippedScenarios([{ status: "pass" }, { status: "skip" }, { status: "fail" }]),
+    ).toBe(1);
   });
 
   it("prefers counts.failed when available", () => {

@@ -30,7 +30,7 @@ describe("qa confidence report", () => {
 
   it("passes strict zero-unknowns when every lane passes or has an allowed blocked verdict", async () => {
     await writeJson("tool-defaults/qa-suite-summary.json", {
-      counts: { total: 20, passed: 20, failed: 0 },
+      counts: { total: 20, passed: 18, skipped: 2, failed: 0 },
       scenarios: [],
     });
     await writeJson("token/qa-runtime-token-efficiency-summary.json", {
@@ -84,6 +84,7 @@ describe("qa confidence report", () => {
       "pass",
       "environment-blocked",
     ]);
+    expect(report.lanes[0]?.details).toContain("counts.skipped=2");
     expect(renderQaConfidenceMarkdownReport(report)).toContain("Zero unknowns: yes");
   });
 

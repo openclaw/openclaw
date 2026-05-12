@@ -293,9 +293,12 @@ function evaluateQaSuiteSummary(payload: unknown): { passed: boolean; details: s
   }
   const failedCount = readNumber(isRecord(payload.counts) ? payload.counts.failed : undefined);
   if (failedCount !== undefined) {
+    const skippedCount = readNumber(isRecord(payload.counts) ? payload.counts.skipped : undefined);
+    const skippedDetails =
+      skippedCount === undefined ? "" : ` counts.skipped=${Math.max(0, Math.floor(skippedCount))}`;
     return {
       passed: failedCount === 0,
-      details: `qa-suite-summary counts.failed=${Math.max(0, Math.floor(failedCount))}`,
+      details: `qa-suite-summary counts.failed=${Math.max(0, Math.floor(failedCount))}${skippedDetails}`,
     };
   }
   const scenarios = Array.isArray(payload.scenarios) ? payload.scenarios : [];
