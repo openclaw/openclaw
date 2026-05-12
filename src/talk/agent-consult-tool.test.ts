@@ -31,6 +31,7 @@ describe("realtime voice agent consult tool", () => {
   it("accepts provider question aliases from realtime tool calls", () => {
     expect(parseRealtimeVoiceAgentConsultArgs({ prompt: "  Check the repo. " })).toStrictEqual({
       context: undefined,
+      deliveryPreference: undefined,
       question: "Check the repo.",
       responseStyle: undefined,
     });
@@ -38,6 +39,7 @@ describe("realtime voice agent consult tool", () => {
       parseRealtimeVoiceAgentConsultArgs({ query: "  Send a Discord message. " }),
     ).toStrictEqual({
       context: undefined,
+      deliveryPreference: undefined,
       question: "Send a Discord message.",
       responseStyle: undefined,
     });
