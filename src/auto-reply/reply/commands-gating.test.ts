@@ -555,7 +555,7 @@ describe("command gating", () => {
     showParams.command.channel = "webchat";
     showParams.command.channelId = "webchat";
     showParams.command.surface = "webchat";
-    isInternalMessageChannelMock.mockReturnValueOnce(true);
+    showParams.command.senderIsOwner = true;
     const showResult = await handleConfigCommand(showParams, true);
     expect(showResult?.shouldContinue).toBe(false);
     expect(showResult?.reply?.text).toContain("Config messages.ackReaction");
@@ -575,6 +575,9 @@ describe("command gating", () => {
     const setResult = await handleConfigCommand(setParams, true);
     expect(setResult?.shouldContinue).toBe(false);
     expect(setResult?.reply?.text).toContain("Config updated");
-    expect(replaceConfigFileMock).toHaveBeenCalled();
+    expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
+    expect(replaceConfigFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({ afterWrite: { mode: "auto" } }),
+    );
   });
 });
