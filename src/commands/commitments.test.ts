@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommitmentRecord } from "../commitments/types.js";
-import type { RuntimeEnv } from "../runtime.js";
+import type { OutputRuntimeEnv, RuntimeEnv } from "../runtime.js";
 import { stripAnsi } from "../terminal/ansi.js";
-import { commitmentsListCommand } from "./commitments.js";
+import { commitmentsDismissCommand, commitmentsListCommand } from "./commitments.js";
 
 const mocks = vi.hoisted(() => ({
   listCommitments: vi.fn(),
@@ -33,6 +33,32 @@ function createRuntime(): { runtime: RuntimeEnv; logs: string[] } {
       log: (message: unknown) => logs.push(String(message)),
       error: vi.fn(),
       exit: vi.fn(),
+    },
+  };
+}
+
+function createOutputRuntime(): {
+  runtime: OutputRuntimeEnv;
+  logs: string[];
+  stdout: string[];
+  jsonWrites: unknown[];
+} {
+  const logs: string[] = [];
+  const stdout: string[] = [];
+  const jsonWrites: unknown[] = [];
+  return {
+    logs,
+    stdout,
+    jsonWrites,
+    runtime: {
+      log: (message: unknown) => logs.push(String(message)),
+      error: vi.fn(),
+      exit: vi.fn(),
+      writeStdout: (chunk: string) => stdout.push(chunk),
+      writeJson: (value: unknown, space = 2) => {
+        jsonWrites.push(value);
+        stdout.push(JSON.stringify(value, null, space > 0 ? space : undefined) + "\n");
+      },
     },
   };
 }
@@ -82,5 +108,56 @@ describe("commitments command", () => {
       "ID               Status     Kind             Due                      Scope                        Suggested text",
       "cm_escape        pending    event_check_in   2026-04-30T17:00:00.000Z main/telegram/+15551234567   How did it go?\\nspoofed",
     ]);
+  });
+
+  it("writes list --json payload through writeJson (stdout), not runtime.log (regression for #81183)", async () => {
+    const { runtime, logs, stdout, jsonWrites } = createOutputRuntime();
+
+    await commitmentsListCommand({ json: true }, runtime);
+
+    expect(jsonWrites).toHaveLength(1);
+    const payload = jsonWrites[0] as Record<string, unknown>;
+    expect(payload.count).toBe(1);
+    expect(payload.status).toBe("pending");
+    expect(payload.store).toBe("/tmp/openclaw-commitments.json");
+    expect(Array.isArray(payload.commitments)).toBe(true);
+    expect(logs).toEqual([]);
+    expect(stdout).toHaveLength(1);
+    expect(JSON.parse(stdout[0])).toEqual(payload);
+  });
+
+  it("writes list --json --all payload through writeJson with null status", async () => {
+    const { runtime, jsonWrites } = createOutputRuntime();
+
+    await commitmentsListCommand({ json: true, all: true }, runtime);
+
+    expect(jsonWrites).toHaveLength(1);
+    const payload = jsonWrites[0] as Record<string, unknown>;
+    expect(payload.status).toBeNull();
+  });
+
+  it("writes dismiss --json payload through writeJson (stdout), not runtime.log (regression for #81183)", async () => {
+    mocks.markCommitmentsStatus.mockResolvedValue(undefined);
+    const { runtime, logs, stdout, jsonWrites } = createOutputRuntime();
+
+    await commitmentsDismissCommand({ ids: ["cm_abc"], json: true }, runtime);
+
+    expect(jsonWrites).toEqual([{ dismissed: ["cm_abc"] }]);
+    expect(logs).toEqual([]);
+    expect(stdout).toHaveLength(1);
+    expect(JSON.parse(stdout[0])).toEqual({ dismissed: ["cm_abc"] });
+  });
+
+  it("falls back to runtime.log when runtime does not expose writeJson (back-compat)", async () => {
+    const { runtime, logs } = createRuntime();
+
+    await commitmentsListCommand({ json: true }, runtime);
+
+    // Plain RuntimeEnv mocks have no writeJson; writeRuntimeJson falls back to
+    // runtime.log so older callers and the existing test runtime still work.
+    expect(logs).toHaveLength(1);
+    const parsed = JSON.parse(logs[0]) as Record<string, unknown>;
+    expect(parsed.count).toBe(1);
+    expect(parsed.store).toBe("/tmp/openclaw-commitments.json");
   });
 });
