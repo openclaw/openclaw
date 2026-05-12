@@ -207,6 +207,10 @@ function pruneMissingTranscriptEntries(params: {
     if (!entry?.sessionId) {
       continue;
     }
+    // Skip entries with key-shaped sessionId (legacy malformed stores where sessionId contains ':' like "agent:main:main")
+    if (entry.sessionId.includes(':')) {
+      continue;
+    }
     const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
     if (!fs.existsSync(transcriptPath)) {
       delete params.store[key];
