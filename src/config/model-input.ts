@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -6,6 +7,9 @@ import {
   resolvePrimaryStringValue,
 } from "../shared/string-coerce.js";
 import type { AgentModelConfig } from "./types.agents-shared.js";
+
+const log = createSubsystemLogger("model-input");
+const warnedStringModels = new Set<string>();
 
 type AgentModelListLike = {
   primary?: string;
@@ -39,6 +43,13 @@ export function resolveAgentModelPrimaryValue(model?: AgentModelConfig): string 
 
 export function resolveAgentModelFallbackValues(model?: AgentModelConfig): string[] {
   if (!model || typeof model !== "object") {
+    if (typeof model === "string" && model.length > 0 && !warnedStringModels.has(model)) {
+      warnedStringModels.add(model);
+      log.debug(
+        'Model config is a string ("%s"); fallbacks are not available. Use { primary, fallbacks } format for fallback support.',
+        model,
+      );
+    }
     return [];
   }
   return Array.isArray(model.fallbacks) ? model.fallbacks : [];

@@ -7,6 +7,7 @@ import { note } from "../terminal/note.js";
 import {
   noteImplicitFallbackClobberWarnings,
   noteOpencodeProviderOverrides,
+  noteStringModelFallbackWarning,
 } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
@@ -301,6 +302,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   noteOpencodeProviderOverrides(cfg);
   noteImplicitFallbackClobberWarnings(cfg);
+  noteStringModelFallbackWarning(cfg);
 
   return {
     cfg,

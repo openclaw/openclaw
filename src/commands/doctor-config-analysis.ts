@@ -206,6 +206,20 @@ export function noteImplicitFallbackClobberWarnings(cfg: OpenClawConfig): void {
   note(warnings.join("\n"), "Doctor warnings");
 }
 
+export function noteStringModelFallbackWarning(cfg: OpenClawConfig): void {
+  const model = cfg.agents?.defaults?.model;
+  if (typeof model !== "string" || model.length === 0) {
+    return;
+  }
+  note(
+    [
+      `- agents.defaults.model is a string ("${model}"); fallbacks are silently disabled.`,
+      '- Use { "primary": "…", "fallbacks": ["…"] } format for fallback support.',
+    ].join("\n"),
+    "Doctor warnings",
+  );
+}
+
 export function noteIncludeConfinementWarning(snapshot: {
   path?: string | null;
   issues?: Array<{ message: string }>;
