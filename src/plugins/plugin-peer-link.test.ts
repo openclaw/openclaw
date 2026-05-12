@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  auditOpenClawPeerDependenciesInManagedNpmRoot,
   linkOpenClawPeerDependencies,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
@@ -48,6 +49,32 @@ describe("plugin peer links", () => {
     expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(process.cwd()));
     expect(messages.join("\n")).toContain('Linked peerDependency "openclaw"');
+  });
+
+  it("audits missing managed npm openclaw peer links without relinking", async () => {
+    const npmRoot = makeTempDir();
+    const packageDir = path.join(npmRoot, "node_modules", "peer-plugin");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "peer-plugin",
+        version: "1.0.0",
+        peerDependencies: {
+          openclaw: ">=2026.0.0",
+        },
+      }),
+      "utf8",
+    );
+
+    const result = await auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot });
+
+    const linkPath = path.join(packageDir, "node_modules", "openclaw");
+    expect(result.checked).toBe(1);
+    expect(result.broken).toBe(1);
+    expect(result.issues[0]?.packageName).toBe("peer-plugin");
+    expect(result.issues[0]?.reason).toContain(linkPath);
+    expect(fs.existsSync(linkPath)).toBe(false);
   });
 
   it.runIf(process.platform !== "win32")(

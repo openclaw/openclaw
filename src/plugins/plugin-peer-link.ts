@@ -14,6 +14,18 @@ type RelinkManagedNpmRootResult = {
   skipped: number;
 };
 
+type OpenClawPeerLinkAuditIssue = {
+  packageName: string;
+  packageDir: string;
+  reason: string;
+};
+
+type AuditManagedNpmRootResult = {
+  checked: number;
+  broken: number;
+  issues: OpenClawPeerLinkAuditIssue[];
+};
+
 type OpenClawPeerLinkResult = "linked" | "skipped" | "unchanged";
 
 function readStringRecord(value: unknown): Record<string, string> {
@@ -87,6 +99,63 @@ async function safeRealpath(filePath: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+function managedPackageNameFromDir(params: { npmRoot: string; packageDir: string }): string {
+  return path
+    .relative(path.join(params.npmRoot, "node_modules"), params.packageDir)
+    .split(path.sep)
+    .join("/");
+}
+
+async function auditOpenClawPeerDependency(params: {
+  hostRoot: string;
+  npmRoot: string;
+  packageDir: string;
+}): Promise<OpenClawPeerLinkAuditIssue | null> {
+  const packageName = managedPackageNameFromDir({
+    npmRoot: params.npmRoot,
+    packageDir: params.packageDir,
+  });
+  const nodeModulesDir = path.join(params.packageDir, "node_modules");
+  try {
+    const existing = await fs.lstat(nodeModulesDir);
+    if (!existing.isDirectory() || existing.isSymbolicLink()) {
+      return {
+        packageName,
+        packageDir: params.packageDir,
+        reason: `${nodeModulesDir} is not a real directory`,
+      };
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return {
+        packageName,
+        packageDir: params.packageDir,
+        reason: `missing ${path.join(nodeModulesDir, "openclaw")}`,
+      };
+    }
+    throw error;
+  }
+
+  const linkPath = path.join(nodeModulesDir, "openclaw");
+  const currentTarget = await safeRealpath(linkPath);
+  if (!currentTarget) {
+    return {
+      packageName,
+      packageDir: params.packageDir,
+      reason: `missing ${linkPath}`,
+    };
+  }
+  const expectedTarget = (await safeRealpath(params.hostRoot)) ?? params.hostRoot;
+  if (currentTarget !== expectedTarget) {
+    return {
+      packageName,
+      packageDir: params.packageDir,
+      reason: `${linkPath} points to ${currentTarget} instead of ${expectedTarget}`,
+    };
+  }
+  return null;
 }
 
 async function ensureRealNodeModulesDir(params: {
@@ -221,4 +290,36 @@ export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
     skipped += result.skipped;
   }
   return { checked, attempted, repaired, skipped };
+}
+
+export async function auditOpenClawPeerDependenciesInManagedNpmRoot(params: {
+  npmRoot: string;
+}): Promise<AuditManagedNpmRootResult> {
+  const hostRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    cwd: process.cwd(),
+  });
+  if (!hostRoot) {
+    return { checked: 0, broken: 0, issues: [] };
+  }
+
+  let checked = 0;
+  const issues: OpenClawPeerLinkAuditIssue[] = [];
+  for (const packageDir of await listManagedNpmRootPackageDirs(params.npmRoot)) {
+    const peerDependencies = await readPackagePeerDependencies(packageDir);
+    if (!Object.hasOwn(peerDependencies, "openclaw")) {
+      continue;
+    }
+    checked += 1;
+    const issue = await auditOpenClawPeerDependency({
+      hostRoot,
+      npmRoot: params.npmRoot,
+      packageDir,
+    });
+    if (issue) {
+      issues.push(issue);
+    }
+  }
+  return { checked, broken: issues.length, issues };
 }

@@ -10,7 +10,10 @@ import {
   type InstalledPluginIndexRecordStoreOptions,
 } from "../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
-import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "../plugins/plugin-peer-link.js";
+import {
+  auditOpenClawPeerDependenciesInManagedNpmRoot,
+  relinkOpenClawPeerDependenciesInManagedNpmRoot,
+} from "../plugins/plugin-peer-link.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
@@ -241,7 +244,19 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
 export async function maybeRepairManagedNpmOpenClawPeerLinks(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<boolean> {
+  const npmRoot = resolveManagedPluginNpmRoot(params);
   if (!params.prompter.shouldRepair) {
+    const audit = await auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot });
+    if (audit.broken > 0) {
+      note(
+        [
+          "Managed npm OpenClaw host peer links need repair:",
+          ...audit.issues.map((issue) => `- ${issue.packageName}: ${issue.reason}`),
+          `Repair with ${formatCliCommand("openclaw doctor --fix")} to relink managed npm plugin packages.`,
+        ].join("\n"),
+        "Plugin registry",
+      );
+    }
     return false;
   }
 
@@ -251,7 +266,7 @@ export async function maybeRepairManagedNpmOpenClawPeerLinks(
     warn: (message) => messages.push({ level: "warn", message }),
   };
   const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({
-    npmRoot: resolveManagedPluginNpmRoot(params),
+    npmRoot,
     logger,
   });
 
