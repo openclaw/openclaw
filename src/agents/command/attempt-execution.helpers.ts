@@ -13,6 +13,7 @@ import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.js";
+import { cliBackendLog } from "../cli-runner/log.js";
 
 /** Maximum number of JSONL records to inspect before giving up. */
 const SESSION_FILE_MAX_RECORDS = 500;
@@ -26,14 +27,16 @@ function normalizeClaudeCliSessionId(sessionId: string | undefined): string | un
   return trimmed;
 }
 
-async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promise<boolean> {
+type JsonlFileScan = { fileExists: boolean; hasAssistant: boolean };
+
+async function scanJsonlFile(filePath: string | undefined): Promise<JsonlFileScan> {
   if (!filePath) {
-    return false;
+    return { fileExists: false, hasAssistant: false };
   }
   try {
     const stat = await fs.lstat(filePath);
     if (stat.isSymbolicLink() || !stat.isFile()) {
-      return false;
+      return { fileExists: false, hasAssistant: false };
     }
 
     const fh = await fs.open(filePath, "r");
@@ -56,16 +59,20 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
         }
         const rec = obj as Record<string, unknown> | null;
         if ((rec?.message as Record<string, unknown> | undefined)?.role === "assistant") {
-          return true;
+          return { fileExists: true, hasAssistant: true };
         }
       }
-      return false;
+      return { fileExists: true, hasAssistant: false };
     } finally {
       await fh.close();
     }
   } catch {
-    return false;
+    return { fileExists: false, hasAssistant: false };
   }
+}
+
+async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promise<boolean> {
+  return (await scanJsonlFile(filePath)).hasAssistant;
 }
 
 /**
@@ -77,13 +84,31 @@ export async function sessionFileHasContent(sessionFile: string | undefined): Pr
   return await jsonlFileHasAssistantMessage(sessionFile);
 }
 
-export async function claudeCliSessionTranscriptHasContent(params: {
+type TranscriptProjectScan = { project: string; fileExists: boolean; hasAssistant: boolean };
+
+type TranscriptScanResult = {
+  hasAssistant: boolean;
+  fileExists: boolean;
+  sessionId: string | null;
+  homeDir: string | null;
+  projects: TranscriptProjectScan[];
+};
+
+/**
+ * Delay between the first negative scan and the rescan that covers claude-cli's
+ * asynchronous transcript flush. claude-cli writes the user-message header
+ * before the assistant turn is flushed, so the first scan can race the JSONL
+ * and see no assistant message even though one is about to land.
+ */
+const CLAUDE_CLI_TRANSCRIPT_FLUSH_RETRY_MS = 150;
+
+async function claudeCliSessionTranscriptScan(params: {
   sessionId: string | undefined;
   homeDir?: string;
-}): Promise<boolean> {
+}): Promise<TranscriptScanResult> {
   const sessionId = normalizeClaudeCliSessionId(params.sessionId);
   if (!sessionId) {
-    return false;
+    return { hasAssistant: false, fileExists: false, sessionId: null, homeDir: null, projects: [] };
   }
   const homeDir = params.homeDir?.trim() || process.env.HOME || os.homedir();
   const projectsDir = path.join(homeDir, CLAUDE_PROJECTS_RELATIVE_DIR);
@@ -91,16 +116,60 @@ export async function claudeCliSessionTranscriptHasContent(params: {
   try {
     projectEntries = await fs.readdir(projectsDir, { withFileTypes: true });
   } catch {
-    return false;
+    return { hasAssistant: false, fileExists: false, sessionId, homeDir, projects: [] };
   }
+  const projects: TranscriptProjectScan[] = [];
+  let anyFileExists = false;
   for (const entry of projectEntries) {
     if (!entry.isDirectory()) {
       continue;
     }
     const candidate = path.join(projectsDir, entry.name, `${sessionId}.jsonl`);
-    if (await jsonlFileHasAssistantMessage(candidate)) {
+    const scan = await scanJsonlFile(candidate);
+    projects.push({
+      project: entry.name,
+      fileExists: scan.fileExists,
+      hasAssistant: scan.hasAssistant,
+    });
+    if (scan.fileExists) {
+      anyFileExists = true;
+    }
+    if (scan.hasAssistant) {
+      return { hasAssistant: true, fileExists: true, sessionId, homeDir, projects };
+    }
+  }
+  return { hasAssistant: false, fileExists: anyFileExists, sessionId, homeDir, projects };
+}
+
+export async function claudeCliSessionTranscriptHasContent(params: {
+  sessionId: string | undefined;
+  homeDir?: string;
+}): Promise<boolean> {
+  const first = await claudeCliSessionTranscriptScan(params);
+  if (first.hasAssistant) {
+    return true;
+  }
+  // claude-cli flushes the user-message header before the assistant turn lands.
+  // If the JSONL is on disk but lacks an assistant message, the runtime is
+  // racing the flush — wait once and rescan before declaring transcript-missing.
+  // The wait is gated on fileExists so the genuinely-no-session path stays fast.
+  if (first.fileExists) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, CLAUDE_CLI_TRANSCRIPT_FLUSH_RETRY_MS);
+    });
+    const second = await claudeCliSessionTranscriptScan(params);
+    if (second.hasAssistant) {
       return true;
     }
+    cliBackendLog.warn(
+      `claude-cli transcript probe negative after ${CLAUDE_CLI_TRANSCRIPT_FLUSH_RETRY_MS}ms retry: sessionId=${second.sessionId ?? ""} homeDir=${second.homeDir ?? ""} projects=${JSON.stringify(second.projects)}`,
+    );
+    return false;
+  }
+  if (first.sessionId) {
+    cliBackendLog.warn(
+      `claude-cli transcript probe negative (no matching jsonl): sessionId=${first.sessionId} homeDir=${first.homeDir ?? ""} projectCount=${first.projects.length}`,
+    );
   }
   return false;
 }

@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cliBackendLog } from "../cli-runner/log.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -427,6 +428,149 @@ describe("claudeCliSessionTranscriptHasContent", () => {
         homeDir: tmpDir,
       }),
     ).toBe(false);
+  });
+
+  it("returns true immediately when the assistant message is already flushed (no retry sleep)", async () => {
+    await writeClaudeProjectFile(
+      "race-already-flushed",
+      `${JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "ack" }] },
+      })}\n`,
+    );
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      expect(
+        await claudeCliSessionTranscriptHasContent({
+          sessionId: "race-already-flushed",
+          homeDir: tmpDir,
+        }),
+      ).toBe(true);
+      // No 150ms sleep should fire when the assistant message is present on first scan.
+      const sleepCalls = setTimeoutSpy.mock.calls.filter(([, delay]) => delay === 150);
+      expect(sleepCalls).toHaveLength(0);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("returns true after retry when the assistant message lands during the flush window", async () => {
+    const sessionId = "race-flush-window";
+    const file = await writeClaudeProjectFile(sessionId, "");
+    // Pre-seed with a user header but no assistant — mirrors claude-cli's
+    // intermediate state right after a session-id rotation.
+    await fs.writeFile(
+      file,
+      `${JSON.stringify({
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: "hi" }] },
+      })}\n`,
+      "utf-8",
+    );
+
+    let firstScanDone = false;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      handler: (...args: unknown[]) => void,
+      delay?: number,
+    ) => {
+      if (delay === 150) {
+        // Simulate claude-cli flushing the assistant message during the retry
+        // window, then fire the retry continuation synchronously to unblock
+        // the rescan.
+        firstScanDone = true;
+        void fs
+          .appendFile(
+            file,
+            `${JSON.stringify({
+              type: "assistant",
+              message: { role: "assistant", content: [{ type: "text", text: "ack" }] },
+            })}\n`,
+            "utf-8",
+          )
+          .then(() => {
+            handler();
+          });
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return (setTimeoutSpy.getMockImplementation() as never) ?? (0 as never);
+    }) as typeof setTimeout);
+
+    try {
+      expect(
+        await claudeCliSessionTranscriptHasContent({
+          sessionId,
+          homeDir: tmpDir,
+        }),
+      ).toBe(true);
+      expect(firstScanDone).toBe(true);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("returns false and warns when the JSONL exists but never gains an assistant message", async () => {
+    const sessionId = "race-never-flushes";
+    await writeClaudeProjectFile(
+      sessionId,
+      `${JSON.stringify({
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: "hi" }] },
+      })}\n`,
+    );
+
+    const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      handler: (...args: unknown[]) => void,
+      delay?: number,
+    ) => {
+      if (delay === 150) {
+        handler();
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+
+    try {
+      expect(
+        await claudeCliSessionTranscriptHasContent({
+          sessionId,
+          homeDir: tmpDir,
+        }),
+      ).toBe(false);
+      const retryWarnings = warnSpy.mock.calls.filter(
+        ([msg]) => typeof msg === "string" && msg.includes("after 150ms retry"),
+      );
+      expect(retryWarnings).toHaveLength(1);
+      expect(retryWarnings[0]?.[0]).toContain(sessionId);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("returns false and warns with projectCount when no project dir holds a matching jsonl", async () => {
+    // Create unrelated project dirs so projectCount reflects scanned candidates.
+    await writeClaudeProjectFile("other-session", "");
+    const otherProjectDir = path.join(tmpDir, ".claude", "projects", "another-workspace");
+    await fs.mkdir(otherProjectDir, { recursive: true });
+
+    const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
+    try {
+      expect(
+        await claudeCliSessionTranscriptHasContent({
+          sessionId: "no-such-session",
+          homeDir: tmpDir,
+        }),
+      ).toBe(false);
+      const noMatchWarnings = warnSpy.mock.calls.filter(
+        ([msg]) => typeof msg === "string" && msg.includes("no matching jsonl"),
+      );
+      expect(noMatchWarnings).toHaveLength(1);
+      expect(noMatchWarnings[0]?.[0]).toContain("projectCount=2");
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 
