@@ -2347,6 +2347,35 @@ describe("config cli", () => {
         unsetPaths: [["channels", "discord", "guilds", "123"]],
       });
     });
+
+    it("supports --dry-run for config unset without writing", async () => {
+      const resolved: OpenClawConfig = {
+        tools: {
+          profile: "coding",
+          alsoAllow: ["agents_list"],
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run"]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining("Dry run successful: removal of tools.alsoAllow validated"),
+      );
+    });
+
+    it("includes --dry-run in config unset help output", () => {
+      const program = new Command();
+      registerConfigCli(program);
+
+      const configCommand = program.commands.find((command) => command.name() === "config");
+      const unsetCommand = configCommand?.commands.find((command) => command.name() === "unset");
+      const helpText = unsetCommand?.helpInformation() ?? "";
+
+      expect(helpText).toContain("--dry-run");
+      expect(helpText).toContain("Validate removal without writing openclaw.json");
+    });
   });
 
   describe("config file", () => {

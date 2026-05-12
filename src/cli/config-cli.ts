@@ -87,6 +87,9 @@ type ConfigPatchOptions = {
   json?: boolean | undefined;
   replacePath?: string[] | undefined;
 };
+type ConfigUnsetOptions = {
+  dryRun?: boolean | undefined;
+};
 type ConfigMutationOptions = {
   dryRun?: boolean | undefined;
   allowExec?: boolean | undefined;
@@ -1763,8 +1766,13 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
   }
 }
 
-export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv }) {
+export async function runConfigUnset(opts: {
+  path: string;
+  cliOptions?: ConfigUnsetOptions;
+  runtime?: RuntimeEnv;
+}) {
   const runtime = opts.runtime ?? defaultRuntime;
+  const cliOptions = opts.cliOptions ?? {};
   try {
     const parsedPath = parseRequiredPath(opts.path);
     const snapshot = await loadValidConfig(runtime);
@@ -1780,6 +1788,30 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
         ),
       );
       runtime.exit(1);
+      return;
+    }
+    const operation = buildDeleteOperation(parsedPath);
+    const nextConfig = next as OpenClawConfig;
+    if (cliOptions.dryRun) {
+      const policyIssues = collectUnsupportedSecretRefPolicyIssues(nextConfig);
+      const errors = collectDryRunSchemaErrors({
+        config: nextConfig,
+        operations: [operation],
+      });
+      if (policyIssues.length > 0) {
+        errors.push(
+          ...formatConfigIssueLines(policyIssues, "", { normalizeRoot: true })
+            .map((line) => line.trim())
+            .map((message) => ({ kind: "schema" as const, message })),
+        );
+      }
+      const dedupedErrors = dedupeDryRunErrors(errors);
+      if (dedupedErrors.length > 0) {
+        throw new Error(formatDryRunFailureMessage({ errors: dedupedErrors, skippedExecRefs: 0 }));
+      }
+      runtime.log(
+        info(`Dry run successful: removal of ${opts.path} validated against ${shortenHomePath(snapshot.path)}.`),
+      );
       return;
     }
     await replaceConfigFile({
@@ -2031,8 +2063,9 @@ export function registerConfigCli(program: Command) {
     .command("unset")
     .description("Remove a config value by dot path")
     .argument("<path>", "Config path (dot or bracket notation)")
-    .action(async (path: string) => {
-      await runConfigUnset({ path });
+    .option("--dry-run", "Validate removal without writing openclaw.json", false)
+    .action(async (path: string, opts: ConfigUnsetOptions) => {
+      await runConfigUnset({ path, cliOptions: opts });
     });
 
   cmd
