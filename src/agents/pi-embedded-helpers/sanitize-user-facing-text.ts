@@ -27,11 +27,53 @@ import {
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
-export function formatBillingErrorMessage(provider?: string, model?: string): string {
+function isApiKeyBillingAuthMode(authProfileMode?: string): boolean {
+  const normalized = authProfileMode?.trim().toLowerCase().replace(/-/g, "_");
+  return !normalized || normalized === "api_key";
+}
+
+function formatProviderLabel(
+  provider?: string,
+  model?: string,
+): {
+  providerName?: string;
+  providerLabel?: string;
+} {
   const providerName = provider?.trim();
   const modelName = model?.trim();
   const providerLabel =
     providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
+  return { providerName, providerLabel };
+}
+
+function formatNonApiKeyBillingErrorMessage(
+  provider?: string,
+  model?: string,
+  authProfileMode?: string,
+): string {
+  const { providerLabel } = formatProviderLabel(provider, model);
+  const credentialLabel =
+    authProfileMode?.trim().toLowerCase() === "oauth"
+      ? "OAuth"
+      : authProfileMode?.trim().toLowerCase() === "token"
+        ? "token"
+        : "non-API-key";
+  if (providerLabel) {
+    return `⚠️ ${providerLabel} returned a temporary account or usage-limit error while using ${credentialLabel} credentials. OpenClaw will retry when the provider recovers; please try again in a minute.`;
+  }
+  return `⚠️ API provider returned a temporary account or usage-limit error while using ${credentialLabel} credentials. OpenClaw will retry when the provider recovers; please try again in a minute.`;
+}
+
+export function formatBillingErrorMessage(
+  provider?: string,
+  model?: string,
+  authProfileMode?: string,
+): string {
+  if (!isApiKeyBillingAuthMode(authProfileMode)) {
+    return formatNonApiKeyBillingErrorMessage(provider, model, authProfileMode);
+  }
+
+  const { providerName, providerLabel } = formatProviderLabel(provider, model);
   if (providerLabel) {
     return `⚠️ ${providerLabel} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
   }

@@ -141,6 +141,26 @@ describe("handleAssistantFailover", () => {
       expect(logDecision).toHaveBeenCalledWith("surface_error");
     });
 
+    it("uses neutral billing copy for OAuth-backed Anthropic profiles", async () => {
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "surface_error", reason: "billing" },
+          failoverReason: "billing",
+          billingFailure: true,
+          authProfileMode: "oauth",
+        }),
+      );
+
+      const err = expectThrownFailoverError(outcome);
+      expect(err.reason).toBe("billing");
+      expect(err.message).toBe(
+        formatBillingErrorMessage("Anthropic", "claude-haiku-4-5-20251001", "oauth"),
+      );
+      expect(err.message).toContain("OAuth credentials");
+      expect(err.message).not.toContain("API key");
+      expect(err.message).not.toContain("top up");
+    });
+
     it("throws an auth FailoverError for auth-classified surface errors", async () => {
       const outcome = await handleAssistantFailover(
         makeParams({

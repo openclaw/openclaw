@@ -986,7 +986,13 @@ export function classifyProviderRuntimeFailureKind(
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
+  opts?: {
+    cfg?: OpenClawConfig;
+    sessionKey?: string;
+    provider?: string;
+    model?: string;
+    authProfileMode?: string;
+  },
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -1138,7 +1144,11 @@ export function formatAssistantErrorText(
   }
 
   if (isBillingErrorMessage(raw)) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+    return formatBillingErrorMessage(
+      opts?.provider,
+      opts?.model ?? msg.model,
+      opts?.authProfileMode,
+    );
   }
 
   if (providerRuntimeFailureKind === "schema") {

@@ -74,6 +74,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       sessionKey: ctx.params.sessionKey,
       provider: lastAssistant.provider,
       model: lastAssistant.model,
+      authProfileMode: ctx.params.authProfileMode,
     });
     const rawError = lastAssistant.errorMessage?.trim();
     const failoverReason = classifyFailoverReason(rawError ?? "", {

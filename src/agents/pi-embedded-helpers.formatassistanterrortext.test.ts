@@ -124,6 +124,19 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Anthropic");
     expect(result).not.toContain("API provider");
   });
+  it("uses neutral recovery copy for Anthropic OAuth billing-shaped errors", () => {
+    const msg = makeAssistantError("out of extra usage; try again later");
+    msg.model = "claude-sonnet-4-6";
+    const result = formatAssistantErrorText(msg, {
+      provider: "Anthropic",
+      authProfileMode: "oauth",
+    });
+    expect(result).toBe(formatBillingErrorMessage("Anthropic", "claude-sonnet-4-6", "oauth"));
+    expect(result).toContain("OAuth credentials");
+    expect(result).toContain("try again in a minute");
+    expect(result).not.toContain("API key");
+    expect(result).not.toContain("top up");
+  });
   it("uses the active assistant model for billing message context", () => {
     const msg = makeAssistantError("insufficient credits");
     msg.model = "claude-3-5-sonnet";

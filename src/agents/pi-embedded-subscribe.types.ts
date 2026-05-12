@@ -58,6 +58,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   silentExpected?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
+  /** Credential type for the active auth profile, used only for user-facing error copy. */
+  authProfileMode?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   /** Agent identity for hook context — resolved from session config in attempt.ts. */

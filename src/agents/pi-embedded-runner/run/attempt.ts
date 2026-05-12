@@ -2669,6 +2669,9 @@ export async function runEmbeddedAttempt(
           silentExpected: params.silentExpected,
           config: params.config,
           sessionKey: sandboxSessionKey,
+          authProfileMode: params.authProfileId
+            ? params.authProfileStore.profiles?.[params.authProfileId]?.type
+            : undefined,
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           builtinToolNames,
