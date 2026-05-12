@@ -10,7 +10,6 @@ async function main() {
   const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
   const configPath =
     process.env.OPENCLAW_CONFIG_PATH?.trim() || path.join(stateDir, "openclaw.json");
-  const transcriptPath = path.join(stateDir, "agents", "main", "sessions", "sess-main.jsonl");
   const now = Date.now();
 
   await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -44,7 +43,6 @@ async function main() {
     sessionKey: "agent:main:main",
     entry: {
       sessionId: "sess-main",
-      sessionFile: transcriptPath,
       updatedAt: now,
       deliveryContext: {
         channel: "imessage",
@@ -61,7 +59,6 @@ async function main() {
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
-    transcriptPath,
     now: () => now,
     events: [
       { type: "session", version: 1, id: "sess-main" },
@@ -100,7 +97,7 @@ async function main() {
       stateDir,
       configPath,
       agentDatabasePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
-      transcriptPath,
+      sessionId: "sess-main",
     }) + "\n",
   );
 }
