@@ -143,7 +143,10 @@ async function issuePairingScopedTokenForAdminApprovedDevice(name: string): Prom
   };
 }
 
-async function issueMixedRolePairingScopedDevice(name: string): Promise<{
+async function issueMixedRolePairingScopedDevice(
+  name: string,
+  opts?: { platform?: string },
+): Promise<{
   deviceId: string;
   identityPath: string;
   identity: ReturnType<typeof loadDeviceIdentity>["identity"];
@@ -157,7 +160,7 @@ async function issueMixedRolePairingScopedDevice(name: string): Promise<{
     role: "operator",
     roles: ["operator", "node"],
     scopes: ["operator.pairing"],
-    platform: "linux",
+    ...(opts?.platform ? { platform: opts.platform } : {}),
     clientId: GATEWAY_CLIENT_NAMES.TEST,
     clientMode: GATEWAY_CLIENT_MODES.TEST,
   });
@@ -387,9 +390,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
           deviceIdentity: device.identity,
           timeoutMessage: "timeout waiting for revoked node reconnect",
         }),
-      ).rejects.toThrow(
-        "pairing required: device is asking for a higher role than currently approved",
-      );
+      ).rejects.toThrow("role upgrade pending approval");
 
       const pairedAfterReconnect = await getPairedDevice(device.deviceId);
       expect(pairedAfterReconnect?.tokens?.node?.token).toBe(revokedNodeToken?.token);
@@ -403,7 +404,9 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
 
   test("rejects local node reconnect with metadata mismatch after node token revocation", async () => {
     const started = await startServerWithClient("secret");
-    const device = await issueMixedRolePairingScopedDevice("same-device-node-metadata-reconnect");
+    const device = await issueMixedRolePairingScopedDevice("same-device-node-metadata-reconnect", {
+      platform: "linux",
+    });
 
     try {
       await connectOk(started.ws);
@@ -490,9 +493,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
           deviceIdentity: device.identity,
           timeoutMessage: "timeout waiting for denied removal node reconnect",
         }),
-      ).rejects.toThrow(
-        "pairing required: device is asking for a higher role than currently approved",
-      );
+      ).rejects.toThrow("role upgrade pending approval");
 
       const pairedAfterReconnect = await getPairedDevice(device.deviceId);
       expect(pairedAfterReconnect?.tokens?.node?.token).toBe(revokedNodeToken?.token);
