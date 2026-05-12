@@ -1,4 +1,6 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { __testing, registerNativeHookRelay } from "../agents/harness/native-hook-relay.js";
 import {
   createReadableTextStream,
   createWritableTextBuffer,
@@ -6,6 +8,57 @@ import {
 } from "./native-hook-relay-cli.js";
 
 describe("native hook relay CLI", () => {
+  it("waits for a direct relay bridge that becomes ready after startup", async () => {
+    __testing.clearNativeHookRelaysForTests();
+    const relayId = "relay-startup-readiness";
+    const callGateway = vi.fn();
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+    let relay: ReturnType<typeof registerNativeHookRelay> | undefined;
+
+    const registerLater = delay(150).then(() => {
+      relay = registerNativeHookRelay({
+        provider: "codex",
+        relayId,
+        sessionId: "session-startup-readiness",
+        runId: "run-startup-readiness",
+        allowedEvents: ["pre_tool_use"],
+      });
+    });
+
+    try {
+      const exitCode = await runNativeHookRelayCli(
+        {
+          provider: "codex",
+          relayId,
+          event: "pre_tool_use",
+          timeout: "1000",
+        },
+        {
+          stdin: createReadableTextStream(
+            JSON.stringify({
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: "pnpm test" },
+            }),
+          ),
+          stdout,
+          stderr,
+          callGateway: callGateway as never,
+        },
+      );
+
+      expect(exitCode).toBe(0);
+      expect(stdout.text()).toBe("");
+      expect(stderr.text()).toBe("");
+      expect(callGateway).not.toHaveBeenCalled();
+    } finally {
+      await registerLater;
+      relay?.unregister();
+      __testing.clearNativeHookRelaysForTests();
+    }
+  });
+
   it("reads Codex hook JSON from stdin and forwards it to the gateway relay", async () => {
     const callGateway = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
     const stdout = createWritableTextBuffer();
@@ -16,7 +69,7 @@ describe("native hook relay CLI", () => {
         provider: "codex",
         relayId: "relay-1",
         event: "pre_tool_use",
-        timeout: "1234",
+        timeout: "1",
       },
       {
         stdin: createReadableTextStream(
@@ -47,7 +100,7 @@ describe("native hook relay CLI", () => {
           tool_input: { command: "pnpm test" },
         },
       },
-      timeoutMs: 1234,
+      timeoutMs: 1,
       scopes: ["operator.admin"],
     });
   });
@@ -58,7 +111,7 @@ describe("native hook relay CLI", () => {
     const stderr = createWritableTextBuffer();
 
     const exitCode = await runNativeHookRelayCli(
-      { provider: "codex", relayId: "relay-1", event: "permission_request" },
+      { provider: "codex", relayId: "relay-1", event: "permission_request", timeout: "1" },
       {
         stdin: createReadableTextStream("{}"),
         stdout,
@@ -77,7 +130,7 @@ describe("native hook relay CLI", () => {
     const stderr = createWritableTextBuffer();
 
     const exitCode = await runNativeHookRelayCli(
-      { provider: "codex", relayId: "relay-1", event: "pre_tool_use" },
+      { provider: "codex", relayId: "relay-1", event: "pre_tool_use", timeout: "1" },
       {
         stdin: createReadableTextStream("{nope"),
         stderr,
@@ -95,7 +148,7 @@ describe("native hook relay CLI", () => {
     const stderr = createWritableTextBuffer();
 
     const exitCode = await runNativeHookRelayCli(
-      { provider: "codex", relayId: "relay-1", event: "post_tool_use" },
+      { provider: "codex", relayId: "relay-1", event: "post_tool_use", timeout: "1" },
       {
         stdin: createReadableTextStream("x".repeat(1024 * 1024 + 1)),
         stderr,
@@ -116,7 +169,7 @@ describe("native hook relay CLI", () => {
     const stderr = createWritableTextBuffer();
 
     const exitCode = await runNativeHookRelayCli(
-      { provider: "codex", relayId: "relay-1", event: "pre_tool_use" },
+      { provider: "codex", relayId: "relay-1", event: "pre_tool_use", timeout: "1" },
       {
         stdin: createReadableTextStream("{}"),
         stdout,
@@ -130,10 +183,13 @@ describe("native hook relay CLI", () => {
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: "Native hook relay unavailable",
+        permissionDecisionReason: expect.stringContaining("Native hook relay unavailable"),
       },
     });
     expect(stderr.text()).toContain("native hook relay unavailable");
+    expect(stderr.text()).toContain("bridgeRegistry=");
+    expect(stderr.text()).toContain("gateway=gateway closed");
+    expect(stderr.text()).toContain("remediation=restart the active OpenClaw agent run");
   });
 
   it("fails closed for PermissionRequest when the gateway relay is unavailable", async () => {
@@ -144,7 +200,7 @@ describe("native hook relay CLI", () => {
     const stderr = createWritableTextBuffer();
 
     const exitCode = await runNativeHookRelayCli(
-      { provider: "codex", relayId: "relay-1", event: "permission_request" },
+      { provider: "codex", relayId: "relay-1", event: "permission_request", timeout: "1" },
       {
         stdin: createReadableTextStream("{}"),
         stdout,
@@ -159,10 +215,12 @@ describe("native hook relay CLI", () => {
         hookEventName: "PermissionRequest",
         decision: {
           behavior: "deny",
-          message: "Native hook relay unavailable",
+          message: expect.stringContaining("Native hook relay unavailable"),
         },
       },
     });
+    expect(stderr.text()).toContain("bridgeRegistry=");
+    expect(stderr.text()).toContain("gateway=gateway closed");
   });
 
   it("keeps PostToolUse unavailable handling observational", async () => {
@@ -173,7 +231,7 @@ describe("native hook relay CLI", () => {
     const stderr = createWritableTextBuffer();
 
     const exitCode = await runNativeHookRelayCli(
-      { provider: "codex", relayId: "relay-1", event: "post_tool_use" },
+      { provider: "codex", relayId: "relay-1", event: "post_tool_use", timeout: "1" },
       {
         stdin: createReadableTextStream("{}"),
         stdout,
@@ -195,7 +253,7 @@ describe("native hook relay CLI", () => {
     const stderr = createWritableTextBuffer();
 
     const exitCode = await runNativeHookRelayCli(
-      { provider: "codex", relayId: "relay-1", event: "before_agent_finalize" },
+      { provider: "codex", relayId: "relay-1", event: "before_agent_finalize", timeout: "1" },
       {
         stdin: createReadableTextStream("{}"),
         stdout,

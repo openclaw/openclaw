@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import {
   invokeNativeHookRelayBridge,
@@ -34,6 +37,7 @@ export async function runNativeHookRelayCli(
   const provider = readRequiredOption(opts.provider, "provider");
   const relayId = readRequiredOption(opts.relayId, "relay-id");
   const event = readRequiredOption(opts.event, "event");
+  const timeoutMs = normalizeTimeoutMs(opts.timeout);
 
   let rawPayload: unknown;
   try {
@@ -44,19 +48,21 @@ export async function runNativeHookRelayCli(
     return 1;
   }
 
+  let bridgeError: unknown;
   try {
     const response = await invokeNativeHookRelayBridge({
       provider,
       relayId,
       event,
       rawPayload,
-      registrationTimeoutMs: 100,
-      timeoutMs: normalizeTimeoutMs(opts.timeout),
+      registrationTimeoutMs: timeoutMs,
+      timeoutMs,
     });
     writeText(stdout, response.stdout);
     writeText(stderr, response.stderr);
     return response.exitCode;
-  } catch {
+  } catch (error) {
+    bridgeError = error;
     // Fall through to the gateway path for embedded/local gateway cases and
     // older registrations that predate the direct relay bridge.
   }
@@ -65,18 +71,25 @@ export async function runNativeHookRelayCli(
     const response = await callGatewayFn<NativeHookRelayProcessResponse>({
       method: "nativeHook.invoke",
       params: { provider, relayId, event, rawPayload },
-      timeoutMs: normalizeTimeoutMs(opts.timeout),
+      timeoutMs,
       scopes: [ADMIN_SCOPE],
     });
     writeText(stdout, response.stdout);
     writeText(stderr, response.stderr);
     return response.exitCode;
   } catch (error) {
-    writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
+    const message = formatNativeHookRelayUnavailableDiagnostic({
+      provider,
+      relayId,
+      event,
+      bridgeError,
+      gatewayError: error,
+    });
+    writeText(stderr, formatRelayCliError("native hook relay unavailable", message));
     const response = renderNativeHookRelayUnavailableResponse({
       provider,
       event,
-      message: "Native hook relay unavailable",
+      message,
     });
     writeText(stdout, response.stdout);
     writeText(stderr, response.stderr);
@@ -119,6 +132,53 @@ function writeText(stream: NodeJS.WritableStream, value: string | undefined): vo
 function formatRelayCliError(prefix: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return `${prefix}: ${message}\n`;
+}
+
+function formatNativeHookRelayUnavailableDiagnostic(params: {
+  provider: string;
+  relayId: string;
+  event: string;
+  bridgeError: unknown;
+  gatewayError: unknown;
+}): string {
+  return [
+    "Native hook relay unavailable",
+    "owner=OpenClaw gateway native-hook-relay",
+    `provider=${params.provider}`,
+    `event=${params.event}`,
+    `relayId=${params.relayId}`,
+    `bridgeRegistry=${nativeHookRelayBridgeRegistryPath(params.relayId)}`,
+    `bridge=${formatRelayDiagnosticError(params.bridgeError)}`,
+    `gateway=${formatRelayDiagnosticError(params.gatewayError)}`,
+    "remediation=restart the active OpenClaw agent run so native hook commands are regenerated; if every run reports this, restart the OpenClaw gateway",
+  ].join("; ");
+}
+
+function formatRelayDiagnosticError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return sanitizeRelayDiagnostic(error.message);
+  }
+  if (typeof error === "string" && error.trim()) {
+    return sanitizeRelayDiagnostic(error);
+  }
+  return "unknown";
+}
+
+function sanitizeRelayDiagnostic(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, 500);
+}
+
+function nativeHookRelayBridgeRegistryPath(relayId: string): string {
+  const uid = typeof process.getuid === "function" ? process.getuid() : "nouid";
+  return path.join(
+    tmpdir(),
+    `openclaw-native-hook-relays-${uid}`,
+    `${nativeHookRelayBridgeKey(relayId)}.json`,
+  );
+}
+
+function nativeHookRelayBridgeKey(relayId: string): string {
+  return createHash("sha256").update(relayId).digest("hex").slice(0, 32);
 }
 
 export function createReadableTextStream(text: string): NodeJS.ReadableStream {
