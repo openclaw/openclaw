@@ -2503,6 +2503,16 @@ async function runEmbeddedAgentInternal(
                   log.info(
                     `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
                   );
+                  if (
+                    params.currentMessageId !== undefined &&
+                    params.currentMessageId === lastPersistedCurrentMessageId
+                  ) {
+                    // The failed attempt reached Pi far enough to persist this user turn.
+                    // Retrying the original prompt would replay it, so resume from the
+                    // truncated transcript and suppress the next user append.
+                    nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                    suppressNextUserMessagePersistence = true;
+                  }
                   continue;
                 }
                 log.warn(
