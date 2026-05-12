@@ -507,6 +507,7 @@ function shortenInstallLabel(message: string): string {
     [/^Preparing\b/i, "Preparing"],
     [/^Linking\b/i, "Linking"],
     [/^Linked\b/i, "Linking"],
+    [/^npm rejected managed npm alias overrides\b/i, "Retrying"],
     [/^Compatibility\b/i, "Resolving"],
     [/^ClawHub\b/i, "Resolving"],
   ];

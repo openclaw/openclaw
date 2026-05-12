@@ -478,7 +478,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
   });
 
-  it("leaves a blank line after npm install warnings before the success status", async () => {
+  it("logs npm install warnings once while shortening the progress label", async () => {
     const warning =
       "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.";
     installPluginFromNpmSpec.mockImplementation(async (params) => {
@@ -510,7 +510,8 @@ describe("ensureOnboardingPluginInstalled", () => {
       runtime: { log } as never,
     });
 
-    expect(update).toHaveBeenCalledWith(warning);
+    expect(update).toHaveBeenCalledWith("Retrying");
+    expect(update).not.toHaveBeenCalledWith(warning);
     expect(log).toHaveBeenCalledWith(`${warning}\n`);
     expect(stop).toHaveBeenCalledWith("Installed Codex plugin");
     expect(result.status).toBe("installed");
