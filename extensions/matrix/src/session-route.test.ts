@@ -61,8 +61,6 @@ function createStoredDirectDmSession(
     accountId?: string | null;
     nativeChannelId?: string;
     nativeDirectUserId?: string;
-    lastTo?: string;
-    lastAccountId?: string;
   } = {},
 ): Record<string, unknown> {
   const accountId = params.accountId === null ? undefined : (params.accountId ?? "ops");
@@ -89,8 +87,6 @@ function createStoredDirectDmSession(
       to,
       ...accountMetadata,
     },
-    ...(params.lastTo ? { lastTo: params.lastTo } : {}),
-    ...(params.lastAccountId ? { lastAccountId: params.lastAccountId } : {}),
   };
 }
 
@@ -107,8 +103,6 @@ function createStoredChannelSession(): Record<string, unknown> {
       to: "room:!ops:example.org",
       accountId: "ops",
     },
-    lastTo: "room:!ops:example.org",
-    lastAccountId: "ops",
   };
 }
 
@@ -228,8 +222,6 @@ describe("resolveMatrixOutboundSessionRoute", () => {
         to: "room:@bob:example.org",
         nativeChannelId: "!dm:example.org",
         nativeDirectUserId: "@alice:example.org",
-        lastTo: "room:@bob:example.org",
-        lastAccountId: "ops",
       }),
       accountId: "ops",
     });
@@ -244,8 +236,6 @@ describe("resolveMatrixOutboundSessionRoute", () => {
         to: "room:@bob:example.org",
         nativeChannelId: "!dm:example.org",
         nativeDirectUserId: "@alice:example.org",
-        lastTo: "room:@bob:example.org",
-        lastAccountId: "ops",
       }),
       accountId: "ops",
       target: "@bob:example.org",

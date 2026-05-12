@@ -25,12 +25,10 @@ function resolveMatrixSessionAccountId(value: unknown): string | undefined {
 
 function resolveMatrixStoredRoomId(params: {
   deliveryTo?: unknown;
-  lastTo?: unknown;
   nativeChannelId?: unknown;
 }): string | undefined {
   return (
     resolveMatrixRoomTargetId(params.deliveryTo) ??
-    resolveMatrixRoomTargetId(params.lastTo) ??
     resolveMatrixRoomTargetId(params.nativeChannelId)
   );
 }
@@ -41,9 +39,6 @@ type MatrixStoredSessionEntryLike = {
     to?: unknown;
     accountId?: unknown;
   };
-  lastChannel?: unknown;
-  lastTo?: unknown;
-  lastAccountId?: unknown;
   chatType?: unknown;
   nativeChannelId?: unknown;
   nativeDirectUserId?: unknown;
@@ -58,14 +53,10 @@ export function resolveMatrixStoredSessionMeta(entry?: MatrixStoredSessionEntryL
   if (!entry) {
     return null;
   }
-  const channel =
-    trimMaybeString(entry.deliveryContext?.channel) ?? trimMaybeString(entry.lastChannel);
-  const accountId =
-    resolveMatrixSessionAccountId(entry.deliveryContext?.accountId ?? entry.lastAccountId) ??
-    undefined;
+  const channel = trimMaybeString(entry.deliveryContext?.channel);
+  const accountId = resolveMatrixSessionAccountId(entry.deliveryContext?.accountId) ?? undefined;
   const roomId = resolveMatrixStoredRoomId({
     deliveryTo: entry.deliveryContext?.to,
-    lastTo: entry.lastTo,
     nativeChannelId: entry.nativeChannelId,
   });
   const chatType = trimMaybeString(entry.chatType) ?? undefined;
