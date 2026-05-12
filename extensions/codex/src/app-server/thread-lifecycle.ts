@@ -84,13 +84,16 @@ export async function startOrResumeThread(params: {
   let preserveExistingBinding = false;
   let rotatedContextEngineBinding = false;
   let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
-  if (binding?.threadId && contextEngineBinding) {
-    if (!isContextEngineBindingCompatible(binding.contextEngine, contextEngineBinding)) {
+  if (binding?.threadId && (binding.contextEngine || contextEngineBinding)) {
+    if (
+      !contextEngineBinding ||
+      !isContextEngineBindingCompatible(binding.contextEngine, contextEngineBinding)
+    ) {
       embeddedAgentLog.debug(
         "codex app-server context-engine binding changed; starting a new thread",
         {
           threadId: binding.threadId,
-          engineId: contextEngineBinding.engineId,
+          engineId: contextEngineBinding?.engineId,
           previousEngineId: binding.contextEngine?.engineId,
         },
       );
@@ -318,7 +321,10 @@ function buildContextEngineBinding(
     policyFingerprint: JSON.stringify({
       schemaVersion: 1,
       engineId,
+      engineVersion: contextEngine.info.version,
       ownsCompaction: contextEngine.info.ownsCompaction === true,
+      turnMaintenanceMode: contextEngine.info.turnMaintenanceMode,
+      citationsMode: resolveContextEngineCitationsMode(params.config),
       contextTokenBudget: params.contextTokenBudget,
       projectionMaxChars: resolveCodexContextEngineProjectionMaxChars({
         contextTokenBudget: params.contextTokenBudget,
@@ -339,6 +345,11 @@ function isContextEngineBindingCompatible(
     previous.engineId === next.engineId &&
     previous.policyFingerprint === next.policyFingerprint
   );
+}
+
+function resolveContextEngineCitationsMode(config: JsonObject | undefined): JsonValue | undefined {
+  const memoryConfig = isJsonObject(config?.memory) ? config.memory : undefined;
+  return memoryConfig?.citations;
 }
 
 function shouldRecheckRecoverablePluginBinding(params: {
