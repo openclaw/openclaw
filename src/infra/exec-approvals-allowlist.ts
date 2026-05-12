@@ -16,6 +16,7 @@ import {
   resolveCommandResolutionFromArgv,
   resolvePolicyTargetCandidatePath,
   resolvePolicyTargetResolution,
+  splitCommandChain,
   splitCommandChainWithOperators,
   type ExecCommandAnalysis,
   type ExecCommandSegment,
@@ -555,11 +556,54 @@ function resolveInlineCommandFallback(params: {
   if (params.by !== null || !params.inlineCommand) {
     return null;
   }
+  if (!isWindowsPlatform(params.context.platform)) {
+    if (hasShellLineContinuation(params.inlineCommand)) {
+      return null;
+    }
+    const inlineChainParts = splitCommandChain(params.inlineCommand);
+    if (!inlineChainParts || inlineChainParts.length <= 1) {
+      return null;
+    }
+    return evaluateShellWrapperInlineCommands({
+      inlineCommands: inlineChainParts,
+      context: params.context,
+      inlineDepth: params.inlineDepth + 1,
+    });
+  }
   return evaluateShellWrapperInlineCommand({
     inlineCommand: params.inlineCommand,
     context: params.context,
     inlineDepth: params.inlineDepth + 1,
   });
+}
+
+function evaluateShellWrapperInlineCommands(params: {
+  inlineCommands: string[];
+  context: ExecAllowlistContext;
+  inlineDepth: number;
+}): InlineChainAllowlistEvaluation | null {
+  if (params.inlineDepth >= MAX_SHELL_WRAPPER_INLINE_EVAL_DEPTH) {
+    return null;
+  }
+
+  const matches: ExecAllowlistEntry[] = [];
+  for (const inlineCommand of params.inlineCommands) {
+    const analysis = analyzeShellCommand({
+      command: inlineCommand,
+      cwd: params.context.cwd,
+      env: params.context.env,
+      platform: params.context.platform,
+    });
+    if (!analysis.ok) {
+      return null;
+    }
+    const result = evaluateSegments(analysis.segments, params.context, params.inlineDepth);
+    if (!result.satisfied) {
+      return null;
+    }
+    matches.push(...result.matches);
+  }
+  return { matches, satisfiedBy: "allowlist" };
 }
 
 function evaluateShellWrapperInlineCommand(params: {

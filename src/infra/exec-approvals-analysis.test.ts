@@ -858,7 +858,7 @@ describe("exec approvals shell analysis", () => {
         });
       });
 
-      it("evaluates single-command wrappers against the inner payload", () => {
+      it("keeps single-command wrappers unchanged (no recursive allowlist lookup)", () => {
         if (process.platform === "win32") {
           return;
         }
@@ -873,10 +873,7 @@ describe("exec approvals shell analysis", () => {
             env,
           });
           expect(result.analysisOk).toBe(true);
-          expect(result.allowlistSatisfied).toBe(true);
-          expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual([gogPath]);
-          expect(result.segmentAllowlistEntries).toEqual([null]);
-          expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
+          expect(result.allowlistSatisfied).toBe(false);
         });
       });
     });
