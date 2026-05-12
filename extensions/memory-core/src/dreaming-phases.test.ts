@@ -2842,4 +2842,8 @@ describe("dreaming session-corpus candidate hygiene", () => {
       ),
     ).toBe(false);
   });
+
+  it("preserves non-assistant poll requests", () => {
+    expect(__testing.shouldRejectDreamingSessionCorpusSnippet("User: Please poll.")).toBe(false);
+  });
 });

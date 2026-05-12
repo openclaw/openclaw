@@ -587,22 +587,44 @@ function normalizeSessionCorpusSnippet(value: string): string {
 }
 
 function shouldRejectDreamingSessionCorpusSnippet(snippet: string): boolean {
-  const value = String(snippet || "").trim();
-  if (!value) return true;
+  const value = snippet.trim();
+  if (!value) {
+    return true;
+  }
 
   // Preserve explicit durable signals even when assistant-authored.
-  if (/\bArthur (confirmed|decided|approved|rejected|corrected)\b/i.test(value)) return false;
-  if (/\bdecision\b|\baccepted\b|\bverified\b|\bPASS\b/i.test(value)) return false;
-  if (/\bcommit\s+[0-9a-f]{7,40}\b/i.test(value)) return false;
-  if (/\bPR\s*#\d+\b/i.test(value)) return false;
+  if (/\bArthur (confirmed|decided|approved|rejected|corrected)\b/i.test(value)) {
+    return false;
+  }
+  if (/\bdecision\b|\baccepted\b|\bverified\b|\bPASS\b/i.test(value)) {
+    return false;
+  }
+  if (/\bcommit\s+[0-9a-f]{7,40}\b/i.test(value)) {
+    return false;
+  }
+  if (/\bPR\s*#\d+\b/i.test(value)) {
+    return false;
+  }
 
   // Reject obvious assistant process chatter before it reaches session-corpus.
-  if (/\bAssistant:\s+Need\b/i.test(value)) return true;
-  if (/\bAssistant:\s+Now\b/i.test(value)) return true;
-  if (/\bAssistant:\s+Oops\b/i.test(value)) return true;
-  if (/worktree maybe not created|\bpoll\.?\s*$/i.test(value)) return true;
-  if (/\bNeed commit PR\b|\bcommit PR\b/i.test(value)) return true;
-  if (/^\s*(Assistant:\s*)?(inspect|commit|push|merge|poll)\.?\s*$/i.test(value)) return true;
+  if (/\bAssistant:\s+Need\b/i.test(value)) {
+    return true;
+  }
+  if (/\bAssistant:\s+Now\b/i.test(value)) {
+    return true;
+  }
+  if (/\bAssistant:\s+Oops\b/i.test(value)) {
+    return true;
+  }
+  if (/\bAssistant:\s+.*(?:worktree maybe not created|\bpoll\.?\s*$)/i.test(value)) {
+    return true;
+  }
+  if (/\bNeed commit PR\b|\bcommit PR\b/i.test(value)) {
+    return true;
+  }
+  if (/^\s*(Assistant:\s*)?(inspect|commit|push|merge|poll)\.?\s*$/i.test(value)) {
+    return true;
+  }
 
   return false;
 }
