@@ -565,8 +565,8 @@ describe("extractShellWrapperCommand", () => {
     },
     {
       argv: ["pwsh", "-File", "script.ps1", "-ExtraArg"],
-      expectedInline: "script.ps1 -ExtraArg",
-      expectedCommand: { isWrapper: true, command: "script.ps1 -ExtraArg" },
+      expectedInline: "script.ps1",
+      expectedCommand: { isWrapper: true, command: "script.ps1" },
     },
     {
       argv: ["pwsh", "--commandwithargs", "allowed.exe", ";", "unlisted.exe"],

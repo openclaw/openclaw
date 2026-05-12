@@ -281,7 +281,7 @@ describe("resolvePowerShellInlineCommandMatch", () => {
     {
       name: "file script arguments",
       argv: ["pwsh", "-File", "script.ps1", "-ExtraArg"],
-      expected: { command: "script.ps1 -ExtraArg", valueTokenIndex: 2 },
+      expected: { command: "script.ps1", valueTokenIndex: 2 },
     },
     {
       name: "stops at the first positional argument",

@@ -825,7 +825,26 @@ describe("exec approvals shell analysis", () => {
       }
     });
 
-    it("preserves PowerShell file arguments during inline fallback", () => {
+    it.each([
+      {
+        name: "extra script argument",
+        scriptArgs: ["-ExtraArg"],
+        argPattern: "^\x00\x00$",
+        expected: false,
+      },
+      {
+        name: "empty script argument",
+        scriptArgs: [""],
+        argPattern: "^\x00\x00$",
+        expected: false,
+      },
+      {
+        name: "semicolon data argument",
+        scriptArgs: ["literal;data"],
+        argPattern: "^literal;data\x00$",
+        expected: true,
+      },
+    ])("preserves PowerShell file argv for $name", ({ scriptArgs, argPattern, expected }) => {
       const dir = makeTempDir();
       const pwshPath = path.join(dir, "pwsh");
       const scriptPath = path.join(dir, "script.ps1");
@@ -836,22 +855,24 @@ describe("exec approvals shell analysis", () => {
       try {
         const env = makePathEnv(dir);
         const analysis = analyzeArgvCommand({
-          argv: ["pwsh", "-File", scriptPath, "-ExtraArg"],
+          argv: ["pwsh", "-File", scriptPath, ...scriptArgs],
           cwd: dir,
           env,
         });
         expect(analysis.ok).toBe(true);
         const result = evaluateExecAllowlist({
           analysis,
-          allowlist: [{ pattern: scriptPath, argPattern: "^\x00\x00$" }],
+          allowlist: [{ pattern: scriptPath, argPattern }],
           safeBins: new Set(),
           cwd: dir,
           env,
           platform: "win32",
         });
-        expect(result.allowlistSatisfied).toBe(false);
-        expect(result.segmentAllowlistEntries).toEqual([null]);
-        expect(result.segmentSatisfiedBy).toEqual([null]);
+        expect(result.allowlistSatisfied).toBe(expected);
+        if (!expected) {
+          expect(result.segmentAllowlistEntries).toEqual([null]);
+          expect(result.segmentSatisfiedBy).toEqual([null]);
+        }
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
       }

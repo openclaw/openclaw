@@ -88,7 +88,7 @@ describe("system run command helpers", () => {
     { argv: ["pwsh", "-File", "script.ps1"], expected: "script.ps1" },
     {
       argv: ["pwsh", "-File", "script.ps1", "-ExtraArg"],
-      expected: "script.ps1 -ExtraArg",
+      expected: "script.ps1",
     },
     { argv: ["powershell", "-f", "script.ps1"], expected: "script.ps1" },
     { argv: ["pwsh", "-ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },

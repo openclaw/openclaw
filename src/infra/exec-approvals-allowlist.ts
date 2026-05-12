@@ -39,7 +39,12 @@ import {
 } from "./exec-wrapper-resolution.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import { expandHomePrefix } from "./home-dir.js";
-import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-inline-command.js";
+import {
+  POSIX_INLINE_COMMAND_FLAGS,
+  isPowerShellInlineFileCommandFlag,
+  resolveInlineCommandMatch,
+  resolvePowerShellInlineCommandMatch,
+} from "./shell-inline-command.js";
 
 function hasShellLineContinuation(command: string): boolean {
   return /\\(?:\r\n|\n|\r)/.test(command);
@@ -435,6 +440,37 @@ function resolveShellWrapperScriptArgv(params: {
   return [params.shellScriptCandidatePath, ...scriptArgs];
 }
 
+function resolvePowerShellFileScriptArgv(params: {
+  segment: ExecCommandSegment;
+  cwd?: string;
+}): string[] | null {
+  const argv = params.segment.argv;
+  if (!Array.isArray(argv) || argv.length < 3) {
+    return null;
+  }
+  const wrapperName = normalizeExecutableToken(argv[0] ?? "");
+  if (!POWERSHELL_WRAPPERS.has(wrapperName)) {
+    return null;
+  }
+
+  const match = resolvePowerShellInlineCommandMatch(argv);
+  if (match.valueTokenIndex === null || !match.command) {
+    return null;
+  }
+  if (!isPowerShellInlineFileCommandFlag(argv[match.valueTokenIndex - 1] ?? "")) {
+    return null;
+  }
+
+  const scriptToken = argv[match.valueTokenIndex]?.trim();
+  if (!scriptToken) {
+    return null;
+  }
+  const expanded = scriptToken.startsWith("~") ? expandHomePrefix(scriptToken) : scriptToken;
+  const base = params.cwd && params.cwd.trim().length > 0 ? params.cwd : process.cwd();
+  const scriptPath = path.isAbsolute(expanded) ? expanded : path.resolve(base, expanded);
+  return [scriptPath, ...argv.slice(match.valueTokenIndex + 1)];
+}
+
 function resolveSegmentAllowlistMatch(params: {
   segment: ExecCommandSegment;
   context: ExecAllowlistContext;
@@ -457,6 +493,10 @@ function resolveSegmentAllowlistMatch(params: {
       ? { ...executableResolution, resolvedPath: candidatePath }
       : executableResolution;
   const inlineCommand = extractBindableShellWrapperInlineCommand(allowlistSegment.argv);
+  const powerShellFileScriptArgv = resolvePowerShellFileScriptArgv({
+    segment: allowlistSegment,
+    cwd: params.context.cwd,
+  });
   const isShellWrapperInvocation = isShellWrapperSegment(allowlistSegment);
   const isPositionalCarrierInvocation =
     inlineCommand !== null && isDirectShellPositionalCarrierInvocation(inlineCommand);
@@ -490,18 +530,20 @@ function resolveSegmentAllowlistMatch(params: {
       )
     : null;
   const shellScriptCandidatePath =
-    inlineCommand === null
+    powerShellFileScriptArgv?.[0] ??
+    (inlineCommand === null
       ? resolveShellWrapperScriptCandidatePath({
           segment: allowlistSegment,
           cwd: params.context.cwd,
         })
-      : undefined;
+      : undefined);
   const shellScriptArgv = shellScriptCandidatePath
-    ? resolveShellWrapperScriptArgv({
+    ? (powerShellFileScriptArgv ??
+      resolveShellWrapperScriptArgv({
         shellScriptCandidatePath,
         effectiveArgv,
         cwd: params.context.cwd,
-      })
+      }))
     : null;
   const shellScriptMatch =
     shellScriptCandidatePath && shellScriptArgv
@@ -518,7 +560,7 @@ function resolveSegmentAllowlistMatch(params: {
       : null;
   return {
     effectiveArgv,
-    inlineCommand,
+    inlineCommand: powerShellFileScriptArgv ? null : inlineCommand,
     match: executableMatch ?? shellPositionalArgvMatch ?? shellScriptMatch,
   };
 }

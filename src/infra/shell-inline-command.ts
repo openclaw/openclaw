@@ -24,6 +24,7 @@ const POWERSHELL_COMMAND_FLAGS = [
   ...expandPowerShellSwitchForms(["cwa"]),
 ];
 const POWERSHELL_FILE_FLAGS = expandPowerShellSwitchPrefixForms("file", "f");
+const POWERSHELL_INLINE_FILE_FLAGS = new Set(POWERSHELL_FILE_FLAGS);
 
 export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
   ...POWERSHELL_COMMAND_FLAGS,
@@ -32,10 +33,7 @@ export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
   ...expandPowerShellSwitchPrefixForms("ec", "e"),
 ]);
 
-const POWERSHELL_INLINE_REST_COMMAND_FLAGS = new Set([
-  ...POWERSHELL_COMMAND_FLAGS,
-  ...POWERSHELL_FILE_FLAGS,
-]);
+const POWERSHELL_INLINE_REST_COMMAND_FLAGS = new Set(POWERSHELL_COMMAND_FLAGS);
 
 const POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
   ...expandPowerShellSwitchPrefixForms("configurationfile", "conf"),
@@ -227,6 +225,10 @@ export function resolvePowerShellInlineCommandMatch(argv: string[]): {
 
 export function isPowerShellInlineRestCommandFlag(token: string): boolean {
   return POWERSHELL_INLINE_REST_COMMAND_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
+}
+
+export function isPowerShellInlineFileCommandFlag(token: string): boolean {
+  return POWERSHELL_INLINE_FILE_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
 }
 
 export function hasPosixInteractiveStartupBeforeInlineCommand(
