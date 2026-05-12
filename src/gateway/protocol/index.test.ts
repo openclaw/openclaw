@@ -5,7 +5,10 @@ import {
   formatValidationErrors,
   validateModelsListParams,
   validateNodeEventResult,
+  validateNodePairRequestParams,
   validateNodePresenceAlivePayload,
+  validateTasksCancelParams,
+  validateTasksListParams,
   validateTalkConfigResult,
   validateTalkEvent,
   validateTalkClientCreateParams,
@@ -151,6 +154,7 @@ describe("validateTalkConfigResult", () => {
               },
               model: "gpt-realtime",
               voice: "alloy",
+              instructions: "Speak with crisp diction.",
               mode: "realtime",
               transport: "gateway-relay",
               brain: "agent-consult",
@@ -168,7 +172,7 @@ describe("validateTalkClientCreateParams", () => {
       validateTalkClientCreateParams({
         sessionKey: "agent:main:main",
         provider: "openai",
-        model: "gpt-realtime-1.5",
+        model: "gpt-realtime-2",
         voice: "alloy",
         mode: "realtime",
         transport: "webrtc",
@@ -177,7 +181,7 @@ describe("validateTalkClientCreateParams", () => {
     ).toBe(true);
   });
 
-  it("rejects request-time instruction overrides", () => {
+  it("rejects request-time instruction overrides for Talk client creation", () => {
     expect(
       validateTalkClientCreateParams({
         sessionKey: "agent:main:main",
@@ -270,7 +274,7 @@ describe("validateTalkSession", () => {
       validateTalkSessionCreateParams({
         sessionKey: "agent:main:main",
         provider: "openai",
-        model: "gpt-realtime-1.5",
+        model: "gpt-realtime-2",
         voice: "alloy",
         mode: "realtime",
         transport: "managed-room",
@@ -284,7 +288,7 @@ describe("validateTalkSession", () => {
         roomUrl: "/talk/rooms/talk_handoff-1",
         sessionKey: "agent:main:main",
         provider: "openai",
-        model: "gpt-realtime-1.5",
+        model: "gpt-realtime-2",
         voice: "alloy",
         mode: "realtime",
         transport: "managed-room",
@@ -311,7 +315,7 @@ describe("validateTalkSession", () => {
     ).toBe(true);
   });
 
-  it("rejects request-time instruction overrides", () => {
+  it("rejects request-time instruction overrides for Talk session creation", () => {
     expect(
       validateTalkSessionCreateParams({
         sessionKey: "agent:main:main",
@@ -406,6 +410,7 @@ describe("validateTalkSessionRelayParams", () => {
         sessionId: "session-1",
         callId: "call-1",
         result: { ok: true },
+        options: { suppressResponse: true, willContinue: true },
       }),
     ).toBe(true);
   });
@@ -457,6 +462,25 @@ describe("validateModelsListParams", () => {
   });
 });
 
+describe("validateTasksListParams", () => {
+  it("accepts SDK task ledger filters", () => {
+    expect(
+      validateTasksListParams({
+        status: ["running", "completed"],
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        limit: 50,
+        cursor: "100",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects internal task statuses and unknown fields", () => {
+    expect(validateTasksListParams({ status: "succeeded" })).toBe(false);
+    expect(validateTasksCancelParams({ taskId: "task-1", force: true })).toBe(false);
+  });
+});
+
 describe("validateNodePresenceAlivePayload", () => {
   it("accepts a closed trigger and known metadata fields", () => {
     expect(
@@ -479,6 +503,27 @@ describe("validateNodePresenceAlivePayload", () => {
       validateNodePresenceAlivePayload({
         trigger: "silent_push",
         arbitrary: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("validateNodePairRequestParams", () => {
+  it("accepts node pairing permissions", () => {
+    expect(
+      validateNodePairRequestParams({
+        nodeId: "ios-node-1",
+        commands: ["canvas.snapshot"],
+        permissions: { camera: true, notifications: false },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects non-boolean node pairing permissions", () => {
+    expect(
+      validateNodePairRequestParams({
+        nodeId: "ios-node-1",
+        permissions: { camera: "yes" },
       }),
     ).toBe(false);
   });

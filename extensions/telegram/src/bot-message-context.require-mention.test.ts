@@ -56,7 +56,9 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
       }),
     });
 
-    expect(ctx).not.toBeNull();
+    if (!ctx) {
+      throw new Error("expected Telegram context when topic disables requireMention");
+    }
   });
 
   it("lets explicit topic requireMention=false override mention activation", async () => {
@@ -72,14 +74,16 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
       }),
     });
 
-    expect(ctx).not.toBeNull();
-    expect(resolveGroupActivation).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatId: -1001234567890,
-        messageThreadId: 99,
-        sessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
-      }),
-    );
+    if (!ctx?.ctxPayload) {
+      throw new Error("expected Telegram context payload when topic disables requireMention");
+    }
+    const activationCalls = resolveGroupActivation.mock.calls as unknown as Array<
+      [{ chatId: number; messageThreadId?: number; sessionKey: string }]
+    >;
+    const [activationOptions] = activationCalls[0] ?? [];
+    expect(activationOptions?.chatId).toBe(-1001234567890);
+    expect(activationOptions?.messageThreadId).toBe(99);
+    expect(activationOptions?.sessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:99");
   });
 
   it("lets explicit topic requireMention=true override always activation", async () => {
@@ -107,6 +111,8 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
       }),
     });
 
-    expect(ctx).not.toBeNull();
+    if (!ctx) {
+      throw new Error("expected Telegram context when topic config keeps agent");
+    }
   });
 });

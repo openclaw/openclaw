@@ -32,11 +32,13 @@ export type SessionsState = {
 };
 
 type LoadSessionsOverrides = {
+  agentId?: string;
   activeMinutes?: number;
   limit?: number;
   includeGlobal?: boolean;
   includeUnknown?: boolean;
   showArchived?: boolean;
+  configuredAgentsOnly?: boolean;
 };
 
 type CreateSessionParams = {
@@ -427,10 +429,16 @@ async function loadSessionsOnce(
       ? 0
       : (overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0));
     const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
+    const configuredAgentsOnly = overrides?.configuredAgentsOnly ?? true;
     const params: Record<string, unknown> = {
       includeGlobal,
       includeUnknown,
+      configuredAgentsOnly,
     };
+    const agentId = overrides?.agentId?.trim();
+    if (agentId) {
+      params.agentId = agentId;
+    }
     if (activeMinutes > 0) {
       params.activeMinutes = activeMinutes;
     }

@@ -83,6 +83,7 @@ type ModelCallLifecycleDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "model.call.completed" | "model.call.error" }
 >;
+type ModelFailoverDiagnosticEvent = Extract<DiagnosticEventPayload, { type: "model.failover" }>;
 type HarnessRunDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "harness.run.started" | "harness.run.completed" | "harness.run.error" }
@@ -1665,6 +1666,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.channel) {
           attrs["openclaw.channel"] = evt.channel;
         }
+        if (evt.blockedBy) {
+          attrs["openclaw.blocked_by"] = lowCardinalityAttr(evt.blockedBy, "unknown");
+        }
         durationHistogram.record(evt.durationMs, attrs);
         if (!tracesEnabled) {
           return;
@@ -1673,6 +1677,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.outcome": evt.outcome,
         };
         addRunAttrs(spanAttrs, evt);
+        if (evt.blockedBy) {
+          spanAttrs["openclaw.blocked_by"] = lowCardinalityAttr(evt.blockedBy, "unknown");
+        }
         if (evt.errorCategory) {
           spanAttrs["openclaw.errorCategory"] = lowCardinalityAttr(evt.errorCategory, "other");
         }
@@ -1832,6 +1839,44 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.context.reserve_tokens"] = evt.reserveTokens;
         }
         const span = spanWithDuration("openclaw.context.assembled", spanAttrs, 0, {
+          parentContext: activeTrustedParentContext(evt, metadata),
+          endTimeMs: evt.ts,
+        });
+        span.end(evt.ts);
+      };
+
+      const recordModelFailover = (
+        evt: ModelFailoverDiagnosticEvent,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = {
+          "openclaw.failover.reason": lowCardinalityAttr(evt.reason, "unknown"),
+        };
+        if (evt.fromProvider) {
+          spanAttrs["openclaw.provider"] = evt.fromProvider;
+        }
+        if (evt.fromModel) {
+          spanAttrs["openclaw.model"] = evt.fromModel;
+        }
+        if (evt.toProvider) {
+          spanAttrs["openclaw.failover.to_provider"] = evt.toProvider;
+        }
+        if (evt.toModel) {
+          spanAttrs["openclaw.failover.to_model"] = evt.toModel;
+        }
+        if (evt.lane) {
+          spanAttrs["openclaw.lane"] = lowCardinalityAttr(evt.lane, "unknown");
+        }
+        if (evt.suspended !== undefined) {
+          spanAttrs["openclaw.failover.suspended"] = evt.suspended;
+        }
+        if (evt.cascadeDepth !== undefined) {
+          spanAttrs["openclaw.failover.cascade_depth"] = evt.cascadeDepth;
+        }
+        const span = spanWithDuration("openclaw.model.failover", spanAttrs, 0, {
           parentContext: activeTrustedParentContext(evt, metadata),
           endTimeMs: evt.ts,
         });
@@ -2414,6 +2459,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordTelemetryExporter(evt, metadata);
               return;
             case "payload.large":
+              return;
+            case "model.failover":
+              recordModelFailover(evt, metadata);
               return;
           }
         } catch (err) {

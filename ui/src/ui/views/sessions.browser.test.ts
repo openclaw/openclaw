@@ -1,7 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 
 const VIEWPORTS = [
   [375, 812],
@@ -15,22 +15,13 @@ const describeBrowserLayout = existsSync(chromium.executablePath()) ? describe :
 let browser: Browser;
 
 function readUiCss(): string {
-  const roots = [process.cwd(), resolve(process.cwd(), "ui")];
   const files = [
-    "src/styles/base.css",
-    "src/styles/layout.css",
-    "src/styles/layout.mobile.css",
-    "src/styles/components.css",
+    "ui/src/styles/base.css",
+    "ui/src/styles/layout.css",
+    "ui/src/styles/layout.mobile.css",
+    "ui/src/styles/components.css",
   ];
-  return files
-    .map((file) => {
-      const path = roots
-        .map((root) => resolve(root, file))
-        .find((candidate) => existsSync(candidate));
-      expect(path, `Missing CSS fixture ${file}`).toBeTruthy();
-      return readFileSync(path!, "utf8");
-    })
-    .join("\n");
+  return files.map((file) => readStyleSheet(file)).join("\n");
 }
 
 function sessionsTableHtml() {
@@ -39,6 +30,8 @@ function sessionsTableHtml() {
     "Key",
     "Label",
     "Kind",
+    "Status",
+    "Runtime",
     "Updated",
     "Tokens",
     "Compaction",
@@ -62,9 +55,11 @@ function sessionsTableHtml() {
                           ? "data-table-checkbox-col"
                           : index === 1
                             ? "data-table-key-col"
-                            : index === 6
-                              ? "session-compaction-col"
-                              : ""
+                            : index === 4
+                              ? "session-status-col"
+                              : index === 8
+                                ? "session-compaction-col"
+                                : ""
                       }">${header}</th>`,
                   )
                   .join("")}
@@ -80,6 +75,13 @@ function sessionsTableHtml() {
                 </td>
                 <td><input value="" /></td>
                 <td><span class="data-table-badge data-table-badge--direct">direct</span></td>
+                <td class="session-status-col">
+                  <span class="session-status-badge session-status-badge--live" aria-label="Status: Live">
+                    <span class="session-status-badge__dot" aria-hidden="true"></span>
+                    <span class="session-status-badge__label">Live</span>
+                  </span>
+                </td>
+                <td class="session-runtime-cell"><span class="mono">claude-cli (fallback none)</span></td>
                 <td>now</td>
                 <td class="session-token-cell">123456 / 200000</td>
                 <td class="session-compaction-col">
@@ -95,14 +97,20 @@ function sessionsTableHtml() {
                 <td><select><option>stream</option></select></td>
               </tr>
               <tr class="session-checkpoint-details-row">
-                <td colspan="11">
+                <td colspan="13">
                   <div class="session-details-panel">
                     <div class="session-details-panel__hero">
                       <div>
                         <div class="session-details-panel__eyebrow">Session details</div>
                         <div class="session-details-panel__title">agent:main:main</div>
                       </div>
-                      <span class="data-table-badge data-table-badge--direct">direct</span>
+                      <div class="session-details-panel__badges">
+                        <span class="session-status-badge session-status-badge--live" aria-label="Status: Live">
+                          <span class="session-status-badge__dot" aria-hidden="true"></span>
+                          <span class="session-status-badge__label">Live</span>
+                        </span>
+                        <span class="data-table-badge data-table-badge--direct">direct</span>
+                      </div>
                     </div>
                     <div class="session-details-grid">
                       <div class="session-detail-stat">
@@ -162,29 +170,58 @@ describeBrowserLayout("sessions responsive browser layout", () => {
       const container = document.querySelector(".data-table-container");
       const compaction = document.querySelector(".session-compaction-cell");
       const trigger = document.querySelector(".session-compaction-trigger");
+      const status = document.querySelector(".session-status-badge");
+      const statusLabel = document.querySelector(".session-status-badge__label");
+      const runtime = document.querySelector(".session-runtime-cell .mono");
+      const kind = document.querySelector(".data-table-badge");
+      const key = document.querySelector(".session-key-cell .session-link");
       const details = document.querySelector(".session-details-panel");
-      if (!(container instanceof HTMLElement) || !(compaction instanceof HTMLElement)) {
+      if (
+        !(container instanceof HTMLElement) ||
+        !(compaction instanceof HTMLElement) ||
+        !(status instanceof HTMLElement) ||
+        !(statusLabel instanceof HTMLElement) ||
+        !(runtime instanceof HTMLElement) ||
+        !(kind instanceof HTMLElement) ||
+        !(key instanceof HTMLElement)
+      ) {
         throw new Error("Missing sessions table fixture elements");
       }
       const containerRect = container.getBoundingClientRect();
       const compactionRect = compaction.getBoundingClientRect();
+      const statusRect = status.getBoundingClientRect();
       return {
         bodyOverflow: document.documentElement.scrollWidth - window.innerWidth,
         compactionText: compaction.textContent?.trim(),
+        statusText: status.textContent?.trim(),
+        runtimeText: runtime.textContent?.trim(),
+        keyWhiteSpace: getComputedStyle(key).whiteSpace,
+        kindWhiteSpace: getComputedStyle(kind).whiteSpace,
+        statusWhiteSpace: getComputedStyle(status).whiteSpace,
+        runtimeWhiteSpace: getComputedStyle(runtime).whiteSpace,
         hasTrigger: trigger !== null,
         hasLegacyButton: document.querySelector(".session-checkpoint-toggle") !== null,
         hasDetails: details !== null,
         compactionVisible:
           compactionRect.left >= containerRect.left && compactionRect.right <= containerRect.right,
+        statusVisible:
+          statusRect.left >= containerRect.left && statusRect.right <= containerRect.right,
       };
     });
 
     expect(metrics.bodyOverflow).toBeLessThanOrEqual(1);
-    expect(metrics.compactionText).toContain("1 Checkpoint");
+    expect(metrics.compactionText).toBe("1 Checkpoint");
+    expect(metrics.statusText).toBe("Live");
+    expect(metrics.runtimeText).toBe("claude-cli (fallback none)");
+    expect(metrics.keyWhiteSpace).toBe("nowrap");
+    expect(metrics.kindWhiteSpace).toBe("nowrap");
+    expect(metrics.statusWhiteSpace).toBe("nowrap");
+    expect(metrics.runtimeWhiteSpace).toBe("nowrap");
     expect(metrics.hasTrigger).toBe(true);
     expect(metrics.hasLegacyButton).toBe(false);
     expect(metrics.hasDetails).toBe(true);
     expect(metrics.compactionVisible).toBe(true);
+    expect(metrics.statusVisible).toBe(true);
 
     await page.close();
   });

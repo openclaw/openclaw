@@ -6,12 +6,15 @@ import threadResumeResponseSchema from "./protocol-generated/json/v2/ThreadResum
 import threadStartResponseSchema from "./protocol-generated/json/v2/ThreadStartResponse.json" with { type: "json" };
 import turnCompletedNotificationSchema from "./protocol-generated/json/v2/TurnCompletedNotification.json" with { type: "json" };
 import turnStartResponseSchema from "./protocol-generated/json/v2/TurnStartResponse.json" with { type: "json" };
-import type { v2 } from "./protocol-generated/typescript/index.js";
 import type {
   CodexDynamicToolCallParams,
+  CodexErrorNotification,
+  CodexModelListResponse,
+  CodexThreadForkResponse,
   CodexThreadResumeResponse,
   CodexThreadStartResponse,
   CodexTurn,
+  CodexTurnCompletedNotification,
   CodexTurnStartResponse,
 } from "./protocol.js";
 
@@ -28,24 +31,40 @@ const ajv = new AjvCtor({
 const validateDynamicToolCallParams = ajv.compile<CodexDynamicToolCallParams>(
   dynamicToolCallParamsSchema,
 );
-const validateErrorNotification = ajv.compile<v2.ErrorNotification>(errorNotificationSchema);
-const validateModelListResponse = ajv.compile<v2.ModelListResponse>(modelListResponseSchema);
+const validateErrorNotification = ajv.compile<CodexErrorNotification>(errorNotificationSchema);
+const validateModelListResponse = ajv.compile<CodexModelListResponse>(modelListResponseSchema);
 const validateThreadResumeResponse = ajv.compile<CodexThreadResumeResponse>(
   threadResumeResponseSchema,
 );
 const validateThreadStartResponse =
   ajv.compile<CodexThreadStartResponse>(threadStartResponseSchema);
-const validateTurnCompletedNotification = ajv.compile<v2.TurnCompletedNotification>(
+const validateTurnCompletedNotification = ajv.compile<CodexTurnCompletedNotification>(
   turnCompletedNotificationSchema,
 );
 const validateTurnStartResponse = ajv.compile<CodexTurnStartResponse>(turnStartResponseSchema);
 
 export function assertCodexThreadStartResponse(value: unknown): CodexThreadStartResponse {
-  return assertCodexShape(validateThreadStartResponse, value, "thread/start response");
+  return assertCodexShape(
+    validateThreadStartResponse,
+    normalizeThreadResponse(value),
+    "thread/start response",
+  );
+}
+
+export function assertCodexThreadForkResponse(value: unknown): CodexThreadForkResponse {
+  return assertCodexShape(
+    validateThreadStartResponse,
+    normalizeThreadResponse(value),
+    "thread/fork response",
+  );
 }
 
 export function assertCodexThreadResumeResponse(value: unknown): CodexThreadResumeResponse {
-  return assertCodexShape(validateThreadResumeResponse, value, "thread/resume response");
+  return assertCodexShape(
+    validateThreadResumeResponse,
+    normalizeThreadResponse(value),
+    "thread/resume response",
+  );
 }
 
 export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResponse {
@@ -62,11 +81,11 @@ export function readCodexDynamicToolCallParams(
   return readCodexShape(validateDynamicToolCallParams, value);
 }
 
-export function readCodexErrorNotification(value: unknown): v2.ErrorNotification | undefined {
+export function readCodexErrorNotification(value: unknown): CodexErrorNotification | undefined {
   return readCodexShape(validateErrorNotification, value);
 }
 
-export function readCodexModelListResponse(value: unknown): v2.ModelListResponse | undefined {
+export function readCodexModelListResponse(value: unknown): CodexModelListResponse | undefined {
   return readCodexShape(validateModelListResponse, value);
 }
 
@@ -77,7 +96,7 @@ export function readCodexTurn(value: unknown): CodexTurn | undefined {
 
 export function readCodexTurnCompletedNotification(
   value: unknown,
-): v2.TurnCompletedNotification | undefined {
+): CodexTurnCompletedNotification | undefined {
   return readCodexShape(
     validateTurnCompletedNotification,
     normalizeTurnCompletedNotification(value),
@@ -136,6 +155,23 @@ function normalizeThreadItem(value: unknown): unknown {
     default:
       return value;
   }
+}
+
+function normalizeThreadResponse(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value) || !("thread" in value)) {
+    return value;
+  }
+  const thread = (value as { thread?: unknown }).thread;
+  if (thread && typeof thread === "object" && !Array.isArray(thread)) {
+    const t = thread as { id?: string; sessionId?: string };
+    if (typeof t.id === "string" && typeof t.sessionId !== "string") {
+      return { ...value, thread: { ...thread, sessionId: t.id } };
+    }
+    if (typeof t.sessionId === "string" && typeof t.id !== "string") {
+      return { ...value, thread: { ...thread, id: t.sessionId } };
+    }
+  }
+  return value;
 }
 
 function normalizeTurnStartResponse(value: unknown): unknown {

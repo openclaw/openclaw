@@ -9,7 +9,8 @@ import {
 } from "./heartbeat-runner.test-utils.js";
 
 vi.mock("./outbound/deliver.js", () => ({
-  deliverOutboundPayloads: vi.fn().mockResolvedValue(undefined),
+  deliverOutboundPayloads: vi.fn().mockResolvedValue([]),
+  deliverOutboundPayloadsInternal: vi.fn().mockResolvedValue([]),
 }));
 
 type SeedSessionInput = {
@@ -19,6 +20,21 @@ type SeedSessionInput = {
 };
 type AgentDefaultsConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type HeartbeatConfig = NonNullable<AgentDefaultsConfig["heartbeat"]>;
+
+function expectReplyOptions(options: unknown, expected: Record<string, unknown>) {
+  if (!options || typeof options !== "object") {
+    throw new Error("expected reply options");
+  }
+  const actual = options as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
+function firstReplyCall(replySpy: HeartbeatReplySpy) {
+  return replySpy.mock.calls[0] ?? [];
+}
 
 async function withHeartbeatFixture(
   run: (ctx: {
@@ -71,9 +87,10 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
 
     expect(params.replySpy).toHaveBeenCalledTimes(1);
+    const [ctx, opts] = firstReplyCall(params.replySpy);
     return {
-      ctx: params.replySpy.mock.calls[0]?.[0],
-      opts: params.replySpy.mock.calls[0]?.[1],
+      ctx,
+      opts,
       replySpy: params.replySpy,
     };
   }
@@ -154,56 +171,50 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         replySpy,
       });
 
-      expect(result.replySpy).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.objectContaining({
-          isHeartbeat: true,
-          ...params.expectedOptions,
-        }),
-        cfg,
-      );
+      expect(result.replySpy).toHaveBeenCalledTimes(1);
+      const [ctx, opts, passedConfig] = firstReplyCall(result.replySpy);
+      if (!ctx || typeof ctx !== "object") {
+        throw new Error("expected heartbeat reply context");
+      }
+      expectReplyOptions(opts, {
+        isHeartbeat: true,
+        ...params.expectedOptions,
+      });
+      expect(passedConfig).toBe(cfg);
     });
   }
 
   it("passes heartbeatModelOverride from defaults heartbeat config", async () => {
     const replyOpts = await runDefaultsHeartbeat({ model: "ollama/llama3.2:1b" });
-    expect(replyOpts).toEqual(
-      expect.objectContaining({
-        isHeartbeat: true,
-        heartbeatModelOverride: "ollama/llama3.2:1b",
-        suppressToolErrorWarnings: false,
-      }),
-    );
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      heartbeatModelOverride: "ollama/llama3.2:1b",
+      suppressToolErrorWarnings: false,
+    });
   });
 
   it("passes suppressToolErrorWarnings when configured", async () => {
     const replyOpts = await runDefaultsHeartbeat({ suppressToolErrorWarnings: true });
-    expect(replyOpts).toEqual(
-      expect.objectContaining({
-        isHeartbeat: true,
-        suppressToolErrorWarnings: true,
-      }),
-    );
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      suppressToolErrorWarnings: true,
+    });
   });
 
   it("passes heartbeat timeoutSeconds as a reply-run timeout override", async () => {
     const replyOpts = await runDefaultsHeartbeat({ timeoutSeconds: 45 });
-    expect(replyOpts).toEqual(
-      expect.objectContaining({
-        isHeartbeat: true,
-        timeoutOverrideSeconds: 45,
-      }),
-    );
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      timeoutOverrideSeconds: 45,
+    });
   });
 
   it("passes bootstrapContextMode when heartbeat lightContext is enabled", async () => {
     const replyOpts = await runDefaultsHeartbeat({ lightContext: true });
-    expect(replyOpts).toEqual(
-      expect.objectContaining({
-        isHeartbeat: true,
-        bootstrapContextMode: "lightweight",
-      }),
-    );
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      bootstrapContextMode: "lightweight",
+    });
   });
 
   it("uses isolated session key when isolatedSession is enabled", async () => {
@@ -294,20 +305,15 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
 
   it("does not pass heartbeatModelOverride when no heartbeat model is configured", async () => {
     const replyOpts = await runDefaultsHeartbeat({ model: undefined });
-    expect(replyOpts).toEqual(
-      expect.objectContaining({
-        isHeartbeat: true,
-      }),
-    );
+    const actual = expectReplyOptions(replyOpts, { isHeartbeat: true });
+    expect(actual.heartbeatModelOverride).toBeUndefined();
   });
 
   it("trims heartbeat model override before passing it downstream", async () => {
     const replyOpts = await runDefaultsHeartbeat({ model: "  ollama/llama3.2:1b  " });
-    expect(replyOpts).toEqual(
-      expect.objectContaining({
-        isHeartbeat: true,
-        heartbeatModelOverride: "ollama/llama3.2:1b",
-      }),
-    );
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      heartbeatModelOverride: "ollama/llama3.2:1b",
+    });
   });
 });

@@ -272,7 +272,14 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       historyLimit: 20,
       textChunkLimit: 2000,
       chunkMode: "length", // length | newline
-      streaming: "off", // off | partial | block | progress
+      streaming: {
+        mode: "progress", // off | partial | block | progress (Discord default: progress)
+        progress: {
+          label: "auto",
+          maxLines: 8,
+          toolProgress: true,
+        },
+      },
       maxLinesPerMessage: 17,
       ui: {
         components: {
@@ -344,8 +351,9 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `channels.discord.voice.daveEncryption` and `channels.discord.voice.decryptionFailureTolerance` pass through to `@discordjs/voice` DAVE options (`true` and `24` by default).
 - `channels.discord.voice.connectTimeoutMs` controls the initial `@discordjs/voice` Ready wait for `/vc join` and auto-join attempts (`30000` by default).
 - `channels.discord.voice.reconnectGraceMs` controls how long a disconnected voice session may take to enter reconnect signalling before OpenClaw destroys it (`15000` by default).
+- Discord voice playback is not interrupted by another user's speaking-start event. To avoid feedback loops, OpenClaw ignores new voice capture while TTS is playing.
 - OpenClaw additionally attempts voice receive recovery by leaving/rejoining a voice session after repeated decrypt failures.
-- `channels.discord.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
+- `channels.discord.streaming` is the canonical stream mode key. Discord defaults to `streaming.mode: "progress"` so tool/work progress appears in one edited preview message; set `streaming.mode: "off"` to disable it. Legacy `streamMode` and boolean `streaming` values remain runtime aliases; run `openclaw doctor --fix` to rewrite persisted config.
 - `channels.discord.autoPresence` maps runtime availability to bot presence (healthy => online, degraded => idle, exhausted => dnd) and allows optional status text overrides.
 - `channels.discord.dangerouslyAllowNameMatching` re-enables mutable name/tag matching (break-glass compatibility mode).
 - `channels.discord.execApprovals`: Discord-native exec approval delivery and approver authorization.
@@ -444,6 +452,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         ephemeral: true,
       },
       typingReaction: "hourglass_flowing_sand",
+      unfurlLinks: false,
+      unfurlMedia: false,
       textChunkLimit: 4000,
       chunkMode: "length",
       streaming: {
@@ -475,7 +485,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   resolve the secret value.
 - `configWrites: false` blocks Slack-initiated config writes.
 - Optional `channels.slack.defaultAccount` overrides default account selection when it matches a configured account id.
-- `channels.slack.streaming.mode` is the canonical Slack stream mode key. `channels.slack.streaming.nativeTransport` controls Slack's native streaming transport. Legacy `streamMode`, boolean `streaming`, and `nativeStreaming` values are auto-migrated.
+- `channels.slack.streaming.mode` is the canonical Slack stream mode key. `channels.slack.streaming.nativeTransport` controls Slack's native streaming transport. Legacy `streamMode`, boolean `streaming`, and `nativeStreaming` values remain runtime aliases; run `openclaw doctor --fix` to rewrite persisted config.
+- `unfurlLinks` and `unfurlMedia` pass Slack's `chat.postMessage` link and media unfurl booleans through for bot replies. Omit them to keep Slack's default behavior; set them at `channels.slack.accounts.<accountId>` to override the top-level default for one account.
 - Use `user:<id>` (DM) or `channel:<id>` for delivery targets.
 
 **Reaction notification modes:** `off`, `own` (default), `all`, `allowlist` (from `reactionAllowlist`).
@@ -573,31 +584,13 @@ When Mattermost native commands are enabled:
 - `channels.signal.configWrites`: allow or deny Signal-initiated config writes.
 - Optional `channels.signal.defaultAccount` overrides default account selection when it matches a configured account id.
 
-### BlueBubbles
-
-BlueBubbles is the recommended iMessage path (plugin-backed, configured under `channels.bluebubbles`).
-
-```json5
-{
-  channels: {
-    bluebubbles: {
-      enabled: true,
-      dmPolicy: "pairing",
-      // serverUrl, password, webhookPath, group controls, and advanced actions:
-      // see /channels/bluebubbles
-    },
-  },
-}
-```
-
-- Core key paths covered here: `channels.bluebubbles`, `channels.bluebubbles.dmPolicy`.
-- Optional `channels.bluebubbles.defaultAccount` overrides default account selection when it matches a configured account id.
-- Top-level `bindings[]` entries with `type: "acp"` can bind BlueBubbles conversations to persistent ACP sessions. Use a BlueBubbles handle or target string (`chat_id:*`, `chat_guid:*`, `chat_identifier:*`) in `match.peer.id`. Shared field semantics: [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
-- Full BlueBubbles channel configuration is documented in [BlueBubbles](/channels/bluebubbles).
-
 ### iMessage
 
-OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
+OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required. This is the preferred path for new OpenClaw iMessage setups when the host can grant Messages database and Automation permissions.
+
+BlueBubbles support was removed. `channels.bluebubbles` is not a supported runtime config surface on current OpenClaw. Migrate old configs to `channels.imessage`; use [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) for the short version and [Coming from BlueBubbles](/channels/imessage-from-bluebubbles) for the full translation table.
+
+If the Gateway is not running on the signed-in Messages Mac, keep `channels.imessage.enabled=true` and set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg "$@"` on that Mac. The default local `imsg` path is macOS-only.
 
 ```json5
 {
@@ -616,6 +609,17 @@ OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
       mediaMaxMb: 16,
       service: "auto",
       region: "US",
+      actions: {
+        reactions: true,
+        edit: true,
+        unsend: true,
+        reply: true,
+        sendWithEffect: true,
+        sendAttachment: true,
+      },
+      catchup: {
+        enabled: false,
+      },
     },
   },
 }
@@ -629,6 +633,10 @@ OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
 - `attachmentRoots` and `remoteAttachmentRoots` restrict inbound attachment paths (default: `/Users/*/Library/Messages/Attachments`).
 - SCP uses strict host-key checking, so ensure the relay host key already exists in `~/.ssh/known_hosts`.
 - `channels.imessage.configWrites`: allow or deny iMessage-initiated config writes.
+- `channels.imessage.actions.*`: enable private API actions that are also gated by `imsg status` / `openclaw channels status --probe`.
+- `channels.imessage.includeAttachments` is off by default; set it to `true` before expecting inbound media in agent turns.
+- `channels.imessage.catchup.enabled`: opt in to replaying inbound messages that arrived while the Gateway was down.
+- `channels.imessage.groups`: group registry and per-group settings. With `groupPolicy: "allowlist"`, configure either explicit `chat_id` keys or a `"*"` wildcard entry so group messages can pass the registry gate.
 - Top-level `bindings[]` entries with `type: "acp"` can bind iMessage conversations to persistent ACP sessions. Use a normalized handle or explicit chat target (`chat_id:*`, `chat_guid:*`, `chat_identifier:*`) in `match.peer.id`. Shared field semantics: [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 
 <Accordion title="iMessage SSH wrapper example">

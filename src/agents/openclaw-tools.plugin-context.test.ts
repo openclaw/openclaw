@@ -14,12 +14,8 @@ describe("openclaw plugin tool context", () => {
       },
     });
 
-    expect(result.context).toEqual(
-      expect.objectContaining({
-        requesterSenderId: "trusted-sender",
-        senderIsOwner: true,
-      }),
-    );
+    expect(result.context.requesterSenderId).toBe("trusted-sender");
+    expect(result.context.senderIsOwner).toBe(true);
   });
 
   it("forwards fs policy for plugin tool sandbox enforcement", () => {
@@ -30,11 +26,7 @@ describe("openclaw plugin tool context", () => {
       },
     });
 
-    expect(result.context).toEqual(
-      expect.objectContaining({
-        fsPolicy: { workspaceOnly: true },
-      }),
-    );
+    expect(result.context.fsPolicy).toStrictEqual({ workspaceOnly: true });
   });
 
   it("forwards ephemeral sessionId", () => {
@@ -46,12 +38,40 @@ describe("openclaw plugin tool context", () => {
       },
     });
 
-    expect(result.context).toEqual(
-      expect.objectContaining({
-        sessionKey: "agent:main:telegram:direct:12345",
-        sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-      }),
-    );
+    expect(result.context.sessionKey).toBe("agent:main:telegram:direct:12345");
+    expect(result.context.sessionId).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+  });
+
+  it("forwards runtime-owned active model metadata", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        modelProvider: " local-provider ",
+        modelId: " local-model ",
+      },
+    });
+
+    expect(result.context.activeModel).toStrictEqual({
+      provider: "local-provider",
+      modelId: "local-model",
+      modelRef: "local-provider/local-model",
+    });
+  });
+
+  it("does not duplicate provider-qualified active model refs", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        modelProvider: "openrouter",
+        modelId: "openrouter/auto",
+      },
+    });
+
+    expect(result.context.activeModel).toStrictEqual({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      modelRef: "openrouter/auto",
+    });
   });
 
   it("infers the default agent workspace when workspaceDir is omitted", () => {
@@ -74,12 +94,8 @@ describe("openclaw plugin tool context", () => {
       } as never,
     });
 
-    expect(result.context).toEqual(
-      expect.objectContaining({
-        agentId: "main",
-        workspaceDir,
-      }),
-    );
+    expect(result.context.agentId).toBe("main");
+    expect(result.context.workspaceDir).toBe(workspaceDir);
   });
 
   it("infers the session agent workspace when workspaceDir is omitted", () => {
@@ -101,12 +117,8 @@ describe("openclaw plugin tool context", () => {
       resolvedConfig: config,
     });
 
-    expect(result.context).toEqual(
-      expect.objectContaining({
-        agentId: "support",
-        workspaceDir: supportWorkspace,
-      }),
-    );
+    expect(result.context.agentId).toBe("support");
+    expect(result.context.workspaceDir).toBe(supportWorkspace);
   });
 
   it("uses requester agent override for synthetic embedded session keys", () => {
@@ -129,12 +141,8 @@ describe("openclaw plugin tool context", () => {
       resolvedConfig: config,
     });
 
-    expect(result.context).toEqual(
-      expect.objectContaining({
-        agentId: "recall",
-        workspaceDir: recallWorkspace,
-      }),
-    );
+    expect(result.context.agentId).toBe("recall");
+    expect(result.context.workspaceDir).toBe(recallWorkspace);
   });
 
   it("forwards browser session wiring", () => {
@@ -146,14 +154,10 @@ describe("openclaw plugin tool context", () => {
       },
     });
 
-    expect(result.context).toEqual(
-      expect.objectContaining({
-        browser: {
-          sandboxBridgeUrl: "http://127.0.0.1:9999",
-          allowHostControl: true,
-        },
-      }),
-    );
+    expect(result.context.browser).toStrictEqual({
+      sandboxBridgeUrl: "http://127.0.0.1:9999",
+      allowHostControl: true,
+    });
   });
 
   it("forwards gateway subagent binding", () => {
@@ -178,16 +182,12 @@ describe("openclaw plugin tool context", () => {
       },
     });
 
-    expect(result.context).toEqual(
-      expect.objectContaining({
-        deliveryContext: {
-          channel: "slack",
-          to: "channel:C123",
-          accountId: "work",
-          threadId: "1710000000.000100",
-        },
-      }),
-    );
+    expect(result.context.deliveryContext).toStrictEqual({
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "work",
+      threadId: "1710000000.000100",
+    });
   });
 
   it("does not inject ambient thread defaults into plugin tools", async () => {

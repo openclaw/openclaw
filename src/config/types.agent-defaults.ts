@@ -19,6 +19,7 @@ import type { MemorySearchConfig } from "./types.tools.js";
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
 export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
+export type SubagentDelegationMode = "suggest" | "prefer";
 
 export type Gpt5PromptOverlayConfig = {
   /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
@@ -34,6 +35,8 @@ export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
   params?: Record<string, unknown>;
+  /** Optional agent execution runtime for this specific provider/model entry. */
+  agentRuntime?: AgentRuntimePolicyConfig;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
 };
@@ -92,6 +95,17 @@ export type AgentContextLimitsConfig = {
   postCompactionMaxChars?: number;
 };
 
+export type AgentRunRetriesConfig = {
+  /** Base number of run retry iterations (default: 24). */
+  base?: number;
+  /** Additional run retry iterations per fallback profile (default: 8). */
+  perProfile?: number;
+  /** Minimum limit for run retry iterations (default: 32). */
+  min?: number;
+  /** Maximum limit for run retry iterations (default: 160). */
+  max?: number;
+};
+
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -147,6 +161,8 @@ export type CliBackendConfig = {
   imagePathScope?: "temp" | "workspace";
   /** Serialize runs for this CLI. */
   serialize?: boolean;
+  /** Opt in to bounded raw transcript reseed before compaction for safe session resets. */
+  reseedFromRawTranscriptWhenUncompacted?: boolean;
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
     /** Live-session output caps for CLIs that stream JSONL through a long-lived process. */
@@ -294,6 +310,8 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
+  /** Outer run loop retry iteration boundaries. */
+  runRetries?: AgentRunRetriesConfig;
   /** Embedded Pi runner hardening and compatibility controls. */
   embeddedPi?: {
     /**
@@ -402,7 +420,7 @@ export type AgentDefaultsConfig = {
      */
     isolatedSession?: boolean;
     /**
-     * If true, defer heartbeat runs while subagent or nested command lanes are busy.
+     * If true, defer heartbeat runs while this agent's session-keyed subagent or nested command lanes are busy.
      * Cron lanes are always treated as busy for heartbeat deferral.
      */
     skipWhenBusy?: boolean;
@@ -418,6 +436,8 @@ export type AgentDefaultsConfig = {
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {
+    /** Prompt-only guidance for how strongly the main agent should delegate work. Default: "suggest". */
+    delegationMode?: SubagentDelegationMode;
     /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any. */
     allowAgents?: string[];
     /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
@@ -434,7 +454,7 @@ export type AgentDefaultsConfig = {
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
     runTimeoutSeconds?: number;
-    /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
+    /** Gateway timeout in ms for sub-agent announce delivery calls (default: 120000). */
     announceTimeoutMs?: number;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
     requireAgentId?: boolean;

@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   listGoogleChatAccountIds,
@@ -69,19 +69,18 @@ function buildAccount(): ResolvedGoogleChatAccount {
 }
 
 async function waitForGoogleChatMonitorStarted() {
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    if (hoisted.startGoogleChatMonitor.mock.calls.length === 1) {
-      return;
-    }
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(hoisted.startGoogleChatMonitor).toHaveBeenCalledOnce());
 }
 
 describe("googlechat setup", () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./channel.runtime.js");
+    vi.resetModules();
   });
 
   it("rejects env auth for non-default accounts", () => {

@@ -13,6 +13,14 @@ import {
   shouldEnableOpenClawCompileCache,
 } from "./entry.compile-cache.js";
 
+function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("entry compile cache", () => {
   const tempDirs: string[] = [];
 
@@ -155,9 +163,12 @@ describe("entry compile cache", () => {
         env: { NODE_DISABLE_COMPILE_CACHE: "1" },
       },
     );
-    expect(attachChildProcessBridge).toHaveBeenCalledWith(child, {
-      onSignal: expect.any(Function),
-    });
+    const [bridgeChild, bridgeOptions] = requireFirstMockCall(
+      attachChildProcessBridge,
+      "child process bridge attach",
+    );
+    expect(bridgeChild).toBe(child);
+    expect(bridgeOptions).toEqual({ onSignal: expect.any(Function) });
 
     child.emit("exit", 0, null);
 

@@ -21,9 +21,11 @@ describe("restart-helper", () => {
 
   async function prepareAndReadScript(env: Record<string, string>, gatewayPort = 18789) {
     const scriptPath = await prepareRestartScript(env, gatewayPort);
-    expect(scriptPath).toBeTruthy();
-    const content = await fs.readFile(scriptPath!, "utf-8");
-    return { scriptPath: scriptPath!, content };
+    if (scriptPath == null) {
+      throw new Error("expected restart script path");
+    }
+    const content = await fs.readFile(scriptPath, "utf-8");
+    return { scriptPath, content };
   }
 
   async function cleanupScript(scriptPath: string) {
@@ -540,7 +542,7 @@ exit 0
         stdio: "ignore",
         windowsHide: true,
       });
-      expect(mockChild.unref).toHaveBeenCalled();
+      expect(mockChild.unref).toHaveBeenCalledTimes(1);
     });
 
     it("uses cmd.exe on Windows", async () => {
@@ -556,7 +558,7 @@ exit 0
         stdio: "ignore",
         windowsHide: true,
       });
-      expect(mockChild.unref).toHaveBeenCalled();
+      expect(mockChild.unref).toHaveBeenCalledTimes(1);
     });
 
     it("quotes cmd.exe /c paths with metacharacters on Windows", async () => {

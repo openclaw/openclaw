@@ -13,10 +13,6 @@ vi.mock("./auth-profiles/store.js", () => ({
   loadAuthProfileStoreForRuntime: vi.fn(),
 }));
 
-vi.mock("./auth-profiles/source-check.js", () => ({
-  hasAnyAuthProfileStoreSource: vi.fn(),
-}));
-
 vi.mock("./auth-profiles/usage.js", () => ({
   getSoonestCooldownExpiry: vi.fn(),
   isProfileInCooldown: vi.fn(),
@@ -29,6 +25,15 @@ vi.mock("./auth-profiles/order.js", () => ({
 
 vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
+const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+  configFingerprint: "model-fallback-probe-test-empty-plugin-metadata",
+  plugins: [],
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
 vi.mock("./auth-profiles/source-check.js", () => ({
@@ -68,6 +73,7 @@ let setLoggerOverride: LoggerModule["setLoggerOverride"];
 
 const makeCfg = makeModelFallbackCfg;
 let cleanupLogCapture: (() => void) | undefined;
+const OPENAI_PROBE_CANDIDATE = { provider: "openai", model: "gpt-4.1-mini" } as const;
 
 async function loadModelFallbackProbeModules() {
   const authProfilesStoreModule = await import("./auth-profiles/store.js");
@@ -137,6 +143,25 @@ function expectPrimaryProbeSuccess(
   });
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordWithFields(
+  records: Array<Record<string, unknown>>,
+  expected: Record<string, unknown>,
+) {
+  const matching = records.find((record) =>
+    Object.entries(expected).every(([key, value]) => record[key] === value),
+  );
+  if (!matching) {
+    throw new Error(`Expected matching record for ${JSON.stringify(expected)}`);
+  }
+}
+
 async function expectProbeFailureFallsBack({
   reason,
   probeError,
@@ -204,7 +229,7 @@ describe("runWithModelFallback – probe logic", () => {
     mockedGetSoonestCooldownExpiry.mockReturnValue(params.soonest);
     mockedResolveProfilesUnavailableReason.mockReturnValue(params.reason);
     return modelFallbackTesting.resolveCooldownDecision({
-      candidate: { provider: "openai", model: "gpt-4.1-mini" },
+      candidate: OPENAI_PROBE_CANDIDATE,
       isPrimary: params.isPrimary ?? true,
       requestedModel: params.requestedModel ?? true,
       hasFallbackCandidates: params.hasFallbackCandidates ?? true,
@@ -218,6 +243,17 @@ describe("runWithModelFallback – probe logic", () => {
       >[0]["authRuntime"],
       authStore: { version: 1, profiles: {} },
       profileIds: ["openai-profile-1"],
+    });
+  }
+
+  function expectOpenAiProbeSuspension(
+    decision: ReturnType<ModelFallbackModule["__testing"]["resolveCooldownDecision"]>,
+    reason: "rate_limit" | "billing",
+  ) {
+    expect(decision).toEqual({
+      type: "suspend_lanes",
+      reason,
+      leaderCandidate: OPENAI_PROBE_CANDIDATE,
     });
   }
 
@@ -318,13 +354,14 @@ describe("runWithModelFallback – probe logic", () => {
     ).toEqual({ type: "attempt", reason: "rate_limit", markProbe: true });
 
     _probeThrottleInternals.lastProbeAttempt.set("recent-openai", NOW - 10_000);
-    expect(
+    expectOpenAiProbeSuspension(
       resolveOpenAiCooldownDecision({
         reason: "rate_limit",
         soonest: NOW + 30 * 1000,
         throttleKey: "recent-openai",
       }),
-    ).toMatchObject({ type: "skip", reason: "rate_limit" });
+      "rate_limit",
+    );
   });
 
   it("logs primary metadata on probe success and failure fallback decisions", async () => {
@@ -380,77 +417,73 @@ describe("runWithModelFallback – probe logic", () => {
 
     const decisionPayloads = logCapture.records
       .filter((record) => record.message === "model fallback decision")
-      .map((record) => record.attributes ?? {});
+      .map((record) => requireRecord(record.attributes, "decision payload"));
 
-    expect(decisionPayloads).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event: "model_fallback_decision",
-          decision: "probe_cooldown_candidate",
-          candidateProvider: "openai",
-          candidateModel: "gpt-4.1-mini",
-          allowTransientCooldownProbe: true,
-        }),
-        expect.objectContaining({
-          event: "model_fallback_decision",
-          decision: "candidate_succeeded",
-          candidateProvider: "openai",
-          candidateModel: "gpt-4.1-mini",
-          isPrimary: true,
-          requestedModelMatched: true,
-        }),
-        expect.objectContaining({
-          event: "model_fallback_decision",
-          decision: "candidate_failed",
-          candidateProvider: "openai",
-          candidateModel: "gpt-4.1-mini",
-          isPrimary: true,
-          requestedModelMatched: true,
-          nextCandidateProvider: "anthropic",
-          nextCandidateModel: "claude-haiku-3-5",
-          fallbackStepType: "fallback_step",
-          fallbackStepFromModel: "openai/gpt-4.1-mini",
-          fallbackStepToModel: "anthropic/claude-haiku-3-5",
-          fallbackStepFromFailureReason: "rate_limit",
-          fallbackStepChainPosition: 1,
-          fallbackStepFinalOutcome: "next_fallback",
-        }),
-        expect.objectContaining({
-          event: "model_fallback_decision",
-          decision: "candidate_succeeded",
-          candidateProvider: "anthropic",
-          candidateModel: "claude-haiku-3-5",
-          isPrimary: false,
-          requestedModelMatched: false,
-          fallbackStepType: "fallback_step",
-          fallbackStepFromModel: "openai/gpt-4.1-mini",
-          fallbackStepToModel: "anthropic/claude-haiku-3-5",
-          fallbackStepFromFailureReason: "rate_limit",
-          fallbackStepChainPosition: 2,
-          fallbackStepFinalOutcome: "succeeded",
-        }),
-      ]),
+    expectRecordWithFields(decisionPayloads, {
+      event: "model_fallback_decision",
+      decision: "probe_cooldown_candidate",
+      candidateProvider: "openai",
+      candidateModel: "gpt-4.1-mini",
+      allowTransientCooldownProbe: true,
+    });
+    expectRecordWithFields(decisionPayloads, {
+      event: "model_fallback_decision",
+      decision: "candidate_succeeded",
+      candidateProvider: "openai",
+      candidateModel: "gpt-4.1-mini",
+      isPrimary: true,
+      requestedModelMatched: true,
+    });
+    expectRecordWithFields(decisionPayloads, {
+      event: "model_fallback_decision",
+      decision: "candidate_failed",
+      candidateProvider: "openai",
+      candidateModel: "gpt-4.1-mini",
+      isPrimary: true,
+      requestedModelMatched: true,
+      nextCandidateProvider: "anthropic",
+      nextCandidateModel: "claude-haiku-3-5",
+      fallbackStepType: "fallback_step",
+      fallbackStepFromModel: "openai/gpt-4.1-mini",
+      fallbackStepToModel: "anthropic/claude-haiku-3-5",
+      fallbackStepFromFailureReason: "rate_limit",
+      fallbackStepChainPosition: 1,
+      fallbackStepFinalOutcome: "next_fallback",
+    });
+    expectRecordWithFields(decisionPayloads, {
+      event: "model_fallback_decision",
+      decision: "candidate_succeeded",
+      candidateProvider: "anthropic",
+      candidateModel: "claude-haiku-3-5",
+      isPrimary: false,
+      requestedModelMatched: false,
+      fallbackStepType: "fallback_step",
+      fallbackStepFromModel: "openai/gpt-4.1-mini",
+      fallbackStepToModel: "anthropic/claude-haiku-3-5",
+      fallbackStepFromFailureReason: "rate_limit",
+      fallbackStepChainPosition: 2,
+      fallbackStepFinalOutcome: "succeeded",
+    });
+
+    const fallbackSteps = onFallbackStep.mock.calls.map(([step]) =>
+      requireRecord(step, "fallback step"),
     );
-    expect(onFallbackStep).toHaveBeenCalledWith(
-      expect.objectContaining({
-        fallbackStepType: "fallback_step",
-        fallbackStepFromModel: "openai/gpt-4.1-mini",
-        fallbackStepToModel: "anthropic/claude-haiku-3-5",
-        fallbackStepFromFailureReason: "rate_limit",
-        fallbackStepChainPosition: 1,
-        fallbackStepFinalOutcome: "next_fallback",
-      }),
-    );
-    expect(onFallbackStep).toHaveBeenCalledWith(
-      expect.objectContaining({
-        fallbackStepType: "fallback_step",
-        fallbackStepFromModel: "openai/gpt-4.1-mini",
-        fallbackStepToModel: "anthropic/claude-haiku-3-5",
-        fallbackStepFromFailureReason: "rate_limit",
-        fallbackStepChainPosition: 2,
-        fallbackStepFinalOutcome: "succeeded",
-      }),
-    );
+    expectRecordWithFields(fallbackSteps, {
+      fallbackStepType: "fallback_step",
+      fallbackStepFromModel: "openai/gpt-4.1-mini",
+      fallbackStepToModel: "anthropic/claude-haiku-3-5",
+      fallbackStepFromFailureReason: "rate_limit",
+      fallbackStepChainPosition: 1,
+      fallbackStepFinalOutcome: "next_fallback",
+    });
+    expectRecordWithFields(fallbackSteps, {
+      fallbackStepType: "fallback_step",
+      fallbackStepFromModel: "openai/gpt-4.1-mini",
+      fallbackStepToModel: "anthropic/claude-haiku-3-5",
+      fallbackStepFromFailureReason: "rate_limit",
+      fallbackStepChainPosition: 2,
+      fallbackStepFinalOutcome: "succeeded",
+    });
   });
 
   it.each([
@@ -628,13 +661,14 @@ describe("runWithModelFallback – probe logic", () => {
     const agentBKey = _probeThrottleInternals.resolveProbeThrottleKey("openai", "/tmp/agent-b");
     _probeThrottleInternals.lastProbeAttempt.set(agentAKey, NOW - 10_000);
 
-    expect(
+    expectOpenAiProbeSuspension(
       resolveOpenAiCooldownDecision({
         reason: "rate_limit",
         soonest: NOW + 30 * 1000,
         throttleKey: agentAKey,
       }),
-    ).toMatchObject({ type: "skip", reason: "rate_limit" });
+      "rate_limit",
+    );
     expect(
       resolveOpenAiCooldownDecision({
         reason: "rate_limit",
@@ -661,11 +695,12 @@ describe("runWithModelFallback – probe logic", () => {
         soonest: NOW + 60 * 1000,
       }),
     ).toEqual({ type: "attempt", reason: "billing", markProbe: true });
-    expect(
+    expectOpenAiProbeSuspension(
       resolveOpenAiCooldownDecision({
         reason: "billing",
         soonest: NOW + 30 * 60 * 1000,
       }),
-    ).toMatchObject({ type: "skip", reason: "billing" });
+      "billing",
+    );
   });
 });

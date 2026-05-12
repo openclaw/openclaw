@@ -5,6 +5,7 @@ import {
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import {
   CHAT_SESSIONS_ACTIVE_MINUTES,
+  CHAT_SESSIONS_REFRESH_LIMIT,
   clearPendingQueueItemsForRun,
   flushChatQueueForEvent,
   refreshChatAvatar,
@@ -15,6 +16,7 @@ import {
   loadCron,
   refreshActiveTab,
   setLastActiveSessionKey,
+  syncUrlWithSessionKey,
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
@@ -44,7 +46,6 @@ import {
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
-import { loadNodes, type NodesState } from "./controllers/nodes.ts";
 import {
   applySessionsChangedEvent,
   loadSessions,
@@ -58,6 +59,7 @@ import {
 } from "./gateway.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import { buildAgentMainSessionKey, normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
 import type { UiSettings } from "./storage.ts";
 import type {
   AgentsListResult,
@@ -108,6 +110,7 @@ type GatewayHost = {
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
   reconcileWebPushState?: () => Promise<void> | void;
+  sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
 };
 
 type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
@@ -130,6 +133,8 @@ type GatewayHostWithSideResults = GatewayHost & {
   chatSideResult?: ChatSideResult | null;
   chatSideResultTerminalRuns?: Set<string>;
 };
+
+const SESSIONS_CHANGED_RELOAD_DEBOUNCE_MS = 5_000;
 
 function enqueueApprovalRequest(host: GatewayHost, entry: ExecApprovalRequest | null) {
   if (!entry) {
@@ -169,6 +174,29 @@ function isChatTurnSessionChangedPayload(payload: unknown): boolean {
     record.reason === "send" ||
     record.reason === "steer"
   );
+}
+
+function clearSessionsChangedReloadTimer(host: GatewayHost) {
+  if (host.sessionsChangedReloadTimer == null) {
+    return;
+  }
+  globalThis.clearTimeout(host.sessionsChangedReloadTimer);
+  host.sessionsChangedReloadTimer = null;
+}
+
+function shouldRunDeferredSessionsReload(host: GatewayHost): boolean {
+  return host.connected && Boolean(host.client) && host.tab !== "chat";
+}
+
+function scheduleSessionsChangedReload(host: GatewayHost) {
+  clearSessionsChangedReloadTimer(host);
+  host.sessionsChangedReloadTimer = globalThis.setTimeout(() => {
+    host.sessionsChangedReloadTimer = null;
+    if (!shouldRunDeferredSessionsReload(host)) {
+      return;
+    }
+    void loadSessions(host as unknown as SessionsState);
+  }, SESSIONS_CHANGED_RELOAD_DEBOUNCE_MS);
 }
 
 type ConnectGatewayOptions = {
@@ -401,11 +429,66 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
   }
 }
 
+function resolveMainSessionFallback(host: GatewayHost): string {
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
+  if (mainSessionKey) {
+    return mainSessionKey;
+  }
+  const configuredMainKey =
+    snapshot?.sessionDefaults?.mainKey?.trim() || host.agentsList?.mainKey?.trim();
+  if (configuredMainKey && parseAgentSessionKey(configuredMainKey)) {
+    return configuredMainKey;
+  }
+  const defaultAgentId = host.agentsList?.defaultId?.trim() || "main";
+  return buildAgentMainSessionKey({
+    agentId: defaultAgentId,
+    mainKey: configuredMainKey,
+  });
+}
+
+function fallbackUnconfiguredSessionSelection(host: GatewayHost) {
+  const parsed = parseAgentSessionKey(host.sessionKey);
+  if (!parsed) {
+    return;
+  }
+  const configuredAgentIds = new Set(
+    (host.agentsList?.agents ?? []).map((entry) => normalizeAgentId(entry.id)),
+  );
+  if (configuredAgentIds.size === 0 || configuredAgentIds.has(normalizeAgentId(parsed.agentId))) {
+    return;
+  }
+  const nextSessionKey = resolveMainSessionFallback(host);
+  host.sessionKey = nextSessionKey;
+  applySettings(host as unknown as Parameters<typeof applySettings>[0], {
+    ...host.settings,
+    sessionKey: nextSessionKey,
+    lastActiveSessionKey: nextSessionKey,
+  });
+  syncUrlWithSessionKey(
+    host as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+    nextSessionKey,
+    true,
+  );
+}
+
+async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
+  try {
+    await loadAgents(host as unknown as AgentsState);
+    fallbackUnconfiguredSessionSelection(host);
+  } finally {
+    await refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+  }
+}
+
 export function connectGateway(host: GatewayHost, options?: ConnectGatewayOptions) {
   const shutdownHost = host as GatewayHostWithShutdownMessage;
   const reconnectReason = options?.reason ?? "initial";
   shutdownHost.pendingShutdownMessage = null;
   shutdownHost.resumeChatQueueAfterReconnect = false;
+  clearSessionsChangedReloadTimer(host);
   host.lastError = null;
   host.lastErrorCode = null;
   host.hello = null;
@@ -486,11 +569,8 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       if (host.tab !== "chat") {
         void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
       }
-      void loadAgents(host as unknown as AgentsState);
       void loadHealthState(host as unknown as HealthState);
-      void loadNodes(host as unknown as NodesState, { quiet: true });
-      void loadDevices(host as unknown as DevicesState, { quiet: true });
-      void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+      void loadAgentsThenRefreshActiveTab(host);
       // Re-run push reconciliation now that the gateway client is available.
       void host.reconcileWebPushState?.();
       void verifyPendingUpdateVersion(host, client);
@@ -500,6 +580,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      clearSessionsChangedReloadTimer(host);
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =
         resolveGatewayErrorDetailCode(error) ??
@@ -586,6 +667,8 @@ function handleTerminalChatEvent(
     if (state === "final") {
       void loadSessions(host as unknown as SessionsState, {
         activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+        agentId: resolveChatEventSessionListAgentId(host, payload),
+        limit: CHAT_SESSIONS_REFRESH_LIMIT,
       });
     }
   }
@@ -612,6 +695,21 @@ function isEventForDifferentActiveRun(
   activeRunId: string | null,
 ): boolean {
   return Boolean(activeRunId && payload && payload.runId !== activeRunId);
+}
+
+function resolveChatEventSessionListAgentId(
+  host: GatewayHost,
+  payload: ChatEventPayload | undefined,
+): string {
+  const sessionKey = payload?.sessionKey?.trim() || host.sessionKey;
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (parsed?.agentId) {
+    return parsed.agentId;
+  }
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  return normalizeAgentId(snapshot?.sessionDefaults?.defaultAgentId);
 }
 
 function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {
@@ -761,7 +859,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     if (result.applied || isChatTurnSessionChangedPayload(evt.payload)) {
       return;
     }
-    void loadSessions(host as unknown as SessionsState);
+    scheduleSessionsChangedReload(host);
     return;
   }
 

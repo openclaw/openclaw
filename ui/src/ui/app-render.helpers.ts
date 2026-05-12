@@ -1,6 +1,11 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
-import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
+import {
+  CHAT_SESSIONS_ACTIVE_MINUTES,
+  CHAT_SESSIONS_REFRESH_LIMIT,
+  refreshChat,
+  refreshChatAvatar,
+} from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import {
@@ -48,6 +53,25 @@ type ChatRefreshHost = AppViewState & {
   scrollToBottom(opts?: { smooth?: boolean }): void;
   updateComplete?: Promise<unknown>;
 };
+
+export async function handleChatManualRefresh(state: ChatRefreshHost): Promise<void> {
+  state.chatManualRefreshInFlight = true;
+  state.chatNewMessagesBelow = false;
+  await state.updateComplete;
+  state.resetToolStream();
+  try {
+    await refreshChat(state as unknown as Parameters<typeof refreshChat>[0], {
+      awaitHistory: true,
+      scheduleScroll: false,
+    });
+    state.scrollToBottom({ smooth: true });
+  } finally {
+    requestAnimationFrame(() => {
+      state.chatManualRefreshInFlight = false;
+      state.chatNewMessagesBelow = false;
+    });
+  }
+}
 
 export function resolveAssistantAttachmentAuthToken(
   state: Pick<AppViewState, "hello" | "settings" | "password">,
@@ -315,24 +339,7 @@ export function renderChatControls(state: AppViewState) {
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${refreshDisabled}
-        @click=${async () => {
-          const app = state as unknown as ChatRefreshHost;
-          app.chatManualRefreshInFlight = true;
-          app.chatNewMessagesBelow = false;
-          await app.updateComplete;
-          app.resetToolStream();
-          try {
-            await refreshChat(state as unknown as Parameters<typeof refreshChat>[0], {
-              scheduleScroll: false,
-            });
-            app.scrollToBottom({ smooth: true });
-          } finally {
-            requestAnimationFrame(() => {
-              app.chatManualRefreshInFlight = false;
-              app.chatNewMessagesBelow = false;
-            });
-          }
-        }}
+        @click=${() => handleChatManualRefresh(state as unknown as ChatRefreshHost)}
         title=${refreshLabel}
         aria-label=${refreshLabel}
         data-tooltip=${refreshLabel}
@@ -640,11 +647,12 @@ export async function createChatSession(state: AppViewState) {
       emitCommandHooks: parentSessionKey !== undefined ? true : undefined,
     },
     {
-      activeMinutes: 0,
-      limit: 0,
+      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+      limit: CHAT_SESSIONS_REFRESH_LIMIT,
       includeGlobal: true,
       includeUnknown: true,
       showArchived: state.sessionsShowArchived,
+      agentId: resolveAgentIdFromSessionKey(previousSessionKey),
     },
   );
   if (
@@ -671,11 +679,12 @@ export async function createChatSession(state: AppViewState) {
 
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
-    activeMinutes: 0,
-    limit: 0,
+    activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+    limit: CHAT_SESSIONS_REFRESH_LIMIT,
     includeGlobal: true,
     includeUnknown: true,
     showArchived: state.sessionsShowArchived,
+    agentId: parseAgentSessionKey(state.sessionKey)?.agentId,
   });
 }
 

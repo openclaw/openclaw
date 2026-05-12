@@ -13,7 +13,7 @@ type ListThinkingLevels = (
   provider?: string | null,
   model?: string | null,
   catalog?: CommandArgChoiceContext["catalog"],
-) => ThinkLevel[];
+) => string[];
 
 const BROWSER_SAFE_THINKING_LEVELS: ThinkLevel[] = [
   ...BASE_THINKING_LEVELS,
@@ -70,11 +70,13 @@ function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliase
   if (!command) {
     throw new Error(`registerAlias: unknown command key: ${key}`);
   }
-  const existing = new Set(
-    command.textAliases
-      .map((alias) => normalizeOptionalLowercaseString(alias))
-      .filter((alias): alias is string => Boolean(alias)),
-  );
+  const existing = new Set<string>();
+  for (const alias of command.textAliases) {
+    const lowered = normalizeOptionalLowercaseString(alias);
+    if (lowered) {
+      existing.add(lowered);
+    }
+  }
   for (const alias of aliases) {
     const trimmed = alias.trim();
     if (!trimmed) {
@@ -145,8 +147,12 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
 export function buildBuiltinChatCommands(
   params: { listThinkingLevels?: ListThinkingLevels } = {},
 ): ChatCommandDefinition[] {
-  const listThinkingLevelChoices =
+  const configuredThinkingLevels =
     params.listThinkingLevels ?? (() => BROWSER_SAFE_THINKING_LEVELS);
+  const listThinkingLevelChoices: ListThinkingLevels = (provider, model, catalog) => {
+    const levels = configuredThinkingLevels(provider, model, catalog);
+    return ["default", ...levels.filter((level) => level !== "default")];
+  };
   const commands: ChatCommandDefinition[] = [
     defineChatCommand({
       key: "help",
@@ -797,9 +803,9 @@ export function buildBuiltinChatCommands(
       args: [
         {
           name: "mode",
-          description: "status, on, or off",
+          description: "status, on, off, or default",
           type: "string",
-          choices: ["status", "on", "off"],
+          choices: ["status", "on", "off", "default"],
         },
       ],
       argsMenu: "auto",

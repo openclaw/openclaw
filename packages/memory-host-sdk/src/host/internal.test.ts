@@ -16,6 +16,11 @@ import {
   type MemoryMultimodalSettings,
 } from "./multimodal.js";
 
+type FileEntry = NonNullable<Awaited<ReturnType<typeof buildFileEntry>>>;
+type MultimodalIndexingChunk = NonNullable<
+  Awaited<ReturnType<typeof buildMultimodalChunkForIndexing>>
+>;
+
 let sharedTempRoot = "";
 let sharedTempId = 0;
 
@@ -36,6 +41,31 @@ function setupTempDirLifecycle(prefix: string): () => string {
     fsSync.mkdirSync(tmpDir, { recursive: true });
   });
   return () => tmpDir;
+}
+
+function expectFileEntry(entry: Awaited<ReturnType<typeof buildFileEntry>>): FileEntry {
+  if (!entry) {
+    throw new Error("Expected file entry to be built");
+  }
+  return entry;
+}
+
+function expectMultimodalIndexingChunk(
+  built: Awaited<ReturnType<typeof buildMultimodalChunkForIndexing>>,
+): MultimodalIndexingChunk {
+  if (!built) {
+    throw new Error("Expected multimodal indexing chunk to be built");
+  }
+  return built;
+}
+
+function expectEmbeddingInput(
+  chunk: MultimodalIndexingChunk["chunk"],
+): NonNullable<MultimodalIndexingChunk["chunk"]["embeddingInput"]> {
+  if (!chunk.embeddingInput) {
+    throw new Error("Expected multimodal chunk embedding input");
+  }
+  return chunk.embeddingInput;
 }
 
 const multimodal: MemoryMultimodalSettings = {
@@ -93,14 +123,15 @@ describe("memory host SDK package internals", () => {
     const note = await buildFileEntry(notePath, tmpDir);
     const image = await buildFileEntry(imagePath, tmpDir, multimodal);
 
-    expect(note).toMatchObject({ path: "note.md", kind: "markdown" });
-    expect(image).toMatchObject({
-      path: "diagram.png",
-      kind: "multimodal",
-      modality: "image",
-      mimeType: "image/png",
-      contentText: "Image file: diagram.png",
-    });
+    const noteEntry = expectFileEntry(note);
+    expect(noteEntry.path).toBe("note.md");
+    expect(noteEntry.kind).toBe("markdown");
+    const imageEntry = expectFileEntry(image);
+    expect(imageEntry.path).toBe("diagram.png");
+    expect(imageEntry.kind).toBe("multimodal");
+    expect(imageEntry.modality).toBe("image");
+    expect(imageEntry.mimeType).toBe("image/png");
+    expect(imageEntry.contentText).toBe("Image file: diagram.png");
   });
 
   it("builds multimodal chunks lazily and rejects changed files", async () => {
@@ -108,15 +139,18 @@ describe("memory host SDK package internals", () => {
     const imagePath = path.join(tmpDir, "diagram.png");
     fsSync.writeFileSync(imagePath, Buffer.from("png"));
 
-    const entry = await buildFileEntry(imagePath, tmpDir, multimodal);
-    const built = await buildMultimodalChunkForIndexing(entry!);
-    expect(built?.chunk.embeddingInput?.parts).toEqual([
-      { type: "text", text: "Image file: diagram.png" },
-      expect.objectContaining({ type: "inline-data", mimeType: "image/png" }),
-    ]);
+    const entry = expectFileEntry(await buildFileEntry(imagePath, tmpDir, multimodal));
+    const built = expectMultimodalIndexingChunk(await buildMultimodalChunkForIndexing(entry));
+    const parts = expectEmbeddingInput(built.chunk).parts ?? [];
+    expect(parts[0]).toEqual({ type: "text", text: "Image file: diagram.png" });
+    const inlinePart = parts[1];
+    if (inlinePart?.type !== "inline-data") {
+      throw new Error("Expected multimodal inline-data embedding part");
+    }
+    expect(inlinePart.mimeType).toBe("image/png");
 
-    fsSync.writeFileSync(imagePath, Buffer.alloc(entry!.size + 32, 1));
-    await expect(buildMultimodalChunkForIndexing(entry!)).resolves.toBeNull();
+    fsSync.writeFileSync(imagePath, Buffer.alloc(entry.size + 32, 1));
+    await expect(buildMultimodalChunkForIndexing(entry)).resolves.toBeNull();
   });
 
   it("chunks mixed text and preserves surrogate pairs", () => {

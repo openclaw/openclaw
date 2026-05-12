@@ -1,3 +1,4 @@
+import type { AuthConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
@@ -8,7 +9,7 @@ import type { ModelApi, ModelProviderConfig } from "openclaw/plugin-sdk/provider
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const PROVIDER_ID = "microsoft-foundry";
 export const DEFAULT_API = "openai-completions";
@@ -98,17 +99,8 @@ type FoundryModelCompat = {
   maxTokensField: "max_completion_tokens" | "max_tokens";
 };
 
-type FoundryAuthProfileConfig = {
-  provider: string;
-  mode: "api_key" | "oauth" | "token";
-  email?: string;
-};
-
 type FoundryConfigShape = {
-  auth?: {
-    profiles?: Record<string, FoundryAuthProfileConfig>;
-    order?: Record<string, string[]>;
-  };
+  auth?: AuthConfig;
   models?: {
     providers?: Record<string, ModelProviderConfig>;
   };

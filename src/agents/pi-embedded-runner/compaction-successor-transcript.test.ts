@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
@@ -32,6 +32,50 @@ function makeAssistant(text: string, timestamp: number) {
   });
 }
 
+function requireString(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+function requireValue<T>(value: T | null | undefined, label: string): T {
+  if (value == null) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+type TranscriptEntry = ReturnType<SessionManager["getEntries"]>[number];
+
+function requireEntryByIdAndType<T extends TranscriptEntry["type"]>(
+  entries: readonly TranscriptEntry[],
+  id: string,
+  type: T,
+  label: string,
+): Extract<TranscriptEntry, { type: T }> {
+  const entry = entries.find((candidate) => candidate.id === id);
+  if (!entry) {
+    throw new Error(`expected ${label}`);
+  }
+  if (entry.type !== type) {
+    throw new Error(`expected ${label} to be ${type}, got ${entry.type}`);
+  }
+  return entry as Extract<TranscriptEntry, { type: T }>;
+}
+
+function requireEntryByType<T extends TranscriptEntry["type"]>(
+  entries: readonly TranscriptEntry[],
+  type: T,
+  label: string,
+): Extract<TranscriptEntry, { type: T }> {
+  const entry = entries.find((candidate) => candidate.type === type);
+  if (!entry) {
+    throw new Error(`expected ${label}`);
+  }
+  return entry as Extract<TranscriptEntry, { type: T }>;
+}
+
 function createCompactedSession(sessionDir: string): {
   manager: SessionManager;
   sessionFile: string;
@@ -51,7 +95,12 @@ function createCompactedSession(sessionDir: string): {
   manager.appendCompaction("Summary of old user and old assistant.", firstKeptId, 5000);
   manager.appendMessage({ role: "user", content: "post user", timestamp: 5 });
   manager.appendMessage(makeAssistant("post assistant", 6));
-  return { manager, sessionFile: manager.getSessionFile()!, firstKeptId, oldUserId };
+  return {
+    manager,
+    sessionFile: requireString(manager.getSessionFile(), "compacted session file"),
+    firstKeptId,
+    oldUserId,
+  };
 }
 
 describe("rotateTranscriptAfterCompaction", () => {
@@ -69,14 +118,50 @@ describe("rotateTranscriptAfterCompaction", () => {
     openSpy.mockRestore();
 
     expect(result.rotated).toBe(true);
-    expect(result.sessionFile).toBeTruthy();
+    const successorFile = requireString(result.sessionFile, "successor session file");
 
-    const successor = SessionManager.open(result.sessionFile!);
-    expect(successor.getHeader()).toMatchObject({
-      parentSession: sessionFile,
-      cwd: dir,
-    });
-    expect(successor.buildSessionContext().messages.length).toBeGreaterThan(0);
+    const successor = SessionManager.open(successorFile);
+    const header = requireValue(successor.getHeader(), "successor header");
+    expect(header.parentSession).toBe(sessionFile);
+    expect(header.cwd).toBe(dir);
+    const messages = successor.buildSessionContext().messages;
+    expect(
+      messages.map((message) => {
+        if (message.role === "compactionSummary") {
+          return {
+            role: message.role,
+            summary: message.summary,
+            tokensBefore: message.tokensBefore,
+          };
+        }
+        if (!("content" in message)) {
+          throw new Error(`expected ${message.role} message content`);
+        }
+        return {
+          role: message.role,
+          content: message.content,
+          timestamp: message.timestamp,
+        };
+      }),
+    ).toEqual([
+      {
+        role: "compactionSummary",
+        summary: "Summary of old user and old assistant.",
+        tokensBefore: 5000,
+      },
+      { role: "user", content: "kept user", timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "kept assistant" }],
+        timestamp: 4,
+      },
+      { role: "user", content: "post user", timestamp: 5 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "post assistant" }],
+        timestamp: 6,
+      },
+    ]);
   });
 
   it("creates a compacted successor transcript and leaves the archive untouched", async () => {
@@ -92,26 +177,25 @@ describe("rotateTranscriptAfterCompaction", () => {
     });
 
     expect(result.rotated).toBe(true);
-    expect(result.sessionId).toBeTruthy();
-    expect(result.sessionFile).toBeTruthy();
-    expect(result.sessionFile).not.toBe(sessionFile);
+    const successorSessionId = requireString(result.sessionId, "successor session id");
+    const successorFile = requireString(result.sessionFile, "successor session file");
+    expect(successorFile).not.toBe(sessionFile);
     expect(await fs.readFile(sessionFile, "utf8")).toBe(originalBytes);
 
-    const successor = SessionManager.open(result.sessionFile!);
-    expect(successor.getHeader()).toMatchObject({
-      id: result.sessionId,
-      parentSession: sessionFile,
-      cwd: dir,
-    });
+    const successor = SessionManager.open(successorFile);
+    const header = requireValue(successor.getHeader(), "successor header");
+    expect(header.id).toBe(successorSessionId);
+    expect(header.parentSession).toBe(sessionFile);
+    expect(header.cwd).toBe(dir);
     expect(successor.getEntries().length).toBeLessThan(originalEntryCount);
     expect(successor.getBranch()[0]?.type).toBe("model_change");
-    expect(successor.getBranch()).toContainEqual(
-      expect.objectContaining({
-        type: "custom",
-        customType: "test-extension",
-        data: { cursor: "before-compaction" },
-      }),
+    const customBranchEntry = requireEntryByType(
+      successor.getBranch(),
+      "custom",
+      "preserved custom branch entry",
     );
+    expect(customBranchEntry.customType).toBe("test-extension");
+    expect(customBranchEntry.data).toStrictEqual({ cursor: "before-compaction" });
 
     const context = successor.buildSessionContext();
     const contextText = JSON.stringify(context.messages);
@@ -148,30 +232,29 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: manager.getSessionFile()!,
+      sessionFile: requireString(manager.getSessionFile(), "source session file"),
       now: () => new Date("2026-04-27T12:05:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(result.sessionFile!);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
     const entries = successor.getEntries();
     expect(entries.find((entry) => entry.id === staleModelId)).toBeUndefined();
     expect(entries.find((entry) => entry.id === staleThinkingId)).toBeUndefined();
     expect(entries.find((entry) => entry.id === staleSessionInfoId)).toBeUndefined();
-    expect(entries.filter((entry) => entry.type === "model_change")).toHaveLength(1);
-    expect(entries.filter((entry) => entry.type === "thinking_level_change")).toHaveLength(1);
-    expect(entries.filter((entry) => entry.type === "session_info")).toHaveLength(1);
-    expect(entries.find((entry) => entry.type === "model_change")).toMatchObject({
-      provider: "openai",
-      modelId: "gpt-5.2",
-    });
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        type: "custom",
-        customType: "test-extension",
-        data: { cursor: "preserved" },
-      }),
-    );
+    const countEntryType = (type: (typeof entries)[number]["type"]) =>
+      entries.reduce((count, entry) => count + (entry.type === type ? 1 : 0), 0);
+    expect(countEntryType("model_change")).toBe(1);
+    expect(countEntryType("thinking_level_change")).toBe(1);
+    expect(countEntryType("session_info")).toBe(1);
+    const modelChange = requireEntryByType(entries, "model_change", "current model change");
+    expect(modelChange.provider).toBe("openai");
+    expect(modelChange.modelId).toBe("gpt-5.2");
+    const customEntry = requireEntryByType(entries, "custom", "preserved custom entry");
+    expect(customEntry.customType).toBe("test-extension");
+    expect(customEntry.data).toStrictEqual({ cursor: "preserved" });
 
     const context = successor.buildSessionContext();
     expect(context.thinkingLevel).toBe("high");
@@ -198,14 +281,19 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: manager.getSessionFile()!,
+      sessionFile: requireString(manager.getSessionFile(), "source session file"),
       now: () => new Date("2026-04-27T12:10:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(result.sessionFile!);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
     const entries = successor.getEntries();
-    expect(entries.find((entry) => entry.id === firstDuplicateId)).toBeDefined();
+    requireValue(
+      entries.find((entry) => entry.id === firstDuplicateId),
+      "kept duplicate entry",
+    );
     expect(entries.find((entry) => entry.id === secondDuplicateId)).toBeUndefined();
     const contextText = JSON.stringify(successor.buildSessionContext().messages);
     expect(contextText.match(/deployment status check/g)).toHaveLength(1);
@@ -219,13 +307,11 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: manager.getSessionFile()!,
+      sessionFile: requireString(manager.getSessionFile(), "source session file"),
     });
 
-    expect(result).toMatchObject({
-      rotated: false,
-      reason: "no compaction entry",
-    });
+    expect(result.rotated).toBe(false);
+    expect(result.reason).toBe("no compaction entry");
   });
 
   it("uses a refreshed manager after manual boundary hardening", async () => {
@@ -240,11 +326,10 @@ describe("rotateTranscriptAfterCompaction", () => {
     });
     manager.appendMessage(makeAssistant("detailed recent answer", 4));
     const compactionId = manager.appendCompaction("fresh manual summary", recentTailId, 200);
-    const sessionFile = manager.getSessionFile();
-    expect(sessionFile).toBeTruthy();
-    const staleManager = SessionManager.open(sessionFile!);
+    const sessionFile = requireString(manager.getSessionFile(), "manual compaction session file");
+    const staleManager = SessionManager.open(sessionFile);
 
-    const hardened = await hardenManualCompactionBoundary({ sessionFile: sessionFile! });
+    const hardened = await hardenManualCompactionBoundary({ sessionFile });
     expect(hardened.applied).toBe(true);
     const staleLeaf = staleManager.getLeafEntry();
     expect(staleLeaf?.type).toBe("compaction");
@@ -254,13 +339,15 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(staleLeaf.firstKeptEntryId).toBe(recentTailId);
 
     const result = await rotateTranscriptAfterCompaction({
-      sessionManager: SessionManager.open(sessionFile!),
-      sessionFile: sessionFile!,
+      sessionManager: SessionManager.open(sessionFile),
+      sessionFile,
       now: () => new Date("2026-04-27T12:30:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(result.sessionFile!);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
     const successorText = JSON.stringify(successor.buildSessionContext().messages);
     expect(successorText).toContain("fresh manual summary");
     expect(successorText).not.toContain("recent question");
@@ -268,9 +355,10 @@ describe("rotateTranscriptAfterCompaction", () => {
     const successorCompaction = successor
       .getEntries()
       .find((entry) => entry.type === "compaction" && entry.id === compactionId);
-    expect(successorCompaction).toMatchObject({
-      firstKeptEntryId: compactionId,
-    });
+    if (!successorCompaction || successorCompaction.type !== "compaction") {
+      throw new Error("expected successor compaction entry");
+    }
+    expect(successorCompaction.firstKeptEntryId).toBe(compactionId);
   });
 
   it("preserves unsummarized sibling branches and branch summaries", async () => {
@@ -297,7 +385,7 @@ describe("rotateTranscriptAfterCompaction", () => {
     manager.appendCompaction("Summary of main branch.", firstKeptId, 5000);
     manager.appendMessage({ role: "user", content: "next", timestamp: 7 });
 
-    const sessionFile = manager.getSessionFile()!;
+    const sessionFile = requireString(manager.getSessionFile(), "source session file");
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
       sessionFile,
@@ -305,16 +393,27 @@ describe("rotateTranscriptAfterCompaction", () => {
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(result.sessionFile!);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
     const allEntries = successor.getEntries();
-    expect(allEntries.find((entry) => entry.id === branchSummaryId)).toMatchObject({
-      type: "branch_summary",
-      summary: "Summary of the abandoned branch.",
-    });
-    expect(allEntries.find((entry) => entry.id === siblingMsgId)).toMatchObject({
-      type: "message",
-      message: expect.objectContaining({ content: "do task B instead" }),
-    });
+    const branchSummary = requireEntryByIdAndType(
+      allEntries,
+      branchSummaryId,
+      "branch_summary",
+      "preserved branch summary",
+    );
+    expect(branchSummary.summary).toBe("Summary of the abandoned branch.");
+    const siblingMessage = requireEntryByIdAndType(
+      allEntries,
+      siblingMsgId,
+      "message",
+      "preserved sibling message",
+    );
+    if (!("content" in siblingMessage.message)) {
+      throw new Error("expected sibling message content");
+    }
+    expect(siblingMessage.message.content).toBe("do task B instead");
 
     const activeContextText = JSON.stringify(successor.buildSessionContext().messages);
     expect(activeContextText).toContain("Summary of main branch.");
@@ -352,12 +451,14 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: manager.getSessionFile()!,
+      sessionFile: requireString(manager.getSessionFile(), "source session file"),
       now: () => new Date("2026-04-27T13:00:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(result.sessionFile!);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
     const entries = successor.getEntries();
     const indexById = new Map(entries.map((entry, index) => [entry.id, index]));
     expect(indexById.get(branchFromId)).toBeLessThan(indexById.get(branchSummaryId)!);

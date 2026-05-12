@@ -20,6 +20,26 @@ async function createTempDir(prefix: string) {
   return await tempDirs.make(prefix);
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    const statError = error as NodeJS.ErrnoException;
+    expect({
+      code: statError.code,
+      path: statError.path,
+      syscall: statError.syscall,
+    }).toEqual({
+      code: "ENOENT",
+      path: targetPath,
+      syscall: "stat",
+    });
+    return;
+  }
+  throw new Error(`Expected path to be missing: ${targetPath}`);
+}
+
 async function createFixtureDir() {
   return await createTempDir(TEMP_DIR_PREFIX);
 }
@@ -107,12 +127,12 @@ describe("withTempDir", () => {
     const value = await withTempDir("openclaw-install-source-utils-", async (tmpDir) => {
       observedDir = tmpDir;
       await fs.writeFile(path.join(tmpDir, markerFile), "ok", "utf-8");
-      await expect(fs.stat(path.join(tmpDir, markerFile))).resolves.toBeDefined();
+      await expect(fs.readFile(path.join(tmpDir, markerFile), "utf8")).resolves.toBe("ok");
       return "done";
     });
 
     expect(value).toBe("done");
-    await expect(fs.stat(observedDir)).rejects.toThrow();
+    await expectPathMissing(observedDir);
   });
 });
 
@@ -185,10 +205,14 @@ describe("packNpmSpecToArchive", () => {
     });
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
       ["npm", "pack", "openclaw-plugin@1.2.3", "--ignore-scripts", "--json"],
-      expect.objectContaining({
+      {
         cwd,
         timeoutMs: 300_000,
-      }),
+        env: {
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+          NPM_CONFIG_IGNORE_SCRIPTS: "true",
+        },
+      },
     );
   });
 

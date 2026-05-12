@@ -90,7 +90,7 @@ backend emits it.
 | ---------- | --------------------------------------- | ---------------------------------- | ----------------------------------------------------- |
 | ComfyUI    | `workflow`                              | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
 | DeepInfra  | `black-forest-labs/FLUX-1-schnell`      | Yes (1 image)                      | `DEEPINFRA_API_KEY`                                   |
-| fal        | `fal-ai/flux/dev`                       | Yes                                | `FAL_KEY`                                             |
+| fal        | `fal-ai/flux/dev`                       | Yes (model-specific limits)        | `FAL_KEY`                                             |
 | Google     | `gemini-3.1-flash-image-preview`        | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
 | LiteLLM    | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
 | MiniMax    | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
@@ -107,13 +107,13 @@ Use `action: "list"` to inspect available providers and models at runtime:
 
 ## Provider capabilities
 
-| Capability            | ComfyUI            | DeepInfra | fal               | Google         | MiniMax               | OpenAI         | Vydra | xAI            |
-| --------------------- | ------------------ | --------- | ----------------- | -------------- | --------------------- | -------------- | ----- | -------------- |
-| Generate (max count)  | Workflow-defined   | 4         | 4                 | 4              | 9                     | 4              | 1     | 4              |
-| Edit / reference      | 1 image (workflow) | 1 image   | 1 image           | Up to 5 images | 1 image (subject ref) | Up to 5 images | -     | Up to 5 images |
-| Size control          | -                  | ✓         | ✓                 | ✓              | -                     | Up to 4K       | -     | -              |
-| Aspect ratio          | -                  | -         | ✓ (generate only) | ✓              | ✓                     | -              | -     | ✓              |
-| Resolution (1K/2K/4K) | -                  | -         | ✓                 | ✓              | -                     | -              | -     | 1K, 2K         |
+| Capability            | ComfyUI            | DeepInfra | fal                       | Google         | MiniMax               | OpenAI         | Vydra | xAI            |
+| --------------------- | ------------------ | --------- | ------------------------- | -------------- | --------------------- | -------------- | ----- | -------------- |
+| Generate (max count)  | Workflow-defined   | 4         | 4                         | 4              | 9                     | 4              | 1     | 4              |
+| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; NB2: 14 | Up to 5 images | 1 image (subject ref) | Up to 5 images | -     | Up to 5 images |
+| Size control          | -                  | ✓         | ✓                         | ✓              | -                     | Up to 4K       | -     | -              |
+| Aspect ratio          | -                  | -         | ✓                         | ✓              | ✓                     | -              | -     | ✓              |
+| Resolution (1K/2K/4K) | -                  | -         | ✓                         | ✓              | -                     | -              | -     | 1K, 2K         |
 
 ## Tool parameters
 
@@ -151,7 +151,11 @@ Use `action: "list"` to inspect available providers and models at runtime:
   `outputFormat: "png"` or `"webp"` for transparency-capable providers.
 </ParamField>
 <ParamField path="count" type="number">Number of images to generate (1-4).</ParamField>
-<ParamField path="timeoutMs" type="number">Optional provider request timeout in milliseconds.</ParamField>
+<ParamField path="timeoutMs" type="number">
+  Optional provider request timeout in milliseconds. When Codex calls
+  `image_generate` through dynamic tools, this per-call value still overrides
+  the configured default and is capped at 600000 ms.
+</ParamField>
 <ParamField path="filename" type="string">Output filename hint.</ParamField>
 <ParamField path="openai" type="object">
   OpenAI-only hints: `background`, `moderation`, `outputCompression`, and `user`.
@@ -218,7 +222,8 @@ from each attempt.
   <Accordion title="Timeouts">
     Set `agents.defaults.imageGenerationModel.timeoutMs` for slow image
     backends. A per-call `timeoutMs` tool parameter overrides the configured
-    default.
+    default. Codex dynamic-tool calls honor the same timeout budget, bounded
+    by OpenClaw's 600000 ms dynamic-tool bridge maximum.
   </Accordion>
   <Accordion title="Inspect at runtime">
     Use `action: "list"` to inspect the currently registered providers,
@@ -236,7 +241,9 @@ reference images. Pass a reference image path or URL:
 ```
 
 OpenAI, OpenRouter, Google, and xAI support up to 5 reference images via the
-`images` parameter. fal, MiniMax, and ComfyUI support 1.
+`images` parameter. fal supports 1 reference image for Flux image-to-image, up
+to 10 for GPT Image 2 edits, and up to 14 for Nano Banana 2 edits. MiniMax and
+ComfyUI support 1.
 
 ## Provider deep dives
 

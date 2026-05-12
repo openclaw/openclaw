@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import "../../test-support/browser-security.mock.js";
 import {
   readBody,
   resolveSafeRouteTabUrl,
@@ -71,9 +72,9 @@ describe("browser route shared helpers", () => {
     });
 
     it("normalizes non-object bodies to empty object", () => {
-      expect(readBody(requestWithBody(null))).toEqual({});
-      expect(readBody(requestWithBody("text"))).toEqual({});
-      expect(readBody(requestWithBody(["x"]))).toEqual({});
+      expect(readBody(requestWithBody(null))).toStrictEqual({});
+      expect(readBody(requestWithBody("text"))).toStrictEqual({});
+      expect(readBody(requestWithBody(["x"]))).toStrictEqual({});
     });
   });
 
@@ -163,8 +164,8 @@ describe("browser route shared helpers", () => {
 
       expect(run).not.toHaveBeenCalled();
       expect(response.statusCode).toBe(400);
-      expect(response.body).toMatchObject({ error: expect.any(String) });
       const body = response.body as { error?: unknown };
+      expect(typeof body.error).toBe("string");
       expect(body.error).not.toBe("");
     });
   });

@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "../internal/discord.js";
 import {
@@ -102,12 +102,45 @@ function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {})
   } as OpenClawConfig;
 }
 
+type MockCallReader = { mock: { calls: unknown[][] } };
+
+function firstMockArg(mock: MockCallReader, label: string) {
+  const firstCall = mock.mock.calls[0];
+  if (!firstCall) {
+    throw new Error(`expected ${label} mock call`);
+  }
+  return firstCall[0];
+}
+
+function mockMessages(mock: unknown): string[] {
+  return (mock as MockCallReader).mock.calls.map((call) => {
+    const message = call[0];
+    return typeof message === "string" ? message : "";
+  });
+}
+
+function expectMockLogContains(mock: unknown, expected: string): void {
+  expect(mockMessages(mock).join("\n")).toContain(expected);
+}
+
+function expectMockLogNotContains(mock: unknown, expected: string): void {
+  expect(mockMessages(mock).join("\n")).not.toContain(expected);
+}
+
+function expectMessagesContainAll(messages: string[], expected: string[]): void {
+  const joinedMessages = messages.join("\n");
+  for (const entry of expected) {
+    expect(joinedMessages).toContain(entry);
+  }
+}
+
 vi.mock("../voice/manager.runtime.js", () => {
   voiceRuntimeModuleLoadedMock();
   return {
     DiscordVoiceManager: function DiscordVoiceManager() {},
     DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
     DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
+    DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
   };
 });
 describe("monitorDiscordProvider", () => {
@@ -130,7 +163,7 @@ describe("monitorDiscordProvider", () => {
     | { listenerTimeout?: number; slowListenerThreshold?: number }
     | undefined => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
-    const opts = clientConstructorOptionsMock.mock.calls[0]?.[0] as {
+    const opts = firstMockArg(clientConstructorOptionsMock, "Discord client constructor") as {
       eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
     };
     return opts.eventQueue;
@@ -142,25 +175,37 @@ describe("monitorDiscordProvider", () => {
     requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
   } => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
-    return (
-      (clientConstructorOptionsMock.mock.calls[0]?.[0] as {
-        clientId?: string;
-        eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-        requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
-      }) ?? {}
-    );
+    return firstMockArg(clientConstructorOptionsMock, "Discord client constructor") as {
+      clientId?: string;
+      eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
+      requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
+    };
   };
 
   const getHealthProbe = () => {
     expect(reconcileAcpThreadBindingsOnStartupMock).toHaveBeenCalledTimes(1);
-    const firstCall = reconcileAcpThreadBindingsOnStartupMock.mock.calls.at(0) as
-      | [ReconcileStartupParams]
-      | undefined;
-    const reconcileParams = firstCall?.[0];
+    const reconcileParams = firstMockArg(
+      reconcileAcpThreadBindingsOnStartupMock,
+      "ACP startup reconciliation",
+    ) as ReconcileStartupParams;
     if (!reconcileParams?.healthProbe) {
       throw new Error("healthProbe was not wired into ACP startup reconciliation");
     }
     return reconcileParams.healthProbe;
+  };
+
+  const getMonitorLifecycleParams = (): {
+    gatewayReadyTimeoutMs?: number;
+    gatewayRuntimeReadyTimeoutMs?: number;
+  } => {
+    expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
+    const params = firstMockArg(monitorLifecycleMock, "Discord lifecycle monitor") as
+      | { gatewayReadyTimeoutMs?: number; gatewayRuntimeReadyTimeoutMs?: number }
+      | undefined;
+    if (!params) {
+      throw new Error("expected lifecycle monitor params");
+    }
+    return params;
   };
 
   beforeAll(async () => {
@@ -225,6 +270,7 @@ describe("monitorDiscordProvider", () => {
         DiscordVoiceManager: function DiscordVoiceManager() {},
         DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
         DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
+        DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
       } as never;
     });
     providerTesting.setLoadDiscordProviderSessionRuntime(
@@ -327,11 +373,12 @@ describe("monitorDiscordProvider", () => {
 
     expect(monitorLifecycleMock).not.toHaveBeenCalled();
     expect(disconnect).toHaveBeenCalledTimes(1);
-    expect(() =>
+    expect(
       emitter.emit("error", new Error("Max reconnect attempts (0) reached after code 1005")),
-    ).not.toThrow();
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("suppressed late gateway reconnect-exhausted error after dispose"),
+    ).toBe(true);
+    expectMockLogContains(
+      runtime.error,
+      "suppressed late gateway reconnect-exhausted error after dispose",
     );
   });
 
@@ -350,7 +397,7 @@ describe("monitorDiscordProvider", () => {
     expect(monitorLifecycleMock).not.toHaveBeenCalled();
     expect(createdBindingManagers).toHaveLength(1);
     expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("identity offline"));
+    expectMockLogContains(runtime.error, "identity offline");
   });
 
   it("fails closed before lifecycle when Discord bot identity has no usable id", async () => {
@@ -368,7 +415,7 @@ describe("monitorDiscordProvider", () => {
     expect(monitorLifecycleMock).not.toHaveBeenCalled();
     expect(createdBindingManagers).toHaveLength(1);
     expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("no usable id"));
+    expectMockLogContains(runtime.error, "no usable id");
   });
 
   it("does not double-stop thread bindings when lifecycle performs cleanup", async () => {
@@ -402,12 +449,9 @@ describe("monitorDiscordProvider", () => {
       runtime: baseRuntime(),
     });
 
-    expect(monitorLifecycleMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gatewayReadyTimeoutMs: 90_000,
-        gatewayRuntimeReadyTimeoutMs: 120_000,
-      }),
-    );
+    const lifecycleParams = getMonitorLifecycleParams();
+    expect(lifecycleParams.gatewayReadyTimeoutMs).toBe(90_000);
+    expect(lifecycleParams.gatewayRuntimeReadyTimeoutMs).toBe(120_000);
   });
 
   it("does not load the Discord voice runtime when voice is disabled", async () => {
@@ -655,7 +699,7 @@ describe("monitorDiscordProvider", () => {
         reason: "status-timeout",
       });
 
-      const firstCall = getAcpSessionStatusMock.mock.calls[0]?.[0] as
+      const firstCall = firstMockArg(getAcpSessionStatusMock, "ACP session status") as
         | { signal?: AbortSignal }
         | undefined;
       if (!firstCall?.signal) {
@@ -852,9 +896,7 @@ describe("monitorDiscordProvider", () => {
 
     await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(1));
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
-    expect(runtime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("failed to deploy native commands"),
-    );
+    expectMockLogNotContains(runtime.error, "failed to deploy native commands");
     expect(
       vi
         .mocked(runtime.log)
@@ -908,9 +950,7 @@ describe("monitorDiscordProvider", () => {
     expect(warningMessages[0]).toContain("retry after 0s");
     expect(warningMessages[0]).toContain("Message send/receive is unaffected.");
     expect(warningMessages[0]).not.toContain("body=");
-    expect(runtime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("native-slash-command-deploy-rest"),
-    );
+    expectMockLogNotContains(runtime.error, "native-slash-command-deploy-rest");
   });
 
   it("formats Discord deploy rate limits without raw response bodies", () => {
@@ -985,11 +1025,10 @@ describe("monitorDiscordProvider", () => {
 
     await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(1));
     expect(clientDeployCommandsMock).toHaveBeenCalledWith({ mode: "reconcile" });
-    expect(getConstructedClientOptions().requestOptions).toMatchObject({
-      timeout: 15_000,
-      runtimeProfile: "persistent",
-      maxQueueSize: 1000,
-    });
+    const requestOptions = getConstructedClientOptions().requestOptions;
+    expect(requestOptions?.timeout).toBe(15_000);
+    expect(requestOptions?.runtimeProfile).toBe("persistent");
+    expect(requestOptions?.maxQueueSize).toBe(1000);
     expect(getConstructedClientOptions().eventQueue?.listenerTimeout).toBe(120_000);
   });
 
@@ -1017,9 +1056,7 @@ describe("monitorDiscordProvider", () => {
     expect(listNativeCommandSpecsForConfigMock).not.toHaveBeenCalled();
     expect(getPluginCommandSpecsMock).not.toHaveBeenCalled();
     expect(clientDeployCommandsMock).not.toHaveBeenCalled();
-    expect(runtime.log).not.toHaveBeenCalledWith(
-      expect.stringContaining("cleared native commands"),
-    );
+    expectMockLogNotContains(runtime.log, "cleared native commands");
   });
 
   it("derives application id from token before probing Discord over REST", async () => {
@@ -1082,8 +1119,9 @@ describe("monitorDiscordProvider", () => {
       setStatus,
     });
 
-    expect(setStatus.mock.calls).toContainEqual([expect.objectContaining({ connected: true })]);
-    expect(setStatus.mock.calls).toContainEqual([expect.objectContaining({ connected: false })]);
+    const statuses = setStatus.mock.calls.map((call) => call[0] as { connected?: boolean });
+    expect(statuses.some((status) => status.connected === true)).toBe(true);
+    expect(statuses.some((status) => status.connected === false)).toBe(true);
   });
 
   it("logs Discord startup phases and early gateway debug events", async () => {
@@ -1104,26 +1142,20 @@ describe("monitorDiscordProvider", () => {
       runtime,
     });
 
-    await vi.waitFor(() =>
-      expect(
-        vi
-          .mocked(runtime.log)
-          .mock.calls.some((call) => String(call[0]).includes("deploy-commands:done")),
-      ).toBe(true),
-    );
+    await vi.waitFor(() => expectMockLogContains(runtime.log, "deploy-commands:done"));
 
     const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
-    expect(messages.some((msg) => msg.includes("fetch-application-id:start"))).toBe(true);
-    expect(messages.some((msg) => msg.includes("fetch-application-id:done"))).toBe(true);
-    expect(messages.some((msg) => msg.includes("deploy-commands:schedule"))).toBe(true);
-    expect(messages.some((msg) => msg.includes("deploy-commands:scheduled"))).toBe(true);
-    expect(messages.some((msg) => msg.includes("deploy-commands:done"))).toBe(true);
-    expect(messages.some((msg) => msg.includes("fetch-bot-identity:start"))).toBe(true);
-    expect(messages.some((msg) => msg.includes("fetch-bot-identity:done"))).toBe(true);
+    expectMessagesContainAll(messages, [
+      "fetch-application-id:start",
+      "fetch-application-id:done",
+      "deploy-commands:schedule",
+      "deploy-commands:scheduled",
+      "deploy-commands:done",
+      "fetch-bot-identity:start",
+      "fetch-bot-identity:done",
+    ]);
     expect(
-      messages.some(
-        (msg) => msg.includes("gateway-debug") && msg.includes("Gateway websocket opened"),
-      ),
+      messages.some((message) => /gateway-debug.*Gateway websocket opened/.test(message)),
     ).toBe(true);
   });
 
@@ -1136,6 +1168,6 @@ describe("monitorDiscordProvider", () => {
     });
 
     const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
-    expect(messages.some((msg) => msg.includes("discord startup ["))).toBe(false);
+    expect(messages.join("\n")).not.toContain("discord startup [");
   });
 });

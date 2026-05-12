@@ -10,7 +10,7 @@ import {
   type SessionContext,
   type SessionEntry,
   type SessionHeader,
-} from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
 import { appendRegularFile } from "../../infra/fs-safe.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 
@@ -114,9 +114,10 @@ export class TranscriptFileState {
     const branch: SessionEntry[] = [];
     let current = (fromId ?? this.leafId) ? this.byId.get((fromId ?? this.leafId)!) : undefined;
     while (current) {
-      branch.unshift(current);
+      branch.push(current);
       current = current.parentId ? this.byId.get(current.parentId) : undefined;
     }
+    branch.reverse();
     return branch;
   }
 

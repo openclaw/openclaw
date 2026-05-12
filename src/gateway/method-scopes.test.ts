@@ -29,10 +29,13 @@ afterEach(() => {
 describe("method scope resolution", () => {
   it.each([
     ["sessions.resolve", ["operator.read"]],
+    ["tasks.list", ["operator.read"]],
+    ["tasks.get", ["operator.read"]],
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
+    ["tasks.cancel", ["operator.write"]],
     ["tools.invoke", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
@@ -62,11 +65,120 @@ describe("method scope resolution", () => {
   });
 
   it("leaves node-only pending drain outside operator scopes", () => {
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.drain")).toEqual([]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("node.pending.drain")).toStrictEqual([]);
+  });
+
+  it("classifies plugin session actions with a CLI-safe default operator scope", () => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction")).toEqual([
+      "operator.write",
+    ]);
+    expect(isGatewayMethodClassified("plugins.sessionAction")).toBe(true);
+    expect(authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.write",
+    });
+  });
+
+  it("derives least-privilege scopes from registered plugin session action params", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.sessionActions = [
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+        action: {
+          id: "approve",
+          requiredScopes: ["operator.approvals"],
+          handler: () => ({ result: { ok: true } }),
+        },
+      },
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+        action: {
+          id: "view",
+          requiredScopes: ["operator.read"],
+          handler: () => ({ result: { ok: true } }),
+        },
+      },
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+        action: {
+          id: "default-write",
+          handler: () => ({ result: { ok: true } }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual(["operator.approvals"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: " scope-plugin ",
+        actionId: " view ",
+      }),
+    ).toEqual(["operator.read"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: "scope-plugin",
+        actionId: "default-write",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: "scope-plugin",
+        actionId: "missing",
+      }),
+    ).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
+    expect(
+      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.approvals"], {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.write"], {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual({ allowed: false, missingScope: "operator.approvals" });
+  });
+
+  it("falls back to broad operator scopes when a dynamic session action is not locally registered", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: "remote-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
   });
 
   it("returns empty scopes for unknown methods", () => {
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("totally.unknown.method")).toEqual([]);
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("totally.unknown.method")).toStrictEqual(
+      [],
+    );
   });
 
   it("reads plugin-registered gateway method scopes from the active plugin registry", () => {
@@ -221,20 +333,21 @@ describe("core gateway method classification", () => {
   it("treats node-role methods as classified even without operator scopes", () => {
     expect(isGatewayMethodClassified("node.pending.drain")).toBe(true);
     expect(isGatewayMethodClassified("node.pending.pull")).toBe(true);
+    expect(isGatewayMethodClassified("node.pluginSurface.refresh")).toBe(true);
   });
 
   it("classifies every exposed core gateway handler method", () => {
     const unclassified = Object.keys(coreGatewayHandlers).filter(
       (method) => !isGatewayMethodClassified(method),
     );
-    expect(unclassified).toEqual([]);
+    expect(unclassified).toStrictEqual([]);
   });
 
   it("classifies every listed gateway method name", () => {
     const unclassified = listGatewayMethods().filter(
       (method) => !isGatewayMethodClassified(method),
     );
-    expect(unclassified).toEqual([]);
+    expect(unclassified).toStrictEqual([]);
   });
 });
 

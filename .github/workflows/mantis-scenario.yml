@@ -12,6 +12,8 @@ on:
           - discord-status-reactions-tool-only
           - discord-thread-reply-filepath-attachment
           - slack-desktop-smoke
+          - telegram-live
+          - telegram-desktop-proof
       baseline_ref:
         description: Optional baseline ref for before/after scenarios
         required: false
@@ -83,6 +85,35 @@ jobs:
                 workflow run mantis-slack-desktop-smoke.yml
                 --repo "$GITHUB_REPOSITORY"
                 --ref main
+                -f "candidate_ref=${CANDIDATE_REF}"
+              )
+              if [[ -n "${PR_NUMBER:-}" ]]; then
+                args+=(-f "pr_number=${PR_NUMBER}")
+              fi
+              gh "${args[@]}"
+              ;;
+            telegram-live)
+              args=(
+                workflow run mantis-telegram-live.yml
+                --repo "$GITHUB_REPOSITORY"
+                --ref main
+                -f "candidate_ref=${CANDIDATE_REF}"
+              )
+              if [[ -n "${PR_NUMBER:-}" ]]; then
+                args+=(-f "pr_number=${PR_NUMBER}")
+              fi
+              gh "${args[@]}"
+              ;;
+            telegram-desktop-proof)
+              baseline_ref="$BASELINE_REF"
+              if [[ -z "$baseline_ref" || "$baseline_ref" == "0bf06e953fdda290799fc9fb9244a8f67fdae593" ]]; then
+                baseline_ref="main"
+              fi
+              args=(
+                workflow run mantis-telegram-desktop-proof.yml
+                --repo "$GITHUB_REPOSITORY"
+                --ref main
+                -f "baseline_ref=${baseline_ref}"
                 -f "candidate_ref=${CANDIDATE_REF}"
               )
               if [[ -n "${PR_NUMBER:-}" ]]; then

@@ -69,7 +69,22 @@ function expectWrapperToContainPathSuffix(wrapper: string, pathSuffix: string[])
   const nativeSuffix = pathSuffix.join(path.sep);
   const escapedNativeSuffix = JSON.stringify(nativeSuffix).slice(1, -1);
   const posixSuffix = pathSuffix.join("/");
-  expect(wrapper.includes(escapedNativeSuffix) || wrapper.includes(posixSuffix)).toBe(true);
+  if (wrapper.includes(escapedNativeSuffix)) {
+    expect(wrapper).toContain(escapedNativeSuffix);
+  } else {
+    expect(wrapper).toContain(posixSuffix);
+  }
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let error: unknown;
+  try {
+    await fs.access(targetPath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 afterEach(async () => {
@@ -117,9 +132,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain(JSON.stringify(installedBinPath));
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
-    await expect(
-      fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(path.join(agentDir, "acp-auth", "codex", "auth.json"));
   });
 
   it("keeps generated wrappers usable when chmod is rejected by the state filesystem", async () => {
@@ -163,7 +176,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@zed-industries/codex-acp@0.13.0"');
+    expect(wrapper).toContain('"@zed-industries/codex-acp@0.14.0"');
     expect(wrapper).toContain('"--", "codex-acp"');
     expect(wrapper).not.toContain("@zed-industries/codex-acp@^0.11.1");
   });
@@ -184,7 +197,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.32.0"');
+    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.33.1"');
     expect(wrapper).toContain('"--", "claude-agent-acp"');
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@^0.31.0");
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.0");
@@ -208,6 +221,34 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(wrapper).toContain("@zed-industries/codex-acp");
     expectWrapperToContainPathSuffix(wrapper, ["bin", "codex-acp.js"]);
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
+  });
+
+  it("keeps the orphaned wrapper alive long enough to force-kill the child process group", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+    });
+
+    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
+    expect(wrapper).toContain('killChildTree("SIGTERM")');
+    expect(wrapper).toContain('killChildTree("SIGKILL", { force: true })');
+    expect(wrapper).toMatch(
+      /forceKillTimer = setTimeout\(\(\) => \{\s*killChildTree\("SIGKILL", \{ force: true \}\);\s*process\.exit\(1\);/s,
+    );
+    expect(wrapper).toMatch(
+      /child\.on\("exit", \(code, signal\) => \{\s*if \(parentWatcher\) \{\s*clearInterval\(parentWatcher\);\s*\}\s*if \(orphanCleanupStarted\) \{\s*return;\s*\}/s,
+    );
+    expect(wrapper).not.toMatch(
+      /forceKillTimer = setTimeout\(\(\) => killChildTree\("SIGKILL"\), 1_500\);\s*forceKillTimer\.unref\?\.\(\);\s*process\.exit\(1\);/s,
+    );
   });
 
   it("uses the bundled Claude ACP dependency by default when it is installed", async () => {
@@ -251,11 +292,21 @@ describe("prepareAcpxCodexAuthConfig", () => {
       resolveInstalledCodexAcpBinPath: async () => installedBinPath,
     });
 
-    const { stdout } = await execFileAsync(process.execPath, [generated.wrapperPath], {
-      cwd: root,
-    });
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        generated.wrapperPath,
+        "--openclaw-acpx-lease-id",
+        "lease-1",
+        "--openclaw-gateway-instance-id",
+        "gateway-1",
+      ],
+      {
+        cwd: root,
+      },
+    );
     const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexHome?: unknown };
-    expect(launched.argv).toEqual([]);
+    expect(launched.argv).toStrictEqual([]);
     const expectedCodexHome = await fs.realpath(path.join(stateDir, "acpx", "codex-home"));
     expect(path.resolve(String(launched.codexHome))).toBe(expectedCodexHome);
   });
@@ -326,15 +377,57 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
     expect(isolatedConfig).not.toContain("notify");
     expect(isolatedConfig).not.toContain("SkyComputerUseClient");
+    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(root))}]`);
+    expect(isolatedConfig).toContain('trust_level = "trusted"');
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain("CODEX_HOME: codexHome");
     expect(wrapper).not.toContain(sourceCodexHome);
-    await expect(
-      fs.access(path.join(agentDir, "acp-auth", "codex-source", "auth.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(path.join(agentDir, "acp-auth", "codex-source", "auth.json"));
+    await expectPathMissing(path.join(agentDir, "acp-auth", "codex", "auth.json"));
+  });
+
+  it("copies only trusted Codex project declarations into the isolated Codex home", async () => {
+    const root = await makeTempDir();
+    const sourceCodexHome = path.join(root, "source-codex");
+    const stateDir = path.join(root, "state");
+    const explicitProject = path.join(root, "explicit project");
+    const inlineProject = path.join(root, "inline-project");
+    const mapProject = path.join(root, "map-project");
+    const untrustedProject = path.join(root, "untrusted-project");
+    const generated = generatedCodexPaths(stateDir);
+    await fs.mkdir(sourceCodexHome, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceCodexHome, "config.toml"),
+      [
+        'notify = ["SkyComputerUseClient", "turn-ended"]',
+        `projects = { ${JSON.stringify(mapProject)} = { trust_level = "trusted" }, ${JSON.stringify(untrustedProject)} = { trust_level = "untrusted" } }`,
+        "[projects]",
+        `${JSON.stringify(inlineProject)} = { trust_level = "trusted" }`,
+        `[projects.${JSON.stringify(explicitProject)}]`,
+        'trust_level = "trusted"',
+        "",
+      ].join("\n"),
+    );
+    process.env.CODEX_HOME = sourceCodexHome;
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => undefined,
+    });
+
+    const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
+    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(root))}]`);
+    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(explicitProject))}]`);
+    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(inlineProject))}]`);
+    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(path.resolve(mapProject))}]`);
+    expect(isolatedConfig).not.toContain(untrustedProject);
+    expect(isolatedConfig).not.toContain("notify");
+    expect(isolatedConfig).not.toContain("SkyComputerUseClient");
   });
 
   it("normalizes an explicitly configured Codex ACP command to the local wrapper", async () => {

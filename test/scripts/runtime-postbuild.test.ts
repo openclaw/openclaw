@@ -1,11 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { discoverStaticExtensionAssets } from "../../scripts/lib/static-extension-assets.mjs";
+import {
+  copyStaticExtensionAssetsToRuntimeOverlay,
+  discoverStaticExtensionAssets,
+} from "../../scripts/lib/static-extension-assets.mjs";
 import {
   copyStaticExtensionAssets,
   listStaticExtensionAssetOutputs,
   rewriteRootRuntimeImportsToStableAliases,
+  runRuntimePostBuild,
   writeLegacyCliExitCompatChunks,
   writeLegacyRootRuntimeCompatAliases,
   writeStableRootRuntimeAliases,
@@ -14,16 +18,28 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  expect(statError).toBeInstanceOf(Error);
+  if (!(statError instanceof Error)) {
+    throw new Error("expected missing path error");
+  }
+  expect(Reflect.get(statError, "code")).toBe("ENOENT");
+}
+
 describe("runtime postbuild static assets", () => {
   it("tracks plugin-owned static assets that release packaging must ship", () => {
-    expect(listStaticExtensionAssetOutputs()).toEqual(
-      expect.arrayContaining([
-        "dist/extensions/acpx/error-format.mjs",
-        "dist/extensions/acpx/mcp-command-line.mjs",
-        "dist/extensions/acpx/mcp-proxy.mjs",
-        "dist/extensions/diffs/assets/viewer-runtime.js",
-      ]),
-    );
+    expect(listStaticExtensionAssetOutputs()).toEqual([
+      "dist/extensions/acpx/error-format.mjs",
+      "dist/extensions/acpx/mcp-command-line.mjs",
+      "dist/extensions/acpx/mcp-proxy.mjs",
+      "dist/extensions/diffs/assets/viewer-runtime.js",
+    ]);
   });
 
   it("discovers static assets from plugin package metadata", async () => {
@@ -74,6 +90,168 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(destPath, "utf8")).toBe("proxy-data\n");
   });
 
+  it("stages copied static assets byte-for-byte during the same postbuild run", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const source = "extensions/diffs/assets/viewer-runtime.js";
+    const output = "assets/viewer-runtime.js";
+    const distAsset = "dist/extensions/diffs/assets/viewer-runtime.js";
+    const runtimeAsset = "dist-runtime/extensions/diffs/assets/viewer-runtime.js";
+
+    await fs.mkdir(path.join(rootDir, "src", "plugin-sdk"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "src", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf8",
+    );
+    await fs.mkdir(path.join(rootDir, "extensions", "diffs", "assets"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "extensions", "diffs", "package.json"),
+      JSON.stringify({
+        name: "@openclaw/diffs",
+        openclaw: {
+          extensions: ["./index.ts"],
+          build: {
+            staticAssets: [{ source: `./${output}`, output }],
+          },
+        },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "extensions", "diffs", "openclaw.plugin.json"),
+      '{"id":"diffs"}\n',
+      "utf8",
+    );
+    await fs.writeFile(path.join(rootDir, source), "export const viewer = true;\n", "utf8");
+
+    runRuntimePostBuild({
+      cwd: rootDir,
+      repoRoot: rootDir,
+      rootDir,
+      timings: false,
+    });
+
+    await expect(fs.readFile(path.join(rootDir, distAsset), "utf8")).resolves.toBe(
+      "export const viewer = true;\n",
+    );
+    await expect(fs.readFile(path.join(rootDir, runtimeAsset), "utf8")).resolves.toBe(
+      "export const viewer = true;\n",
+    );
+  });
+
+  it("preserves restored dist static assets when plugin sources are absent", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const output = "assets/viewer-runtime.js";
+    const distPluginDir = path.join(rootDir, "dist", "extensions", "diffs");
+    const runtimeAsset = path.join(rootDir, "dist-runtime", "extensions", "diffs", output);
+
+    await fs.mkdir(path.join(rootDir, "src", "plugin-sdk"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "src", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf8",
+    );
+    await fs.mkdir(path.join(distPluginDir, "assets"), { recursive: true });
+    await fs.writeFile(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
+    await fs.writeFile(
+      path.join(distPluginDir, "openclaw.plugin.json"),
+      '{"id":"diffs"}\n',
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distPluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/diffs",
+        openclaw: {
+          extensions: ["./index.js"],
+          build: {
+            staticAssets: [{ source: `./${output}`, output }],
+          },
+        },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(path.join(distPluginDir, output), "console.log('viewer');\n", "utf8");
+
+    runRuntimePostBuild({
+      cwd: rootDir,
+      repoRoot: rootDir,
+      rootDir,
+      timings: false,
+    });
+
+    await expect(fs.readFile(runtimeAsset, "utf8")).resolves.toBe("console.log('viewer');\n");
+  });
+
+  it("skips runtime overlay asset copies when the runtime extension root is absent", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    await fs.mkdir(path.join(rootDir, "extensions", "demo", "assets"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "extensions", "demo", "assets", "viewer.js"),
+      "viewer\n",
+      "utf8",
+    );
+
+    copyStaticExtensionAssetsToRuntimeOverlay({
+      rootDir,
+      assets: [
+        {
+          src: "extensions/demo/assets/viewer.js",
+          dest: "dist/extensions/demo/assets/viewer.js",
+        },
+      ],
+    });
+
+    await expectPathMissing(path.join(rootDir, "dist-runtime", "extensions", "demo", "assets"));
+  });
+
+  it("ignores runtime overlay static assets outside dist extensions", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    await fs.mkdir(path.join(rootDir, "dist-runtime", "extensions"), { recursive: true });
+    await fs.mkdir(path.join(rootDir, "extensions", "demo", "assets"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "extensions", "demo", "assets", "viewer.js"),
+      "viewer\n",
+      "utf8",
+    );
+
+    copyStaticExtensionAssetsToRuntimeOverlay({
+      rootDir,
+      assets: [
+        {
+          src: "extensions/demo/assets/viewer.js",
+          dest: "dist/other/demo/assets/viewer.js",
+        },
+      ],
+    });
+
+    await expectPathMissing(path.join(rootDir, "dist-runtime", "other", "demo", "assets"));
+  });
+
+  it("warns when a runtime overlay static asset source is missing", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const warn = vi.fn();
+    await fs.mkdir(path.join(rootDir, "dist-runtime", "extensions"), { recursive: true });
+
+    copyStaticExtensionAssetsToRuntimeOverlay({
+      rootDir,
+      assets: [
+        {
+          src: "extensions/demo/assets/missing.js",
+          dest: "dist/extensions/demo/assets/missing.js",
+        },
+      ],
+      warn,
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      "[runtime-postbuild] static asset not found, skipping: extensions/demo/assets/missing.js",
+    );
+    await expectPathMissing(
+      path.join(rootDir, "dist-runtime", "extensions", "demo", "assets", "missing.js"),
+    );
+  });
+
   it("warns when a declared static asset is missing", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const warn = vi.fn();
@@ -117,7 +295,7 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(path.join(distDir, "runtime-tts.runtime.js"), "utf8")).toBe(
       'export * from "./runtime-tts.runtime-AbCd1234.js";\n',
     );
-    await expect(fs.stat(path.join(distDir, "library.js"))).rejects.toThrow();
+    await expectPathMissing(path.join(distDir, "library.js"));
   });
 
   it("does not write ambiguous stable aliases for colliding root runtime chunks", async () => {
@@ -142,7 +320,7 @@ describe("runtime postbuild static assets", () => {
 
     writeStableRootRuntimeAliases({ rootDir });
 
-    await expect(fs.stat(path.join(distDir, "install.runtime.js"))).rejects.toThrow();
+    await expectPathMissing(path.join(distDir, "install.runtime.js"));
   });
 
   it("writes a stable plugin install runtime alias when install runtimes collide", async () => {
@@ -473,6 +651,32 @@ describe("runtime postbuild static assets", () => {
     );
     expect(await fs.readFile(path.join(distDir, "server-close-DvAvfgr8.js"), "utf8")).toBe(
       'export * from "./server-close.runtime.js";\n',
+    );
+  });
+
+  it("writes compatibility aliases for previous tool and ACP manager chunk names", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(path.join(distDir, "acp", "control-plane"), { recursive: true });
+    await fs.mkdir(path.join(distDir, "web-fetch"), { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "acp", "control-plane", "manager.js"),
+      "export const getAcpSessionManager = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "web-fetch", "runtime.js"),
+      "export const resolveWebFetchDefinition = true;\n",
+      "utf8",
+    );
+
+    writeLegacyRootRuntimeCompatAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "manager-DzRWrKSA.js"), "utf8")).toBe(
+      'export * from "./acp/control-plane/manager.js";\n',
+    );
+    expect(await fs.readFile(path.join(distDir, "runtime-CeGN4XUC.js"), "utf8")).toBe(
+      'export * from "./web-fetch/runtime.js";\n',
     );
   });
 

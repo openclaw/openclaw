@@ -9,6 +9,7 @@ import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
+import { resolveToolDisplay } from "../tool-display.ts";
 import type {
   MessageContentItem,
   MessageGroup,
@@ -391,7 +392,7 @@ export function renderMessageGroup(
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
-    canvasHostUrl?: string | null;
+    canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
     contextWindow?: number | null;
@@ -456,7 +457,7 @@ export function renderMessageGroup(
               isToolExpanded: opts.isToolExpanded,
               onToggleToolExpanded: opts.onToggleToolExpanded,
               onRequestUpdate: opts.onRequestUpdate,
-              canvasHostUrl: opts.canvasHostUrl,
+              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
               basePath: opts.basePath,
               localMediaPreviewRoots: opts.localMediaPreviewRoots,
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
@@ -1285,7 +1286,7 @@ function renderInlineToolCards(
     onOpenSidebar?: (content: SidebarContent) => void;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
-    canvasHostUrl?: string | null;
+    canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
   },
@@ -1299,7 +1300,7 @@ function renderInlineToolCards(
             ? () => opts.onToggleToolExpanded?.(`${opts.messageKey}:toolcard:${index}`)
             : () => undefined,
           onOpenSidebar: opts.onOpenSidebar,
-          canvasHostUrl: opts.canvasHostUrl,
+          canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
           embedSandboxMode: opts.embedSandboxMode ?? "scripts",
           allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
         }),
@@ -1381,7 +1382,7 @@ function renderGroupedMessage(
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string) => void;
     onRequestUpdate?: () => void;
-    canvasHostUrl?: string | null;
+    canvasPluginSurfaceUrl?: string | null;
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
@@ -1465,19 +1466,30 @@ function renderGroupedMessage(
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
-  const toolSummaryLabel =
-    toolNames.length <= 3
+  const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
+  const singleToolDisplay = singleToolCard
+    ? resolveToolDisplay({
+        name: singleToolCard.name,
+        args: singleToolCard.args,
+        detailMode: "explain",
+      })
+    : null;
+  const toolSummaryLabel = singleToolDisplay?.detail
+    ? singleToolCard?.outputText?.trim()
+      ? "output"
+      : undefined
+    : toolNames.length <= 3
       ? toolNames.join(", ")
       : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolPreview =
     markdown && !toolSummaryLabel ? markdown.trim().replace(/\s+/g, " ").slice(0, 120) : "";
-  const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
   const toolMessageLabel =
-    singleToolCard && !markdown && !hasImages
-      ? singleToolCard.outputText?.trim()
-        ? "Tool output"
-        : "Tool call"
-      : "Tool output";
+    singleToolDisplay?.detail && !markdown && !hasImages
+      ? singleToolDisplay.detail
+      : singleToolDisplay && !markdown && !hasImages
+        ? singleToolDisplay.label
+        : "Tool output";
+  const toolMessageIcon = singleToolDisplay ? icons[singleToolDisplay.icon] : icons.zap;
 
   const hasActions = canCopyMarkdown || canExpand;
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
@@ -1504,7 +1516,7 @@ function renderGroupedMessage(
                 aria-expanded=${String(toolMessageExpanded)}
                 @click=${() => opts.onToggleToolMessageExpanded?.(toolMessageDisclosureId)}
               >
-                <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
+                <span class="chat-tool-msg-summary__icon">${toolMessageIcon}</span>
                 <span class="chat-tool-msg-summary__label">${toolMessageLabel}</span>
                 ${toolSummaryLabel
                   ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
@@ -1551,7 +1563,7 @@ function renderGroupedMessage(
                           ? renderExpandedToolCardContent(
                               singleToolCard,
                               onOpenSidebar,
-                              opts.canvasHostUrl,
+                              opts.canvasPluginSurfaceUrl,
                               opts.embedSandboxMode ?? "scripts",
                               opts.allowExternalEmbedUrls ?? false,
                             )
@@ -1560,7 +1572,7 @@ function renderGroupedMessage(
                               onOpenSidebar,
                               isToolExpanded: opts.isToolExpanded,
                               onToggleToolExpanded: opts.onToggleToolExpanded,
-                              canvasHostUrl: opts.canvasHostUrl,
+                              canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                               allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
                             })
@@ -1589,7 +1601,7 @@ function renderGroupedMessage(
                   (block) => html`${renderToolPreview(block.preview, "chat_message", {
                     onOpenSidebar,
                     rawText: block.rawText ?? null,
-                    canvasHostUrl: opts.canvasHostUrl,
+                    canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                     embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                   })}
                   ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
@@ -1614,7 +1626,7 @@ function renderGroupedMessage(
                   onOpenSidebar,
                   isToolExpanded: opts.isToolExpanded,
                   onToggleToolExpanded: opts.onToggleToolExpanded,
-                  canvasHostUrl: opts.canvasHostUrl,
+                  canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                   embedSandboxMode: opts.embedSandboxMode ?? "scripts",
                   allowExternalEmbedUrls: opts.allowExternalEmbedUrls ?? false,
                 })

@@ -87,6 +87,26 @@ function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>)
   });
 }
 
+async function raceWithTimeoutResult<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutResult: T,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(timeoutResult), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function createVisibleChatAcpCoordinator(cfg: OpenClawConfig) {
   return createAcpDispatchDeliveryCoordinator({
     cfg,
@@ -111,13 +131,13 @@ async function expectVisibleChatBlockRoutesToAccount(
 
   await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
 
-  expect(deliveryMocks.routeReply).toHaveBeenCalledWith(
-    expect.objectContaining({
-      channel: "visiblechat",
-      to: "channel:thread-1",
-      accountId,
-    }),
-  );
+  expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
+  const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
+    [{ channel?: string; to?: string; accountId?: string }]
+  >;
+  expect(routeParams.channel).toBe("visiblechat");
+  expect(routeParams.to).toBe("channel:thread-1");
+  expect(routeParams.accountId).toBe(accountId);
 }
 
 describe("createAcpDispatchDeliveryCoordinator", () => {
@@ -356,12 +376,11 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     );
     const coordinator = createCoordinator(onReplyStart);
 
-    const delivered = await Promise.race([
+    const delivered = await raceWithTimeoutResult(
       coordinator.deliver("final", { text: "hello" }).then(() => "delivered"),
-      new Promise<string>((resolve) => {
-        setTimeout(() => resolve("timed-out"), 50);
-      }),
-    ]);
+      50,
+      "timed-out",
+    );
 
     expect(delivered).toBe("delivered");
     expect(onReplyStart).toHaveBeenCalledTimes(1);
@@ -490,12 +509,12 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
 
-    expect(deliveryMocks.routeReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:claude:acp:spawned",
-        policySessionKey: "agent:main:main",
-      }),
-    );
+    expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
+    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
+      [{ sessionKey?: string; policySessionKey?: string }]
+    >;
+    expect(routeParams.sessionKey).toBe("agent:claude:acp:spawned");
+    expect(routeParams.policySessionKey).toBe("agent:main:main");
   });
 
   it("routes ACP replies when cfg.channels is missing", async () => {

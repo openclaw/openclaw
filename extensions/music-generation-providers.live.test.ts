@@ -2,7 +2,7 @@ import {
   resolveApiKeyForProvider,
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -285,11 +285,11 @@ describeLive("music generation provider live", () => {
       );
 
       if (attempted.length === 0) {
-        expect(failures).toEqual([]);
+        expect(failures).toStrictEqual([]);
         console.warn("[live:music-generation] no provider had usable auth; skipping assertions");
         return;
       }
-      expect(failures).toEqual([]);
+      expect(failures).toStrictEqual([]);
     },
     10 * 60_000,
   );

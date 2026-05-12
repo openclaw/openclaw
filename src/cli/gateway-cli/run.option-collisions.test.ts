@@ -19,7 +19,8 @@ const forceFreePortAndWait = vi.fn(async (_port: number, _opts: unknown) => ({
 }));
 const waitForPortBindable = vi.fn(async (_port: number, _opts?: unknown) => 0);
 const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
-const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
+type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unknown>;
+const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
   await start();
 });
 const gatewayLogMessages = vi.hoisted(() => [] as string[]);
@@ -157,7 +158,7 @@ vi.mock("./dev.js", () => ({
 }));
 
 vi.mock("./run-loop.js", () => ({
-  runGatewayLoop: (params: { start: () => Promise<unknown> }) => runGatewayLoop(params),
+  runGatewayLoop: (params: { start: GatewayLoopStart }) => runGatewayLoop(params),
 }));
 
 describe("gateway run option collisions", () => {
@@ -195,15 +196,26 @@ describe("gateway run option collisions", () => {
     await sharedProgram.parseAsync(argv, { from: "user" });
   }
 
+  function callArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
+    const call = mock.mock.calls[index];
+    if (!call) {
+      throw new Error(`Expected mock call ${index}`);
+    }
+    return call[argIndex];
+  }
+
+  function gatewayStartOptions(index = 0) {
+    expect(startGatewayServer.mock.calls[index]?.[0]).toBe(18789);
+    return callArg(startGatewayServer, index, 1) as {
+      auth?: { mode?: string; token?: string; password?: string };
+      bind?: string;
+      startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
+      startupStartedAt?: number;
+    };
+  }
+
   function expectAuthOverrideMode(mode: string) {
-    expect(startGatewayServer).toHaveBeenCalledWith(
-      18789,
-      expect.objectContaining({
-        auth: expect.objectContaining({
-          mode,
-        }),
-      }),
-    );
+    expect(gatewayStartOptions().auth?.mode).toBe(mode);
   }
 
   it("forwards parent-captured options to `gateway run` subcommand", async () => {
@@ -218,20 +230,13 @@ describe("gateway run option collisions", () => {
       "--force",
     ]);
 
-    expect(forceFreePortAndWait).toHaveBeenCalledWith(18789, expect.anything());
-    expect(waitForPortBindable).toHaveBeenCalledWith(
-      18789,
-      expect.objectContaining({ intervalMs: 150, timeoutMs: 3000 }),
-    );
+    expect(callArg(forceFreePortAndWait, 0, 0)).toBe(18789);
+    expect(callArg(waitForPortBindable, 0, 0)).toBe(18789);
+    expect(
+      callArg(waitForPortBindable, 0, 1) as { intervalMs?: number; timeoutMs?: number },
+    ).toEqual({ intervalMs: 150, timeoutMs: 3000 });
     expect(setGatewayWsLogStyle).toHaveBeenCalledWith("full");
-    expect(startGatewayServer).toHaveBeenCalledWith(
-      18789,
-      expect.objectContaining({
-        auth: expect.objectContaining({
-          token: "tok_run",
-        }),
-      }),
-    );
+    expect(gatewayStartOptions().auth?.token).toBe("tok_run");
   });
 
   it("blocks --force port cleanup from an older binary with newer config", async () => {
@@ -294,15 +299,26 @@ describe("gateway run option collisions", () => {
 
     expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(1);
     expect(readBestEffortConfig).not.toHaveBeenCalled();
-    expect(startGatewayServer).toHaveBeenCalledWith(
-      18789,
-      expect.objectContaining({
-        bind: "loopback",
-        startupConfigSnapshotRead: {
-          snapshot: configState.snapshot,
-        },
-      }),
-    );
+    const options = gatewayStartOptions();
+    expect(options.bind).toBe("loopback");
+    expect(options.startupConfigSnapshotRead).toEqual({ snapshot: configState.snapshot });
+  });
+
+  it("uses the startup snapshot only for the first in-process gateway start", async () => {
+    runGatewayLoop.mockImplementationOnce(async ({ start }: { start: GatewayLoopStart }) => {
+      await start({ startupStartedAt: 1000 });
+      await start({ startupStartedAt: 2000 });
+    });
+
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    expect(startGatewayServer).toHaveBeenCalledTimes(2);
+    const firstOptions = gatewayStartOptions(0);
+    expect(firstOptions.startupStartedAt).toBe(1000);
+    expect(firstOptions.startupConfigSnapshotRead).toEqual({ snapshot: configState.snapshot });
+    const secondOptions = gatewayStartOptions(1);
+    expect(secondOptions.startupConfigSnapshotRead).toBeUndefined();
+    expect(secondOptions.startupStartedAt).toBe(2000);
   });
 
   it("logs when first startup will build missing Control UI assets", async () => {
@@ -397,15 +413,9 @@ describe("gateway run option collisions", () => {
 
     await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
 
-    expect(startGatewayServer).toHaveBeenCalledWith(
-      18789,
-      expect.objectContaining({
-        bind: "loopback",
-        startupConfigSnapshotRead: expect.objectContaining({
-          snapshot: expect.objectContaining({ valid: false }),
-        }),
-      }),
-    );
+    const options = gatewayStartOptions();
+    expect(options.bind).toBe("loopback");
+    expect(options.startupConfigSnapshotRead?.snapshot?.valid).toBe(false);
   });
 
   it.each(["none", "trusted-proxy"] as const)("accepts --auth %s override", async (mode) => {
@@ -420,7 +430,7 @@ describe("gateway run option collisions", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(runtimeErrors).toContain(
-      'Invalid --auth (use "none", "token", "password", or "trusted-proxy")',
+      'Invalid --auth. Use "none", "token", "password", or "trusted-proxy".',
     );
   });
 
@@ -447,12 +457,7 @@ describe("gateway run option collisions", () => {
 
     await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
 
-    expect(startGatewayServer).toHaveBeenCalledWith(
-      18789,
-      expect.objectContaining({
-        bind: "loopback",
-      }),
-    );
+    expect(gatewayStartOptions().bind).toBe("loopback");
   });
 
   it("reads gateway password from --password-file", async () => {
@@ -472,15 +477,9 @@ describe("gateway run option collisions", () => {
       },
     );
 
-    expect(startGatewayServer).toHaveBeenCalledWith(
-      18789,
-      expect.objectContaining({
-        auth: expect.objectContaining({
-          mode: "password",
-          password: "pw_from_file", // pragma: allowlist secret
-        }),
-      }),
-    );
+    const options = gatewayStartOptions();
+    expect(options.auth?.mode).toBe("password");
+    expect(options.auth?.password).toBe("pw_from_file"); // pragma: allowlist secret
     expect(runtimeErrors).not.toContain(
       "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
     );

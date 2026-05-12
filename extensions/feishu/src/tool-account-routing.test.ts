@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
@@ -60,6 +60,11 @@ describe("feishu tool account routing", () => {
         ...(await import("./wiki.js")),
       })));
     ({ registerFeishuWikiTools } = await import("./wiki.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.resetModules();
   });
 
   beforeEach(() => {
@@ -135,8 +140,8 @@ describe("feishu tool account routing", () => {
     await tool.execute("call-ctx", { url: "invalid-url" });
     await tool.execute("call-override", { url: "invalid-url", accountId: "a" });
 
-    expect(createFeishuClientMock.mock.calls[0]?.[0]?.appId).toBe("app-b");
-    expect(createFeishuClientMock.mock.calls[1]?.[0]?.appId).toBe("app-a");
+    expect(createFeishuClientMock.mock.calls.at(0)?.[0]?.appId).toBe("app-b");
+    expect(createFeishuClientMock.mock.calls.at(1)?.[0]?.appId).toBe("app-a");
   });
 
   test("falls back to the configured Feishu default selection when agentAccountId is not a real account", async () => {

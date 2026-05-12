@@ -26,6 +26,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function requireNonEmptyString(value: string | null | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 function buildHookJsonHeaders(options?: {
   token?: string | null;
   headers?: Record<string, string>;
@@ -82,6 +89,25 @@ async function waitForCronIsolatedRuns(count: number, timeoutMs = 2_000): Promis
     .toBe(count);
 }
 
+type HookCronRunCall = {
+  sessionKey?: string;
+  job?: {
+    agentId?: string;
+    payload?: {
+      externalContentSource?: string;
+      model?: string;
+    };
+  };
+};
+
+function cronRunCall(index = 0): HookCronRunCall {
+  const call = cronIsolatedRun.mock.calls.at(index)?.[0];
+  if (!call || typeof call !== "object") {
+    throw new Error(`expected cron isolated run call ${index + 1}`);
+  }
+  return call as HookCronRunCall;
+}
+
 async function postAgentHookWithIdempotency(
   port: number,
   idempotencyKey: string,
@@ -104,7 +130,7 @@ async function expectFirstHookDelivery(
 ) {
   const first = await postAgentHookWithIdempotency(port, idempotencyKey, headers);
   const firstBody = (await first.json()) as { runId?: string };
-  expect(firstBody.runId).toBeTruthy();
+  requireNonEmptyString(firstBody.runId, "first hook run id");
   await waitForSystemEvent(5_000);
   drainSystemEvents(resolveMainKey());
   return firstBody;
@@ -126,9 +152,7 @@ async function expectHookAgentSessionRouting(params: {
   expect(resAgent.status).toBe(200);
   await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
 
-  const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-    | { sessionKey?: string; job?: { agentId?: string } }
-    | undefined;
+  const routedCall = cronRunCall();
   expect(routedCall?.job?.agentId).toBe("hooks");
   expect(routedCall?.sessionKey).toBe(params.expectedSessionKey);
   drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
@@ -145,9 +169,11 @@ async function waitForSystemEventTexts(sessionKey: string, timeoutMs = 2_000) {
 }
 
 async function writeHookTransformModule(moduleName: string, source: string): Promise<void> {
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  expect(configPath).toBeTruthy();
-  const transformsDir = path.join(path.dirname(configPath!), "hooks", "transforms");
+  const configPath = requireNonEmptyString(
+    process.env.OPENCLAW_CONFIG_PATH,
+    "OPENCLAW_CONFIG_PATH",
+  );
+  const transformsDir = path.join(path.dirname(configPath), "hooks", "transforms");
   await fs.mkdir(transformsDir, { recursive: true });
   await fs.writeFile(path.join(transformsDir, moduleName), source, "utf-8");
 }
@@ -163,17 +189,15 @@ describe("gateway server hooks", () => {
       const resWake = await postHook(port, "/hooks/wake", { text: "Ping", mode: "next-heartbeat" });
       expect(resWake.status).toBe(200);
       const wakeEvents = await waitForSystemEvent();
-      expect(wakeEvents.some((e) => e.includes("Ping"))).toBe(true);
+      expect(wakeEvents.join("\n")).toContain("Ping");
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
       const resAgent = await postHook(port, "/hooks/agent", { message: "Do it", name: "Email" });
       expect(resAgent.status).toBe(200);
       const agentEvents = await waitForSystemEvent();
-      expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
-      const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { payload?: { externalContentSource?: string } };
-      };
+      expect(agentEvents.join("\n")).toContain("Hook Email: done");
+      const firstCall = cronRunCall();
       expect(firstCall?.job?.payload?.externalContentSource).toBe("webhook");
       drainSystemEvents(resolveMainKey());
 
@@ -185,9 +209,7 @@ describe("gateway server hooks", () => {
       });
       expect(resAgentModel.status).toBe(200);
       await waitForSystemEvent();
-      const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { payload?: { model?: string } };
-      };
+      const call = cronRunCall();
       expect(call?.job?.payload?.model).toBe("openai/gpt-4.1-mini");
       drainSystemEvents(resolveMainKey());
 
@@ -199,9 +221,7 @@ describe("gateway server hooks", () => {
       });
       expect(resAgentWithId.status).toBe(200);
       await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
-      const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { agentId?: string };
-      };
+      const routedCall = cronRunCall();
       expect(routedCall?.job?.agentId).toBe("hooks");
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
 
@@ -213,9 +233,7 @@ describe("gateway server hooks", () => {
       });
       expect(resAgentUnknown.status).toBe(200);
       await waitForSystemEvent();
-      const fallbackCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { agentId?: string };
-      };
+      const fallbackCall = cronRunCall();
       expect(fallbackCall?.job?.agentId).toBe("main");
       drainSystemEvents(resolveMainKey());
 
@@ -242,7 +260,7 @@ describe("gateway server hooks", () => {
       );
       expect(resHeader.status).toBe(200);
       const headerEvents = await waitForSystemEvent();
-      expect(headerEvents.some((e) => e.includes("Header auth"))).toBe(true);
+      expect(headerEvents.join("\n")).toContain("Header auth");
       drainSystemEvents(resolveMainKey());
 
       const resGet = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
@@ -288,10 +306,7 @@ describe("gateway server hooks", () => {
         .poll(() => cronIsolatedRun.mock.calls.length, { timeout: 2_000, interval: 10 })
         .toBe(1);
 
-      const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        sessionKey?: string;
-        job?: { payload?: { externalContentSource?: string } };
-      };
+      const call = cronRunCall();
       expect(call?.sessionKey).toBe("main");
       expect(call?.job?.payload?.externalContentSource).toBe("gmail");
       drainSystemEvents(resolveMainKey());
@@ -312,8 +327,8 @@ describe("gateway server hooks", () => {
       expect(resAgent.status).toBe(200);
 
       const targetEvents = await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
-      expect(targetEvents.some((event) => event.includes("Hook Email: done"))).toBe(true);
-      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+      expect(targetEvents.join("\n")).toContain("Hook Email: done");
+      expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
     });
   });
@@ -347,7 +362,7 @@ describe("gateway server hooks", () => {
       });
       expect(directSilent.status).toBe(200);
       await waitForCronIsolatedRuns(1);
-      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+      expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
 
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
@@ -357,7 +372,7 @@ describe("gateway server hooks", () => {
       const mappedSilent = await postHook(port, "/hooks/mapped-silent", { subject: "Email" });
       expect(mappedSilent.status).toBe(200);
       await waitForCronIsolatedRuns(2);
-      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+      expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
 
       cronIsolatedRun.mockResolvedValueOnce({
         status: "error",
@@ -394,7 +409,7 @@ describe("gateway server hooks", () => {
       });
       expect(response.status).toBe(200);
       await waitForCronIsolatedRuns(1);
-      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+      expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
     });
   });
 
@@ -415,23 +430,19 @@ describe("gateway server hooks", () => {
       const direct = await postHook(port, "/hooks/wake", { text: "Direct wake" });
       expect(direct.status).toBe(200);
       await waitForSystemEvent(5_000);
-      expect(peekSystemEventEntries(resolveMainKey())).toEqual([
-        expect.objectContaining({
-          text: "Direct wake",
-          trusted: false,
-        }),
-      ]);
+      const directEvents = peekSystemEventEntries(resolveMainKey());
+      expect(directEvents).toHaveLength(1);
+      expect(directEvents[0]?.text).toBe("Direct wake");
+      expect(directEvents[0]?.trusted).toBe(false);
       drainSystemEvents(resolveMainKey());
 
       const mapped = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
       expect(mapped.status).toBe(200);
       await waitForSystemEvent(5_000);
-      expect(peekSystemEventEntries(resolveMainKey())).toEqual([
-        expect.objectContaining({
-          text: "Mapped wake: Email",
-          trusted: false,
-        }),
-      ]);
+      const mappedEvents = peekSystemEventEntries(resolveMainKey());
+      expect(mappedEvents).toHaveLength(1);
+      expect(mappedEvents[0]?.text).toBe("Mapped wake: Email");
+      expect(mappedEvents[0]?.trusted).toBe(false);
       drainSystemEvents(resolveMainKey());
     });
   });
@@ -485,9 +496,7 @@ describe("gateway server hooks", () => {
       });
       expect(defaultRoute.status).toBe(200);
       await waitForSystemEvent();
-      const defaultCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string }
-        | undefined;
+      const defaultCall = cronRunCall();
       expect(defaultCall?.sessionKey).toBe("hook:ingress");
       drainSystemEvents(resolveMainKey());
 
@@ -503,9 +512,7 @@ describe("gateway server hooks", () => {
       });
       expect(mappedOk.status).toBe(200);
       await waitForSystemEvent();
-      const mappedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string }
-        | undefined;
+      const mappedCall = cronRunCall();
       expect(mappedCall?.sessionKey).toBe("hook:mapped:42");
       drainSystemEvents(resolveMainKey());
 
@@ -557,9 +564,7 @@ describe("gateway server hooks", () => {
       });
       expect(staticMapped.status).toBe(200);
       await waitForSystemEvent();
-      const staticCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { sessionKey?: string }
-        | undefined;
+      const staticCall = cronRunCall();
       expect(staticCall?.sessionKey).toBe("hook:gmail:fixed");
       drainSystemEvents(resolveMainKey());
     });
@@ -702,10 +707,12 @@ describe("gateway server hooks", () => {
 
   test("dedupes hook retries even when trusted-proxy client IP changes", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    expect(configPath).toBeTruthy();
+    const configPath = requireNonEmptyString(
+      process.env.OPENCLAW_CONFIG_PATH,
+      "OPENCLAW_CONFIG_PATH",
+    );
     await fs.writeFile(
-      configPath!,
+      configPath,
       JSON.stringify({ gateway: { trustedProxies: ["127.0.0.1"] } }, null, 2),
       "utf-8",
     );
@@ -750,7 +757,7 @@ describe("gateway server hooks", () => {
       firstNowSpy.mockRestore();
 
       const firstBody = (await first.json()) as { runId?: string };
-      expect(firstBody.runId).toBeTruthy();
+      requireNonEmptyString(firstBody.runId, "first hook run id");
       await waitForSystemEvent();
       drainSystemEvents(resolveMainKey());
 
@@ -779,7 +786,7 @@ describe("gateway server hooks", () => {
       thirdNowSpy.mockRestore();
       expect(third.status).toBe(200);
       const thirdBody = (await third.json()) as { runId?: string };
-      expect(thirdBody.runId).toBeTruthy();
+      requireNonEmptyString(thirdBody.runId, "third hook run id");
       expect(thirdBody.runId).not.toBe(firstBody.runId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
     });
@@ -805,9 +812,7 @@ describe("gateway server hooks", () => {
       const resNoAgent = await postHook(port, "/hooks/agent", { message: "No explicit agent" });
       expect(resNoAgent.status).toBe(200);
       await waitForSystemEvent();
-      const noAgentCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { agentId?: string };
-      };
+      const noAgentCall = cronRunCall();
       expect(noAgentCall?.job?.agentId).toBeUndefined();
       drainSystemEvents(resolveMainKey());
 
@@ -818,9 +823,7 @@ describe("gateway server hooks", () => {
       });
       expect(resAllowed.status).toBe(200);
       await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
-      const allowedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        job?: { agentId?: string };
-      };
+      const allowedCall = cronRunCall();
       expect(allowedCall?.job?.agentId).toBe("hooks");
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
 
@@ -877,7 +880,9 @@ describe("gateway server hooks", () => {
         throttled = await postHook(port, "/hooks/wake", { text: "blocked" }, { token: "wrong" });
       }
       expect(throttled?.status).toBe(429);
-      expect(throttled?.headers.get("retry-after")).toBeTruthy();
+      expect(requireNonEmptyString(throttled?.headers.get("retry-after"), "retry-after")).toMatch(
+        /^\d+$/,
+      );
 
       const allowed = await postHook(port, "/hooks/wake", { text: "auth reset" });
       expect(allowed.status).toBe(200);

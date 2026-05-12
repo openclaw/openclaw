@@ -1,8 +1,8 @@
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordAccountAllowFrom, resolveDiscordAccountDmPolicy } from "../accounts.js";
 import type { AutocompleteInteraction } from "../internal/discord.js";
 import {
@@ -63,8 +63,9 @@ export function resolveDiscordNativeCommandAllowlistAccess(params: {
   return { configured: true, allowed: match.allowed } as const;
 }
 
-export function resolveDiscordGuildNativeCommandAuthorized(params: {
+export async function resolveDiscordGuildNativeCommandAuthorized(params: {
   cfg: OpenClawConfig;
+  accountId: string;
   discordConfig: DiscordConfig;
   useAccessGroups: boolean;
   commandsAllowFromAccess: ReturnType<typeof resolveDiscordNativeCommandAllowlistAccess>;
@@ -270,11 +271,10 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
         tag: sender.tag,
       },
       allowNameMatching,
-      useAccessGroups,
       cfg,
       rest: interaction.client.rest,
     });
-    if (dmAccess.decision !== "allow") {
+    if (dmAccess.senderAccess.decision !== "allow") {
       return false;
     }
   }
@@ -292,6 +292,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
   if (!isDirectMessage) {
     return resolveDiscordGuildNativeCommandAuthorized({
       cfg,
+      accountId,
       discordConfig,
       useAccessGroups,
       commandsAllowFromAccess,

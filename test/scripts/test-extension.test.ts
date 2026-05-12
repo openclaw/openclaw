@@ -20,6 +20,13 @@ import {
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
 
+type RunGroupParams = {
+  args: string[];
+  config: string;
+  env: Record<string, string | undefined>;
+  targets: string[];
+};
+
 function runScript(args: string[], cwd = process.cwd()) {
   return execFileSync(process.execPath, [scriptPath, ...args], {
     cwd,
@@ -27,13 +34,32 @@ function runScript(args: string[], cwd = process.cwd()) {
   });
 }
 
+function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> } }): T {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected first mock call argument");
+  }
+  const [arg] = call;
+  if (arg === undefined) {
+    throw new Error("expected first mock call argument");
+  }
+  return arg;
+}
+
 function findExtensionWithoutTests() {
   const extensionId = listAvailableExtensionIds().find(
     (candidate) => !resolveExtensionTestPlan({ targetArg: candidate, cwd: process.cwd() }).hasTests,
   );
 
-  expect(extensionId).toBeDefined();
-  return extensionId ?? "missing-no-test-extension";
+  if (!extensionId) {
+    throw new Error("Expected at least one extension without tests");
+  }
+  return extensionId;
+}
+
+function expectPositiveIntegerMetric(value: number) {
+  expect(Number.isInteger(value)).toBe(true);
+  expect(value).toBeGreaterThan(0);
 }
 
 describe("scripts/test-extension.mjs", () => {
@@ -44,15 +70,6 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.extensionDir).toBe(bundledPluginRoot("slack"));
     expect(plan.config).toBe("test/vitest/vitest.extension-slack.config.ts");
     expect(plan.roots).toContain(bundledPluginRoot("slack"));
-    expect(plan.hasTests).toBe(true);
-  });
-
-  it("resolves bluebubbles onto the bluebubbles vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "bluebubbles", cwd: process.cwd() });
-
-    expect(plan.extensionId).toBe("bluebubbles");
-    expect(plan.config).toBe("test/vitest/vitest.extension-bluebubbles.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("bluebubbles"));
     expect(plan.hasTests).toBe(true);
   });
 
@@ -237,7 +254,7 @@ describe("scripts/test-extension.mjs", () => {
 
   it("can fail safe to all extensions when the base revision is unavailable", () => {
     const extensionIds = listChangedExtensionIds({
-      base: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      base: "refs/heads/openclaw-test-missing-base",
       unavailableBaseBehavior: "all",
     });
 
@@ -272,7 +289,6 @@ describe("scripts/test-extension.mjs", () => {
         "msteams",
         "feishu",
         "irc",
-        "bluebubbles",
         "acpx",
         "diffs",
         "browser",
@@ -283,7 +299,6 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(batch.extensionIds).toEqual([
       "acpx",
-      "bluebubbles",
       "browser",
       "diffs",
       "feishu",
@@ -304,146 +319,107 @@ describe("scripts/test-extension.mjs", () => {
       "zalo",
       "zalouser",
     ]);
-    expect(batch.planGroups).toEqual([
+    const stablePlanGroups = batch.planGroups.map(({ estimatedCost, testFileCount, ...group }) => {
+      expectPositiveIntegerMetric(estimatedCost);
+      expectPositiveIntegerMetric(testFileCount);
+      return group;
+    });
+
+    expect(stablePlanGroups).toEqual([
       {
         config: "test/vitest/vitest.extension-acpx.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["acpx"],
         roots: [bundledPluginRoot("acpx")],
-        testFileCount: expect.any(Number),
-      },
-      {
-        config: "test/vitest/vitest.extension-bluebubbles.config.ts",
-        estimatedCost: expect.any(Number),
-        extensionIds: ["bluebubbles"],
-        roots: [bundledPluginRoot("bluebubbles")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-browser.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["browser"],
         roots: [bundledPluginRoot("browser")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-diffs.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["diffs"],
         roots: [bundledPluginRoot("diffs")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-feishu.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["feishu"],
         roots: [bundledPluginRoot("feishu")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-irc.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["irc"],
         roots: [bundledPluginRoot("irc")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-line.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["line"],
         roots: [bundledPluginRoot("line")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-matrix.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["matrix"],
         roots: [bundledPluginRoot("matrix")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-mattermost.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["mattermost"],
         roots: [bundledPluginRoot("mattermost")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-media.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["vydra"],
         roots: [bundledPluginRoot("vydra")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-memory.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["memory-core"],
         roots: [bundledPluginRoot("memory-core")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-misc.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["firecrawl"],
         roots: [bundledPluginRoot("firecrawl")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-msteams.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["msteams"],
         roots: [bundledPluginRoot("msteams")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-provider-openai.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["openai"],
         roots: [bundledPluginRoot("openai")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-qa.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["qa-lab"],
         roots: [bundledPluginRoot("qa-lab")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-slack.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["slack"],
         roots: [bundledPluginRoot("slack")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-telegram.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["telegram"],
         roots: [bundledPluginRoot("telegram")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-voice-call.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["voice-call"],
         roots: [bundledPluginRoot("voice-call")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-whatsapp.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["whatsapp"],
         roots: [bundledPluginRoot("whatsapp")],
-        testFileCount: expect.any(Number),
       },
       {
         config: "test/vitest/vitest.extension-zalo.config.ts",
-        estimatedCost: expect.any(Number),
         extensionIds: ["zalo", "zalouser"],
         roots: [bundledPluginRoot("zalo"), bundledPluginRoot("zalouser")],
-        testFileCount: expect.any(Number),
       },
     ]);
   });
@@ -482,19 +458,12 @@ describe("scripts/test-extension.mjs", () => {
   it("runs extension batch config groups concurrently when requested", async () => {
     const started: string[] = [];
     const resolvers: Array<() => void> = [];
-    const runGroup = vi.fn(
-      (params: {
-        args: string[];
-        config: string;
-        env: Record<string, string | undefined>;
-        targets: string[];
-      }) => {
-        started.push(params.config);
-        return new Promise<number>((resolve) => {
-          resolvers.push(() => resolve(0));
-        });
-      },
-    );
+    const runGroup = vi.fn((params: RunGroupParams) => {
+      started.push(params.config);
+      return new Promise<number>((resolve) => {
+        resolvers.push(() => resolve(0));
+      });
+    });
     const runPromise = runExtensionBatchPlan(
       {
         extensionCount: 3,
@@ -543,14 +512,22 @@ describe("scripts/test-extension.mjs", () => {
     }
     await expect(runPromise).resolves.toBe(0);
     expect(runGroup).toHaveBeenCalledTimes(3);
-    expect(runGroup.mock.calls[0]?.[0]).toMatchObject({
+    const firstRunGroupParams = requireFirstMockArg<RunGroupParams>(runGroup);
+    expect(firstRunGroupParams).toEqual({
       args: ["--reporter=dot"],
       config: "heavy",
+      env: {
+        OPENCLAW_EXTENSION_BATCH_PARALLEL: "2",
+        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
+          process.cwd(),
+          "node_modules",
+          ".experimental-vitest-cache",
+          "extension-batch",
+          "0-heavy",
+        ),
+      },
       targets: ["extensions/two"],
     });
-    expect(runGroup.mock.calls[0]?.[0].env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toContain(
-      path.join("node_modules", ".experimental-vitest-cache", "extension-batch", "0-heavy"),
-    );
   });
 
   it("keeps extension batch parallelism bounded by group count", () => {

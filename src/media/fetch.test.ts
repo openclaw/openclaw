@@ -45,6 +45,14 @@ function makeLookupFn(): LookupFn {
   return vi.fn(async () => ({ address: "149.154.167.220", family: 4 })) as unknown as LookupFn;
 }
 
+function requireFetchGuardRequest(): unknown {
+  const [call] = fetchWithSsrFGuardMock.mock.calls;
+  if (!call) {
+    throw new Error("expected fetchWithSsrFGuard call");
+  }
+  return call[0];
+}
+
 async function expectRemoteMediaMaxBytesError(params: {
   fetchImpl: Parameters<typeof fetchRemoteMedia>[0]["fetchImpl"];
   maxBytes: number;
@@ -62,7 +70,7 @@ async function expectRemoteMediaMaxBytesError(params: {
 async function expectRedactedBotTokenFetchError(params: {
   botFileUrl: string;
   botToken: string;
-  redactedBotToken: string;
+  expectedErrorText: string;
   fetchImpl: Parameters<typeof fetchRemoteMedia>[0]["fetchImpl"];
 }) {
   const error = await fetchRemoteMedia({
@@ -79,7 +87,7 @@ async function expectRedactedBotTokenFetchError(params: {
   expect(error).toBeInstanceOf(Error);
   const errorText = error instanceof Error ? String(error) : "";
   expect(errorText).not.toContain(params.botToken);
-  expect(errorText).toContain(`bot${params.redactedBotToken}`);
+  expect(errorText).toBe(params.expectedErrorText);
 }
 
 async function expectFetchRemoteMediaRejected(params: {
@@ -90,20 +98,27 @@ async function expectFetchRemoteMediaRejected(params: {
   lookupFn?: LookupFn;
   expectedError: RegExp | string | Record<string, unknown>;
 }) {
-  const rejection = expect(
-    fetchRemoteMedia({
-      url: params.url,
-      fetchImpl: params.fetchImpl,
-      lookupFn: params.lookupFn ?? makeLookupFn(),
-      maxBytes: params.maxBytes ?? 1024,
-      ...(params.readIdleTimeoutMs ? { readIdleTimeoutMs: params.readIdleTimeoutMs } : {}),
-    }),
-  ).rejects;
+  const request = {
+    url: params.url,
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn ?? makeLookupFn(),
+    maxBytes: params.maxBytes ?? 1024,
+    ...(params.readIdleTimeoutMs ? { readIdleTimeoutMs: params.readIdleTimeoutMs } : {}),
+  };
   if (params.expectedError instanceof RegExp || typeof params.expectedError === "string") {
-    await rejection.toThrow(params.expectedError);
+    await expect(fetchRemoteMedia(request)).rejects.toThrow(params.expectedError);
     return;
   }
-  await rejection.toMatchObject(params.expectedError);
+  let fetchError: unknown;
+  try {
+    await fetchRemoteMedia(request);
+  } catch (error) {
+    fetchError = error;
+  }
+  expect(fetchError).toBeInstanceOf(Error);
+  for (const [key, value] of Object.entries(params.expectedError)) {
+    expect((fetchError as Record<string, unknown>)[key]).toStrictEqual(value);
+  }
 }
 
 async function expectFetchRemoteMediaResolvesToError(
@@ -251,16 +266,18 @@ describe("fetchRemoteMedia", () => {
       fetchImpl: vi.fn(async () => {
         throw new Error(`dial failed for ${botFileUrl}`);
       }),
+      expectedErrorText: `MediaFetchError: Failed to fetch media from https://files.example.test/file/bot${redactedBotToken}/photos/1.jpg: dial failed for https://files.example.test/file/bot${redactedBotToken}/photos/1.jpg`,
     },
     {
       name: "redacts bot tokens from HTTP error messages",
       fetchImpl: vi.fn(async () => new Response("unauthorized", { status: 401 })),
+      expectedErrorText: `MediaFetchError: Failed to fetch media from https://files.example.test/file/bot${redactedBotToken}/photos/1.jpg: HTTP 401; body: unauthorized`,
     },
-  ] as const)("$name", async ({ fetchImpl }) => {
+  ] as const)("$name", async ({ fetchImpl, expectedErrorText }) => {
     await expectRedactedBotTokenFetchError({
       botFileUrl,
       botToken,
-      redactedBotToken,
+      expectedErrorText,
       fetchImpl,
     });
   });
@@ -315,31 +332,35 @@ describe("fetchRemoteMedia", () => {
 
   it("uses trusted explicit-proxy mode when the caller opts in for proxy-side DNS", async () => {
     const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+    const lookupFn = makeLookupFn();
+    const dispatcherPolicy = {
+      mode: "explicit-proxy" as const,
+      proxyUrl: "http://localhost:8888",
+      allowPrivateProxy: true,
+    };
 
     await fetchRemoteMedia({
       url: "https://files.example.test/file/bot123/photos/test.jpg",
       fetchImpl,
-      lookupFn: makeLookupFn(),
+      lookupFn,
       trustExplicitProxyDns: true,
       dispatcherAttempts: [
         {
-          dispatcherPolicy: {
-            mode: "explicit-proxy",
-            proxyUrl: "http://localhost:8888",
-            allowPrivateProxy: true,
-          },
+          dispatcherPolicy,
         },
       ],
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "trusted_explicit_proxy",
-        dispatcherPolicy: expect.objectContaining({
-          mode: "explicit-proxy",
-          proxyUrl: "http://localhost:8888",
-        }),
-      }),
-    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(requireFetchGuardRequest()).toStrictEqual({
+      url: "https://files.example.test/file/bot123/photos/test.jpg",
+      fetchImpl,
+      init: undefined,
+      maxRedirects: undefined,
+      policy: undefined,
+      lookupFn,
+      dispatcherPolicy,
+      mode: "trusted_explicit_proxy",
+    });
   });
 });
