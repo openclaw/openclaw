@@ -208,22 +208,16 @@ export class TelnyxProvider implements VoiceCallProvider {
           digits: data.payload?.digit || "",
         };
 
-      case "call.streaming.started":
-      case "call.streaming.stopped":
-        // Informational. The realtime bridge tracks its own lifecycle via the
-        // WebSocket; we acknowledge the webhook (200) but skip event emission
-        // to avoid duplicate signal at the manager.
+      case "streaming.started":
+      case "streaming.stopped":
+        // Informational webhook acknowledgement. The realtime bridge tracks
+        // its own lifecycle via the WebSocket; we ack the carrier webhook with
+        // 200 and skip event emission to avoid duplicate signal at the
+        // manager. Telnyx surfaces stream errors as `{event:"error"}` JSON
+        // frames over the WS, not as carrier webhooks, so there is no
+        // matching `streaming.failed` webhook to handle here — see the
+        // `error` branch in `TelnyxStreamFrameAdapter`.
         return null;
-
-      case "call.streaming.failed": {
-        const reason = typeof data.payload?.reason === "string" ? data.payload.reason : undefined;
-        return {
-          ...baseEvent,
-          type: "call.error",
-          error: `Telnyx streaming failed${reason ? `: ${reason}` : ""}`,
-          retryable: false,
-        };
-      }
 
       default:
         return null;

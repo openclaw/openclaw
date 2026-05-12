@@ -404,42 +404,16 @@ describe("TelnyxProvider Media Streaming (PCMU)", () => {
     expect(body.stream_auth_token).toBe("token-xyz");
   });
 
-  it("normalizes call.streaming.failed into a non-retryable call.error event", () => {
+  it("silently acknowledges streaming.started and streaming.stopped webhooks", () => {
     const provider = new TelnyxProvider(
       { apiKey: "KEY123", connectionId: "CONN456", publicKey: undefined },
       { skipVerification: true },
     );
-    const rawBody = JSON.stringify({
-      data: {
-        event_type: "call.streaming.failed",
-        id: "evt-1",
-        payload: {
-          call_control_id: "call-control-1",
-          client_state: Buffer.from("call-1").toString("base64"),
-          reason: "destination_unreachable",
-        },
-      },
-    });
-    const result = provider.parseWebhookEvent(createCtx({ rawBody }), {
-      verifiedRequestKey: "key-1",
-    });
-    expect(result.events).toHaveLength(1);
-    const event = result.events[0];
-    if (event?.type !== "call.error") {
-      throw new Error(`expected call.error, got ${event?.type}`);
-    }
-    expect(event.error).toBe("Telnyx streaming failed: destination_unreachable");
-    expect(event.retryable).toBe(false);
-    expect(event.callId).toBe("call-1");
-    expect(event.providerCallId).toBe("call-control-1");
-  });
-
-  it("silently acknowledges call.streaming.started and call.streaming.stopped", () => {
-    const provider = new TelnyxProvider(
-      { apiKey: "KEY123", connectionId: "CONN456", publicKey: undefined },
-      { skipVerification: true },
-    );
-    for (const eventType of ["call.streaming.started", "call.streaming.stopped"]) {
+    // Telnyx documents stream lifecycle webhooks as `streaming.started` and
+    // `streaming.stopped` (no `call.` prefix). The bridge tracks its own
+    // lifecycle on the WebSocket; we ack the carrier webhook with 200 and
+    // emit nothing to avoid duplicate signal at the manager.
+    for (const eventType of ["streaming.started", "streaming.stopped"]) {
       const rawBody = JSON.stringify({
         data: {
           event_type: eventType,

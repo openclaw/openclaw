@@ -68,7 +68,31 @@ describe("TwilioStreamFrameAdapter", () => {
 });
 
 describe("TelnyxStreamFrameAdapter", () => {
-  it("parses Telnyx start, media, mark, stop with no streamSid", () => {
+  it("parses Telnyx start with top-level stream_id and start.call_control_id", () => {
+    const adapter = new TelnyxStreamFrameAdapter("call-control-id-123");
+
+    // Telnyx start frame: stream_id is top-level, call_control_id lives in start.
+    expect(
+      adapter.parseInbound(
+        JSON.stringify({
+          event: "start",
+          sequence_number: "1",
+          stream_id: "telnyx-stream-7",
+          start: {
+            call_control_id: "v3:carrier-call-id",
+            call_session_id: "session-1",
+            media_format: { encoding: "PCMU", sample_rate: 8000, channels: 1 },
+          },
+        }),
+      ),
+    ).toEqual({
+      kind: "start",
+      streamId: "telnyx-stream-7",
+      providerCallId: "v3:carrier-call-id",
+    });
+  });
+
+  it("falls back to the constructor providerCallId when start fields are absent", () => {
     const adapter = new TelnyxStreamFrameAdapter("call-control-id-123");
 
     expect(adapter.parseInbound(JSON.stringify({ event: "start", start: {} }))).toEqual({
@@ -76,24 +100,16 @@ describe("TelnyxStreamFrameAdapter", () => {
       streamId: "call-control-id-123",
       providerCallId: "call-control-id-123",
     });
+  });
 
-    expect(
-      adapter.parseInbound(
-        JSON.stringify({
-          event: "start",
-          start: { stream_id: "telnyx-stream-7" },
-        }),
-      ),
-    ).toEqual({
-      kind: "start",
-      streamId: "telnyx-stream-7",
-      providerCallId: "call-control-id-123",
-    });
+  it("parses media, mark, and stop with no streamSid", () => {
+    const adapter = new TelnyxStreamFrameAdapter("call-control-id-123");
 
     expect(
       adapter.parseInbound(
         JSON.stringify({
           event: "media",
+          stream_id: "telnyx-stream-7",
           media: { payload: "AAA=", timestamp: 40, track: "inbound_track" },
         }),
       ),
@@ -109,6 +125,29 @@ describe("TelnyxStreamFrameAdapter", () => {
     ).toEqual({ kind: "mark", name: "audio-1" });
 
     expect(adapter.parseInbound(JSON.stringify({ event: "stop" }))).toEqual({ kind: "stop" });
+  });
+
+  it("surfaces Telnyx WS error frames so failures don't get swallowed", () => {
+    const adapter = new TelnyxStreamFrameAdapter("call-control-id-123");
+
+    expect(
+      adapter.parseInbound(
+        JSON.stringify({
+          event: "error",
+          stream_id: "telnyx-stream-7",
+          payload: {
+            code: 100002,
+            title: "WebSocket error",
+            detail: "Unable to decode payload",
+          },
+        }),
+      ),
+    ).toEqual({
+      kind: "error",
+      code: "100002",
+      title: "WebSocket error",
+      detail: "Unable to decode payload",
+    });
   });
 
   it("serializes outbound frames without streamSid", () => {

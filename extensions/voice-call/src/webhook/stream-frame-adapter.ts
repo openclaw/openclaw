@@ -23,6 +23,7 @@ export type StreamFrame =
     }
   | { kind: "mark"; name?: string }
   | { kind: "stop" }
+  | { kind: "error"; code?: string; title?: string; detail?: string }
   | { kind: "ignored" };
 
 export interface StreamFrameAdapter {
@@ -145,10 +146,17 @@ export class TwilioStreamFrameAdapter implements StreamFrameAdapter {
 /**
  * Telnyx Media Streaming frame format (PCMU profile).
  *
- * Inbound frames do not carry streamSid; the carrier binds the WS to a call
- * via the per-call auth token in the upgrade URL. Outbound frames are minimal
- * envelopes: `{event:"media", media:{payload}}`, `{event:"clear"}`,
- * `{event:"mark", mark:{name}}`.
+ * Inbound frames carry `stream_id` at the top level of the envelope; the
+ * `start` frame additionally carries `start.call_control_id` (the carrier
+ * call id). The WS is bound to a call via the per-call auth token in the
+ * upgrade URL.
+ *
+ * Stream errors arrive as `{event:"error", payload:{...}}` frames over the
+ * WebSocket — not as a webhook event. The adapter surfaces those as a
+ * dedicated frame kind so the realtime bridge can log and tear down cleanly.
+ *
+ * Outbound frames are minimal envelopes: `{event:"media", media:{payload}}`,
+ * `{event:"clear"}`, `{event:"mark", mark:{name}}`.
  *
  * Reference: https://developers.telnyx.com/docs/voice/programmable-voice/media-streaming
  */
@@ -163,19 +171,21 @@ export class TelnyxStreamFrameAdapter implements StreamFrameAdapter {
       return { kind: "ignored" };
     }
     const event = msg.event;
+    const topLevelStreamId =
+      typeof msg.stream_id === "string" && msg.stream_id ? msg.stream_id : undefined;
     if (event === "start") {
       const startData =
         typeof msg.start === "object" && msg.start !== null
           ? (msg.start as Record<string, unknown>)
           : undefined;
-      const streamId =
-        typeof startData?.stream_id === "string" && startData.stream_id
-          ? startData.stream_id
+      const carrierCallControlId =
+        typeof startData?.call_control_id === "string" && startData.call_control_id
+          ? startData.call_control_id
           : this.providerCallId;
       return {
         kind: "start",
-        streamId,
-        providerCallId: this.providerCallId,
+        streamId: topLevelStreamId ?? this.providerCallId,
+        providerCallId: carrierCallControlId,
       };
     }
     if (event === "media") {
@@ -204,6 +214,21 @@ export class TelnyxStreamFrameAdapter implements StreamFrameAdapter {
     }
     if (event === "stop") {
       return { kind: "stop" };
+    }
+    if (event === "error") {
+      const errorData =
+        typeof msg.payload === "object" && msg.payload !== null
+          ? (msg.payload as Record<string, unknown>)
+          : undefined;
+      return {
+        kind: "error",
+        code:
+          typeof errorData?.code === "string" || typeof errorData?.code === "number"
+            ? String(errorData.code)
+            : undefined,
+        title: typeof errorData?.title === "string" ? errorData.title : undefined,
+        detail: typeof errorData?.detail === "string" ? errorData.detail : undefined,
+      };
     }
     return { kind: "ignored" };
   }

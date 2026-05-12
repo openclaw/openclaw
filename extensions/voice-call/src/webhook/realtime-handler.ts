@@ -475,6 +475,14 @@ export class RealtimeCallHandler {
             bridge.acknowledgeMark();
             return;
           }
+          if (frame.kind === "error") {
+            console.error(
+              `[voice-call] realtime WS error frame providerCallId=${activeCallSid} code=${frame.code ?? "?"} title=${frame.title ?? ""} detail=${frame.detail ?? ""}`,
+            );
+            // Carrier closes the stream after an error frame; let the close
+            // handler tear the bridge down on the resulting WS close.
+            return;
+          }
           if (frame.kind === "stop") {
             stopReceived = true;
             this.closeTelephonyBridge(activeCallSid, bridge, "completed");
