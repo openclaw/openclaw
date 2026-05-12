@@ -31,6 +31,9 @@ describe("runtime suite resolver", () => {
     expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "codex-native-live" })).toEqual([
       ...QA_RUNTIME_CODEX_NATIVE_LIVE_SCENARIO_IDS,
     ]);
+    expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "codex-native-live" })).toContain(
+      "codex-pi-shaped-read-vocabulary",
+    );
     expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "fault-injection-mock" })).toEqual([
       ...QA_RUNTIME_FAULT_INJECTION_MOCK_SCENARIO_IDS,
     ]);
@@ -40,6 +43,9 @@ describe("runtime suite resolver", () => {
     expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "first-hour-live" })).toEqual([
       ...QA_RUNTIME_FIRST_HOUR_LIVE_SCENARIO_IDS,
     ]);
+    expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "first-hour-live" })).toContain(
+      "codex-pi-shaped-read-vocabulary",
+    );
     expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "soak-100" })).toEqual([
       ...QA_RUNTIME_SOAK_100_SCENARIO_IDS,
     ]);

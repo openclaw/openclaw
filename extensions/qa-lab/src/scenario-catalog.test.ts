@@ -349,6 +349,26 @@ describe("qa scenario catalog", () => {
     expect(scenario.title).toBe("Instruction followthrough repo contract");
   });
 
+  it("adds the Codex Pi-shaped Read vocabulary canary to live parity coverage", () => {
+    const scenario = readQaScenarioById("codex-pi-shaped-read-vocabulary");
+    const config = readQaScenarioExecutionConfig("codex-pi-shaped-read-vocabulary") as
+      | {
+          runtimeParityComparison?: string;
+          fixtureFile?: string;
+          expectedMarker?: string;
+          unavailableNeedles?: string[];
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/codex-pi-shaped-read-vocabulary.md");
+    expect(scenario.runtimeParityTier).toBe("live-only");
+    expect(config?.runtimeParityComparison).toBe("codex-native-workspace");
+    expect(config?.fixtureFile).toBe("PI_SHAPED_READ_FIXTURE.txt");
+    expect(config?.expectedMarker).toBe("PI_SHAPED_READ_OK");
+    expect(config?.unavailableNeedles).toContain("not in my available tool surface");
+    expect(JSON.stringify(scenario.execution.flow)).toContain("Use the Read tool");
+  });
+
   it("marks prose-only first-hour scenarios as outcome-only comparisons", () => {
     expect(readQaScenarioExecutionConfig("channel-chat-baseline")).toMatchObject({
       runtimeParityComparison: "outcome-only",

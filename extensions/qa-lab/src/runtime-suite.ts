@@ -86,6 +86,7 @@ export const QA_RUNTIME_CODEX_NATIVE_LIVE_SCENARIO_IDS = [
   "streaming-final-integrity",
   "approval-turn-tool-followthrough",
   "instruction-followthrough-repo-contract",
+  "codex-pi-shaped-read-vocabulary",
   "compaction-retry-mutating-tool",
   "runtime-tool-fs-read",
   "runtime-tool-fs-write",
@@ -121,6 +122,7 @@ export const QA_RUNTIME_FAULT_INJECTION_LIVE_SCENARIO_IDS = [
 export const QA_RUNTIME_FIRST_HOUR_LIVE_SCENARIO_IDS = [
   ...QA_RUNTIME_FIRST_HOUR_SCENARIO_IDS,
   "streaming-final-integrity",
+  "codex-pi-shaped-read-vocabulary",
   "gateway-restart-inflight-run",
   "config-apply-restart-wakeup",
   "cron-one-minute-ping",
