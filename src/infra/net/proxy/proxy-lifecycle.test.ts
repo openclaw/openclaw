@@ -382,6 +382,29 @@ describe("startProxy", () => {
     await stopProxy(handle);
   });
 
+  it("keeps overlapping Gateway loopback bypass registrations active until the final unregister", async () => {
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+    });
+
+    const bypassPolicy = expectLastProxylineBypassPolicy();
+    const unregisterFirst = expectBypassUnregister(
+      registerManagedProxyGatewayLoopbackBypass("ws://127.0.0.1:18789"),
+    );
+    const unregisterSecond = expectBypassUnregister(
+      registerManagedProxyGatewayLoopbackBypass("ws://127.0.0.1:18789"),
+    );
+
+    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(true);
+    unregisterFirst();
+    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(true);
+    unregisterSecond();
+    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(false);
+
+    await stopProxy(handle);
+  });
+
   it("accepts literal loopback IPs and localhost for Gateway bypass registration", async () => {
     const handle = await startProxy({
       enabled: true,

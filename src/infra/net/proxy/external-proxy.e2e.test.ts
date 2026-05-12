@@ -288,6 +288,7 @@ async function runNodeModule(
 
 describe("SSRF external proxy routing", () => {
   let target: Server | null = null;
+  let globalFetchTarget: Server | null = null;
   let wsTarget: Server | null = null;
   let gatewayBypassWsTarget: Server | null = null;
   let httpsLikeTarget: Server | null = null;
@@ -316,6 +317,7 @@ describe("SSRF external proxy routing", () => {
     await closeServer(httpsLikeTarget);
     await closeServer(gatewayBypassWsTarget);
     await closeServer(wsTarget);
+    await closeServer(globalFetchTarget);
     await closeServer(target);
     gatewayBypassWss = null;
     wss = null;
@@ -324,6 +326,7 @@ describe("SSRF external proxy routing", () => {
     httpsLikeTarget = null;
     gatewayBypassWsTarget = null;
     wsTarget = null;
+    globalFetchTarget = null;
     target = null;
   });
 
@@ -331,6 +334,10 @@ describe("SSRF external proxy routing", () => {
     target = createServer((_req, res) => {
       res.writeHead(218, { "content-type": "text/plain" });
       res.end("from loopback target");
+    });
+    globalFetchTarget = createServer((_req, res) => {
+      res.writeHead(219, { "content-type": "text/plain" });
+      res.end("from global fetch target");
     });
     wsTarget = createServer();
     wss = new WebSocketServer({ server: wsTarget });
@@ -343,6 +350,7 @@ describe("SSRF external proxy routing", () => {
       ws.close(1000, "done");
     });
     const targetPort = await listenOnLoopback(target);
+    const globalFetchTargetPort = await listenOnLoopback(globalFetchTarget);
     const wsTargetPort = await listenOnLoopback(wsTarget);
     const gatewayBypassWsTargetPort = await listenOnLoopback(gatewayBypassWsTarget);
 
@@ -443,6 +451,10 @@ describe("SSRF external proxy routing", () => {
             signal: AbortSignal.timeout(${PROBE_TIMEOUT_MS}),
           });
           const body = await response.text();
+          const globalFetchResponse = await fetch(process.env.OPENCLAW_TEST_GLOBAL_FETCH_TARGET_URL, {
+            signal: AbortSignal.timeout(${PROBE_TIMEOUT_MS}),
+          });
+          const globalFetchBody = await globalFetchResponse.text();
           const nodeHttp = await nodeHttpGet(process.env.OPENCLAW_TEST_NODE_HTTP_TARGET_URL);
           const explicitAgent = await nodeHttpGet(process.env.OPENCLAW_TEST_EXPLICIT_AGENT_TARGET_URL, {
             agent: new http.Agent(),
@@ -457,6 +469,7 @@ describe("SSRF external proxy routing", () => {
           );
           console.log(JSON.stringify({
             fetch: { status: response.status, body },
+            globalFetch: { status: globalFetchResponse.status, body: globalFetchBody },
             nodeHttp,
             explicitAgent,
           }));
@@ -468,6 +481,7 @@ describe("SSRF external proxy routing", () => {
         ...process.env,
         OPENCLAW_PROXY_URL: `http://127.0.0.1:${proxyPort}`,
         OPENCLAW_TEST_TARGET_URL: `http://127.0.0.1:${targetPort}/private-metadata`,
+        OPENCLAW_TEST_GLOBAL_FETCH_TARGET_URL: `http://127.0.0.1:${globalFetchTargetPort}/global-fetch-metadata`,
         OPENCLAW_TEST_NODE_HTTP_TARGET_URL: `http://127.0.0.1:${targetPort}/node-http-metadata`,
         OPENCLAW_TEST_EXPLICIT_AGENT_TARGET_URL: `http://127.0.0.1:${targetPort}/explicit-agent`,
         OPENCLAW_TEST_NODE_HTTPS_TARGET_URL: `https://127.0.0.1:${httpsLikeTargetPort}/https-connect-proof`,
@@ -481,11 +495,13 @@ describe("SSRF external proxy routing", () => {
     expect(child.stderr).toBe("");
     expect(child.code).toBe(0);
     expect(child.stdout).toContain('"fetch":{"status":218');
+    expect(child.stdout).toContain('"globalFetch":{"status":219');
     expect(child.stdout).toContain('"nodeHttp":{"status":218');
     expect(child.stdout).toContain('"explicitAgent":{"status":218');
     expect(child.stdout).toContain('"body":"from loopback target"');
     expect(seenConnectTargets).toContain(`127.0.0.1:${wsTargetPort}`);
     expect(seenConnectTargets).toContain(`127.0.0.1:${httpsLikeTargetPort}`);
+    expect(seenConnectTargets).toContain(`127.0.0.1:${globalFetchTargetPort}`);
     expect(seenConnectTargets).toContain(`http://127.0.0.1:${targetPort}/node-http-metadata`);
     expect(seenConnectTargets).toContain(`http://127.0.0.1:${targetPort}/explicit-agent`);
     expect(seenConnectTargets).not.toContain(`127.0.0.1:${gatewayBypassWsTargetPort}`);

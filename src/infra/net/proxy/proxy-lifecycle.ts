@@ -47,13 +47,13 @@ type ProxyEnvSnapshot = Record<ProxyEnvKey, string | undefined>;
 
 let baseProxyEnvSnapshot: ProxyEnvSnapshot | null = null;
 let proxylineHandle: ProxylineHandle | null = null;
-const gatewayLoopbackBypassAuthorities = new Set<string>();
+const gatewayLoopbackBypassAuthorityCounts = new Map<string, number>();
 
 export function _resetGlobalAgentBootstrapForTests(): void {
   baseProxyEnvSnapshot = null;
   proxylineHandle?.stop();
   proxylineHandle = null;
-  gatewayLoopbackBypassAuthorities.clear();
+  gatewayLoopbackBypassAuthorityCounts.clear();
 }
 
 function captureProxyEnv(): ProxyEnvSnapshot {
@@ -275,7 +275,7 @@ function getGatewayControlPlaneBypassAuthority(value: string): string | null {
 
 const shouldBypassManagedProxyForGatewayLoopback: ProxylineBypassPolicy = ({ url }) => {
   const authority = getGatewayControlPlaneBypassAuthority(url);
-  return authority !== null && gatewayLoopbackBypassAuthorities.has(authority);
+  return authority !== null && (gatewayLoopbackBypassAuthorityCounts.get(authority) ?? 0) > 0;
 };
 
 export function registerManagedProxyGatewayLoopbackBypass(url: string): (() => void) | undefined {
@@ -293,14 +293,22 @@ export function registerManagedProxyGatewayLoopbackBypass(url: string): (() => v
     return undefined;
   }
 
-  gatewayLoopbackBypassAuthorities.add(authority);
+  gatewayLoopbackBypassAuthorityCounts.set(
+    authority,
+    (gatewayLoopbackBypassAuthorityCounts.get(authority) ?? 0) + 1,
+  );
   let stopped = false;
   return () => {
     if (stopped) {
       return;
     }
     stopped = true;
-    gatewayLoopbackBypassAuthorities.delete(authority);
+    const nextCount = (gatewayLoopbackBypassAuthorityCounts.get(authority) ?? 1) - 1;
+    if (nextCount <= 0) {
+      gatewayLoopbackBypassAuthorityCounts.delete(authority);
+    } else {
+      gatewayLoopbackBypassAuthorityCounts.set(authority, nextCount);
+    }
   };
 }
 
