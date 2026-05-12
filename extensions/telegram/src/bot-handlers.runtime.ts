@@ -202,6 +202,12 @@ export const registerTelegramHandlers = ({
   };
   const normalizePromptContextMinTimestampMs = (timestampMs?: number) =>
     typeof timestampMs === "number" && Number.isFinite(timestampMs) ? timestampMs : undefined;
+  const promptContextBoundaryOptions = (
+    timestampMs?: number,
+  ): Pick<TelegramMessageContextOptions, "promptContextMinTimestampMs"> => {
+    const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(timestampMs);
+    return promptContextMinTimestampMs === undefined ? {} : { promptContextMinTimestampMs };
+  };
   const latestPromptContextMinTimestampMs = (
     ...timestamps: Array<number | undefined>
   ): number | undefined => {
@@ -411,13 +417,10 @@ export const registerTelegramHandlers = ({
         return;
       }
       if (entries.length === 1) {
-        const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(
-          last.promptContextMinTimestampMs,
-        );
         await processMessageWithReplyChain(last.ctx, last.msg, last.allMedia, last.storeAllowFrom, {
           receivedAtMs: last.receivedAtMs,
           ingressBuffer: "inbound-debounce",
-          ...(promptContextMinTimestampMs !== undefined ? { promptContextMinTimestampMs } : {}),
+          ...promptContextBoundaryOptions(last.promptContextMinTimestampMs),
         });
         return;
       }
@@ -450,7 +453,7 @@ export const registerTelegramHandlers = ({
           ...(messageIdOverride ? { messageIdOverride } : {}),
           receivedAtMs: first.receivedAtMs,
           ingressBuffer: "inbound-debounce",
-          ...(promptContextMinTimestampMs !== undefined ? { promptContextMinTimestampMs } : {}),
+          ...promptContextBoundaryOptions(promptContextMinTimestampMs),
         },
       );
     },
@@ -611,9 +614,7 @@ export const registerTelegramHandlers = ({
         primaryEntry.msg,
         allMedia,
         storeAllowFrom,
-        entry.promptContextMinTimestampMs !== undefined
-          ? { promptContextMinTimestampMs: entry.promptContextMinTimestampMs }
-          : undefined,
+        promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
       );
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
@@ -649,9 +650,7 @@ export const registerTelegramHandlers = ({
         messageIdOverride: String(last.msg.message_id),
         receivedAtMs: first.receivedAtMs,
         ingressBuffer: "text-fragment",
-        ...(entry.promptContextMinTimestampMs !== undefined
-          ? { promptContextMinTimestampMs: entry.promptContextMinTimestampMs }
-          : {}),
+        ...promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
       });
     } catch (err) {
       runtime.error?.(danger(`text fragment handler failed: ${String(err)}`));
@@ -1377,7 +1376,7 @@ export const registerTelegramHandlers = ({
         const entry: TextFragmentEntry = {
           key,
           messages: [{ msg, ctx, receivedAtMs: nowMs }],
-          ...(promptContextMinTimestampMs !== undefined ? { promptContextMinTimestampMs } : {}),
+          ...promptContextBoundaryOptions(promptContextMinTimestampMs),
           timer: setTimeout(() => {}, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS),
         };
         textFragmentBuffer.set(key, entry);
@@ -1409,7 +1408,7 @@ export const registerTelegramHandlers = ({
       } else {
         const entry: MediaGroupEntry = {
           messages: [{ msg, ctx }],
-          ...(promptContextMinTimestampMs !== undefined ? { promptContextMinTimestampMs } : {}),
+          ...promptContextBoundaryOptions(promptContextMinTimestampMs),
           timer: setTimeout(async () => {
             mediaGroupBuffer.delete(mediaGroupId);
             mediaGroupProcessing = mediaGroupProcessing
@@ -1506,7 +1505,7 @@ export const registerTelegramHandlers = ({
       debounceKey,
       debounceLane,
       botUsername: ctx.me?.username,
-      ...(promptContextMinTimestampMs !== undefined ? { promptContextMinTimestampMs } : {}),
+      ...promptContextBoundaryOptions(promptContextMinTimestampMs),
     });
   };
   bot.on("callback_query", async (ctx) => {
@@ -2397,7 +2396,7 @@ export const registerTelegramHandlers = ({
         storeAllowFrom,
         sendOversizeWarning: event.sendOversizeWarning,
         oversizeLogMessage: event.oversizeLogMessage,
-        ...(promptContextMinTimestampMs !== undefined ? { promptContextMinTimestampMs } : {}),
+        ...promptContextBoundaryOptions(promptContextMinTimestampMs),
       });
     } catch (err) {
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
