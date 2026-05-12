@@ -447,6 +447,7 @@ async function resolveInstalledPackageScanRoot(params: {
 }
 
 async function collectInstalledPackageScanRoots(params: {
+  additionalPackageDirs?: string[];
   dependencyScanRootDir?: string;
   packageDir: string;
 }): Promise<string[]> {
@@ -465,6 +466,15 @@ async function collectInstalledPackageScanRoots(params: {
   const queue: InstalledPackageScanRoot[] = [
     { packageDir: params.packageDir, realPath: packageRealPath },
   ];
+  for (const packageDir of params.additionalPackageDirs ?? []) {
+    const realPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
+    if (!isSamePathOrInside(boundaryRealPath, realPath)) {
+      throw new Error(
+        `installed dependency scan found package outside install root at ${packageDir}`,
+      );
+    }
+    queue.push({ packageDir, realPath });
+  }
   const visitedRealPaths = new Set<string>();
   const scanRoots: string[] = [];
   let queueIndex = 0;
@@ -1107,6 +1117,7 @@ export async function scanPackageInstallSourceRuntime(
 }
 
 export async function scanInstalledPackageDependencyTreeRuntime(params: {
+  additionalPackageDirs?: string[];
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
   dependencyScanRootDir?: string;
@@ -1116,6 +1127,9 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
   trustedSourceLinkedOfficialInstall?: boolean;
 }): Promise<InstallSecurityScanResult | undefined> {
   const scanRoots = await collectInstalledPackageScanRoots({
+    ...(params.additionalPackageDirs
+      ? { additionalPackageDirs: params.additionalPackageDirs }
+      : {}),
     dependencyScanRootDir: params.dependencyScanRootDir,
     packageDir: params.packageDir,
   });

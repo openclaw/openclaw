@@ -80,6 +80,7 @@ export async function scanPackageInstallSource(
 }
 
 export async function scanInstalledPackageDependencyTree(params: {
+  additionalPackageDirs?: string[];
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
   dependencyScanRootDir?: string;
