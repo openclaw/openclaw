@@ -584,6 +584,7 @@ Docs: https://docs.openclaw.ai
 ### Breaking
 
 - Channels/iMessage: remove the bundled BlueBubbles channel surface and deprecate BlueBubbles-backed iMessage setup in OpenClaw. Existing `channels.bluebubbles` configs must migrate to `channels.imessage` using `imsg` on a signed-in Mac or an SSH wrapper, and non-macOS default `imsg` configs now report remote-Mac wrapper guidance.
+- Proxy: replace OpenClaw managed HTTP/WebSocket/fetch interception internals with Proxyline while preserving Gateway loopback routing policy.
 
 ### Fixes
 

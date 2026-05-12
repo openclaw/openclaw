@@ -82,7 +82,6 @@ let DEFAULT_UNDICI_STREAM_TIMEOUT_MS: typeof import("./undici-global-dispatcher.
 let ensureGlobalUndiciDispatcherStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciDispatcherStreamTimeouts;
 let ensureGlobalUndiciEnvProxyDispatcher: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciEnvProxyDispatcher;
 let ensureGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciStreamTimeouts;
-let forceResetGlobalDispatcher: typeof import("./undici-global-dispatcher.js").forceResetGlobalDispatcher;
 let resetGlobalUndiciStreamTimeoutsForTests: typeof import("./undici-global-dispatcher.js").resetGlobalUndiciStreamTimeoutsForTests;
 let undiciGlobalDispatcherModule: typeof import("./undici-global-dispatcher.js");
 
@@ -94,7 +93,6 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
       ensureGlobalUndiciDispatcherStreamTimeouts,
       ensureGlobalUndiciEnvProxyDispatcher,
       ensureGlobalUndiciStreamTimeouts,
-      forceResetGlobalDispatcher,
       resetGlobalUndiciStreamTimeoutsForTests,
     } = undiciGlobalDispatcherModule);
   });
@@ -370,77 +368,6 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
     expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
-  });
-});
-
-describe("forceResetGlobalDispatcher", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    resetGlobalUndiciStreamTimeoutsForTests();
-    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(false);
-    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue(undefined);
-  });
-
-  it("does not import undici when proxy env is cleared", () => {
-    setCurrentDispatcher(new EnvHttpProxyAgent());
-
-    forceResetGlobalDispatcher();
-
-    expect(loadUndiciGlobalDispatcherDeps).not.toHaveBeenCalled();
-    expect(setGlobalDispatcher).not.toHaveBeenCalled();
-  });
-
-  it("restores a direct Agent when clearing a proxy dispatcher installed by OpenClaw", () => {
-    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
-    ensureGlobalUndiciEnvProxyDispatcher();
-    expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
-
-    vi.clearAllMocks();
-    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(false);
-
-    forceResetGlobalDispatcher();
-
-    expect(loadUndiciGlobalDispatcherDeps).toHaveBeenCalledTimes(1);
-    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    expect(getCurrentDispatcher()).toBeInstanceOf(Agent);
-  });
-
-  it("replaces a stale EnvHttpProxyAgent when restored proxy env is still configured", () => {
-    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
-    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
-      httpProxy: "http://proxy-b.example:8080",
-      httpsProxy: "http://proxy-b.example:8080",
-    });
-    setCurrentDispatcher(new EnvHttpProxyAgent());
-
-    forceResetGlobalDispatcher();
-
-    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
-    expect((getCurrentDispatcher() as { options?: Record<string, unknown> }).options).toEqual({
-      httpProxy: "http://proxy-b.example:8080",
-      httpsProxy: "http://proxy-b.example:8080",
-      allowH2: false,
-    });
-  });
-
-  it("preserves ALL_PROXY-only EnvHttpProxyAgent options when resetting", () => {
-    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
-    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
-      httpProxy: "http://proxy-all.example:3128",
-      httpsProxy: "http://proxy-all.example:3128",
-    });
-    setCurrentDispatcher(new EnvHttpProxyAgent());
-
-    forceResetGlobalDispatcher();
-
-    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
-    expect((getCurrentDispatcher() as { options?: Record<string, unknown> }).options).toEqual({
-      httpProxy: "http://proxy-all.example:3128",
-      httpsProxy: "http://proxy-all.example:3128",
-      allowH2: false,
-    });
   });
 });
 
