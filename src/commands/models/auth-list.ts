@@ -152,7 +152,7 @@ export async function modelsAuthListCommand(
       agentId,
       agentDir: shortenHomePath(agentDir),
       authStateStore: "sqlite",
-      provider: provider ?? null,
+      provider: providerFilter.provider ?? null,
       profiles,
     });
     return;
@@ -160,8 +160,8 @@ export async function modelsAuthListCommand(
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log("Auth runtime state: SQLite");
-  if (provider) {
-    runtime.log(`Provider: ${provider}`);
+  if (providerFilter.provider) {
+    runtime.log(`Provider: ${providerFilter.provider}`);
   }
   if (profiles.length === 0) {
     runtime.log("Profiles: (none)");
