@@ -370,6 +370,43 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
   });
 
+  it("applies inherited tool denies from stored subagent sessions", () => {
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-inherited-deny-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:limited": {
+            sessionId: "limited-session",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolDeny: ["bash", "read"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const cfg = {
+      ...baseCfg,
+      session: {
+        store: storePath,
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:limited");
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("read", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
+  });
+
   it("defaults to leaf behavior when no depth is provided", () => {
     const policy = resolveSubagentToolPolicy(baseCfg);
     // Default depth=1, maxSpawnDepth=2 → orchestrator

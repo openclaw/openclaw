@@ -486,6 +486,16 @@ describe("gateway sessions patch", () => {
     expect(entry.spawnDepth).toBe(2);
   });
 
+  test("sets inheritedToolDeny for ACP sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        storeKey: "agent:main:acp:child",
+        patch: { key: "agent:main:acp:child", inheritedToolDeny: ["bash", "read", "bash"] },
+      }),
+    );
+    expect(entry.inheritedToolDeny).toEqual(["exec", "read"]);
+  });
+
   test("rejects spawnDepth on non-subagent sessions", async () => {
     const result = await runPatch({
       patch: { key: MAIN_SESSION_KEY, spawnDepth: 1 },
@@ -498,6 +508,13 @@ describe("gateway sessions patch", () => {
       patch: { key: MAIN_SESSION_KEY, spawnedWorkspaceDir: "/tmp/nope" },
     });
     expectPatchError(result, "spawnedWorkspaceDir is only supported");
+  });
+
+  test("rejects inheritedToolDeny on non-subagent sessions", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, inheritedToolDeny: ["exec"] },
+    });
+    expectPatchError(result, "inheritedToolDeny is only supported");
   });
 
   test("normalizes exec/send/group patches", async () => {

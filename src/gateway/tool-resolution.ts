@@ -81,10 +81,30 @@ export function resolveGatewayScopedTools(params: {
         store: subagentStore,
       })
     : undefined;
+  const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
+  const surface = params.surface ?? "http";
+  const gatewayToolsCfg = params.cfg.gateway?.tools;
+  const defaultGatewayDeny =
+    surface === "http"
+      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
+      : [];
   const workspaceDir = resolveAgentWorkspaceDir(
     params.cfg,
     agentId ?? resolveDefaultAgentId(params.cfg),
   );
+  const explicitDenylist = collectExplicitDenylist([
+    profilePolicy,
+    providerProfilePolicy,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    subagentPolicy,
+    defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
+    Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
+    excludedToolNames.length > 0 ? { deny: excludedToolNames } : undefined,
+  ]);
 
   const allTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
@@ -110,16 +130,8 @@ export function resolveGatewayScopedTools(params: {
       subagentPolicy,
       gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
     ]),
-    pluginToolDenylist: collectExplicitDenylist([
-      profilePolicy,
-      providerProfilePolicy,
-      globalPolicy,
-      globalProviderPolicy,
-      agentPolicy,
-      agentProviderPolicy,
-      groupPolicy,
-      subagentPolicy,
-    ]),
+    pluginToolDenylist: explicitDenylist,
+    inheritedToolDenylist: explicitDenylist,
   });
 
   const policyFiltered = applyToolPolicyPipeline({
@@ -145,16 +157,10 @@ export function resolveGatewayScopedTools(params: {
     ],
   });
 
-  const surface = params.surface ?? "http";
-  const gatewayToolsCfg = params.cfg.gateway?.tools;
-  const defaultGatewayDeny =
-    surface === "http"
-      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
-      : [];
   const gatewayDenySet = new Set([
     ...defaultGatewayDeny,
     ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
-    ...(params.excludeToolNames ? Array.from(params.excludeToolNames) : []),
+    ...excludedToolNames,
   ]);
 
   return {

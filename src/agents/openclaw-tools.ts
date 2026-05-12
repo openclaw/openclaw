@@ -414,6 +414,7 @@ export function createOpenClawTools(
             config: resolvedConfig,
             requesterAgentIdOverride: options?.requesterAgentIdOverride,
             workspaceDir: spawnWorkspaceDir,
+            inheritedToolDenylist: options?.inheritedToolDenylist,
           }),
         ]),
     createSessionsYieldTool({

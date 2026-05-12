@@ -311,6 +311,20 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("passes inherited tool denies to subagent spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      inheritedToolDenylist: ["exec", "read"],
+    });
+
+    await tool.execute("call-inherited-deny", {
+      task: "build feature",
+    });
+
+    const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
+    expect(spawnContext.inheritedToolDenylist).toEqual(["exec", "read"]);
+  });
+
   it("accepts taskName as a stable subagent handle", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -502,6 +516,23 @@ describe("sessions_spawn tool", () => {
     expect(spawnContext.agentSessionKey).toBe("agent:main:main");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("passes inherited tool denies to ACP spawns", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      inheritedToolDenylist: ["exec", "process"],
+    });
+
+    await tool.execute("call-acp-inherited-deny", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+    });
+
+    const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
+    expect(spawnContext.inheritedToolDenylist).toEqual(["exec", "process"]);
   });
 
   it("forwards model override to ACP runtime spawns", async () => {

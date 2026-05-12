@@ -22,6 +22,7 @@ import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import {
   resolveSubagentCapabilityStore,
+  resolveStoredSubagentInheritedToolDenylist,
   resolveStoredSubagentCapabilities,
   type SessionCapabilityStore,
   type SubagentSessionRole,
@@ -119,6 +120,10 @@ export function resolveSubagentToolPolicyForSession(
     cfg,
     store,
   });
+  const inheritedToolDeny = resolveStoredSubagentInheritedToolDenylist(sessionKey, {
+    cfg,
+    store,
+  });
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
   const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
   const explicitAllow = new Set(
@@ -128,6 +133,7 @@ export function resolveSubagentToolPolicyForSession(
     ...resolveSubagentDenyListForRole(capabilities.role).filter(
       (toolName) => !explicitAllow.has(normalizeToolName(toolName)),
     ),
+    ...inheritedToolDeny,
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
   const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;

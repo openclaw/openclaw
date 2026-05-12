@@ -194,6 +194,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     subagentControlScope: Type.Optional(
       Type.Union([Type.Literal("children"), Type.Literal("none"), Type.Null()]),
     ),
+    inheritedToolDeny: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
     sendPolicy: Type.Optional(
       Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()]),
     ),

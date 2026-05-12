@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { normalizeInheritedToolDenylist } from "../agents/inherited-tool-deny.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   resolveAllowedModelRef,
@@ -225,6 +226,26 @@ export async function applySessionsPatchToStore(params: {
         return invalid("subagentControlScope cannot be changed once set");
       }
       next.subagentControlScope = normalized;
+    }
+  }
+
+  if ("inheritedToolDeny" in patch) {
+    const raw = patch.inheritedToolDeny;
+    if (raw === null) {
+      delete next.inheritedToolDeny;
+    } else if (raw !== undefined) {
+      if (!Array.isArray(raw)) {
+        return invalid("invalid inheritedToolDeny (use an array of tool names)");
+      }
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("inheritedToolDeny is only supported for subagent:* or acp:* sessions");
+      }
+      const inheritedToolDeny = normalizeInheritedToolDenylist(raw);
+      if (inheritedToolDeny.length > 0) {
+        next.inheritedToolDeny = inheritedToolDeny;
+      } else {
+        delete next.inheritedToolDeny;
+      }
     }
   }
 

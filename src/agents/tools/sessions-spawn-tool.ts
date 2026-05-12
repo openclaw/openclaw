@@ -374,6 +374,7 @@ export function createSessionsSpawnTool(
             agentGroupSpace: opts?.agentGroupSpace,
             agentMemberRoleIds: opts?.agentMemberRoleIds,
             sandboxed: opts?.sandboxed,
+            inheritedToolDenylist: opts?.inheritedToolDenylist,
           },
         );
         const childSessionKey = result.childSessionKey?.trim();
@@ -477,6 +478,7 @@ export function createSessionsSpawnTool(
           agentMemberRoleIds: opts?.agentMemberRoleIds,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
           workspaceDir: opts?.workspaceDir,
+          inheritedToolDenylist: opts?.inheritedToolDenylist,
         },
       );
 

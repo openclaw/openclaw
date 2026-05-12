@@ -17,6 +17,7 @@ export type SpawnedToolContext = {
   agentGroupSpace?: string | null;
   agentMemberRoleIds?: string[];
   workspaceDir?: string;
+  inheritedToolDenylist?: string[];
 };
 
 type NormalizedSpawnedRunMetadata = {
