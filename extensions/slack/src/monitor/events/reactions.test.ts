@@ -136,6 +136,57 @@ describe("registerSlackReactionEvents", () => {
       },
       expectedCalls: 0,
     },
+    {
+      name: "blocks reactions when reaction notifications are off",
+      input: { overrides: { dmPolicy: "open", reactionMode: "off" } },
+      expectedCalls: 0,
+    },
+    {
+      name: "blocks own-mode reactions on messages not authored by the bot",
+      input: {
+        overrides: { dmPolicy: "open", reactionMode: "own" },
+        event: {
+          ...buildReactionEvent(),
+          item_user: "U_OTHER",
+        },
+      },
+      expectedCalls: 0,
+    },
+    {
+      name: "allows own-mode reactions on messages authored by the bot",
+      input: {
+        overrides: { dmPolicy: "open", reactionMode: "own" },
+        event: {
+          ...buildReactionEvent(),
+          item_user: "U_BOT",
+        },
+      },
+      expectedCalls: 1,
+    },
+    {
+      name: "blocks reactions from senders outside the reaction allowlist",
+      input: {
+        overrides: {
+          dmPolicy: "open",
+          reactionMode: "allowlist",
+          reactionAllowlist: ["U2"],
+        },
+        event: buildReactionEvent({ user: "U1" }),
+      },
+      expectedCalls: 0,
+    },
+    {
+      name: "allows reactions from senders inside the reaction allowlist",
+      input: {
+        overrides: {
+          dmPolicy: "open",
+          reactionMode: "allowlist",
+          reactionAllowlist: ["U1"],
+        },
+        event: buildReactionEvent({ user: "U1" }),
+      },
+      expectedCalls: 1,
+    },
   ];
 
   it.each(cases)("$name", async ({ input, expectedCalls }) => {
