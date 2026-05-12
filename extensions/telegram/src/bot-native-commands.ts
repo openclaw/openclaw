@@ -457,6 +457,12 @@ function normalizeTelegramNativeReplyPayload(
   return result && typeof result === "object" ? result : {};
 }
 
+function isSuppressedTelegramNativeReplyPayload(result: TelegramNativeReplyPayload): boolean {
+  return Boolean(
+    (result as TelegramNativeReplyPayload & { suppressReply?: boolean }).suppressReply,
+  );
+}
+
 function hasRenderableTelegramNativeReplyPayload(result: TelegramNativeReplyPayload): boolean {
   return resolveSendableOutboundReplyParts(result).hasContent;
 }
@@ -1658,6 +1664,17 @@ export const registerTelegramNativeCommands = ({
             payload: result,
           })
         ) {
+          await cleanupTelegramProgressPlaceholder({
+            bot,
+            chatId,
+            progressMessageId,
+            runtime,
+          });
+          return;
+        }
+
+        // If the plugin handled delivery itself and wants no fallback, just clean up
+        if (isSuppressedTelegramNativeReplyPayload(result)) {
           await cleanupTelegramProgressPlaceholder({
             bot,
             chatId,
