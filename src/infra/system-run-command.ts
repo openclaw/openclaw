@@ -7,8 +7,8 @@ import {
 } from "./exec-wrapper-resolution.js";
 import {
   POSIX_INLINE_COMMAND_FLAGS,
-  POWERSHELL_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
+  resolvePowerShellInlineCommandMatch,
 } from "./shell-inline-command.js";
 
 type SystemRunCommandValidation =
@@ -95,7 +95,7 @@ function hasTrailingPositionalArgvAfterInlineCommand(argv: string[]): boolean {
 
   const inlineCommandIndex =
     wrapper === "powershell" || wrapper === "pwsh"
-      ? resolveInlineCommandMatch(wrapperArgv, POWERSHELL_INLINE_COMMAND_FLAGS).valueTokenIndex
+      ? resolvePowerShellInlineCommandMatch(wrapperArgv).valueTokenIndex
       : resolveInlineCommandMatch(wrapperArgv, POSIX_INLINE_COMMAND_FLAGS, {
           allowCombinedC: true,
         }).valueTokenIndex;

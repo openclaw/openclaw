@@ -637,6 +637,7 @@ function evaluateShellWrapperInlineCommand(params: {
   }
   return { matches, satisfiedBy: "allowlist" };
 }
+
 function evaluateSegments(
   segments: ExecCommandSegment[],
   params: ExecAllowlistContext,

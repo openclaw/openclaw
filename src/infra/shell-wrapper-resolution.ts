@@ -11,8 +11,9 @@ import {
   hasPosixInteractiveStartupBeforeInlineCommand,
   hasPosixLoginStartupBeforeInlineCommand,
   POSIX_INLINE_COMMAND_FLAGS,
-  POWERSHELL_INLINE_COMMAND_FLAGS,
+  POWERSHELL_INLINE_COMMAND_TAIL_FLAGS,
   resolveInlineCommandMatch,
+  resolvePowerShellInlineCommandMatch,
 } from "./shell-inline-command.js";
 
 const POSIX_SHELL_WRAPPER_NAMES = ["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"] as const;
@@ -217,12 +218,12 @@ function extractCmdInlineCommand(argv: string[]): string | null {
 }
 
 function extractPowerShellInlineCommand(argv: string[]): string | null {
-  const match = resolveInlineCommandMatch(argv, POWERSHELL_INLINE_COMMAND_FLAGS);
+  const match = resolvePowerShellInlineCommandMatch(argv);
   if (match.command === null || match.valueTokenIndex === null) {
     return match.command;
   }
   const flag = normalizeLowercaseStringOrEmpty(argv[match.valueTokenIndex - 1]);
-  if (flag === "-command" || flag === "-c" || flag === "--command") {
+  if (POWERSHELL_INLINE_COMMAND_TAIL_FLAGS.has(flag)) {
     const command = argv.slice(match.valueTokenIndex).join(" ").trim();
     return command.length > 0 ? command : null;
   }

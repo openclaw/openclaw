@@ -3,6 +3,7 @@ import {
   POSIX_INLINE_COMMAND_FLAGS,
   POWERSHELL_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
+  resolvePowerShellInlineCommandMatch,
 } from "./shell-inline-command.js";
 
 describe("resolveInlineCommandMatch", () => {
@@ -28,6 +29,18 @@ describe("resolveInlineCommandMatch", () => {
     {
       name: "extracts the next token for PowerShell -ec",
       argv: ["pwsh", "-ec", "ZQBjAGgAbwA="],
+      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 2 },
+    },
+    {
+      name: "extracts the next token for PowerShell /ec",
+      argv: ["pwsh", "/NoProfile", "/ec", "ZQBjAGgAbwA="],
+      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 3 },
+    },
+    {
+      name: "extracts the next token for PowerShell -en",
+      argv: ["pwsh", "-en", "ZQBjAGgAbwA="],
       flags: POWERSHELL_INLINE_COMMAND_FLAGS,
       expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 2 },
     },
@@ -88,5 +101,52 @@ describe("resolveInlineCommandMatch", () => {
       command: null,
       valueTokenIndex: null,
     });
+  });
+});
+
+describe("resolvePowerShellInlineCommandMatch", () => {
+  it.each([
+    {
+      name: "slash encoded-command alias",
+      argv: ["pwsh", "/NoProfile", "/ec", "ZQBjAGgAbwA="],
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 3 },
+    },
+    {
+      name: "encoded-command prefix abbreviation",
+      argv: ["pwsh", "-en", "ZQBjAGgAbwA="],
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 2 },
+    },
+    {
+      name: "option value before slash encoded-command alias",
+      argv: ["pwsh", "-WorkingDir", "/tmp/project", "/ec", "ZQBjAGgAbwA="],
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 4 },
+    },
+    {
+      name: "input format value before encoded command",
+      argv: ["pwsh", "-if", "XML", "-EncodedCommand", "ZQBjAGgAbwA="],
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 4 },
+    },
+    {
+      name: "configuration value before encoded-command alias",
+      argv: ["pwsh", "-config", "SomeConfig", "-ec", "ZQBjAGgAbwA="],
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 4 },
+    },
+    {
+      name: "window style value before slash encoded-command alias",
+      argv: ["pwsh", "-win", "hidden", "/ec", "ZQBjAGgAbwA="],
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 4 },
+    },
+    {
+      name: "stops at the first positional argument",
+      argv: ["pwsh", "script.ps1", "/ec", "ZQBjAGgAbwA="],
+      expected: { command: null, valueTokenIndex: null },
+    },
+    {
+      name: "does not treat an option value as an encoded-command flag",
+      argv: ["pwsh", "-WorkingDir", "/ec", "ZQBjAGgAbwA="],
+      expected: { command: null, valueTokenIndex: null },
+    },
+  ])("$name", ({ argv, expected }) => {
+    expect(resolvePowerShellInlineCommandMatch(argv)).toEqual(expected);
   });
 });

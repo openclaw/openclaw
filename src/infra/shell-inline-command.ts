@@ -1,16 +1,53 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
-export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
-  "-c",
-  "-command",
-  "--command",
-  "-f",
-  "-file",
+
+function expandPowerShellSwitchPrefixForms(name: string, minPrefixLength: number): string[] {
+  const normalized = normalizeLowercaseStringOrEmpty(name);
+  const forms: string[] = [];
+  for (let length = minPrefixLength; length <= normalized.length; length += 1) {
+    const prefix = normalized.slice(0, length);
+    forms.push(`-${prefix}`, `/${prefix}`);
+  }
+  forms.push(`--${normalized}`);
+  return forms;
+}
+
+const POWERSHELL_COMMAND_FLAGS = [
+  ...expandPowerShellSwitchPrefixForms("command", 1),
+  "-cwa",
+  "/cwa",
+  "--commandwithargs",
+];
+const POWERSHELL_FILE_FLAGS = expandPowerShellSwitchPrefixForms("file", 1);
+const POWERSHELL_ENCODED_COMMAND_FLAGS = [
+  ...expandPowerShellSwitchPrefixForms("encodedcommand", 1),
   "-ec",
-  "-encodedcommand",
-  "-enc",
-  "-e",
+  "/ec",
+];
+const POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
+  ...expandPowerShellSwitchPrefixForms("configurationname", 1),
+  ...expandPowerShellSwitchPrefixForms("executionpolicy", 1),
+  ...expandPowerShellSwitchPrefixForms("inputformat", 1),
+  ...expandPowerShellSwitchPrefixForms("outputformat", 1),
+  ...expandPowerShellSwitchPrefixForms("psconsolefile", 1),
+  ...expandPowerShellSwitchPrefixForms("settingsfile", 1),
+  ...expandPowerShellSwitchPrefixForms("version", 1),
+  ...expandPowerShellSwitchPrefixForms("windowstyle", 1),
+  ...expandPowerShellSwitchPrefixForms("workingdirectory", 1),
+  "-if",
+  "/if",
+  "-of",
+  "/of",
+  "-wd",
+  "/wd",
+]);
+
+export const POWERSHELL_INLINE_COMMAND_TAIL_FLAGS = new Set(POWERSHELL_COMMAND_FLAGS);
+export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
+  ...POWERSHELL_COMMAND_FLAGS,
+  ...POWERSHELL_FILE_FLAGS,
+  ...POWERSHELL_ENCODED_COMMAND_FLAGS,
 ]);
 
 const POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
@@ -109,7 +146,11 @@ function advancePosixInlineOptionScan(token: string): number {
 export function resolveInlineCommandMatch(
   argv: string[],
   flags: ReadonlySet<string>,
-  options: { allowCombinedC?: boolean } = {},
+  options: {
+    allowCombinedC?: boolean;
+    stopAtFirstNonOption?: boolean;
+    valueOptions?: ReadonlySet<string>;
+  } = {},
 ): { command: string | null; valueTokenIndex: number | null } {
   for (let i = 1; i < argv.length; ) {
     const token = argv[i]?.trim();
@@ -139,9 +180,26 @@ export function resolveInlineCommandMatch(
     if (options.allowCombinedC && !token.startsWith("-") && !token.startsWith("+")) {
       break;
     }
+    if (options.valueOptions?.has(lower)) {
+      i += 2;
+      continue;
+    }
+    if (options.stopAtFirstNonOption && !token.startsWith("-") && !token.startsWith("/")) {
+      break;
+    }
     i += options.allowCombinedC ? advancePosixInlineOptionScan(token) : 1;
   }
   return { command: null, valueTokenIndex: null };
+}
+
+export function resolvePowerShellInlineCommandMatch(argv: string[]): {
+  command: string | null;
+  valueTokenIndex: number | null;
+} {
+  return resolveInlineCommandMatch(argv, POWERSHELL_INLINE_COMMAND_FLAGS, {
+    stopAtFirstNonOption: true,
+    valueOptions: POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES,
+  });
 }
 
 export function hasPosixInteractiveStartupBeforeInlineCommand(

@@ -825,6 +825,34 @@ describe("exec approvals shell analysis", () => {
       }
     });
 
+    it.each([
+      { name: "slash encoded-command alias", argv: ["pwsh", "/ec", "ZQBjAGgAbwA="] },
+      { name: "encoded-command prefix abbreviation", argv: ["pwsh", "-en", "ZQBjAGgAbwA="] },
+    ])("does not satisfy bare wrapper allowlist entries for PowerShell $name", ({ argv }) => {
+      const dir = makeTempDir();
+      const pwshPath = path.join(dir, "pwsh");
+      fs.writeFileSync(pwshPath, "");
+      fs.chmodSync(pwshPath, 0o755);
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({ argv, cwd: dir, env });
+        expect(analysis.ok).toBe(true);
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: pwshPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it("satisfies allowlist when bare * wildcard is present", () => {
       const dir = makeTempDir();
       const binPath = path.join(dir, "mybin");
