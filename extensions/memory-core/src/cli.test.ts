@@ -9,11 +9,15 @@ import {
   spyRuntimeLogs,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { assertPathIsSafe } from "./lab-safety.js";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
+const resolveSessionTranscriptsDirForAgent = vi.hoisted(() =>
+  vi.fn((agentId: string) => path.join(os.tmpdir(), "openclaw-memory-cli-sessions", agentId)),
+);
 const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   vi.fn(async ({ config }: { config: unknown }) => ({
     resolvedConfig: config,
@@ -49,7 +53,7 @@ vi.mock("./cli.host.runtime.js", async () => {
     normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
-    resolveSessionTranscriptsDirForAgent: runtimeCore.resolveSessionTranscriptsDirForAgent,
+    resolveSessionTranscriptsDirForAgent,
     resolveStateDir: runtimeCore.resolveStateDir,
     setVerbose: runtimeCli.setVerbose,
     shortenHomeInString: runtimeCli.shortenHomeInString,
@@ -86,6 +90,11 @@ beforeEach(() => {
   getMemorySearchManager.mockReset();
   getRuntimeConfig.mockReset().mockReturnValue({});
   resolveDefaultAgentId.mockReset().mockReturnValue("main");
+  resolveSessionTranscriptsDirForAgent
+    .mockReset()
+    .mockImplementation((agentId: string) =>
+      path.join(os.tmpdir(), "openclaw-memory-cli-sessions", agentId),
+    );
   resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
     diagnostics: [] as string[],
@@ -406,6 +415,154 @@ describe("memory cli", () => {
     expect(helpText).toContain(
       "Preview REM reflections, candidate truths, and deep promotion output.",
     );
+    expect(helpText).toContain("openclaw memory privacy audit");
+    expect(helpText).toContain("Show memory privacy surfaces and risks.");
+    expect(helpText).toContain("openclaw memory export --encrypted --out memory-backup.age");
+  });
+
+  it("prints privacy audit JSON with remote embedding and transcript warnings", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Remember launch plans.\n");
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", ["Met Priya about budget."]);
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json"),
+        "{}",
+      );
+      const sessionsDir = path.join(workspaceDir, "fake-sessions");
+      resolveSessionTranscriptsDirForAgent.mockReturnValueOnce(sessionsDir);
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(path.join(sessionsDir, "thread.jsonl"), "{}\n");
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () =>
+          makeMemoryStatus({
+            workspaceDir,
+            provider: "openai",
+            requestedProvider: "openai",
+            sources: ["memory", "sessions"],
+            dbPath: path.join(workspaceDir, "memory.sqlite"),
+          }),
+        close,
+      });
+      await fs.writeFile(path.join(workspaceDir, "memory.sqlite"), "sqlite-ish");
+
+      const json = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["privacy", "audit", "--json"]);
+
+      const payload = firstWrittenJsonArg(json) as Array<{
+        embedding: { classification: string };
+        transcriptPersistence: { files: number; sessionsSourceEnabled: boolean };
+        findings: Array<{ code: string }>;
+      }>;
+      expect(payload[0]?.embedding.classification).toBe("remote");
+      expect(payload[0]?.transcriptPersistence.sessionsSourceEnabled).toBe(true);
+      expect(payload[0]?.transcriptPersistence.files).toBe(1);
+      expect(payload[0]?.findings.map((finding) => finding.code)).toContain(
+        "remote-embedding-provider",
+      );
+      expect(payload[0]?.findings.map((finding) => finding.code)).toContain("memory-index-present");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("round-trips encrypted memory export and import", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Remember local-first privacy.\n");
+      await writeDailyMemoryNote(workspaceDir, "2026-04-04", ["Discussed encrypted backups."]);
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir, provider: "ollama" }),
+        close,
+      });
+      const previous = process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;
+      process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = "correct horse battery staple";
+      try {
+        const backupPath = path.join(workspaceDir, "backup.age");
+        const restoreDir = path.join(workspaceDir, "restore");
+        await runMemoryCli(["export", "--encrypted", "--out", backupPath, "--json"]);
+        await runMemoryCli(["import", "--encrypted", "--in", backupPath, "--target", restoreDir]);
+
+        await expect(fs.readFile(backupPath, "utf-8")).resolves.toContain("age-encryption.org");
+        await expect(fs.readFile(path.join(restoreDir, "MEMORY.md"), "utf-8")).resolves.toBe(
+          "Remember local-first privacy.\n",
+        );
+        await expect(
+          fs.readFile(path.join(restoreDir, "memory", "2026-04-04.md"), "utf-8"),
+        ).resolves.toBe("Discussed encrypted backups.\n");
+        expect(close).toHaveBeenCalled();
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;
+        } else {
+          process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = previous;
+        }
+      }
+    });
+  });
+
+  it("rejects encrypted import with the wrong passphrase", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Protected.\n");
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+      const previous = process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;
+      const backupPath = path.join(workspaceDir, "backup.age");
+      try {
+        process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = "right passphrase";
+        await runMemoryCli(["export", "--encrypted", "--out", backupPath]);
+        process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = "wrong passphrase";
+
+        await expect(
+          runMemoryCli([
+            "import",
+            "--encrypted",
+            "--in",
+            backupPath,
+            "--target",
+            path.join(workspaceDir, "restore-wrong"),
+          ]),
+        ).rejects.toThrow();
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;
+        } else {
+          process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = previous;
+        }
+      }
+    });
+  });
+
+  it("refuses to overwrite restored memory files by default", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Protected.\n");
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+      const previous = process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;
+      process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = "overwrite passphrase";
+      try {
+        const backupPath = path.join(workspaceDir, "backup.age");
+        const restoreDir = path.join(workspaceDir, "restore-overwrite");
+        await runMemoryCli(["export", "--encrypted", "--out", backupPath]);
+        await fs.mkdir(restoreDir, { recursive: true });
+        await fs.writeFile(path.join(restoreDir, "MEMORY.md"), "Existing.\n");
+
+        await expect(
+          runMemoryCli(["import", "--encrypted", "--in", backupPath, "--target", restoreDir]),
+        ).rejects.toThrow("Refusing to overwrite existing file");
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE;
+        } else {
+          process.env.OPENCLAW_MEMORY_BACKUP_PASSPHRASE = previous;
+        }
+      }
+    });
   });
 
   it("prints vector error when unavailable", async () => {

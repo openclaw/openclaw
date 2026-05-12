@@ -958,6 +958,9 @@ importers:
 
   extensions/memory-core:
     dependencies:
+      age-encryption:
+        specifier: ^0.1.5
+        version: 0.1.5
       chokidar:
         specifier: 5.0.0
         version: 5.0.0
@@ -4652,6 +4655,9 @@ packages:
     engines: {node: '>=22.12.0'}
     hasBin: true
 
+  age-encryption@0.1.5:
+    resolution: {integrity: sha512-dCYck6yQczeJHq+Jj+nc3ziBAxcod1DLlNkyLgwJyIOXh32NzzKm3kybXCZuDhecgWLGp1FDEUW2QxqGuHtjuw==}
+
   agent-base@7.1.4:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
     engines: {node: '>= 14'}
@@ -4854,6 +4860,10 @@ packages:
   basic-ftp@6.0.1:
     resolution: {integrity: sha512-3ilxa3n4276wGQp/ImRAuz4ALdsj/2Wd3FqoZBZlajDYnByCZ0JMb4+26Rde0wGXIbM0G2HWSfr/Fi8b21KX8g==}
     engines: {node: '>=10.0.0'}
+
+  bech32-buffer@0.2.1:
+    resolution: {integrity: sha512-fCG1TyZuCN48Sdw97p/IR39fvqpFlWDVpG7qnuU1Uc3+Xtc/0uqAp8U7bMW/bGuVF5CcNVIXwxQsWwUr6un6FQ==}
+    engines: {node: '>=8'}
 
   bidi-js@1.0.3:
     resolution: {integrity: sha512-RKshQI1R3YQ+n9YJz2QQ147P66ELpa1FQEg20Dk8oW9t2KgLbpDLLp9aGZ7y8WHSshDknG0bknqGw5/tyCs5tw==}
@@ -5979,6 +5989,12 @@ packages:
 
   libsignal@6.0.0:
     resolution: {integrity: sha512-d/5V3YFtDljbFMufz4ncyUYGYhJl+vzAe+c2EFFBQ6bz1h8Q3IOMEGXYMzlibU60I+e8GagMMpji18iez3P1hA==}
+
+  libsodium-sumo@0.7.16:
+    resolution: {integrity: sha512-x6atrz2AdXCJg6G709x9W9TTJRI6/0NcL5dD0l5GGVqNE48UJmDsjO4RUWYTeyXXUpg+NXZ2SHECaZnFRYzwGA==}
+
+  libsodium-wrappers-sumo@0.7.16:
+    resolution: {integrity: sha512-gR0JEFPeN3831lB9+ogooQk0KH4K5LSMIO5Prd5Q5XYR2wHFtZfPg0eP7t1oJIWq+UIzlU4WVeBxZ97mt28tXw==}
 
   lie@3.3.0:
     resolution: {integrity: sha512-UaiMJzeWRlEujzAuw5LokY1L5ecNQYZKfmyZ9L7wDHb/p5etKaxXhohBcrw0EYby+G/NA52vRSN4N39dxHAIwQ==}
@@ -11301,6 +11317,11 @@ snapshots:
       - bare-buffer
       - react-native-b4a
 
+  age-encryption@0.1.5:
+    dependencies:
+      bech32-buffer: 0.2.1
+      libsodium-wrappers-sumo: 0.7.16
+
   agent-base@7.1.4: {}
 
   agent-base@9.0.0: {}
@@ -11485,6 +11506,8 @@ snapshots:
   base64-js@1.5.1: {}
 
   basic-ftp@6.0.1: {}
+
+  bech32-buffer@0.2.1: {}
 
   bidi-js@1.0.3:
     dependencies:
@@ -12800,6 +12823,12 @@ snapshots:
     dependencies:
       curve25519-js: 0.0.4
       protobufjs: 7.5.6
+
+  libsodium-sumo@0.7.16: {}
+
+  libsodium-wrappers-sumo@0.7.16:
+    dependencies:
+      libsodium-sumo: 0.7.16
 
   lie@3.3.0:
     dependencies:

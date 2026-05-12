@@ -30,6 +30,9 @@ import {
 } from "./cli.host.runtime.js";
 import type {
   MemoryCommandOptions,
+  MemoryExportOptions,
+  MemoryImportOptions,
+  MemoryPrivacyAuditOptions,
   MemoryPromoteCommandOptions,
   MemoryPromoteExplainOptions,
   MemoryRemBackfillOptions,
@@ -46,6 +49,13 @@ import {
 } from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import {
+  collectMemoryBackupArchive,
+  decryptMemoryBackupArchive,
+  encryptMemoryBackupArchive,
+  writeMemoryBackupArchive,
+} from "./encrypted-backup.js";
+import { buildMemoryPrivacyReport, type MemoryPrivacyReport } from "./privacy-audit.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
 import {
@@ -649,6 +659,194 @@ async function scanMemorySources(params: {
     ? null
     : numericTotals.reduce((sum, total) => sum + total, 0);
   return { sources: scans, totalFiles, issues };
+}
+
+function readBackupPassphrase(envName?: string): string {
+  const key = (envName?.trim() || "OPENCLAW_MEMORY_BACKUP_PASSPHRASE").trim();
+  const value = process.env[key];
+  if (!value) {
+    throw new Error(`Set ${key} to the memory backup passphrase.`);
+  }
+  return value;
+}
+
+function formatBytes(bytes: number | undefined): string {
+  if (bytes === undefined) {
+    return "unknown";
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KiB", "MiB", "GiB"];
+  let value = bytes / 1024;
+  for (const unit of units) {
+    if (value < 1024 || unit === units[units.length - 1]) {
+      return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
+    }
+    value /= 1024;
+  }
+  return `${bytes} B`;
+}
+
+function formatPrivacyReport(report: MemoryPrivacyReport): string {
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  const info = (text: string) => colorize(rich, theme.info, text);
+  const warn = (text: string) => colorize(rich, theme.warn, text);
+  const success = (text: string) => colorize(rich, theme.success, text);
+  const label = (text: string) => muted(`${text}:`);
+  const lines = [
+    `${heading("Memory Privacy")} ${muted(`(${report.agentId})`)}`,
+    `${label("Workspace")} ${info(report.workspaceDir ? shortenHomePath(report.workspaceDir) : "<unknown>")}`,
+    `${label("Embeddings")} ${info(report.embedding.provider)} ${muted(`(${report.embedding.classification})`)}`,
+    report.embedding.model ? `${label("Model")} ${info(report.embedding.model)}` : null,
+    `${label("Session transcripts")} ${
+      report.transcriptPersistence.sessionsSourceEnabled
+        ? warn("indexed")
+        : report.transcriptPersistence.files > 0
+          ? warn("present")
+          : muted("not found")
+    } ${muted(`(${report.transcriptPersistence.files} files)`)}`,
+  ].filter(Boolean) as string[];
+  lines.push(label("Artifacts"));
+  for (const artifact of report.artifacts) {
+    const state = artifact.exists ? success("present") : muted("missing");
+    const counts =
+      artifact.files !== undefined || artifact.bytes !== undefined
+        ? muted(` · ${artifact.files ?? 0} files · ${formatBytes(artifact.bytes)}`)
+        : "";
+    lines.push(`  ${info(artifact.kind)} ${muted("·")} ${state}${counts}`);
+    lines.push(`    ${muted(shortenHomePath(artifact.path))}`);
+  }
+  if (report.findings.length > 0) {
+    lines.push(label("Findings"));
+    for (const finding of report.findings) {
+      const color =
+        finding.severity === "info" ? info : finding.severity === "action" ? success : warn;
+      lines.push(`  ${color(finding.severity)} ${muted(finding.code)} ${finding.message}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+export async function runMemoryPrivacyAudit(opts: MemoryPrivacyAuditOptions) {
+  setVerbose(Boolean(opts.verbose));
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory privacy audit");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const reports: MemoryPrivacyReport[] = [];
+  for (const agentId of resolveAgentIds(cfg, opts.agent)) {
+    await withMemoryManagerForAgent({
+      cfg,
+      agentId,
+      purpose: "status",
+      run: async (manager) => {
+        reports.push(
+          await buildMemoryPrivacyReport({
+            cfg,
+            agentId,
+            status: manager.status(),
+            sessionsDir: resolveSessionTranscriptsDirForAgent(agentId),
+          }),
+        );
+      },
+    });
+  }
+  if (opts.json) {
+    defaultRuntime.writeJson(reports);
+    return;
+  }
+  for (const report of reports) {
+    defaultRuntime.log(formatPrivacyReport(report));
+    defaultRuntime.log("");
+  }
+}
+
+export async function runMemoryExport(opts: MemoryExportOptions) {
+  if (!opts.encrypted) {
+    throw new Error("Only encrypted memory export is supported. Pass --encrypted.");
+  }
+  if (!opts.out?.trim()) {
+    throw new Error("--out is required.");
+  }
+  const passphrase = readBackupPassphrase(opts.passphraseEnv);
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory export");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentId = resolveAgent(cfg, opts.agent);
+  let payload:
+    | {
+        agentId: string;
+        out: string;
+        fileCount: number;
+        sourceWorkspaceDir: string;
+      }
+    | undefined;
+  await withMemoryManagerForAgent({
+    cfg,
+    agentId,
+    purpose: "status",
+    run: async (manager) => {
+      const status = manager.status();
+      if (!status.workspaceDir) {
+        throw new Error(`Memory workspace is unavailable for agent ${agentId}.`);
+      }
+      const archive = await collectMemoryBackupArchive({ workspaceDir: status.workspaceDir });
+      const encrypted = await encryptMemoryBackupArchive(archive, passphrase);
+      const outPath = path.resolve(opts.out ?? "");
+      await fs.mkdir(path.dirname(outPath), { recursive: true });
+      await fs.writeFile(outPath, encrypted, { flag: "wx" });
+      payload = {
+        agentId,
+        out: outPath,
+        fileCount: archive.files.length,
+        sourceWorkspaceDir: archive.sourceWorkspaceDir,
+      };
+    },
+  });
+  if (!payload) {
+    return;
+  }
+  if (opts.json) {
+    defaultRuntime.writeJson(payload);
+    return;
+  }
+  defaultRuntime.log(
+    `Encrypted memory backup written: ${shortenHomePath(payload.out)} (${payload.fileCount} files)`,
+  );
+}
+
+export async function runMemoryImport(opts: MemoryImportOptions) {
+  if (!opts.encrypted) {
+    throw new Error("Only encrypted memory import is supported. Pass --encrypted.");
+  }
+  if (!opts.in?.trim()) {
+    throw new Error("--in is required.");
+  }
+  if (!opts.target?.trim()) {
+    throw new Error("--target is required.");
+  }
+  const passphrase = readBackupPassphrase(opts.passphraseEnv);
+  const inputPath = path.resolve(opts.in);
+  const targetDir = path.resolve(opts.target);
+  const archive = await decryptMemoryBackupArchive(await fs.readFile(inputPath), passphrase);
+  const fileCount = await writeMemoryBackupArchive({
+    archive,
+    targetDir,
+    overwrite: Boolean(opts.overwrite),
+  });
+  const payload = {
+    in: inputPath,
+    target: targetDir,
+    fileCount,
+    sourceWorkspaceDir: archive.sourceWorkspaceDir,
+  };
+  if (opts.json) {
+    defaultRuntime.writeJson(payload);
+    return;
+  }
+  defaultRuntime.log(
+    `Encrypted memory backup restored: ${shortenHomePath(targetDir)} (${fileCount} files)`,
+  );
 }
 
 export async function runMemoryStatus(opts: MemoryCommandOptions) {

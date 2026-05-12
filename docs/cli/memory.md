@@ -35,6 +35,8 @@ openclaw memory promote-explain "router vlan"
 openclaw memory promote-explain "router vlan" --json
 openclaw memory rem-harness
 openclaw memory rem-harness --json
+openclaw memory privacy audit
+openclaw memory export --encrypted --out memory-backup.age
 openclaw memory status --json
 openclaw memory status --deep --index
 openclaw memory status --deep --index --verbose
@@ -110,6 +112,53 @@ openclaw memory promote-explain <selector> [--agent <id>] [--include-promoted] [
 - `--agent <id>`: scope to a single agent (default: the default agent).
 - `--include-promoted`: include already promoted candidates.
 - `--json`: print JSON output.
+
+`memory privacy audit`:
+
+Audit memory storage, embedding, transcript, and backup privacy risks.
+
+```bash
+openclaw memory privacy audit [--agent <id>] [--json] [--verbose]
+```
+
+- Reports memory workspace paths, storage surfaces (MEMORY.md, DREAMS.md, daily notes), and dreaming artifacts.
+- Classifies embedding providers as local, remote, none, or unknown.
+- Detects persisted Active Memory session transcripts and database/vector index paths.
+- Emits findings with actionable privacy advice.
+- `--agent <id>`: scope to a single agent (default: all configured agents).
+- `--json`: print JSON output.
+- `--verbose`: include detailed storage surface listings.
+
+`memory export`:
+
+Export memory artifacts into an encrypted backup.
+
+```bash
+openclaw memory export --encrypted --out <file> [--agent <id>] [--passphrase-env <name>] [--json]
+```
+
+- Creates an encrypted `.age` archive of `MEMORY.md`, `DREAMS.md`, and the `memory/` directory.
+- Requires `--encrypted`.
+- `--out <file>`: path to the output backup file (e.g., `memory-backup.age`).
+- `--passphrase-env <name>`: environment variable containing the backup passphrase (default: `OPENCLAW_MEMORY_BACKUP_PASSPHRASE`).
+- `--agent <id>`: scope to a single agent (default: the default agent).
+- `--json`: print machine-readable status after export.
+
+`memory import`:
+
+Import memory artifacts from an encrypted backup.
+
+```bash
+openclaw memory import --encrypted --in <file> --target <dir> [--passphrase-env <name>] [--overwrite] [--json]
+```
+
+- Decrypts an encrypted `.age` archive into an explicit target directory.
+- Refuses to overwrite existing files unless `--overwrite` is passed.
+- `--in <file>`: path to the input backup file.
+- `--target <dir>`: directory where artifacts will be restored.
+- `--passphrase-env <name>`: environment variable containing the decryption passphrase.
+- `--overwrite`: allow overwriting existing files in the target directory.
+- `--json`: print machine-readable status after import.
 
 `memory rem-harness`:
 
