@@ -373,4 +373,56 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     expect(raw).not.toContain(fakeApiKey);
     expect(readMessages(second.sessionFile)).toHaveLength(1);
   });
+
+  it("dedupes delivery mirrors against older unredacted assistant entries", async () => {
+    const sessionsDir = fixture.sessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionId = "test-session-redact-upgrade-dedupe";
+    const sessionKey = "test-channel:test-redact-upgrade-dedupe";
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [sessionKey]: { sessionId, updatedAt: Date.now() } }, null, 2),
+      { encoding: "utf-8", mode: 0o600 },
+    );
+
+    const fakeApiKey = "sk-proj-OLDERUNREDACTEDTRANSCRIPT1234567890";
+    const unredacted = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath,
+      config: { logging: { redactSensitive: "off" } },
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `Here is your key: ${fakeApiKey}` }],
+        api: "openai-responses",
+        provider: "openclaw",
+        model: "legacy-assistant",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+      },
+    });
+    const deduped = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath,
+      config: { logging: { redactSensitive: "tools" } },
+      text: `Here is your key: ${fakeApiKey}`,
+    });
+
+    expect(unredacted.ok).toBe(true);
+    expect(deduped.ok).toBe(true);
+    if (!unredacted.ok || !deduped.ok) {
+      return;
+    }
+    expect(deduped.messageId).toBe(unredacted.messageId);
+
+    const raw = fs.readFileSync(deduped.sessionFile, "utf-8");
+    expect(raw).toContain(fakeApiKey);
+    expect(readMessages(deduped.sessionFile)).toHaveLength(1);
+  });
 });

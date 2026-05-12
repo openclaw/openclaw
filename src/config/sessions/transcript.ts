@@ -401,7 +401,12 @@ async function findLatestEquivalentAssistantMessageId(
       if (!candidate || candidate.role !== "assistant") {
         continue;
       }
-      const candidateText = extractAssistantMessageText(candidate);
+      const candidateText = extractAssistantMessageText(
+        redactTranscriptMessage(
+          candidate as AgentMessage,
+          config,
+        ) as unknown as SessionTranscriptAssistantMessage,
+      );
       if (candidateText !== expectedText) {
         return undefined;
       }
