@@ -27,9 +27,9 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
       delta: "The fix strips leaked `<thinking>` tags from messages.",
     });
 
-    expect(onPartialReply).toHaveBeenCalled();
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
     const lastCall = onPartialReply.mock.calls[onPartialReply.mock.calls.length - 1];
-    expect(lastCall[0].text).toContain("`<thinking>`");
+    expect(lastCall[0].text).toBe("The fix strips leaked `<thinking>` tags from messages.");
   });
 
   it("does not strip thinking tags inside fenced code blocks", () => {
@@ -40,9 +40,11 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
       delta: "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
     });
 
-    expect(onPartialReply).toHaveBeenCalled();
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
     const lastCall = onPartialReply.mock.calls[onPartialReply.mock.calls.length - 1];
-    expect(lastCall[0].text).toContain("<thinking>code example</thinking>");
+    expect(lastCall[0].text).toBe(
+      "Example:\n  ````\n<thinking>code example</thinking>\n  ````\nDone.",
+    );
   });
 
   it("still strips actual thinking tags outside code spans", () => {
@@ -53,10 +55,8 @@ describe("subscribeEmbeddedPiSession thinking tag code span awareness", () => {
       delta: "Hello <thinking>internal thought</thinking> world",
     });
 
-    expect(onPartialReply).toHaveBeenCalled();
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
     const lastCall = onPartialReply.mock.calls[onPartialReply.mock.calls.length - 1];
-    expect(lastCall[0].text).not.toContain("internal thought");
-    expect(lastCall[0].text).toContain("Hello");
-    expect(lastCall[0].text).toContain("world");
+    expect(lastCall[0].text).toBe("Hello  world");
   });
 });

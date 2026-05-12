@@ -190,11 +190,11 @@ describe("registerPluginCliCommands", () => {
   it("injects gateway-backed node runtime into plugin CLI commands", async () => {
     await registerPluginCliCommands(createProgram(), {} as OpenClawConfig);
 
-    const loadOptions = mocks.loadOpenClawPlugins.mock.calls[0]?.[0] as
-      | { runtimeOptions?: { nodes?: { list?: unknown; invoke?: unknown } } }
-      | undefined;
-    expect(typeof loadOptions?.runtimeOptions?.nodes?.list).toBe("function");
-    expect(typeof loadOptions?.runtimeOptions?.nodes?.invoke).toBe("function");
+    const loadOptions = getMockCallObject(mocks.loadOpenClawPlugins) as {
+      runtimeOptions?: { nodes?: { list?: unknown; invoke?: unknown } };
+    };
+    expect(typeof loadOptions.runtimeOptions?.nodes?.list).toBe("function");
+    expect(typeof loadOptions.runtimeOptions?.nodes?.invoke).toBe("function");
   });
 
   it("reuses loaded plugin CLI entries on repeat calls for the same program", async () => {
@@ -430,7 +430,7 @@ describe("registerPluginCliCommands", () => {
     await program.parseAsync(["nodes", "canvas", "snapshot"], { from: "user" });
 
     expect(mocks.memoryRegister).toHaveBeenCalledTimes(1);
-    expect(mocks.memoryRegister.mock.calls[0]?.[0].program).toBe(nodes);
+    expect(getMockCallObject(mocks.memoryRegister).program).toBe(nodes);
     expect(mocks.memoryListAction).toHaveBeenCalledTimes(1);
   });
 

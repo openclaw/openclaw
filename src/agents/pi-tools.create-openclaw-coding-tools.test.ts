@@ -1058,13 +1058,7 @@ describe("createOpenClawCodingTools", () => {
         path: textPath,
       });
 
-      expect(textResult?.content?.some((block) => block.type === "image")).toBe(false);
-      const textBlocks = textResult?.content?.filter((block) => block.type === "text") as
-        | Array<{ text?: string }>
-        | undefined;
-      expect(textBlocks?.length ?? 0).toBeGreaterThan(0);
-      const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
-      expect(combinedText).toContain(contents);
+      expect(textResult?.content).toEqual([{ type: "text", text: contents }]);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

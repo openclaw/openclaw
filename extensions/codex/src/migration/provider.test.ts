@@ -331,7 +331,7 @@ describe("buildCodexMigrationProvider", () => {
     });
     expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
       enabled: true,
-      allow_destructive_actions: false,
+      allow_destructive_actions: true,
       plugins: {
         "google-calendar": {
           enabled: true,
@@ -651,7 +651,7 @@ describe("buildCodexMigrationProvider", () => {
     });
     expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
       enabled: true,
-      allow_destructive_actions: false,
+      allow_destructive_actions: true,
       plugins: {
         "google-calendar": {
           enabled: false,

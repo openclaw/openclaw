@@ -268,8 +268,7 @@ describe("msteams monitor handler authz", () => {
     const { deps } = createDeps(createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }));
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createChannelThreadActivity({ attachments: [createQuoteAttachment()] }));
-    return runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0]
-      ?.ctxPayload;
+    return firstSettledDispatch().ctxPayload;
   }
 
   function recordFromMockCall(value: unknown): Record<string, unknown> {
@@ -286,6 +285,15 @@ describe("msteams monitor handler authz", () => {
       throw new Error(`Expected mock call at index ${callIndex}`);
     }
     return call[argIndex];
+  }
+
+  function firstSettledDispatch(): { ctxPayload?: unknown } {
+    const dispatched = mockCallArg(
+      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+      0,
+      0,
+    );
+    return recordFromMockCall(dispatched) as { ctxPayload?: unknown };
   }
 
   function logMeta(logFn: unknown, message: string): Record<string, unknown> {
@@ -624,8 +632,7 @@ describe("msteams monitor handler authz", () => {
     await handler(createAttackerGroupActivity({ text: "/config set foo bar" }));
 
     expect(conversationStore.upsert).toHaveBeenCalled();
-    const dispatched =
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
+    const dispatched = firstSettledDispatch();
     expect(recordFromMockCall(dispatched?.ctxPayload).CommandAuthorized).toBe(true);
   });
 
@@ -655,11 +662,7 @@ describe("msteams monitor handler authz", () => {
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createChannelThreadActivity());
 
-    const dispatched =
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
-    if (!dispatched) {
-      throw new Error("expected authorized thread message to dispatch");
-    }
+    const dispatched = firstSettledDispatch();
     const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
     expect(ctxPayload.BodyForAgent).toBe(
       "[Thread history]\nAlice: Allowed context\n[/Thread history]\n\nCurrent message",
@@ -699,8 +702,7 @@ describe("msteams monitor handler authz", () => {
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createChannelThreadActivity());
 
-    const dispatched =
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
+    const dispatched = firstSettledDispatch();
     expect(recordFromMockCall(dispatched?.ctxPayload).BodyForAgent).toBe(
       "[Thread history]\nAlice: Allowlisted by display name\n[/Thread history]\n\nCurrent message",
     );

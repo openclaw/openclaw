@@ -67,7 +67,11 @@ async function createWorkProfileWithConfig(params: {
 }
 
 function writtenBrowserConfig(): Record<string, unknown> {
-  const cfg = writeConfigFile.mock.calls[0]?.[0] as { browser?: Record<string, unknown> };
+  const [call] = writeConfigFile.mock.calls;
+  if (!call) {
+    throw new Error("Expected written browser config call");
+  }
+  const [cfg] = call as [{ browser?: Record<string, unknown> }];
   if (!cfg?.browser) {
     throw new Error("Expected written browser config");
   }

@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as capabilityProviderRuntime from "../plugins/capability-provider-runtime.js";
 import type { VideoGenerationProviderPlugin } from "../plugins/types.js";
 
-const resolvePluginCapabilityProvidersMock = vi.spyOn(
-  capabilityProviderRuntime,
-  "resolvePluginCapabilityProviders",
+const resolvePluginCapabilityProvidersMock = vi.hoisted(() =>
+  vi.fn<() => VideoGenerationProviderPlugin[]>(() => []),
 );
+vi.mock("../plugins/capability-provider-runtime.js", () => ({
+  resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
+}));
 
 function createProvider(
   params: Pick<VideoGenerationProviderPlugin, "id"> & Partial<VideoGenerationProviderPlugin>,

@@ -78,7 +78,7 @@ describe("postJsonWithRetry", () => {
     expect(postJsonParams.errorPrefix).toBe("memory batch failed");
     expect(postJsonParams.attachStatus).toBe(true);
 
-    const retryOptions = requireRetryOptions(retryAsyncMock.mock.calls[0]);
+    const retryOptions = requireRetryOptions(retryAsyncMock.mock.calls.at(0));
     expect(retryOptions.attempts).toBe(3);
     expect(retryOptions.minDelayMs).toBe(300);
     expect(retryOptions.maxDelayMs).toBe(2000);

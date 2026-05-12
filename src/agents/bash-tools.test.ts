@@ -515,17 +515,16 @@ const LONG_LOG_EXPECTATION_CASES: LongLogExpectationCase[] = [
 const expectNotifyNoopEvents = (
   events: string[],
   notifyOnExitEmptySuccess: boolean,
+  sessionId: string,
   label: string,
 ) => {
   if (!notifyOnExitEmptySuccess) {
     expect(events, label).toStrictEqual([]);
     return;
   }
-  expect(events.length, label).toBeGreaterThan(0);
-  expect(
-    events.some((event) => event.includes(OUTPUT_EXEC_COMPLETED)),
-    label,
-  ).toBe(true);
+  expect(events, label).toStrictEqual([
+    `${OUTPUT_EXEC_COMPLETED} (${sessionId.slice(0, 8)}, code 0)`,
+  ]);
 };
 const runDisallowedElevationCase = async ({
   defaultLevel,
@@ -620,10 +619,10 @@ const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoop
     notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {},
   );
 
-  const { status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
+  const { sessionId, status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
   expect(status).toBe(PROCESS_STATUS_COMPLETED);
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
-  expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, label);
+  expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, sessionId, label);
 };
 
 describe("tool descriptions", () => {

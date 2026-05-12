@@ -26,6 +26,15 @@ describe("cdp helpers", () => {
     fetchWithSsrFGuardMock.mockReset();
   });
 
+  function requireGuardedFetchRequest() {
+    const [call] = fetchWithSsrFGuardMock.mock.calls;
+    if (!call) {
+      throw new Error("expected guarded CDP fetch call");
+    }
+    const [request] = call;
+    return request;
+  }
+
   it("releases guarded CDP fetches after the response body is consumed", async () => {
     const release = vi.fn(async () => {});
     const json = vi.fn(async () => {
@@ -105,7 +114,7 @@ describe("cdp helpers", () => {
       }),
     ).resolves.toBeUndefined();
 
-    const [request] = fetchWithSsrFGuardMock.mock.calls[0] ?? [];
+    const request = requireGuardedFetchRequest();
     expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
     expect(request?.policy).toEqual({
       dangerouslyAllowPrivateNetwork: false,
@@ -131,7 +140,7 @@ describe("cdp helpers", () => {
       }),
     ).resolves.toBeUndefined();
 
-    const [request] = fetchWithSsrFGuardMock.mock.calls[0] ?? [];
+    const request = requireGuardedFetchRequest();
     expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
     expect(request?.policy).toEqual({
       dangerouslyAllowPrivateNetwork: false,

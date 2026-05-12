@@ -2519,12 +2519,9 @@ export async function runEmbeddedPiAgent(
           });
 
           // Timeout aborts can leave the run without payloads or with only a
-          // partial assistant fragment. Emit an explicit timeout error instead.
-          if (
-            timedOutDuringPrompt &&
-            !hasMessagingToolDeliveryEvidence(attempt) &&
-            (!payloadsWithToolMedia?.length || hasPartialAssistantTextAfterPromptTimeout)
-          ) {
+          // partial assistant fragment. Emit an explicit timeout error instead,
+          // preserving any tool payloads that succeeded before the timeout.
+          if (timedOutDuringPrompt && !hasMessagingToolDeliveryEvidence(attempt)) {
             const timeoutText = idleTimedOut
               ? "The model did not produce a response before the model idle timeout. " +
                 "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers."
@@ -2544,6 +2541,7 @@ export async function runEmbeddedPiAgent(
             });
             return {
               payloads: [
+                ...(hasPartialAssistantTextAfterPromptTimeout ? [] : payloadsWithToolMedia || []),
                 {
                   text: timeoutText,
                   isError: true,

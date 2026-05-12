@@ -282,9 +282,9 @@ troubleshooting, see the main [FAQ](/help/faq).
   <Accordion title="Are opus / sonnet / gpt built-in shortcuts?">
     Yes. OpenClaw ships a few default shorthands (only applied when the model exists in `agents.defaults.models`):
 
-    - `opus` → `anthropic/claude-opus-4-6`
+    - `opus` → `anthropic/claude-opus-4-7`
     - `sonnet` → `anthropic/claude-sonnet-4-6`
-    - `gpt` → `openai/gpt-5.5`
+    - `gpt` → `openai/gpt-5.4`
     - `gpt-mini` → `openai/gpt-5.4-mini`
     - `gpt-nano` → `openai/gpt-5.4-nano`
     - `gemini` → `google/gemini-3.1-pro-preview`

@@ -113,7 +113,7 @@ describe("tryRouteCli", () => {
 
     await tryRouteCli(["node", "openclaw", "agents", "--json"]);
 
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
     expect(captured[0]).toBe(true);
     expect(loggingState.forceConsoleToStderr).toBe(true);
   });
@@ -146,7 +146,7 @@ describe("tryRouteCli", () => {
 
     await tryRouteCli(["node", "openclaw", "agents"]);
 
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
     expect(captured[0]).toBe(false);
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });

@@ -312,7 +312,8 @@ describe("ssh sandbox backend", () => {
       timedOut: false,
       token: execSpec.finalizeToken,
     });
-    expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalled();
+    expect(sshMocks.createSshSandboxSessionFromSettings).toHaveBeenCalledTimes(2);
+    expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
   });
 
   it("filters blocked secrets from exec subprocess env", async () => {

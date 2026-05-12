@@ -33,10 +33,10 @@ function expectLatestUninstallPlanParams(expected: {
   deleteFiles: boolean;
   channelIds?: unknown;
 }) {
-  expect(planPluginUninstall).toHaveBeenCalled();
   const params = planPluginUninstall.mock.calls.at(-1)?.[0] as
     | { pluginId?: string; deleteFiles?: boolean; channelIds?: unknown }
     | undefined;
+  expect(params).toBeDefined();
   expect(params?.pluginId).toBe(expected.pluginId);
   expect(params?.deleteFiles).toBe(expected.deleteFiles);
   if ("channelIds" in expected) {
@@ -119,9 +119,9 @@ describe("plugins cli uninstall", () => {
 
     await runPluginsCommand(["plugins", "uninstall", "alpha", "--dry-run"]);
 
-    expect(buildPluginSnapshotReport).toHaveBeenCalled();
+    expect(buildPluginSnapshotReport).toHaveBeenCalledTimes(1);
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
-    expect(planPluginUninstall).toHaveBeenCalled();
+    expect(planPluginUninstall).toHaveBeenCalledTimes(1);
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expectRuntimeLogIncludes("Dry run, no changes made.");
@@ -543,6 +543,6 @@ describe("plugins cli uninstall", () => {
     );
 
     expect(runtimeErrors.at(-1)).toContain("is not managed by plugins config/install records");
-    expect(planPluginUninstall).toHaveBeenCalled();
+    expect(planPluginUninstall).toHaveBeenCalledTimes(1);
   });
 });

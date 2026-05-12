@@ -112,7 +112,7 @@ describe("music generate background helpers", () => {
     });
 
     expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalled();
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
   it("warns channel completion agents that normal final replies are private", async () => {

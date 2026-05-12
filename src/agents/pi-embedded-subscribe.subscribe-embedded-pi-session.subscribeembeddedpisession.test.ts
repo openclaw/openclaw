@@ -338,7 +338,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
     const payload = onToolResult.mock.calls.at(-1)?.[0] as
       | { text?: string; mediaUrls?: string[] }
@@ -380,7 +380,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
     const toolPayload = onToolResult.mock.calls.at(-1)?.[0] as
       | { text?: string; mediaUrls?: string[] }
@@ -438,7 +438,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -492,7 +492,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -735,16 +735,14 @@ describe("subscribeEmbeddedPiSession", () => {
       });
       await flushBlockReplyCallbacks();
 
-      expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
       const payloadTexts = onBlockReply.mock.calls
         .map((call) => call[0]?.text)
         .filter((value): value is string => typeof value === "string");
+      expect(payloadTexts).toEqual(["Final answer"]);
       for (const text of payloadTexts) {
         expect(text).not.toContain("Reasoning");
         expect(text).not.toContain(open);
       }
-      const combined = payloadTexts.join(" ").replace(/\s+/g, " ").trim();
-      expect(combined).toBe("Final answer");
     },
   );
 
