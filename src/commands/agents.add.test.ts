@@ -11,6 +11,7 @@ import {
 } from "../agents/auth-profiles/persisted.js";
 import { readAuthProfileStorePayloadResult } from "../agents/auth-profiles/sqlite-storage.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -41,8 +42,8 @@ import { agentsAddCommand } from "./agents.js";
 
 const runtime = createTestRuntime();
 
-function oauthProfileSecretId(authStorePath: string, profileId: string): string {
-  return createHash("sha256").update(`${authStorePath}\0${profileId}`).digest("hex").slice(0, 32);
+function oauthProfileSecretId(storeKey: string, profileId: string): string {
+  return createHash("sha256").update(`${storeKey}\0${profileId}`).digest("hex").slice(0, 32);
 }
 
 describe("agents add command", () => {
@@ -161,6 +162,7 @@ describe("agents add command", () => {
     try {
       const sourceAgentDir = path.join(root, "main", "agent");
       const destAgentDir = path.join(root, "work", "agent");
+      const expires = Date.now() + 60_000;
       await fs.mkdir(sourceAgentDir, { recursive: true });
       saveAuthProfileStore(
         {
@@ -171,7 +173,7 @@ describe("agents add command", () => {
               provider: "openai-codex",
               access: "codex-copy-access-token",
               refresh: "codex-copy-refresh-token",
-              expires: Date.now() + 60_000,
+              expires,
               copyToAgents: true,
             },
           },
@@ -194,19 +196,20 @@ describe("agents add command", () => {
         profiles: Record<string, Record<string, unknown>>;
       };
       const credential = copied.profiles["openai-codex:default"];
-      expect(credential).toMatchObject({
+      expect(credential).toStrictEqual({
         type: "oauth",
         provider: "openai-codex",
+        expires,
         copyToAgents: true,
         oauthRef: {
           source: "openclaw-credentials",
           provider: "openai-codex",
-          id: expect.any(String),
+          id: oauthProfileSecretId(
+            resolveAuthProfileStoreKey(destAgentDir),
+            "openai-codex:default",
+          ),
         },
       });
-      expect(credential).not.toHaveProperty("access");
-      expect(credential).not.toHaveProperty("refresh");
-      expect(credential).not.toHaveProperty("idToken");
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
