@@ -2044,6 +2044,23 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         });
         return;
       }
+      // Untyped (JS) plugins can pass `null` or a non-object value here. Reject
+      // those with a diagnostic instead of throwing on the property read below,
+      // so a malformed descriptor stays a registration-time diagnostic rather
+      // than aborting the whole plugin load.
+      if (
+        descriptor.activeWhen === null ||
+        typeof descriptor.activeWhen !== "object" ||
+        Array.isArray(descriptor.activeWhen)
+      ) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `control UI descriptor activeWhen must be an object: ${id}`,
+        });
+        return;
+      }
       const namespace = normalizeHostHookString(descriptor.activeWhen.sessionExtensionNamespace);
       const valuePath = normalizeOptionalHostHookString(descriptor.activeWhen.valuePath);
       if (!namespace || valuePath === "") {

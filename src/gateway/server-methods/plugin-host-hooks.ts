@@ -53,7 +53,24 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const descriptors = (getActivePluginRegistry()?.controlUiDescriptors ?? []).map((entry) =>
+    // Project the registry descriptors and apply the documented ordering
+    // contract: lower `priority` renders first, with `(pluginId, descriptor.id)`
+    // as the deterministic tie-breaker. Descriptors that omit `priority` sort
+    // after any descriptor that sets one. The sort is stable so descriptors
+    // that share the same (priority, pluginId, id) keep their registration
+    // order (in practice the (pluginId, id) tuple is unique within a registry).
+    const entries = getActivePluginRegistry()?.controlUiDescriptors ?? [];
+    const sortedEntries = entries.slice().sort((a, b) => {
+      const ap = a.descriptor.priority ?? Number.POSITIVE_INFINITY;
+      const bp = b.descriptor.priority ?? Number.POSITIVE_INFINITY;
+      if (ap !== bp) return ap - bp;
+      if (a.pluginId !== b.pluginId) return a.pluginId < b.pluginId ? -1 : 1;
+      const aid = a.descriptor.id;
+      const bid = b.descriptor.id;
+      if (aid === bid) return 0;
+      return aid < bid ? -1 : 1;
+    });
+    const descriptors = sortedEntries.map((entry) =>
       Object.assign({}, entry.descriptor, {
         pluginId: entry.pluginId,
         pluginName: entry.pluginName,

@@ -832,8 +832,7 @@ describe("host-hook fixture plugin contract", () => {
           surface: "chat-message",
           label: "Empty namespace",
           activeWhen: {
-            // oxlint-disable-next-line typescript/no-explicit-any -- exercise untyped-plugin shape
-            sessionExtensionNamespace: "" as any,
+            sessionExtensionNamespace: "",
           },
         });
       },
@@ -848,6 +847,55 @@ describe("host-hook fixture plugin contract", () => {
     expect(diagnostics[1]?.message).toContain(
       "control UI descriptor activeWhen requires non-empty sessionExtensionNamespace: empty-namespace",
     );
+  });
+
+  it("rejects non-object activeWhen values without throwing", () => {
+    // Untyped (JS) plugins can supply `null`, a string, or an array as the
+    // `activeWhen` value. The validation must reject those with a diagnostic
+    // rather than throwing a TypeError when it tries to read the predicate
+    // sub-fields — a registration-time crash would otherwise turn a malformed
+    // descriptor into a hard plugin load failure.
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "malformed-active-when",
+        name: "Malformed ActiveWhen",
+      }),
+      register(api) {
+        api.session.controls.registerControlUiDescriptor({
+          id: "null-active-when",
+          surface: "chat-message",
+          label: "Null activeWhen",
+          // oxlint-disable-next-line typescript/no-explicit-any -- exercise untyped-plugin shape
+          activeWhen: null as any,
+        });
+        api.session.controls.registerControlUiDescriptor({
+          id: "string-active-when",
+          surface: "chat-message",
+          label: "String activeWhen",
+          // oxlint-disable-next-line typescript/no-explicit-any -- exercise untyped-plugin shape
+          activeWhen: "not-an-object" as any,
+        });
+        api.session.controls.registerControlUiDescriptor({
+          id: "array-active-when",
+          surface: "chat-message",
+          label: "Array activeWhen",
+          // oxlint-disable-next-line typescript/no-explicit-any -- exercise untyped-plugin shape
+          activeWhen: ["a", "b"] as any,
+        });
+      },
+    });
+
+    expect(registry.registry.controlUiDescriptors ?? []).toHaveLength(0);
+    const diagnostics = diagnosticSummaries(registry.registry.diagnostics);
+    expect(diagnostics).toHaveLength(3);
+    expect(diagnostics.map((d) => d.message)).toEqual([
+      "control UI descriptor activeWhen must be an object: null-active-when",
+      "control UI descriptor activeWhen must be an object: string-active-when",
+      "control UI descriptor activeWhen must be an object: array-active-when",
+    ]);
   });
 
   it("projects registered session extensions into gateway session rows", () => {

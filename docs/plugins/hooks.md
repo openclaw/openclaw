@@ -397,9 +397,15 @@ api.session.controls.registerControlUiDescriptor({
 Rules:
 
 - `activeWhen` is rejected on the static surfaces (`session` / `tool` / `run` /
-  `settings`); existing static-slot clients do not interpret it.
+  `settings`); existing static-slot clients do not interpret it. The predicate
+  body must be a plain object; `null` / non-object values are rejected with a
+  diagnostic rather than crashing the plugin load.
 - `priority` is a stable sort key when multiple plugins contribute to the same
   surface. Lower values render first. Non-finite priorities are rejected.
+  The Gateway sorts `plugins.uiDescriptors` results so clients can iterate the
+  projection in render order without their own sort pass — the secondary sort
+  is `pluginId` ascending then descriptor `id` ascending, and descriptors that
+  omit `priority` sort after every descriptor that sets one.
 - The host stays agnostic about how the predicate body is interpreted — it
   carries the metadata and the projected extension value. Clients walk
   `valuePath` against the extension value and compare against `equals` (when
