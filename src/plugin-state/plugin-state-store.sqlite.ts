@@ -1,4 +1,3 @@
-import { existsSync, rmSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import {
@@ -10,12 +9,10 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
+  type OpenClawStateDatabaseOptions,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import {
-  resolveLegacyPluginStateSqlitePath,
-  resolvePluginStateSqlitePath,
-} from "./plugin-state-store.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   PluginStateStoreError,
   type PluginStateEntry,
@@ -25,9 +22,8 @@ import {
   type PluginStateStoreProbeStep,
 } from "./plugin-state-store.types.js";
 
-const LEGACY_PLUGIN_STATE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
-
 export const MAX_PLUGIN_STATE_VALUE_BYTES = 65_536;
+export const MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN = 1_000;
 
 type PluginStateEntriesTable = OpenClawStateKyselyDatabase["plugin_state_entries"];
 type PluginStateStoreDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
@@ -81,20 +77,10 @@ function wrapPluginStateError(
   operation: PluginStateStoreOperation,
   fallbackCode: PluginStateStoreErrorCode,
   message: string,
-  pathname = resolvePluginStateSqlitePath(process.env),
+  pathname = resolveOpenClawStateSqlitePath(process.env),
 ): PluginStateStoreError {
   if (error instanceof PluginStateStoreError) {
     return error;
-  }
-  const errorMessage = error instanceof Error ? error.message : String(error);
-  if (errorMessage.includes("schema version")) {
-    return createPluginStateError({
-      code: "PLUGIN_STATE_SCHEMA_UNSUPPORTED",
-      operation: "ensure-schema",
-      message: errorMessage,
-      path: pathname,
-      cause: error,
-    });
   }
   return createPluginStateError({
     code: fallbackCode,
@@ -113,7 +99,7 @@ function parseStoredJson(raw: string, operation: PluginStateStoreOperation): unk
       code: "PLUGIN_STATE_CORRUPT",
       operation,
       message: "Plugin state entry contains corrupt JSON.",
-      path: resolvePluginStateSqlitePath(process.env),
+      path: resolveOpenClawStateSqlitePath(process.env),
       cause: error,
     });
   }
@@ -185,7 +171,7 @@ function selectPluginStateEntry(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; key: string; now: number },
 ): PluginStateRow | undefined {
-  return executeSqliteQueryTakeFirstSync<PluginStateRow>(
+  return executeSqliteQueryTakeFirstSync(
     db,
     getPluginStateKysely(db)
       .selectFrom("plugin_state_entries")
@@ -201,7 +187,7 @@ function selectPluginStateEntries(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; now: number },
 ): PluginStateRow[] {
-  return executeSqliteQuerySync<PluginStateRow>(
+  return executeSqliteQuerySync(
     db,
     getPluginStateKysely(db)
       .selectFrom("plugin_state_entries")
@@ -248,7 +234,7 @@ function countLivePluginStateNamespaceEntries(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; now: number },
 ): number {
-  const row = executeSqliteQueryTakeFirstSync<CountRow>(
+  const row = executeSqliteQueryTakeFirstSync(
     db,
     getPluginStateKysely(db)
       .selectFrom("plugin_state_entries")
@@ -260,11 +246,26 @@ function countLivePluginStateNamespaceEntries(
   return countRow(row);
 }
 
+function countLivePluginStateEntries(
+  db: DatabaseSync,
+  params: { pluginId: string; now: number },
+): number {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getPluginStateKysely(db)
+      .selectFrom("plugin_state_entries")
+      .select((eb) => eb.fn.countAll<number | bigint>().as("count"))
+      .where("plugin_id", "=", params.pluginId)
+      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
+  );
+  return countRow(row);
+}
+
 function deleteOldestPluginStateNamespaceEntries(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; protectedKey: string; now: number; limit: number },
 ): void {
-  const keys = executeSqliteQuerySync<{ entry_key: string }>(
+  const keys = executeSqliteQuerySync(
     db,
     getPluginStateKysely(db)
       .selectFrom("plugin_state_entries")
@@ -299,8 +300,10 @@ function sweepExpiredPluginStateEntriesFromDatabase(db: DatabaseSync, now: numbe
 
 function openPluginStateDatabase(
   operation: PluginStateStoreOperation = "open",
+  options: OpenClawStateDatabaseOptions = {},
 ): PluginStateDatabase {
-  const pathname = resolvePluginStateSqlitePath(process.env);
+  const env = options.env ?? process.env;
+  const pathname = resolveOpenClawStateSqlitePath(env);
   if (cachedDatabase && cachedDatabase.path === pathname && cachedDatabase.db.isOpen) {
     return cachedDatabase;
   }
@@ -309,23 +312,13 @@ function openPluginStateDatabase(
   }
 
   try {
-    const database = openOpenClawStateDatabase();
+    const database = openOpenClawStateDatabase(options);
     cachedDatabase = {
       db: database.db,
       path: database.path,
     };
     return cachedDatabase;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("schema version")) {
-      throw createPluginStateError({
-        code: "PLUGIN_STATE_SCHEMA_UNSUPPORTED",
-        operation: "ensure-schema",
-        message,
-        path: pathname,
-        cause: error,
-      });
-    }
     throw wrapPluginStateError(
       error,
       operation,
@@ -341,15 +334,20 @@ function countRow(row: CountRow | undefined): number {
   return typeof raw === "bigint" ? Number(raw) : raw;
 }
 
+function envOptions(env?: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
+  return env ? { env } : {};
+}
+
 function runWriteTransaction<T>(
   operation: PluginStateStoreOperation,
   write: (store: PluginStateDatabase) => T,
+  options: OpenClawStateDatabaseOptions = {},
 ): T {
   return runOpenClawStateWriteTransaction(() => {
-    const store = openPluginStateDatabase(operation);
+    const store = openPluginStateDatabase(operation, options);
     const result = write(store);
     return result;
-  });
+  }, options);
 }
 
 function enforcePostRegisterLimits(params: {
@@ -374,6 +372,18 @@ function enforcePostRegisterLimits(params: {
       limit: namespaceCount - params.maxEntries,
     });
   }
+  const pluginCount = countLivePluginStateEntries(params.store.db, {
+    pluginId: params.pluginId,
+    now: params.now,
+  });
+  if (pluginCount > MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN) {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      operation: "register",
+      message: `Plugin state for ${params.pluginId} exceeds the ${MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN} live row limit.`,
+      path: params.store.path,
+    });
+  }
 }
 
 export function pluginStateRegister(params: {
@@ -383,36 +393,41 @@ export function pluginStateRegister(params: {
   valueJson: string;
   maxEntries: number;
   ttlMs?: number;
+  env?: NodeJS.ProcessEnv;
 }): void {
   try {
-    runWriteTransaction("register", (store) => {
-      const now = Date.now();
-      const expiresAt = params.ttlMs == null ? null : now + params.ttlMs;
-      deleteExpiredPluginStateNamespaceEntries(store.db, {
-        pluginId: params.pluginId,
-        namespace: params.namespace,
-        now,
-      });
-      upsertPluginStateEntry(
-        store.db,
-        bindPluginStateEntry({
+    runWriteTransaction(
+      "register",
+      (store) => {
+        const now = Date.now();
+        const expiresAt = params.ttlMs == null ? null : now + params.ttlMs;
+        deleteExpiredPluginStateNamespaceEntries(store.db, {
           pluginId: params.pluginId,
           namespace: params.namespace,
-          key: params.key,
-          valueJson: params.valueJson,
-          createdAt: now,
-          expiresAt,
-        }),
-      );
-      enforcePostRegisterLimits({
-        store,
-        pluginId: params.pluginId,
-        namespace: params.namespace,
-        maxEntries: params.maxEntries,
-        now,
-        protectedKey: params.key,
-      });
-    });
+          now,
+        });
+        upsertPluginStateEntry(
+          store.db,
+          bindPluginStateEntry({
+            pluginId: params.pluginId,
+            namespace: params.namespace,
+            key: params.key,
+            valueJson: params.valueJson,
+            createdAt: now,
+            expiresAt,
+          }),
+        );
+        enforcePostRegisterLimits({
+          store,
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          maxEntries: params.maxEntries,
+          now,
+          protectedKey: params.key,
+        });
+      },
+      envOptions(params.env),
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
@@ -430,40 +445,45 @@ export function pluginStateRegisterIfAbsent(params: {
   valueJson: string;
   maxEntries: number;
   ttlMs?: number;
+  env?: NodeJS.ProcessEnv;
 }): boolean {
   try {
-    return runWriteTransaction("register", (store) => {
-      const now = Date.now();
-      const expiresAt = params.ttlMs == null ? null : now + params.ttlMs;
-      deleteExpiredPluginStateNamespaceEntries(store.db, {
-        pluginId: params.pluginId,
-        namespace: params.namespace,
-        now,
-      });
-      const inserted = insertPluginStateEntryIfAbsent(
-        store.db,
-        bindPluginStateEntry({
+    return runWriteTransaction(
+      "register",
+      (store) => {
+        const now = Date.now();
+        const expiresAt = params.ttlMs == null ? null : now + params.ttlMs;
+        deleteExpiredPluginStateNamespaceEntries(store.db, {
           pluginId: params.pluginId,
           namespace: params.namespace,
-          key: params.key,
-          valueJson: params.valueJson,
-          createdAt: now,
-          expiresAt,
-        }),
-      );
-      if (!inserted) {
-        return false;
-      }
-      enforcePostRegisterLimits({
-        store,
-        pluginId: params.pluginId,
-        namespace: params.namespace,
-        maxEntries: params.maxEntries,
-        now,
-        protectedKey: params.key,
-      });
-      return true;
-    });
+          now,
+        });
+        const inserted = insertPluginStateEntryIfAbsent(
+          store.db,
+          bindPluginStateEntry({
+            pluginId: params.pluginId,
+            namespace: params.namespace,
+            key: params.key,
+            valueJson: params.valueJson,
+            createdAt: now,
+            expiresAt,
+          }),
+        );
+        if (!inserted) {
+          return false;
+        }
+        enforcePostRegisterLimits({
+          store,
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          maxEntries: params.maxEntries,
+          now,
+          protectedKey: params.key,
+        });
+        return true;
+      },
+      envOptions(params.env),
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
@@ -478,9 +498,10 @@ export function pluginStateLookup(params: {
   pluginId: string;
   namespace: string;
   key: string;
+  env?: NodeJS.ProcessEnv;
 }): unknown {
   try {
-    const { db } = openPluginStateDatabase("lookup");
+    const { db } = openPluginStateDatabase("lookup", envOptions(params.env));
     const row = selectPluginStateEntry(db, {
       pluginId: params.pluginId,
       namespace: params.namespace,
@@ -502,21 +523,26 @@ export function pluginStateConsume(params: {
   pluginId: string;
   namespace: string;
   key: string;
+  env?: NodeJS.ProcessEnv;
 }): unknown {
   try {
-    return runWriteTransaction("consume", (store) => {
-      const row = selectPluginStateEntry(store.db, {
-        pluginId: params.pluginId,
-        namespace: params.namespace,
-        key: params.key,
-        now: Date.now(),
-      });
-      if (!row) {
-        return undefined;
-      }
-      deletePluginStateEntry(store.db, params);
-      return parseStoredJson(row.value_json, "consume");
-    });
+    return runWriteTransaction(
+      "consume",
+      (store) => {
+        const row = selectPluginStateEntry(store.db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          key: params.key,
+          now: Date.now(),
+        });
+        if (!row) {
+          return undefined;
+        }
+        deletePluginStateEntry(store.db, params);
+        return parseStoredJson(row.value_json, "consume");
+      },
+      envOptions(params.env),
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
@@ -531,11 +557,16 @@ export function pluginStateDelete(params: {
   pluginId: string;
   namespace: string;
   key: string;
+  env?: NodeJS.ProcessEnv;
 }): boolean {
   try {
-    return runWriteTransaction("delete", ({ db }) => {
-      return deletePluginStateEntry(db, params) > 0;
-    });
+    return runWriteTransaction(
+      "delete",
+      ({ db }) => {
+        return deletePluginStateEntry(db, params) > 0;
+      },
+      envOptions(params.env),
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
@@ -549,9 +580,10 @@ export function pluginStateDelete(params: {
 export function pluginStateEntries(params: {
   pluginId: string;
   namespace: string;
+  env?: NodeJS.ProcessEnv;
 }): PluginStateEntry<unknown>[] {
   try {
-    const { db } = openPluginStateDatabase("entries");
+    const { db } = openPluginStateDatabase("entries", envOptions(params.env));
     const rows = selectPluginStateEntries(db, {
       pluginId: params.pluginId,
       namespace: params.namespace,
@@ -568,17 +600,25 @@ export function pluginStateEntries(params: {
   }
 }
 
-export function pluginStateClear(params: { pluginId: string; namespace: string }): void {
+export function pluginStateClear(params: {
+  pluginId: string;
+  namespace: string;
+  env?: NodeJS.ProcessEnv;
+}): void {
   try {
-    runWriteTransaction("clear", ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        getPluginStateKysely(db)
-          .deleteFrom("plugin_state_entries")
-          .where("plugin_id", "=", params.pluginId)
-          .where("namespace", "=", params.namespace),
-      );
-    });
+    runWriteTransaction(
+      "clear",
+      ({ db }) => {
+        executeSqliteQuerySync(
+          db,
+          getPluginStateKysely(db)
+            .deleteFrom("plugin_state_entries")
+            .where("plugin_id", "=", params.pluginId)
+            .where("namespace", "=", params.namespace),
+        );
+      },
+      envOptions(params.env),
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
@@ -608,12 +648,15 @@ export function isPluginStateDatabaseOpen(): boolean {
   return cachedDatabase?.db.isOpen === true;
 }
 
-export function clearPluginStateSqliteStoreForTests(): void {
+export function clearPluginStateDatabaseForTests(): void {
   const store = openPluginStateDatabase("clear");
-  store.db.exec("DELETE FROM plugin_state_entries;");
+  executeSqliteQuerySync(
+    store.db,
+    getPluginStateKysely(store.db).deleteFrom("plugin_state_entries"),
+  );
 }
 
-export function seedPluginStateSqliteEntriesForTests(
+export function seedPluginStateDatabaseEntriesForTests(
   entries: readonly PluginStateSeedEntryForTests[],
 ): void {
   if (entries.length === 0) {
@@ -624,20 +667,23 @@ export function seedPluginStateSqliteEntriesForTests(
   runWriteTransaction("register", (store) => {
     for (let index = 0; index < entries.length; index += 1) {
       const entry = entries[index];
-      store.statements.upsertEntry.run({
-        plugin_id: entry.pluginId,
-        namespace: entry.namespace,
-        entry_key: entry.key,
-        value_json: entry.valueJson,
-        created_at: entry.createdAt ?? now + index,
-        expires_at: entry.expiresAt ?? null,
-      });
+      upsertPluginStateEntry(
+        store.db,
+        bindPluginStateEntry({
+          pluginId: entry.pluginId,
+          namespace: entry.namespace,
+          key: entry.key,
+          valueJson: entry.valueJson,
+          createdAt: entry.createdAt ?? now + index,
+          expiresAt: entry.expiresAt ?? null,
+        }),
+      );
     }
   });
 }
 
 export function probePluginStateStore(): PluginStateStoreProbeResult {
-  const dbPath = resolvePluginStateSqlitePath(process.env);
+  const databasePath = resolveOpenClawStateSqlitePath(process.env);
   const steps: PluginStateStoreProbeStep[] = [];
   const wasOpen = cachedDatabase !== null;
 
@@ -650,7 +696,7 @@ export function probePluginStateStore(): PluginStateStoreProbeResult {
             code: "PLUGIN_STATE_OPEN_FAILED",
             operation: "probe",
             message: error instanceof Error ? error.message : String(error),
-            path: dbPath,
+            path: databasePath,
             cause: error,
           });
     steps.push({ name, ok: false, code: wrapped.code, message: wrapped.message });
@@ -666,11 +712,11 @@ export function probePluginStateStore(): PluginStateStoreProbeResult {
         code: "PLUGIN_STATE_SQLITE_UNAVAILABLE",
         operation: "load-sqlite",
         message: "SQLite support is unavailable for plugin state storage.",
-        path: dbPath,
+        path: databasePath,
         cause: error,
       }),
     );
-    return { ok: false, dbPath, steps };
+    return { ok: false, databasePath, steps };
   }
 
   try {
@@ -709,85 +755,13 @@ export function probePluginStateStore(): PluginStateStoreProbeResult {
     pushFailure("probe", error);
   } finally {
     if (!wasOpen) {
-      closePluginStateSqliteStore();
+      closePluginStateDatabase();
     }
   }
 
-  return { ok: steps.every((step) => step.ok), dbPath, steps };
+  return { ok: steps.every((step) => step.ok), databasePath, steps };
 }
 
-export function closePluginStateSqliteStore(): void {
+export function closePluginStateDatabase(): void {
   cachedDatabase = null;
-}
-
-export type LegacyPluginStateSidecarImportResult = {
-  sourcePath: string;
-  importedEntries: number;
-  removedSource: boolean;
-};
-
-function removeLegacyPluginStateSidecarFiles(sourcePath: string): boolean {
-  let removed = false;
-  for (const suffix of LEGACY_PLUGIN_STATE_SIDECAR_SUFFIXES) {
-    const candidate = `${sourcePath}${suffix}`;
-    if (!existsSync(candidate)) {
-      continue;
-    }
-    rmSync(candidate, { force: true });
-    removed = true;
-  }
-  return removed;
-}
-
-export function legacyPluginStateSidecarExists(env: NodeJS.ProcessEnv = process.env): boolean {
-  return existsSync(resolveLegacyPluginStateSqlitePath(env));
-}
-
-export function importLegacyPluginStateSidecarToSqlite(
-  env: NodeJS.ProcessEnv = process.env,
-): LegacyPluginStateSidecarImportResult {
-  const sourcePath = resolveLegacyPluginStateSqlitePath(env);
-  if (!existsSync(sourcePath)) {
-    return {
-      sourcePath,
-      importedEntries: 0,
-      removedSource: false,
-    };
-  }
-
-  const { DatabaseSync } = requireNodeSqlite();
-  const legacyDb = new DatabaseSync(sourcePath);
-  let rows: PluginStateRow[];
-  try {
-    rows = executeSqliteQuerySync<PluginStateRow>(
-      legacyDb,
-      getPluginStateKysely(legacyDb)
-        .selectFrom("plugin_state_entries")
-        .select(["plugin_id", "namespace", "entry_key", "value_json", "created_at", "expires_at"])
-        .orderBy("plugin_id", "asc")
-        .orderBy("namespace", "asc")
-        .orderBy("entry_key", "asc"),
-    ).rows;
-  } finally {
-    legacyDb.close();
-  }
-
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      for (const row of rows) {
-        upsertPluginStateEntry(database.db, {
-          ...row,
-          created_at: normalizeNumber(row.created_at) ?? 0,
-          expires_at: normalizeNumber(row.expires_at) ?? null,
-        });
-      }
-    },
-    { env },
-  );
-
-  return {
-    sourcePath,
-    importedEntries: rows.length,
-    removedSource: removeLegacyPluginStateSidecarFiles(sourcePath),
-  };
 }
