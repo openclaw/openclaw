@@ -63,52 +63,47 @@ export async function cleanupEmbeddedAttemptResources(params: {
   sessionManager: unknown;
   bundleMcpRuntime?: { dispose(): Promise<void> | void };
   bundleLspRuntime?: { dispose(): Promise<void> | void };
-  sessionLock?: { release(): Promise<void> | void };
   aborted?: boolean;
   abortSettlePromise?: Promise<unknown> | null;
   runId?: string;
   sessionId?: string;
 }): Promise<void> {
   try {
-    try {
-      params.removeToolResultContextGuard?.();
-    } catch {
-      /* best-effort */
-    }
-    if (params.aborted && params.abortSettlePromise) {
-      await waitForEmbeddedAbortSettle({
-        promise: params.abortSettlePromise,
-        runId: params.runId ?? "unknown",
-        sessionId: params.sessionId ?? "unknown",
-      });
-    }
-    // PERF: When the run was aborted (user stop / timeout), skip the expensive
-    // waitForIdle (up to 30 s) and just clear pending tool results synchronously.
-    try {
-      await params.flushPendingToolResultsAfterIdle({
-        agent: params.session?.agent as IdleAwareAgent | null | undefined,
-        sessionManager: params.sessionManager as ToolResultFlushManager | null | undefined,
-        ...(params.aborted ? { timeoutMs: 0 } : {}),
-      });
-    } catch {
-      /* best-effort */
-    }
-    try {
-      params.session?.dispose();
-    } catch {
-      /* best-effort */
-    }
-    try {
-      await params.bundleMcpRuntime?.dispose();
-    } catch {
-      /* best-effort */
-    }
-    try {
-      await params.bundleLspRuntime?.dispose();
-    } catch {
-      /* best-effort */
-    }
-  } finally {
-    await params.sessionLock?.release();
+    params.removeToolResultContextGuard?.();
+  } catch {
+    /* best-effort */
+  }
+  if (params.aborted && params.abortSettlePromise) {
+    await waitForEmbeddedAbortSettle({
+      promise: params.abortSettlePromise,
+      runId: params.runId ?? "unknown",
+      sessionId: params.sessionId ?? "unknown",
+    });
+  }
+  // PERF: When the run was aborted (user stop / timeout), skip the expensive
+  // waitForIdle (up to 30 s) and just clear pending tool results synchronously.
+  try {
+    await params.flushPendingToolResultsAfterIdle({
+      agent: params.session?.agent as IdleAwareAgent | null | undefined,
+      sessionManager: params.sessionManager as ToolResultFlushManager | null | undefined,
+      ...(params.aborted ? { timeoutMs: 0 } : {}),
+    });
+  } catch {
+    /* best-effort */
+  }
+  try {
+    params.session?.dispose();
+  } catch {
+    /* best-effort */
+  }
+  try {
+    await params.bundleMcpRuntime?.dispose();
+  } catch {
+    /* best-effort */
+  }
+  try {
+    await params.bundleLspRuntime?.dispose();
+  } catch {
+    /* best-effort */
   }
 }

@@ -432,8 +432,7 @@ describe("CodexAppServerEventProjector", () => {
         },
       }),
     );
-    const toolProgressText = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string })
-      .text;
+    const toolProgressText = onToolResult.mock.calls[0]?.[0]?.text;
     expect(toolProgressText).toBe("🛠️ `run tests (workspace)`");
 
     await projector.handleNotification(

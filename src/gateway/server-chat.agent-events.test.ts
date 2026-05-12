@@ -1246,6 +1246,60 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("projects tool-search bridge calls like native channel verbose tool events", () => {
+    const { nodeSendToSession, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-1",
+    });
+
+    registerAgentRunContext("run-tool-search-node", {
+      sessionKey: "session-1",
+      verboseLevel: "on",
+    });
+
+    handler({
+      runId: "run-tool-search-node",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: {
+        phase: "start",
+        name: "tool_search_code",
+        toolCallId: "tool-search-node-1",
+        args: {
+          code: 'return await openclaw.tools.call("openclaw:core:exec", { command: "echo hi" });',
+        },
+      },
+    });
+
+    const payload = nodeSendToSession.mock.calls[0]?.[2] as {
+      stream?: string;
+      data?: { name?: string; args?: Record<string, unknown> };
+    };
+    expect(payload.stream).toBe("tool");
+    expect(payload.data).toMatchObject({
+      phase: "start",
+      name: "exec",
+      bridgeToolName: "tool_search_code",
+      bridgeTargetToolName: "openclaw:core:exec",
+      bridgeVerb: "call",
+      args: { command: "echo hi" },
+    });
+    expect(
+      formatChannelProgressDraftLine({
+        event: "tool",
+        name: payload.data?.name,
+        args: payload.data?.args,
+      }),
+    ).toBe(
+      formatChannelProgressDraftLine({
+        event: "tool",
+        name: "exec",
+        args: { command: "echo hi" },
+      }),
+    );
+    resetAgentRunContextForTest();
+  });
+
   it("hydrates node session tool events with session ownership metadata", () => {
     const { nodeSendToSession, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",

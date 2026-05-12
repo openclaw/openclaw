@@ -1,8 +1,12 @@
+import { randomUUID } from "node:crypto";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
 } from "../config/sessions/transcript-store.sqlite.js";
+import { makeMissingToolResult } from "./session-transcript-repair.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
+import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 /** Placeholder for blank user messages — preserves the user turn so strict
  * providers that require at least one user message don't reject the transcript. */
@@ -14,6 +18,7 @@ type RepairReport = {
   rewrittenAssistantMessages?: number;
   droppedBlankUserMessages?: number;
   rewrittenUserMessages?: number;
+  insertedToolResults?: number;
   reason?: string;
 };
 
@@ -170,6 +175,7 @@ function buildRepairSummaryParts(params: {
   rewrittenAssistantMessages: number;
   droppedBlankUserMessages: number;
   rewrittenUserMessages: number;
+  insertedToolResults: number;
 }): string {
   const parts: string[] = [];
   if (params.droppedEntries > 0) {
@@ -185,7 +191,109 @@ function buildRepairSummaryParts(params: {
   if (params.rewrittenUserMessages > 0) {
     parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
   }
+  if (params.insertedToolResults > 0) {
+    parts.push(`inserted ${params.insertedToolResults} missing tool result(s)`);
+  }
   return parts.length > 0 ? parts.join(", ") : "no changes";
+}
+
+function isCodeModeToolCallRepairCandidate(entry: unknown): entry is SessionMessageEntry {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { type?: unknown; message?: unknown };
+  if (record.type !== "message" || !record.message || typeof record.message !== "object") {
+    return false;
+  }
+  const message = record.message as {
+    role?: unknown;
+    api?: unknown;
+    provider?: unknown;
+    stopReason?: unknown;
+  };
+  return (
+    message.role === "assistant" &&
+    message.api === "openai-codex-responses" &&
+    message.provider === "openai-codex" &&
+    message.stopReason !== "error" &&
+    message.stopReason !== "aborted"
+  );
+}
+
+function collectPersistedToolResultIds(entries: unknown[]): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as { type?: unknown; message?: unknown };
+    if (record.type !== "message" || !record.message || typeof record.message !== "object") {
+      continue;
+    }
+    const message = record.message as AgentMessage;
+    if (message.role !== "toolResult") {
+      continue;
+    }
+    const id = extractToolResultId(message);
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return ids;
+}
+
+function makeSyntheticToolResultEntry(params: {
+  parent: SessionMessageEntry;
+  toolCallId: string;
+  toolName?: string;
+}): SessionMessageEntry {
+  const message = makeMissingToolResult({
+    toolCallId: params.toolCallId,
+    toolName: params.toolName,
+    text: "aborted",
+  });
+  return {
+    type: "message",
+    id: `repair-${randomUUID()}`,
+    parentId: typeof params.parent.id === "string" ? params.parent.id : undefined,
+    timestamp: new Date().toISOString(),
+    message: message as unknown as SessionMessageEntry["message"],
+  };
+}
+
+function insertMissingCodeModeToolResults(entries: unknown[]): {
+  entries: unknown[];
+  insertedToolResults: number;
+} {
+  const resultIds = collectPersistedToolResultIds(entries);
+  let insertedToolResults = 0;
+  const out: unknown[] = [];
+
+  for (const entry of entries) {
+    out.push(entry);
+    if (!isCodeModeToolCallRepairCandidate(entry)) {
+      continue;
+    }
+    const toolCalls = extractToolCallsFromAssistant(
+      entry.message as unknown as Extract<AgentMessage, { role: "assistant" }>,
+    );
+    for (const toolCall of toolCalls) {
+      if (resultIds.has(toolCall.id)) {
+        continue;
+      }
+      out.push(
+        makeSyntheticToolResultEntry({
+          parent: entry,
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+        }),
+      );
+      resultIds.add(toolCall.id);
+      insertedToolResults += 1;
+    }
+  }
+
+  return { entries: insertedToolResults > 0 ? out : entries, insertedToolResults };
 }
 
 async function repairTranscriptEntries(params: {
@@ -200,6 +308,7 @@ async function repairTranscriptEntries(params: {
   let rewrittenAssistantMessages = 0;
   let droppedBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
+  let insertedToolResults = 0;
 
   for (const entry of storedEntries) {
     if (isStructurallyInvalidMessageEntry(entry)) {
@@ -248,7 +357,18 @@ async function repairTranscriptEntries(params: {
     droppedBlankUserMessages === 0 &&
     rewrittenUserMessages === 0
   ) {
-    return { repaired: false, droppedEntries: 0 };
+    const repairedToolResults = insertMissingCodeModeToolResults(entries);
+    insertedToolResults = repairedToolResults.insertedToolResults;
+    if (insertedToolResults === 0) {
+      return { repaired: false, droppedEntries: 0 };
+    }
+    entries.splice(0, entries.length, ...repairedToolResults.entries);
+  } else {
+    const repairedToolResults = insertMissingCodeModeToolResults(entries);
+    insertedToolResults = repairedToolResults.insertedToolResults;
+    if (insertedToolResults > 0) {
+      entries.splice(0, entries.length, ...repairedToolResults.entries);
+    }
   }
 
   try {
@@ -263,6 +383,7 @@ async function repairTranscriptEntries(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      insertedToolResults,
       reason: `repair failed: ${err instanceof Error ? err.message : "unknown error"}`,
     };
   }
@@ -273,6 +394,7 @@ async function repairTranscriptEntries(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      insertedToolResults,
     })} (${params.label})`,
   );
   return {
@@ -281,6 +403,7 @@ async function repairTranscriptEntries(params: {
     rewrittenAssistantMessages,
     droppedBlankUserMessages,
     rewrittenUserMessages,
+    insertedToolResults,
   };
 }
 
