@@ -7,9 +7,7 @@ import {
   redactSensitiveText,
 } from "../logging/redact.js";
 
-function resolveTranscriptRedactPatterns(
-  patterns: OpenClawConfig["logging"] extends { redactPatterns?: infer T } ? T : never,
-) {
+function resolveTranscriptRedactPatterns(patterns?: string[]) {
   return patterns && patterns.length > 0 ? [...patterns, ...getDefaultRedactPatterns()] : undefined;
 }
 

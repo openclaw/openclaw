@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import { formatErrorMessage } from "../../infra/errors.js";
