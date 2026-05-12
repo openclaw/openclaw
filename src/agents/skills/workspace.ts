@@ -611,6 +611,7 @@ function loadSkillEntries(
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     pluginSkillsDir?: string;
+    preserveSourceDuplicates?: boolean;
   },
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
@@ -897,28 +898,26 @@ function loadSkillEntries(
     source: "openclaw-workspace",
   });
 
-  const merged = new Map<string, LoadedSkillRecord>();
-  // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
-  for (const record of extraSkills) {
-    merged.set(record.skill.name, record);
-  }
-  for (const record of bundledSkills) {
-    merged.set(record.skill.name, record);
-  }
-  for (const record of managedSkills) {
-    merged.set(record.skill.name, record);
-  }
-  for (const record of personalAgentsSkills) {
-    merged.set(record.skill.name, record);
-  }
-  for (const record of projectAgentsSkills) {
-    merged.set(record.skill.name, record);
-  }
-  for (const record of workspaceSkills) {
-    merged.set(record.skill.name, record);
-  }
+  const sourceRecords = [
+    ...extraSkills,
+    ...bundledSkills,
+    ...managedSkills,
+    ...personalAgentsSkills,
+    ...projectAgentsSkills,
+    ...workspaceSkills,
+  ];
+  const records = opts?.preserveSourceDuplicates
+    ? sourceRecords
+    : (() => {
+        const merged = new Map<string, LoadedSkillRecord>();
+        // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
+        for (const record of sourceRecords) {
+          merged.set(record.skill.name, record);
+        }
+        return Array.from(merged.values());
+      })();
 
-  const skillEntries: SkillEntry[] = Array.from(merged.values())
+  const skillEntries: SkillEntry[] = records
     .sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
     .map((record) => {
       const skill = record.skill;
@@ -1178,6 +1177,22 @@ export function loadWorkspaceSkillEntries(
     return entries;
   }
   return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, opts?.eligibility);
+}
+
+export function loadWorkspaceSkillEntriesForInstallCollision(
+  workspaceDir: string,
+  opts?: {
+    config?: OpenClawConfig;
+    managedSkillsDir?: string;
+    bundledSkillsDir?: string;
+    pluginSkillsDir?: string;
+    agentId?: string;
+  },
+): SkillEntry[] {
+  return loadSkillEntries(workspaceDir, {
+    ...opts,
+    preserveSourceDuplicates: true,
+  });
 }
 
 export function loadVisibleWorkspaceSkillEntries(

@@ -18,6 +18,7 @@ import type { SkillInstallResult } from "./skills-install.types.js";
 import {
   hasBinary as defaultHasBinary,
   loadWorkspaceSkillEntries as defaultLoadWorkspaceSkillEntries,
+  loadWorkspaceSkillEntriesForInstallCollision as defaultLoadWorkspaceSkillEntriesForInstallCollision,
   resolveSkillsInstallPreferences as defaultResolveSkillsInstallPreferences,
   type SkillEntry,
   type SkillInstallSpec,
@@ -43,6 +44,7 @@ export type { SkillInstallResult } from "./skills-install.types.js";
 type SkillsInstallDeps = {
   hasBinary: (bin: string) => boolean;
   loadWorkspaceSkillEntries: typeof defaultLoadWorkspaceSkillEntries;
+  loadWorkspaceSkillEntriesForInstallCollision: typeof defaultLoadWorkspaceSkillEntriesForInstallCollision;
   resolveNodeInstallStateDir: () => string;
   resolveBrewExecutable: () => string | undefined;
   isContainerEnvironment: () => boolean;
@@ -53,6 +55,7 @@ type SkillsInstallDeps = {
 const defaultSkillsInstallDeps: SkillsInstallDeps = {
   hasBinary: defaultHasBinary,
   loadWorkspaceSkillEntries: defaultLoadWorkspaceSkillEntries,
+  loadWorkspaceSkillEntriesForInstallCollision: defaultLoadWorkspaceSkillEntriesForInstallCollision,
   resolveNodeInstallStateDir: resolveDefaultNodeInstallStateDir,
   resolveBrewExecutable: defaultResolveBrewExecutable,
   isContainerEnvironment: defaultIsContainerEnvironment,
@@ -576,7 +579,9 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 
   const toolsRootCollision = resolveSkillToolsRootCollision({
     entry,
-    entries,
+    entries: deps.loadWorkspaceSkillEntriesForInstallCollision(workspaceDir, {
+      config: params.config,
+    }),
     bundledContext: deps.resolveBundledSkillsContext(),
   });
   if (toolsRootCollision) {

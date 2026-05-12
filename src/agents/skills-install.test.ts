@@ -36,7 +36,17 @@ async function writeInstallableSkill(
     skillKey?: string;
   },
 ): Promise<string> {
-  const skillDir = path.join(workspaceDir, "skills", name);
+  return writeInstallableSkillInRoot(path.join(workspaceDir, "skills"), name, options);
+}
+
+async function writeInstallableSkillInRoot(
+  skillsRootDir: string,
+  name: string,
+  options?: {
+    skillKey?: string;
+  },
+): Promise<string> {
+  const skillDir = path.join(skillsRootDir, name);
   await fs.mkdir(skillDir, { recursive: true });
   const metadata = {
     openclaw: {
@@ -81,10 +91,15 @@ function mockDangerousSkillScanFinding(skillDir: string) {
 
 function loadTestWorkspaceSkillEntries(
   workspaceDir: string,
-  source = "openclaw-workspace",
+  source: unknown = "openclaw-workspace",
 ): SkillEntry[] {
+  const resolvedSource = typeof source === "string" ? source : "openclaw-workspace";
+  return loadTestSkillEntriesFromDir(path.join(workspaceDir, "skills"), resolvedSource);
+}
+
+function loadTestSkillEntriesFromDir(dir: string, source = "openclaw-workspace"): SkillEntry[] {
   const skills = loadSkillsFromDirSafe({
-    dir: path.join(workspaceDir, "skills"),
+    dir,
     source,
   }).skills;
   return skills.map((skill) => {
@@ -122,6 +137,7 @@ function setSkillsInstallTestDeps(
 ) {
   skillsInstallTesting.setDepsForTest({
     loadWorkspaceSkillEntries: loadTestWorkspaceSkillEntries,
+    loadWorkspaceSkillEntriesForInstallCollision: loadTestWorkspaceSkillEntries,
     resolveNodeInstallStateDir: () => {
       const stateDir = process.env.OPENCLAW_STATE_DIR;
       if (!stateDir) {
@@ -278,6 +294,39 @@ describe("installSkill code safety scanning", () => {
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     });
   });
+
+  it.each(["openclaw-managed", "openclaw-extra"])(
+    "blocks non-bundled installs that shadow a trusted %s skill tools directory",
+    async (trustedSource) => {
+      await withWorkspaceCase(async ({ workspaceDir }) => {
+        const trustedSkillsRoot = path.join(workspaceDir, `${trustedSource}-skills`);
+        await writeInstallableSkillInRoot(trustedSkillsRoot, "runtime-owner", {
+          skillKey: "shared-runtime",
+        });
+        await writeInstallableSkill(workspaceDir, "runtime-owner", {
+          skillKey: "shared-runtime",
+        });
+        setSkillsInstallTestDeps({
+          loadWorkspaceSkillEntriesForInstallCollision: (dir) => [
+            ...loadTestSkillEntriesFromDir(trustedSkillsRoot, trustedSource),
+            ...loadTestWorkspaceSkillEntries(dir),
+          ],
+        });
+
+        const result = await installSkill({
+          workspaceDir,
+          skillName: "runtime-owner",
+          installId: "deps",
+        });
+
+        expect(result.ok).toBe(false);
+        expect(result.message).toContain(
+          `Skill "runtime-owner" install blocked: tools directory collides with runtime-owner (${trustedSource}).`,
+        );
+        expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("allows dangerous skill installs when forced unsafe install is set", async () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {

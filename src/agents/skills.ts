@@ -33,6 +33,7 @@ export {
   filterWorkspaceSkillEntries,
   filterWorkspaceSkillEntriesWithOptions,
   loadWorkspaceSkillEntries,
+  loadWorkspaceSkillEntriesForInstallCollision,
   resolveSkillsPromptForRun,
   syncSkillsToWorkspace,
 } from "./skills/workspace.js";
