@@ -379,6 +379,7 @@ export async function readCronRunLogEntriesPage(
         entry.delivery?.intended?.channel ?? "",
         entry.delivery?.resolved?.channel ?? "",
         ...(entry.delivery?.messageToolSentTo ?? []).map((target) => target.channel),
+        ...(entry.warnings ?? []),
       ].join(" ");
     },
   });

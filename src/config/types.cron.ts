@@ -51,6 +51,11 @@ export type CronConfig = {
    */
   sessionRetention?: string | false;
   /**
+   * Warn when a main-session systemEvent next-heartbeat handoff finishes faster than this.
+   * Set to 0 to disable the warning. Default: 50ms.
+   */
+  ghostRunWarningThresholdMs?: number;
+  /**
    * Run-history pruning controls. History is stored in SQLite; maxBytes is
    * retained for compatibility with older file-backed run logs.
    * Defaults: `maxBytes=2_000_000`, `keepLines=2000`.

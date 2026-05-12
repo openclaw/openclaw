@@ -20,7 +20,7 @@ import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
-import { CronService } from "../cron/service.js";
+import { CronService, type CronEvent } from "../cron/service.js";
 import {
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
@@ -51,6 +51,11 @@ import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
+
+const DEFAULT_GHOST_RUN_WARNING_THRESHOLD_MS = 50;
+const POSSIBLE_MAIN_NEXT_HEARTBEAT_GHOST_RUN = "possible-main-next-heartbeat-ghost-run";
+const POSSIBLE_MAIN_NEXT_HEARTBEAT_GHOST_RUN_MESSAGE =
+  "cron: possible ghost run; next-heartbeat systemEvent finished before confirmed agent processing";
 
 export type GatewayCronState = {
   cron: CronServiceContract;
@@ -119,6 +124,43 @@ function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
     },
     createdAtMs: job.createdAtMs,
     updatedAtMs: job.updatedAtMs,
+  };
+}
+
+function resolveGhostRunWarningThresholdMs(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return DEFAULT_GHOST_RUN_WARNING_THRESHOLD_MS;
+  }
+  return Math.floor(value);
+}
+
+function getMainNextHeartbeatGhostRunWarning(params: {
+  evt: CronEvent;
+  job: CronJob | undefined;
+  thresholdMs: number;
+}):
+  | {
+      code: typeof POSSIBLE_MAIN_NEXT_HEARTBEAT_GHOST_RUN;
+      message: typeof POSSIBLE_MAIN_NEXT_HEARTBEAT_GHOST_RUN_MESSAGE;
+    }
+  | undefined {
+  const { evt, job, thresholdMs } = params;
+  if (thresholdMs <= 0 || !job || evt.action !== "finished" || evt.status !== "ok") {
+    return undefined;
+  }
+  if (
+    job.sessionTarget !== "main" ||
+    job.wakeMode !== "next-heartbeat" ||
+    job.payload.kind !== "systemEvent"
+  ) {
+    return undefined;
+  }
+  if (typeof evt.durationMs !== "number" || evt.durationMs >= thresholdMs) {
+    return undefined;
+  }
+  return {
+    code: POSSIBLE_MAIN_NEXT_HEARTBEAT_GHOST_RUN,
+    message: POSSIBLE_MAIN_NEXT_HEARTBEAT_GHOST_RUN_MESSAGE,
   };
 }
 
@@ -292,6 +334,9 @@ export function buildGatewayCronService(params: {
       agentId: agentId ?? defaultAgentId,
     });
   const sessionStorePath = resolveSessionStorePath(defaultAgentId);
+  const ghostRunWarningThresholdMs = resolveGhostRunWarningThresholdMs(
+    params.cfg.cron?.ghostRunWarningThresholdMs,
+  );
 
   const runCronChangedHook = (evt: PluginHookCronChangedEvent) => {
     const hookRunner = getGlobalHookRunner();
@@ -573,6 +618,25 @@ export function buildGatewayCronService(params: {
       runCronChangedHook(hookEvt);
       if (evt.action === "finished") {
         const job = evt.job ?? cron.getJob(evt.jobId);
+        const ghostRunWarning = getMainNextHeartbeatGhostRunWarning({
+          evt,
+          job,
+          thresholdMs: ghostRunWarningThresholdMs,
+        });
+        if (ghostRunWarning) {
+          cronLogger.warn(
+            {
+              jobId: evt.jobId,
+              jobName: job?.name,
+              durationMs: evt.durationMs,
+              thresholdMs: ghostRunWarningThresholdMs,
+              sessionTarget: job?.sessionTarget,
+              wakeMode: job?.wakeMode,
+              payloadKind: job?.payload.kind,
+            },
+            ghostRunWarning.message,
+          );
+        }
         dispatchGatewayCronFinishedNotifications({
           evt,
           job,
@@ -607,6 +671,7 @@ export function buildGatewayCronService(params: {
             model: evt.model,
             provider: evt.provider,
             usage: evt.usage,
+            warnings: ghostRunWarning ? [ghostRunWarning.code] : undefined,
           },
           opts: { keepLines: runLogPrune.keepLines },
         }).catch((err: unknown) => {

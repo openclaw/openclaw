@@ -1288,6 +1288,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
     sessionRetention: "24h", // duration string or false
+    ghostRunWarningThresholdMs: 50, // set 0 to disable fast handoff warnings
     runLog: {
       maxBytes: "2mb", // default 2_000_000 bytes
       keepLines: 2000, // default 2000
@@ -1297,6 +1298,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 ```
 
 - `sessionRetention`: how long to keep completed isolated cron run sessions before pruning from `sessions.json`. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
+- `ghostRunWarningThresholdMs`: threshold in milliseconds for annotating very fast successful main-session `systemEvent` jobs using `wakeMode: "next-heartbeat"` with `possible-main-next-heartbeat-ghost-run` in the run-log `warnings` array. Default: `50`; set `0` to disable.
 - `runLog.maxBytes`: accepted for compatibility with older file-backed cron run logs. Default: `2_000_000` bytes.
 - `runLog.keepLines`: newest SQLite run-history rows retained per job. Default: `2000`.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.

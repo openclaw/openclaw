@@ -226,6 +226,16 @@ Retention and pruning are controlled in config:
 - `cron.sessionRetention` (default `24h`) prunes completed isolated run sessions.
 - `cron.runLog.keepLines` prunes retained SQLite run-history rows per job. `cron.runLog.maxBytes` remains accepted for compatibility with older file-backed run logs.
 
+## Ghost-run warnings
+
+For main-session `systemEvent` jobs that use `wakeMode: "next-heartbeat"`, cron may finish quickly after handing work to the next heartbeat. OpenClaw annotates very fast successful handoffs with `possible-main-next-heartbeat-ghost-run` in the run log so operators know the scheduler accepted the handoff but did not prove agent processing completed in that cron run.
+
+- `cron.ghostRunWarningThresholdMs` controls the fast-run threshold in milliseconds.
+- Default: `50`.
+- Set `cron.ghostRunWarningThresholdMs: 0` to disable this warning.
+- Increase the threshold if your environment has slower handoff bookkeeping and you still want these runs flagged.
+- Check `openclaw cron runs --id <job-id>` or the job's run-log JSONL for the `warnings` array when investigating this warning.
+
 ## Migrating older jobs
 
 <Note>
