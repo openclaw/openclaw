@@ -11,10 +11,13 @@
 - **What changed**:
   - Gateway branch `codex/fix-wallet-chat-access`: added `skills/wallet/SKILL.md` so deployed agents can use the AgentGlob wallet runtime from chat.
   - Dashboard branch `codex/fix-wallet-chat-access`: deploy now syncs selected/platform-native skills on every redeploy, not only first bootstrap; Wallet tab now warns that redeploy is required for chat access after setting/replacing the key.
-  - Live repair target: `projectmanager` on 2ndClaw needs redeploy/restart after the dashboard + gateway changes ship so `AGENTGLOB_RUNTIME_URL`, `AGENTGLOB_RUNTIME_TOKEN`, and `workspace/skills/wallet/SKILL.md` are present.
+  - Built and deployed gateway tag `v2026.05.12.1` from SHA `4f88a87d5`; rollout completed on 1stClaw (14/14) and 2ndClaw (13/13).
+  - Live repair completed for `projectmanager` on 2ndClaw: `AGENTGLOB_RUNTIME_URL`, `AGENTGLOB_RUNTIME_TOKEN`, and `workspace/skills/wallet/SKILL.md` are present, and only `projectmanager` was recreated after the env/skill repair.
 - **Validation**:
   - Dashboard: `npx tsc --noEmit`, `npm run build`
-  - Gateway: `pnpm build`
+  - Dashboard Cloud Run deploy: GitHub Actions run `25730530962` completed successfully for SHA `a2e7867`
+  - Gateway: `pnpm build`, `pnpm check:docs`, `/opt/openclaw-ops/scripts/build-and-push.sh v2026.05.12.1`, `/opt/openclaw-ops/scripts/deploy.sh v2026.05.12.1`
+  - Runtime: `projectmanager` wallet balance endpoint returned HTTP 200 on Ethereum, Arbitrum, Polygon, and Base; Arbitrum balance returned `0.000561686456576002 ETH`, other native balances returned `0`.
 
 ---
 
