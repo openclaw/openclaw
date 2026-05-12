@@ -138,6 +138,7 @@ import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-disco
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
+import { createEmbeddedPiResourceLoader } from "./resource-loader.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
