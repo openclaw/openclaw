@@ -68,7 +68,7 @@ describe("formatAssistantErrorText", () => {
   });
   it("rewrites generic provider internal errors without support request ids", () => {
     const msg = makeAssistantError(
-      "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID 7a3da80b-ed7d-4a91-a33a-a6e0328fc2bc in your message.",
+      "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID synthetic-provider-request-001 in your message.",
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "The AI service returned an internal error. Please try again in a moment.",
@@ -76,7 +76,7 @@ describe("formatAssistantErrorText", () => {
   });
   it("rewrites request-id-only generic provider internal errors without exposing the id", () => {
     const msg = makeAssistantError(
-      "An error occurred while processing your request. Please include request ID req_7a3da80bed7d4a91a33aa6e0328fc2bc in your message.",
+      "An error occurred while processing your request. Please include request ID req_synthetic_provider_request_001 in your message.",
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "The AI service returned an internal error. Please try again in a moment.",
@@ -426,7 +426,7 @@ describe("formatRawAssistantErrorForUi", () => {
   it("formats plain provider internal errors without request ids", () => {
     expect(
       formatRawAssistantErrorForUi(
-        "An error occurred while processing your request. Please include the request ID 7a3da80b-ed7d-4a91-a33a-a6e0328fc2bc in your message.",
+        "An error occurred while processing your request. Please include the request ID synthetic-provider-request-001 in your message.",
       ),
     ).toBe("The AI service returned an internal error. Please try again in a moment.");
   });

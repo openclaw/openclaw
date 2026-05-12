@@ -139,7 +139,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("does not expose provider request ids from generic internal errors", () => {
     const rawError =
-      "An error occurred while processing your request. Please include request ID req_7a3da80bed7d4a91a33aa6e0328fc2bc in your message.";
+      "An error occurred while processing your request. Please include request ID req_synthetic_provider_request_001 in your message.";
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
         errorMessage: rawError,
@@ -152,7 +152,7 @@ describe("buildEmbeddedRunPayloads", () => {
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "request ID");
-    expectNoPayloadTextContaining(payloads, "req_7a3da80bed7d4a91a33aa6e0328fc2bc");
+    expectNoPayloadTextContaining(payloads, "req_synthetic_provider_request_001");
   });
 
   it("surfaces OpenAI model capacity errors instead of generic empty-response copy", () => {
