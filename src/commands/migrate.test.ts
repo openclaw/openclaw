@@ -1416,19 +1416,22 @@ describe("migrateApplyCommand", () => {
     const warning =
       "Codex app-backed plugins were planned without source app accessibility verification.";
     const base = codexPluginPlan();
+    const items = [...base.items];
+    const gmailIndex = items.findIndex((item) => item.id === "plugin:gmail");
+    const gmailItem = items[gmailIndex];
+    if (!gmailItem) {
+      throw new Error("Expected gmail plugin item");
+    }
+    items[gmailIndex] = {
+      ...gmailItem,
+      details: {
+        ...gmailItem.details,
+        sourceAppVerification: "not_run",
+      },
+    };
     const planned = codexPluginPlan({
       warnings: [warning],
-      items: base.items.map((item) =>
-        item.id === "plugin:gmail"
-          ? {
-              ...item,
-              details: {
-                ...item.details,
-                sourceAppVerification: "not_run",
-              },
-            }
-          : item,
-      ),
+      items,
     });
     const logs: string[] = [];
     const jsonRuntime: RuntimeEnv = {
