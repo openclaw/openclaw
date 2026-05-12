@@ -63,6 +63,18 @@ function isCredentialProviderCompatibleWithAuthProvider(params: {
   );
 }
 
+export function isStoredCredentialCompatibleWithAuthProvider(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  credential: AuthProfileCredential;
+}): boolean {
+  return isCredentialProviderCompatibleWithAuthProvider({
+    cfg: params.cfg,
+    providerAuthKey: resolveProviderIdForAuth(params.provider, { config: params.cfg }),
+    credential: params.credential,
+  });
+}
+
 function isConfiguredProfileCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
   providerAuthKey: string;

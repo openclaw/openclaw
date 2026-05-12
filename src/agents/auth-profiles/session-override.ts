@@ -2,7 +2,11 @@ import { upsertSessionEntry } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
+import {
+  isConfiguredAwsSdkAuthProfileForProvider,
+  isStoredCredentialCompatibleWithAuthProvider,
+  resolveAuthProfileOrder,
+} from "../auth-profiles/order.js";
 import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 
@@ -13,12 +17,24 @@ function isProfileForProvider(params: {
   store: ReturnType<typeof ensureAuthProfileStore>;
 }): boolean {
   const entry = params.store.profiles[params.profileId];
-  if (!entry?.provider) {
-    return false;
+  if (entry) {
+    if (!entry.provider) {
+      return false;
+    }
+    return params.providers.some((provider) =>
+      isStoredCredentialCompatibleWithAuthProvider({
+        cfg: params.cfg,
+        provider,
+        credential: entry,
+      }),
+    );
   }
-  const entryProviderKey = resolveProviderIdForAuth(entry.provider, { config: params.cfg });
-  return params.providers.some(
-    (provider) => resolveProviderIdForAuth(provider, { config: params.cfg }) === entryProviderKey,
+  return params.providers.some((provider) =>
+    isConfiguredAwsSdkAuthProfileForProvider({
+      cfg: params.cfg,
+      provider,
+      profileId: params.profileId,
+    }),
   );
 }
 
