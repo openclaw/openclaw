@@ -187,6 +187,18 @@ describe("system run command helpers", () => {
     expect(res.previewText).toBe("echo hi");
   });
 
+  test("validateSystemRunCommandConsistency accepts PowerShell command-with-args payload text", () => {
+    const res = expectValidResult(
+      validateSystemRunCommandConsistency({
+        argv: ["pwsh", "-cwa", "Write-Output", "hi"],
+        rawCommand: "Write-Output hi",
+        allowLegacyShellText: true,
+      }),
+    );
+    expect(res.shellPayload).toBe("Write-Output hi");
+    expect(res.previewText).toBe("Write-Output hi");
+  });
+
   test("validateSystemRunCommandConsistency rejects shell-only rawCommand for env assignment prelude", () => {
     expectRawCommandMismatch({
       argv: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],

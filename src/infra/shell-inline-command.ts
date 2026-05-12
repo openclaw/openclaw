@@ -217,6 +217,10 @@ export function resolvePowerShellInlineCommandMatch(argv: string[]): {
   });
 }
 
+export function isPowerShellInlineRestCommandFlag(token: string): boolean {
+  return POWERSHELL_INLINE_REST_COMMAND_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
+}
+
 export function hasPosixInteractiveStartupBeforeInlineCommand(
   argv: string[],
   flags: ReadonlySet<string>,
