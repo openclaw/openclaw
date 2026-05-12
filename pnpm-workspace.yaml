@@ -61,7 +61,7 @@ overrides:
   yauzl: 3.2.1
   protobufjs: 7.5.5
   uuid: 14.0.0
-  undici: ">=6.24.0"
+  undici: 6.25.0
 
 allowBuilds:
   "@openclaw/fs-safe": true
@@ -82,7 +82,7 @@ allowBuilds:
   sharp: true
   tree-sitter-bash: false
   openclaw: true
-  sqlite3: set this to true or false
+  sqlite3: false
 
 packageExtensions:
   "@earendil-works/pi-coding-agent":
