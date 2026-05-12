@@ -157,11 +157,13 @@ openclaw migrate apply codex --yes --plugin google-calendar
   OpenClaw agent workspace when you want per-agent ownership.
 - Source-installed `openai-curated` Codex plugins discovered through Codex
   app-server `plugin/list`. Planning reads `plugin/read` for each enabled
-  installed plugin. App-backed plugins are migratable only when a fresh source
-  `app/list` snapshot reports every owned app as present, enabled, and
-  accessible. Disabled plugins, unreadable plugin details, missing apps,
-  disabled apps, inaccessible apps, and source app inventory failures become
-  manual skipped items with typed reasons instead of target config entries.
+  installed plugin. App-backed plugins are migratable only when the source Codex
+  app-server account is logged in with ChatGPT subscription auth and a fresh
+  source `app/list` snapshot reports every owned app as present, enabled, and
+  accessible. Disabled plugins, unreadable plugin details, subscription-gated
+  source accounts, missing apps, disabled apps, inaccessible apps, and source app
+  inventory failures become manual skipped items with typed reasons instead of
+  target config entries.
   Apply calls app-server `plugin/install` for each selected eligible plugin,
   even if the target app-server already reports that plugin as installed and
   enabled. Migrated Codex plugins are usable only in sessions that select the
@@ -170,11 +172,11 @@ openclaw migrate apply codex --yes --plugin google-calendar
 
 ### Manual-review Codex state
 
-Codex `config.toml`, native `hooks/hooks.json`, non-curated marketplaces,
-cached plugin bundles that are not source-installed curated plugins, and
-source-installed plugins that fail the source app-readiness gate are not
-activated automatically. They are copied or reported in the migration report for
-manual review.
+Codex `config.toml`, native `hooks/hooks.json`, non-curated marketplaces, cached
+plugin bundles that are not source-installed curated plugins, and source-installed
+plugins that fail the source subscription or app-inventory gates are not activated
+automatically. They are copied or reported in the migration report for manual
+review.
 
 For migrated source-installed curated plugins, apply writes:
 
@@ -185,10 +187,11 @@ For migrated source-installed curated plugins, apply writes:
   `pluginName` for each selected plugin
 
 Migration never writes `plugins["*"]` and never stores local marketplace cache
-paths. Source-side app-readiness failures are reported on manual items with
-typed reasons such as `app_inaccessible`, `app_disabled`, `app_missing`,
-`plugin_disabled`, `plugin_read_unavailable`, or `app_inventory_unavailable`;
-those plugins are not written to target config.
+paths. Source-side subscription and app-inventory failures are reported on manual
+items with typed reasons such as `codex_subscription_required`,
+`app_inaccessible`, `app_disabled`, `app_missing`, `plugin_disabled`,
+`plugin_read_unavailable`, or `app_inventory_unavailable`; those plugins are not
+written to target config.
 Target-side auth-required installs are reported on the affected plugin item with
 `status: "skipped"`, `reason: "auth_required"`, and sanitized app identifiers.
 Their explicit config entries are written disabled until you reauthorize and

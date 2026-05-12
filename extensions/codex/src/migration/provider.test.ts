@@ -309,15 +309,14 @@ describe("buildCodexMigrationProvider", () => {
       reason: "app_inaccessible",
     });
     const details = expectRecordFields(manualItem.details, {
-      code: "app_inaccessible",
       pluginName: "readwise",
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
     });
+    expect(details).not.toHaveProperty("code");
     expect(details.apps).toEqual([
       {
         id: "asdk_app_readwise",
         name: "Readwise",
-        status: "inaccessible",
         isAccessible: false,
         isEnabled: true,
         needsAuth: false,
@@ -365,15 +364,14 @@ describe("buildCodexMigrationProvider", () => {
       reason: "codex_subscription_required",
     });
     const details = expectRecordFields(manualItem.details, {
-      code: "codex_subscription_required",
       pluginName: "gmail",
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
     });
+    expect(details).not.toHaveProperty("code");
     expect(details.apps).toEqual([
       {
         id: "app-gmail",
         name: "Gmail",
-        status: "auth_required",
         needsAuth: true,
       },
     ]);
@@ -389,6 +387,81 @@ describe("buildCodexMigrationProvider", () => {
     );
     expect(appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/list")).toHaveLength(
       0,
+    );
+  });
+
+  it("warns and skips app-backed plugins when source Codex account is missing", async () => {
+    const fixture = await createCodexFixture();
+    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("gmail", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginRead("gmail", [pluginApp("app-gmail", { name: "Gmail", needsAuth: true })]);
+      }
+      if (method === "account/read") {
+        return {
+          account: null,
+          requiresOpenaiAuth: true,
+        } satisfies CodexGetAccountResponse;
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+      }),
+    );
+
+    expect(plan.items.some((item) => item.id === "plugin:gmail")).toBe(false);
+    expect(plan.items.some((item) => item.id === "config:codex-plugins")).toBe(false);
+    expectRecordFields(findItemByReason(plan.items, "codex_subscription_required"), {
+      reason: "codex_subscription_required",
+      status: "skipped",
+    });
+    expect(appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/list")).toHaveLength(
+      0,
+    );
+  });
+
+  it("falls through to app inventory when source account read fails", async () => {
+    const fixture = await createCodexFixture();
+    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("gmail", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginRead("gmail", [pluginApp("app-gmail", { name: "Gmail", needsAuth: true })]);
+      }
+      if (method === "account/read") {
+        throw new Error("account unavailable");
+      }
+      if (method === "app/list") {
+        return appsList([appInfo("app-gmail")]);
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+      }),
+    );
+
+    expectRecordFields(findItem(plan.items, "plugin:gmail"), {
+      kind: "plugin",
+      action: "install",
+      status: "planned",
+    });
+    expect(appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/list")).toHaveLength(
+      1,
     );
   });
 
@@ -494,21 +567,19 @@ describe("buildCodexMigrationProvider", () => {
       status: "skipped",
     });
     const details = expectRecordFields(manualItem.details, {
-      code: "app_inaccessible",
       pluginName: "readwise",
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
     });
+    expect(details).not.toHaveProperty("code");
     expect(details.apps).toEqual([
       {
         id: "asdk_app_reader",
         name: "Reader",
-        status: "missing",
         needsAuth: false,
       },
       {
         id: "asdk_app_readwise",
         name: "Readwise",
-        status: "inaccessible",
         isAccessible: false,
         isEnabled: true,
         needsAuth: false,
@@ -677,7 +748,6 @@ describe("buildCodexMigrationProvider", () => {
       pluginName: "reader",
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
     });
-    expect(plan.items.some((item) => item.reason === "app_auth_required")).toBe(false);
   });
 
   it("copies planned skills and archives native config during apply", async () => {

@@ -206,11 +206,7 @@ function hasCodexSubscriptionRequiredPlugin(plan: MigrationPlan): boolean {
   if (plan.providerId !== "codex") {
     return false;
   }
-  return plan.items.some(
-    (item) =>
-      item.reason === "codex_subscription_required" ||
-      item.details?.code === "codex_subscription_required",
-  );
+  return plan.items.some((item) => item.reason === "codex_subscription_required");
 }
 
 function readCodexSubscriptionWarning(plan: MigrationPlan): string | undefined {

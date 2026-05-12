@@ -88,12 +88,13 @@ The integration has three separate states:
   for the active account and can be mapped to the migrated plugin identity.
 
 Migration is the durable install/eligibility step. During planning, OpenClaw
-reads source Codex `plugin/read` details and takes a fresh source `app/list`
-snapshot. App-backed source plugins are eligible only when every owned app is
-present, enabled, and accessible in that fresh source snapshot. Runtime app
-inventory is the target-session accessibility check after migration. Codex
-harness session setup then computes a restrictive thread app config for the
-enabled and accessible plugin apps.
+reads source Codex `plugin/read` details, checks that the source Codex app-server
+account is logged in with ChatGPT subscription auth, and takes a fresh source
+`app/list` snapshot. App-backed source plugins are eligible only when the
+subscription check passes and every owned app is present, enabled, and accessible
+in that fresh source snapshot. Runtime app inventory is the target-session
+accessibility check after migration. Codex harness session setup then computes a
+restrictive thread app config for the enabled and accessible plugin apps.
 
 Thread app config is computed when OpenClaw establishes a Codex harness session
 or replaces a stale Codex thread binding. It is not recomputed on every turn.
@@ -104,9 +105,10 @@ V1 is intentionally narrow:
 
 - Only `openai-curated` plugins that were already installed in the source Codex
   app-server inventory are migration-eligible.
-- App-backed source plugins must pass the migration-time app-readiness gate.
-  Inaccessible, disabled, missing, unreadable, or stale source app state is
-  reported as a skipped manual item instead of an enabled config entry.
+- App-backed source plugins must pass the migration-time subscription and
+  app-inventory gates. Subscription-gated accounts plus inaccessible, disabled,
+  missing, unreadable, or stale source app state are reported as skipped manual
+  items instead of enabled config entries.
 - Migration writes explicit plugin identities with `marketplaceName` and
   `pluginName`; it does not write local `marketplacePath` cache paths.
 - `codexPlugins.enabled` is the global enablement switch.
@@ -170,8 +172,13 @@ reauthorize and enable it.
 
 **`app_inaccessible`, `app_disabled`, or `app_missing`:**
 migration did not install the plugin because the source Codex app inventory did
-not show all owned apps as ready. Reauthorize or enable the app in Codex, then
-rerun migration.
+not show all owned apps as present, enabled, and accessible. Reauthorize or
+enable the app in Codex, then rerun migration.
+
+**`codex_subscription_required`:** migration did not install the app-backed
+plugin because the source Codex app-server account was not logged in with a
+ChatGPT subscription account. Log in to the Codex app with subscription auth,
+then rerun migration.
 
 **`marketplace_missing` or `plugin_missing`:** the target Codex app-server
 cannot see the expected `openai-curated` marketplace or plugin. Rerun migration

@@ -18,7 +18,6 @@ import {
   codexPluginMigrationSubscriptionWarning,
   discoverCodexSource,
   hasCodexSource,
-  type CodexPluginAppReadinessCode,
   type CodexPluginSource,
   type CodexSkillSource,
 } from "./source.js";
@@ -42,11 +41,11 @@ export type CodexPluginMigrationConfigEntry = {
   enabled: boolean;
 };
 
-type CodexPluginAppReadinessSkipDetails = {
-  code: CodexPluginAppReadinessCode;
+type CodexPluginMigrationBlockSkipDetails = {
   pluginName: string;
   marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
-  apps: NonNullable<CodexPluginSource["appReadiness"]>["apps"];
+  apps?: NonNullable<CodexPluginSource["migrationBlock"]>["apps"];
+  error?: string;
 };
 
 function uniqueSkillName(skill: CodexSkillSource, counts: Map<string, number>): string {
@@ -189,12 +188,12 @@ function buildPluginItems(
     }
 
     manualIndex += 1;
-    if (plugin.appReadiness?.reason && plugin.pluginName) {
-      const details: CodexPluginAppReadinessSkipDetails = {
-        code: plugin.appReadiness.reason,
+    if (plugin.migrationBlock && plugin.pluginName) {
+      const details: CodexPluginMigrationBlockSkipDetails = {
         pluginName: plugin.pluginName,
         marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-        apps: plugin.appReadiness.apps,
+        ...(plugin.migrationBlock.apps ? { apps: plugin.migrationBlock.apps } : {}),
+        ...(plugin.migrationBlock.error ? { error: plugin.migrationBlock.error } : {}),
       };
       items.push(
         createMigrationItem({
@@ -203,7 +202,7 @@ function buildPluginItems(
           action: "manual",
           source: plugin.source,
           status: "skipped",
-          reason: details.code,
+          reason: plugin.migrationBlock.code,
           message:
             plugin.message ??
             `Codex native plugin "${plugin.name}" was found but not activated automatically.`,
@@ -380,7 +379,7 @@ export async function buildCodexMigrationPlan(
   const targets = resolveCodexMigrationTargets(ctx);
   const source = await discoverCodexSource({
     input: ctx.source,
-    evaluatePluginAppReadiness: true,
+    evaluatePluginMigrationEligibility: true,
   });
   if (!hasCodexSource(source)) {
     throw new Error(
@@ -435,7 +434,7 @@ export async function buildCodexMigrationPlan(
         ]
       : []),
     ...(source.plugins.some(
-      (plugin) => plugin.appReadiness?.reason === "codex_subscription_required",
+      (plugin) => plugin.migrationBlock?.code === "codex_subscription_required",
     )
       ? [codexPluginMigrationSubscriptionWarning()]
       : []),

@@ -777,7 +777,7 @@ describe("migrateApplyCommand", () => {
           action: "manual",
           status: "skipped",
           reason: "codex_subscription_required",
-          details: { code: "codex_subscription_required", pluginName: "gmail" },
+          details: { pluginName: "gmail" },
         },
       ],
       warnings: [warning],

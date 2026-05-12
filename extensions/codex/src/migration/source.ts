@@ -42,52 +42,31 @@ export type CodexPluginSource = {
   pluginName?: string;
   installed?: boolean;
   enabled?: boolean;
-  appReadiness?: CodexPluginAppReadiness;
+  migrationBlock?: CodexPluginMigrationBlock;
   message?: string;
 };
 
-export type CodexPluginAppReadinessStatus =
-  | "not_app_backed"
-  | "ready"
-  | "inaccessible"
-  | "missing"
-  | "disabled"
+export type CodexPluginMigrationBlockCode =
   | "plugin_disabled"
-  | "auth_required"
-  | "unknown";
-
-export type CodexPluginAppReadinessCode =
-  | "plugin_disabled"
+  | "codex_subscription_required"
+  | "plugin_read_unavailable"
+  | "app_inventory_unavailable"
   | "app_inaccessible"
   | "app_disabled"
-  | "app_missing"
-  | "app_auth_required"
-  | "codex_subscription_required"
-  | "app_readiness_unknown"
-  | "plugin_read_unavailable"
-  | "app_inventory_unavailable";
+  | "app_missing";
 
-export type CodexPluginAppReadinessAppStatus =
-  | "ready"
-  | "inaccessible"
-  | "missing"
-  | "disabled"
-  | "auth_required"
-  | "unknown";
-
-export type CodexPluginAppReadinessApp = {
+export type CodexPluginMigrationAppFact = {
   id: string;
   name: string;
-  status: CodexPluginAppReadinessAppStatus;
+  needsAuth?: boolean;
   isAccessible?: boolean;
   isEnabled?: boolean;
-  needsAuth?: boolean;
 };
 
-export type CodexPluginAppReadiness = {
-  status: CodexPluginAppReadinessStatus;
-  reason?: CodexPluginAppReadinessCode;
-  apps: CodexPluginAppReadinessApp[];
+export type CodexPluginMigrationBlock = {
+  code: CodexPluginMigrationBlockCode;
+  apps?: CodexPluginMigrationAppFact[];
+  error?: string;
 };
 
 type CodexArchiveSource = {
@@ -113,7 +92,7 @@ type CodexSource = {
 
 type CodexSourceDiscoveryOptions = {
   input?: string;
-  evaluatePluginAppReadiness?: boolean;
+  evaluatePluginMigrationEligibility?: boolean;
 };
 
 type SourceAppServerRequestOptions = {
@@ -238,15 +217,15 @@ async function discoverInstalledCuratedPlugins(
       .filter((plugin) => plugin.installed)
       .map((plugin) => buildInstalledPluginSource(plugin))
       .filter((plugin): plugin is CodexPluginSource => plugin !== undefined);
-    const withReadiness =
-      options.evaluatePluginAppReadiness === true
-        ? await withPluginAppReadiness({
+    const withEligibility =
+      options.evaluatePluginMigrationEligibility === true
+        ? await withPluginMigrationEligibility({
             plugins,
             marketplace: marketplaceRef(marketplace),
             requestOptions,
           })
         : plugins;
-    const sorted = withReadiness.toSorted((a, b) =>
+    const sorted = withEligibility.toSorted((a, b) =>
       (a.pluginName ?? a.name).localeCompare(b.pluginName ?? b.name),
     );
     return { plugins: sorted };
@@ -314,12 +293,12 @@ function marketplaceRef(marketplace: v2.PluginMarketplaceEntry): CodexPluginMark
   };
 }
 
-async function withPluginAppReadiness(params: {
+async function withPluginMigrationEligibility(params: {
   plugins: CodexPluginSource[];
   marketplace: CodexPluginMarketplaceRef;
   requestOptions: SourceAppServerRequestOptions;
 }): Promise<CodexPluginSource[]> {
-  const pending: Array<{ plugin: CodexPluginSource; detail: v2.PluginDetail }> = [];
+  const pending: Array<{ plugin: CodexPluginSource; apps: CodexPluginMigrationAppFact[] }> = [];
   const evaluated: CodexPluginSource[] = [];
 
   for (const plugin of params.plugins) {
@@ -327,11 +306,7 @@ async function withPluginAppReadiness(params: {
       evaluated.push({
         ...plugin,
         migratable: false,
-        appReadiness: {
-          status: "plugin_disabled",
-          reason: "plugin_disabled",
-          apps: [],
-        },
+        migrationBlock: { code: "plugin_disabled" },
         message: `Codex plugin "${plugin.pluginName ?? plugin.name}" is installed in Codex but disabled; enable it in Codex before migrating it to OpenClaw.`,
       });
       continue;
@@ -342,11 +317,7 @@ async function withPluginAppReadiness(params: {
       evaluated.push({
         ...plugin,
         migratable: false,
-        appReadiness: {
-          status: "unknown",
-          reason: "plugin_read_unavailable",
-          apps: [],
-        },
+        migrationBlock: { code: "plugin_read_unavailable", error: detail.error },
         message: `Codex plugin "${plugin.pluginName ?? plugin.name}" detail could not be read: ${detail.error}`,
       });
       continue;
@@ -356,30 +327,14 @@ async function withPluginAppReadiness(params: {
       evaluated.push({
         ...plugin,
         migratable: true,
-        appReadiness: {
-          status: "not_app_backed",
-          apps: [],
-        },
       });
       continue;
     }
 
-    const appBackedPlugin: CodexPluginSource = {
-      ...plugin,
-      migratable: false,
-      appReadiness: {
-        status: "unknown",
-        reason: "app_readiness_unknown",
-        apps: detail.detail.apps.map((app) => ({
-          id: app.id,
-          name: app.name,
-          status: "unknown" as const,
-          needsAuth: app.needsAuth,
-        })),
-      },
-    };
-    evaluated.push(appBackedPlugin);
-    pending.push({ plugin: appBackedPlugin, detail: detail.detail });
+    const apps = detail.detail.apps
+      .map(sourcePluginAppFact)
+      .toSorted((left, right) => left.id.localeCompare(right.id));
+    pending.push({ plugin, apps });
   }
 
   if (pending.length === 0) {
@@ -388,34 +343,30 @@ async function withPluginAppReadiness(params: {
 
   const sourceAccount = await readSourceCodexAccount(params.requestOptions).catch(() => undefined);
   if (sourceAccount && sourceAccount !== "chatgpt") {
-    for (const { plugin } of pending) {
-      plugin.appReadiness = {
-        status: "auth_required",
-        reason: "codex_subscription_required",
-        apps:
-          plugin.appReadiness?.apps.map((app) => ({
-            ...app,
-            status: "auth_required",
-          })) ?? [],
-      };
-      plugin.message = codexSubscriptionRequiredMessage(plugin);
+    for (const { plugin, apps } of pending) {
+      evaluated.push({
+        ...plugin,
+        migratable: false,
+        migrationBlock: { code: "codex_subscription_required", apps },
+        message: codexSubscriptionRequiredMessage(plugin),
+      });
     }
     return evaluated;
   }
 
   const snapshot = await refreshSourceAppInventory(params.requestOptions).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
-    for (const { plugin } of pending) {
-      plugin.appReadiness = {
-        status: "unknown",
-        reason: "app_inventory_unavailable",
-        apps:
-          plugin.appReadiness?.apps.map((app) => ({
-            ...app,
-            status: "unknown",
-          })) ?? [],
-      };
-      plugin.message = `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but source app inventory could not be read: ${message}`;
+    for (const { plugin, apps } of pending) {
+      evaluated.push({
+        ...plugin,
+        migratable: false,
+        migrationBlock: {
+          code: "app_inventory_unavailable",
+          apps,
+          error: message,
+        },
+        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but source app inventory could not be read: ${message}`,
+      });
     }
     return undefined;
   });
@@ -424,21 +375,21 @@ async function withPluginAppReadiness(params: {
   }
 
   const appInfoById = new Map(snapshot.apps.map((app) => [app.id, app] as const));
-  for (const { plugin, detail } of pending) {
-    const apps = detail.apps
-      .map((app) => sourceAppReadiness(app, appInfoById.get(app.id)))
+  for (const { plugin, apps: declaredApps } of pending) {
+    const apps = declaredApps
+      .map((app) => sourcePluginAppFactWithInventory(app, appInfoById.get(app.id)))
       .toSorted((left, right) => left.id.localeCompare(right.id));
-    const status = summarizeAppReadiness(apps);
-    const ready = status === "ready";
-    plugin.migratable = ready;
-    plugin.appReadiness = {
-      status,
-      ...(ready ? {} : { reason: readinessCode(status) }),
-      apps,
-    };
-    if (!ready) {
-      plugin.message = appReadinessMessage(plugin, apps, status);
+    const blockCode = migrationBlockCodeForApps(apps);
+    if (!blockCode) {
+      evaluated.push({ ...plugin, migratable: true });
+      continue;
     }
+    evaluated.push({
+      ...plugin,
+      migratable: false,
+      migrationBlock: { code: blockCode, apps },
+      message: appInventoryBlockMessage(plugin, apps, blockCode),
+    });
   }
 
   return evaluated;
@@ -496,82 +447,60 @@ async function refreshSourceAppInventory(
   });
 }
 
-function sourceAppReadiness(
-  app: v2.AppSummary,
-  info: v2.AppInfo | undefined,
-): CodexPluginAppReadinessApp {
-  if (!info) {
-    return {
-      id: app.id,
-      name: app.name,
-      status: "missing",
-      needsAuth: app.needsAuth,
-    };
-  }
-  const status: CodexPluginAppReadinessAppStatus = !info.isAccessible
-    ? "inaccessible"
-    : !info.isEnabled
-      ? "disabled"
-      : "ready";
+function sourcePluginAppFact(app: v2.AppSummary): CodexPluginMigrationAppFact {
   return {
     id: app.id,
     name: app.name,
-    status,
-    isAccessible: info.isAccessible,
-    isEnabled: info.isEnabled,
     needsAuth: app.needsAuth,
   };
 }
 
-function summarizeAppReadiness(
-  apps: readonly CodexPluginAppReadinessApp[],
-): CodexPluginAppReadinessStatus {
-  if (apps.some((app) => app.status === "inaccessible")) {
-    return "inaccessible";
+function sourcePluginAppFactWithInventory(
+  app: CodexPluginMigrationAppFact,
+  info: v2.AppInfo | undefined,
+): CodexPluginMigrationAppFact {
+  if (!info) {
+    return app;
   }
-  if (apps.some((app) => app.status === "disabled")) {
-    return "disabled";
-  }
-  if (apps.some((app) => app.status === "missing")) {
-    return "missing";
-  }
-  if (apps.some((app) => app.status === "auth_required")) {
-    return "auth_required";
-  }
-  if (apps.some((app) => app.status === "unknown")) {
-    return "unknown";
-  }
-  return "ready";
+  return {
+    ...app,
+    isAccessible: info.isAccessible,
+    isEnabled: info.isEnabled,
+  };
 }
 
-function readinessCode(status: CodexPluginAppReadinessStatus): CodexPluginAppReadinessCode {
-  switch (status) {
-    case "inaccessible":
-      return "app_inaccessible";
-    case "disabled":
-      return "app_disabled";
-    case "missing":
-      return "app_missing";
-    case "auth_required":
-      return "app_auth_required";
-    case "plugin_disabled":
-      return "plugin_disabled";
-    default:
-      return "app_readiness_unknown";
+function migrationBlockCodeForApps(
+  apps: readonly CodexPluginMigrationAppFact[],
+): CodexPluginMigrationBlockCode | undefined {
+  if (apps.some((app) => app.isAccessible === false)) {
+    return "app_inaccessible";
   }
+  if (apps.some((app) => app.isEnabled === false)) {
+    return "app_disabled";
+  }
+  if (apps.some((app) => app.isAccessible === undefined || app.isEnabled === undefined)) {
+    return "app_missing";
+  }
+  return undefined;
 }
 
-function appReadinessMessage(
+function appInventoryBlockMessage(
   plugin: CodexPluginSource,
-  apps: readonly CodexPluginAppReadinessApp[],
-  status: CodexPluginAppReadinessStatus,
+  apps: readonly CodexPluginMigrationAppFact[],
+  code: CodexPluginMigrationBlockCode,
 ): string {
+  const status =
+    code === "app_inaccessible" ? "inaccessible" : code === "app_disabled" ? "disabled" : "missing";
   const blocking =
-    apps.find((app) => app.status === status) ??
-    apps.find((app) => app.status !== "ready") ??
-    apps[0];
+    apps.find((app) =>
+      code === "app_inaccessible"
+        ? app.isAccessible === false
+        : code === "app_disabled"
+          ? app.isEnabled === false
+          : app.isAccessible === undefined || app.isEnabled === undefined,
+    ) ?? apps[0];
   const appLabel = blocking ? ` app "${blocking.name}"` : " an owned app";
-  return `Codex plugin "${plugin.pluginName ?? plugin.name}" owns${appLabel} but the source app inventory reports it is ${blocking?.status ?? "unknown"}; authenticate or enable the app in Codex before migrating it to OpenClaw.`;
+  return `Codex plugin "${plugin.pluginName ?? plugin.name}" owns${appLabel} but the source app inventory reports it is ${status}; authenticate or enable the app in Codex before migrating it to OpenClaw.`;
 }
 
 export function codexPluginMigrationSubscriptionWarning(): string {
