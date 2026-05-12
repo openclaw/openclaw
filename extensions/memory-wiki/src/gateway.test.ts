@@ -154,6 +154,27 @@ describe("memory-wiki gateway methods", () => {
     } as never);
   });
 
+  it("registers Obsidian CLI methods with write scope", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+
+    expect(
+      Object.fromEntries(
+        registerGatewayMethod.mock.calls
+          .filter(([method]) => typeof method === "string" && method.startsWith("wiki.obsidian."))
+          .map(([method, , options]) => [method, options]),
+      ),
+    ).toEqual({
+      "wiki.obsidian.status": { scope: "operator.read" },
+      "wiki.obsidian.search": { scope: "operator.write" },
+      "wiki.obsidian.open": { scope: "operator.write" },
+      "wiki.obsidian.command": { scope: "operator.write" },
+      "wiki.obsidian.daily": { scope: "operator.write" },
+    });
+  });
+
   it("returns wiki status over the gateway", async () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();

@@ -367,7 +367,7 @@ export function registerMemoryWikiGatewayMethods(params: {
         respondError(respond, error);
       }
     },
-    { scope: READ_SCOPE },
+    { scope: WRITE_SCOPE },
   );
 
   api.registerGatewayMethod(
