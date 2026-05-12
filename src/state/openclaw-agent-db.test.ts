@@ -23,7 +23,7 @@ import {
 
 type AgentDbTestDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "memory_index_chunks" | "memory_index_sources" | "schema_meta" | "sessions"
+  "memory_index_chunks" | "memory_index_sources" | "schema_meta" | "session_routes" | "sessions"
 >;
 type EmbeddingTable = "memory_index_chunks" | "memory_embedding_cache";
 
@@ -128,7 +128,7 @@ describe("openclaw agent database", () => {
     });
   });
 
-  it("enforces one canonical session row per session key", () => {
+  it("enforces one canonical session route per session key", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawAgentDatabase({
       agentId: "worker-1",
@@ -145,14 +145,30 @@ describe("openclaw agent database", () => {
         updated_at: 1,
       }),
     );
+    executeSqliteQuerySync(
+      database.db,
+      agentDb.insertInto("sessions").values({
+        session_id: "session-2",
+        session_key: "main:session-1",
+        created_at: 2,
+        updated_at: 2,
+      }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      agentDb.insertInto("session_routes").values({
+        session_key: "main:session-1",
+        session_id: "session-1",
+        updated_at: 1,
+      }),
+    );
 
     expect(() =>
       executeSqliteQuerySync(
         database.db,
-        agentDb.insertInto("sessions").values({
-          session_id: "session-2",
+        agentDb.insertInto("session_routes").values({
           session_key: "main:session-1",
-          created_at: 2,
+          session_id: "session-2",
           updated_at: 2,
         }),
       ),
