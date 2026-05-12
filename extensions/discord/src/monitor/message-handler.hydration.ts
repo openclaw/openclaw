@@ -23,6 +23,12 @@ function mergeFetchedDiscordMessage(base: Message, fetched: APIMessage): Message
     tts: fetched.tts ?? baseRawData.tts ?? false,
     pinned: fetched.pinned ?? baseRawData.pinned ?? false,
     type: fetched.type ?? baseRawData.type ?? 0,
+    message_reference:
+      fetched.message_reference ?? baseRawData.message_reference ?? baseFallback.message_reference,
+    referenced_message:
+      fetched.referenced_message ??
+      baseRawData.referenced_message ??
+      baseFallback.referenced_message,
     message_snapshots:
       fetched.message_snapshots ?? baseRawData.message_snapshots ?? baseFallback.message_snapshots,
     sticker_items:
@@ -69,6 +75,10 @@ function readMessageFallback(message: Message): MessageFallback {
     timestamp?: unknown;
     stickers?: unknown;
     sticker_items?: unknown;
+    messageReference?: unknown;
+    message_reference?: unknown;
+    referencedMessage?: unknown;
+    referenced_message?: unknown;
     message_snapshots?: unknown;
   };
   return {
@@ -82,6 +92,11 @@ function readMessageFallback(message: Message): MessageFallback {
     mention_roles: normalizeStringArray(value.mentionedRoles),
     mention_everyone: value.mentionedEveryone === true,
     timestamp: readString(value.timestamp) ?? "1970-01-01T00:00:00.000Z",
+    message_reference:
+      normalizeApiMessageReference(value.message_reference) ??
+      normalizeApiMessageReference(value.messageReference),
+    referenced_message:
+      normalizeApiMessage(value.referenced_message) ?? normalizeApiMessage(value.referencedMessage),
     sticker_items: Array.isArray(value.sticker_items)
       ? (value.sticker_items as APIMessage["sticker_items"])
       : Array.isArray(value.stickers)
@@ -110,6 +125,16 @@ function normalizeApiUsers(value: unknown): APIUser[] {
         return user.id ? [user] : [];
       })
     : [];
+}
+
+function normalizeApiMessageReference(value: unknown): APIMessage["message_reference"] | undefined {
+  return value && typeof value === "object"
+    ? (value as APIMessage["message_reference"])
+    : undefined;
+}
+
+function normalizeApiMessage(value: unknown): APIMessage | undefined {
+  return value && typeof value === "object" ? (value as APIMessage) : undefined;
 }
 
 function normalizeApiUser(value: unknown): APIUser {
@@ -158,6 +183,13 @@ function shouldHydrateDiscordMessage(params: { message: Message }) {
     return true;
   }
   if (!currentText) {
+    return true;
+  }
+  const rawData = readMessageRawData(params.message);
+  const hasReplyReference = Boolean(
+    params.message.messageReference?.message_id || rawData.message_reference?.message_id,
+  );
+  if (hasReplyReference && !params.message.referencedMessage) {
     return true;
   }
   const hasMentionMetadata =
