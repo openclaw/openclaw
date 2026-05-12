@@ -9,6 +9,7 @@ import {
 import { unwrapKnownDispatchWrapperInvocation } from "../dispatch-wrapper-resolution.js";
 import type { ExecCommandSegment } from "../exec-approvals-analysis.js";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
+import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "../shell-inline-command.js";
 import {
   extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
@@ -78,6 +79,60 @@ function uniqueCommandPayloadCandidates(candidates: string[]): string[] {
   return [...new Set(candidates.filter((candidate) => candidate.trim().length > 0))];
 }
 
+function isDirectShellPositionalCarrierInvocation(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+
+  const shellWhitespace = String.raw`[^\S\r\n]+`;
+  const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
+  const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
+  return new RegExp(
+    `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}(?:${shellWhitespace}${positionalArg})*$`,
+    "u",
+  ).test(trimmed);
+}
+
+function detectShellPositionalCarrierInlineEvalArgvInternal(
+  argv: string[],
+  seenArgv: Set<string>,
+): InterpreterInlineEvalHit | null {
+  const executableArgv = stripLeadingEnvAssignments(argv);
+  const executable = normalizeExecutableToken(executableArgv[0] ?? "");
+  if (!isShellWrapperExecutable(executable)) {
+    return null;
+  }
+  if (!["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"].includes(executable)) {
+    return null;
+  }
+  const key = commandArgvKey(executableArgv);
+  if (seenArgv.has(key)) {
+    return null;
+  }
+  seenArgv.add(key);
+
+  const inlineMatch = resolveInlineCommandMatch(executableArgv, POSIX_INLINE_COMMAND_FLAGS, {
+    allowCombinedC: true,
+  });
+  if (inlineMatch.valueTokenIndex === null || !inlineMatch.command) {
+    return null;
+  }
+  if (!isDirectShellPositionalCarrierInvocation(inlineMatch.command)) {
+    return null;
+  }
+
+  const carriedArgv = executableArgv
+    .slice(inlineMatch.valueTokenIndex + 1)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+  if (carriedArgv.length === 0) {
+    return null;
+  }
+
+  return detectInlineEvalArgvInternal(carriedArgv, seenArgv);
+}
+
 function detectCarrierInlineEvalArgvInternal(
   argv: string[],
   seenArgv: Set<string>,
@@ -120,7 +175,9 @@ function detectInlineEvalArgvInternal(
     return null;
   }
   return (
-    detectInterpreterInlineEvalArgv(argv) ?? detectCarrierInlineEvalArgvInternal(argv, seenArgv)
+    detectInterpreterInlineEvalArgv(argv) ??
+    detectShellPositionalCarrierInlineEvalArgvInternal(argv, seenArgv) ??
+    detectCarrierInlineEvalArgvInternal(argv, seenArgv)
   );
 }
 

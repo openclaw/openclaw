@@ -63,6 +63,16 @@ describe("command-analysis risks", () => {
     );
     expect(detectInlineEvalArgv(["command", "node", "--eval", "1"])?.flag).toBe("--eval");
     expect(detectInlineEvalArgv(["env", "-S", 'python3 -c "print(1)"'])?.flag).toBe("-c");
+    expect(
+      detectInlineEvalArgv(["sh", "-lc", '$0 "$@"', "find", ".", "-exec", "id", "{}", ";"])?.flag,
+    ).toBe("-exec");
+    expect(
+      detectInlineEvalArgv(["bash", "-c", 'exec -- "$0" "$@"', "xargs", "sh", "-c", "id"])?.flag,
+    ).toBe("<command>");
+    expect(
+      detectInlineEvalArgv(["env", "sh", "-lc", '$0 "$@"', "find", ".", "-okdir", "id", "{}", ";"])
+        ?.flag,
+    ).toBe("-okdir");
     expect(detectInlineEvalArgv(["python3", "script.py"])).toBeNull();
   });
 
@@ -74,6 +84,8 @@ describe("command-analysis risks", () => {
     ).toBeNull();
     expect(detectInlineEvalArgv(["env", "-S", 'echo python3 -c "print(1)"'])).toBeNull();
     expect(detectInlineEvalArgv(["command", "-v", "python3", "-c", "print(1)"])).toBeNull();
+    expect(detectInlineEvalArgv(["sh", "-lc", '$0 "$@"', "find", ".", "-name", "*.ts"])).toBeNull();
+    expect(detectInlineEvalArgv(["sh", "-lc", 'echo "$0"; "$@"', "find", ".", "-exec"])).toBeNull();
   });
 
   it("detects command carriers", () => {
