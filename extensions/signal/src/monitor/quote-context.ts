@@ -1,5 +1,5 @@
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { looksLikeUuid } from "../identity.js";
 import type {
   SignalDataMessage,

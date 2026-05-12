@@ -1464,11 +1464,14 @@ async function deliverOutboundPayloadsCore(
   // do not re-attach a duplicate quote indicator. This applies to channels that
   // treat replyToId as a one-shot quote bubble. Channels that use replyToId as
   // persistent thread context (slack thread_ts, mattermost rootId, googlechat
-  // threadName) must keep the id on every payload to avoid orphaning chunks
-  // from the thread.
+  // threadName, tlon urbit thread reply id) must keep the id on every payload
+  // to avoid orphaning chunks from the thread.
   let inheritedReplyDelivered = false;
   const isThreadBasedChannel =
-    channel === "slack" || channel === "mattermost" || channel === "googlechat";
+    channel === "slack" ||
+    channel === "mattermost" ||
+    channel === "googlechat" ||
+    channel === "tlon";
   // Suppress inherited reply on subsequent payloads only when the channel
   // treats replyToId as one-shot quote metadata. Skip suppression when the
   // channel falls back to a pass-through (signal group without author) — the
