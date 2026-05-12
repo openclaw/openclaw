@@ -80,14 +80,6 @@ function buildTokenProvider(): MSTeamsAccessTokenProvider {
   };
 }
 
-function firstMockCall(mock: ReturnType<typeof vi.fn>, label: string): unknown[] {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
 async function resolvePublicHost(): Promise<{ address: string }> {
   return { address: "93.184.216.34" };
 }

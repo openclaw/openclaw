@@ -59,37 +59,6 @@ function firstGoogleClientHttpOptions(): Record<string, unknown> {
   return recordField(firstObjectArg(createGoogleGenAIMock).httpOptions, "httpOptions");
 }
 
-function requireFetchCall(
-  fetchMock: ReturnType<typeof vi.fn>,
-  index: number,
-): [RequestInfo | URL, RequestInit | undefined] {
-  const call = fetchMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected Google video fetch call ${index}`);
-  }
-  return call as [RequestInfo | URL, RequestInit | undefined];
-}
-
-function parseFetchJsonBody(fetchMock: ReturnType<typeof vi.fn>, index: number): unknown {
-  const [, init] = requireFetchCall(fetchMock, index);
-  const body = init?.body;
-  if (typeof body !== "string") {
-    throw new Error(`expected Google video fetch body ${index}`);
-  }
-  return JSON.parse(body) as unknown;
-}
-
-function fetchInputUrl(fetchMock: ReturnType<typeof vi.fn>, index: number): string {
-  const [input] = requireFetchCall(fetchMock, index);
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  return input.url;
-}
-
 let ssrfMock: { mockRestore: () => void } | undefined;
 
 describe("google video generation provider", () => {

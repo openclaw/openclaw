@@ -2,7 +2,7 @@ import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
 } from "openclaw/plugin-sdk/channel-message";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { lineConfigAdapter } from "./config-adapter.js";
@@ -40,16 +40,11 @@ type LineRuntimeMocks = {
 };
 
 beforeEach(() => {
-  vi.setSystemTime(1_800_000_000_000);
   ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();
   ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
     hostname: "example.com",
     addresses: ["93.184.216.34"],
   });
-});
-
-afterEach(() => {
-  vi.useRealTimers();
 });
 
 function lineResult(messageId: string, chatId = "c1") {
