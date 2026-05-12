@@ -28,6 +28,7 @@ export type SkillScanSummary = {
 
 export type SkillScanOptions = {
   excludeTestFiles?: boolean;
+  includeNodeModules?: boolean;
   includeFiles?: string[];
   maxFiles?: number;
   maxFileBytes?: number;
@@ -424,6 +425,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
 function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOptions> {
   return {
     excludeTestFiles: opts?.excludeTestFiles ?? false,
+    includeNodeModules: opts?.includeNodeModules ?? false,
     includeFiles: opts?.includeFiles ?? [],
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
     maxFileBytes: Math.max(1, opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES),
@@ -442,6 +444,7 @@ async function walkDirWithLimit(
   dirPath: string,
   maxFiles: number,
   excludeTestFiles: boolean,
+  includeNodeModules: boolean,
 ): Promise<string[]> {
   const files: string[] = [];
   const stack: string[] = [dirPath];
@@ -458,7 +461,7 @@ async function walkDirWithLimit(
         break;
       }
       // Skip hidden dirs and node_modules
-      if (entry.name.startsWith(".") || entry.name === "node_modules") {
+      if (entry.name.startsWith(".") || (!includeNodeModules && entry.name === "node_modules")) {
         continue;
       }
       if (
@@ -568,7 +571,12 @@ async function collectScannableFiles(dirPath: string, opts: Required<SkillScanOp
     return forcedFiles.slice(0, opts.maxFiles);
   }
 
-  const walkedFiles = await walkDirWithLimit(dirPath, opts.maxFiles, opts.excludeTestFiles);
+  const walkedFiles = await walkDirWithLimit(
+    dirPath,
+    opts.maxFiles,
+    opts.excludeTestFiles,
+    opts.includeNodeModules,
+  );
   const seen = new Set(forcedFiles.map((f) => path.resolve(f)));
   const out = [...forcedFiles];
   for (const walkedFile of walkedFiles) {

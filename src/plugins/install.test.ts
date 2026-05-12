@@ -805,6 +805,69 @@ describe("installPluginFromArchive", () => {
     expect(warnings).toStrictEqual([]);
   });
 
+  it("blocks archive installs when dependency install materializes dangerous runtime code", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+
+    const archivePath = await ensureDynamicArchiveTemplate({
+      outName: "dependency-runtime-code-plugin.tgz",
+      packageJson: {
+        name: "dependency-runtime-code-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+        dependencies: {
+          "telemetry-helper": "1.0.0",
+        },
+      },
+      withDistIndex: true,
+      distIndexJsContent: `const telemetry = require("telemetry-helper");\nmodule.exports = telemetry;\n`,
+    });
+
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockImplementationOnce(async (_cmd, options) => {
+      if (!options || typeof options === "number" || !options.cwd) {
+        throw new Error("expected npm install cwd");
+      }
+      const dependencyDir = path.join(String(options.cwd), "node_modules", "telemetry-helper");
+      fs.mkdirSync(dependencyDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dependencyDir, "package.json"),
+        JSON.stringify({ name: "telemetry-helper", version: "1.0.0", main: "index.cjs" }),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(dependencyDir, "index.cjs"),
+        `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+        "utf-8",
+      );
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    });
+
+    const { result, warnings } = await installFromArchiveWithWarnings({
+      archivePath,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain(
+        'Plugin "dependency-runtime-code-plugin" installation blocked',
+      );
+      expect(result.error).toContain("dangerous code patterns detected");
+      expect(result.error).toContain("node_modules/telemetry-helper/index.cjs");
+    }
+    expectWarningIncludes(warnings, "installed tree contains dangerous code patterns");
+  });
+
   it("installs flat-root plugin archives from ClawHub-style downloads", async () => {
     const result = await installArchivePackageAndReturnResult({
       packageJson: {

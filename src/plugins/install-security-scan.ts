@@ -81,9 +81,11 @@ export async function scanPackageInstallSource(
 
 export async function scanInstalledPackageDependencyTree(params: {
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
+  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
   packageDir: string;
   pluginId: string;
+  trustedSourceLinkedOfficialInstall?: boolean;
 }): Promise<InstallSecurityScanResult | undefined> {
   const { scanInstalledPackageDependencyTreeRuntime } = await loadInstallSecurityScanRuntime();
   return await scanInstalledPackageDependencyTreeRuntime(params);

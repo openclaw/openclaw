@@ -338,6 +338,7 @@ const DEFAULT_PACKAGE_MANIFEST_TRAVERSAL_LIMITS: PackageManifestTraversalLimits 
   maxDirectories: 10_000,
   maxManifests: 10_000,
 };
+const DEFAULT_INSTALLED_PACKAGE_CODE_SCAN_MAX_FILES = 10_000;
 
 function readPositiveIntegerEnv(name: string, fallback: number): number {
   const rawValue = process.env[name];
@@ -366,6 +367,13 @@ function resolvePackageManifestTraversalLimits(): PackageManifestTraversalLimits
       DEFAULT_PACKAGE_MANIFEST_TRAVERSAL_LIMITS.maxManifests,
     ),
   };
+}
+
+function resolveInstalledPackageCodeScanMaxFiles(): number {
+  return readPositiveIntegerEnv(
+    "OPENCLAW_INSTALL_SCAN_MAX_CODE_FILES",
+    DEFAULT_INSTALLED_PACKAGE_CODE_SCAN_MAX_FILES,
+  );
 }
 
 async function collectPackageManifestPaths(params: {
@@ -565,8 +573,10 @@ async function scanManifestDependencyDenylist(params: {
 }
 
 async function scanDirectoryTarget(params: {
+  includeNodeModules?: boolean;
   includeFiles?: string[];
   logger: InstallScanLogger;
+  maxFiles?: number;
   path: string;
   suppressBuiltinWarnings?: boolean;
   suspiciousMessage: string;
@@ -576,7 +586,9 @@ async function scanDirectoryTarget(params: {
   try {
     const scanSummary = await scanDirectoryWithSummary(params.path, {
       excludeTestFiles: true,
+      includeNodeModules: params.includeNodeModules,
       includeFiles: params.includeFiles,
+      maxFiles: params.maxFiles,
     });
     const builtinScan = buildBuiltinScanFromSummary(scanSummary);
     if (params.suppressBuiltinWarnings) {
@@ -935,14 +947,37 @@ export async function scanPackageInstallSourceRuntime(
 
 export async function scanInstalledPackageDependencyTreeRuntime(params: {
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
+  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
   packageDir: string;
   pluginId: string;
+  trustedSourceLinkedOfficialInstall?: boolean;
 }): Promise<InstallSecurityScanResult | undefined> {
-  return await scanManifestDependencyDenylist({
+  const dependencyBlocked = await scanManifestDependencyDenylist({
     logger: params.logger,
     packageDir: params.packageDir,
     allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
+    targetLabel: `Plugin "${params.pluginId}" installation`,
+  });
+  if (dependencyBlocked) {
+    return dependencyBlocked;
+  }
+
+  const builtinScan = await scanDirectoryTarget({
+    includeNodeModules: true,
+    logger: params.logger,
+    maxFiles: resolveInstalledPackageCodeScanMaxFiles(),
+    path: params.packageDir,
+    suppressBuiltinWarnings: params.trustedSourceLinkedOfficialInstall === true,
+    suspiciousMessage: `Plugin "{target}" installed tree has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
+    targetName: params.pluginId,
+    warningMessage: `WARNING: Plugin "${params.pluginId}" installed tree contains dangerous code patterns`,
+  });
+  return resolveBuiltinScanDecision({
+    builtinScan,
+    logger: params.logger,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     targetLabel: `Plugin "${params.pluginId}" installation`,
   });
 }
