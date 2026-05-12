@@ -23,6 +23,8 @@ import {
 } from "../infra/shell-inline-command.js";
 import type { RunResult } from "./invoke-types.js";
 
+const POSIX_SHELL_WRAPPER_NAMES: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
+
 type SystemRunAllowlistAnalysis = {
   analysisOk: boolean;
   allowlistMatches: ExecAllowlistEntry[];
@@ -166,11 +168,15 @@ export function resolveSystemRunExecArgv(params: {
     if (!rebuilt.ok || !rebuilt.command) {
       return null;
     }
-    execArgv = replacePosixShellInlineCommand({
+    const rewrittenArgv = replacePosixShellInlineCommand({
       argv: params.argv,
       oldCommand: params.shellCommand,
       nextCommand: rebuilt.command,
     });
+    if (!rewrittenArgv) {
+      return null;
+    }
+    execArgv = rewrittenArgv;
   }
   return execArgv;
 }
@@ -202,7 +208,7 @@ function replacePosixShellInlineCommand(params: {
   const transportArgv = resolveShellWrapperTransportArgv(params.argv);
   if (
     !transportArgv ||
-    !POSIX_SHELL_WRAPPERS.has(normalizeExecutableToken(transportArgv[0] ?? ""))
+    !POSIX_SHELL_WRAPPER_NAMES.has(normalizeExecutableToken(transportArgv[0] ?? ""))
   ) {
     return null;
   }
