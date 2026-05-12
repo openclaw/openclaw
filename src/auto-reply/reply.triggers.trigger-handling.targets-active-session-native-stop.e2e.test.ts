@@ -269,7 +269,13 @@ async function expectNextRunUsesTargetSession(
   );
 
   expect(params.runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-  const runParams = firstMockCallArg(params.runEmbeddedPiAgentMock, "embedded PI agent");
+  const runParams = params.runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+    | Record<string, unknown>
+    | undefined;
+  expect(runParams).toBeDefined();
+  if (!runParams) {
+    throw new Error("expected embedded PI agent call params");
+  }
   for (const [key, value] of Object.entries(expected)) {
     expect(runParams[key]).toEqual(value);
   }

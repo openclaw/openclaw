@@ -208,13 +208,12 @@ describe("stageSandboxMedia", () => {
           workspaceDir,
         });
 
-        let stagedStatError: NodeJS.ErrnoException | undefined;
-        try {
-          await fs.stat(join(sandboxDir, "media", "inbound", basename(sensitiveFile)));
-        } catch (error) {
-          stagedStatError = error as NodeJS.ErrnoException;
-        }
-        expect(stagedStatError?.code).toBe("ENOENT");
+        await expect(
+          fs.stat(join(sandboxDir, "media", "inbound", basename(sensitiveFile))),
+        ).rejects.toSatisfy((error) => {
+          expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+          return true;
+        });
         expect(ctx.MediaPath).toBe(sensitiveFile);
       }
 
@@ -291,13 +290,12 @@ describe("stageSandboxMedia", () => {
         workspaceDir,
       });
 
-      let stagedStatError: NodeJS.ErrnoException | undefined;
-      try {
-        await fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath)));
-      } catch (error) {
-        stagedStatError = error as NodeJS.ErrnoException;
-      }
-      expect(stagedStatError?.code).toBe("ENOENT");
+      await expect(
+        fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath))),
+      ).rejects.toSatisfy((error) => {
+        expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+        return true;
+      });
       expect(ctx.MediaPath).toBe(mediaPath);
       expect(sessionCtx.MediaPath).toBe(mediaPath);
     });

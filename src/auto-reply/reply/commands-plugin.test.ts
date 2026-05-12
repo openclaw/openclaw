@@ -104,11 +104,11 @@ describe("handlePluginCommand", () => {
 
     await handlePluginCommand(params, true);
 
-    expect(executePluginCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "target-session",
-      }),
-    );
+    expect(executePluginCommandMock).toHaveBeenCalledTimes(1);
+    const [[commandParams]] = executePluginCommandMock.mock.calls as unknown as Array<
+      [{ sessionId?: string }]
+    >;
+    expect(commandParams.sessionId).toBe("target-session");
   });
 
   it("continues the agent without leaking continueAgent into the reply payload", async () => {
