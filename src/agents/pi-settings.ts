@@ -65,11 +65,34 @@ function toPositiveInt(value: unknown): number | undefined {
   return Math.floor(value);
 }
 
+/**
+ * True when the active context engine takes responsibility for headroom after
+ * compaction — either by fully owning the compaction lifecycle
+ * (`ownsCompaction === true`) or by intercepting the runtime's
+ * `session_before_compact` event and supplying its own assembly
+ * (`interceptsCompaction === true`).
+ *
+ * Both cases mean the engine, not Pi's `reserveTokensFloor`, decides how
+ * much headroom the next prompt has — so the floor should be auto-zeroed
+ * to avoid double-reserving (LCM's `compactionTargetFraction = 0.35` already
+ * leaves ~65% of the context window free post-compaction, far more than the
+ * 20K-token default floor would reserve).
+ */
+function engineOwnsPostCompactHeadroom(info?: ContextEngineInfo): boolean {
+  return info?.ownsCompaction === true || info?.interceptsCompaction === true;
+}
+
 export function applyPiCompactionSettingsFromConfig(params: {
   settingsManager: PiSettingsManagerLike;
   cfg?: OpenClawConfig;
   /** When known, the resolved context window budget for the current model. */
   contextTokenBudget?: number;
+  /**
+   * Active context engine info. When present and the engine owns or
+   * intercepts compaction, the host treats `reserveTokensFloor` as 0 because
+   * the engine is responsible for post-compaction headroom.
+   */
+  contextEngineInfo?: ContextEngineInfo;
 }): {
   didOverride: boolean;
   compaction: { reserveTokens: number; keepRecentTokens: number };
@@ -80,7 +103,9 @@ export function applyPiCompactionSettingsFromConfig(params: {
 
   const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
-  let reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
+  let reserveTokensFloor = engineOwnsPostCompactHeadroom(params.contextEngineInfo)
+    ? 0
+    : resolveCompactionReserveTokensFloor(params.cfg);
 
   // Cap the floor to a safe fraction of the context window so that
   // small-context models (e.g. Ollama with 16 K tokens) are not starved of

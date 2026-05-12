@@ -1054,14 +1054,17 @@ async function compactEmbeddedPiSessionDirectOnce(
       // rehydration also restores Pi's auto-compaction (openclaw#75799), so re-apply
       // both guards. effectiveModel.baseUrl matches the surrounding scope so
       // auth-profile-injected baseUrls reach the endpoint-class detector.
+      // `contextEngineInfo` is intentionally omitted from both calls below:
+      // these guards run inside the compaction LLM session, which is not the
+      // user-facing agent session and has no associated context engine. The
+      // reserve-token floor / auto-compaction-disable rules that depend on the
+      // engine's `ownsCompaction` / `interceptsCompaction` flags do not apply
+      // to this inner-session settings manager.
       applyPiCompactionSettingsFromConfig({
         settingsManager,
         cfg: params.config,
         contextTokenBudget: ctxInfo.tokens,
       });
-      // contextEngineInfo is intentionally omitted: this guard runs inside the
-      // compaction LLM session, which is not the user-facing agent session and
-      // has no associated context engine.
       applyPiAutoCompactionGuard({
         settingsManager,
         silentOverflowProneProvider: isSilentOverflowProneModel({
