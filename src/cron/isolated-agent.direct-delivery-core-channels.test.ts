@@ -64,13 +64,13 @@ const CASES: ChannelCase[] = [
 ];
 
 async function runExplicitAnnounceTurn(params: {
-  home: string;
+  cfg: ReturnType<typeof makeCfg>;
   deps: CliDeps;
   channel: ChannelCase["channel"];
   to: string;
 }) {
   return await runCronIsolatedAgentTurn({
-    cfg: makeCfg(params.home),
+    cfg: params.cfg,
     deps: params.deps,
     job: {
       ...makeJob({ kind: "agentTurn", message: "do it" }),
@@ -125,6 +125,7 @@ async function expectCoreChannelAnnounceDelivery({
 }): Promise<void> {
   await withTempCronHome(async (home) => {
     await seedMainRouteSession(home, { lastChannel: "webchat", lastTo: "" });
+    const cfg = makeCfg(home);
     const deps = createCliDeps();
     if (meta) {
       mockAgentPayloads(payloads, meta);
@@ -133,7 +134,7 @@ async function expectCoreChannelAnnounceDelivery({
     }
 
     const res = await runExplicitAnnounceTurn({
-      home,
+      cfg,
       deps,
       channel: testCase.channel,
       to: testCase.to,
