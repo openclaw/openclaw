@@ -27,6 +27,13 @@ function escapeHtmlAttr(text: string): string {
   return escapeHtml(text).replace(/"/g, "&quot;");
 }
 
+function unescapeModelEmittedTelegramCodeTags(html: string): string {
+  return html.replace(
+    /&lt;(\/?)((?:code|pre))&gt;/gi,
+    (_match, slash: string, tag: string) => `<${slash}${tag.toLowerCase()}>`,
+  );
+}
+
 /**
  * File extensions that share TLDs and commonly appear in code/documentation.
  * These are wrapped in <code> tags to prevent Telegram from generating
@@ -61,7 +68,7 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
 }
 
 function renderTelegramHtml(ir: MarkdownIR): string {
-  return renderMarkdownWithMarkers(ir, {
+  const html = renderMarkdownWithMarkers(ir, {
     styleMarkers: {
       bold: { open: "<b>", close: "</b>" },
       italic: { open: "<i>", close: "</i>" },
@@ -74,6 +81,7 @@ function renderTelegramHtml(ir: MarkdownIR): string {
     escapeText: escapeHtml,
     buildLink: buildTelegramLink,
   });
+  return unescapeModelEmittedTelegramCodeTags(html);
 }
 
 function leadingWhitespaceLength(line: string): number {

@@ -19,7 +19,11 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
-import { markdownToTelegramHtmlChunks, splitTelegramHtmlChunks } from "./format.js";
+import {
+  markdownToTelegramHtmlChunks,
+  renderTelegramHtmlText,
+  splitTelegramHtmlChunks,
+} from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 
@@ -52,7 +56,7 @@ function chunkTelegramOutboundText(
   ctx?: { formatting?: OutboundDeliveryFormattingOptions },
 ): string[] {
   return ctx?.formatting?.parseMode === "HTML"
-    ? splitTelegramHtmlChunks(text, limit)
+    ? splitTelegramHtmlChunks(renderTelegramHtmlText(text), limit)
     : markdownToTelegramHtmlChunks(text, limit);
 }
 

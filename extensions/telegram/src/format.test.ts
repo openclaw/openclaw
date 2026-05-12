@@ -21,6 +21,16 @@ describe("markdownToTelegramHtml", () => {
       ],
       ["preserves Telegram HTML", "<b>yes</b>", "<b>yes</b>"],
       [
+        "preserves model-emitted code tags",
+        "run <code>pnpm test</code>",
+        "run <code>pnpm test</code>",
+      ],
+      [
+        "preserves model-emitted pre-code tags",
+        "<pre><code>pnpm test</code></pre>",
+        "<pre><code>pnpm test</code></pre>",
+      ],
+      [
         "escapes unsupported raw HTML",
         "<script>nope</script>",
         "&lt;script&gt;nope&lt;/script&gt;",

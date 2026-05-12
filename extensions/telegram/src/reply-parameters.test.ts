@@ -47,6 +47,28 @@ describe("telegram reply parameters", () => {
     });
   });
 
+  it("caps native quote text and entities before sending", () => {
+    const longQuote = `${"a".repeat(1020)}bold tail`;
+
+    expect(
+      buildTelegramThreadReplyParams({
+        replyToMessageId: 77,
+        replyQuoteMessageId: 77,
+        replyQuoteText: longQuote,
+        replyQuotePosition: 3,
+        replyQuoteEntities: [{ type: "bold", offset: 1020, length: 9 }],
+      }),
+    ).toEqual({
+      reply_parameters: {
+        message_id: 77,
+        quote: `${"a".repeat(1020)}bold`,
+        quote_position: 3,
+        quote_entities: [{ type: "bold", offset: 1020, length: 4 }],
+        allow_sending_without_reply: true,
+      },
+    });
+  });
+
   it("falls back to legacy reply id for blank quotes or mismatched quote sources", () => {
     expect(
       buildTelegramThreadReplyParams({

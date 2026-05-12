@@ -245,6 +245,25 @@ describe("telegramPlugin outbound attachments", () => {
     expect(sendMessageTelegram.mock.calls.at(1)?.[2]?.textMode).toBe("html");
   });
 
+  it("normalizes model-emitted code tags before HTML outbound chunking", async () => {
+    installTelegramRuntime();
+    sendMessageTelegram.mockResolvedValue({ messageId: "tg-code", chatId: "12345" });
+    const sendText = telegramPlugin.outbound?.sendText;
+    if (!sendText) {
+      throw new Error("Expected Telegram outbound sendText");
+    }
+
+    await sendText({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "run <code>pnpm test</code>",
+      formatting: { parseMode: "HTML" },
+    });
+
+    expect(sendMessageTelegram.mock.calls.at(0)?.[1]).toBe("run <code>pnpm test</code>");
+    expect(sendMessageTelegram.mock.calls.at(0)?.[2]?.textMode).toBe("html");
+  });
+
   it("preserves explicit HTML parse mode for payload media captions", async () => {
     installTelegramRuntime();
     sendMessageTelegram.mockResolvedValue({ messageId: "tg-payload", chatId: "12345" });

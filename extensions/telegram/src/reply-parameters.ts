@@ -1,5 +1,6 @@
 import type { MessageEntity } from "@grammyjs/types";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import { buildTelegramNativeQuoteCandidate } from "./bot/native-quote.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
 type TelegramReplyParameters = {
@@ -63,7 +64,13 @@ export function buildTelegramThreadReplyParams(opts?: {
   const replyQuoteTextRaw =
     replyQuoteMessageId === replyToMessageId ? opts?.replyQuoteText : undefined;
   const replyQuoteText = replyQuoteTextRaw?.trim() ? replyQuoteTextRaw : undefined;
-  if (!replyQuoteText) {
+  const replyQuoteCandidate = buildTelegramNativeQuoteCandidate({
+    text: replyQuoteText,
+    entities: Array.isArray(opts?.replyQuoteEntities)
+      ? (opts.replyQuoteEntities as MessageEntity[])
+      : undefined,
+  });
+  if (!replyQuoteCandidate) {
     params.reply_to_message_id = replyToMessageId;
     params.allow_sending_without_reply = true;
     return params;
@@ -71,14 +78,14 @@ export function buildTelegramThreadReplyParams(opts?: {
 
   const replyParameters: TelegramReplyParameters = {
     message_id: replyToMessageId,
-    quote: replyQuoteText,
+    quote: replyQuoteCandidate.text,
     allow_sending_without_reply: true,
   };
   if (typeof opts?.replyQuotePosition === "number" && Number.isFinite(opts.replyQuotePosition)) {
     replyParameters.quote_position = Math.trunc(opts.replyQuotePosition);
   }
-  if (Array.isArray(opts?.replyQuoteEntities) && opts.replyQuoteEntities.length > 0) {
-    replyParameters.quote_entities = opts.replyQuoteEntities as MessageEntity[];
+  if (replyQuoteCandidate.entities) {
+    replyParameters.quote_entities = replyQuoteCandidate.entities as MessageEntity[];
   }
   params.reply_parameters = replyParameters;
   return params;
