@@ -5,6 +5,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_BUNDLE="${OPENCLAW_APP_BUNDLE:-}"
+DIST_APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
+APPLICATIONS_APP_BUNDLE="/Applications/OpenClaw.app"
 APP_PROCESS_PATTERN="OpenClaw.app/Contents/MacOS/OpenClaw"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/OpenClaw"
 LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/OpenClaw"
@@ -191,16 +193,16 @@ choose_app_bundle() {
     return 0
   fi
 
-  if [[ -d "/Applications/OpenClaw.app" ]]; then
-    APP_BUNDLE="/Applications/OpenClaw.app"
-    return 0
-  fi
-
-  if [[ -d "${ROOT_DIR}/dist/OpenClaw.app" ]]; then
-    APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
+  if [[ -d "${DIST_APP_BUNDLE}" ]]; then
+    APP_BUNDLE="${DIST_APP_BUNDLE}"
     if [[ ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
       fail "dist/OpenClaw.app missing Sparkle after packaging"
     fi
+    return 0
+  fi
+
+  if [[ -d "${APPLICATIONS_APP_BUNDLE}" ]]; then
+    APP_BUNDLE="${APPLICATIONS_APP_BUNDLE}"
     return 0
   fi
 
@@ -208,6 +210,29 @@ choose_app_bundle() {
 }
 
 choose_app_bundle
+
+sync_app_bundle() {
+  if [[ -n "${OPENCLAW_APP_BUNDLE:-}" ]]; then
+    log "==> Using explicit app bundle: ${APP_BUNDLE}"
+    return 0
+  fi
+
+  if [[ "${APP_BUNDLE}" != "${DIST_APP_BUNDLE}" ]]; then
+    log "==> Using installed app bundle: ${APP_BUNDLE}"
+    return 0
+  fi
+
+  if [[ -d "${APPLICATIONS_APP_BUNDLE}" && -w "${APPLICATIONS_APP_BUNDLE}" ]]; then
+    log "==> Updating /Applications/OpenClaw.app from fresh packaged build"
+    rm -rf "${APPLICATIONS_APP_BUNDLE}"
+    /usr/bin/ditto "${DIST_APP_BUNDLE}" "${APPLICATIONS_APP_BUNDLE}"
+    APP_BUNDLE="${APPLICATIONS_APP_BUNDLE}"
+  fi
+
+  log "==> Launching app bundle: ${APP_BUNDLE}"
+}
+
+sync_app_bundle
 
 # When signed, clear any previous launchagent override marker.
 if [[ "$NO_SIGN" -ne 1 && "$ATTACH_ONLY" -ne 1 && -f "${LAUNCHAGENT_DISABLE_MARKER}" ]]; then

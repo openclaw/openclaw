@@ -44,7 +44,9 @@ public actor CanvasRealtimeTalkBridge {
 
     private struct SessionRequest: Encodable {
         let sessionKey: String?
+        let mode: String
         let transport: String
+        let brain: String
     }
 
     private struct RelayAudioContract: Decodable, Sendable {
@@ -55,12 +57,25 @@ public actor CanvasRealtimeTalkBridge {
     }
 
     private struct SessionResponse: Decodable, Sendable {
+        let sessionId: String?
         let provider: String?
         let transport: String?
         let relaySessionId: String?
         let model: String?
         let voice: String?
         let audio: RelayAudioContract?
+    }
+
+    private struct ToolCallResponse: Decodable, Sendable {
+        let runId: String?
+        let idempotencyKey: String?
+    }
+
+    private struct ChatEventPayload: Decodable, Sendable {
+        let runId: String?
+        let state: String?
+        let errorMessage: String?
+        let message: AnyCodable?
     }
 
     fileprivate struct RelayTranscriptEvent: Sendable {
@@ -81,6 +96,7 @@ public actor CanvasRealtimeTalkBridge {
     }
 
     private struct RelaySessionState: Sendable {
+        let sessionId: String
         let relaySessionId: String
         let sessionKey: String?
         let provider: String
@@ -94,24 +110,56 @@ public actor CanvasRealtimeTalkBridge {
         let ok: Bool
     }
 
-    private struct RelayConsultResult: Decodable {
-        let result: String
+    struct CaptureHandle {
+        let stop: () async -> Void
+    }
+
+    struct PlaybackHandle {
+        let stop: () async -> Void
+    }
+
+    struct Runtime {
+        let requestMicrophonePermission: () async -> Bool
+        let configureAudioSession: () throws -> Void
+        let startCapture: (_ sampleRate: Double, _ onChunk: @escaping @Sendable (Data) async -> Void) throws -> CaptureHandle
+        let startPlayback: (_ sampleRate: Double, _ stream: AsyncThrowingStream<Data, Error>) async -> PlaybackHandle
+
+        static func live() -> Runtime {
+            Runtime(
+                requestMicrophonePermission: {
+                    await CanvasRealtimeTalkBridge.requestMicrophonePermission()
+                },
+                configureAudioSession: {
+                    #if os(iOS)
+                    try CanvasRealtimeTalkBridge.configureAudioSession()
+                    #endif
+                },
+                startCapture: { sampleRate, onChunk in
+                    try CanvasRealtimeTalkBridge.makeLiveCaptureHandle(
+                        sampleRate: sampleRate,
+                        onChunk: onChunk)
+                },
+                startPlayback: { sampleRate, stream in
+                    await CanvasRealtimeTalkBridge.makeLivePlaybackHandle(
+                        sampleRate: sampleRate,
+                        stream: stream)
+                })
+        }
     }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "canvas.realtime")
     private let request: RequestHandler
     private let events: EventStreamProvider
     private let onStatus: StatusHandler?
+    private let runtime: Runtime
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     private var session: RelaySessionState?
     private var eventTask: Task<Void, Never>?
-    private var playbackTask: Task<Void, Never>?
+    private var playbackHandle: PlaybackHandle?
     private var playbackContinuation: AsyncThrowingStream<Data, Error>.Continuation?
-    private var inputEngine: AVAudioEngine?
-    private var inputEncoder: RealtimePCM16Encoder?
-    private var scheduledMarkTasks: [UUID: Task<Void, Never>] = [:]
+    private var captureHandle: CaptureHandle?
     private var transcriptEntries: [TranscriptEntry] = []
     private var outputCursorUptime: TimeInterval = 0
     private var currentState: String = "idle"
@@ -124,6 +172,19 @@ public actor CanvasRealtimeTalkBridge {
         self.request = request
         self.events = events
         self.onStatus = onStatus
+        self.runtime = Runtime.live()
+    }
+
+    init(
+        request: @escaping RequestHandler,
+        events: @escaping EventStreamProvider,
+        onStatus: StatusHandler? = nil,
+        runtime: Runtime)
+    {
+        self.request = request
+        self.events = events
+        self.onStatus = onStatus
+        self.runtime = runtime
     }
 
     public func isActive() -> Bool {
@@ -150,7 +211,7 @@ public actor CanvasRealtimeTalkBridge {
             return status
         }
 
-        let permissionOk = await Self.requestMicrophonePermission()
+        let permissionOk = await self.runtime.requestMicrophonePermission()
         guard permissionOk else {
             let status = CanvasRealtimeTalkStatus(
                 ok: false,
@@ -161,19 +222,24 @@ public actor CanvasRealtimeTalkBridge {
         }
 
         do {
-            #if os(iOS)
-            try Self.configureAudioSession()
-            #endif
+            try self.runtime.configureAudioSession()
 
-            let payload = try self.encoder.encode(SessionRequest(sessionKey: sessionKey, transport: "gateway-relay"))
+            let payload = try self.encoder.encode(SessionRequest(
+                sessionKey: sessionKey,
+                mode: "realtime",
+                transport: "gateway-relay",
+                brain: "agent-consult"))
             let responseData = try await self.request(
-                "talk.realtime.session",
+                "talk.session.create",
                 String(decoding: payload, as: UTF8.self),
                 20)
             let response = try self.decoder.decode(SessionResponse.self, from: responseData)
+            let sessionId = Self.trimmedNonEmpty(response.sessionId) ?? Self.trimmedNonEmpty(response.relaySessionId)
+            let relaySessionId = Self.trimmedNonEmpty(response.relaySessionId) ?? sessionId
 
             guard response.transport == "gateway-relay",
-                  let relaySessionId = response.relaySessionId,
+                  let sessionId,
+                  let relaySessionId,
                   let audio = response.audio,
                   audio.inputEncoding == "pcm16",
                   audio.outputEncoding == "pcm16"
@@ -194,6 +260,7 @@ public actor CanvasRealtimeTalkBridge {
             }
 
             let relaySession = RelaySessionState(
+                sessionId: sessionId,
                 relaySessionId: relaySessionId,
                 sessionKey: sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines),
                 provider: response.provider?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "openai",
@@ -205,8 +272,8 @@ public actor CanvasRealtimeTalkBridge {
             self.transcriptEntries.removeAll(keepingCapacity: true)
             self.outputCursorUptime = ProcessInfo.processInfo.systemUptime
             self.startEventLoop(relaySessionId: relaySessionId)
-            self.startPlayback(sampleRate: relaySession.outputSampleRateHz)
-            try self.startCapture(sampleRate: relaySession.inputSampleRateHz)
+            await self.startPlayback(sampleRate: relaySession.outputSampleRateHz)
+            try await self.startCapture(sampleRate: relaySession.inputSampleRateHz)
 
             let status = CanvasRealtimeTalkStatus(
                 ok: true,
@@ -265,7 +332,7 @@ public actor CanvasRealtimeTalkBridge {
     }
 
     private func handle(eventFrame: EventFrame, relaySessionId: String) async {
-        guard eventFrame.event == "talk.realtime.relay",
+        guard eventFrame.event == "talk.event" || eventFrame.event == "talk.realtime.relay",
               let payload = eventFrame.payload
         else {
             return
@@ -292,7 +359,7 @@ public actor CanvasRealtimeTalkBridge {
                 state: "listening",
                 message: "Thomas cleared the current phrase.")
         case .mark:
-            self.scheduleMarkAck(relaySessionId: relaySessionId)
+            return
         case let .transcript(entry):
             self.handleTranscript(entry)
             let prefix = entry.role == "assistant" ? "Thomas" : "You"
@@ -323,45 +390,37 @@ public actor CanvasRealtimeTalkBridge {
                 voice: voice))
     }
 
-    private func startPlayback(sampleRate: Double) {
+    private func startPlayback(sampleRate: Double) async {
         self.playbackContinuation?.finish()
-        self.playbackTask?.cancel()
+        self.playbackContinuation = nil
+        if let handle = self.playbackHandle {
+            await handle.stop()
+        }
         let stream = AsyncThrowingStream<Data, Error> { continuation in
             self.playbackContinuation = continuation
         }
-        self.playbackTask = Task { @MainActor in
-            _ = await PCMStreamingAudioPlayer.shared.play(stream: stream, sampleRate: sampleRate)
-        }
+        self.playbackHandle = await self.runtime.startPlayback(sampleRate, stream)
     }
 
-    private func startCapture(sampleRate: Double) throws {
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        let encoder = try RealtimePCM16Encoder(sourceFormat: format, targetSampleRate: sampleRate)
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
-            guard let self, let data = encoder.encode(buffer), !data.isEmpty else { return }
-            Task {
-                await self.sendAudioChunk(data)
-            }
+    private func startCapture(sampleRate: Double) async throws {
+        if let handle = self.captureHandle {
+            await handle.stop()
         }
-        engine.prepare()
-        try engine.start()
-        self.inputEngine = engine
-        self.inputEncoder = encoder
+        self.captureHandle = try self.runtime.startCapture(sampleRate) { [weak self] data in
+            await self?.sendAudioChunk(data)
+        }
     }
 
     private func sendAudioChunk(_ data: Data) async {
         guard let session = self.session else { return }
         let payload: [String: Any] = [
-            "relaySessionId": session.relaySessionId,
+            "sessionId": session.sessionId,
             "audioBase64": data.base64EncodedString(),
             "timestamp": Date().timeIntervalSince1970 * 1000,
         ]
         do {
             _ = try await self.request(
-                "talk.realtime.relayAudio",
+                "talk.session.appendAudio",
                 Self.jsonString(from: payload),
                 10)
         } catch {
@@ -380,49 +439,14 @@ public actor CanvasRealtimeTalkBridge {
 
     private func clearOutput() async {
         self.outputCursorUptime = ProcessInfo.processInfo.systemUptime
-        self.cancelScheduledMarks()
         self.playbackContinuation?.finish()
         self.playbackContinuation = nil
-        self.playbackTask?.cancel()
-        self.playbackTask = nil
-        await MainActor.run {
-            _ = PCMStreamingAudioPlayer.shared.stop()
+        if let handle = self.playbackHandle {
+            await handle.stop()
+            self.playbackHandle = nil
         }
         if let sampleRate = self.session?.outputSampleRateHz {
-            self.startPlayback(sampleRate: sampleRate)
-        }
-    }
-
-    private func scheduleMarkAck(relaySessionId: String) {
-        let delay = max(0, self.outputCursorUptime - ProcessInfo.processInfo.systemUptime)
-        let token = UUID()
-        let task = Task { [weak self] in
-            let nanoseconds = UInt64(delay * 1_000_000_000)
-            if nanoseconds > 0 {
-                try? await Task.sleep(nanoseconds: nanoseconds)
-            }
-            guard !Task.isCancelled else { return }
-            await self?.sendMark(relaySessionId: relaySessionId)
-        }
-        self.scheduledMarkTasks[token] = task
-    }
-
-    private func cancelScheduledMarks() {
-        for task in self.scheduledMarkTasks.values {
-            task.cancel()
-        }
-        self.scheduledMarkTasks.removeAll(keepingCapacity: false)
-    }
-
-    private func sendMark(relaySessionId: String) async {
-        self.scheduledMarkTasks = self.scheduledMarkTasks.filter { !$0.value.isCancelled }
-        let payload: [String: Any] = [
-            "relaySessionId": relaySessionId,
-        ]
-        do {
-            _ = try await self.request("talk.realtime.relayMark", Self.jsonString(from: payload), 10)
-        } catch {
-            self.logger.error("realtime relay mark failed: \(error.localizedDescription, privacy: .public)")
+            await self.startPlayback(sampleRate: sampleRate)
         }
     }
 
@@ -440,29 +464,38 @@ public actor CanvasRealtimeTalkBridge {
     private func handleToolCall(_ call: RelayToolCallEvent, relaySessionId: String) async {
         guard call.name == "openclaw_agent_consult" else {
             await self.submitToolResult(
-                relaySessionId: relaySessionId,
+                sessionId: self.session?.sessionId ?? relaySessionId,
                 callId: call.callId,
                 result: ["error": "Tool \"\(call.name)\" is not available in native realtime talk."])
             return
         }
 
         do {
-            let payload = Self.consultPayload(
+            let payload = Self.toolCallPayload(
                 sessionKey: self.session?.sessionKey,
-                args: call.args?.foundationValue,
-                transcript: self.transcriptEntries.map { ["role": $0.role, "text": $0.text] })
+                callId: call.callId,
+                relaySessionId: relaySessionId,
+                args: call.args?.foundationValue)
             let data = try await self.request(
-                "talk.realtime.consult",
+                "talk.client.toolCall",
                 Self.jsonString(from: payload),
                 45)
-            let result = try self.decoder.decode(RelayConsultResult.self, from: data)
+            let response = try self.decoder.decode(ToolCallResponse.self, from: data)
+            let runId = Self.trimmedNonEmpty(response.runId) ?? Self.trimmedNonEmpty(response.idempotencyKey)
+            guard let runId else {
+                throw NSError(
+                    domain: "CanvasRealtimeTalkBridge",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "OpenClaw realtime tool call did not return a run id"])
+            }
+            let result = try await self.waitForChatResult(runId: runId, timeoutSeconds: 120)
             await self.submitToolResult(
-                relaySessionId: relaySessionId,
+                sessionId: self.session?.sessionId ?? relaySessionId,
                 callId: call.callId,
-                result: ["result": result.result])
+                result: ["result": result])
         } catch {
             await self.submitToolResult(
-                relaySessionId: relaySessionId,
+                sessionId: self.session?.sessionId ?? relaySessionId,
                 callId: call.callId,
                 result: ["error": error.localizedDescription])
         }
@@ -488,15 +521,109 @@ public actor CanvasRealtimeTalkBridge {
         return payload
     }
 
-    private func submitToolResult(relaySessionId: String, callId: String, result: [String: Any]) async {
-        let payload: [String: Any] = [
+    private static func toolCallPayload(
+        sessionKey: String?,
+        callId: String,
+        relaySessionId: String,
+        args: Any?)
+        -> [String: Any]
+    {
+        var payload: [String: Any] = [
+            "callId": callId,
+            "name": "openclaw_agent_consult",
             "relaySessionId": relaySessionId,
+            "args": args ?? [:],
+        ]
+        let trimmedSessionKey = sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedSessionKey.isEmpty {
+            payload["sessionKey"] = trimmedSessionKey
+        }
+        return payload
+    }
+
+    private func waitForChatResult(runId: String, timeoutSeconds: Double) async throws -> String {
+        let stream = await self.events()
+        return try await AsyncTimeout.withTimeout(
+            seconds: timeoutSeconds,
+            onTimeout: {
+                NSError(
+                    domain: "CanvasRealtimeTalkBridge",
+                    code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "OpenClaw tool call timed out"])
+            },
+            operation: {
+                for await event in stream {
+                    guard event.event == "chat",
+                          let payload = event.payload,
+                          let chatPayload = try? GatewayPayloadDecoding.decode(payload, as: ChatEventPayload.self),
+                          chatPayload.runId == runId
+                    else {
+                        continue
+                    }
+
+                    switch chatPayload.state?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+                    case "final":
+                        return Self.extractTextFromChatMessage(chatPayload.message) ?? "OpenClaw finished with no text."
+                    case "aborted":
+                        throw NSError(
+                            domain: "CanvasRealtimeTalkBridge",
+                            code: 4,
+                            userInfo: [NSLocalizedDescriptionKey: chatPayload.errorMessage ?? "OpenClaw tool call aborted"])
+                    case "error":
+                        throw NSError(
+                            domain: "CanvasRealtimeTalkBridge",
+                            code: 5,
+                            userInfo: [NSLocalizedDescriptionKey: chatPayload.errorMessage ?? "OpenClaw tool call failed"])
+                    default:
+                        continue
+                    }
+                }
+
+                throw NSError(
+                    domain: "CanvasRealtimeTalkBridge",
+                    code: 6,
+                    userInfo: [NSLocalizedDescriptionKey: "OpenClaw tool call finished without a final chat event"])
+            })
+    }
+
+    private static func extractTextFromChatMessage(_ message: AnyCodable?) -> String? {
+        guard let message else { return nil }
+        guard let dict = message.dictionaryValue else { return nil }
+
+        if let text = dict["text"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !text.isEmpty
+        {
+            return text
+        }
+
+        guard let content = dict["content"]?.arrayValue else { return nil }
+        let parts = content.compactMap { item -> String? in
+            guard let block = item.dictionaryValue,
+                  block["type"]?.stringValue == "text",
+                  let text = block["text"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty
+            else {
+                return nil
+            }
+            return text
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
+    }
+
+    private static func trimmedNonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func submitToolResult(sessionId: String, callId: String, result: [String: Any]) async {
+        let payload: [String: Any] = [
+            "sessionId": sessionId,
             "callId": callId,
             "result": result,
         ]
         do {
             let data = try await self.request(
-                "talk.realtime.relayToolResult",
+                "talk.session.submitToolResult",
                 Self.jsonString(from: payload),
                 30)
             _ = try? self.decoder.decode(RelayOkResult.self, from: data)
@@ -506,14 +633,13 @@ public actor CanvasRealtimeTalkBridge {
     }
 
     private func stopInternally(sendStopRequest: Bool) async {
-        let relaySessionId = self.session?.relaySessionId
-        self.cancelScheduledMarks()
+        let sessionId = self.session?.sessionId
         self.eventTask?.cancel()
         self.eventTask = nil
-        self.inputEngine?.inputNode.removeTap(onBus: 0)
-        self.inputEngine?.stop()
-        self.inputEngine = nil
-        self.inputEncoder = nil
+        if let handle = self.captureHandle {
+            await handle.stop()
+            self.captureHandle = nil
+        }
         await self.clearOutput()
         self.transcriptEntries.removeAll(keepingCapacity: false)
         self.session = nil
@@ -522,12 +648,12 @@ public actor CanvasRealtimeTalkBridge {
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
         #endif
 
-        guard sendStopRequest, let relaySessionId else { return }
+        guard sendStopRequest, let sessionId else { return }
         let payload: [String: Any] = [
-            "relaySessionId": relaySessionId,
+            "sessionId": sessionId,
         ]
         do {
-            _ = try await self.request("talk.realtime.relayStop", Self.jsonString(from: payload), 10)
+            _ = try await self.request("talk.session.close", Self.jsonString(from: payload), 10)
         } catch {
             self.logger.error("realtime relay stop failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -535,12 +661,13 @@ public actor CanvasRealtimeTalkBridge {
 
     private func decodeRelayEvent(_ payload: AnyCodable) -> RelayEvent? {
         guard let dict = payload.dictionaryValue,
-              dict["relaySessionId"]?.stringValue?.isEmpty == false,
+              (dict["relaySessionId"]?.stringValue?.isEmpty == false ||
+                  dict["sessionId"]?.stringValue?.isEmpty == false),
               let type = dict["type"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
         else {
             return nil
         }
-        let relaySessionId = dict["relaySessionId"]?.stringValue ?? ""
+        let relaySessionId = dict["relaySessionId"]?.stringValue ?? dict["sessionId"]?.stringValue ?? ""
         switch type {
         case "ready":
             return RelayEvent(relaySessionId: relaySessionId, kind: .ready)
@@ -640,6 +767,44 @@ public actor CanvasRealtimeTalkBridge {
         #else
         return true
         #endif
+    }
+
+    private static func makeLiveCaptureHandle(
+        sampleRate: Double,
+        onChunk: @escaping @Sendable (Data) async -> Void) throws -> CaptureHandle
+    {
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        let encoder = try RealtimePCM16Encoder(sourceFormat: format, targetSampleRate: sampleRate)
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
+            guard let data = encoder.encode(buffer), !data.isEmpty else { return }
+            Task {
+                await onChunk(data)
+            }
+        }
+        engine.prepare()
+        try engine.start()
+        return CaptureHandle {
+            input.removeTap(onBus: 0)
+            engine.stop()
+        }
+    }
+
+    private static func makeLivePlaybackHandle(
+        sampleRate: Double,
+        stream: AsyncThrowingStream<Data, Error>) async -> PlaybackHandle
+    {
+        let task = Task { @MainActor in
+            _ = await PCMStreamingAudioPlayer.shared.play(stream: stream, sampleRate: sampleRate)
+        }
+        return PlaybackHandle {
+            task.cancel()
+            await MainActor.run {
+                _ = PCMStreamingAudioPlayer.shared.stop()
+            }
+        }
     }
 }
 

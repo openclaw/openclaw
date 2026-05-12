@@ -34,7 +34,7 @@ select_identity() {
 
   # Prefer a Developer ID Application cert.
   preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Developer ID Application/ { print $2; exit }')"
+    | awk '/Developer ID Application/ { print $2; exit }')"
 
   if [ -n "$preferred" ]; then
     echo "$preferred"
@@ -43,7 +43,7 @@ select_identity() {
 
   # Next, try Apple Distribution.
   preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Distribution/ { print $2; exit }')"
+    | awk '/Apple Distribution/ { print $2; exit }')"
   if [ -n "$preferred" ]; then
     echo "$preferred"
     return
@@ -51,7 +51,7 @@ select_identity() {
 
   # Then, try Apple Development.
   preferred="$(security find-identity -p codesigning -v 2>/dev/null \
-    | awk -F'\"' '/Apple Development/ { print $2; exit }')"
+    | awk '/Apple Development/ { print $2; exit }')"
   if [ -n "$preferred" ]; then
     echo "$preferred"
     return
@@ -59,7 +59,7 @@ select_identity() {
 
   # Fallback to the first valid signing identity.
   available="$(security find-identity -p codesigning -v 2>/dev/null \
-    | sed -n 's/.*\"\\(.*\\)\"/\\1/p')"
+    | awk '/[0-9A-F]{40}/ { print $2 }')"
 
   if [ -n "$available" ]; then
     first="$(printf '%s\n' "$available" | head -n1)"

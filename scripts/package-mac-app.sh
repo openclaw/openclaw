@@ -16,6 +16,7 @@ PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/
 BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || echo "0")
+XCODE_SWIFT_TOOLCHAIN_RPATH="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx"
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
 APP_BUILD="${APP_BUILD:-}"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
@@ -125,6 +126,15 @@ merge_framework_machos() {
   done < <(find "$primary" -type f -print0)
 }
 
+remove_rpath_if_present() {
+  local binary="$1"
+  local rpath="$2"
+
+  if /usr/bin/otool -l "$binary" | /usr/bin/grep -Fq "$rpath"; then
+    /usr/bin/install_name_tool -delete_rpath "$rpath" "$binary"
+  fi
+}
+
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install)"
   (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
@@ -215,6 +225,7 @@ fi
 chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
+remove_rpath_if_present "$APP_ROOT/Contents/MacOS/OpenClaw" "$XCODE_SWIFT_TOOLCHAIN_RPATH"
 
 echo "🚚 Copying MLX TTS helper"
 cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
@@ -227,6 +238,7 @@ if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
 fi
 chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
+remove_rpath_if_present "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" "$XCODE_SWIFT_TOOLCHAIN_RPATH"
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
