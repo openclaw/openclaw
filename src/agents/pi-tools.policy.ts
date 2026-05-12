@@ -120,10 +120,10 @@ export function resolveSubagentToolPolicyForSession(
     cfg,
     store,
   });
-  const inheritedToolDeny = resolveStoredSubagentInheritedToolDenylist(sessionKey, {
-    cfg,
+  const inheritedToolDenyPolicy = resolveInheritedToolDenyPolicyForSession(cfg, sessionKey, {
     store,
   });
+  const inheritedToolDeny = inheritedToolDenyPolicy?.deny ?? [];
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
   const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
   const explicitAllow = new Set(
@@ -138,6 +138,20 @@ export function resolveSubagentToolPolicyForSession(
   ];
   const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
   return { allow: mergedAllow, deny };
+}
+
+export function resolveInheritedToolDenyPolicyForSession(
+  cfg: OpenClawConfig | undefined,
+  sessionKey: string | undefined | null,
+  opts?: {
+    store?: SessionCapabilityStore;
+  },
+): SandboxToolPolicy | undefined {
+  const inheritedToolDeny = resolveStoredSubagentInheritedToolDenylist(sessionKey, {
+    cfg,
+    store: opts?.store,
+  });
+  return inheritedToolDeny.length > 0 ? { deny: inheritedToolDeny } : undefined;
 }
 
 export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {

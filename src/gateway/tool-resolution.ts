@@ -3,6 +3,7 @@ import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
+  resolveInheritedToolDenyPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../agents/pi-tools.policy.js";
 import {
@@ -81,6 +82,13 @@ export function resolveGatewayScopedTools(params: {
         store: subagentStore,
       })
     : undefined;
+  const inheritedToolDenyPolicy = resolveInheritedToolDenyPolicyForSession(
+    params.cfg,
+    params.sessionKey,
+    {
+      store: subagentStore,
+    },
+  );
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
   const surface = params.surface ?? "http";
   const gatewayToolsCfg = params.cfg.gateway?.tools;
@@ -101,6 +109,7 @@ export function resolveGatewayScopedTools(params: {
     agentProviderPolicy,
     groupPolicy,
     subagentPolicy,
+    inheritedToolDenyPolicy,
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
     excludedToolNames.length > 0 ? { deny: excludedToolNames } : undefined,
@@ -154,6 +163,7 @@ export function resolveGatewayScopedTools(params: {
         agentId,
       }),
       { policy: subagentPolicy, label: "subagent tools.allow" },
+      { policy: inheritedToolDenyPolicy, label: "inherited tools.deny" },
     ],
   });
 

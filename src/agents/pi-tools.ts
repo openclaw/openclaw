@@ -38,6 +38,7 @@ import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
+  resolveInheritedToolDenyPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
 import {
@@ -553,6 +554,13 @@ export function createOpenClawCodingTools(options?: {
           store: subagentStore,
         })
       : undefined;
+  const inheritedToolDenyPolicy = resolveInheritedToolDenyPolicyForSession(
+    options?.config,
+    options?.sessionKey,
+    {
+      store: subagentStore,
+    },
+  );
   const globalPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(globalPolicy);
   const globalProviderPolicyWithToolSearchControls =
     mergeToolSearchControlAllowlist(globalProviderPolicy);
@@ -758,6 +766,7 @@ export function createOpenClawCodingTools(options?: {
     senderPolicy,
     sandboxToolPolicy,
     subagentPolicy,
+    inheritedToolDenyPolicy,
   ]);
   const pluginToolsOnly =
     includeOpenClawTools || !includePluginTools
@@ -961,6 +970,7 @@ export function createOpenClawCodingTools(options?: {
       }),
       { policy: sandboxToolPolicyWithToolSearchControls, label: "sandbox tools.allow" },
       { policy: subagentPolicyWithToolSearchControls, label: "subagent tools.allow" },
+      { policy: inheritedToolDenyPolicy, label: "inherited tools.deny" },
     ],
   });
   options?.recordToolPrepStage?.("authorization-policy");
