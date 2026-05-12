@@ -282,6 +282,7 @@ Control how group/room messages are handled per channel:
     - Telegram allowlist can match user IDs (`"123456789"`, `"telegram:123456789"`, `"tg:123456789"`) or usernames (`"@alice"` or `"alice"`); prefixes are case-insensitive.
     - Default is `groupPolicy: "allowlist"`; if your group allowlist is empty, group messages are blocked.
     - Runtime safety: when a provider block is completely missing (`channels.<provider>` absent), group policy falls back to a fail-closed mode (typically `allowlist`) instead of inheriting `channels.defaults.groupPolicy`.
+    - When you set `groupPolicy: "open"` explicitly, entries under `channels.<provider>.groups` act as per-group overrides (for example a single room with `requireMention: false`) and do not turn every other group into a blocked outsider. Omit `groupPolicy` (or set it to `"allowlist"`) if you want a populated `groups` dictionary to behave as an implicit allowlist.
 
   </Accordion>
 </AccordionGroup>
