@@ -44,7 +44,7 @@ describe("isAllowedParsedChatSender", () => {
     ).toBe(true);
   });
 
-  it("does not match conversation targets unless explicitly enabled", () => {
+  it("matches conversation targets by default and can disable them", () => {
     for (const entry of ["chat_id:123", "chat_guid:thread-123", "chat_identifier:team"]) {
       expect(
         isAllowedParsedChatSender({
@@ -56,7 +56,7 @@ describe("isAllowedParsedChatSender", () => {
           normalizeSender,
           parseAllowTarget,
         }),
-      ).toBe(false);
+      ).toBe(true);
 
       expect(
         isAllowedParsedChatSender({
@@ -65,11 +65,11 @@ describe("isAllowedParsedChatSender", () => {
           chatId: 123,
           chatGuid: "thread-123",
           chatIdentifier: "team",
-          allowConversationTargets: true,
+          allowConversationTargets: false,
           normalizeSender,
           parseAllowTarget,
         }),
-      ).toBe(true);
+      ).toBe(false);
     }
   });
 });

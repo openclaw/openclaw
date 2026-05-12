@@ -81,7 +81,7 @@ type ParsedChatAllowTarget =
   | { kind: "chat_identifier"; chatIdentifier: string }
   | { kind: "handle"; handle: string };
 
-/** Match allowlist entries against senders, with conversation targets requiring explicit opt-in. */
+/** Match allowlist entries against senders and conversation targets unless explicitly disabled. */
 export function isAllowedParsedChatSender(params: {
   allowFrom: Array<string | number>;
   sender: string;

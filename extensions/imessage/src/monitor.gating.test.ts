@@ -516,6 +516,30 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(allowed.kind).toBe("dispatch");
   });
 
+  it("uses legacy conversation allowFrom entries for group admission", async () => {
+    const cfg = baseCfg();
+    cfg.channels ??= {};
+    cfg.channels.imessage ??= {};
+    cfg.channels.imessage.groupPolicy = "allowlist";
+
+    const { decision } = await resolveDispatchDecision({
+      cfg,
+      message: {
+        id: 35,
+        chat_id: 101,
+        sender: "+15550003333",
+        is_from_me: false,
+        text: "@openclaw ok",
+        is_group: true,
+      },
+      allowFrom: ["chat_id:101"],
+      groupAllowFrom: [],
+      groupPolicy: "allowlist",
+    });
+
+    expect(decision.kind).toBe("dispatch");
+  });
+
   it("does not authorize group control commands from conversation allowlist entries", async () => {
     const cfg = baseCfg();
     cfg.channels ??= {};
@@ -538,6 +562,38 @@ describe("imessage monitor gating + envelope builders", () => {
       bodyText: "/status",
       allowFrom: [],
       groupAllowFrom: ["chat_id:101"],
+      groupPolicy: "allowlist",
+      dmPolicy: "pairing",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "control command (unauthorized)" });
+  });
+
+  it("does not authorize group control commands from legacy conversation allowFrom entries", async () => {
+    const cfg = baseCfg();
+    cfg.channels ??= {};
+    cfg.channels.imessage ??= {};
+    cfg.channels.imessage.groupPolicy = "allowlist";
+
+    const decision = await resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: {
+        id: 36,
+        chat_id: 101,
+        sender: "+15550003333",
+        is_from_me: false,
+        text: "/status",
+        is_group: true,
+      },
+      opts: {},
+      messageText: "/status",
+      bodyText: "/status",
+      allowFrom: ["chat_id:101"],
+      groupAllowFrom: [],
       groupPolicy: "allowlist",
       dmPolicy: "pairing",
       storeAllowFrom: [],

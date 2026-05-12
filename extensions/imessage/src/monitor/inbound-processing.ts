@@ -175,6 +175,26 @@ const matchIMessageIngressEntry: NonNullable<ChannelIngressIdentityDescriptor["m
   return undefined;
 };
 
+function isIMessageConversationAllowTarget(entry: string): boolean {
+  const parsed = parseIMessageAllowTarget(entry);
+  return (
+    parsed.kind === "chat_id" || parsed.kind === "chat_guid" || parsed.kind === "chat_identifier"
+  );
+}
+
+function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
+  groupAllowFrom: string[];
+  allowFrom: string[];
+}): string[] {
+  const legacyChatTargets = params.allowFrom.filter((entry) =>
+    isIMessageConversationAllowTarget(entry),
+  );
+  if (legacyChatTargets.length === 0) {
+    return params.groupAllowFrom;
+  }
+  return Array.from(new Set([...params.groupAllowFrom, ...legacyChatTargets]));
+}
+
 const imessageIngressIdentity = defineStableChannelIngressIdentity({
   key: "imessage-sender",
   normalizeEntry: normalizeIMessageHandleEntry,
@@ -532,6 +552,12 @@ export async function resolveIMessageInboundDecision(params: {
 
   const groupId = isGroup ? groupIdCandidate : undefined;
   const hasControlCommandInMessage = hasControlCommand(messageText, params.cfg);
+  const groupAllowFromForAccess = isGroup
+    ? mergeIMessageGroupAllowFromWithLegacyChatTargets({
+        groupAllowFrom: params.groupAllowFrom,
+        allowFrom: params.allowFrom,
+      })
+    : params.groupAllowFrom;
   const accessDecision = await createChannelIngressResolver({
     channelId: "imessage",
     accountId: params.accountId,
@@ -557,7 +583,7 @@ export async function resolveIMessageInboundDecision(params: {
     groupPolicy: normalizeGroupPolicy(params.groupPolicy),
     policy: { groupAllowFromFallbackToAllowFrom: false },
     allowFrom: params.allowFrom,
-    groupAllowFrom: params.groupAllowFrom,
+    groupAllowFrom: groupAllowFromForAccess,
     command: {
       allowTextCommands: isGroup,
       hasControlCommand: hasControlCommandInMessage,
@@ -737,7 +763,7 @@ export async function resolveIMessageInboundDecision(params: {
     accountId: params.accountId,
   });
   const replyContextAllowFrom = Array.from(
-    new Set([...params.groupAllowFrom, ...effectiveGroupAllowFrom]),
+    new Set([...groupAllowFromForAccess, ...effectiveGroupAllowFrom]),
   );
   const replySenderAllowed =
     !isGroup || replyContextAllowFrom.length === 0
