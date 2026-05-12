@@ -6,6 +6,16 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- fix(auth): prevent bootstrap pairing scope changes [AI]. (#80976) Thanks @pgondhi987.
+- Validate Control UI loopback retry endpoints [AI]. (#80900) Thanks @pgondhi987.
+- Harden exported markdown link rendering [AI]. (#80902) Thanks @pgondhi987.
+- fix(gateway): honor minimal discovery mode for wide-area DNS-SD [AI]. (#80903) Thanks @pgondhi987.
+- slack: enforce reaction notification policy [AI]. (#80907) Thanks @pgondhi987.
+- Enforce gateway command scopes by caller context [AI]. (#80891) Thanks @pgondhi987.
+- Enforce Slack plugin approval button authorization [AI]. (#80899) Thanks @pgondhi987.
+- Recognize PowerShell -ec inline commands [AI]. (#80893) Thanks @pgondhi987.
+- fix(qqbot): authorize approval button callbacks [AI]. (#80892) Thanks @pgondhi987.
+- Telegram: render supported HTML tags in streamed and durable replies instead of showing literal markup. (#80977)
 - Scrub streamable MCP redirect headers [AI]. (#80906) Thanks @pgondhi987.
 - fix(memory-wiki): require admin scope for ingest [AI]. (#80897) Thanks @pgondhi987.
 - memory-wiki: require write scope for Obsidian search [AI]. (#80904) Thanks @pgondhi987.
