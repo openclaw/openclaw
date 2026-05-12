@@ -34,6 +34,7 @@ const CODEX_PLUGIN_NATIVE_CONFIG_PATH = [
   "codexPlugins",
 ] as const;
 const MIGRATION_REASON_PLUGIN_EXISTS = "plugin exists";
+const CODEX_PLUGIN_SOURCE_APP_VERIFICATION_UNVERIFIED = "not_run";
 
 export type CodexPluginMigrationConfigEntry = {
   configKey: string;
@@ -181,6 +182,9 @@ function buildPluginItems(
             pluginName: plugin.pluginName,
             sourceInstalled: plugin.installed === true,
             sourceEnabled: plugin.enabled === true,
+            ...(plugin.apps && plugin.apps.length > 0 && !shouldVerifyPluginApps(ctx)
+              ? { sourceAppVerification: CODEX_PLUGIN_SOURCE_APP_VERIFICATION_UNVERIFIED }
+              : {}),
           },
         }),
       );
@@ -224,6 +228,10 @@ function buildPluginItems(
     );
   }
   return items;
+}
+
+function shouldVerifyPluginApps(ctx: MigrationProviderContext): boolean {
+  return ctx.providerOptions?.verifyPluginApps === true;
 }
 
 export function readCodexPluginMigrationConfigEntry(
@@ -380,6 +388,7 @@ export async function buildCodexMigrationPlan(
   const source = await discoverCodexSource({
     input: ctx.source,
     evaluatePluginMigrationEligibility: true,
+    verifyPluginApps: shouldVerifyPluginApps(ctx),
   });
   if (!hasCodexSource(source)) {
     throw new Error(
@@ -423,6 +432,13 @@ export async function buildCodexMigrationPlan(
     ...(source.plugins.some((plugin) => plugin.migratable)
       ? [
           "Codex source-installed openai-curated plugins are planned for native activation; cached plugin bundles remain manual-review only.",
+        ]
+      : []),
+    ...(source.plugins.some(
+      (plugin) => plugin.migratable && plugin.apps && plugin.apps.length > 0,
+    ) && !shouldVerifyPluginApps(ctx)
+      ? [
+          "Codex app-backed plugins were planned without source app accessibility verification. Re-run with --verify-plugin-apps to force a fresh source app/list check before planning native plugin activation.",
         ]
       : []),
     ...(source.plugins.some((plugin) => plugin.sourceKind === "cache")

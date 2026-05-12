@@ -40,6 +40,7 @@ function makeContext(params: {
   stateDir: string;
   workspaceDir: string;
   overwrite?: boolean;
+  verifyPluginApps?: boolean;
   reportDir?: string;
   config?: MigrationProviderContext["config"];
   runtime?: MigrationProviderContext["runtime"];
@@ -58,6 +59,7 @@ function makeContext(params: {
     source: params.source,
     stateDir: params.stateDir,
     overwrite: params.overwrite,
+    providerOptions: params.verifyPluginApps ? { verifyPluginApps: true } : undefined,
     reportDir: params.reportDir,
     logger,
   };
@@ -174,6 +176,7 @@ describe("buildCodexMigrationProvider", () => {
         source: fixture.codexHome,
         stateDir: fixture.stateDir,
         workspaceDir: fixture.workspaceDir,
+        verifyPluginApps: true,
       }),
     );
 
@@ -230,6 +233,7 @@ describe("buildCodexMigrationProvider", () => {
         source: fixture.codexHome,
         stateDir: fixture.stateDir,
         workspaceDir: fixture.workspaceDir,
+        verifyPluginApps: true,
       }),
     );
 
@@ -296,6 +300,7 @@ describe("buildCodexMigrationProvider", () => {
         source: fixture.codexHome,
         stateDir: fixture.stateDir,
         workspaceDir: fixture.workspaceDir,
+        verifyPluginApps: true,
       }),
     );
 
@@ -324,6 +329,52 @@ describe("buildCodexMigrationProvider", () => {
     ]);
     expect(appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/list")).toHaveLength(
       1,
+    );
+  });
+
+  it("plans app-backed plugins without source app/list by default", async () => {
+    const fixture = await createCodexFixture();
+    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("gmail", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginRead("gmail", [pluginApp("app-gmail", { name: "Gmail", needsAuth: true })]);
+      }
+      if (method === "account/read") {
+        return chatGptAccount();
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+      }),
+    );
+
+    expectRecordFields(findItem(plan.items, "plugin:gmail"), {
+      kind: "plugin",
+      action: "install",
+      status: "planned",
+    });
+    expectRecordFields(findItem(plan.items, "config:codex-plugins"), {
+      kind: "config",
+      action: "merge",
+      status: "planned",
+    });
+    expect(plan.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "Codex app-backed plugins were planned without source app accessibility verification",
+        ),
+      ]),
+    );
+    expect(appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/list")).toHaveLength(
+      0,
     );
   });
 
@@ -428,7 +479,7 @@ describe("buildCodexMigrationProvider", () => {
     );
   });
 
-  it("falls through to app inventory when source account read fails", async () => {
+  it("falls through to app inventory when source account read fails and app verification is requested", async () => {
     const fixture = await createCodexFixture();
     appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
       if (method === "plugin/list") {
@@ -452,6 +503,7 @@ describe("buildCodexMigrationProvider", () => {
         source: fixture.codexHome,
         stateDir: fixture.stateDir,
         workspaceDir: fixture.workspaceDir,
+        verifyPluginApps: true,
       }),
     );
 
@@ -462,6 +514,45 @@ describe("buildCodexMigrationProvider", () => {
     });
     expect(appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/list")).toHaveLength(
       1,
+    );
+  });
+
+  it("skips app-backed plugins by default when source account read fails", async () => {
+    const fixture = await createCodexFixture();
+    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("gmail", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginRead("gmail", [pluginApp("app-gmail", { name: "Gmail", needsAuth: true })]);
+      }
+      if (method === "account/read") {
+        throw new Error("account unavailable");
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+      }),
+    );
+
+    expect(plan.items.some((item) => item.id === "plugin:gmail")).toBe(false);
+    expect(plan.items.some((item) => item.id === "config:codex-plugins")).toBe(false);
+    const manualItem = findItemByReason(plan.items, "codex_account_unavailable");
+    expectRecordFields(manualItem, {
+      kind: "manual",
+      action: "manual",
+      reason: "codex_account_unavailable",
+      status: "skipped",
+    });
+    expectRecordFields(manualItem.details, { error: "account unavailable" });
+    expect(appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/list")).toHaveLength(
+      0,
     );
   });
 
@@ -491,6 +582,7 @@ describe("buildCodexMigrationProvider", () => {
         source: fixture.codexHome,
         stateDir: fixture.stateDir,
         workspaceDir: fixture.workspaceDir,
+        verifyPluginApps: true,
         config: {
           agents: {
             defaults: {
@@ -558,6 +650,7 @@ describe("buildCodexMigrationProvider", () => {
         source: fixture.codexHome,
         stateDir: fixture.stateDir,
         workspaceDir: fixture.workspaceDir,
+        verifyPluginApps: true,
       }),
     );
 
@@ -622,6 +715,7 @@ describe("buildCodexMigrationProvider", () => {
         source: fixture.codexHome,
         stateDir: fixture.stateDir,
         workspaceDir: fixture.workspaceDir,
+        verifyPluginApps: true,
       }),
     );
 
@@ -656,6 +750,7 @@ describe("buildCodexMigrationProvider", () => {
         source: fixture.codexHome,
         stateDir: fixture.stateDir,
         workspaceDir: fixture.workspaceDir,
+        verifyPluginApps: true,
       }),
     );
 
@@ -697,6 +792,7 @@ describe("buildCodexMigrationProvider", () => {
         source: fixture.codexHome,
         stateDir: fixture.stateDir,
         workspaceDir: fixture.workspaceDir,
+        verifyPluginApps: true,
       }),
     );
 
@@ -734,6 +830,7 @@ describe("buildCodexMigrationProvider", () => {
         source: fixture.codexHome,
         stateDir: fixture.stateDir,
         workspaceDir: fixture.workspaceDir,
+        verifyPluginApps: true,
       }),
     );
 

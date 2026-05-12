@@ -42,6 +42,7 @@ export type CodexPluginSource = {
   pluginName?: string;
   installed?: boolean;
   enabled?: boolean;
+  apps?: CodexPluginMigrationAppFact[];
   migrationBlock?: CodexPluginMigrationBlock;
   message?: string;
 };
@@ -49,6 +50,7 @@ export type CodexPluginSource = {
 export type CodexPluginMigrationBlockCode =
   | "plugin_disabled"
   | "codex_subscription_required"
+  | "codex_account_unavailable"
   | "plugin_read_unavailable"
   | "app_inventory_unavailable"
   | "app_inaccessible"
@@ -93,6 +95,7 @@ type CodexSource = {
 type CodexSourceDiscoveryOptions = {
   input?: string;
   evaluatePluginMigrationEligibility?: boolean;
+  verifyPluginApps?: boolean;
 };
 
 type SourceAppServerRequestOptions = {
@@ -223,6 +226,7 @@ async function discoverInstalledCuratedPlugins(
             plugins,
             marketplace: marketplaceRef(marketplace),
             requestOptions,
+            verifyPluginApps: options.verifyPluginApps === true,
           })
         : plugins;
     const sorted = withEligibility.toSorted((a, b) =>
@@ -297,6 +301,7 @@ async function withPluginMigrationEligibility(params: {
   plugins: CodexPluginSource[];
   marketplace: CodexPluginMarketplaceRef;
   requestOptions: SourceAppServerRequestOptions;
+  verifyPluginApps: boolean;
 }): Promise<CodexPluginSource[]> {
   const pending: Array<{ plugin: CodexPluginSource; apps: CodexPluginMigrationAppFact[] }> = [];
   const evaluated: CodexPluginSource[] = [];
@@ -341,7 +346,23 @@ async function withPluginMigrationEligibility(params: {
     return evaluated;
   }
 
-  const sourceAccount = await readSourceCodexAccount(params.requestOptions).catch(() => undefined);
+  let sourceAccount: Awaited<ReturnType<typeof readSourceCodexAccount>> | undefined;
+  try {
+    sourceAccount = await readSourceCodexAccount(params.requestOptions);
+  } catch (error) {
+    if (!params.verifyPluginApps) {
+      const message = error instanceof Error ? error.message : String(error);
+      for (const { plugin, apps } of pending) {
+        evaluated.push({
+          ...plugin,
+          migratable: false,
+          migrationBlock: { code: "codex_account_unavailable", apps, error: message },
+          message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but the source Codex app-server account could not be read: ${message}`,
+        });
+      }
+      return evaluated;
+    }
+  }
   if (sourceAccount && sourceAccount !== "chatgpt") {
     for (const { plugin, apps } of pending) {
       evaluated.push({
@@ -349,6 +370,17 @@ async function withPluginMigrationEligibility(params: {
         migratable: false,
         migrationBlock: { code: "codex_subscription_required", apps },
         message: codexSubscriptionRequiredMessage(plugin),
+      });
+    }
+    return evaluated;
+  }
+
+  if (!params.verifyPluginApps) {
+    for (const { plugin, apps } of pending) {
+      evaluated.push({
+        ...plugin,
+        apps,
+        migratable: true,
       });
     }
     return evaluated;
@@ -381,7 +413,7 @@ async function withPluginMigrationEligibility(params: {
       .toSorted((left, right) => left.id.localeCompare(right.id));
     const blockCode = migrationBlockCodeForApps(apps);
     if (!blockCode) {
-      evaluated.push({ ...plugin, migratable: true });
+      evaluated.push({ ...plugin, apps, migratable: true });
       continue;
     }
     evaluated.push({

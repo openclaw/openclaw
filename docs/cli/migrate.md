@@ -22,6 +22,7 @@ openclaw migrate claude --dry-run
 openclaw migrate codex --dry-run
 openclaw migrate codex --skill gog-vault77-google-workspace
 openclaw migrate codex --plugin google-calendar --dry-run
+openclaw migrate codex --plugin google-calendar --verify-plugin-apps --dry-run
 openclaw migrate hermes --dry-run
 openclaw migrate hermes
 openclaw migrate apply codex --yes --skill gog-vault77-google-workspace
@@ -58,6 +59,9 @@ openclaw onboard --import-from hermes --import-source ~/.hermes
 </ParamField>
 <ParamField path="--plugin <name>" type="string">
   Select one Codex plugin install item by plugin name or item id. Repeat the flag to migrate multiple Codex plugins. When omitted, interactive Codex migrations show a native Codex plugin checkbox selector and non-interactive migrations keep all planned plugins. This only applies to source-installed `openai-curated` Codex plugins discovered by the Codex app-server inventory.
+</ParamField>
+<ParamField path="--verify-plugin-apps" type="boolean">
+  Codex only. Force a fresh source Codex app-server `app/list` traversal before planning native plugin activation. Off by default to keep migration planning fast.
 </ParamField>
 <ParamField path="--no-backup" type="boolean">
   Skip the pre-apply backup. Requires `--force` when local OpenClaw state exists.
@@ -157,13 +161,20 @@ openclaw migrate apply codex --yes --plugin google-calendar
   OpenClaw agent workspace when you want per-agent ownership.
 - Source-installed `openai-curated` Codex plugins discovered through Codex
   app-server `plugin/list`. Planning reads `plugin/read` for each enabled
-  installed plugin. App-backed plugins are migratable only when the source Codex
-  app-server account is logged in with ChatGPT subscription auth and a fresh
-  source `app/list` snapshot reports every owned app as present, enabled, and
-  accessible. Disabled plugins, unreadable plugin details, subscription-gated
-  source accounts, missing apps, disabled apps, inaccessible apps, and source app
-  inventory failures become manual skipped items with typed reasons instead of
-  target config entries.
+  installed plugin. App-backed plugins require the source Codex app-server
+  account response to be a ChatGPT subscription account; non-ChatGPT or missing
+  account responses are skipped with `codex_subscription_required`. By default,
+  migration does not call source `app/list`, so app-backed plugins that pass the
+  account gate are planned without source app accessibility verification, and
+  account lookup transport failures skip with `codex_account_unavailable`. Pass
+  `--verify-plugin-apps` when you want migration to force a fresh source
+  `app/list` snapshot and require every owned app to be present, enabled, and
+  accessible before planning native activation. In that mode, account lookup
+  transport failures fall through to source app inventory verification. Disabled
+  plugins, unreadable plugin details, subscription-gated source accounts, and,
+  when verification is requested, missing apps, disabled apps, inaccessible
+  apps, or source app inventory failures become manual skipped items with typed
+  reasons instead of target config entries.
   Apply calls app-server `plugin/install` for each selected eligible plugin,
   even if the target app-server already reports that plugin as installed and
   enabled. Migrated Codex plugins are usable only in sessions that select the
@@ -174,9 +185,10 @@ openclaw migrate apply codex --yes --plugin google-calendar
 
 Codex `config.toml`, native `hooks/hooks.json`, non-curated marketplaces, cached
 plugin bundles that are not source-installed curated plugins, and source-installed
-plugins that fail the source subscription or app-inventory gates are not activated
-automatically. They are copied or reported in the migration report for manual
-review.
+plugins that fail the source subscription gate are not activated automatically.
+When `--verify-plugin-apps` is set, plugins that fail the source app-inventory
+gate are also skipped. They are copied or reported in the migration report for
+manual review.
 
 For migrated source-installed curated plugins, apply writes:
 
@@ -187,11 +199,12 @@ For migrated source-installed curated plugins, apply writes:
   `pluginName` for each selected plugin
 
 Migration never writes `plugins["*"]` and never stores local marketplace cache
-paths. Source-side subscription and app-inventory failures are reported on manual
-items with typed reasons such as `codex_subscription_required`,
-`app_inaccessible`, `app_disabled`, `app_missing`, `plugin_disabled`,
-`plugin_read_unavailable`, or `app_inventory_unavailable`; those plugins are not
-written to target config.
+paths. Source-side subscription failures are reported on manual items with typed
+reasons such as `codex_subscription_required`, `codex_account_unavailable`,
+`plugin_disabled`, or `plugin_read_unavailable`. With `--verify-plugin-apps`,
+source app-inventory failures can also appear as `app_inaccessible`,
+`app_disabled`, `app_missing`, or `app_inventory_unavailable`. Skipped plugins
+are not written to target config.
 Target-side auth-required installs are reported on the affected plugin item with
 `status: "skipped"`, `reason: "auth_required"`, and sanitized app identifiers.
 Their explicit config entries are written disabled until you reauthorize and
