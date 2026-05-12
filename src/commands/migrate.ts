@@ -1,5 +1,6 @@
 import { cancel, isCancel } from "@clack/prompts";
 import { formatCliCommand } from "../cli/command-format.js";
+import { withProgress } from "../cli/progress.js";
 import { promptYesNo } from "../cli/prompt.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { redactMigrationPlan } from "../plugin-sdk/migration.js";
@@ -84,6 +85,26 @@ function selectMigrationItems(plan: MigrationPlan, opts: MigrateCommonOptions): 
     applyMigrationPluginSelection(applyMigrationSkillSelection(plan, opts.skills), opts.plugins),
     opts,
   );
+}
+
+async function createMigrationPlanWithProgress(
+  runtime: RuntimeEnv,
+  opts: MigrateCommonOptions & { provider: string },
+): Promise<MigrationPlan> {
+  const createPlan = async (): Promise<MigrationPlan> => await createMigrationPlan(runtime, opts);
+  if (opts.json) {
+    return selectMigrationItems(await createPlan(), opts);
+  }
+  const plan = await withProgress(
+    { label: `Scanning ${opts.provider} migration…`, indeterminate: true },
+    async (progress) => {
+      progress.setLabel("Reading migration source…");
+      const plan = await createPlan();
+      progress.tick();
+      return plan;
+    },
+  );
+  return selectMigrationItems(plan, opts);
 }
 
 function assertVerifyPluginAppsProvider(providerId: string, opts: MigrateCommonOptions): void {
@@ -310,10 +331,7 @@ export async function migratePlanCommand(
     );
   }
   assertVerifyPluginAppsProvider(providerId, opts);
-  const plan = selectMigrationItems(
-    await createMigrationPlan(runtime, { ...opts, provider: providerId }),
-    opts,
-  );
+  const plan = await createMigrationPlanWithProgress(runtime, { ...opts, provider: providerId });
   if (opts.json) {
     writeRuntimeJson(runtime, redactMigrationPlan(plan));
   } else {

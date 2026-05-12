@@ -11,6 +11,7 @@ import {
   symbolBar,
 } from "@clack/prompts";
 import {
+  reconcileInteractiveMigrationEnterValues,
   reconcileInteractiveMigrationShortcutValues,
   reconcileInteractiveMigrationSkillToggleValues,
 } from "./selection.js";
@@ -186,7 +187,18 @@ export function promptMigrationSkillSelectionValues(
     lastSelectedValues = [...(prompt.value ?? [])];
   });
 
-  prompt.on("key", (key) => {
+  prompt.on("key", (key, info) => {
+    if (info.name === "return") {
+      const activatedOption = prompt.options[prompt.cursor];
+      const activatedValue = activatedOption?.disabled ? undefined : activatedOption?.value;
+      prompt.value = reconcileInteractiveMigrationEnterValues(
+        prompt.value ?? [],
+        activatedValue,
+        opts.selectableValues,
+      );
+      lastSelectedValues = [...(prompt.value ?? [])];
+      return;
+    }
     if (key !== "a" && key !== "i") {
       return;
     }

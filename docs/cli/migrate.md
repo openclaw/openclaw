@@ -129,7 +129,8 @@ your personal Codex CLI state by default.
 Running `openclaw migrate codex` in an interactive terminal previews the full
 plan, then opens checkbox selectors before the final apply confirmation. Skill
 copy items are prompted first. Use `Toggle all on` or `Toggle all off` for bulk
-selection; planned skills start checked, conflict skills start unchecked, and
+selection. Press Space to toggle rows, or press Enter to activate the highlighted
+row and continue. Planned skills start checked, conflict skills start unchecked, and
 `Skip for now` skips skill copies for this run while still continuing to plugin
 selection. When source-installed curated Codex plugins are migratable and
 `--plugin` was not supplied, migration then prompts for native Codex plugin
