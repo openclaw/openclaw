@@ -66,7 +66,12 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
       systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",
-      systemPromptWhen: "first",
+      // Always inject the harness system prompt (SOUL.md / IDENTITY.md / etc.)
+      // on every turn, including `claude --resume`. The previous "first" default
+      // dropped `--append-system-prompt-file` from the resumeArgs and caused
+      // resumed sessions to behave as generic Claude instead of the configured
+      // identity. Fixes #80374.
+      systemPromptWhen: "always",
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
       reliability: {
         watchdog: {

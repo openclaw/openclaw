@@ -288,4 +288,16 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("OTEL_EXPORTER_OTLP_PROTOCOL");
     expect(backend.config.clearEnv).toContain("OTEL_SDK_DISABLED");
   });
+
+  it("re-injects the harness system prompt on resumed sessions (#80374)", () => {
+    // Regression for #80374: previously `systemPromptWhen: "first"` dropped the
+    // `--append-system-prompt-file` flag when claude was invoked with --resume,
+    // so resumed sessions silently lost SOUL.md / IDENTITY.md / USER.md and the
+    // agent behaved as generic Claude until /reset or /reload. The fix sets
+    // the default to "always" so the harness system prompt re-injects on every
+    // turn for the claude-cli backend.
+    const backend = buildAnthropicCliBackend();
+    expect(backend.config.systemPromptWhen).toBe("always");
+    expect(backend.config.systemPromptFileArg).toBe("--append-system-prompt-file");
+  });
 });
