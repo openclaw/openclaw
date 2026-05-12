@@ -14,6 +14,16 @@ function expectButtonByText(container: Element, text: string): HTMLButtonElement
   return button;
 }
 
+function expectRowByLabel(container: Element, text: string): HTMLElement {
+  const row = Array.from(container.querySelectorAll<HTMLElement>(".qs-row")).find(
+    (candidate) => candidate.querySelector(".qs-row__label")?.textContent?.trim() === text,
+  );
+  if (!(row instanceof HTMLElement)) {
+    throw new Error(`Expected quick settings row "${text}"`);
+  }
+  return row;
+}
+
 function expectFileInput(input: Element | null | undefined): HTMLInputElement {
   if (!(input instanceof HTMLInputElement)) {
     throw new Error("Expected file input");
@@ -143,9 +153,9 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    const browserInput = Array.from(container.querySelectorAll("input")).find((input) =>
-      input.closest(".qs-row")?.textContent?.includes("Browser enabled"),
-    );
+    const browserRow = expectRowByLabel(container, "Browser enabled");
+    expect(browserRow.querySelector(".qs-toggle__hint")?.textContent).toBe("Disabled");
+    const browserInput = browserRow.querySelector("input");
     expect(browserInput).toBeInstanceOf(HTMLInputElement);
     expect((browserInput as HTMLInputElement).checked).toBe(false);
 

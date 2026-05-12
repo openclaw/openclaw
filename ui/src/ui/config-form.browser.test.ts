@@ -250,8 +250,7 @@ describe("config form renderer", () => {
     const tags = Array.from(container.querySelectorAll(".cfg-tag")).map((node) =>
       node.textContent?.trim(),
     );
-    expect(tags).toContain("security");
-    expect(tags).toContain("secret");
+    expect(tags).toEqual(["security", "secret"]);
 
     render(
       renderConfigForm({
@@ -277,8 +276,11 @@ describe("config form renderer", () => {
       "tag-filtered field label",
     );
     expect(fieldLabel.textContent?.trim()).toBe("Token");
-    expect(container.textContent).not.toContain("Allow From");
-    expect(container.textContent).not.toContain("Mode");
+    expect(
+      Array.from(container.querySelectorAll(".cfg-field__label")).map((label) =>
+        label.textContent?.trim(),
+      ),
+    ).toEqual(["Token"]);
   });
 
   it("supports SecretInput unions in additionalProperties maps", () => {

@@ -40,7 +40,7 @@ describe("lazy view rendering", () => {
     );
 
     expect(onChange).toHaveBeenCalled();
-    expect(container.textContent).toContain("Logs view");
+    expect(container.textContent?.trim()).toBe("Logs view");
   });
 
   it("renders a recoverable error panel when a lazy module import fails", async () => {
@@ -79,6 +79,6 @@ describe("lazy view rendering", () => {
 
     expect(loader).toHaveBeenCalledTimes(2);
     expect(onChange).toHaveBeenCalled();
-    expect(container.textContent).toContain("Recovered");
+    expect(container.textContent?.trim()).toBe("Recovered");
   });
 });

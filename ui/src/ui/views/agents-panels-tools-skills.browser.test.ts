@@ -104,13 +104,32 @@ describe("agents tools panel (browser)", () => {
     );
     await Promise.resolve();
 
-    const text = container.textContent ?? "";
-    expect(text).toContain("Built-In");
-    expect(text).toContain("Plugin: voice-call");
-    expect(text).toContain("Optional");
-    expect(text).toContain("Available Right Now");
-    expect(text).toContain("Message Actions");
-    expect(text).toContain("Channel: guildchat");
+    expect(
+      Array.from(container.querySelectorAll(".agent-tools-pane > .label")).map((label) =>
+        label.textContent?.trim(),
+      ),
+    ).toEqual(["Available Right Now", "Quick Presets"]);
+    const runtimeChip = container.querySelector(".agent-tools-runtime-chip");
+    expect(runtimeChip?.querySelector(".mono")?.textContent?.trim()).toBe("Message Actions");
+    expect(runtimeChip?.querySelector(".agent-tools-runtime-chip__meta")?.textContent?.trim()).toBe(
+      "Channel: guildchat",
+    );
+    expect(
+      Array.from(container.querySelectorAll(".agent-tools-group__title > .agent-pill")).map(
+        (pill) => pill.textContent?.trim(),
+      ),
+    ).toEqual(["Plugin: voice-call"]);
+    expect(
+      Array.from(container.querySelectorAll(".agent-tool-card")).map((card) => ({
+        title: card.querySelector(".agent-tool-title")?.textContent?.trim(),
+        badges: Array.from(card.querySelectorAll(".agent-tool-summary__badges .agent-pill")).map(
+          (pill) => pill.textContent?.trim(),
+        ),
+      })),
+    ).toEqual([
+      { title: "tts", badges: ["Built-In"] },
+      { title: "voice_call", badges: ["Plugin: voice-call", "Optional"] },
+    ]);
     expect(container.querySelector(".agent-tool-card[open]")).toBeNull();
   });
 
@@ -127,7 +146,9 @@ describe("agents tools panel (browser)", () => {
     );
     await Promise.resolve();
 
-    expect(container.textContent ?? "").toContain("Could not load runtime tool catalog");
+    expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
+      "Could not load runtime tool catalog. Showing built-in fallback list instead.",
+    );
   });
 
   it("closes expanded tool rows when the parent group collapses", async () => {
@@ -256,11 +277,17 @@ describe("agents tools panel (browser)", () => {
     const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
     tool!.open = true;
 
-    const sourceDetail = Array.from(
-      container.querySelectorAll<HTMLElement>(".agent-tool-detail"),
-    ).find((detail) => detail.textContent?.includes("Source"));
-
-    expect(sourceDetail?.textContent).toContain("Plugin: voice-call");
+    expect(
+      Array.from(container.querySelectorAll<HTMLElement>(".agent-tool-detail")).map((detail) => ({
+        label: detail.querySelector(".label")?.textContent?.trim(),
+        value: detail.lastElementChild?.textContent?.trim(),
+      })),
+    ).toEqual([
+      { label: "Access", value: "Enabled by the current profile." },
+      { label: "Source", value: "Plugin: voice-call" },
+      { label: "Default Presets", value: "full" },
+      { label: "Current Session", value: "Not available in this chat session right now." },
+    ]);
   });
 
   it("opens the collapsed group and tool row from a live tool chip", async () => {

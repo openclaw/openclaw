@@ -171,6 +171,10 @@ function mockObjectArg(source: MockCallSource, label: string, callIndex = 0, arg
   return arg as Record<string, unknown>;
 }
 
+function mockMessageBody(source: MockCallSource, label: string, callIndex = 0) {
+  return String(mockObjectArg(source, label, callIndex).body);
+}
+
 function expectSentTextMessage(
   source: MockCallSource,
   expected: {
@@ -1132,7 +1136,7 @@ describe("matrix live qa scenarios", () => {
         eventId: "$sut-reply",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
-        body: String(sendTextMessage.mock.calls.at(0)?.[0]?.body).replace(
+        body: mockMessageBody(sendTextMessage, "sendTextMessage").replace(
           "@sut:matrix-qa.test reply with only this exact marker: ",
           "",
         ),
@@ -1198,7 +1202,7 @@ describe("matrix live qa scenarios", () => {
         eventId: "$sut-bot-reply",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
-        body: String(sendTextMessage.mock.calls.at(0)?.[0]?.body).replace(
+        body: mockMessageBody(sendTextMessage, "sendTextMessage").replace(
           "@sut:matrix-qa.test reply with only this exact marker: ",
           "",
         ),
@@ -1914,7 +1918,7 @@ describe("matrix live qa scenarios", () => {
 
       const sendTextMessage = vi.fn().mockResolvedValue("$driver-trigger");
       const waitForRoomEvent = vi.fn().mockImplementation(async () => {
-        const token = String(sendTextMessage.mock.calls.at(0)?.[0]?.body).replace(
+        const token = mockMessageBody(sendTextMessage, "sendTextMessage").replace(
           "@sync-gateway:matrix-qa.test reply with only this exact marker: ",
           "",
         );
@@ -1986,7 +1990,9 @@ describe("matrix live qa scenarios", () => {
       expect(artifacts.roomKey).toBe("e2ee-sync-state-loss-crypto-intact-recovery");
 
       await expectPathMissing(syncStorePath);
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.registrationToken).toBe("registration-token");
+      expect(mockObjectArg(registerWithToken, "registerWithToken").registrationToken).toBe(
+        "registration-token",
+      );
       expect(createPrivateRoom).toHaveBeenCalledWith({
         encrypted: true,
         inviteUserIds: ["@observer:matrix-qa.test", "@sync-gateway:matrix-qa.test"],
@@ -2304,7 +2310,7 @@ describe("matrix live qa scenarios", () => {
         eventId: "$sut-reply",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
-        body: String(sendTextMessage.mock.calls.at(0)?.[0]?.body).replace(
+        body: mockMessageBody(sendTextMessage, "sendTextMessage").replace(
           "reply with only this exact marker: ",
           "",
         ),
@@ -2383,7 +2389,7 @@ describe("matrix live qa scenarios", () => {
         eventId: "$sut-reply",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
-        body: String(sendTextMessage.mock.calls.at(0)?.[0]?.body).replace(
+        body: mockMessageBody(sendTextMessage, "sendTextMessage").replace(
           "@sut:matrix-qa.test reply with only this exact marker: ",
           "",
         ),
@@ -2439,7 +2445,7 @@ describe("matrix live qa scenarios", () => {
       .mockImplementationOnce(async () => {
         const childToken =
           /task="Finish with exactly ([^".]+)\./.exec(
-            String(sendTextMessage.mock.calls.at(0)?.[0]?.body),
+            mockMessageBody(sendTextMessage, "sendTextMessage"),
           )?.[1] ?? "MATRIX_QA_SUBAGENT_CHILD_FIXED";
         return {
           event: {
@@ -2605,7 +2611,7 @@ describe("matrix live qa scenarios", () => {
     const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
     const sendTextMessage = vi.fn().mockResolvedValue("$quiet-stream-trigger");
     const readFinalText = () =>
-      /reply exactly `([^`]+)`/.exec(String(sendTextMessage.mock.calls.at(0)?.[0]?.body))?.[1] ??
+      /reply exactly `([^`]+)`/.exec(mockMessageBody(sendTextMessage, "sendTextMessage"))?.[1] ??
       "MATRIX_QA_QUIET_STREAM_PREVIEW_COMPLETE";
     const waitForRoomEvent = vi
       .fn()
@@ -2703,7 +2709,7 @@ describe("matrix live qa scenarios", () => {
               kind: "message",
               eventId: "$partial-final",
               body: readMatrixQaReplyDirective(
-                sendTextMessage.mock.calls.at(0)?.[0]?.body,
+                mockMessageBody(sendTextMessage, "sendTextMessage"),
                 fallbackFinalText,
               ),
               relatesTo: {
@@ -2754,7 +2760,7 @@ describe("matrix live qa scenarios", () => {
               kind: "notice",
               eventId: "$tool-progress-final",
               body: readMatrixQaReplyDirective(
-                sendTextMessage.mock.calls.at(0)?.[0]?.body,
+                mockMessageBody(sendTextMessage, "sendTextMessage"),
                 "MATRIX_QA_TOOL_PROGRESS_FIXED",
               ),
               relatesTo: {
@@ -2782,7 +2788,7 @@ describe("matrix live qa scenarios", () => {
     );
     expect(artifacts.previewEventId).toBe("$tool-progress-preview");
     expect(artifacts.reply?.eventId).toBe("$tool-progress-final");
-    const prompt = String(sendTextMessage.mock.calls.at(0)?.[0]?.body);
+    const prompt = mockMessageBody(sendTextMessage, "sendTextMessage");
     expect(prompt).toContain("use the read tool exactly once on `QA_KICKOFF_TASK.md`");
     expect(prompt).toContain("Do not read `HEARTBEAT.md`");
     expect(prompt).toContain("reply with only this exact marker and no other text");
@@ -2819,7 +2825,7 @@ describe("matrix live qa scenarios", () => {
               kind: "notice",
               eventId: "$tool-progress-generic-final",
               body: readMatrixQaReplyDirective(
-                sendTextMessage.mock.calls.at(0)?.[0]?.body,
+                mockMessageBody(sendTextMessage, "sendTextMessage"),
                 "MATRIX_QA_TOOL_PROGRESS_FIXED",
               ),
               relatesTo: {
@@ -2952,7 +2958,7 @@ describe("matrix live qa scenarios", () => {
               kind: "message",
               eventId: "$tool-progress-optout-final",
               body: readMatrixQaReplyDirective(
-                sendTextMessage.mock.calls.at(0)?.[0]?.body,
+                mockMessageBody(sendTextMessage, "sendTextMessage"),
                 "MATRIX_QA_TOOL_PROGRESS_OPTOUT_FIXED",
               ),
             }),
@@ -2998,7 +3004,7 @@ describe("matrix live qa scenarios", () => {
               kind: "notice",
               eventId: "$tool-progress-error-final",
               body: readMatrixQaReplyDirective(
-                sendTextMessage.mock.calls.at(0)?.[0]?.body,
+                mockMessageBody(sendTextMessage, "sendTextMessage"),
                 "MATRIX_QA_TOOL_PROGRESS_ERROR_FIXED",
               ),
               relatesTo: {
@@ -3063,7 +3069,7 @@ describe("matrix live qa scenarios", () => {
               kind: "notice",
               eventId: "$tool-progress-error-short-final",
               body: readMatrixQaReplyDirective(
-                sendTextMessage.mock.calls.at(0)?.[0]?.body,
+                mockMessageBody(sendTextMessage, "sendTextMessage"),
                 "MATRIX_QA_TOOL_PROGRESS_ERROR_SHORT_FIXED",
               ),
               relatesTo: {
@@ -3135,7 +3141,7 @@ describe("matrix live qa scenarios", () => {
               kind: "message",
               eventId: "$tool-progress-mention-final",
               body: readMatrixQaReplyDirective(
-                sendTextMessage.mock.calls.at(0)?.[0]?.body,
+                mockMessageBody(sendTextMessage, "sendTextMessage"),
                 "MATRIX_QA_TOOL_PROGRESS_MENTION_SAFE_FIXED",
               ),
               relatesTo: {
@@ -3167,7 +3173,7 @@ describe("matrix live qa scenarios", () => {
     const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
     const sendTextMessage = vi.fn().mockResolvedValue("$block-stream-trigger");
     const readBlockText = (label: "ONE" | "TWO") =>
-      String(sendTextMessage.mock.calls.at(0)?.[0]?.body)
+      mockMessageBody(sendTextMessage, "sendTextMessage")
         .split("\n")
         .find((line) => line.startsWith(`MATRIX_QA_BLOCK_${label}_`)) ??
       `MATRIX_QA_BLOCK_${label}_FIXED`;
@@ -3250,7 +3256,7 @@ describe("matrix live qa scenarios", () => {
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!block:matrix-qa.test",
     });
-    const body = String(sendTextMessage.mock.calls.at(0)?.[0]?.body);
+    const body = mockMessageBody(sendTextMessage, "sendTextMessage");
     expect(body).toMatch(
       /reply with exactly this two-line body and no extra text:\nMATRIX_QA_BLOCK_ONE_[A-F0-9]{8}\nMATRIX_QA_BLOCK_TWO_[A-F0-9]{8}$/,
     );
@@ -3557,7 +3563,7 @@ describe("matrix live qa scenarios", () => {
     }
     const firstReplyWait = waitForRoomEvent.mock.calls.at(1)?.[0];
     const firstToken =
-      String(sendMediaMessage.mock.calls.at(0)?.[0]?.body).match(
+      mockMessageBody(sendMediaMessage, "sendMediaMessage").match(
         /MATRIX_QA_MEDIA_[A-Z]+_[A-Z0-9]+/,
       )?.[0] ?? "";
     expect(
@@ -3592,7 +3598,7 @@ describe("matrix live qa scenarios", () => {
         eventId: "$sut-reply",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
-        body: String(sendTextMessage.mock.calls.at(0)?.[0]?.body).replace(
+        body: mockMessageBody(sendTextMessage, "sendTextMessage").replace(
           "reply with only this exact marker: ",
           "",
         ),
@@ -3668,7 +3674,7 @@ describe("matrix live qa scenarios", () => {
         eventId: "$sut-primary-reply",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
-        body: String(sendPrimaryTextMessage.mock.calls.at(0)?.[0]?.body).replace(
+        body: mockMessageBody(sendPrimaryTextMessage, "sendPrimaryTextMessage").replace(
           "reply with only this exact marker: ",
           "",
         ),
@@ -3684,7 +3690,7 @@ describe("matrix live qa scenarios", () => {
         eventId: "$sut-secondary-reply",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
-        body: String(sendSecondaryTextMessage.mock.calls.at(0)?.[0]?.body).replace(
+        body: mockMessageBody(sendSecondaryTextMessage, "sendSecondaryTextMessage").replace(
           "reply with only this exact marker: ",
           "",
         ),
@@ -3792,7 +3798,7 @@ describe("matrix live qa scenarios", () => {
         eventId: "$sut-primary-reply",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
-        body: String(sendPrimaryTextMessage.mock.calls.at(0)?.[0]?.body).replace(
+        body: mockMessageBody(sendPrimaryTextMessage, "sendPrimaryTextMessage").replace(
           "reply with only this exact marker: ",
           "",
         ),
@@ -3808,7 +3814,7 @@ describe("matrix live qa scenarios", () => {
         eventId: "$sut-secondary-reply",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
-        body: String(sendSecondaryTextMessage.mock.calls.at(0)?.[0]?.body).replace(
+        body: mockMessageBody(sendSecondaryTextMessage, "sendSecondaryTextMessage").replace(
           "reply with only this exact marker: ",
           "",
         ),
@@ -3911,7 +3917,7 @@ describe("matrix live qa scenarios", () => {
           eventId: "$sut-autojoin-reply",
           sender: "@sut:matrix-qa.test",
           type: "m.room.message",
-          body: String(sendTextMessage.mock.calls.at(0)?.[0]?.body).replace(
+          body: mockMessageBody(sendTextMessage, "sendTextMessage").replace(
             "@sut:matrix-qa.test reply with only this exact marker: ",
             "",
           ),
@@ -3977,7 +3983,7 @@ describe("matrix live qa scenarios", () => {
         eventId: "$sut-reply",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
-        body: String(sendTextMessage.mock.calls.at(0)?.[0]?.body).replace(
+        body: mockMessageBody(sendTextMessage, "sendTextMessage").replace(
           "@sut:matrix-qa.test reply with only this exact marker: ",
           "",
         ),
@@ -4697,7 +4703,7 @@ describe("matrix live qa scenarios", () => {
       expect(artifacts.secondaryDeviceId).toBe("CLIDEVICE");
 
       expect(startMatrixQaOpenClawCli).toHaveBeenCalledTimes(1);
-      expect(startMatrixQaOpenClawCli.mock.calls.at(0)?.[0].args).toEqual([
+      expect(mockObjectArg(startMatrixQaOpenClawCli, "startMatrixQaOpenClawCli").args).toEqual([
         "matrix",
         "verify",
         "self",
@@ -4706,19 +4712,29 @@ describe("matrix live qa scenarios", () => {
         "--timeout-ms",
         "8000",
       ]);
-      expect(startMatrixQaOpenClawCli.mock.calls.at(0)?.[0].timeoutMs).toBe(16_000);
+      expect(mockObjectArg(startMatrixQaOpenClawCli, "startMatrixQaOpenClawCli").timeoutMs).toBe(
+        16_000,
+      );
       expect(waitForOutput).toHaveBeenCalledTimes(2);
       expect(writeStdin).toHaveBeenCalledWith("yes\n");
       expect(endStdin).toHaveBeenCalledTimes(1);
       expect(wait).toHaveBeenCalledTimes(1);
       expect(kill).toHaveBeenCalledTimes(1);
-      const registrationRequest = registerWithToken.mock.calls.at(0)?.[0];
+      const registrationRequest = mockObjectArg(registerWithToken, "registerWithToken");
       expect(registrationRequest?.deviceName).toBe(
         "OpenClaw Matrix QA CLI Self Verification Owner",
       );
-      expect(registrationRequest?.localpart?.startsWith("qa-cli-self-verification-")).toBe(true);
-      expect(registrationRequest?.localpart).toHaveLength("qa-cli-self-verification-".length + 8);
-      expect(registrationRequest?.password?.startsWith("matrix-qa-")).toBe(true);
+      if (
+        typeof registrationRequest.localpart !== "string" ||
+        typeof registrationRequest.password !== "string"
+      ) {
+        throw new Error("expected registration request credentials");
+      }
+      const registrationLocalpart = registrationRequest.localpart;
+      const registrationPassword = registrationRequest.password;
+      expect(registrationLocalpart.startsWith("qa-cli-self-verification-")).toBe(true);
+      expect(registrationLocalpart).toHaveLength("qa-cli-self-verification-".length + 8);
+      expect(registrationPassword.startsWith("matrix-qa-")).toBe(true);
       expect(registrationRequest?.registrationToken).toBe("registration-token");
       expect(loginWithPassword).toHaveBeenCalledWith({
         deviceName: "OpenClaw Matrix QA CLI Self Verification Device",
@@ -4746,7 +4762,8 @@ describe("matrix live qa scenarios", () => {
         ["matrix", "verify", "status", "--account", "cli", "--json"],
       ]);
       expect(runMatrixQaOpenClawCli.mock.calls.at(0)?.[0].stdin).toBe("encoded-recovery-key\n");
-      const cliEnv = startMatrixQaOpenClawCli.mock.calls.at(0)?.[0].env;
+      const cliEnv = mockObjectArg(startMatrixQaOpenClawCli, "startMatrixQaOpenClawCli")
+        .env as Record<string, unknown>;
       expect(cliEnv?.OPENCLAW_STATE_DIR).toContain("openclaw-matrix-cli-qa-");
       expect(cliEnv?.OPENCLAW_CONFIG_PATH).toContain("openclaw-matrix-cli-qa-");
       const configPath = String(cliEnv?.OPENCLAW_CONFIG_PATH);
@@ -4911,10 +4928,12 @@ describe("matrix live qa scenarios", () => {
         ],
         ["matrix", "verify", "status", "--account", "cli-add-e2ee", "--json"],
       ]);
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.deviceName).toBe(
+      expect(mockObjectArg(registerWithToken, "registerWithToken").deviceName).toBe(
         "OpenClaw Matrix QA CLI Account Add Owner",
       );
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.registrationToken).toBe("registration-token");
+      expect(mockObjectArg(registerWithToken, "registerWithToken").registrationToken).toBe(
+        "registration-token",
+      );
       const [cliRunDir] = await readdir(path.join(outputDir, "cli-account-add-enable-e2ee"));
       const cliArtifactDir = path.join(outputDir, "cli-account-add-enable-e2ee", cliRunDir ?? "");
       await expect(
@@ -5045,12 +5064,18 @@ describe("matrix live qa scenarios", () => {
         ["matrix", "encryption", "setup", "--account", "cli-encryption-setup", "--json"],
         ["matrix", "verify", "status", "--account", "cli-encryption-setup", "--json"],
       ]);
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.deviceName).toBe(
+      expect(mockObjectArg(registerWithToken, "registerWithToken").deviceName).toBe(
         "OpenClaw Matrix QA CLI Encryption Setup Owner",
       );
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.registrationToken).toBe("registration-token");
-      expect(loginWithPassword.mock.calls.at(0)?.[0]?.password).toBe("cli-setup-password");
-      expect(loginWithPassword.mock.calls.at(0)?.[0]?.userId).toBe("@cli-setup:matrix-qa.test");
+      expect(mockObjectArg(registerWithToken, "registerWithToken").registrationToken).toBe(
+        "registration-token",
+      );
+      expect(mockObjectArg(loginWithPassword, "loginWithPassword").password).toBe(
+        "cli-setup-password",
+      );
+      expect(mockObjectArg(loginWithPassword, "loginWithPassword").userId).toBe(
+        "@cli-setup:matrix-qa.test",
+      );
       const [cliRunDir] = await readdir(path.join(outputDir, "cli-encryption-setup"));
       const cliArtifactDir = path.join(outputDir, "cli-encryption-setup", cliRunDir ?? "");
       await expect(
@@ -5165,12 +5190,16 @@ describe("matrix live qa scenarios", () => {
         ["matrix", "encryption", "setup", "--account", "cli-encryption-idempotent", "--json"],
         ["matrix", "encryption", "setup", "--account", "cli-encryption-idempotent", "--json"],
       ]);
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.deviceName).toBe(
+      expect(mockObjectArg(registerWithToken, "registerWithToken").deviceName).toBe(
         "OpenClaw Matrix QA CLI Encryption Idempotent Owner",
       );
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.registrationToken).toBe("registration-token");
-      expect(loginWithPassword.mock.calls.at(0)?.[0]?.password).toBe("cli-idempotent-password");
-      expect(loginWithPassword.mock.calls.at(0)?.[0]?.userId).toBe(
+      expect(mockObjectArg(registerWithToken, "registerWithToken").registrationToken).toBe(
+        "registration-token",
+      );
+      expect(mockObjectArg(loginWithPassword, "loginWithPassword").password).toBe(
+        "cli-idempotent-password",
+      );
+      expect(mockObjectArg(loginWithPassword, "loginWithPassword").userId).toBe(
         "@cli-idempotent:matrix-qa.test",
       );
       const [cliRunDir] = await readdir(path.join(outputDir, "cli-encryption-setup-idempotent"));
@@ -5288,7 +5317,7 @@ describe("matrix live qa scenarios", () => {
           search: "",
         }),
       ).toBe(true);
-      expect(startMatrixQaOpenClawCli.mock.calls.at(0)?.[0].args).toEqual([
+      expect(mockObjectArg(startMatrixQaOpenClawCli, "startMatrixQaOpenClawCli").args).toEqual([
         "matrix",
         "encryption",
         "setup",
@@ -5296,18 +5325,29 @@ describe("matrix live qa scenarios", () => {
         "cli-encryption-failure",
         "--json",
       ]);
-      expect(startMatrixQaOpenClawCli.mock.calls.at(0)?.[0].env.OPENCLAW_CONFIG_PATH).toContain(
-        "openclaw-matrix-e2ee-setup-qa-",
-      );
+      expect(
+        (
+          mockObjectArg(startMatrixQaOpenClawCli, "startMatrixQaOpenClawCli").env as Record<
+            string,
+            unknown
+          >
+        ).OPENCLAW_CONFIG_PATH,
+      ).toContain("openclaw-matrix-e2ee-setup-qa-");
       expect(output).toHaveBeenCalledTimes(1);
       expect(wait).toHaveBeenCalledTimes(1);
       expect(kill).toHaveBeenCalledTimes(1);
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.deviceName).toBe(
+      expect(mockObjectArg(registerWithToken, "registerWithToken").deviceName).toBe(
         "OpenClaw Matrix QA CLI Encryption Failure Owner",
       );
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.registrationToken).toBe("registration-token");
-      expect(loginWithPassword.mock.calls.at(0)?.[0]?.password).toBe("cli-failure-password");
-      expect(loginWithPassword.mock.calls.at(0)?.[0]?.userId).toBe("@cli-failure:matrix-qa.test");
+      expect(mockObjectArg(registerWithToken, "registerWithToken").registrationToken).toBe(
+        "registration-token",
+      );
+      expect(mockObjectArg(loginWithPassword, "loginWithPassword").password).toBe(
+        "cli-failure-password",
+      );
+      expect(mockObjectArg(loginWithPassword, "loginWithPassword").userId).toBe(
+        "@cli-failure:matrix-qa.test",
+      );
       expect(proxyStop).toHaveBeenCalledTimes(1);
       const [cliRunDir] = await readdir(
         path.join(outputDir, "cli-encryption-setup-bootstrap-failure"),
@@ -5471,12 +5511,18 @@ describe("matrix live qa scenarios", () => {
           "--json",
         ],
       ]);
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.deviceName).toBe(
+      expect(mockObjectArg(registerWithToken, "registerWithToken").deviceName).toBe(
         "OpenClaw Matrix QA CLI Recovery Key Owner",
       );
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.registrationToken).toBe("registration-token");
-      expect(loginWithPassword.mock.calls.at(0)?.[0]?.password).toBe("cli-recovery-password");
-      expect(loginWithPassword.mock.calls.at(0)?.[0]?.userId).toBe("@cli-recovery:matrix-qa.test");
+      expect(mockObjectArg(registerWithToken, "registerWithToken").registrationToken).toBe(
+        "registration-token",
+      );
+      expect(mockObjectArg(loginWithPassword, "loginWithPassword").password).toBe(
+        "cli-recovery-password",
+      );
+      expect(mockObjectArg(loginWithPassword, "loginWithPassword").userId).toBe(
+        "@cli-recovery:matrix-qa.test",
+      );
       expect(deleteOwnDevices).toHaveBeenCalledWith(["CLIRECOVERYDEVICE"]);
       expect(stop).toHaveBeenCalledTimes(1);
       const [cliRunDir] = await readdir(path.join(outputDir, "cli-recovery-key-setup"));
@@ -5585,7 +5631,7 @@ describe("matrix live qa scenarios", () => {
       expect(artifacts.recoveryKeyRejected).toBe(true);
       expect(artifacts.setupSuccess).toBe(false);
 
-      expect(startMatrixQaOpenClawCli.mock.calls.at(0)?.[0].args).toEqual([
+      expect(mockObjectArg(startMatrixQaOpenClawCli, "startMatrixQaOpenClawCli").args).toEqual([
         "matrix",
         "encryption",
         "setup",
@@ -5598,12 +5644,18 @@ describe("matrix live qa scenarios", () => {
       expect(output).toHaveBeenCalledTimes(1);
       expect(wait).toHaveBeenCalledTimes(1);
       expect(kill).toHaveBeenCalledTimes(1);
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.deviceName).toBe(
+      expect(mockObjectArg(registerWithToken, "registerWithToken").deviceName).toBe(
         "OpenClaw Matrix QA CLI Invalid Recovery Key Owner",
       );
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.registrationToken).toBe("registration-token");
-      expect(loginWithPassword.mock.calls.at(0)?.[0]?.password).toBe("cli-invalid-password");
-      expect(loginWithPassword.mock.calls.at(0)?.[0]?.userId).toBe("@cli-invalid:matrix-qa.test");
+      expect(mockObjectArg(registerWithToken, "registerWithToken").registrationToken).toBe(
+        "registration-token",
+      );
+      expect(mockObjectArg(loginWithPassword, "loginWithPassword").password).toBe(
+        "cli-invalid-password",
+      );
+      expect(mockObjectArg(loginWithPassword, "loginWithPassword").userId).toBe(
+        "@cli-invalid:matrix-qa.test",
+      );
       expect(deleteOwnDevices).toHaveBeenCalledWith(["CLIINVALIDDEVICE"]);
       expect(stop).toHaveBeenCalledTimes(1);
       const [cliRunDir] = await readdir(path.join(outputDir, "cli-recovery-key-invalid"));
@@ -5709,12 +5761,18 @@ describe("matrix live qa scenarios", () => {
       expect(runMatrixQaOpenClawCli.mock.calls.map(([params]) => params.args)).toEqual([
         ["matrix", "encryption", "setup", "--account", "cli-multi-target", "--json"],
       ]);
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.deviceName).toBe(
+      expect(mockObjectArg(registerWithToken, "registerWithToken").deviceName).toBe(
         "OpenClaw Matrix QA CLI Multi Account Owner",
       );
-      expect(registerWithToken.mock.calls.at(0)?.[0]?.registrationToken).toBe("registration-token");
-      expect(loginWithPassword.mock.calls.at(0)?.[0]?.password).toBe("cli-multi-password");
-      expect(loginWithPassword.mock.calls.at(0)?.[0]?.userId).toBe("@cli-multi:matrix-qa.test");
+      expect(mockObjectArg(registerWithToken, "registerWithToken").registrationToken).toBe(
+        "registration-token",
+      );
+      expect(mockObjectArg(loginWithPassword, "loginWithPassword").password).toBe(
+        "cli-multi-password",
+      );
+      expect(mockObjectArg(loginWithPassword, "loginWithPassword").userId).toBe(
+        "@cli-multi:matrix-qa.test",
+      );
       const [cliRunDir] = await readdir(path.join(outputDir, "cli-encryption-setup-multi-account"));
       const cliArtifactDir = path.join(
         outputDir,
