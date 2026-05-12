@@ -482,6 +482,46 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(freshTranscript);
   });
 
+  it("sessions cleanup fix-missing prunes entries whose sessionId is a session key", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "agent:main:main",
+            updatedAt: Date.now(),
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const preview = dryRun.previewResults[0];
+    expect(preview?.summary.missing).toBe(1);
+    expect(preview?.summary.afterCount).toBe(0);
+    expect(preview?.missingKeys.has("agent:main:main")).toBe(true);
+    expect(loadSessionStore(storePath, { skipCache: true })).toHaveProperty("agent:main:main");
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.missing).toBe(1);
+    expect(loadSessionStore(storePath, { skipCache: true })).not.toHaveProperty("agent:main:main");
+  });
+
   it("cleans up archived transcripts older than the prune window", async () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
