@@ -17,7 +17,7 @@ import {
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { openClient } = setupGatewaySessionsTestHarness();
+const { createSessionFixtureDir, openClient } = setupGatewaySessionsTestHarness();
 
 function expectObject(value: unknown) {
   if (!value || typeof value !== "object") {
@@ -173,7 +173,7 @@ test("sessions.delete closes ACP runtime handles before removing ACP sessions", 
     >
   )[0]?.[0];
   expect(closeSessionCall?.allowBackendUnavailable).toBe(true);
-  expectObject(closeSessionCall?.cfg);
+  expect(closeSessionCall?.cfg).toEqual(expect.any(Object));
   expect(closeSessionCall?.discardPersistentState).toBe(true);
   expect(closeSessionCall?.requireAcpSession).toBe(false);
   expect(closeSessionCall?.reason).toBe("session-delete");
@@ -185,7 +185,7 @@ test("sessions.delete closes ACP runtime handles before removing ACP sessions", 
       [{ cfg?: unknown; reason?: string; sessionKey?: string }]
     >
   )[0]?.[0];
-  expectObject(cancelSessionCall?.cfg);
+  expect(cancelSessionCall?.cfg).toEqual(expect.any(Object));
   expect(cancelSessionCall?.reason).toBe("session-delete");
   expect(cancelSessionCall?.sessionKey).toBe("agent:main:discord:group:dev");
 });
@@ -227,6 +227,8 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
     "agent:main:discord:group:delete",
   );
   expect((event as { reason?: string } | undefined)?.reason).toBe("deleted");
+  expect(event).not.toHaveProperty(`session${"File"}`);
+  expect(event).not.toHaveProperty("transcriptArchived");
   expect((event as { nextSessionId?: string } | undefined)?.nextSessionId).toBeUndefined();
   expect((context as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");
   expect((context as { sessionKey?: string } | undefined)?.sessionKey).toBe(

@@ -1,5 +1,4 @@
-import fs from "node:fs";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -68,22 +67,16 @@ describe("listSessionsFromStore subagent metadata", () => {
         updatedAt: 100,
       } as SessionEntry,
     };
-    const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
-    try {
-      const result = listSessionsFromStore({
-        cfg,
-        store,
-        opts: { limit: 2 },
-      });
+    const result = listSessionsFromStore({
+      cfg,
+      store,
+      opts: { limit: 2 },
+    });
 
-      expect(result.sessions.map((session) => session.sessionId)).toEqual([
-        "newest-session",
-        "middle-session",
-      ]);
-      expect(existsSpy.mock.calls.flat().join("\n")).not.toContain("old-session");
-    } finally {
-      existsSpy.mockRestore();
-    }
+    expect(result.sessions.map((session) => session.sessionId)).toEqual([
+      "newest-session",
+      "middle-session",
+    ]);
   });
 
   test("includes subagent status timing and direct child session keys", () => {

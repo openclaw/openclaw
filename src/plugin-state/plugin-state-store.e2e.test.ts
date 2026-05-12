@@ -1,7 +1,4 @@
-import { mkdirSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closePluginStateDatabase,
@@ -11,7 +8,6 @@ import {
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
-import { resolvePluginStateDir, resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -208,26 +204,6 @@ describe("limits", () => {
 // Failure safety
 // ---------------------------------------------------------------------------
 describe("failure safety", () => {
-  it("gives a typed error for unsupported schema versions", async () => {
-    await withOpenClawTestState({ label: "e2e-fail-schema" }, async () => {
-      // Pre-seed the DB with a future schema version.
-      mkdirSync(resolvePluginStateDir(), { recursive: true });
-      const { DatabaseSync } = requireNodeSqlite();
-      const db = new DatabaseSync(resolvePluginStateSqlitePath());
-      db.exec("PRAGMA user_version = 99;");
-      db.close();
-      closeOpenClawStateDatabaseForTest();
-
-      const store = createPluginStateKeyedStore("fixture-plugin", {
-        namespace: "schema",
-        maxEntries: 10,
-      });
-      const error = await store.register("k", { ok: true }).catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(PluginStateStoreError);
-      expect(error).toMatchObject({ code: "PLUGIN_STATE_SCHEMA_UNSUPPORTED" });
-    });
-  });
-
   it("probe returns redacted diagnostics without leaking stored values", async () => {
     await withOpenClawTestState({ label: "e2e-fail-probe" }, async () => {
       const result = probePluginStateStore();

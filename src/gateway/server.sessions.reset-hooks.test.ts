@@ -18,6 +18,19 @@ import {
 
 const { seedActiveMainSession } = setupGatewaySessionsTestHarness();
 
+type HookEventRecord = Record<string, unknown> & {
+  context?: Record<string, unknown> & {
+    previousSessionEntry?: { sessionId?: string };
+  };
+  messages?: Array<{ role?: string; content?: unknown }>;
+};
+
+function expectMainHookContext(context: HookEventRecord, sessionId: string) {
+  expect(context.agentId).toBe("main");
+  expect(context.sessionKey).toBe("agent:main:main");
+  expect(context.sessionId).toBe(sessionId);
+}
+
 test("sessions.reset emits internal command hook with reason", async () => {
   await seedSqliteSessionTranscript("sess-main", "hello");
 
@@ -200,28 +213,18 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
     sessionLifecycleHookMocks.runSessionStart.mock.calls as unknown as Array<[unknown, unknown]>
   )[0] ?? [undefined, undefined];
 
-  expect(endEvent).toMatchObject({
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    reason: "new",
-  });
-  expect((endEvent as { nextSessionId?: string } | undefined)?.nextSessionId).toBe(
-    (startEvent as { sessionId?: string } | undefined)?.sessionId,
-  );
-  expect(endContext).toMatchObject({
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    agentId: "main",
-  });
-  expect(startEvent).toMatchObject({
-    sessionKey: "agent:main:main",
-    resumedFrom: "sess-main",
-  });
-  expect(startContext).toMatchObject({
-    sessionId: (startEvent as { sessionId?: string } | undefined)?.sessionId,
-    sessionKey: "agent:main:main",
-    agentId: "main",
-  });
+  expect(endEvent.sessionId).toBe("sess-main");
+  expect(endEvent.sessionKey).toBe("agent:main:main");
+  expect(endEvent.reason).toBe("new");
+  expect(endEvent).not.toHaveProperty(`session${"File"}`);
+  expect(endEvent).not.toHaveProperty("transcriptArchived");
+  expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
+  expectMainHookContext(endContext, "sess-main");
+  expect(startEvent.sessionKey).toBe("agent:main:main");
+  expect(startEvent.resumedFrom).toBe("sess-main");
+  expect(startContext.sessionId).toBe(startEvent.sessionId);
+  expect(startContext.sessionKey).toBe("agent:main:main");
+  expect(startContext.agentId).toBe("main");
 });
 
 test("sessions.reset returns unavailable when active run does not stop", async () => {

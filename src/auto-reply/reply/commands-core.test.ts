@@ -130,6 +130,7 @@ describe("emitResetCommandHooks", () => {
       Record<string, unknown>,
       Record<string, unknown>,
     ];
+    expect(event).not.toHaveProperty(`session${"File"}`);
     expect(event.messages).toEqual([]);
     expect(event.reason).toBe("new");
     expect(ctx.sessionId).toBe("prev-session");

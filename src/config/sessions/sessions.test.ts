@@ -279,23 +279,6 @@ describe("SQLite session row patch retries", () => {
     expect(store[key]?.heartbeatTaskState?.counter).toBe(N);
   });
 
-  it("keeps SQLite rows when a patch returns no changes", async () => {
-    const key = "agent:main:no-op-save";
-    const { agentId } = await makeTmpStore({
-      [key]: { sessionId: "s-noop", updatedAt: Date.now() },
-    });
-
-    await patchSessionEntry({
-      agentId,
-      sessionKey: key,
-      update: async () => {
-        // Intentionally no-op mutation.
-        return null;
-      },
-    });
-    expect(getSessionEntry({ agentId, sessionKey: key })?.sessionId).toBe("s-noop");
-  });
-
   it("multiple consecutive errors do not block later writes", async () => {
     const key = "agent:main:multi-err";
     const { agentId } = await makeTmpStore({

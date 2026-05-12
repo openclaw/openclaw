@@ -14,7 +14,6 @@ import {
 } from "./session-binding.js";
 
 let tempDir: string;
-let previousStateDir: string | undefined;
 
 const nativeAuthLookup: Pick<CodexAppServerAuthProfileLookup, "authProfileStore"> = {
   authProfileStore: {
@@ -62,34 +61,25 @@ async function writeCodexCliAuthFile(codexHome: string): Promise<void> {
 describe("codex app-server session binding", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-"));
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tempDir;
   });
 
   afterEach(async () => {
     vi.unstubAllEnvs();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it("round-trips the thread binding through SQLite", async () => {
-    const sessionId = "session-1";
-    await writeCodexAppServerBinding(
-      { sessionId },
-      {
-        threadId: "thread-123",
-        cwd: tempDir,
-        model: "gpt-5.4-codex",
-        modelProvider: "openai",
-        dynamicToolsFingerprint: "tools-v1",
-      },
-    );
+    const sessionId = "session";
+    await writeCodexAppServerBinding(sessionId, {
+      threadId: "thread-123",
+      cwd: tempDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "tools-v1",
+    });
 
-    const binding = await readCodexAppServerBinding({ sessionId });
+    const binding = await readCodexAppServerBinding(sessionId);
 
     expect(binding?.schemaVersion).toBe(1);
     expect(binding?.threadId).toBe("thread-123");
@@ -198,7 +188,9 @@ describe("codex app-server session binding", () => {
     );
 
     const binding = await readCodexAppServerBinding(sessionId, nativeAuthLookup);
+    const raw = JSON.stringify(readRawCodexAppServerBinding(sessionId));
 
+    expect(raw).not.toContain('"modelProvider": "openai"');
     expect(binding?.threadId).toBe("thread-123");
     expect(binding?.authProfileId).toBe("work");
     expect(binding?.model).toBe("gpt-5.4-mini");
@@ -284,7 +276,7 @@ describe("codex app-server session binding", () => {
   });
 
   it("normalizes Codex CLI OAuth bindings even without a local auth profile slot", async () => {
-    const sessionId = "session";
+    const sessionId = "session-oauth";
     const codexHome = path.join(tempDir, "codex-cli");
     const agentDir = path.join(tempDir, "agent");
     vi.stubEnv("CODEX_HOME", codexHome);
@@ -302,10 +294,8 @@ describe("codex app-server session binding", () => {
       { agentDir },
     );
 
-    const raw = readRawCodexAppServerBinding(sessionId) as { modelProvider?: unknown };
     const binding = await readCodexAppServerBinding(sessionId, { agentDir });
 
-    expect(raw.modelProvider).toBeUndefined();
     expect(binding?.authProfileId).toBe("openai-codex:default");
     expect(binding?.modelProvider).toBeUndefined();
   });

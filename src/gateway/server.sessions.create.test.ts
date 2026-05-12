@@ -52,24 +52,17 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
 
-  const key = created.payload?.key as string;
+  const key = requireNonEmptyString(created.payload?.key, "created session key");
+  const sessionId = requireNonEmptyString(created.payload?.sessionId, "created session id");
   const stored = getSessionEntry({ agentId: "ops", sessionKey: key });
-  expect(stored).toMatchObject({
-    sessionId: created.payload?.sessionId,
-    label: "Dashboard Chat",
-    providerOverride: "openai",
-    modelOverride: "gpt-test-a",
-    parentSessionKey: "agent:main:main",
-  });
+  expect(stored?.sessionId).toBe(sessionId);
+  expect(stored?.label).toBe("Dashboard Chat");
+  expect(stored?.providerOverride).toBe("openai");
+  expect(stored?.modelOverride).toBe("gpt-test-a");
+  expect(stored?.parentSessionKey).toBe("agent:main:main");
 
-  const [header] = loadSqliteSessionTranscriptEvents({
-    agentId: "ops",
-    sessionId: created.payload?.sessionId ?? "",
-  });
-  expect(header?.event as { type?: string; id?: string }).toMatchObject({
-    type: "session",
-    id: created.payload?.sessionId,
-  });
+  const [header] = loadSqliteSessionTranscriptEvents({ agentId: "ops", sessionId });
+  expect(header?.event).toMatchObject({ type: "session", id: sessionId });
 });
 
 test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {

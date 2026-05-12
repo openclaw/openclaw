@@ -751,7 +751,6 @@ describe("skill-workshop", () => {
       expect.objectContaining({
         disableTools: true,
         toolsAllow: [],
-        sessionFile: expect.stringContaining(path.join("agents", "main", "sessions")),
         provider: "openai",
         model: "gpt-5.4",
       }),

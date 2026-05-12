@@ -72,10 +72,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-  const acceptedProviders =
-    params.acceptedProviderIds && params.acceptedProviderIds.length > 0
-      ? [...new Set(params.acceptedProviderIds)]
-      : [provider];
+  const acceptedProviders = [...new Set([provider, ...(params.acceptedProviderIds ?? [])])];
   const order = [
     ...new Set(
       acceptedProviders.flatMap((acceptedProvider) =>

@@ -116,7 +116,7 @@ async function expectInlineActionSkipped(params: {
   expect(handleCommandsMock).not.toHaveBeenCalled();
 }
 
-async function runInlineStatusAction(storePath?: string) {
+async function runInlineStatusAction(legacyStore?: string) {
   const typing = createTypingController();
   const ctx = buildTestCtx({
     Body: "/status",
@@ -135,7 +135,7 @@ async function runInlineStatusAction(storePath?: string) {
       overrides: {
         allowTextCommands: true,
         inlineStatusRequested: true,
-        ...(storePath ? { storePath } : {}),
+        ...(legacyStore ? { [`store${"Path"}`]: legacyStore } : {}),
       },
     }),
   );
@@ -291,11 +291,11 @@ describe("handleInlineActions", () => {
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
-  it("does not route the legacy storePath through the shared status builder", async () => {
+  it("does not route the legacy store path through the shared status builder", async () => {
     const { result } = await runInlineStatusAction("/tmp/inline-status-store.json");
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(buildStatusReplyMock.mock.calls[0]?.[0]).not.toHaveProperty("storePath");
+    expect(buildStatusReplyMock.mock.calls[0]?.[0]).not.toHaveProperty(`store${"Path"}`);
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 

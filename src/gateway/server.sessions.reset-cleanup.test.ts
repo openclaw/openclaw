@@ -203,8 +203,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   expect(prepareFreshSession).toHaveBeenCalledWith({
     sessionKey: "agent:main:main",
   });
-  const stored = getSessionEntry({ agentId: "main", sessionKey: "agent:main:main" });
-  expectResetAcpState(stored?.acp);
+  expectResetAcpState(getSessionEntry({ agentId: "main", sessionKey: "agent:main:main" })?.acp);
 });
 
 test("sessions.reset does not emit lifecycle events when key does not exist", async () => {

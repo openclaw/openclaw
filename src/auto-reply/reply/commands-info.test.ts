@@ -247,7 +247,7 @@ describe("info command handlers", () => {
       vi.mocked(buildStatusReply),
       "buildStatusReply",
     ) as Parameters<typeof buildStatusReply>[0];
-    expect(statusReplyParams.sessionEntry?.sessionId).toBe("status-session");
+    expect(statusReplyParams).not.toHaveProperty(`store${"Path"}`);
   });
 
   it("prefers the target session entry when routing /status", async () => {

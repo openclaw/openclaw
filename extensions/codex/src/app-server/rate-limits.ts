@@ -146,51 +146,6 @@ export function summarizeCodexAccountUsage(
   };
 }
 
-export function resolveCodexUsageLimitResetAtMs(
-  value: JsonValue | undefined,
-  nowMs = Date.now(),
-): number | undefined {
-  return selectNextRateLimitReset(value, nowMs)?.resetsAtMs;
-}
-
-export function summarizeCodexAccountUsage(
-  value: JsonValue | undefined,
-  nowMs = Date.now(),
-): CodexAccountUsageSummary | undefined {
-  const snapshots = collectCodexRateLimitSnapshots(value);
-  if (snapshots.length === 0) {
-    return undefined;
-  }
-  const usageSnapshot = snapshots.find(isCodexLimitSnapshot) ?? snapshots[0];
-  const blockedSnapshots = snapshots.filter(snapshotHasLimitBlock);
-  const blockingSnapshot =
-    blockedSnapshots.find(isCodexLimitSnapshot) ?? blockedSnapshots[0] ?? undefined;
-  const blockingReset = blockingSnapshot
-    ? selectSnapshotBlockingReset(blockingSnapshot, nowMs)
-    : undefined;
-  const blockingPeriod = formatBlockingLimitPeriod(blockingReset?.windowDurationMins);
-  const blockedUntilText = blockingReset
-    ? formatAccountResetTime(blockingReset.resetsAtMs, nowMs)
-    : undefined;
-  const blockedResetRelative = blockingReset
-    ? `in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)}`
-    : undefined;
-  const blockingReason = blockingPeriod
-    ? `${blockingPeriod} Codex usage limit is reached`
-    : blockingSnapshot
-      ? "Codex usage limit is reached"
-      : undefined;
-  return {
-    usageLine: formatUsageLine(usageSnapshot),
-    blocked: Boolean(blockingSnapshot),
-    ...(blockingReset ? { blockedUntilMs: blockingReset.resetsAtMs } : {}),
-    ...(blockedUntilText ? { blockedUntilText } : {}),
-    ...(blockedResetRelative ? { blockedResetRelative } : {}),
-    ...(blockingPeriod ? { blockingPeriod } : {}),
-    ...(blockingReason ? { blockingReason } : {}),
-  };
-}
-
 function isCodexUsageLimitError(
   codexErrorInfo: JsonValue | null | undefined,
   message: string | undefined,
