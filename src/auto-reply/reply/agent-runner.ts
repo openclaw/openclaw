@@ -142,11 +142,31 @@ function hasNonEmptyStringArray(value: unknown): boolean {
   return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
 }
 
+function hasCommittedMessagingTargetDeliveryEvidence(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return false;
+    }
+    const record = entry as { text?: unknown; mediaUrls?: unknown };
+    if ("text" in record || "mediaUrls" in record) {
+      return (
+        (typeof record.text === "string" && record.text.trim().length > 0) ||
+        hasNonEmptyStringArray(record.mediaUrls)
+      );
+    }
+    return true;
+  });
+}
+
 function hasSuccessfulSideEffectDelivery(params: {
   blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
   directlySentBlockKeys?: Set<string>;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: unknown[];
   successfulCronAdds?: number;
 }): boolean {
   return Boolean(
@@ -154,6 +174,7 @@ function hasSuccessfulSideEffectDelivery(params: {
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
+    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets) ||
     (params.successfulCronAdds ?? 0) > 0,
   );
 }
@@ -1592,6 +1613,7 @@ export async function runReplyAgent(params: {
           directlySentBlockKeys,
           messagingToolSentTexts: runResult.messagingToolSentTexts,
           messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+          messagingToolSentTargets: runResult.messagingToolSentTargets,
           successfulCronAdds: runResult.successfulCronAdds,
         }),
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
