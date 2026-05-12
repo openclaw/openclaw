@@ -170,15 +170,21 @@ describe("matrix thread bindings", () => {
       parentConversationId?: string;
     },
   ) {
-    await expect(readPersistedBindings(customStateDir)).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          conversationId: expected.conversationId,
-          parentConversationId: expected.parentConversationId ?? "!room:example",
-          targetSessionKey: expected.targetSessionKey,
-        }),
-      ]),
+    const persisted = await readPersistedBindings(customStateDir);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.conversationId).toBe(expected.conversationId);
+    expect(persisted[0]?.parentConversationId).toBe(
+      expected.parentConversationId ?? "!room:example",
     );
+    expect(persisted[0]?.targetSessionKey).toBe(expected.targetSessionKey);
+  }
+
+  function latestSendMessageCall() {
+    const call = sendMessageMatrixMock.mock.calls.at(-1);
+    if (!call) {
+      throw new Error("expected sendMessageMatrix call");
+    }
+    return call;
   }
 
   beforeEach(() => {
@@ -389,9 +395,13 @@ describe("matrix thread bindings", () => {
 
       await vi.waitFor(
         () => {
-          expect(logVerboseMessage).toHaveBeenCalledWith(
-            expect.stringContaining("matrix: auto-unbinding $thread due to idle-expired"),
-          );
+          expect(
+            logVerboseMessage.mock.calls.some(
+              ([message]) =>
+                typeof message === "string" &&
+                message.includes("matrix: auto-unbinding $thread due to idle-expired"),
+            ),
+          ).toBe(true);
         },
         { interval: 1, timeout: 100 },
       );
@@ -523,10 +533,8 @@ describe("matrix thread bindings", () => {
         accountId: "ops",
         conversationId: "$thread",
         parentConversationId: "!room:example",
-      }),
-    ).toMatchObject({
-      targetSessionKey: "agent:ops:subagent:child",
-    });
+      })?.targetSessionKey,
+    ).toBe("agent:ops:subagent:child");
   });
 
   it("replaces reused account managers when the bindings stateDir changes", async () => {
