@@ -120,13 +120,18 @@ function normalizeApprovalSurfaceList(value: string[] | undefined): string[] {
   return normalizeArrayBackedTrimmedStringList(value) ?? [];
 }
 
-function sameApprovalSurfaceList(left: string[] | undefined, right: string[] | undefined): boolean {
-  const normalizedLeft = normalizeApprovalSurfaceList(left);
-  const normalizedRight = normalizeApprovalSurfaceList(right);
-  if (normalizedLeft.length !== normalizedRight.length) {
+function sameApprovalSurfaceSet(left: string[] | undefined, right: string[] | undefined): boolean {
+  const normalizedLeft = new Set(normalizeApprovalSurfaceList(left));
+  const normalizedRight = new Set(normalizeApprovalSurfaceList(right));
+  if (normalizedLeft.size !== normalizedRight.size) {
     return false;
   }
-  return normalizedLeft.every((entry, index) => entry === normalizedRight[index]);
+  for (const entry of normalizedLeft) {
+    if (!normalizedRight.has(entry)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function samePermissions(
@@ -157,10 +162,34 @@ function samePendingApprovalSurface(
     normalizeArrayBackedTrimmedStringList(incoming.commands) ?? existing.commands;
   const incomingPermissions = incoming.permissions ?? existing.permissions;
   return (
-    sameApprovalSurfaceList(existing.caps, incomingCaps) &&
-    sameApprovalSurfaceList(existing.commands, incomingCommands) &&
+    sameApprovalSurfaceSet(existing.caps, incomingCaps) &&
+    sameApprovalSurfaceSet(existing.commands, incomingCommands) &&
     samePermissions(existing.permissions, incomingPermissions)
   );
+}
+
+function mergeNodePairingReplacementInput(params: {
+  existing: readonly NodePairingPendingRequest[];
+  incoming: NodePairingRequestInput;
+}): NodePairingRequestInput {
+  const latest = params.existing[0];
+  return {
+    nodeId: params.incoming.nodeId,
+    displayName: params.incoming.displayName ?? latest?.displayName,
+    platform: params.incoming.platform ?? latest?.platform,
+    version: params.incoming.version ?? latest?.version,
+    coreVersion: params.incoming.coreVersion ?? latest?.coreVersion,
+    uiVersion: params.incoming.uiVersion ?? latest?.uiVersion,
+    deviceFamily: params.incoming.deviceFamily ?? latest?.deviceFamily,
+    modelIdentifier: params.incoming.modelIdentifier ?? latest?.modelIdentifier,
+    caps: params.incoming.caps ?? latest?.caps,
+    commands: params.incoming.commands ?? latest?.commands,
+    permissions: params.incoming.permissions ?? latest?.permissions,
+    remoteIp: params.incoming.remoteIp ?? latest?.remoteIp,
+    silent: Boolean(
+      params.incoming.silent && params.existing.every((pending) => pending.silent === true),
+    ),
+  };
 }
 
 function resolveNodeApprovalRequiredScopes(
@@ -258,12 +287,7 @@ export async function requestNodePairing(
       refreshSingle: (existing, incoming) => refreshPendingNodePairingRequest(existing, incoming),
       buildReplacement: ({ existing, incoming }) =>
         buildPendingNodePairingRequest({
-          req: {
-            ...incoming,
-            silent: Boolean(
-              incoming.silent && existing.every((pending) => pending.silent === true),
-            ),
-          },
+          req: mergeNodePairingReplacementInput({ existing, incoming }),
         }),
       persist: async () => await persistState(state, baseDir),
     });

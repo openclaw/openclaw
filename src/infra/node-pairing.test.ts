@@ -111,9 +111,31 @@ describe("node pairing tokens", () => {
       expect(commandSecond.request.displayName).toBe("Updated Node");
       expect(commandSecond.request.commands).toEqual(["canvas.snapshot"]);
 
-      await requestNodePairing(
+      const reorderedFirst = await requestNodePairing(
         {
           nodeId: "node-3",
+          platform: "darwin",
+          caps: ["camera", "screen"],
+          commands: ["canvas.snapshot", "system.run"],
+        },
+        baseDir,
+      );
+      const reorderedSecond = await requestNodePairing(
+        {
+          nodeId: "node-3",
+          platform: "darwin",
+          caps: ["screen", "camera"],
+          commands: ["system.run", "canvas.snapshot"],
+        },
+        baseDir,
+      );
+
+      expect(reorderedSecond.created).toBe(false);
+      expect(reorderedSecond.request.requestId).toBe(reorderedFirst.request.requestId);
+
+      await requestNodePairing(
+        {
+          nodeId: "node-4",
           platform: "darwin",
           commands: ["canvas.present"],
         },
@@ -121,7 +143,7 @@ describe("node pairing tokens", () => {
       );
 
       const pairing = await listNodePairing(baseDir);
-      const pendingNode = findRecordByField(pairing.pending, "nodeId", "node-3");
+      const pendingNode = findRecordByField(pairing.pending, "nodeId", "node-4");
       expect(pendingNode.commands).toEqual(["canvas.present"]);
       expect(pendingNode.requiredApproveScopes).toEqual(["operator.pairing", "operator.write"]);
       expect(pairing.paired).toEqual([]);
@@ -134,7 +156,9 @@ describe("node pairing tokens", () => {
         {
           nodeId: "node-1",
           platform: "darwin",
+          caps: ["camera"],
           commands: ["canvas.snapshot"],
+          permissions: { camera: true },
         },
         baseDir,
       );
@@ -153,7 +177,9 @@ describe("node pairing tokens", () => {
       const list = await listNodePairing(baseDir);
       expect(list.pending).toHaveLength(1);
       expect(list.pending[0]?.requestId).toBe(second.request.requestId);
+      expect(list.pending[0]?.caps).toEqual(["camera"]);
       expect(list.pending[0]?.commands).toEqual(["canvas.snapshot", "system.run"]);
+      expect(list.pending[0]?.permissions).toEqual({ camera: true });
 
       await expect(
         approveNodePairing(
@@ -171,7 +197,9 @@ describe("node pairing tokens", () => {
       const approvedRecord = requireRecord(approved);
       const approvedNode = requireRecord(approvedRecord.node);
       expect(approvedRecord.requestId).toBe(second.request.requestId);
+      expect(approvedNode.caps).toEqual(["camera"]);
       expect(approvedNode.commands).toEqual(["canvas.snapshot", "system.run"]);
+      expect(approvedNode.permissions).toEqual({ camera: true });
 
       const capsFirst = await requestNodePairing(
         {
