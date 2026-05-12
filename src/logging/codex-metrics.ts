@@ -9,6 +9,19 @@ interface CodexUsageRecord {
   cached: number;
 }
 
+// Extract a privacy-safe command tag from a user message — the leading
+// slash-command identifier ("/eth", "/scan") or "freeform" when the message
+// starts with arbitrary text. The raw prompt is intentionally NOT exported
+// for logging because pasted tokens, OAuth secrets, or customer identifiers
+// must not leak into operational telemetry. Identifier is hard-capped to 31
+// characters even if the message keeps going so long pasted blobs that begin
+// with `/` cannot smuggle data through the tag.
+export function extractCommandTag(content: unknown): string {
+  if (typeof content !== "string") return "n/a";
+  const match = content.trimStart().match(/^\/([a-z][a-z0-9_-]{0,30})/i);
+  return match ? `/${match[1].toLowerCase()}` : "freeform";
+}
+
 let promptTokensTotal = 0;
 let completionTokensTotal = 0;
 let cachedTokensTotal = 0;

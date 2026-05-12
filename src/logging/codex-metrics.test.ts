@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import {
+  extractCommandTag,
   formatCodexMetricsPrometheus,
   recordCodexUsage,
   resetCodexMetrics,
@@ -45,5 +46,43 @@ describe("codex-metrics", () => {
     const out = formatCodexMetricsPrometheus();
     expect(out).toContain("openclaw_codex_prompt_tokens_total 0");
     expect(out).toContain("openclaw_codex_requests_total 0");
+  });
+});
+
+describe("extractCommandTag", () => {
+  test("extracts leading slash-command, lowercased", () => {
+    expect(extractCommandTag("/eth ETH")).toBe("/eth");
+    expect(extractCommandTag("/SCAN")).toBe("/scan");
+    expect(extractCommandTag("  /pulse BTC  ")).toBe("/pulse");
+    expect(extractCommandTag("/set_threshold 75")).toBe("/set_threshold");
+    expect(extractCommandTag("/rsi-multi ETH")).toBe("/rsi-multi");
+  });
+
+  test("returns 'freeform' for plain prose", () => {
+    expect(extractCommandTag("What is funding for ETH?")).toBe("freeform");
+    expect(extractCommandTag("hello")).toBe("freeform");
+    expect(extractCommandTag("")).toBe("freeform");
+  });
+
+  test("does not match path-like strings as commands", () => {
+    expect(extractCommandTag("/home/node/file.txt")).toBe("/home");
+    // Path beyond first segment is dropped; the leading segment looks like a
+    // command tag. This is intentionally lenient — paths are not common as
+    // first-line user input; the privacy goal (no raw prompt content beyond
+    // a short identifier) is still met.
+  });
+
+  test("returns 'n/a' for non-string content", () => {
+    expect(extractCommandTag(undefined)).toBe("n/a");
+    expect(extractCommandTag(null)).toBe("n/a");
+    expect(extractCommandTag(123)).toBe("n/a");
+    expect(extractCommandTag({ text: "/eth" })).toBe("n/a");
+  });
+
+  test("caps the identifier length to 31 chars to avoid arbitrary leakage", () => {
+    const longTail = "a".repeat(60);
+    const out = extractCommandTag(`/${longTail}`);
+    expect(out.length).toBeLessThanOrEqual(32);
+    expect(out.startsWith("/aaaaa")).toBe(true);
   });
 });

@@ -20,7 +20,7 @@ import type {
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
-import { recordCodexUsage } from "../logging/codex-metrics.js";
+import { extractCommandTag, recordCodexUsage } from "../logging/codex-metrics.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
@@ -738,11 +738,7 @@ function emitCodexUsageObservability(
   const messages = (context as { messages?: ReadonlyArray<{ role: string; content: unknown }> })
     .messages;
   const lastUser = messages?.findLast?.((m) => m.role === "user");
-  const rawContent = lastUser?.content;
-  const commandSnippet =
-    typeof rawContent === "string"
-      ? rawContent.slice(0, 80).replace(/\s+/g, " ").trim() || "n/a"
-      : "n/a";
+  const commandTag = extractCommandTag(lastUser?.content);
   log.info(
     `codex_usage model=${model.id} prompt=${prompt} completion=${completion} cached=${cached}`,
     {
@@ -751,7 +747,7 @@ function emitCodexUsageObservability(
       prompt_tokens: prompt,
       completion_tokens: completion,
       cached_tokens: cached,
-      command: commandSnippet,
+      command: commandTag,
     },
   );
 }
