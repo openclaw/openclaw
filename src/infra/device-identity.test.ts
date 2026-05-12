@@ -70,6 +70,15 @@ describe("device identity crypto helpers", () => {
     });
   });
 
+  it("stores generated key material as normalized PEM blocks", async () => {
+    await withIdentity((identity) => {
+      expect(identity.publicKeyPem.startsWith("-----BEGIN PUBLIC KEY-----\n")).toBe(true);
+      expect(identity.publicKeyPem.endsWith("-----END PUBLIC KEY-----\n")).toBe(true);
+      expect(identity.privateKeyPem.startsWith("-----BEGIN PRIVATE KEY-----\n")).toBe(true);
+      expect(identity.privateKeyPem.endsWith("-----END PRIVATE KEY-----\n")).toBe(true);
+    });
+  });
+
   it("does not repair mismatched stored device ids in read-only mode", async () => {
     await withTempDir("openclaw-device-identity-readonly-", async (dir) => {
       const store = { env: { ...process.env, OPENCLAW_STATE_DIR: dir }, key: "mismatched" };
