@@ -11,6 +11,13 @@ type SpawnCall = {
   args: string[];
 };
 
+type ScriptedDockerResult = {
+  prefix: string[];
+  code: number;
+  stdout?: string;
+  stderr?: string;
+};
+
 type MockDockerChild = EventEmitter & {
   stdout: Readable;
   stderr: Readable;
@@ -20,8 +27,10 @@ type MockDockerChild = EventEmitter & {
 
 const spawnState = vi.hoisted(() => ({
   calls: [] as SpawnCall[],
+  containerExists: true,
   inspectRunning: true,
   labelHash: "",
+  scriptedResults: [] as ScriptedDockerResult[],
 }));
 
 const registryMocks = vi.hoisted(() => ({
@@ -43,18 +52,39 @@ function createMockDockerChild(): MockDockerChild {
   return child;
 }
 
+function normalizeMockCommand(command: string): string {
+  return /(?:^|[\\/])docker(?:\.exe)?$/i.test(command) ? "docker" : command;
+}
+
 function spawnDockerProcess(command: string, args: string[]) {
-  spawnState.calls.push({ command, args });
+  const normalizedCommand = normalizeMockCommand(command);
+  spawnState.calls.push({ command: normalizedCommand, args });
   const child = createMockDockerChild();
 
   let code = 0;
   let stdout = "";
   let stderr = "";
-  if (command !== "docker") {
+  const scriptedIndex =
+    normalizedCommand === "docker"
+      ? spawnState.scriptedResults.findIndex((result) =>
+          result.prefix.every((part, index) => args[index] === part),
+        )
+      : -1;
+  if (scriptedIndex >= 0) {
+    const [result] = spawnState.scriptedResults.splice(scriptedIndex, 1);
+    code = result?.code ?? 0;
+    stdout = result?.stdout ?? "";
+    stderr = result?.stderr ?? "";
+  } else if (normalizedCommand !== "docker") {
     code = 1;
     stderr = `unexpected command: ${command}`;
   } else if (args[0] === "inspect" && args[1] === "-f" && args[2] === "{{.State.Running}}") {
-    stdout = spawnState.inspectRunning ? "true\n" : "false\n";
+    if (!spawnState.containerExists) {
+      code = 1;
+      stderr = "No such container";
+    } else {
+      stdout = spawnState.inspectRunning ? "true\n" : "false\n";
+    }
   } else if (
     args[0] === "inspect" &&
     args[1] === "-f" &&
@@ -105,6 +135,10 @@ async function loadFreshDockerModuleForTest() {
   }));
   vi.doMock("node:child_process", async () => createChildProcessMock());
   ({ ensureSandboxContainer } = await import("./docker.js"));
+}
+
+function queueDockerResult(prefix: string[], result: Omit<ScriptedDockerResult, "prefix">) {
+  spawnState.scriptedResults.push({ prefix, ...result });
 }
 
 function createSandboxConfig(
@@ -182,8 +216,10 @@ async function ensureSandboxCreateCallForTest(params: {
 describe("ensureSandboxContainer config-hash recreation", () => {
   beforeEach(async () => {
     spawnState.calls.length = 0;
+    spawnState.containerExists = true;
     spawnState.inspectRunning = true;
     spawnState.labelHash = "";
+    spawnState.scriptedResults.length = 0;
     registryMocks.readRegistryEntry.mockClear();
     registryMocks.updateRegistry.mockClear();
     registryMocks.updateRegistry.mockResolvedValue(undefined);
@@ -316,5 +352,143 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(createCall.args).toContain(
       `openclaw.mountFormatVersion=${SANDBOX_MOUNT_FORMAT_VERSION}`,
     );
+  });
+
+  it("throws a clear Docker sandbox create error without command args", async () => {
+    const cfg = createSandboxConfig([]);
+    spawnState.containerExists = false;
+    queueDockerResult(["create"], {
+      code: 125,
+      stderr: "invalid mount config for type bind",
+    });
+
+    let error: unknown;
+    try {
+      await ensureSandboxContainer({
+        sessionKey: "agent:main:session-1",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toMatch(
+      /Docker sandbox failed during create for container oc-test-shared \(image openclaw-sandbox:test\) with exit code 125/,
+    );
+    expect(message).toContain("invalid mount config");
+    expect(message).not.toContain("create --name");
+    expect(message).not.toContain("/tmp/workspace");
+  });
+
+  it("throws a clear start error for a stopped existing container", async () => {
+    const workspaceDir = "/tmp/workspace";
+    const cfg = createSandboxConfig([]);
+    spawnState.inspectRunning = false;
+    spawnState.labelHash = computeSandboxConfigHash({
+      docker: cfg.docker,
+      workspaceAccess: cfg.workspaceAccess,
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+    });
+    queueDockerResult(["start", "oc-test-shared"], {
+      code: 1,
+      stderr: "container failed to start",
+    });
+
+    await expect(
+      ensureSandboxContainer({
+        sessionKey: "agent:main:session-1",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        cfg,
+      }),
+    ).rejects.toThrow(
+      /Docker sandbox failed during start for container oc-test-shared \(image openclaw-sandbox:test\) with exit code 1/,
+    );
+  });
+
+  it("surfaces setupCommand failure clearly and does not retry it", async () => {
+    const cfg = createSandboxConfig([]);
+    cfg.docker.setupCommand = "echo setup";
+    spawnState.containerExists = false;
+    queueDockerResult(["exec", "-i", "oc-test-shared"], {
+      code: 7,
+      stderr: "setup failed",
+    });
+
+    await expect(
+      ensureSandboxContainer({
+        sessionKey: "agent:main:session-1",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg,
+      }),
+    ).rejects.toThrow(
+      /Docker sandbox failed during setupCommand for container oc-test-shared \(image openclaw-sandbox:test\) with exit code 7/,
+    );
+
+    const execCalls = spawnState.calls.filter(
+      (call) => call.command === "docker" && call.args[0] === "exec",
+    );
+    expect(execCalls).toHaveLength(1);
+  });
+
+  it("does not retry create failures", async () => {
+    const cfg = createSandboxConfig([]);
+    spawnState.containerExists = false;
+    queueDockerResult(["create"], {
+      code: 125,
+      stderr: "invalid bind mount config",
+    });
+
+    await expect(
+      ensureSandboxContainer({
+        sessionKey: "agent:main:session-1",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg,
+      }),
+    ).rejects.toThrow(/invalid bind mount config/);
+
+    const createCalls = spawnState.calls.filter(
+      (call) => call.command === "docker" && call.args[0] === "create",
+    );
+    expect(createCalls).toHaveLength(1);
+  });
+
+  it("does not retry start failures", async () => {
+    const workspaceDir = "/tmp/workspace";
+    const cfg = createSandboxConfig([]);
+    spawnState.inspectRunning = false;
+    spawnState.labelHash = computeSandboxConfigHash({
+      docker: cfg.docker,
+      workspaceAccess: cfg.workspaceAccess,
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+    });
+    queueDockerResult(["start", "oc-test-shared"], {
+      code: 1,
+      stderr: "invalid restart policy",
+    });
+
+    await expect(
+      ensureSandboxContainer({
+        sessionKey: "agent:main:session-1",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        cfg,
+      }),
+    ).rejects.toThrow(/invalid restart policy/);
+
+    const startCalls = spawnState.calls.filter(
+      (call) => call.command === "docker" && call.args[0] === "start",
+    );
+    expect(startCalls).toHaveLength(1);
   });
 });

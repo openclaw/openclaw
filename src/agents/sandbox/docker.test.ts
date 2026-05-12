@@ -30,13 +30,18 @@ function createMockDockerChild(): MockDockerChild {
   return child;
 }
 
+function normalizeMockCommand(command: string): string {
+  return /(?:^|[\\/])docker(?:\.exe)?$/i.test(command) ? "docker" : command;
+}
+
 function spawnDockerProcess(command: string, args: string[]) {
-  spawnState.calls.push({ command, args });
+  const normalizedCommand = normalizeMockCommand(command);
+  spawnState.calls.push({ command: normalizedCommand, args });
   const child = createMockDockerChild();
 
   let code = 0;
   let stderr = "";
-  if (command !== "docker") {
+  if (normalizedCommand !== "docker") {
     code = 1;
     stderr = `unexpected command: ${command}`;
   } else if (args[0] === "image" && args[1] === "inspect") {
@@ -110,6 +115,8 @@ describe("ensureDockerImage", () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toContain("scripts/sandbox-setup.sh");
     expect((err as Error).message).toContain("python3");
+    expect((err as Error).message).toContain("with exit code 1");
+    expect((err as Error).message).toContain("No such image");
     expect(spawnState.calls).toEqual([
       {
         command: "docker",

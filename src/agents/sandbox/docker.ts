@@ -176,6 +176,19 @@ import { appendWorkspaceMountArgs, SANDBOX_MOUNT_FORMAT_VERSION } from "./worksp
 const log = createSubsystemLogger("docker");
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
+const DOCKER_STARTUP_OUTPUT_LIMIT = 2000;
+
+type DockerStartupPhase = "image inspect" | "create" | "start" | "setupCommand";
+
+type DockerStartupErrorContext = {
+  phase: DockerStartupPhase;
+  containerName?: string;
+  image: string;
+};
+
+type DockerImageInspectState =
+  | { state: "exists" }
+  | { state: "missing"; code: number; stdout: string; stderr: string };
 
 export type ExecDockerOptions = ExecDockerRawOptions;
 
@@ -186,6 +199,92 @@ export async function execDocker(args: string[], opts?: ExecDockerOptions) {
     stderr: result.stderr.toString("utf8"),
     code: result.code,
   };
+}
+
+function isExecDockerRawError(error: unknown): error is ExecDockerRawError {
+  return (
+    error instanceof Error &&
+    typeof (error as { code?: unknown }).code === "number" &&
+    Buffer.isBuffer((error as { stdout?: unknown }).stdout) &&
+    Buffer.isBuffer((error as { stderr?: unknown }).stderr)
+  );
+}
+
+function sanitizeDockerOutput(value: string): string {
+  const cleaned = value
+    .replace(/\u001b\[[0-9;]*m/g, "")
+    .replace(
+      /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASS|KEY|CREDENTIAL)[A-Z0-9_]*)=([^\s]+)/gi,
+      "$1=[redacted]",
+    )
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .trim();
+  if (cleaned.length <= DOCKER_STARTUP_OUTPUT_LIMIT) {
+    return cleaned;
+  }
+  return `${cleaned.slice(0, DOCKER_STARTUP_OUTPUT_LIMIT)}... [truncated]`;
+}
+
+function safeErrorMessage(error: unknown): string {
+  if (isExecDockerRawError(error)) {
+    return "";
+  }
+  if (error instanceof Error) {
+    return sanitizeDockerOutput(error.message);
+  }
+  return sanitizeDockerOutput(String(error));
+}
+
+function createDockerSandboxStartupError(params: {
+  context: DockerStartupErrorContext;
+  error?: unknown;
+  exitCode?: number;
+  stdout?: Buffer | string;
+  stderr?: Buffer | string;
+}) {
+  const stderr = sanitizeDockerOutput(
+    Buffer.isBuffer(params.stderr) ? params.stderr.toString("utf8") : (params.stderr ?? ""),
+  );
+  const stdout = sanitizeDockerOutput(
+    Buffer.isBuffer(params.stdout) ? params.stdout.toString("utf8") : (params.stdout ?? ""),
+  );
+  const errorMessage = safeErrorMessage(params.error);
+  const exitCode =
+    typeof params.exitCode === "number"
+      ? params.exitCode
+      : isExecDockerRawError(params.error)
+        ? params.error.code
+        : undefined;
+  const outputParts = [
+    errorMessage ? `error: ${errorMessage}` : undefined,
+    stderr ? `stderr: ${stderr}` : undefined,
+    stdout ? `stdout: ${stdout}` : undefined,
+  ].filter((part): part is string => Boolean(part));
+  const contextParts = [
+    `Docker sandbox failed during ${params.context.phase}`,
+    params.context.containerName ? `for container ${params.context.containerName}` : undefined,
+    `(image ${params.context.image})`,
+    typeof exitCode === "number" ? `with exit code ${exitCode}` : undefined,
+  ].filter((part): part is string => Boolean(part));
+  const details = outputParts.length > 0 ? ` Docker said: ${outputParts.join("; ")}` : "";
+  return new Error(`${contextParts.join(" ")}.${details}`, { cause: params.error });
+}
+
+async function execDockerStartupCommand(args: string[], context: DockerStartupErrorContext) {
+  try {
+    return await execDocker(args);
+  } catch (error) {
+    throw createDockerSandboxStartupError({
+      context,
+      error,
+      ...(isExecDockerRawError(error)
+        ? {
+            stdout: error.stdout,
+            stderr: error.stderr,
+          }
+        : {}),
+    });
+  }
 }
 
 export async function readDockerContainerLabel(
@@ -294,34 +393,85 @@ export function formatDockerDaemonUnavailableError(stderr: string): string {
     .join(" ");
 }
 
-async function inspectDockerImage(image: string): Promise<"exists" | "missing"> {
+async function inspectDockerImage(
+  image: string,
+  context: Omit<DockerStartupErrorContext, "phase" | "image"> = {},
+): Promise<DockerImageInspectState> {
+  const startupContext: DockerStartupErrorContext = {
+    phase: "image inspect",
+    image,
+    ...context,
+  };
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
+  }).catch((error: unknown): never => {
+    throw createDockerSandboxStartupError({
+      context: startupContext,
+      error,
+      ...(isExecDockerRawError(error)
+        ? {
+            stdout: error.stdout,
+            stderr: error.stderr,
+          }
+        : {}),
+    });
   });
   if (result.code === 0) {
-    return "exists";
+    return { state: "exists" };
   }
   const stderr = result.stderr.trim();
   if (stderr.toLowerCase().includes("no such image")) {
-    return "missing";
+    return {
+      state: "missing",
+      code: result.code,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
   }
   if (isDockerDaemonUnavailable(stderr)) {
-    throw new Error(formatDockerDaemonUnavailableError(stderr));
+    throw createDockerSandboxStartupError({
+      context: startupContext,
+      error: new Error(formatDockerDaemonUnavailableError(stderr)),
+      exitCode: result.code,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    });
   }
-  throw new Error(`Failed to inspect sandbox image: ${stderr}`);
+  throw createDockerSandboxStartupError({
+    context: startupContext,
+    error: new Error("Failed to inspect sandbox image"),
+    exitCode: result.code,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  });
 }
 
-export async function ensureDockerImage(image: string) {
-  const imageState = await inspectDockerImage(image);
-  if (imageState === "exists") {
+export async function ensureDockerImage(
+  image: string,
+  context: Omit<DockerStartupErrorContext, "phase" | "image"> = {},
+) {
+  const imageState = await inspectDockerImage(image, context);
+  if (imageState.state === "exists") {
     return;
   }
   if (image === DEFAULT_SANDBOX_IMAGE) {
-    throw new Error(
-      `Sandbox image not found: ${image}. Build it with scripts/sandbox-setup.sh before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:bookworm-slim.`,
-    );
+    throw createDockerSandboxStartupError({
+      context: { phase: "image inspect", image, ...context },
+      error: new Error(
+        `Sandbox image not found: ${image}. Build it with scripts/sandbox-setup.sh before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:bookworm-slim.`,
+      ),
+      exitCode: imageState.code,
+      stdout: imageState.stdout,
+      stderr: imageState.stderr,
+    });
   }
-  throw new Error(`Sandbox image not found: ${image}. Build or pull it first.`);
+  throw createDockerSandboxStartupError({
+    context: { phase: "image inspect", image, ...context },
+    error: new Error(`Sandbox image not found: ${image}. Build or pull it first.`),
+    exitCode: imageState.code,
+    stdout: imageState.stdout,
+    stderr: imageState.stderr,
+  });
 }
 
 export async function dockerContainerState(name: string) {
@@ -506,7 +656,7 @@ async function createSandboxContainer(params: {
   configHash?: string;
 }) {
   const { name, cfg, workspaceDir, scopeKey } = params;
-  await ensureDockerImage(cfg.image);
+  await ensureDockerImage(cfg.image, { containerName: name });
 
   const args = buildSandboxCreateArgs({
     name,
@@ -527,11 +677,23 @@ async function createSandboxContainer(params: {
   appendCustomBinds(args, cfg);
   args.push(cfg.image, "sleep", "infinity");
 
-  await execDocker(args);
-  await execDocker(["start", name]);
+  await execDockerStartupCommand(args, {
+    phase: "create",
+    containerName: name,
+    image: cfg.image,
+  });
+  await execDockerStartupCommand(["start", name], {
+    phase: "start",
+    containerName: name,
+    image: cfg.image,
+  });
 
   if (cfg.setupCommand?.trim()) {
-    await execDocker(["exec", "-i", name, "/bin/sh", "-lc", cfg.setupCommand]);
+    await execDockerStartupCommand(["exec", "-i", name, "/bin/sh", "-lc", cfg.setupCommand], {
+      phase: "setupCommand",
+      containerName: name,
+      image: cfg.image,
+    });
   }
 }
 
@@ -614,7 +776,11 @@ export async function ensureSandboxContainer(params: {
       configHash: expectedHash,
     });
   } else if (!running) {
-    await execDocker(["start", containerName]);
+    await execDockerStartupCommand(["start", containerName], {
+      phase: "start",
+      containerName,
+      image: params.cfg.docker.image,
+    });
   }
   await updateRegistry({
     containerName,
