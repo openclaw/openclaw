@@ -28,6 +28,7 @@ import {
   validateRegistryNpmSpec,
   type ParsedRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
+import { installedPackageNeedsOpenClawPeerLinkRepair } from "../infra/package-update-utils.js";
 import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
@@ -75,6 +76,10 @@ type PackageManifest = PluginPackageManifest & {
   optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
 };
+
+function formatUnresolvedOpenClawPeerLinkError(packageName: string): string {
+  return `Installed plugin ${packageName} declares openclaw as a peer dependency, but OpenClaw could not create a plugin-local node_modules/openclaw link. Run from a packaged OpenClaw install or reinstall OpenClaw, then retry.`;
+}
 
 const MISSING_EXTENSIONS_ERROR =
   'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
@@ -328,8 +333,6 @@ async function rollbackManagedNpmPluginInstall(params: {
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
-        "--prefix",
-        ".",
         params.packageName,
       ],
       {
@@ -499,8 +502,6 @@ async function installPluginFromManagedNpmRoot(
         noAudit: true,
         noFund: true,
       }),
-      "--prefix",
-      ".",
     ],
     {
       cwd: npmRoot,
@@ -535,7 +536,37 @@ async function installPluginFromManagedNpmRoot(
       logger.info?.(`Repaired stale openclaw peer dependency in ${npmRoot} after npm install`);
     }
   }
-  await relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger });
+  try {
+    await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+      npmRoot,
+      logger,
+    });
+  } catch (error) {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: params.packageName,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+    });
+    return {
+      ok: false,
+      error: `Failed to repair openclaw peer links after npm install: ${String(error)}`,
+    };
+  }
+  if (installedPackageNeedsOpenClawPeerLinkRepair(installRoot)) {
+    await rollbackManagedNpmPluginInstall({
+      npmRoot,
+      packageName: params.packageName,
+      targetDir: installRoot,
+      timeoutMs,
+      logger,
+    });
+    return {
+      ok: false,
+      error: formatUnresolvedOpenClawPeerLinkError(params.packageName),
+    };
+  }
 
   let installedDependency: ManagedNpmRootInstalledDependency | null;
   try {
@@ -1136,6 +1167,7 @@ async function validatePackagePluginInstallSource(params: {
         pluginId,
         logger: params.logger,
         extensions,
+        ...(packageMetadata ? { packageMetadata } : {}),
         requestKind: params.installPolicyRequest?.kind,
         requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
         mode: scanMode,
@@ -1185,11 +1217,17 @@ async function scanAndLinkInstalledPackage(params: {
   if (scanResult) {
     return scanResult;
   }
-  await linkOpenClawPeerDependencies({
+  const peerLinkRepair = await linkOpenClawPeerDependencies({
     installedDir: params.installedDir,
     peerDependencies: params.peerDependencies,
     logger: params.logger,
   });
+  if (peerLinkRepair.skipped > 0) {
+    return {
+      ok: false,
+      error: formatUnresolvedOpenClawPeerLinkError(params.pluginId),
+    };
+  }
   return null;
 }
 

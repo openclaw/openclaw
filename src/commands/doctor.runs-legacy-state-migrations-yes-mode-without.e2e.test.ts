@@ -174,7 +174,12 @@ describe("doctor command", () => {
       throw new Error("Expected doctor to write migrated auth profiles");
     }
     const profiles = (written.auth as { profiles: Record<string, unknown> }).profiles;
-    expect(profiles["anthropic:me@example.com"]).toBeTruthy();
+    expect(profiles).toHaveProperty("anthropic:me@example.com");
+    const migratedProfile = profiles["anthropic:me@example.com"] as
+      | { provider?: unknown; mode?: unknown }
+      | undefined;
+    expect(migratedProfile?.provider).toBe("anthropic");
+    expect(migratedProfile?.mode).toBe("oauth");
     expect(profiles["anthropic:default"]).toBeUndefined();
   }, 30_000);
 });

@@ -1,6 +1,9 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ImageContent } from "@mariozechner/pi-ai";
-import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ImageContent } from "@earendil-works/pi-ai";
+import type {
+  PartialReplyPayload,
+  SourceReplyDeliveryMode,
+} from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
@@ -26,11 +29,8 @@ export type { ClientToolDefinition } from "../../command/shared-types.js";
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
 export type CurrentTurnPromptContext = {
-  reply?: {
-    body: string;
-    senderLabel?: string;
-    isQuote?: boolean;
-  };
+  text: string;
+  promptJoiner?: "\n\n" | "\n" | " ";
 };
 
 export type RunEmbeddedPiAgentParams = {
@@ -152,10 +152,34 @@ export type RunEmbeddedPiAgentParams = {
   runId: string;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
+  onExecutionPhase?: (info: {
+    phase:
+      | "runner_entered"
+      | "workspace"
+      | "runtime_plugins"
+      | "model_resolution"
+      | "auth"
+      | "context_engine"
+      | "attempt_dispatch"
+      | "context_assembled"
+      | "turn_accepted"
+      | "process_spawned"
+      | "tool_execution_started"
+      | "assistant_output_started"
+      | "model_call_started";
+    provider?: string;
+    model?: string;
+    backend?: string;
+    source?: string;
+    tool?: string;
+    toolCallId?: string;
+    itemId?: string;
+    firstModelCallStarted?: boolean;
+  }) => void;
   replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
-  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
   onBlockReplyFlush?: () => void | Promise<void>;

@@ -9,10 +9,9 @@ describe("slash command browser import", () => {
   it("builds fallback commands from the browser-safe shared registry", async () => {
     const mod = (await import(browserImportPath)) as SlashCommandsModule;
 
-    expect(mod.SLASH_COMMANDS.find((command) => command.name === "think")).toMatchObject({
-      name: "think",
-      category: "model",
-    });
+    const thinkCommand = mod.SLASH_COMMANDS.find((command) => command.name === "think");
+    expect(thinkCommand?.name).toBe("think");
+    expect(thinkCommand?.category).toBe("model");
   });
 
   it("keeps provider thinking runtime out of the Control UI import path", async () => {
@@ -27,7 +26,7 @@ describe("slash command browser import", () => {
     );
     const mod = (await import(browserImportPath)) as SlashCommandsModule;
 
-    expect(mod.SLASH_COMMANDS.some((command) => command.name === "think")).toBe(true);
+    expect(mod.SLASH_COMMANDS.map((command) => command.name)).toContain("think");
     expect(slashCommands).toContain("commands-registry.shared.js");
     expect(sharedRegistry).toContain("thinking.shared.js");
     expect(sharedRegistry).not.toContain("./thinking.js");

@@ -1,6 +1,6 @@
 import type { webhook } from "@line/bot-sdk";
-import { hasFinalChannelMessageReplyDispatch } from "openclaw/plugin-sdk/channel-message";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { hasFinalChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
@@ -313,7 +313,7 @@ export async function monitorLineProvider(
           },
         });
         const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
-        if (!hasFinalChannelMessageReplyDispatch(dispatchResult)) {
+        if (!hasFinalChannelTurnDispatch(dispatchResult)) {
           logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
         }
       } catch (err) {

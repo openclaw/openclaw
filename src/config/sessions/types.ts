@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { Skill } from "@mariozechner/pi-coding-agent";
+import type { Skill } from "@earendil-works/pi-coding-agent";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -220,6 +220,10 @@ export type SessionEntry = {
   quotaSuspension?: QuotaSuspension;
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
+  /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
+  usageFamilyKey?: string;
+  /** Session ids known to belong to this usage lineage, including archived predecessors. */
+  usageFamilySessionIds?: string[];
   /** Timestamp (ms) of the last user/channel interaction that should extend idle lifetime. */
   lastInteractionAt?: number;
   /** Stable first-run start time for subagent sessions, persisted after completion. */
@@ -265,6 +269,9 @@ export type SessionEntry = {
    * Resets only preserve user-driven overrides.
    */
   modelOverrideSource?: "auto" | "user";
+  /** Selected model that produced the current auto fallback override. */
+  modelOverrideFallbackOriginProvider?: string;
+  modelOverrideFallbackOriginModel?: string;
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;

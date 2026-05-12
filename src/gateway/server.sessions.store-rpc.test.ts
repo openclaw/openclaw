@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
@@ -10,6 +11,27 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+
+function collectNonEmptyLines(text: string): string[] {
+  const lines: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (line.trim().length > 0) {
+      lines.push(line);
+    }
+  }
+  return lines;
+}
+
+function expectSinglePrefixedFilename(files: string[], prefix: string): string {
+  const matches = files.filter((file) => file.startsWith(prefix));
+  expect(matches).toHaveLength(1);
+  const [match] = matches;
+  if (!match) {
+    throw new Error(`Expected one filename with prefix ${prefix}`);
+  }
+  expect(match.length).toBeGreaterThan(prefix.length);
+  return match;
+}
 
 test("lists and patches session store via sessions.* RPC", async () => {
   const { dir, storePath } = await createSessionStoreDir();
@@ -64,17 +86,14 @@ test("lists and patches session store via sessions.* RPC", async () => {
   });
 
   const { ws, hello } = await openClient();
-  expect((hello as { features?: { methods?: string[] } }).features?.methods).toEqual(
-    expect.arrayContaining([
-      "sessions.list",
-      "sessions.preview",
-      "sessions.cleanup",
-      "sessions.patch",
-      "sessions.reset",
-      "sessions.delete",
-      "sessions.compact",
-    ]),
-  );
+  const methods = (hello as { features?: { methods?: string[] } }).features?.methods ?? [];
+  expect(methods).toContain("sessions.list");
+  expect(methods).toContain("sessions.preview");
+  expect(methods).toContain("sessions.cleanup");
+  expect(methods).toContain("sessions.patch");
+  expect(methods).toContain("sessions.reset");
+  expect(methods).toContain("sessions.delete");
+  expect(methods).toContain("sessions.compact");
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const directContext = {
@@ -150,7 +169,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
 
   expect(list1.ok).toBe(true);
   expect(list1.payload?.path).toBe(storePath);
-  expect(list1.payload?.sessions.some((s) => s.key === "global")).toBe(false);
+  expect(list1.payload?.sessions.map((session) => session.key)).not.toContain("global");
   expect(list1.payload?.defaults?.modelProvider).toBe("anthropic");
   const main = list1.payload?.sessions.find((s) => s.key === "agent:main:main");
   expect(main?.totalTokens).toBeUndefined();
@@ -321,8 +340,8 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const listAfterCleanup = await directSessionReq<{
     sessions: Array<{ key: string }>;
   }>("sessions.list", {});
-  expect(listAfterCleanup.payload?.sessions.some((s) => s.key === "agent:main:subagent:one")).toBe(
-    false,
+  expect(listAfterCleanup.payload?.sessions.map((session) => session.key)).not.toContain(
+    "agent:main:subagent:one",
   );
 
   piSdkMock.enabled = true;
@@ -352,7 +371,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(modelPatched.payload?.resolved?.modelProvider).toBe("openai");
   expect(modelPatched.payload?.resolved?.model).toBe("gpt-test-a");
   expect(modelPatched.payload?.resolved?.agentRuntime).toEqual({
-    id: "pi",
+    id: "codex",
     source: "implicit",
   });
 
@@ -370,7 +389,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   );
   expect(mainAfterModelPatch?.modelProvider).toBe("openai");
   expect(mainAfterModelPatch?.model).toBe("gpt-test-a");
-  expect(mainAfterModelPatch?.agentRuntime).toEqual({ id: "pi", source: "implicit" });
+  expect(mainAfterModelPatch?.agentRuntime).toEqual({ id: "codex", source: "implicit" });
 
   const compacted = await directSessionReq<{ ok: true; compacted: boolean }>("sessions.compact", {
     key: "agent:main:main",
@@ -378,12 +397,12 @@ test("lists and patches session store via sessions.* RPC", async () => {
   });
   expect(compacted.ok).toBe(true);
   expect(compacted.payload?.compacted).toBe(true);
-  const compactedLines = (await fs.readFile(path.join(dir, "sess-main.jsonl"), "utf-8"))
-    .split(/\r?\n/)
-    .filter((l) => l.trim().length > 0);
+  const compactedLines = collectNonEmptyLines(
+    await fs.readFile(path.join(dir, "sess-main.jsonl"), "utf-8"),
+  );
   expect(compactedLines).toHaveLength(3);
   const filesAfterCompact = await fs.readdir(dir);
-  expect(filesAfterCompact.some((f) => f.startsWith("sess-main.jsonl.bak."))).toBe(true);
+  expectSinglePrefixedFilename(filesAfterCompact, "sess-main.jsonl.bak.");
 
   const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
     key: "agent:main:discord:group:dev",
@@ -394,11 +413,11 @@ test("lists and patches session store via sessions.* RPC", async () => {
     sessions: Array<{ key: string }>;
   }>("sessions.list", {});
   expect(listAfterDelete.ok).toBe(true);
-  expect(
-    listAfterDelete.payload?.sessions.some((s) => s.key === "agent:main:discord:group:dev"),
-  ).toBe(false);
+  expect(listAfterDelete.payload?.sessions.map((session) => session.key)).not.toContain(
+    "agent:main:discord:group:dev",
+  );
   const filesAfterDelete = await fs.readdir(dir);
-  expect(filesAfterDelete.some((f) => f.startsWith("sess-group.jsonl.deleted."))).toBe(true);
+  expectSinglePrefixedFilename(filesAfterDelete, "sess-group.jsonl.deleted.");
 
   const reset = await directSessionReq<{
     ok: true;
@@ -425,7 +444,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(storeAfterReset["agent:main:main"]?.lastAccountId).toBe("work");
   expect(storeAfterReset["agent:main:main"]?.lastThreadId).toBe("1737500000.123456");
   const filesAfterReset = await fs.readdir(dir);
-  expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
+  expectSinglePrefixedFilename(filesAfterReset, "sess-main.jsonl.reset.");
 
   const badThinking = await directSessionReq("sessions.patch", {
     key: "agent:main:main",
@@ -462,6 +481,28 @@ test("sessions.list configuredAgentsOnly hides disk-discovered unregistered agen
     "utf-8",
   );
 
+  const readFileSyncSpy = vi.spyOn(fsSync, "readFileSync");
+  const realDiskOnlyStorePath = await fs.realpath(diskOnlyStorePath);
+
+  try {
+    const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+      "sessions.list",
+      { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
+    );
+    expect(configuredOnly.ok).toBe(true);
+    expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
+      "agent:main:main",
+    ]);
+    expect(
+      readFileSyncSpy.mock.calls.some(
+        ([file]) =>
+          typeof file === "string" && fsSync.realpathSync.native(file) === realDiskOnlyStorePath,
+      ),
+    ).toBe(false);
+  } finally {
+    readFileSyncSpy.mockRestore();
+  }
+
   const broad = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
     "sessions.list",
     { includeGlobal: false, includeUnknown: false },
@@ -470,14 +511,5 @@ test("sessions.list configuredAgentsOnly hides disk-discovered unregistered agen
   expect(broad.payload?.sessions.map((session) => session.key)).toEqual([
     "agent:main:main",
     "agent:local:main",
-  ]);
-
-  const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
-    "sessions.list",
-    { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
-  );
-  expect(configuredOnly.ok).toBe(true);
-  expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
-    "agent:main:main",
   ]);
 });

@@ -33,7 +33,7 @@ import {
   type CommandRunner,
 } from "./update-global.js";
 
-const MATRIX_HELPER_API = bundledDistPluginFile("matrix", "helper-api.js");
+const TELEGRAM_RUNTIME_API = bundledDistPluginFile("telegram", "runtime-api.js");
 async function writeGlobalPackageJson(packageRoot: string, version = "1.0.0") {
   await fs.writeFile(
     path.join(packageRoot, "package.json"),
@@ -139,17 +139,13 @@ describe("update global helpers", () => {
   });
 
   it("defaults corepack download prompts off for global install env", async () => {
-    await expect(createGlobalInstallEnv({})).resolves.toMatchObject({
-      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-    });
+    const defaultEnv = await createGlobalInstallEnv({});
+    expect(defaultEnv?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("0");
 
-    await expect(
-      createGlobalInstallEnv({
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-      }),
-    ).resolves.toMatchObject({
+    const explicitEnv = await createGlobalInstallEnv({
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
     });
+    expect(explicitEnv?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("1");
   });
 
   it("uses an absolute POSIX script shell for npm lifecycle scripts during global installs", async () => {
@@ -158,15 +154,12 @@ describe("update global helpers", () => {
       .spyOn(fsSync, "existsSync")
       .mockImplementation((candidate) => candidate === "/bin/sh");
     try {
-      await expect(
-        createGlobalInstallEnv({
-          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-          PATH: "/home/peter/.npm-global/bin",
-        }),
-      ).resolves.toMatchObject({
+      const env = await createGlobalInstallEnv({
         COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-        NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
+        PATH: "/home/peter/.npm-global/bin",
       });
+      expect(env?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("1");
+      expect(env?.NPM_CONFIG_SCRIPT_SHELL).toBe("/bin/sh");
     } finally {
       existsSyncSpy.mockRestore();
       platformSpy.mockRestore();
@@ -176,22 +169,17 @@ describe("update global helpers", () => {
   it("preserves explicit npm script shell config for global installs", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     try {
-      await expect(
-        createGlobalInstallEnv({
-          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-          NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
-        }),
-      ).resolves.toMatchObject({
+      const upperEnv = await createGlobalInstallEnv({
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
         NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
       });
-      await expect(
-        createGlobalInstallEnv({
-          COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-          npm_config_script_shell: "/custom/lower-sh",
-        }),
-      ).resolves.toMatchObject({
+      expect(upperEnv?.NPM_CONFIG_SCRIPT_SHELL).toBe("/custom/sh");
+
+      const lowerEnv = await createGlobalInstallEnv({
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
         npm_config_script_shell: "/custom/lower-sh",
       });
+      expect(lowerEnv?.npm_config_script_shell).toBe("/custom/lower-sh");
     } finally {
       platformSpy.mockRestore();
     }
@@ -668,8 +656,10 @@ describe("update global helpers", () => {
       ).resolves.toEqual({
         removed: [".openclaw-123", ".openclaw-456"],
       });
-      await expect(fs.stat(path.join(root, "openclaw"))).resolves.toBeDefined();
-      await expect(fs.stat(path.join(root, ".openclaw-file"))).resolves.toBeDefined();
+      const packageDirStat = await fs.stat(path.join(root, "openclaw"));
+      const markerFileStat = await fs.stat(path.join(root, ".openclaw-file"));
+      expect(packageDirStat.isDirectory()).toBe(true);
+      expect(markerFileStat.isFile()).toBe(true);
     });
   });
 
@@ -683,11 +673,11 @@ describe("update global helpers", () => {
       }
       await writePackageDistInventory(packageRoot);
 
-      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toStrictEqual([]);
 
-      await fs.rm(path.join(packageRoot, MATRIX_HELPER_API));
+      await fs.rm(path.join(packageRoot, TELEGRAM_RUNTIME_API));
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
-        `missing packaged dist file ${MATRIX_HELPER_API}`,
+        `missing packaged dist file ${TELEGRAM_RUNTIME_API}`,
       );
 
       await fs.writeFile(
@@ -755,7 +745,7 @@ describe("update global helpers", () => {
     await withTempDir({ prefix: "openclaw-update-global-legacy-" }, async (packageRoot) => {
       await writeGlobalPackageJson(packageRoot);
 
-      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+      await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toStrictEqual([]);
     });
   });
 
@@ -794,10 +784,10 @@ describe("update global helpers", () => {
   it("verifies legacy sidecars for installed bundled plugins without inventory", async () => {
     await withTempDir({ prefix: "openclaw-update-global-legacy-plugin-" }, async (packageRoot) => {
       await writeGlobalPackageJson(packageRoot);
-      await writeBundledPluginPackageJson(packageRoot, "matrix", "@openclaw/matrix");
+      await writeBundledPluginPackageJson(packageRoot, "telegram", "@openclaw/telegram");
 
       await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
-        `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
+        `missing bundled runtime sidecar ${TELEGRAM_RUNTIME_API}`,
       );
     });
   });
@@ -807,11 +797,11 @@ describe("update global helpers", () => {
       { prefix: "openclaw-update-global-critical-sidecars-" },
       async (packageRoot) => {
         await writeGlobalPackageJson(packageRoot, "2026.4.15");
-        await writeBundledPluginPackageJson(packageRoot, "matrix", "@openclaw/matrix");
+        await writeBundledPluginPackageJson(packageRoot, "telegram", "@openclaw/telegram");
         await writePackageDistInventory(packageRoot);
 
         await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
-          `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
+          `missing bundled runtime sidecar ${TELEGRAM_RUNTIME_API}`,
         );
       },
     );
@@ -825,7 +815,9 @@ describe("update global helpers", () => {
         await writeBundledPluginPackageJson(packageRoot, "qa-lab", "@openclaw/qa-lab");
         await writePackageDistInventory(packageRoot);
 
-        await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+        await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toStrictEqual(
+          [],
+        );
       },
     );
   });

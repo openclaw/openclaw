@@ -7,6 +7,21 @@ import {
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
+type PluginNpmRuntimeBuildPlan = NonNullable<ReturnType<typeof resolvePluginNpmRuntimeBuildPlan>>;
+
+function expectDistRelativePaths(paths: string[]) {
+  expect(paths.every((entry) => entry.startsWith("./dist/"))).toBe(true);
+}
+
+function expectPluginNpmRuntimeBuildPlan(
+  plan: ReturnType<typeof resolvePluginNpmRuntimeBuildPlan>,
+): PluginNpmRuntimeBuildPlan {
+  if (!plan) {
+    throw new Error("expected plugin npm runtime build plan");
+  }
+  return plan;
+}
+
 describe("plugin npm runtime build planning", () => {
   it("plans package-local runtime entries for every publishable plugin package", () => {
     const packageDirs = listPublishablePluginPackageDirs({ repoRoot });
@@ -18,18 +33,19 @@ describe("plugin npm runtime build planning", () => {
         packageDir,
       }),
     );
-    expect(plans.filter(Boolean).map((plan) => plan?.pluginDir)).toEqual(
+    const resolvedPlans = plans.map(expectPluginNpmRuntimeBuildPlan);
+    expect(resolvedPlans.map((plan) => plan.pluginDir)).toEqual(
       packageDirs.map((packageDir) => path.basename(packageDir)),
     );
-    for (const plan of plans) {
-      expect(plan?.outDir).toBe(path.join(plan?.packageDir ?? "", "dist"));
-      expect(plan?.runtimeExtensions.every((entry) => entry.startsWith("./dist/"))).toBe(true);
-      expect(plan?.runtimeBuildOutputs.every((entry) => entry.startsWith("./dist/"))).toBe(true);
-      expect(plan?.packageFiles).toContain("dist/**");
-      expect(plan?.packagePeerMetadata.peerDependencies.openclaw).toBe(
-        plan?.packageJson.openclaw.compat.pluginApi,
+    for (const plan of resolvedPlans) {
+      expect(plan.outDir).toBe(path.join(plan.packageDir, "dist"));
+      expectDistRelativePaths(plan.runtimeExtensions);
+      expectDistRelativePaths(plan.runtimeBuildOutputs);
+      expect(plan.packageFiles).toContain("dist/**");
+      expect(plan.packagePeerMetadata.peerDependencies.openclaw).toBe(
+        plan.packageJson.openclaw.compat.pluginApi,
       );
-      expect(plan?.packagePeerMetadata.peerDependenciesMeta.openclaw.optional).toBe(true);
+      expect(plan.packagePeerMetadata.peerDependenciesMeta.openclaw.optional).toBe(true);
     }
   });
 
@@ -38,28 +54,30 @@ describe("plugin npm runtime build planning", () => {
       repoRoot,
       packageDir: path.join(repoRoot, "extensions", "qqbot"),
     });
-    expect(qqbotPlan?.entry).toEqual(
-      expect.objectContaining({
-        index: path.join(repoRoot, "extensions", "qqbot", "index.ts"),
-        "runtime-api": path.join(repoRoot, "extensions", "qqbot", "runtime-api.ts"),
-        "setup-entry": path.join(repoRoot, "extensions", "qqbot", "setup-entry.ts"),
-      }),
-    );
-    expect(qqbotPlan?.runtimeExtensions).toEqual(["./dist/index.js"]);
-    expect(qqbotPlan?.runtimeSetupEntry).toBe("./dist/setup-entry.js");
+    const qqbotRuntimePlan = expectPluginNpmRuntimeBuildPlan(qqbotPlan);
+    expect(qqbotRuntimePlan.entry).toEqual({
+      api: path.join(repoRoot, "extensions", "qqbot", "api.ts"),
+      "channel-plugin-api": path.join(repoRoot, "extensions", "qqbot", "channel-plugin-api.ts"),
+      index: path.join(repoRoot, "extensions", "qqbot", "index.ts"),
+      "runtime-api": path.join(repoRoot, "extensions", "qqbot", "runtime-api.ts"),
+      "secret-contract-api": path.join(repoRoot, "extensions", "qqbot", "secret-contract-api.ts"),
+      "setup-entry": path.join(repoRoot, "extensions", "qqbot", "setup-entry.ts"),
+      "setup-plugin-api": path.join(repoRoot, "extensions", "qqbot", "setup-plugin-api.ts"),
+    });
+    expect(qqbotRuntimePlan.runtimeExtensions).toEqual(["./dist/index.js"]);
+    expect(qqbotRuntimePlan.runtimeSetupEntry).toBe("./dist/setup-entry.js");
 
     const diffsPlan = resolvePluginNpmRuntimeBuildPlan({
       repoRoot,
       packageDir: path.join(repoRoot, "extensions", "diffs"),
     });
-    expect(diffsPlan?.entry).toEqual(
-      expect.objectContaining({
-        api: path.join(repoRoot, "extensions", "diffs", "api.ts"),
-        index: path.join(repoRoot, "extensions", "diffs", "index.ts"),
-        "runtime-api": path.join(repoRoot, "extensions", "diffs", "runtime-api.ts"),
-      }),
-    );
-    expect(diffsPlan?.packageFiles).toEqual([
+    const diffsRuntimePlan = expectPluginNpmRuntimeBuildPlan(diffsPlan);
+    expect(diffsRuntimePlan.entry).toEqual({
+      api: path.join(repoRoot, "extensions", "diffs", "api.ts"),
+      index: path.join(repoRoot, "extensions", "diffs", "index.ts"),
+      "runtime-api": path.join(repoRoot, "extensions", "diffs", "runtime-api.ts"),
+    });
+    expect(diffsRuntimePlan.packageFiles).toEqual([
       "dist/**",
       "openclaw.plugin.json",
       "README.md",

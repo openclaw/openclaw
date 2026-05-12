@@ -220,11 +220,9 @@ describe("createBlockReplyDeliveryHandler", () => {
       parseMode: "auto",
     });
 
-    expect(normalized.payload).toMatchObject({
-      text: "Result",
-      mediaUrl: "./image.png",
-      mediaUrls: ["./image.png"],
-    });
+    expect(normalized.payload.text).toBe("Result");
+    expect(normalized.payload.mediaUrl).toBe("./image.png");
+    expect(normalized.payload.mediaUrls).toEqual(["./image.png"]);
   });
 
   it("parses lowercase media directives in block replies before path normalization", () => {
@@ -234,11 +232,9 @@ describe("createBlockReplyDeliveryHandler", () => {
       parseMode: "auto",
     });
 
-    expect(normalized.payload).toMatchObject({
-      text: undefined,
-      mediaUrl: "./report.pdf",
-      mediaUrls: ["./report.pdf"],
-    });
+    expect(normalized.payload.text).toBeUndefined();
+    expect(normalized.payload.mediaUrl).toBe("./report.pdf");
+    expect(normalized.payload.mediaUrls).toEqual(["./report.pdf"]);
   });
 
   it("does not mark plain replies as explicit reply_to_current opt-outs", () => {
@@ -309,7 +305,15 @@ describe("createBlockReplyDeliveryHandler", () => {
 
     await handler(payload);
 
-    const enqueuedPayload = enqueue.mock.calls[0]?.[0];
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    const [firstCall] = enqueue.mock.calls;
+    if (!firstCall) {
+      throw new Error("Expected block reply pipeline enqueue call");
+    }
+    const [enqueuedPayload] = firstCall;
+    if (enqueuedPayload === undefined) {
+      throw new Error("Expected block reply pipeline payload");
+    }
     expect(enqueuedPayload).toEqual({
       text: "Alpha",
       mediaUrl: undefined,

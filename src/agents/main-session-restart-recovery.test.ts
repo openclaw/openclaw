@@ -235,11 +235,12 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
-    expect(vi.mocked(callGateway).mock.calls[0]?.[0].params).toMatchObject({
-      sessionKey: "agent:main:main",
-      deliver: false,
-      lane: "main",
-    });
+    const resumeParams = vi.mocked(callGateway).mock.calls.at(0)?.[0].params as
+      | { sessionKey?: string; deliver?: boolean; lane?: string }
+      | undefined;
+    expect(resumeParams?.sessionKey).toBe("agent:main:main");
+    expect(resumeParams?.deliver).toBe(false);
+    expect(resumeParams?.lane).toBe("main");
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
   });
@@ -302,17 +303,24 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
-    const callParams = vi.mocked(callGateway).mock.calls[0]?.[0].params as { message?: string };
+    const callParams = vi.mocked(callGateway).mock.calls.at(0)?.[0].params as {
+      message?: string;
+    };
     expect(callParams.message).toContain(pendingPayload);
 
+    const beforeStoreRead = Date.now();
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
-    expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
-    expect(store["agent:main:main"]?.pendingFinalDelivery).toBe(true);
-    expect(store["agent:main:main"]?.pendingFinalDeliveryText).toBe(pendingPayload);
-    expect(store["agent:main:main"]?.pendingFinalDeliveryCreatedAt).toBeDefined();
-    expect(store["agent:main:main"]?.pendingFinalDeliveryAttemptCount).toBe(1);
-    expect(store["agent:main:main"]?.pendingFinalDeliveryLastAttemptAt).toBeDefined();
-    expect(store["agent:main:main"]?.pendingFinalDeliveryLastError).toBeNull();
+    const entry = store["agent:main:main"];
+    expect(entry?.abortedLastRun).toBe(false);
+    expect(entry?.pendingFinalDelivery).toBe(true);
+    expect(entry?.pendingFinalDeliveryText).toBe(pendingPayload);
+    expect(entry?.pendingFinalDeliveryAttemptCount).toBe(1);
+    expect(entry?.pendingFinalDeliveryLastError).toBeNull();
+    expect(entry?.pendingFinalDeliveryCreatedAt).toBeLessThanOrEqual(beforeStoreRead);
+    expect(entry?.pendingFinalDeliveryLastAttemptAt).toBeLessThanOrEqual(beforeStoreRead);
+    expect(entry?.pendingFinalDeliveryLastAttemptAt ?? 0).toBeGreaterThanOrEqual(
+      entry?.pendingFinalDeliveryCreatedAt ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it("does not scan ordinary running sessions without the restart-aborted marker", async () => {

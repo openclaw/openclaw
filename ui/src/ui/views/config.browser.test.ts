@@ -76,6 +76,17 @@ describe("config view", () => {
     };
   }
 
+  function requireActionButton(
+    button: HTMLButtonElement | undefined,
+    text: string,
+  ): HTMLButtonElement {
+    expect(button).toBeInstanceOf(HTMLButtonElement);
+    if (!(button instanceof HTMLButtonElement)) {
+      throw new Error(`Expected ${text} action button`);
+    }
+    return button;
+  }
+
   function renderConfigView(overrides: Partial<ConfigProps> = {}): {
     container: HTMLElement;
     props: ConfigProps;
@@ -99,6 +110,39 @@ describe("config view", () => {
 
   function normalizedText(container: HTMLElement): string {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
+  }
+
+  function findButtonByText(container: HTMLElement, text: string): HTMLButtonElement {
+    const button = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === text,
+    );
+    if (!button) {
+      throw new Error(`Expected button with text "${text}"`);
+    }
+    return button;
+  }
+
+  function findButtonContainingText(container: HTMLElement, text: string): HTMLButtonElement {
+    const button = Array.from(container.querySelectorAll("button")).find((btn) =>
+      btn.textContent?.includes(text),
+    );
+    if (!button) {
+      throw new Error(`Expected button containing text "${text}"`);
+    }
+    return button;
+  }
+
+  function queryRequired<T extends Element>(
+    container: HTMLElement,
+    selector: string,
+    constructor: new () => T,
+  ): T {
+    const element = container.querySelector(selector);
+    expect(element).toBeInstanceOf(constructor);
+    if (!(element instanceof constructor)) {
+      throw new Error(`Expected element matching "${selector}"`);
+    }
+    return element;
   }
 
   beforeEach(() => {
@@ -125,10 +169,11 @@ describe("config view", () => {
       formMode: "form",
       formValue: { mixed: "x" },
     });
-    let { saveButton, applyButton } = findActionButtons(container);
-    expect(saveButton).not.toBeUndefined();
-    expect(saveButton?.disabled).toBe(false);
-    expect(applyButton?.disabled).toBe(false);
+    let actionButtons = findActionButtons(container);
+    let saveButton = requireActionButton(actionButtons.saveButton, "Save");
+    let applyButton = requireActionButton(actionButtons.applyButton, "Apply");
+    expect(saveButton.disabled).toBe(false);
+    expect(applyButton.disabled).toBe(false);
 
     renderCase({
       schema: null,
@@ -136,24 +181,24 @@ describe("config view", () => {
       formValue: { gateway: { mode: "local" } },
       originalValue: {},
     });
-    ({ saveButton, applyButton } = findActionButtons(container));
-    expect(saveButton).not.toBeUndefined();
-    expect(saveButton?.disabled).toBe(true);
-    expect(applyButton?.disabled).toBe(true);
+    actionButtons = findActionButtons(container);
+    saveButton = requireActionButton(actionButtons.saveButton, "Save");
+    applyButton = requireActionButton(actionButtons.applyButton, "Apply");
+    expect(saveButton.disabled).toBe(true);
+    expect(applyButton.disabled).toBe(true);
 
     renderCase({
       formMode: "raw",
       raw: "{\n}\n",
       originalRaw: "{\n}\n",
     });
-    let clearButton: HTMLButtonElement | undefined;
-    ({ clearButton, saveButton, applyButton } = findActionButtons(container));
-    expect(clearButton).not.toBeUndefined();
-    expect(saveButton).not.toBeUndefined();
-    expect(applyButton).not.toBeUndefined();
-    expect(clearButton?.disabled).toBe(true);
-    expect(saveButton?.disabled).toBe(true);
-    expect(applyButton?.disabled).toBe(true);
+    actionButtons = findActionButtons(container);
+    let clearButton = requireActionButton(actionButtons.clearButton, "Clear");
+    saveButton = requireActionButton(actionButtons.saveButton, "Save");
+    applyButton = requireActionButton(actionButtons.applyButton, "Apply");
+    expect(clearButton.disabled).toBe(true);
+    expect(saveButton.disabled).toBe(true);
+    expect(applyButton.disabled).toBe(true);
 
     const onReset = vi.fn();
     renderCase({
@@ -162,14 +207,15 @@ describe("config view", () => {
       originalRaw: "{\n}\n",
       onReset,
     });
-    ({ clearButton, saveButton, applyButton } = findActionButtons(container));
-    expect(saveButton).not.toBeUndefined();
-    expect(applyButton).not.toBeUndefined();
-    expect(clearButton?.disabled).toBe(false);
-    expect(saveButton?.disabled).toBe(false);
-    expect(applyButton?.disabled).toBe(false);
+    actionButtons = findActionButtons(container);
+    clearButton = requireActionButton(actionButtons.clearButton, "Clear");
+    saveButton = requireActionButton(actionButtons.saveButton, "Save");
+    applyButton = requireActionButton(actionButtons.applyButton, "Apply");
+    expect(clearButton.disabled).toBe(false);
+    expect(saveButton.disabled).toBe(false);
+    expect(applyButton.disabled).toBe(false);
 
-    clearButton?.click();
+    clearButton.click();
     expect(onReset).toHaveBeenCalledTimes(1);
   });
 
@@ -193,36 +239,31 @@ describe("config view", () => {
       );
 
     renderCase({ saving: true });
-    let busyButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("Saving…"),
-    );
-    let { clearButton, applyButton } = findActionButtons(container);
-    expect(busyButton).toBeTruthy();
-    expect(busyButton?.disabled).toBe(true);
-    expect(busyButton?.getAttribute("aria-busy")).toBe("true");
-    expect(busyButton?.querySelector(".config-action-spinner")).not.toBeNull();
-    expect(clearButton?.disabled).toBe(false);
-    expect(applyButton?.disabled).toBe(false);
+    let busyButton = findButtonContainingText(container, "Saving…");
+    let actionButtons = findActionButtons(container);
+    let clearButton = requireActionButton(actionButtons.clearButton, "Clear");
+    let applyButton = requireActionButton(actionButtons.applyButton, "Apply");
+    expect(busyButton.disabled).toBe(true);
+    expect(busyButton.getAttribute("aria-busy")).toBe("true");
+    expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
+    expect(clearButton.disabled).toBe(false);
+    expect(applyButton.disabled).toBe(false);
 
     renderCase({ applying: true });
-    busyButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("Applying…"),
-    );
-    ({ clearButton } = findActionButtons(container));
-    expect(busyButton).toBeTruthy();
-    expect(busyButton?.disabled).toBe(true);
-    expect(busyButton?.querySelector(".config-action-spinner")).not.toBeNull();
-    expect(clearButton?.disabled).toBe(false);
+    busyButton = findButtonContainingText(container, "Applying…");
+    actionButtons = findActionButtons(container);
+    clearButton = requireActionButton(actionButtons.clearButton, "Clear");
+    expect(busyButton.disabled).toBe(true);
+    expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
+    expect(clearButton.disabled).toBe(false);
 
     renderCase({ updating: true });
-    busyButton = Array.from(container.querySelectorAll("button")).find((button) =>
-      button.textContent?.includes("Updating…"),
-    );
-    ({ clearButton } = findActionButtons(container));
-    expect(busyButton).toBeTruthy();
-    expect(busyButton?.disabled).toBe(true);
-    expect(busyButton?.querySelector(".config-action-spinner")).not.toBeNull();
-    expect(clearButton?.disabled).toBe(false);
+    busyButton = findButtonContainingText(container, "Updating…");
+    actionButtons = findActionButtons(container);
+    clearButton = requireActionButton(actionButtons.clearButton, "Clear");
+    expect(busyButton.disabled).toBe(true);
+    expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
+    expect(clearButton.disabled).toBe(false);
   });
 
   it("switches mode via the sidebar toggle", () => {
@@ -236,11 +277,8 @@ describe("config view", () => {
       container,
     );
 
-    const btn = Array.from(container.querySelectorAll("button")).find(
-      (b) => b.textContent?.trim() === "Raw",
-    );
-    expect(btn).toBeTruthy();
-    btn?.click();
+    const btn = findButtonByText(container, "Raw");
+    btn.click();
     expect(onFormModeChange).toHaveBeenCalledWith("raw");
   });
 
@@ -265,26 +303,20 @@ describe("config view", () => {
       originalValue: { gateway: { mode: "local" } },
     });
 
-    const formButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Form",
-    );
-    const rawButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Raw",
-    );
-    expect(formButton?.classList.contains("active")).toBe(true);
-    expect(rawButton?.disabled).toBe(true);
-    const rawNotice = container.querySelector(".config-actions__notice");
-    const actionButtons = container.querySelector(".config-actions__buttons");
-    expect(rawNotice).not.toBeNull();
-    expect(actionButtons).not.toBeNull();
-    expect(actionButtons?.textContent).toContain("Reload");
-    expect(actionButtons?.textContent).toContain("Update");
-    expect(normalizedText(container)).toContain(
-      "Raw mode disabled (snapshot cannot safely round-trip raw text).",
-    );
+    const formButton = findButtonByText(container, "Form");
+    const rawButton = findButtonByText(container, "Raw");
+    expect([...formButton.classList]).toEqual(["config-mode-toggle__btn", "active"]);
+    expect(rawButton.disabled).toBe(true);
+    expect(
+      queryRequired(container, ".config-actions__notice", HTMLElement).textContent?.trim(),
+    ).toBe("Raw mode disabled (snapshot cannot safely round-trip raw text).");
+    const actionButtons = queryRequired(container, ".config-actions__buttons", HTMLElement);
+    expect(
+      [...actionButtons.querySelectorAll("button")].map((button) => button.textContent?.trim()),
+    ).toEqual(["Reload", "Clear", "Save", "Apply", "Update"]);
     expect(container.querySelector(".config-raw-field")).toBeNull();
 
-    rawButton?.click();
+    rawButton.click();
     expect(onFormModeChange).not.toHaveBeenCalled();
   });
 
@@ -309,15 +341,10 @@ describe("config view", () => {
     const tabs = Array.from(container.querySelectorAll(".config-top-tabs__tab")).map((tab) =>
       tab.textContent?.trim(),
     );
-    expect(tabs).toContain("Settings");
-    expect(tabs).toContain("Agents");
-    expect(tabs).toContain("Gateway");
+    expect(tabs).toEqual(["Settings", "Agents", "Gateway", "Theme"]);
 
-    const btn = Array.from(container.querySelectorAll("button")).find(
-      (b) => b.textContent?.trim() === "Gateway",
-    );
-    expect(btn).toBeTruthy();
-    btn?.click();
+    const btn = findButtonByText(container, "Gateway");
+    btn.click();
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
   });
 
@@ -353,11 +380,7 @@ describe("config view", () => {
       },
     });
 
-    const content = container.querySelector<HTMLElement>(".config-content");
-    expect(content).toBeTruthy();
-    if (!content) {
-      return;
-    }
+    const content = queryRequired(container, ".config-content", HTMLElement);
     content.scrollTop = 280;
     content.scrollLeft = 24;
     content.scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
@@ -365,18 +388,56 @@ describe("config view", () => {
       content.scrollLeft = left ?? content.scrollLeft;
     }) as typeof content.scrollTo;
 
-    const messagesButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Messages",
-    );
-    expect(messagesButton).toBeTruthy();
+    const messagesButton = findButtonByText(container, "Messages");
 
-    messagesButton?.click();
+    messagesButton.click();
     await Promise.resolve();
 
     expect(content.scrollTo).toHaveBeenCalledOnce();
     expect(content.scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
     expect(content.scrollTop).toBe(0);
     expect(content.scrollLeft).toBe(0);
+  });
+
+  it("does not normalize off-scope schema sections for scoped config tabs", () => {
+    const offScopeSchema = { type: "object" } as Record<string, unknown>;
+    Object.defineProperty(offScopeSchema, "properties", {
+      get() {
+        throw new Error("off-scope schema was normalized");
+      },
+    });
+
+    const { container } = renderConfigView({
+      activeSection: "channels",
+      navRootLabel: "Communication",
+      includeSections: ["channels"],
+      schema: {
+        type: "object",
+        properties: {
+          channels: {
+            type: "object",
+            properties: {
+              telegram: { type: "string", title: "Telegram" },
+            },
+          },
+          models: offScopeSchema,
+        },
+      },
+      formValue: {
+        channels: { telegram: "enabled" },
+        models: {},
+      },
+      originalValue: {
+        channels: { telegram: "enabled" },
+        models: {},
+      },
+    });
+
+    expect(
+      Array.from(container.querySelectorAll(".cfg-field__label")).map((label) =>
+        label.textContent?.trim(),
+      ),
+    ).toEqual(["Telegram"]);
   });
 
   it("renders and wires the search field controls", () => {
@@ -391,17 +452,14 @@ describe("config view", () => {
       container,
     );
 
-    const icon = container.querySelector<SVGElement>(".config-search__icon");
-    expect(icon).not.toBeNull();
-    expect(icon?.closest(".config-search__input-row")).not.toBeNull();
+    const icon = queryRequired(container, ".config-search__icon", SVGElement);
+    expect(icon.closest(".config-search__input-row")).toBeInstanceOf(HTMLElement);
 
     const input = container.querySelector(".config-search__input");
-    expect(input).not.toBeNull();
-    if (!input) {
-      return;
-    }
-    (input as HTMLInputElement).value = "gateway";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(input).toBeInstanceOf(HTMLInputElement);
+    const searchInput = input as HTMLInputElement;
+    searchInput.value = "gateway";
+    searchInput.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
   });
 
@@ -463,7 +521,11 @@ describe("config view", () => {
       },
     });
 
-    expect(container.querySelectorAll(".config-section-card__header").length).toBeGreaterThan(0);
+    expect(
+      [...container.querySelectorAll(".config-section-card__title")].map((title) =>
+        title.textContent?.trim(),
+      ),
+    ).toEqual(["Authentication", "Gateway"]);
   });
 
   it("clears the active search query", () => {
@@ -478,8 +540,10 @@ describe("config view", () => {
       container,
     );
     const clearButton = container.querySelector<HTMLButtonElement>(".config-search__clear");
-    expect(clearButton).toBeTruthy();
-    clearButton?.click();
+    if (!clearButton) {
+      throw new Error("Expected config search clear button");
+    }
+    clearButton.click();
     expect(onSearchChange).toHaveBeenCalledWith("");
   });
 
@@ -497,22 +561,25 @@ describe("config view", () => {
       onRawChange,
     });
 
-    const text = normalizedText(container);
-    expect(text).toContain("1 secret redacted");
-    expect(text).toContain("Use the reveal button above to edit the raw config.");
-    expect(text).not.toContain("supersecret");
+    expect(
+      queryRequired(container, ".config-raw-field .pill", HTMLElement)
+        .textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe("1 secret redacted");
+    expect(
+      queryRequired(container, ".config-raw-field .callout.info", HTMLElement)
+        .textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe("1 sensitive value hidden. Use the reveal button above to edit the raw config.");
     expect(container.querySelector("textarea")).toBeNull();
 
-    const revealButton = container.querySelector<HTMLButtonElement>(".config-raw-toggle");
-    expect(revealButton).toBeTruthy();
-    revealButton?.click();
+    const revealButton = queryRequired(container, ".config-raw-toggle", HTMLButtonElement);
+    expect(revealButton.getAttribute("title")).toBe("Reveal sensitive values");
+    expect(revealButton.getAttribute("aria-pressed")).toBe("false");
+    revealButton.click();
 
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).not.toBeNull();
-    expect(textarea?.value).toContain("supersecret");
-    if (!textarea) {
-      return;
-    }
+    const textarea = queryRequired(container, "textarea", HTMLTextAreaElement);
+    expect(textarea.value).toBe('{\n  "openai": { "apiKey": "supersecret" }\n}\n');
     textarea.value = textarea.value.replace("supersecret", "updatedsecret");
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onRawChange).toHaveBeenCalledWith(textarea.value);
@@ -552,20 +619,22 @@ describe("config view", () => {
       );
     rerender();
 
-    expect(normalizedText(container)).toContain("View pending changes");
-    expect(normalizedText(container)).not.toContain("gateway.mode");
+    const details = queryRequired(container, ".config-diff", HTMLDetailsElement);
+    expect(details.querySelector(".config-diff__summary span")?.textContent?.trim()).toBe(
+      "View pending changes",
+    );
+    expect(details.querySelector(".config-diff__item")?.textContent?.trim()).toBe(
+      "Changes detected (JSON diff not available)",
+    );
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
 
-    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
-    expect(details).not.toBeNull();
-    details!.open = true;
-    details!.dispatchEvent(new Event("toggle"));
-
-    const text = normalizedText(container);
     expect(updateCount).toBe(1);
     expect(onRawChange).not.toHaveBeenCalled();
-    expect(text).toContain("gateway.mode");
-    expect(text).toContain('"local"');
-    expect(text).toContain('"remote"');
+    const item = queryRequired(container, ".config-diff__item", HTMLElement);
+    expect(item.querySelector(".config-diff__path")?.textContent?.trim()).toBe("gateway.mode");
+    expect(item.querySelector(".config-diff__from")?.textContent?.trim()).toBe('"local"');
+    expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe('"remote"');
   });
 
   it("renders array diff summaries without serializing array values", () => {
@@ -584,11 +653,14 @@ describe("config view", () => {
       },
     });
 
-    const text = normalizedText(container);
-    expect(text).toContain("View 1 pending change");
-    expect(text).toContain("items");
-    expect(text).toContain("[0 items]");
-    expect(text).toContain("[1 item]");
+    const details = queryRequired(container, ".config-diff", HTMLDetailsElement);
+    expect(details.querySelector(".config-diff__summary span")?.textContent?.trim()).toBe(
+      "View 1 pending change",
+    );
+    const item = queryRequired(container, ".config-diff__item", HTMLElement);
+    expect(item.querySelector(".config-diff__path")?.textContent?.trim()).toBe("items");
+    expect(item.querySelector(".config-diff__from")?.textContent?.trim()).toBe("[0 items]");
+    expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe("[1 item]");
   });
 
   it("redacts sensitive values in raw pending changes until raw values are revealed", () => {
@@ -630,24 +702,26 @@ describe("config view", () => {
       );
     rerender();
 
-    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
-    expect(details).not.toBeNull();
-    details!.open = true;
-    details!.dispatchEvent(new Event("toggle"));
+    const details = queryRequired(container, ".config-diff", HTMLDetailsElement);
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
 
-    const text = normalizedText(container);
-    expect(text).toContain("channels.discord.token.id");
-    expect(text).toContain("[redacted - click reveal to view]");
-    expect(text).not.toContain("TOKEN_BEFORE");
-    expect(text).not.toContain("TOKEN_AFTER");
+    const item = queryRequired(container, ".config-diff__item", HTMLElement);
+    expect(item.querySelector(".config-diff__path")?.textContent?.trim()).toBe(
+      "channels.discord.token.id",
+    );
+    expect(item.querySelector(".config-diff__from")?.textContent?.trim()).toBe(
+      "[redacted - click reveal to view]",
+    );
+    expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe(
+      "[redacted - click reveal to view]",
+    );
 
-    const revealButton = container.querySelector<HTMLButtonElement>(".config-raw-toggle");
-    expect(revealButton).not.toBeNull();
-    revealButton!.click();
+    const revealButton = queryRequired(container, ".config-raw-toggle", HTMLButtonElement);
+    revealButton.click();
 
-    const revealedText = normalizedText(container);
-    expect(revealedText).toContain("TOKEN_BEFORE");
-    expect(revealedText).toContain("TOKEN_AFTER");
+    expect(item.querySelector(".config-diff__from")?.textContent?.trim()).toBe('"TOKEN_BEFORE"');
+    expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe('"TOKEN_AFTER"');
   });
 
   it("resets raw reveal state when the config context changes", () => {
@@ -678,14 +752,19 @@ describe("config view", () => {
       );
     rerender();
 
-    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
-    expect(details).not.toBeNull();
-    details!.open = true;
-    details!.dispatchEvent(new Event("toggle"));
-    const revealButton = container.querySelector<HTMLButtonElement>(".config-raw-toggle");
-    expect(revealButton).not.toBeNull();
-    revealButton!.click();
-    expect(normalizedText(container)).toContain("TOKEN_A_AFTER");
+    const details = queryRequired(container, ".config-diff", HTMLDetailsElement);
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+    const revealButton = queryRequired(container, ".config-raw-toggle", HTMLButtonElement);
+    revealButton.click();
+    const revealedItem = queryRequired(container, ".config-diff__item", HTMLElement);
+    expect(revealedItem.querySelector(".config-diff__path")?.textContent?.trim()).toBe("token");
+    expect(revealedItem.querySelector(".config-diff__from")?.textContent?.trim()).toBe(
+      '"TOKEN_A_BEFORE"',
+    );
+    expect(revealedItem.querySelector(".config-diff__to")?.textContent?.trim()).toBe(
+      '"TOKEN_A_AFTER"',
+    );
 
     props.configPath = "/tmp/openclaw-b.json5";
     props.raw = '{\n  token: "TOKEN_B_AFTER"\n}\n';
@@ -698,12 +777,30 @@ describe("config view", () => {
     };
     rerender();
 
-    const text = normalizedText(container);
-    expect(text).toContain("1 secret redacted");
-    expect(text).not.toContain("TOKEN_A_AFTER");
-    expect(text).not.toContain("TOKEN_B_AFTER");
+    expect(
+      queryRequired(container, ".config-raw-field .pill", HTMLElement)
+        .textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe("1 secret redacted");
+    expect(
+      queryRequired(container, ".config-raw-field .callout.info", HTMLElement)
+        .textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe("1 sensitive value hidden. Use the reveal button above to edit the raw config.");
     expect(container.querySelector("textarea")).toBeNull();
-    expect(container.querySelector<HTMLDetailsElement>(".config-diff")?.open).toBe(false);
+    const nextDetails = queryRequired(container, ".config-diff", HTMLDetailsElement);
+    expect(nextDetails.open).toBe(false);
+
+    nextDetails.open = true;
+    nextDetails.dispatchEvent(new Event("toggle"));
+    const redactedItem = queryRequired(container, ".config-diff__item", HTMLElement);
+    expect(redactedItem.querySelector(".config-diff__path")?.textContent?.trim()).toBe("token");
+    expect(redactedItem.querySelector(".config-diff__from")?.textContent?.trim()).toBe(
+      "[redacted - click reveal to view]",
+    );
+    expect(redactedItem.querySelector(".config-diff__to")?.textContent?.trim()).toBe(
+      "[redacted - click reveal to view]",
+    );
   });
 
   it("redacts raw diff values under leaf wildcard sensitive hints when keys contain dots", () => {
@@ -741,16 +838,20 @@ describe("config view", () => {
       );
     rerender();
 
-    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
-    expect(details).not.toBeNull();
-    details!.open = true;
-    details!.dispatchEvent(new Event("toggle"));
+    const details = queryRequired(container, ".config-diff", HTMLDetailsElement);
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
 
-    const text = normalizedText(container);
-    expect(text).toContain("integrations.foo.bar.credential");
-    expect(text).toContain("[redacted - click reveal to view]");
-    expect(text).not.toContain("TOKEN_BEFORE");
-    expect(text).not.toContain("TOKEN_AFTER");
+    const item = queryRequired(container, ".config-diff__item", HTMLElement);
+    expect(item.querySelector(".config-diff__path")?.textContent?.trim()).toBe(
+      "integrations.foo.bar.credential",
+    );
+    expect(item.querySelector(".config-diff__from")?.textContent?.trim()).toBe(
+      "[redacted - click reveal to view]",
+    );
+    expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe(
+      "[redacted - click reveal to view]",
+    );
   });
 
   it("removes the raw pending changes panel after raw changes clear", () => {
@@ -781,18 +882,21 @@ describe("config view", () => {
       );
     rerender();
 
-    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
-    expect(details).not.toBeNull();
-    details!.open = true;
-    details!.dispatchEvent(new Event("toggle"));
-    expect(normalizedText(container)).toContain("gateway.mode");
+    const details = queryRequired(container, ".config-diff", HTMLDetailsElement);
+    details.open = true;
+    details.dispatchEvent(new Event("toggle"));
+    expect(
+      queryRequired(container, ".config-diff__item", HTMLElement)
+        .querySelector(".config-diff__path")
+        ?.textContent?.trim(),
+    ).toBe("gateway.mode");
 
     props.raw = props.originalRaw;
     props.formValue = props.originalValue;
     rerender();
 
     expect(container.querySelector(".config-diff")).toBeNull();
-    expect(normalizedText(container)).toContain("No changes");
+    expect(container.querySelector(".config-status")?.textContent?.trim()).toBe("No changes");
   });
 
   it("renders structured SecretRef values without stringifying", () => {
@@ -838,16 +942,10 @@ describe("config view", () => {
       onFormPatch,
     });
 
-    const input = container.querySelector<HTMLInputElement>(".cfg-input");
-    expect(input).not.toBeNull();
-    expect(input?.readOnly).toBe(true);
-    expect(input?.value).toBe("");
-    expect(input?.placeholder).toContain("Structured value (SecretRef)");
-    expect(container.textContent ?? "").not.toContain("[object Object]");
-
-    if (!input) {
-      return;
-    }
+    const input = queryRequired(container, ".cfg-input", HTMLInputElement);
+    expect(input.readOnly).toBe(true);
+    expect(input.value).toBe("");
+    expect(input.placeholder).toBe("Structured value (SecretRef) - use Raw mode to edit");
     input.value = "[object Object]";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
@@ -868,9 +966,8 @@ describe("config view", () => {
       container,
     );
 
-    const rawUnavailableInput = container.querySelector<HTMLInputElement>(".cfg-input");
-    expect(rawUnavailableInput).not.toBeNull();
-    expect(rawUnavailableInput?.placeholder).toBe(
+    const rawUnavailableInput = queryRequired(container, ".cfg-input", HTMLInputElement);
+    expect(rawUnavailableInput.placeholder).toBe(
       "Structured value (SecretRef) - edit the config file directly",
     );
   });
@@ -905,11 +1002,11 @@ describe("config view", () => {
     });
 
     const input = container.querySelector<HTMLInputElement>(".cfg-input");
-    expect(input).not.toBeNull();
+    expect(input).toBeInstanceOf(HTMLInputElement);
     expect(input?.readOnly).toBe(false);
-    expect(input?.value).toContain("malformed");
+    expect(input?.value).toBe('{  "malformed": true}');
     expect(input?.value).not.toBe("[object Object]");
-    expect(input?.placeholder).not.toContain("Structured value (SecretRef)");
+    expect(input?.placeholder).toBe("");
 
     if (!input) {
       return;
@@ -927,16 +1024,18 @@ describe("config view", () => {
       onOpenCustomThemeImport,
     });
 
-    const customButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Import",
+    const customButton = findButtonByText(container, "Import");
+
+    expect(customButton.disabled).toBe(false);
+    expect(
+      normalizedText(
+        queryRequired(container, ".settings-theme-import__inline-hint", HTMLParagraphElement),
+      ),
+    ).toBe(
+      "Click Import to add one browser-local tweakcn theme. In tweakcn, use Share and paste the copied link here.",
     );
 
-    expect(customButton?.disabled).toBe(false);
-    expect(normalizedText(container)).toContain(
-      "Click Import to add one browser-local tweakcn theme",
-    );
-
-    customButton?.click();
+    customButton.click();
 
     expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
   });
@@ -949,16 +1048,20 @@ describe("config view", () => {
       customThemeImportFocusToken: 1,
     });
 
-    const importButton = Array.from(container.querySelectorAll("button")).find((btn) =>
-      btn.textContent?.includes("Import theme"),
-    );
+    const importButton = findButtonContainingText(container, "Import theme");
 
-    expect(importButton?.disabled).toBe(true);
-    expect(container.querySelector(".settings-theme-import__input")).not.toBeNull();
+    expect(importButton.disabled).toBe(true);
+    queryRequired(container, ".settings-theme-import__input", HTMLInputElement);
     expect(
       container.querySelector<HTMLAnchorElement>(".settings-theme-import__external")?.href,
     ).toBe("https://tweakcn.com/editor/theme");
-    expect(normalizedText(container)).toContain("Share links, editor URLs, registry URLs");
+    expect(
+      normalizedText(
+        queryRequired(container, ".settings-theme-import__hint", HTMLParagraphElement),
+      ),
+    ).toBe(
+      "Open tweakcn.com, choose or create a theme, click Share, then paste the copied theme link here. Share links, editor URLs, registry URLs, theme IDs, and default theme names like amethyst-haze are accepted.",
+    );
   });
 
   it("shows custom theme actions once a tweakcn import exists", () => {
@@ -979,25 +1082,24 @@ describe("config view", () => {
       onCustomThemeImportUrlChange,
     });
 
-    const customButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Light Green",
-    );
-    expect(customButton?.disabled).toBe(false);
-    customButton?.click();
-    expect(setTheme).toHaveBeenCalledWith("custom", expect.any(Object));
+    const customButton = findButtonByText(container, "Light Green");
+    expect(customButton.disabled).toBe(false);
+    customButton.click();
+    expect(setTheme).toHaveBeenCalledWith("custom", { element: customButton });
 
-    const replaceButton = Array.from(container.querySelectorAll("button")).find((btn) =>
-      btn.textContent?.includes("Replace Light Green"),
-    );
-    const clearButton = Array.from(container.querySelectorAll("button")).find((btn) =>
-      btn.textContent?.includes("Clear Light Green"),
-    );
-    replaceButton?.click();
-    clearButton?.click();
+    const replaceButton = findButtonContainingText(container, "Replace Light Green");
+    const clearButton = findButtonContainingText(container, "Clear Light Green");
+    replaceButton.click();
+    clearButton.click();
 
     expect(onImportCustomTheme).toHaveBeenCalledTimes(1);
     expect(onClearCustomTheme).toHaveBeenCalledTimes(1);
-    expect(normalizedText(container)).toContain("Loaded Light Green");
+    expect(container.querySelector(".settings-theme-import__meta-label")?.textContent?.trim()).toBe(
+      "Loaded",
+    );
+    expect(container.querySelector(".settings-theme-import__meta-value")?.textContent?.trim()).toBe(
+      "Light Green \u00b7 https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+    );
 
     const input = container.querySelector(".settings-theme-import__input") as HTMLInputElement;
     input.value = "/r/themes/cmlhfpjhw000004l4f4ax3m7z";

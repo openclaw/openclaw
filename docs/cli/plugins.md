@@ -90,6 +90,10 @@ openclaw plugins install <plugin> --marketplace <name>  # marketplace (explicit)
 openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo>
 ```
 
+Maintainers testing setup-time installs can override automatic plugin install
+sources with guarded environment variables. See
+[Plugin install overrides](/plugins/install-overrides).
+
 <Warning>
 Bare package names install from npm by default during the launch cutover. Use `clawhub:<package>` for ClawHub. Treat plugin installs like running code. Prefer pinned versions.
 </Warning>
@@ -129,7 +133,7 @@ is available, then fall back to `latest`.
 
     This CLI flag applies to plugin install/update flows. Gateway-backed skill dependency installs use the matching `dangerouslyForceUnsafeInstall` request override, while `openclaw skills install` remains a separate ClawHub skill download/install flow.
 
-    If a plugin you published on ClawHub is blocked by a registry scan, use the publisher steps in [ClawHub](/tools/clawhub).
+    If a plugin you published on ClawHub is blocked by a registry scan, use the publisher steps in [ClawHub](/clawhub/security).
 
   </Accordion>
   <Accordion title="Hook packs and npm specs">
@@ -335,7 +339,7 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
   </Accordion>
   <Accordion title="Beta channel updates">
-    `openclaw plugins update` reuses the tracked plugin spec unless you pass a new spec. `openclaw update` additionally knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first, then fall back to the recorded default/latest spec if no plugin beta release exists. Exact versions and explicit tags stay pinned to that selector.
+    `openclaw plugins update` reuses the tracked plugin spec unless you pass a new spec. `openclaw update` additionally knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first, then fall back to the recorded default/latest spec if no plugin beta release exists. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector.
 
   </Accordion>
   <Accordion title="Version checks and integrity drift">
@@ -398,7 +402,7 @@ The local plugin registry is OpenClaw's persisted cold read model for installed 
 
 Use `plugins registry` to inspect whether the persisted registry is present, current, or stale. Use `--refresh` to rebuild it from the persisted plugin index, config policy, and manifest/package metadata. This is a repair path, not a runtime activation path.
 
-`openclaw doctor --fix` also repairs registry-adjacent managed npm drift: if an orphaned or recovered `@openclaw/*` package under the managed plugin npm root shadows a bundled plugin, doctor removes that stale package and rebuilds the registry so startup validates against the bundled manifest.
+`openclaw doctor --fix` also repairs registry-adjacent managed npm drift: if an orphaned or recovered `@openclaw/*` package under the managed plugin npm root shadows a bundled plugin, doctor removes that stale package and rebuilds the registry so startup validates against the bundled manifest. Doctor also relinks the host `openclaw` package into managed npm plugins that declare `peerDependencies.openclaw`, so package-local runtime imports such as `openclaw/plugin-sdk/*` resolve after updates or npm repairs.
 
 <Warning>
 `OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY=1` is a deprecated break-glass compatibility switch for registry read failures. Prefer `plugins registry --refresh` or `openclaw doctor --fix`; the env fallback is only for emergency startup recovery while the migration rolls out.
@@ -417,4 +421,4 @@ Marketplace list accepts a local marketplace path, a `marketplace.json` path, a 
 
 - [Building plugins](/plugins/building-plugins)
 - [CLI reference](/cli)
-- [Community plugins](/plugins/community)
+- [ClawHub](/clawhub)

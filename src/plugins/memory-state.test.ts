@@ -43,8 +43,10 @@ function createMemoryFlushPlan(relativePath: string) {
 
 function expectClearedMemoryState() {
   expect(resolveMemoryFlushPlan({})).toBeNull();
-  expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toEqual([]);
-  expect(listMemoryCorpusSupplements()).toEqual([]);
+  expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toStrictEqual(
+    [],
+  );
+  expect(listMemoryCorpusSupplements()).toStrictEqual([]);
   expect(getMemoryRuntime()).toBeUndefined();
 }
 
@@ -94,23 +96,32 @@ describe("memory plugin state", () => {
     ]);
   });
 
-  it("adapts deprecated split registration to the unified memory capability", async () => {
+  it("adapts deprecated split registration to the unified memory capability", () => {
     const runtime = createMemoryRuntime();
+    const promptBuilder = () => ["legacy prompt"];
+    const flushPlanResolver = () => createMemoryFlushPlan("memory/legacy.md");
 
-    registerMemoryPromptSection(() => ["legacy prompt"]);
-    registerMemoryFlushPlanResolver(() => createMemoryFlushPlan("memory/legacy.md"));
+    registerMemoryPromptSection(promptBuilder);
+    registerMemoryFlushPlanResolver(flushPlanResolver);
     registerMemoryRuntime(runtime);
 
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["legacy prompt"]);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/legacy.md");
     expect(getMemoryRuntime()).toBe(runtime);
-    expect(getMemoryCapabilityRegistration()).toMatchObject({
+    expect(getMemoryCapabilityRegistration()).toStrictEqual({
       pluginId: "legacy-memory-v1",
+      capability: {
+        promptBuilder,
+        flushPlanResolver,
+        runtime,
+      },
     });
   });
 
   it("prefers the registered memory capability over earlier legacy split state", async () => {
     const runtime = createMemoryRuntime();
+    const promptBuilder = () => ["capability prompt"];
+    const flushPlanResolver = () => createMemoryFlushPlan("memory/capability.md");
 
     registerMemoryPromptSection(() => ["legacy prompt"]);
     registerMemoryFlushPlanResolver(() => createMemoryFlushPlan("memory/legacy.md"));
@@ -123,8 +134,8 @@ describe("memory plugin state", () => {
       },
     });
     registerMemoryCapability("memory-core", {
-      promptBuilder: () => ["capability prompt"],
-      flushPlanResolver: () => createMemoryFlushPlan("memory/capability.md"),
+      promptBuilder,
+      flushPlanResolver,
       runtime,
     });
 
@@ -137,8 +148,13 @@ describe("memory plugin state", () => {
       }),
     ).resolves.toEqual({ manager: null, error: "missing" });
     expect(hasMemoryRuntime()).toBe(true);
-    expect(getMemoryCapabilityRegistration()).toMatchObject({
+    expect(getMemoryCapabilityRegistration()).toStrictEqual({
       pluginId: "memory-core",
+      capability: {
+        promptBuilder,
+        flushPlanResolver,
+        runtime,
+      },
     });
   });
 

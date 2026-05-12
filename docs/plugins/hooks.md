@@ -134,7 +134,7 @@ observation-only.
 
 **Sessions and compaction**
 
-- `session_start` / `session_end` - track session lifecycle boundaries
+- `session_start` / `session_end` - track session lifecycle boundaries. The event's `reason` is one of `new`, `reset`, `idle`, `daily`, `compaction`, `deleted`, `shutdown`, `restart`, or `unknown`. The `shutdown` and `restart` values fire from the gateway shutdown finalizer when the process is stopped or restarted while sessions are still active, so downstream plugins (such as memory or transcript stores) can finalize ghost rows that would otherwise be left in an open state across restarts. The finalizer is bounded so a slow plugin cannot block SIGTERM/SIGINT.
 - `before_compaction` / `after_compaction` - observe or annotate compaction cycles
 - `before_reset` - observe session-reset events (`/reset`, programmatic resets)
 
@@ -154,6 +154,10 @@ observation-only.
 
 - `event.toolName`
 - `event.params`
+- optional `event.derivedPaths`, containing best-effort host-derived target path
+  hints for well-known tool envelopes such as `apply_patch`; when present,
+  these paths may be incomplete or may over-approximate what the tool will
+  actually touch (for example, with malformed or partial inputs)
 - optional `event.runId`
 - optional `event.toolCallId`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
@@ -369,6 +373,12 @@ Decision rules:
 - `message_sending` with `cancel: false` is treated as no decision.
 - Rewritten `content` continues to lower-priority hooks unless a later hook
   cancels delivery.
+- `message_sending` can return `cancelReason` and bounded `metadata` with a
+  cancellation. New message lifecycle APIs expose this as a suppressed delivery
+  outcome with reason `cancelled_by_message_sending_hook`; legacy direct
+  delivery keeps returning an empty result array for compatibility.
+- `message_sent` is observation-only. Handler failures are logged and do not
+  change the delivery result.
 
 ## Install hooks
 

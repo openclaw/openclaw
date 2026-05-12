@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyXaiModelCompat,
   buildProviderToolCompatFamilyHooks,
   findOpenAIStrictSchemaViolations,
   inspectGeminiToolSchemas,
   inspectOpenAIToolSchemas,
   normalizeGeminiToolSchemas,
   normalizeOpenAIToolSchemas,
-  resolveXaiModelCompatPatch,
 } from "./provider-tools.js";
 
 describe("buildProviderToolCompatFamilyHooks", () => {
@@ -88,7 +86,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         } as never,
         tools,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("preserves explicit empty properties maps when normalizing strict openai schemas", () => {
@@ -198,12 +196,12 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
 
     expect(normalized[0]?.parameters).toEqual(permissiveParameters);
-    expect(findOpenAIStrictSchemaViolations(permissiveParameters, "cron.parameters")).toEqual(
-      expect.arrayContaining([
-        "cron.parameters.required.schedule",
-        "cron.parameters.additionalProperties",
-      ]),
+    const strictSchemaViolations = findOpenAIStrictSchemaViolations(
+      permissiveParameters,
+      "cron.parameters",
     );
+    expect(strictSchemaViolations).toContain("cron.parameters.required.schedule");
+    expect(strictSchemaViolations).toContain("cron.parameters.additionalProperties");
     expect(
       hooks.inspectToolSchemas({
         provider: "openai",
@@ -217,7 +215,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         } as never,
         tools: [permissiveTool],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("skips openai strict-tool normalization on non-native routes", () => {
@@ -251,7 +249,7 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         } as never,
         tools,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("suppresses openai strict-schema diagnostics because transport falls back to strict false", () => {
@@ -286,35 +284,6 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       ],
     });
 
-    expect(diagnostics).toEqual([]);
-  });
-
-  it("covers the shared xAI tool compat patch", () => {
-    const patch = resolveXaiModelCompatPatch();
-
-    expect(patch).toMatchObject({
-      toolSchemaProfile: "xai",
-      nativeWebSearchTool: true,
-      toolCallArgumentsEncoding: "html-entities",
-    });
-    expect(patch.unsupportedToolSchemaKeywords).toEqual(
-      expect.arrayContaining(["minLength", "maxLength", "minItems", "maxItems"]),
-    );
-
-    expect(
-      applyXaiModelCompat({
-        id: "grok-4",
-        compat: {
-          supportsUsageInStreaming: true,
-        },
-      }),
-    ).toMatchObject({
-      compat: {
-        supportsUsageInStreaming: true,
-        toolSchemaProfile: "xai",
-        nativeWebSearchTool: true,
-        toolCallArgumentsEncoding: "html-entities",
-      },
-    });
+    expect(diagnostics).toStrictEqual([]);
   });
 });

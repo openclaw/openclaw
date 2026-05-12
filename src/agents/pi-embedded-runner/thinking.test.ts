@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { castAgentMessage, castAgentMessages } from "../test-helpers/agent-message-fixtures.js";
 import {
@@ -31,6 +31,30 @@ function dropSingleAssistantContent(content: Array<Record<string, unknown>>) {
   };
 }
 
+const noThinkingReferenceCases = [
+  { name: "dropThinkingBlocks", drop: dropThinkingBlocks },
+  { name: "dropReasoningFromHistory", drop: dropReasoningFromHistory },
+];
+
+function createNoThinkingMessages(): AgentMessage[] {
+  return [
+    castAgentMessage({ role: "user", content: "hello" }),
+    castAgentMessage({ role: "assistant", content: [{ type: "text", text: "world" }] }),
+  ];
+}
+
+describe("thinking-free history contract", () => {
+  it.each(noThinkingReferenceCases)(
+    "$name returns the original reference when no thinking blocks are present",
+    ({ drop }) => {
+      const messages = createNoThinkingMessages();
+
+      const result = drop(messages);
+      expect(result).toBe(messages);
+    },
+  );
+});
+
 describe("isAssistantMessageWithContent", () => {
   it("accepts assistant messages with array content and rejects others", () => {
     const assistant = castAgentMessage({
@@ -47,16 +71,6 @@ describe("isAssistantMessageWithContent", () => {
 });
 
 describe("dropThinkingBlocks", () => {
-  it("returns the original reference when no thinking blocks are present", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({ role: "user", content: "hello" }),
-      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "world" }] }),
-    ];
-
-    const result = dropThinkingBlocks(messages);
-    expect(result).toBe(messages);
-  });
-
   it("preserves thinking blocks when the assistant message is the latest assistant turn", () => {
     const { assistant, messages, result } = dropSingleAssistantContent([
       { type: "thinking", thinking: "internal" },
@@ -159,16 +173,6 @@ describe("dropThinkingBlocks", () => {
 });
 
 describe("dropReasoningFromHistory", () => {
-  it("returns the original reference when no thinking blocks are present", () => {
-    const messages: AgentMessage[] = [
-      castAgentMessage({ role: "user", content: "hello" }),
-      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "world" }] }),
-    ];
-
-    const result = dropReasoningFromHistory(messages);
-    expect(result).toBe(messages);
-  });
-
   it("strips assistant reasoning from prior completed turns", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({ role: "user", content: "first" }),
@@ -449,10 +453,13 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       ),
     ).rejects.toBe(anthropicThinkingError);
     expect(callCount).toBe(2);
-    expect(contexts[1]?.messages?.[0]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }],
-    });
+    const retryMessage = contexts[1]?.messages?.[0];
+    if (!retryMessage || retryMessage.role !== "assistant") {
+      throw new Error("Expected Anthropic recovery retry to start with an assistant message");
+    }
+    expect(retryMessage.content).toEqual([
+      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+    ]);
   });
 
   it("retries with visible assistant text when stripping thinking leaves content", async () => {
@@ -483,10 +490,11 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       ),
     ).rejects.toBe(anthropicThinkingError);
 
-    expect(contexts[1]?.messages?.[0]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "visible answer" }],
-    });
+    const retryMessage = contexts[1]?.messages?.[0];
+    if (!retryMessage || retryMessage.role !== "assistant") {
+      throw new Error("Expected Anthropic recovery retry to start with an assistant message");
+    }
+    expect(retryMessage.content).toEqual([{ type: "text", text: "visible answer" }]);
   });
 
   it("does not retry when the stream fails after yielding a chunk", async () => {

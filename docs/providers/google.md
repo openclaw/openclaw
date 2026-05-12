@@ -13,7 +13,7 @@ Gemini Grounding.
 - Provider: `google`
 - Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - API: Google Gemini API
-- Runtime option: `agents.defaults.agentRuntime.id: "google-gemini-cli"`
+- Runtime option: provider/model `agentRuntime.id: "google-gemini-cli"`
   reuses Gemini CLI OAuth while keeping model refs canonical as `google/*`.
 
 ## Getting started
@@ -226,8 +226,8 @@ The bundled `google` plugin also registers video generation through the shared
 
 - Default video model: `google/veo-3.1-fast-generate-preview`
 - Modes: text-to-video, image-to-video, and single-video reference flows
-- Supports `aspectRatio`, `resolution`, and `audio`
-- Current duration clamp: **4 to 8 seconds**
+- Supports `aspectRatio` (`16:9`, `9:16`) and `resolution` (`720P`, `1080P`); audio output is not supported by Veo today
+- Supported durations: **4, 6, or 8 seconds** (other values snap to the nearest allowed value)
 
 To use Google as the default video provider:
 

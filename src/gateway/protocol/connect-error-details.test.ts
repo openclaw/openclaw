@@ -13,6 +13,7 @@ import {
   readConnectPairingRequiredDetails,
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
+  resolveAuthConnectErrorDetailCode,
 } from "./connect-error-details.js";
 
 describe("readConnectErrorDetailCode", () => {
@@ -40,8 +41,8 @@ describe("readConnectErrorRecoveryAdvice", () => {
   });
 
   it("returns empty advice for invalid payloads", () => {
-    expect(readConnectErrorRecoveryAdvice(null)).toEqual({});
-    expect(readConnectErrorRecoveryAdvice("x")).toEqual({});
+    expect(readConnectErrorRecoveryAdvice(null)).toStrictEqual({});
+    expect(readConnectErrorRecoveryAdvice("x")).toStrictEqual({});
     expect(readConnectErrorRecoveryAdvice({ canRetryWithDeviceToken: "yes" })).toEqual({});
     expect(
       readConnectErrorRecoveryAdvice({
@@ -49,6 +50,12 @@ describe("readConnectErrorRecoveryAdvice", () => {
         recommendedNextStep: "retry_with_magic",
       }),
     ).toEqual({ canRetryWithDeviceToken: true, recommendedNextStep: undefined });
+  });
+});
+
+describe("resolveAuthConnectErrorDetailCode", () => {
+  it("maps device token scope mismatches to a dedicated auth detail", () => {
+    expect(resolveAuthConnectErrorDetailCode("scope_mismatch")).toBe("AUTH_SCOPE_MISMATCH");
   });
 });
 

@@ -164,7 +164,7 @@ describe("createGatewayPluginRequestHandler", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(observedScopes).toEqual([]);
+    expect(observedScopes).toStrictEqual([]);
   });
 
   it("preserves gateway-authenticated plugin route runtime scopes from request auth", async () => {
@@ -408,7 +408,7 @@ describe("createGatewayPluginRequestHandler", () => {
     const { res, setHeader, end } = makeMockHttpResponse();
     const handled = await handler({ url: "/boom" } as IncomingMessage, res);
     expect(handled).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("boom"));
+    expect(log.warn).toHaveBeenCalledWith("plugin http route failed (route): Error: boom");
     expect(res.statusCode).toBe(500);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
     expect(end).toHaveBeenCalledWith("Internal Server Error");
@@ -478,7 +478,7 @@ describe("createGatewayPluginUpgradeHandler", () => {
     expect(handled).toBe(true);
     expect(routeUpgradeHandler).toHaveBeenCalledTimes(1);
     expect(socket.destroyed).toBe(false);
-    expect(socket.chunks).toEqual([]);
+    expect(socket.chunks).toStrictEqual([]);
   });
 });
 

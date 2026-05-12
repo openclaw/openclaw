@@ -160,7 +160,7 @@ beforeEach(() => {
 });
 
 describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)", () => {
-  it("applies bundled channel defaults from plugin-owned schema metadata", async () => {
+  it("applies bundled channel defaults from plugin-owned schema metadata", () => {
     setupTelegramSchemaWithDefault();
 
     const result = validateConfigObjectWithPlugins({
@@ -171,15 +171,13 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.channels?.telegram).toEqual(
-        expect.objectContaining({ dmPolicy: "pairing" }),
-      );
+      expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
     }
   });
 });
 
 describe("validateConfigObjectRawWithPlugins channel metadata", () => {
-  it("still injects channel AJV defaults even in raw mode — persistence safety is handled by io.ts", async () => {
+  it("still injects channel AJV defaults even in raw mode — persistence safety is handled by io.ts", () => {
     // Channel and plugin AJV validation always runs with applyDefaults: true
     // (hardcoded) to avoid breaking schemas that mark defaulted fields as
     // required.
@@ -199,15 +197,13 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     if (result.ok) {
       // AJV defaults ARE injected into validated.config even in raw mode.
       // This is intentional — see comment above.
-      expect(result.config.channels?.telegram).toEqual(
-        expect.objectContaining({ dmPolicy: "pairing" }),
-      );
+      expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
     }
   });
 });
 
 describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
-  it("does not inject plugin AJV defaults in raw mode for plugin-owned config", async () => {
+  it("does not inject plugin AJV defaults in raw mode for plugin-owned config", () => {
     setupPluginSchemaWithRequiredDefault();
 
     const result = validateConfigObjectRawWithPlugins({

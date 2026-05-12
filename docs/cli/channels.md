@@ -32,7 +32,7 @@ openclaw channels logs --channel all
 
 ## Status / capabilities / resolve / logs
 
-- `channels status`: `--probe`, `--timeout <ms>`, `--json`
+- `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>`, `--json`
 - `channels capabilities`: `--channel <name>`, `--account <id>` (only with `--channel`), `--target <dest>`, `--timeout <ms>`, `--json`
 - `channels resolve`: `<entries...>`, `--channel <name>`, `--account <id>`, `--kind <auto|user|group>`, `--json`
 - `channels logs`: `--channel <name|all>`, `--lines <n>`, `--json`
@@ -80,7 +80,7 @@ When you run `openclaw channels add` without flags, the interactive wizard can p
 
 - account ids per selected channel
 - optional display names for those accounts
-- `Bind configured channel accounts to agents now?`
+- `Route these channel accounts to agents now?`
 
 If you confirm bind now, the wizard asks which agent should own each configured channel account and writes account-scoped routing bindings.
 

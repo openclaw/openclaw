@@ -108,6 +108,20 @@ async function post(
   });
 }
 
+function expectErrorResponse(body: unknown, expected: { type: string; message?: string }) {
+  const response = body as {
+    ok?: unknown;
+    error?: { type?: unknown; message?: unknown };
+  };
+  if (Object.hasOwn(response, "ok")) {
+    expect(response.ok).toBe(false);
+  }
+  expect(response.error?.type).toBe(expected.type);
+  if (expected.message !== undefined) {
+    expect(response.error?.message).toBe(expected.message);
+  }
+}
+
 describe("POST /sessions/:sessionKey/kill", () => {
   it("returns 401 when auth fails", async () => {
     authMock.mockResolvedValueOnce({ ok: false, rateLimited: false });
@@ -128,12 +142,25 @@ describe("POST /sessions/:sessionKey/kill", () => {
       },
     );
     expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toMatchObject({
-      ok: false,
-      error: { type: "not_found" },
-    });
+    expectErrorResponse(await response.json(), { type: "not_found" });
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
+
+  it.each(["/sessions/%zz/kill", "/sessions/%20/kill"])(
+    "rejects invalid encoded session key %s without falling through",
+    async (pathname) => {
+      const response = await post(pathname);
+      expect(response.status).toBe(400);
+      expectErrorResponse(await response.json(), {
+        message: "invalid session key",
+        type: "invalid_request_error",
+      });
+      expect(authMock).not.toHaveBeenCalled();
+      expect(loadSessionEntryMock).not.toHaveBeenCalled();
+      expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
+      expect(killControlledSubagentRunMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("kills a matching session via the admin kill helper using the canonical key", async () => {
     authMock.mockResolvedValueOnce({ ok: true, method: "trusted-proxy" });
@@ -180,12 +207,9 @@ describe("POST /sessions/:sessionKey/kill", () => {
   it("rejects local bearer-auth kills without a trusted admin scope surface", async () => {
     const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill");
     expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "missing scope: operator.admin",
-      },
+    expectErrorResponse(await response.json(), {
+      type: "forbidden",
+      message: "missing scope: operator.admin",
     });
     expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
@@ -200,12 +224,9 @@ describe("POST /sessions/:sessionKey/kill", () => {
       },
     );
     expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "missing scope: operator.admin",
-      },
+    expectErrorResponse(await response.json(), {
+      type: "forbidden",
+      message: "missing scope: operator.admin",
     });
     expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
@@ -220,10 +241,7 @@ describe("POST /sessions/:sessionKey/kill", () => {
 
     const response = await post("/sessions/agent%3Amain%3Asubagent%3Aworker/kill");
     expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({
-      ok: false,
-      error: { type: "forbidden" },
-    });
+    expectErrorResponse(await response.json(), { type: "forbidden" });
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
   });
 
@@ -291,14 +309,18 @@ describe("POST /sessions/:sessionKey/kill", () => {
     });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, killed: false });
-    expect(killControlledSubagentRunMock).toHaveBeenCalledWith({
-      cfg,
-      controller: { controllerSessionKey: "agent:main:main" },
-      entry: expect.objectContaining({
-        runId: "run-current-ended",
-        childSessionKey: "agent:main:subagent:worker",
-      }),
-    });
+    expect(killControlledSubagentRunMock).toHaveBeenCalledTimes(1);
+    const killCall = killControlledSubagentRunMock.mock.calls.at(0)?.[0] as
+      | {
+          cfg?: unknown;
+          controller?: { controllerSessionKey?: string };
+          entry?: { runId?: string; childSessionKey?: string };
+        }
+      | undefined;
+    expect(killCall?.cfg).toBe(cfg);
+    expect(killCall?.controller?.controllerSessionKey).toBe("agent:main:main");
+    expect(killCall?.entry?.runId).toBe("run-current-ended");
+    expect(killCall?.entry?.childSessionKey).toBe("agent:main:subagent:worker");
   });
 
   it("rejects bearer-auth requester kills without a trusted write scope surface", async () => {
@@ -309,12 +331,9 @@ describe("POST /sessions/:sessionKey/kill", () => {
       { "x-openclaw-requester-session-key": "agent:other:main" },
     );
     expect(response.status).toBe(403);
-    await expect(response.json()).resolves.toMatchObject({
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: "missing scope: operator.write",
-      },
+    expectErrorResponse(await response.json(), {
+      type: "forbidden",
+      message: "missing scope: operator.write",
     });
     expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(killSubagentRunAdminMock).not.toHaveBeenCalled();
