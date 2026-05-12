@@ -259,7 +259,7 @@ function buildClaudeLiveKey(context: PreparedCliRunContext): string {
   )}`;
 }
 
-function buildClaudeLiveFingerprint(params: {
+export function buildClaudeLiveFingerprint(params: {
   context: PreparedCliRunContext;
   argv: string[];
   env: Record<string, string>;
@@ -326,7 +326,6 @@ function buildClaudeLiveFingerprint(params: {
     cwdHash: params.context.cwdHash ?? sha256(params.context.cwd ?? params.context.workspaceDir),
     provider: params.context.params.provider,
     model: params.context.normalizedModel,
-    systemPromptHash: sha256(params.context.systemPrompt),
     authProfileIdHash: params.context.effectiveAuthProfileId
       ? sha256(params.context.effectiveAuthProfileId)
       : undefined,
