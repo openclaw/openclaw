@@ -155,7 +155,8 @@ export function resolveSystemRunExecArgv(params: {
     params.shellCommand &&
     params.policy.analysisOk &&
     params.policy.allowlistSatisfied &&
-    params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain")
+    params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain") &&
+    isPosixShellInlineCommandTransport(params.argv)
   ) {
     const rebuilt = buildSafeBinsShellCommand({
       command: params.shellCommand,
@@ -179,6 +180,14 @@ export function resolveSystemRunExecArgv(params: {
     execArgv = rewrittenArgv;
   }
   return execArgv;
+}
+
+function isPosixShellInlineCommandTransport(argv: string[]): boolean {
+  const transportArgv = resolveShellWrapperTransportArgv(argv);
+  return Boolean(
+    transportArgv &&
+    POSIX_SHELL_WRAPPER_NAMES.has(normalizeExecutableToken(transportArgv[0] ?? "")),
+  );
 }
 
 function findSubsequence(haystack: readonly string[], needle: readonly string[]): number {

@@ -834,6 +834,31 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "does not apply POSIX safe-bin shell rewrites to PowerShell wrappers",
+    async () => {
+      const oldPath = process.env.PATH;
+      process.env.PATH = "/usr/bin:/bin";
+      try {
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          security: "allowlist",
+          ask: "off",
+          command: ["pwsh", "-Command", "head -c 16"],
+        });
+
+        expect(requireFirstRunCommandArgs(runCommand)).toEqual(["pwsh", "-Command", "head -c 16"]);
+        expectInvokeOk(sendInvokeResult);
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
+    },
+  );
+
   it("denies abbreviated PowerShell encoded payloads even when the wrapper is allowlisted", async () => {
     const binDir = createFixtureDir("openclaw-pwsh-allowlist-");
     const executablePath = createTempExecutable({ dir: binDir, name: "pwsh" });
