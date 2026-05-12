@@ -1,4 +1,3 @@
-/* eslint-disable no-console */
 /**
  * Real-runtime behavior proof for #73706.
  *
