@@ -28,6 +28,7 @@ import {
   hasVisibleAgentPayload,
 } from "./pi-embedded-runner/delivery-evidence.js";
 import type { EmbeddedPiQueueMessageOptions } from "./pi-embedded-runner/run-state.js";
+import { runDedupedAnnounceDelivery } from "./subagent-announce-dedupe.js";
 import {
   callGateway,
   createBoundDeliveryRouter,
@@ -856,42 +857,48 @@ export async function deliverSubagentAnnouncement(params: {
   directIdempotencyKey: string;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
-  return await runSubagentAnnounceDispatch({
-    expectsCompletionMessage: params.expectsCompletionMessage,
-    signal: params.signal,
-    queue: async () =>
-      await maybeQueueSubagentAnnounce({
-        requesterSessionKey: params.requesterSessionKey,
-        announceId: params.announceId,
-        triggerMessage: params.triggerMessage,
-        steerMessage: params.steerMessage,
-        summaryLine: params.summaryLine,
-        requesterOrigin: params.requesterOrigin,
-        sourceSessionKey: params.sourceSessionKey,
-        sourceChannel: params.sourceChannel,
-        sourceTool: params.sourceTool,
-        internalEvents: params.internalEvents,
-        signal: params.signal,
-      }),
-    direct: async () =>
-      await sendSubagentAnnounceDirectly({
-        requesterSessionKey: params.requesterSessionKey,
-        targetRequesterSessionKey: params.targetRequesterSessionKey,
-        triggerMessage: params.triggerMessage,
-        internalEvents: params.internalEvents,
-        directIdempotencyKey: params.directIdempotencyKey,
-        completionDirectOrigin: params.completionDirectOrigin,
-        directOrigin: params.directOrigin,
-        requesterSessionOrigin: params.requesterSessionOrigin,
-        sourceSessionKey: params.sourceSessionKey,
-        sourceChannel: params.sourceChannel,
-        sourceTool: params.sourceTool,
-        requesterIsSubagent: params.requesterIsSubagent,
-        expectsCompletionMessage: params.expectsCompletionMessage,
-        signal: params.signal,
-        bestEffortDeliver: params.bestEffortDeliver,
-      }),
-  });
+  // Coalesce/dedup concurrent or repeated dispatches for the same announce so
+  // racing lifecycle/retry paths cannot double-post the completion in the
+  // requester's channel. Keyed by `directIdempotencyKey`, which is stable for
+  // the same (childSessionKey, childRunId) across retries.
+  return runDedupedAnnounceDelivery(params.directIdempotencyKey, async () =>
+    runSubagentAnnounceDispatch({
+      expectsCompletionMessage: params.expectsCompletionMessage,
+      signal: params.signal,
+      queue: async () =>
+        await maybeQueueSubagentAnnounce({
+          requesterSessionKey: params.requesterSessionKey,
+          announceId: params.announceId,
+          triggerMessage: params.triggerMessage,
+          steerMessage: params.steerMessage,
+          summaryLine: params.summaryLine,
+          requesterOrigin: params.requesterOrigin,
+          sourceSessionKey: params.sourceSessionKey,
+          sourceChannel: params.sourceChannel,
+          sourceTool: params.sourceTool,
+          internalEvents: params.internalEvents,
+          signal: params.signal,
+        }),
+      direct: async () =>
+        await sendSubagentAnnounceDirectly({
+          requesterSessionKey: params.requesterSessionKey,
+          targetRequesterSessionKey: params.targetRequesterSessionKey,
+          triggerMessage: params.triggerMessage,
+          internalEvents: params.internalEvents,
+          directIdempotencyKey: params.directIdempotencyKey,
+          completionDirectOrigin: params.completionDirectOrigin,
+          directOrigin: params.directOrigin,
+          requesterSessionOrigin: params.requesterSessionOrigin,
+          sourceSessionKey: params.sourceSessionKey,
+          sourceChannel: params.sourceChannel,
+          sourceTool: params.sourceTool,
+          requesterIsSubagent: params.requesterIsSubagent,
+          expectsCompletionMessage: params.expectsCompletionMessage,
+          signal: params.signal,
+          bestEffortDeliver: params.bestEffortDeliver,
+        }),
+    }),
+  );
 }
 
 export const __testing = {

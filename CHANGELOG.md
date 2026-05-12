@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/subagents: deduplicate `deliverSubagentAnnouncement` dispatches by direct idempotency key so racing lifecycle/retry paths cannot post a subagent completion twice in the same Slack thread (or any requester channel).
 - fix: harden safe-bin argument validation [AI]. (#80999) Thanks @pgondhi987.
 - fix: scan plugin runtime entries during install [AI]. (#80998) Thanks @pgondhi987.
 - Codex harness: keep auth-profile-backed media tools such as `image_generate` available when OpenAI auth lives in the agent's auth-profile store instead of environment variables.
