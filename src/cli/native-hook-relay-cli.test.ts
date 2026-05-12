@@ -74,7 +74,7 @@ describe("native hook relay CLI", () => {
         timeoutMs: 5_000,
         now: 1_000,
       }),
-    ).toBe(4_750);
+    ).toBe(3_750);
     expect(
       cliTesting.calculateNativeHookRelayGatewayFallbackTimeoutMs({
         startedAt: 1_000,
@@ -83,6 +83,56 @@ describe("native hook relay CLI", () => {
       }),
     ).toBe(1_000);
     expect(cliTesting.calculateNativeHookRelayResponseReserveMs(5_000)).toBe(250);
+  });
+
+  it("reserves gateway fallback budget after stale bridge retries", async () => {
+    const dateNow = vi.spyOn(Date, "now");
+    let now = 10_000;
+    dateNow.mockImplementation(() => now);
+    const staleBridgeError = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1"), {
+      code: "ECONNREFUSED",
+    });
+    const invokeNativeHookRelayBridge = vi.fn(async (params: { timeoutMs: number }) => {
+      now += params.timeoutMs;
+      throw staleBridgeError;
+    });
+    const callGateway = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    try {
+      const exitCode = await runNativeHookRelayCli(
+        {
+          provider: "codex",
+          relayId: "relay-stale-bridge-budget",
+          event: "pre_tool_use",
+          timeout: "5000",
+        },
+        {
+          stdin: createReadableTextStream("{}"),
+          stdout,
+          stderr,
+          callGateway: callGateway as never,
+          invokeNativeHookRelayBridge: invokeNativeHookRelayBridge as never,
+        },
+      );
+
+      expect(exitCode).toBe(0);
+      expect(stdout.text()).toBe("");
+      expect(stderr.text()).toBe("");
+      expect(invokeNativeHookRelayBridge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutMs: 3_750,
+        }),
+      );
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          timeoutMs: 1_000,
+        }),
+      );
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("keeps reachable direct bridge invocation on the remaining hook budget", async () => {

@@ -13,6 +13,7 @@ import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 const MAX_NATIVE_HOOK_STDIN_BYTES = 1024 * 1024;
 const NATIVE_HOOK_DIRECT_BRIDGE_TIMEOUT_FRACTION = 0.75;
 const NATIVE_HOOK_RESPONSE_RESERVE_FRACTION = 0.05;
+const MIN_NATIVE_HOOK_DIRECT_BRIDGE_TIMEOUT_MS = 100;
 const MAX_NATIVE_HOOK_BRIDGE_REGISTRATION_WAIT_MS = 250;
 const MAX_NATIVE_HOOK_RESPONSE_RESERVE_MS = 250;
 
@@ -168,7 +169,12 @@ function calculateNativeHookRelayDirectBridgeTimeoutMs(params: {
   timeoutMs: number;
   now?: number;
 }): number {
-  return calculateNativeHookRelayRemainingTimeoutMs(params);
+  const remainingTimeoutMs = calculateNativeHookRelayRemainingTimeoutMs(params);
+  const directBridgeBudgetMs = Math.max(
+    MIN_NATIVE_HOOK_DIRECT_BRIDGE_TIMEOUT_MS,
+    Math.floor(params.timeoutMs * NATIVE_HOOK_DIRECT_BRIDGE_TIMEOUT_FRACTION),
+  );
+  return Math.max(1, Math.min(remainingTimeoutMs, directBridgeBudgetMs));
 }
 
 function calculateNativeHookRelayGatewayFallbackTimeoutMs(params: {
