@@ -1076,8 +1076,44 @@ describe("browser tool act compatibility", () => {
       1,
     );
     const opts = lastMockCallArg<{ profile?: string }>(browserActionsMocks.browserAct, 2);
-    expect(request).toEqual({ kind: "press", key: "Enter", targetId: "tab-2" });
+    // Top-level ref is backfilled into request (missing there), but nested fields win.
+    expect(request).toEqual({ kind: "press", key: "Enter", targetId: "tab-2", ref: "legacy-ref" });
     expect(opts.profile).toBeUndefined();
+  });
+
+  it("backfills top-level ref into nested request when ref is missing inside request", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      ref: "e22",
+      request: {
+        kind: "click",
+      },
+    });
+
+    const request = lastMockCallArg<{ kind?: string; ref?: string }>(
+      browserActionsMocks.browserAct,
+      1,
+    );
+    expect(request).toMatchObject({ kind: "click", ref: "e22" });
+  });
+
+  it("preserves nested ref when both top-level and nested ref are present", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      ref: "top-level-ref",
+      request: {
+        kind: "click",
+        ref: "nested-ref",
+      },
+    });
+
+    const request = lastMockCallArg<{ kind?: string; ref?: string }>(
+      browserActionsMocks.browserAct,
+      1,
+    );
+    expect(request.ref).toBe("nested-ref");
   });
 
   it("applies configured browser action timeout when act timeout is omitted", async () => {
