@@ -218,10 +218,11 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     const agentCall = hoisted.callGatewayMock.mock.calls.find(
       ([call]) => (call as { method?: string }).method === "agent",
     )?.[0] as { params?: Record<string, unknown> } | undefined;
-    expect(agentCall?.params?.channel).toBe("matrix");
-    expect(agentCall?.params?.accountId).toBe("sut");
-    expect(agentCall?.params?.to).toBe("room:!parent:example");
     expect(agentCall?.params?.deliver).toBe(false);
+    expect(agentCall?.params?.channel).toBeUndefined();
+    expect(agentCall?.params?.accountId).toBeUndefined();
+    expect(agentCall?.params?.to).toBeUndefined();
+    expect(agentCall?.params?.threadId).toBeUndefined();
     const registeredRun = hoisted.registerSubagentRunMock.mock.calls.at(0)?.[0] as
       | {
           requesterOrigin?: { channel?: string; accountId?: string; to?: string };

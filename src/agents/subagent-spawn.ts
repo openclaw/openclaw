@@ -1126,11 +1126,13 @@ export async function spawnSubagentDirect(
       params: {
         message: childTaskMessage,
         sessionKey: childSessionKey,
-        channel: childSessionOrigin?.channel,
-        to: childSessionOrigin?.to ?? undefined,
-        accountId: childSessionOrigin?.accountId ?? undefined,
+        channel: deliverInitialChildRunDirectly ? childSessionOrigin?.channel : undefined,
+        to: deliverInitialChildRunDirectly ? (childSessionOrigin?.to ?? undefined) : undefined,
+        accountId: deliverInitialChildRunDirectly
+          ? (childSessionOrigin?.accountId ?? undefined)
+          : undefined,
         threadId:
-          childSessionOrigin?.threadId != null
+          deliverInitialChildRunDirectly && childSessionOrigin?.threadId != null
             ? stringifyRouteThreadId(childSessionOrigin.threadId)
             : undefined,
         idempotencyKey: childIdem,
