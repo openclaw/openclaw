@@ -126,15 +126,13 @@ describe("emitResetCommandHooks", () => {
     });
 
     await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
-    expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: [],
-        reason: "new",
-      }),
-      expect.objectContaining({
-        sessionId: "prev-session",
-      }),
-    );
+    const [event, ctx] = hookRunnerMocks.runBeforeReset.mock.calls[0] as unknown as [
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
+    expect(event.messages).toEqual([]);
+    expect(event.reason).toBe("new");
+    expect(ctx.sessionId).toBe("prev-session");
   });
 
   it("uses scoped SQLite transcript events for before_reset", async () => {
