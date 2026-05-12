@@ -116,11 +116,13 @@ function buildSilentFallbackFailurePayload(params: {
   fallbackTransition: ReturnType<typeof resolveFallbackTransition>;
   fallbackAttempts: readonly unknown[];
   isHeartbeat: boolean;
+  hasSuccessfulSideEffectDelivery: boolean;
   silentExpected?: boolean;
 }): ReplyPayload | undefined {
   if (
     params.isHeartbeat ||
     params.silentExpected === true ||
+    params.hasSuccessfulSideEffectDelivery ||
     !params.fallbackTransition.fallbackActive ||
     params.fallbackAttempts.length === 0
   ) {
@@ -132,6 +134,22 @@ function buildSilentFallbackFailurePayload(params: {
       `Fallback used ${params.fallbackTransition.activeModelRef}, but it produced no visible reply.`,
     isError: true,
   });
+}
+
+function hasSuccessfulSideEffectDelivery(params: {
+  blockReplyPipeline: { didStream: () => boolean } | null;
+  directlySentBlockKeys?: Set<string>;
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: unknown[];
+}): boolean {
+  return Boolean(
+    params.blockReplyPipeline?.didStream() ||
+    (params.directlySentBlockKeys?.size ?? 0) > 0 ||
+    (params.messagingToolSentTexts?.length ?? 0) > 0 ||
+    (params.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
+    (params.messagingToolSentTargets?.length ?? 0) > 0,
+  );
 }
 
 function buildInlinePluginStatusPayload(params: {
@@ -1574,6 +1592,13 @@ export async function runReplyAgent(params: {
         fallbackTransition,
         fallbackAttempts,
         isHeartbeat,
+        hasSuccessfulSideEffectDelivery: hasSuccessfulSideEffectDelivery({
+          blockReplyPipeline,
+          directlySentBlockKeys,
+          messagingToolSentTexts: runResult.messagingToolSentTexts,
+          messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+          messagingToolSentTargets: runResult.messagingToolSentTargets,
+        }),
         silentExpected: followupRun.run.silentExpected,
       });
       if (silentFallbackFailurePayload) {
