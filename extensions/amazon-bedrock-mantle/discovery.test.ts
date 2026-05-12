@@ -596,25 +596,44 @@ describe("bedrock mantle discovery", () => {
     expect(provider).toBeNull();
   });
 
-  it("skips implicit discovery entirely when no AWS creds are present (#67288)", async () => {
-    // Regression for #67288: previously the mantle provider's discovery ran on
-    // every request even when the user had no AWS credentials configured,
-    // logging "[bedrock-mantle-discovery] Mantle IAM token generation
-    // unavailable" on every turn. Mirror amazon-bedrock's gate
-    // (extensions/amazon-bedrock/discovery.ts:596): when discovery is not
-    // explicitly enabled AND there's no usable bearer source, skip entirely
-    // without calling the IAM token factory.
+  it("logs 'IAM token generation unavailable' at most once per region across repeated implicit-discovery calls (#67288)", async () => {
+    // Regression for #67288: previously the per-request implicit-discovery
+    // call wrote `[bedrock-mantle-discovery] Mantle IAM token generation
+    // unavailable` on every catalog refresh when the AWS default credential
+    // chain returned no usable creds, producing operator log spam. The fix
+    // dedupes the failure log per region per process lifetime via
+    // iamTokenFailureLogged so the diagnostic fires at most once.
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const tokenProviderFactory = vi.fn(() => {
-      throw new Error("should not be called");
+      throw new Error("no credentials");
     });
 
-    const provider = await resolveImplicitMantleProvider({
-      env: {} as NodeJS.ProcessEnv, // no AWS_BEARER_TOKEN_BEDROCK, no AWS_* SDK creds
-      tokenProviderFactory,
-    });
+    try {
+      const first = await resolveImplicitMantleProvider({
+        env: { AWS_REGION: "us-east-1" } as NodeJS.ProcessEnv,
+        tokenProviderFactory,
+      });
+      const second = await resolveImplicitMantleProvider({
+        env: { AWS_REGION: "us-east-1" } as NodeJS.ProcessEnv,
+        tokenProviderFactory,
+      });
+      const third = await resolveImplicitMantleProvider({
+        env: { AWS_REGION: "us-east-1" } as NodeJS.ProcessEnv,
+        tokenProviderFactory,
+      });
 
-    expect(provider).toBeNull();
-    expect(tokenProviderFactory).not.toHaveBeenCalled();
+      expect(first).toBeNull();
+      expect(second).toBeNull();
+      expect(third).toBeNull();
+      // The token factory ran on every call (preserves IAM-chain fallback
+      // semantics — we do not short-circuit hosts that rely on instance roles
+      // / IRSA / SSO etc.) but the diagnostic log line is deduped per region.
+      expect(tokenProviderFactory).toHaveBeenCalledTimes(3);
+    } finally {
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 
   it("honors pluginConfig.discovery.enabled=false even when AWS creds are present (#67288)", async () => {
