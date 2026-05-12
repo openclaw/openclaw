@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { FixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebhookTarget } from "./monitor-types.js";
 import type { GoogleChatEvent } from "./types.js";
@@ -33,6 +34,7 @@ function createRequest(authorization?: string): IncomingMessage {
       authorization: authorization ?? "",
       "content-type": "application/json",
     },
+    socket: { remoteAddress: "203.0.113.10" },
   } as IncomingMessage;
 }
 
@@ -78,11 +80,17 @@ function installSimplePipeline(targets: unknown[]) {
 async function runWebhookHandler(options?: {
   processEvent?: ProcessEventFn;
   authorization?: string;
+  webhookRateLimiter?: FixedWindowRateLimiter;
 }) {
   const processEvent: ProcessEventFn =
     options?.processEvent ?? (vi.fn(async () => {}) as ProcessEventFn);
   const handler = createGoogleChatWebhookRequestHandler({
     webhookTargets: new Map(),
+    webhookRateLimiter: options?.webhookRateLimiter ?? {
+      isRateLimited: vi.fn(() => false),
+      size: vi.fn(() => 0),
+      clear: vi.fn(),
+    },
     webhookInFlightLimiter: {} as never,
     processEvent,
   });
@@ -107,6 +115,62 @@ describe("googlechat monitor webhook", () => {
     vi.doUnmock("openclaw/plugin-sdk/webhook-targets");
     vi.doUnmock("./auth.js");
     vi.resetModules();
+  });
+
+  it("passes a fixed-window request limiter to the shared webhook pipeline", async () => {
+    const rateLimiter: FixedWindowRateLimiter = {
+      isRateLimited: vi.fn(() => false),
+      size: vi.fn(() => 0),
+      clear: vi.fn(),
+    };
+    const webhookTargets = new Map<string, WebhookTarget[]>([
+      [
+        "/googlechat",
+        [
+          {
+            account: {
+              accountId: "default",
+              config: { appPrincipal: "chat-app" },
+            },
+            config: {
+              gateway: {
+                trustedProxies: ["10.0.0.0/24"],
+              },
+            },
+            runtime: {},
+            core: {} as never,
+            path: "/googlechat",
+            mediaMaxMb: 20,
+          } as WebhookTarget,
+        ],
+      ],
+    ]);
+    const handler = createGoogleChatWebhookRequestHandler({
+      webhookTargets,
+      webhookRateLimiter: rateLimiter,
+      webhookInFlightLimiter: {} as never,
+      processEvent: vi.fn(async () => {}),
+    });
+    const req = {
+      ...createRequest(),
+      url: "/googlechat?ignored=1",
+      headers: {
+        ...createRequest().headers,
+        "x-forwarded-for": "198.51.100.7, 10.0.0.1",
+      },
+      socket: { remoteAddress: "10.0.0.1" },
+    } as IncomingMessage;
+    const res = createResponse();
+    withResolvedWebhookRequestPipeline.mockResolvedValue(true);
+
+    await expect(handler(req, res)).resolves.toBe(true);
+
+    expect(withResolvedWebhookRequestPipeline).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rateLimiter,
+        rateLimitKey: "/googlechat:198.51.100.7",
+      }),
+    );
   });
 
   it("accepts add-on payloads that carry systemIdToken in the body", async () => {
