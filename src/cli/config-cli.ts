@@ -1817,16 +1817,28 @@ export async function runConfigUnset(opts: {
       }
       // SecretRef fallout check: collect refs that might be affected by provider removal
       const isProviderPath = pathStartsWith(parsedPath, parsePath("secrets.providers"));
+      let skippedExecRefs: SecretRef[] = [];
       if (isProviderPath) {
         const providerAlias = parsedPath[2]?.toString();
-        if (providerAlias) {
-          const refs = collectAffectedRefsForProviderRemoval(nextConfig, providerAlias);
-          const resolvabilityErrors = await collectDryRunResolvabilityErrors({
-            refs,
+        // If providerAlias is undefined, we're removing the entire secrets.providers map
+        const refs = collectAffectedRefsForProviderRemoval(nextConfig, providerAlias);
+        // Filter out exec refs since config unset doesn't support --allow-exec
+        const { refsToResolve, skippedExecRefs: execRefs } = selectDryRunRefsForResolution({
+          refs,
+          allowExecInDryRun: false,
+        });
+        skippedExecRefs = execRefs;
+        errors.push(
+          ...collectDryRunStaticErrorsForSkippedExecRefs({
+            refs: skippedExecRefs,
             config: nextConfig,
-          });
-          errors.push(...resolvabilityErrors);
-        }
+          }),
+        );
+        const resolvabilityErrors = await collectDryRunResolvabilityErrors({
+          refs: refsToResolve,
+          config: nextConfig,
+        });
+        errors.push(...resolvabilityErrors);
       }
       const dedupedErrors = dedupeDryRunErrors(errors);
       if (dedupedErrors.length > 0) {
@@ -1835,9 +1847,10 @@ export async function runConfigUnset(opts: {
             ok: false,
             operations: 1,
             errors: dedupedErrors,
+            skippedExecRefs: skippedExecRefs.length,
           });
         } else {
-          runtime.error(danger(formatDryRunFailureMessage({ errors: dedupedErrors, skippedExecRefs: 0 })));
+          runtime.error(danger(formatDryRunFailureMessage({ errors: dedupedErrors, skippedExecRefs: skippedExecRefs.length })));
         }
         runtime.exit(1);
         return;
@@ -1847,6 +1860,7 @@ export async function runConfigUnset(opts: {
           ok: true,
           operations: 1,
           checks: { schema: true, resolvability: isProviderPath },
+          skippedExecRefs: skippedExecRefs.length,
         });
       } else {
         runtime.log(success(`Dry run successful: 1 update(s) validated against ${shortenHomePath(snapshot.path)}.`));
@@ -1868,7 +1882,7 @@ export async function runConfigUnset(opts: {
   }
 }
 
-function collectAffectedRefsForProviderRemoval(config: OpenClawConfig, providerAlias: string): SecretRef[] {
+function collectAffectedRefsForProviderRemoval(config: OpenClawConfig, providerAlias?: string): SecretRef[] {
   const refs: SecretRef[] = [];
   for (const target of discoverConfigSecretTargets(config)) {
     const { ref } = resolveSecretInputRef({
@@ -1876,7 +1890,9 @@ function collectAffectedRefsForProviderRemoval(config: OpenClawConfig, providerA
       refValue: target.refValue,
       defaults: config.secrets?.defaults,
     });
-    if (ref && ref.provider === providerAlias) {
+    // If providerAlias is undefined, collect all refs (entire provider map removal)
+    // Otherwise, only collect refs that use the specific provider
+    if (ref && (providerAlias === undefined || ref.provider === providerAlias)) {
       refs.push(ref);
     }
   }
