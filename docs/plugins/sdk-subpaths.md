@@ -308,7 +308,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/exec-approvals-runtime` | Private-local after July 2026; Exec approval policy file helpers without the broad infra-runtime barrel |
     | `plugin-sdk/infra-runtime` | Deprecated compatibility shim; use injected runtime APIs or documented typed-public subpaths |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
-    | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, trace-context, and low-cardinality dimension normalization helpers |
+    | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, and trace-context helpers. Includes `onDiagnosticEvent` (untrusted events, dropped trusted events) and `onModelDiagnosticEvent` (allowlisted `model.call.{started,completed,error}` / `model.usage` / `model.failover` events for observability/cost plugins). The `trusted` flag is an emit-side guarantee only — the runtime uses it to mark its own emissions, and `emitTrustedDiagnosticEvent` is publicly exported, so do not treat trusted-stream events as integrity-attested telemetry. Use it for span attribution and usage tracking, not for security-sensitive accounting. |
     | `plugin-sdk/error-runtime` | Error graph, formatting, unknown-value coercion, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError` |
     | `plugin-sdk/fetch-runtime` | Private-local after July 2026; Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
     | `plugin-sdk/runtime-fetch` | Private-local after July 2026; Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
