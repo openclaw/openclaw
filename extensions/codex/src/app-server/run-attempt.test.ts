@@ -3566,10 +3566,9 @@ describe("runCodexAppServerAttempt", () => {
 
   it("releases completion when Codex raw-events an interrupted turn marker", async () => {
     const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(
-      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-      { turnTerminalIdleTimeoutMs: 60_000 },
-    );
+    const run = runCodexAppServerAttempt(createParams("session", path.join(tempDir, "workspace")), {
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
     let resolved = false;
     void run.then(() => {
       resolved = true;
@@ -3601,6 +3600,59 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.timedOut).toBe(false);
     expect(result.promptError).toBeNull();
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+  });
+
+  it("does not treat a user prompt containing the interrupted marker as terminal", async () => {
+    const harness = createStartedThreadHarness();
+    const markerPrompt =
+      "<turn_aborted>\nThe user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.\n</turn_aborted>";
+    const params = createParams("session", path.join(tempDir, "workspace"));
+    params.prompt = markerPrompt;
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 60_000 });
+    let resolved = false;
+    void run.then(() => {
+      resolved = true;
+    });
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "user-prompt-1",
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: markerPrompt,
+            },
+          ],
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resolved).toBe(false);
+
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-1", text: "It marks an interrupted turn." }],
+        },
+      },
+    });
+
+    const result = await run;
+    expect(resolved).toBe(true);
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.assistantTexts).toEqual(["It marks an interrupted turn."]);
   });
 
   it("releases completion when a projector callback throws during turn/completed", async () => {
@@ -5251,20 +5303,20 @@ describe("runCodexAppServerAttempt", () => {
       serviceTier: "priority",
       persistExtendedHistory: true,
     });
-    expect(requests).toEqual(
-      expect.arrayContaining([
-        {
-          method: "turn/start",
-          params: expect.objectContaining({
-            approvalPolicy: "on-request",
-            approvalsReviewer: "guardian_subagent",
-            sandboxPolicy: { type: "dangerFullAccess" },
-            serviceTier: "priority",
-            model: "gpt-5.4-codex",
-          }),
-        },
-      ]),
-    );
+    const resumeRequest = requests.find((request) => request.method === "thread/resume");
+    const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
+    const resumeConfig = resumeRequestParams?.config as Record<string, unknown> | undefined;
+    expect(resumeConfig?.["features.codex_hooks"]).toBe(true);
+    expect(resumeConfig?.["features.code_mode"]).toBe(true);
+    expect(resumeConfig?.["features.code_mode_only"]).toBe(true);
+    expect(resumeRequestParams?.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    const turnRequest = requests.find((request) => request.method === "turn/start");
+    const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
+    expect(turnRequestParams?.approvalPolicy).toBe("on-request");
+    expect(turnRequestParams?.approvalsReviewer).toBe("guardian_subagent");
+    expect(turnRequestParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+    expect(turnRequestParams?.serviceTier).toBe("priority");
+    expect(turnRequestParams?.model).toBe("gpt-5.4-codex");
   });
 
   it("clamps Codex danger-full-access when OpenClaw sandboxing is active", () => {
@@ -5381,27 +5433,27 @@ describe("runCodexAppServerAttempt", () => {
       developerInstructions: resumeParams.developerInstructions,
       persistExtendedHistory: true,
     });
-    expect(
-      buildTurnStartParams(params, { threadId: "thread-1", cwd: "/tmp/workspace", appServer }),
-    ).toEqual(
-      expect.objectContaining({
-        threadId: "thread-1",
-        cwd: "/tmp/workspace",
+    expect(resumeParams.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    const turnParams = buildTurnStartParams(params, {
+      threadId: "thread-1",
+      cwd: "/tmp/workspace",
+      appServer,
+    });
+    expect(turnParams.threadId).toBe("thread-1");
+    expect(turnParams.cwd).toBe("/tmp/workspace");
+    expect(turnParams.model).toBe("gpt-5.4-codex");
+    expect(turnParams.approvalPolicy).toBe("on-request");
+    expect(turnParams.approvalsReviewer).toBe("guardian_subagent");
+    expect(turnParams.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+    expect(turnParams.serviceTier).toBe("flex");
+    expect(turnParams.collaborationMode).toEqual({
+      mode: "default",
+      settings: {
         model: "gpt-5.4-codex",
-        approvalPolicy: "on-request",
-        approvalsReviewer: "guardian_subagent",
-        sandboxPolicy: { type: "dangerFullAccess" },
-        serviceTier: "flex",
-        collaborationMode: {
-          mode: "default",
-          settings: {
-            model: "gpt-5.4-codex",
-            reasoning_effort: "medium",
-            developer_instructions: null,
-          },
-        },
-      }),
-    );
+        reasoning_effort: "medium",
+        developer_instructions: null,
+      },
+    });
   });
 
   it("uses turn-scoped collaboration instructions for heartbeat Codex turns", () => {
