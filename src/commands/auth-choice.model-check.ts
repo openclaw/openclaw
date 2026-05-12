@@ -1,10 +1,47 @@
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
+import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-codex-routing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
+
+function uniqueProviders(providers: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const provider of providers) {
+    const trimmed = provider.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+function resolveAuthProviderCandidates(params: {
+  config: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  agentId?: string;
+}): string[] {
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.modelId,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  return uniqueProviders([
+    params.provider,
+    ...listOpenAIAuthProfileProvidersForAgentRuntime({
+      provider: params.provider,
+      harnessRuntime: harnessPolicy.runtime,
+    }),
+  ]);
+}
 
 export async function warnIfModelConfigLooksOff(
   config: OpenClawConfig,
@@ -34,9 +71,19 @@ export async function warnIfModelConfigLooksOff(
   }
 
   const store = ensureAuthProfileStore(options?.agentDir);
-  const hasProfile = listProfilesForProvider(store, ref.provider).length > 0;
-  const envKey = resolveEnvApiKey(ref.provider);
-  const hasCustomKey = hasUsableCustomProviderApiKey(config, ref.provider);
+  const authProviders = resolveAuthProviderCandidates({
+    config,
+    provider: ref.provider,
+    modelId: ref.model,
+    agentId: options?.agentId,
+  });
+  const hasProfile = authProviders.some(
+    (provider) => listProfilesForProvider(store, provider).length > 0,
+  );
+  const envKey = authProviders.some((provider) => resolveEnvApiKey(provider));
+  const hasCustomKey = authProviders.some((provider) =>
+    hasUsableCustomProviderApiKey(config, provider),
+  );
   if (!hasProfile && !envKey && !hasCustomKey) {
     warnings.push(
       `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(
