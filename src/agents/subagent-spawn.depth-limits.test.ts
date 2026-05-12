@@ -141,6 +141,7 @@ describe("subagent spawn depth + child limits", () => {
       {
         agentSessionKey: "agent:main:main",
         workspaceDir: "/tmp/workspace-main",
+        inheritedToolAllowlist: ["sessions_spawn", "read", ""],
         inheritedToolDenylist: ["bash", "exec", "read", ""],
       },
     );
@@ -150,6 +151,7 @@ describe("subagent spawn depth + child limits", () => {
     if (!childSession) {
       throw new Error("Expected persisted child session");
     }
+    expect(childSession.inheritedToolAllow).toEqual(["sessions_spawn", "read"]);
     expect(childSession.inheritedToolDeny).toEqual(["exec", "read"]);
   });
 

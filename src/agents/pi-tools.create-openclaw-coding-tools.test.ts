@@ -485,6 +485,21 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes(latestCreateOpenClawToolsOptions().pluginToolDenylist, ["pdf"]);
   });
 
+  it("passes effective allow-list-restricted tool surface to spawned sessions", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { allow: ["read", "sessions_spawn"] } },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
+    expectListIncludes(inheritedAllow, ["read", "sessions_spawn"]);
+    expect(inheritedAllow?.includes("exec")).toBe(false);
+    expect(inheritedAllow?.includes("process")).toBe(false);
+  });
+
   it("records core tool-prep stages for hot-path diagnostics", () => {
     const stages: string[] = [];
 

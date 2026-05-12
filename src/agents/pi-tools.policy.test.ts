@@ -9,7 +9,7 @@ import {
   isToolAllowedByPolicyName,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
-  resolveInheritedToolDenyPolicyForSession,
+  resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicy,
   resolveSubagentToolPolicyForSession,
   resolveTrustedGroupId,
@@ -408,7 +408,7 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
   });
 
-  it("applies inherited tool denies from stored ACP sessions without subagent metadata", () => {
+  it("applies inherited tool policy from stored ACP sessions without subagent metadata", () => {
     const storePath = path.join(
       os.tmpdir(),
       `openclaw-acp-inherited-deny-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
@@ -421,7 +421,8 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
           "agent:main:acp:limited": {
             sessionId: "limited-acp-session",
             updatedAt: Date.now(),
-            inheritedToolDeny: ["custom_plugin_tool"],
+            inheritedToolAllow: ["custom_plugin_tool"],
+            inheritedToolDeny: ["custom_denied_tool"],
           },
         },
         null,
@@ -436,9 +437,10 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const policy = resolveInheritedToolDenyPolicyForSession(cfg, "agent:main:acp:limited");
-    expect(isToolAllowedByPolicyName("custom_plugin_tool", policy)).toBe(false);
-    expect(isToolAllowedByPolicyName("read", policy)).toBe(true);
+    const policy = resolveInheritedToolPolicyForSession(cfg, "agent:main:acp:limited");
+    expect(isToolAllowedByPolicyName("custom_plugin_tool", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("custom_denied_tool", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("read", policy)).toBe(false);
   });
 
   it("defaults to leaf behavior when no depth is provided", () => {

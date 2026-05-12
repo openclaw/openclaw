@@ -40,6 +40,15 @@ export function inheritedToolDenyPatch(value: unknown): { inheritedToolDeny?: st
   return inheritedToolDeny.length > 0 ? { inheritedToolDeny } : {};
 }
 
+export function normalizeInheritedToolAllowlist(value: unknown): string[] {
+  return normalizeInheritedToolDenylist(value);
+}
+
+export function inheritedToolAllowPatch(value: unknown): { inheritedToolAllow?: string[] } {
+  const inheritedToolAllow = normalizeInheritedToolAllowlist(value);
+  return inheritedToolAllow.length > 0 ? { inheritedToolAllow } : {};
+}
+
 export function findAcpUnsupportedInheritedToolDeny(value: unknown): string | undefined {
   const inheritedToolDeny = normalizeInheritedToolDenylist(value);
   if (inheritedToolDeny.length === 0) {
@@ -50,6 +59,20 @@ export function findAcpUnsupportedInheritedToolDeny(value: unknown): string | un
   );
 }
 
+export function findAcpUnsupportedInheritedToolAllow(value: unknown): string | undefined {
+  const inheritedToolAllow = normalizeInheritedToolAllowlist(value);
+  if (inheritedToolAllow.length === 0) {
+    return undefined;
+  }
+  return ACP_UNSUPPORTED_INHERITED_TOOL_DENY.find(
+    (toolName) => !isToolAllowedByPolicyName(toolName, { allow: inheritedToolAllow }),
+  );
+}
+
 export function formatAcpInheritedToolDenyError(toolName: string): string {
   return `runtime="acp" is unavailable because the requester denies ${toolName}. Use runtime="subagent".`;
+}
+
+export function formatAcpInheritedToolAllowError(toolName: string): string {
+  return `runtime="acp" is unavailable because the requester does not allow ${toolName}. Use runtime="subagent".`;
 }

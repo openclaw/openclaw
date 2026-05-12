@@ -11,7 +11,9 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import {
+  findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
+  formatAcpInheritedToolAllowError,
   formatAcpInheritedToolDenyError,
 } from "../inherited-tool-deny.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -327,6 +329,17 @@ export function createSessionsSpawnTool(
           ...roleContext,
         });
       }
+      const acpUnsupportedInheritedAllow =
+        runtime === "acp"
+          ? findAcpUnsupportedInheritedToolAllow(opts?.inheritedToolAllowlist)
+          : undefined;
+      if (acpUnsupportedInheritedAllow) {
+        return jsonResult({
+          status: "forbidden",
+          error: formatAcpInheritedToolAllowError(acpUnsupportedInheritedAllow),
+          ...roleContext,
+        });
+      }
       if (runtime === "acp" && lightContext) {
         throw new Error("lightContext is only supported for runtime='subagent'.");
       }
@@ -389,6 +402,7 @@ export function createSessionsSpawnTool(
             agentGroupSpace: opts?.agentGroupSpace,
             agentMemberRoleIds: opts?.agentMemberRoleIds,
             sandboxed: opts?.sandboxed,
+            inheritedToolAllowlist: opts?.inheritedToolAllowlist,
             inheritedToolDenylist: opts?.inheritedToolDenylist,
           },
         );
@@ -493,6 +507,7 @@ export function createSessionsSpawnTool(
           agentMemberRoleIds: opts?.agentMemberRoleIds,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
           workspaceDir: opts?.workspaceDir,
+          inheritedToolAllowlist: opts?.inheritedToolAllowlist,
           inheritedToolDenylist: opts?.inheritedToolDenylist,
         },
       );

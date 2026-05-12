@@ -38,7 +38,7 @@ import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
-  resolveInheritedToolDenyPolicyForSession,
+  resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
 import {
@@ -78,6 +78,7 @@ import {
   applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
   collectExplicitDenylist,
+  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   mergeAlsoAllowPolicy,
   normalizeToolName,
   resolveToolProfilePolicy,
@@ -201,6 +202,33 @@ export function resolveProcessToolScopeKey(params: {
   }
   const agentId = params.agentId?.trim();
   return agentId ? `agent:${agentId}` : undefined;
+}
+
+function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolean {
+  return (
+    Array.isArray(policy?.allow) &&
+    policy.allow.some((entry) => {
+      const normalized = normalizeToolName(entry);
+      return (
+        Boolean(normalized) &&
+        normalized !== "*" &&
+        normalized !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY
+      );
+    })
+  );
+}
+
+function replaceWithEffectiveToolAllowlist(target: string[], tools: Array<{ name: string }>): void {
+  target.length = 0;
+  const seen = new Set<string>();
+  for (const tool of tools) {
+    const normalized = normalizeToolName(tool.name);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    target.push(normalized);
+  }
 }
 
 function applyModelProviderToolPolicy(
@@ -554,7 +582,7 @@ export function createOpenClawCodingTools(options?: {
           store: subagentStore,
         })
       : undefined;
-  const inheritedToolDenyPolicy = resolveInheritedToolDenyPolicyForSession(
+  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(
     options?.config,
     options?.sessionKey,
     {
@@ -583,6 +611,7 @@ export function createOpenClawCodingTools(options?: {
     senderPolicyWithToolSearchControls,
     sandboxToolPolicyWithToolSearchControls,
     subagentPolicyWithToolSearchControls,
+    inheritedToolPolicy,
   ]);
   options?.recordToolPrepStage?.("tool-policy");
   const execConfig = resolveExecConfig({ cfg: options?.config, agentId });
@@ -766,8 +795,24 @@ export function createOpenClawCodingTools(options?: {
     senderPolicy,
     sandboxToolPolicy,
     subagentPolicy,
-    inheritedToolDenyPolicy,
+    inheritedToolPolicy,
   ]);
+  const inheritedToolDenylist = [...pluginToolDenylist];
+  const inheritedToolAllowlist: string[] = [];
+  const shouldInheritEffectiveToolAllowlist = [
+    profilePolicy,
+    providerProfilePolicy,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    senderPolicy,
+    sandboxToolPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+    options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
+  ].some(hasRestrictiveAllowPolicy);
   const pluginToolsOnly =
     includeOpenClawTools || !includePluginTools
       ? []
@@ -894,7 +939,8 @@ export function createOpenClawCodingTools(options?: {
           authProfileStore: options?.authProfileStore,
           senderIsOwner: options?.senderIsOwner,
           sessionId: options?.sessionId,
-          inheritedToolDenylist: pluginToolDenylist,
+          inheritedToolAllowlist,
+          inheritedToolDenylist,
           onYield: options?.onYield,
           allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
           recordToolPrepStage: options?.recordToolPrepStage,
@@ -970,9 +1016,12 @@ export function createOpenClawCodingTools(options?: {
       }),
       { policy: sandboxToolPolicyWithToolSearchControls, label: "sandbox tools.allow" },
       { policy: subagentPolicyWithToolSearchControls, label: "subagent tools.allow" },
-      { policy: inheritedToolDenyPolicy, label: "inherited tools.deny" },
+      { policy: inheritedToolPolicy, label: "inherited tools" },
     ],
   });
+  if (shouldInheritEffectiveToolAllowlist) {
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, subagentFiltered);
+  }
   options?.recordToolPrepStage?.("authorization-policy");
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.

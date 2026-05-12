@@ -22,6 +22,7 @@ import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import {
   resolveSubagentCapabilityStore,
+  resolveStoredSubagentInheritedToolAllowlist,
   resolveStoredSubagentInheritedToolDenylist,
   resolveStoredSubagentCapabilities,
   type SessionCapabilityStore,
@@ -120,10 +121,10 @@ export function resolveSubagentToolPolicyForSession(
     cfg,
     store,
   });
-  const inheritedToolDenyPolicy = resolveInheritedToolDenyPolicyForSession(cfg, sessionKey, {
+  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(cfg, sessionKey, {
     store,
   });
-  const inheritedToolDeny = inheritedToolDenyPolicy?.deny ?? [];
+  const inheritedToolDeny = inheritedToolPolicy?.deny ?? [];
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
   const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
   const explicitAllow = new Set(
@@ -140,18 +141,28 @@ export function resolveSubagentToolPolicyForSession(
   return { allow: mergedAllow, deny };
 }
 
-export function resolveInheritedToolDenyPolicyForSession(
+export function resolveInheritedToolPolicyForSession(
   cfg: OpenClawConfig | undefined,
   sessionKey: string | undefined | null,
   opts?: {
     store?: SessionCapabilityStore;
   },
 ): SandboxToolPolicy | undefined {
+  const inheritedToolAllow = resolveStoredSubagentInheritedToolAllowlist(sessionKey, {
+    cfg,
+    store: opts?.store,
+  });
   const inheritedToolDeny = resolveStoredSubagentInheritedToolDenylist(sessionKey, {
     cfg,
     store: opts?.store,
   });
-  return inheritedToolDeny.length > 0 ? { deny: inheritedToolDeny } : undefined;
+  if (inheritedToolAllow.length === 0 && inheritedToolDeny.length === 0) {
+    return undefined;
+  }
+  return {
+    ...(inheritedToolAllow.length > 0 ? { allow: inheritedToolAllow } : {}),
+    ...(inheritedToolDeny.length > 0 ? { deny: inheritedToolDeny } : {}),
+  };
 }
 
 export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {

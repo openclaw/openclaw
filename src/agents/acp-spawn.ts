@@ -72,8 +72,11 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import {
+  findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
+  formatAcpInheritedToolAllowError,
   formatAcpInheritedToolDenyError,
+  inheritedToolAllowPatch,
   inheritedToolDenyPatch,
 } from "./inherited-tool-deny.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
@@ -128,6 +131,7 @@ export type SpawnAcpContext = {
   /** Trusted provider role ids for the requester in this group turn. */
   agentMemberRoleIds?: string[];
   sandboxed?: boolean;
+  inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
 };
 
@@ -1173,6 +1177,16 @@ export async function spawnAcpDirect(
       error: formatAcpInheritedToolDenyError(acpUnsupportedInheritedTool),
     });
   }
+  const acpUnsupportedInheritedAllow = findAcpUnsupportedInheritedToolAllow(
+    ctx.inheritedToolAllowlist,
+  );
+  if (acpUnsupportedInheritedAllow) {
+    return createAcpSpawnFailure({
+      status: "forbidden",
+      errorCode: "runtime_policy",
+      error: formatAcpInheritedToolAllowError(acpUnsupportedInheritedAllow),
+    });
+  }
 
   const spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
@@ -1307,6 +1321,7 @@ export async function spawnAcpDirect(
         key: sessionKey,
         spawnedBy: requesterInternalKey,
         ...subagentEnvelopeState.childSessionPatch,
+        ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
         ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
         ...(params.label ? { label: params.label } : {}),
       },
