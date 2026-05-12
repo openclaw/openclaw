@@ -3,7 +3,7 @@ import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { handleBashChatCommand } from "./bash-command.js";
-import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
+import { requireGatewayClientScope } from "./command-gates.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";
@@ -460,7 +460,7 @@ describe("command gating", () => {
   });
 
   it("enforces gateway client permissions when the command channel is external", () => {
-    const result = requireGatewayClientScopeForInternalChannel(
+    const result = requireGatewayClientScope(
       {
         ctx: {
           Provider: "internal",
@@ -484,7 +484,7 @@ describe("command gating", () => {
   });
 
   it("enforces gateway client permissions when the scope list is empty", () => {
-    const result = requireGatewayClientScopeForInternalChannel(
+    const result = requireGatewayClientScope(
       {
         ctx: {
           Provider: "internal",
@@ -508,7 +508,7 @@ describe("command gating", () => {
   });
 
   it("does not require gateway client permissions when scopes are absent", () => {
-    const result = requireGatewayClientScopeForInternalChannel(
+    const result = requireGatewayClientScope(
       {
         ctx: {
           Provider: "telegram",

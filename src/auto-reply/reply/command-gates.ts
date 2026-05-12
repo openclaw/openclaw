@@ -43,7 +43,7 @@ export function rejectNonOwnerCommand(
   return { shouldContinue: false };
 }
 
-export function requireGatewayClientScopeForInternalChannel(
+export function requireGatewayClientScope(
   params: HandleCommandsParams,
   config: {
     label: string;

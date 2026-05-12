@@ -45,7 +45,7 @@ import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
-  requireGatewayClientScopeForInternalChannel,
+  requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parsePluginsCommand } from "./plugins-commands.js";
@@ -426,7 +426,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
   }
 
   if (isPluginsWriteAction(pluginsCommand.action)) {
-    const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
+    const missingAdminScope = requireGatewayClientScope(params, {
       label: "/plugins write",
       allowedScopes: ["operator.admin"],
       missingText:
