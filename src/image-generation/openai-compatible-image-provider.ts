@@ -12,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  parseOpenAiCompatibleImageResponse,
+  parseOpenAiCompatibleImageResponseAsync,
   type OpenAiCompatibleImageResponsePayload,
 } from "./image-assets.js";
 import type {
@@ -260,7 +260,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
             ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
             : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
         );
-        const images = parseOpenAiCompatibleImageResponse(
+        const images = await parseOpenAiCompatibleImageResponseAsync(
           (await response.json()) as OpenAiCompatibleImageResponsePayload,
           options.response,
         );

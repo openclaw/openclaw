@@ -14,6 +14,7 @@ export type ImageMimeTypeDetection = {
 
 export type OpenAiCompatibleImageResponseEntry = {
   b64_json?: unknown;
+  url?: unknown;
   mime_type?: unknown;
   revised_prompt?: unknown;
 };
@@ -168,6 +169,59 @@ export function generatedImageAssetFromOpenAiCompatibleEntry(
   });
 }
 
+async function generatedImageAssetFromOpenAiCompatibleUrlEntry(
+  entry: OpenAiCompatibleImageResponseEntry,
+  index: number,
+  options: {
+    defaultMimeType?: string;
+    fileNamePrefix?: string;
+    fetchFn?: typeof fetch;
+  } = {},
+): Promise<GeneratedImageAsset | undefined> {
+  const url = normalizeOptionalString(entry.url);
+  if (!url) {
+    return undefined;
+  }
+  const fetchFn = options.fetchFn ?? fetch;
+  const response = await fetchFn(url);
+  if (!response.ok) {
+    throw new Error(`OpenAI-compatible image URL download failed (${response.status})`);
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const headerMimeType = normalizeOptionalString(response.headers.get("content-type"));
+  const defaultMimeType =
+    normalizeOptionalString(options.defaultMimeType) ?? DEFAULT_IMAGE_MIME_TYPE;
+  const detected = sniffImageMimeType(buffer, headerMimeType ?? defaultMimeType);
+  const mimeType = headerMimeType ?? detected.mimeType;
+  const prefix = normalizeOptionalString(options.fileNamePrefix) ?? DEFAULT_IMAGE_FILE_PREFIX;
+  const image: GeneratedImageAsset = {
+    buffer,
+    mimeType,
+    fileName: `${prefix}-${index + 1}.${detected.extension ?? imageFileExtensionForMimeType(mimeType)}`,
+  };
+  const revisedPrompt = normalizeOptionalString(entry.revised_prompt);
+  if (revisedPrompt) {
+    image.revisedPrompt = revisedPrompt;
+  }
+  return image;
+}
+
+async function generatedImageAssetFromOpenAiCompatibleEntryAsync(
+  entry: OpenAiCompatibleImageResponseEntry,
+  index: number,
+  options: {
+    defaultMimeType?: string;
+    fileNamePrefix?: string;
+    sniffMimeType?: boolean;
+    fetchFn?: typeof fetch;
+  } = {},
+): Promise<GeneratedImageAsset | undefined> {
+  return (
+    generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options) ??
+    (await generatedImageAssetFromOpenAiCompatibleUrlEntry(entry, index, options))
+  );
+}
+
 export function parseOpenAiCompatibleImageResponse(
   payload: OpenAiCompatibleImageResponsePayload,
   options: {
@@ -179,6 +233,23 @@ export function parseOpenAiCompatibleImageResponse(
   return (payload.data ?? [])
     .map((entry, index) => generatedImageAssetFromOpenAiCompatibleEntry(entry, index, options))
     .filter((entry): entry is GeneratedImageAsset => entry !== undefined);
+}
+
+export async function parseOpenAiCompatibleImageResponseAsync(
+  payload: OpenAiCompatibleImageResponsePayload,
+  options: {
+    defaultMimeType?: string;
+    fileNamePrefix?: string;
+    sniffMimeType?: boolean;
+    fetchFn?: typeof fetch;
+  } = {},
+): Promise<GeneratedImageAsset[]> {
+  const images = await Promise.all(
+    (payload.data ?? []).map((entry, index) =>
+      generatedImageAssetFromOpenAiCompatibleEntryAsync(entry, index, options),
+    ),
+  );
+  return images.filter((entry): entry is GeneratedImageAsset => entry !== undefined);
 }
 
 export function imageSourceUploadFileName(params: {
