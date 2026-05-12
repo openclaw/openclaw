@@ -1,5 +1,11 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { clearHistoryEntriesIfEnabled } from "../../auto-reply/reply/history.js";
+import type {
+  PluginHookBeforeRouteInboundMessageContext,
+  PluginHookBeforeRouteInboundMessageEvent,
+  PluginHookBeforeRouteInboundMessageResult,
+} from "../../plugins/hook-message.types.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import { EMPTY_CHANNEL_TURN_DISPATCH_COUNTS } from "./dispatch-result.js";
@@ -453,6 +459,78 @@ export async function runChannelTurn<
   }
 
   const resolved = await params.adapter.resolveTurn(input, eventClass, preflight);
+
+  // ── before_route_inbound_message hook ──────────────────────────────
+  // Fire right after resolveTurn so it runs for all inbound messages:
+  // - Main adapters: runInboundReplyTurn() → runChannelTurn() → runPreparedChannelTurnCore()
+  // - Compat mode: dispatchChannelMessageReplyWithBase() → recordChannelMessageReplyDispatch()
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner) {
+    const channelName = params.channel;
+    const bodyText = String(params.ctxPayload?.Body ?? "");
+    const isGroup =
+      String(params.ctxPayload?.ChatType ?? "") === "group" ||
+      String(params.ctxPayload?.ChatType ?? "") === "supergroup";
+
+    const hookCtx: PluginHookBeforeRouteInboundMessageContext = {
+      channelId: channelName,
+      accountId: params.accountId,
+      conversationId: params.ctxPayload?.NativeChannelId ?? params.ctxPayload?.OriginatingTo,
+      parentConversationId: params.ctxPayload?.MessageThreadId
+        ? String(params.ctxPayload.MessageThreadId)
+        : undefined,
+      sessionKey: resolved.sessionKey ?? resolved.routeSessionKey,
+    };
+
+    const hookEvent: PluginHookBeforeRouteInboundMessageEvent = {
+      channel: channelName,
+      accountId: params.accountId,
+      conversationId: hookCtx.conversationId,
+      parentConversationId: hookCtx.parentConversationId,
+      body: bodyText,
+      isGroup,
+      senderId: params.ctxPayload?.From,
+      originalSessionKey: resolved.sessionKey ?? resolved.routeSessionKey,
+    };
+
+    const hookResult = await hookRunner.runBeforeRouteInboundMessage(hookEvent, hookCtx);
+
+    if (hookResult?.handled) {
+      // Redirect: update ctxPayload.SessionKey for compat mode and resolved values for adapter mode
+      if (
+        hookResult.redirectSessionKey &&
+        hookResult.redirectSessionKey !== (resolved.sessionKey ?? resolved.routeSessionKey)
+      ) {
+        if (params.ctxPayload?.SessionKey) {
+          // Compat mode: ctxPayload already has SessionKey set by buildInboundReplyDispatchBase
+          params.ctxPayload.SessionKey = hookResult.redirectSessionKey;
+        }
+        // Adapter mode: also update resolved.ctxPayload.SessionKey so record/dispatch use the redirect
+        if (resolved.ctxPayload) {
+          resolved.ctxPayload.SessionKey = hookResult.redirectSessionKey;
+        }
+        // Update resolved sessionKey values for downstream
+        resolved.sessionKey = hookResult.redirectSessionKey;
+        resolved.routeSessionKey = hookResult.redirectSessionKey;
+      }
+      // Suppress: drop the message entirely — return early after onFinalize
+      if (hookResult.suppressDelivery) {
+        const suppressedResult: ChannelTurnResult<TDispatchResult> = {
+          admission: { kind: "drop", reason: "suppressed_by_hook" },
+          dispatched: false,
+          ctxPayload: resolved.ctxPayload ?? params.ctxPayload,
+          routeSessionKey: resolved.routeSessionKey,
+        };
+        try {
+          await params.adapter.onFinalize?.(suppressedResult);
+        } catch {
+          // Suppress onFinalize errors to not mask the suppression
+        }
+        return suppressedResult;
+      }
+    }
+  }
+
   emit({
     ...params,
     accountId: resolved.accountId ?? params.accountId,
