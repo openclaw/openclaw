@@ -44,7 +44,7 @@ describe("system-cli", () => {
   it("runs system event with default wake mode and text output", async () => {
     await runCli(["system", "event", "--text", "  hello world  "]);
 
-    const [method, payload, options, requestOptions] = callGatewayFromCli.mock.calls[0] ?? [];
+    const [method, payload, options, requestOptions] = callGatewayFromCli.mock.calls.at(0) ?? [];
     expect(method).toBe("wake");
     expect((payload as { text?: string } | undefined)?.text).toBe("  hello world  ");
     expect(options).toEqual({ mode: "next-heartbeat", text: "hello world" });
@@ -78,7 +78,8 @@ describe("system-cli", () => {
     ]);
 
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
-    const [method, gatewayOptions, params, requestOptions] = callGatewayFromCli.mock.calls[0] ?? [];
+    const [method, gatewayOptions, params, requestOptions] =
+      callGatewayFromCli.mock.calls.at(0) ?? [];
     expect(method).toBe("wake");
     expect(typeof gatewayOptions).toBe("object");
     expect(params).toEqual({
@@ -93,7 +94,7 @@ describe("system-cli", () => {
     await runCli(["system", "event", "--text", "ping"]);
 
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
-    const [, , params] = callGatewayFromCli.mock.calls[0];
+    const [, , params] = callGatewayFromCli.mock.calls.at(0) ?? [];
     expect(params).not.toHaveProperty("sessionKey");
   });
 
@@ -101,7 +102,7 @@ describe("system-cli", () => {
     await runCli(["system", "event", "--text", "ping", "--session-key", "  "]);
 
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
-    const [, , params] = callGatewayFromCli.mock.calls[0];
+    const [, , params] = callGatewayFromCli.mock.calls.at(0) ?? [];
     expect(params).not.toHaveProperty("sessionKey");
   });
 
@@ -125,7 +126,7 @@ describe("system-cli", () => {
 
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
     const [calledMethod, gatewayOptions, calledParams, requestOptions] =
-      callGatewayFromCli.mock.calls[0] ?? [];
+      callGatewayFromCli.mock.calls.at(0) ?? [];
     expect(calledMethod).toBe(method);
     expect(typeof gatewayOptions).toBe("object");
     expect(calledParams).toEqual(params);

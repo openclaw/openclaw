@@ -105,7 +105,7 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
+    const call = callGatewayMock.mock.calls.at(0)?.[0] as {
       params?: { delivery?: TestDelivery };
     };
     return call?.params?.delivery;
@@ -534,7 +534,7 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
+    const call = callGatewayMock.mock.calls.at(0)?.[0] as {
       params?: { agentId?: unknown };
     };
     expect(call?.params?.agentId).toBeNull();
@@ -721,7 +721,7 @@ describe("cron tool", () => {
       },
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
+    const call = callGatewayMock.mock.calls.at(0)?.[0] as {
       method?: string;
       params?: { agentId?: string | null };
     };
@@ -1066,7 +1066,7 @@ describe("cron tool", () => {
       name: "flat-name-should-be-ignored",
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
+    const call = callGatewayMock.mock.calls.at(0)?.[0] as {
       params?: { name?: string; payload?: { text?: string } };
     };
     expect(call?.params?.name).toBe("nested-job");
