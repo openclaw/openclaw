@@ -536,6 +536,7 @@ describe("CLI attempt execution", () => {
       config: {},
       embeddedAssistantGapFill: true,
     });
+    expect(updatedFirst?.sessionId).toBe(sessionEntry.sessionId);
 
     await appendSessionTranscriptMessage({
       agentId: "main",
