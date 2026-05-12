@@ -8,7 +8,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { readBtwTranscriptMessages } from "./btw-transcript.js";
-import { resolveAgentHarnessPolicy } from "./harness/selection.js";
+import { resolveAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
 import {
   resolveImageSanitizationLimits,
   type ImageSanitizationLimits,
@@ -298,6 +298,40 @@ export async function runBtwSideQuestion(
     sessionKey: params.sessionKey,
     config: params.cfg,
   });
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
+  const harness = selectAgentHarness({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.cfg,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
+  if (harness.runSideQuestion) {
+    const { authProfileId, authProfileIdSource } = await resolveRuntimeModel({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      agentId: sessionAgentId,
+      agentDir: params.agentDir,
+      workspaceDir,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      sessionKey: params.sessionKey,
+      isNewSession: params.isNewSession,
+    });
+    const result = await harness.runSideQuestion({
+      ...params,
+      sessionId,
+      agentId: sessionAgentId,
+      workspaceDir,
+      authProfileId,
+      authProfileIdSource,
+    });
+    return { text: result.text };
+  }
+  if (harness.id !== "pi") {
+    throw new Error(`Selected agent harness "${harness.id}" does not support /btw side questions.`);
+  }
 
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
@@ -370,7 +404,6 @@ export async function runBtwSideQuestion(
     throw new Error("No active session context.");
   }
 
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
   const { model, authProfileId } = await resolveRuntimeModel({
     cfg: params.cfg,
     provider: params.provider,

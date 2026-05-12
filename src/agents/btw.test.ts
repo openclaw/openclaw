@@ -519,29 +519,16 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Codex side answer." });
     expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
-    const [[sideQuestionParams]] = codexSideQuestionMock.mock.calls as unknown as Array<
-      [
-        {
-          provider?: string;
-          model?: string;
-          question?: string;
-          sessionId?: string;
-          agentId?: string;
-          workspaceDir?: string;
-          authProfileId?: string;
-        },
-      ]
-    >;
-    expect(sideQuestionParams.provider).toBe("openai");
-    expect(sideQuestionParams.model).toBe("gpt-5.5");
-    expect(sideQuestionParams.question).toBe(DEFAULT_QUESTION);
-    expect(sideQuestionParams.sessionId).toBe("session-1");
-    expect(sideQuestionParams.agentId).toBe("main");
-    expect(sideQuestionParams.workspaceDir).toBe("/tmp/workspace");
-    expect(sideQuestionParams.authProfileId).toBe("openai-codex:work");
-    expect(
-      (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
-    ).toContain("session-1.jsonl");
+    expect(codexSideQuestionMock.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.5",
+      question: DEFAULT_QUESTION,
+      sessionId: "session-1",
+      sessionKey: DEFAULT_SESSION_KEY,
+      agentId: "main",
+      workspaceDir: "/tmp/workspace",
+      authProfileId: "openai-codex:work",
+    });
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
@@ -563,21 +550,6 @@ describe("runBtwSideQuestion", () => {
     ).rejects.toThrow('Selected agent harness "codex" does not support /btw side questions.');
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps the direct provider fallback for non-Codex harnesses without side-question hooks", async () => {
-    registerAgentHarness({
-      id: "custom",
-      label: "Custom test harness",
-      supports: () => ({ supported: true, priority: 100 }),
-      runAttempt: vi.fn(),
-    });
-    mockDoneAnswer("Direct fallback answer.");
-
-    const result = await runSideQuestion();
-
-    expect(result).toEqual({ text: "Direct fallback answer." });
-    expect(streamSimpleMock).toHaveBeenCalledTimes(1);
   });
 
   it("applies provider runtime auth before streaming github-copilot BTW questions", async () => {
