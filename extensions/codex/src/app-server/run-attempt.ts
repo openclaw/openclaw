@@ -111,6 +111,7 @@ import {
 import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
 import {
   formatCodexUsageLimitErrorMessage,
+  resolveCodexUsageLimitResetAtMs,
   shouldRefreshCodexRateLimitsForUsageLimitMessage,
 } from "./rate-limits.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
@@ -1519,14 +1520,13 @@ export async function runCodexAppServerAttempt(
     });
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     if (usageLimitError) {
-      await markCodexAuthProfileBlockedFromRateLimits({
+      await markCodexAuthProfileBlockedFromRecentRateLimits({
         params,
         authProfileId: startupAuthProfileId,
-        rateLimits: usageLimitError.rateLimitsForProfile,
       });
       return buildCodexTurnStartFailureResult({
         params,
-        message: usageLimitError.message,
+        message: usageLimitError,
         messagesSnapshot: turnStartFailureMessages,
         systemPromptReport,
       });
@@ -1795,16 +1795,15 @@ export async function runCodexAppServerAttempt(
   }
 }
 
-async function markCodexAuthProfileBlockedFromRateLimits(params: {
+async function markCodexAuthProfileBlockedFromRecentRateLimits(params: {
   params: EmbeddedRunAttemptParams;
   authProfileId?: string;
-  rateLimits?: JsonValue;
 }): Promise<void> {
   const authProfileId = params.authProfileId?.trim();
   if (!authProfileId || !params.params.authProfileStore) {
     return;
   }
-  const blockedUntil = resolveCodexUsageLimitResetAtMs(params.rateLimits);
+  const blockedUntil = resolveCodexUsageLimitResetAtMs(readRecentCodexRateLimits());
   if (!blockedUntil) {
     return;
   }

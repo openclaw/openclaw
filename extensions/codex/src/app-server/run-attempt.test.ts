@@ -2848,11 +2848,7 @@ describe("runCodexAppServerAttempt", () => {
     });
     harnessRef.current = harness;
 
-    const runError = runCodexAppServerAttempt(createParams(sessionId, workspaceDir)).catch(
-      (error: unknown) => error,
-    );
-
-    const result = await runCodexAppServerAttempt(params);
+    const result = await runCodexAppServerAttempt(createParams(sessionId, workspaceDir));
     expect(result.promptErrorSource).toBe("prompt");
     expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
     expect(result.promptError).toContain("Next reset in");
@@ -2884,42 +2880,13 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    const runError = runCodexAppServerAttempt(createParams(sessionId, workspaceDir)).catch(
-      (error: unknown) => error,
-    );
+    const run = runCodexAppServerAttempt(createParams(sessionId, workspaceDir));
     await harness.waitForMethod("turn/start");
 
     const result = await run;
     expect(result.promptErrorSource).toBe("prompt");
     expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
     expect(result.promptError).toContain("Next reset in");
-    expect(params.authProfileStore.usageStats?.[authProfileId]?.blockedUntil).toBeUndefined();
-  });
-
-  it("refreshes Codex account rate limits when turn/start omits reset details", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "turn/start") {
-        throw Object.assign(new Error("You've reached your usage limit."), {
-          data: { codexErrorInfo: "usageLimitExceeded" },
-        });
-      }
-      if (method === "account/rateLimits/read") {
-        return rateLimitsUpdated(resetsAt).params;
-      }
-      return undefined;
-    });
-
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-    await harness.waitForMethod("account/rateLimits/read");
-
-    const result = await run;
-    expect(result.promptErrorSource).toBe("prompt");
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
-    expect(result.promptError).not.toContain("Codex did not return a reset time");
   });
 
   it("refreshes Codex account rate limits when turn/start omits reset details", async () => {
@@ -2938,18 +2905,14 @@ describe("runCodexAppServerAttempt", () => {
       return undefined;
     });
 
-    const runError = runCodexAppServerAttempt(createParams(sessionId, workspaceDir)).catch(
-      (error: unknown) => error,
-    );
+    const run = runCodexAppServerAttempt(createParams(sessionId, workspaceDir));
     await harness.waitForMethod("account/rateLimits/read");
 
-    const error = await runError;
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain(
-      "You've reached your Codex subscription usage limit.",
-    );
-    expect((error as Error).message).toContain("Next reset in");
-    expect((error as Error).message).not.toContain("Codex did not return a reset time");
+    const result = await run;
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Next reset in");
+    expect(result.promptError).not.toContain("Codex did not return a reset time");
   });
 
   it("cleans up native hook relay state when the Codex turn aborts", async () => {

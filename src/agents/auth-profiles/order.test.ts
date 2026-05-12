@@ -240,7 +240,42 @@ describe("resolveAuthProfileOrder", () => {
       provider: "openai-codex",
     });
 
-    expect(order).toEqual(["openai:personal", "openai:backup"]);
+    expect(order).toEqual(["openai:personal", "openai:backup", "openai:platform"]);
+  });
+
+  it("lets Codex auth discover normal OpenAI API-key profiles as backups", async () => {
+    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:personal": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+        "openai:backup": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-platform",
+        },
+        "openai:oauth": {
+          type: "oauth",
+          provider: "openai",
+          access: "wrong-provider-access",
+          refresh: "wrong-provider-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      store,
+      provider: "openai-codex",
+    });
+
+    expect(order).toEqual(["openai-codex:personal", "openai:backup"]);
   });
 
   it("keeps direct OpenAI Codex auth order ahead of the friendly OpenAI alias", async () => {
@@ -319,12 +354,13 @@ describe("resolveAuthProfileOrder", () => {
       expect(store.lastGood).toEqual({
         "fixture-provider": "fixture-provider:default",
       });
-      const usageStats = store.usageStats?.["fixture-provider:default"];
-      expect(usageStats?.errorCount).toBe(0);
-      expect(usageStats?.blockedUntil).toBeUndefined();
-      expect(usageStats?.blockedReason).toBeUndefined();
-      expect(usageStats?.cooldownUntil).toBeUndefined();
-      expect(usageStats?.cooldownReason).toBeUndefined();
+      expect(store.usageStats?.["fixture-provider:default"]).toMatchObject({
+        errorCount: 0,
+        blockedUntil: undefined,
+        blockedReason: undefined,
+        cooldownUntil: undefined,
+        cooldownReason: undefined,
+      });
       const lastUsed = store.usageStats?.["fixture-provider:default"]?.lastUsed;
       expect(typeof lastUsed).toBe("number");
       expect(Number.isFinite(lastUsed)).toBe(true);

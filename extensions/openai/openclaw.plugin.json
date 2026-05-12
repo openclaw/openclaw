@@ -813,7 +813,6 @@
       "choiceLabel": "OpenAI API Key Backup",
       "choiceHint": "Use an OpenAI API key when your Codex subscription is unavailable",
       "assistantPriority": 5,
-      "assistantVisibility": "manual-only",
       "groupId": "openai-codex",
       "groupLabel": "OpenAI Codex",
       "groupHint": "ChatGPT/Codex sign-in",

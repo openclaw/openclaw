@@ -119,6 +119,20 @@ Use `openai/gpt-*` model refs for Codex-backed OpenAI agent turns. Prefer
 `openai-codex:*` auth profiles and `auth.order.openai-codex` remain valid, but
 do not write new `openai-codex/gpt-*` model refs.
 
+```json5
+{
+  auth: {
+    order: {
+      openai: ["openai-codex:user@example.com", "openai:api-key-backup"],
+    },
+  },
+}
+```
+
+In that shape, both profiles still run through Codex for `openai/gpt-*` agent
+turns. The API key is only an auth fallback, not a request to switch to PI or
+plain OpenAI Responses.
+
 The rest of this page covers common variants users must choose between:
 deployment shape, fail-closed routing, guardian approval policy, native Codex
 plugins, and Computer Use. For full option lists, defaults, enums, discovery,

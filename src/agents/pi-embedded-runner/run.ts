@@ -747,7 +747,6 @@ export async function runEmbeddedPiAgent(
           })
         : authStore;
       const requestedProfileId = params.authProfileId?.trim();
-      const requestedProfileIsUserLocked = params.authProfileIdSource === "user";
       const isForwardablePluginHarnessAuthProfile = (
         profileId: string | undefined,
       ): profileId is string => {
@@ -769,7 +768,7 @@ export async function runEmbeddedPiAgent(
         return runtimeAuthPlan.forwardedAuthProfileId === profileId;
       };
       const resolvePluginHarnessProfileOrder = (): string[] => {
-        if (requestedProfileId && requestedProfileIsUserLocked) {
+        if (requestedProfileId) {
           return isForwardablePluginHarnessAuthProfile(requestedProfileId)
             ? [requestedProfileId]
             : [];
@@ -794,13 +793,6 @@ export async function runEmbeddedPiAgent(
           store: attemptAuthProfileStore,
           provider: harnessAuthProvider,
         }).filter(isForwardablePluginHarnessAuthProfile);
-        if (resolvedOrder.length > 0) {
-          return resolvedOrder;
-        }
-        if (requestedProfileId && isForwardablePluginHarnessAuthProfile(requestedProfileId)) {
-          return [requestedProfileId];
-        }
-        return [];
       };
       const pluginHarnessProfileOrder = pluginHarnessOwnsTransport
         ? resolvePluginHarnessProfileOrder()
@@ -811,25 +803,6 @@ export async function runEmbeddedPiAgent(
         ? resolvePluginHarnessPreferredProfileId()
         : requestedProfileId;
       let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
-      const canForwardPluginHarnessAuthProfile = (
-        profileId: string | undefined,
-      ): profileId is string => {
-        if (!pluginHarnessOwnsTransport || !profileId) {
-          return false;
-        }
-        const profileCredentialProvider = attemptAuthProfileStore.profiles?.[profileId]?.provider;
-        const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
-          provider,
-          authProfileProvider: profileCredentialProvider ?? profileId.split(":", 1)[0],
-          sessionAuthProfileId: profileId,
-          config: params.config,
-          workspaceDir: resolvedWorkspace,
-          harnessId: agentHarness.id,
-          harnessRuntime: agentHarness.id,
-          allowHarnessAuthProfileForwarding: true,
-        });
-        return runtimeAuthPlan.forwardedAuthProfileId === profileId;
-      };
       if (lockedProfileId) {
         if (pluginHarnessOwnsTransport) {
           if (!isForwardablePluginHarnessAuthProfile(lockedProfileId)) {
@@ -3113,11 +3086,7 @@ export async function runEmbeddedPiAgent(
           if (lastProfileId) {
             await markAuthProfileSuccess({
               store: profileFailureStore,
-              provider: resolveAuthProfileStateProvider(
-                profileFailureStore,
-                lastProfileId,
-                provider,
-              ),
+              provider,
               profileId: lastProfileId,
               agentDir: params.agentDir,
             });
