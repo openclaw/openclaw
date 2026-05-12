@@ -1,26 +1,16 @@
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+import type {
+  FinalDeliveryError,
+  FinalDeliveryState,
+  FinalDeliveryTerminalReason,
+} from "./subagent-final-delivery.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export type FinalDeliveryError = {
-  message: string;
-  retryability: "transient" | "permanent" | "unknown";
-  path: "queued" | "steered" | "direct" | "none";
-};
-
-export type FinalDeliveryState =
-  | { kind: "not_required" }
-  | { kind: "pending"; attemptCount: number; lastError?: FinalDeliveryError }
-  | {
-      kind: "retrying";
-      attemptCount: number;
-      nextRetryAt: number;
-      lastError?: FinalDeliveryError;
-    }
-  | { kind: "delivered"; deliveredAt: number }
-  | { kind: "terminal_failed"; reason: "permanent-failure"; error: FinalDeliveryError }
-  | { kind: "expired"; expiredAt: number; lastError?: FinalDeliveryError };
-
-export type FinalDeliveryTerminalReason = "permanent-failure" | "expiry";
+export type {
+  FinalDeliveryError,
+  FinalDeliveryState,
+  FinalDeliveryTerminalReason,
+} from "./subagent-final-delivery.types.js";
 
 type FinalDeliveryEvent =
   | { type: "delivered"; deliveredAt: number }
