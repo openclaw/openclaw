@@ -1317,6 +1317,13 @@ export const nodeHandlers: GatewayRequestHandlers = {
         getHealthCache: context.getHealthCache,
         refreshHealthSnapshot: context.refreshHealthSnapshot,
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        hasPendingNodeSystemRunEvent: (eventParams) =>
+          context.nodeRegistry.hasPendingSystemRunEvent({
+            nodeId: eventParams.nodeId,
+            connId: eventParams.connId,
+            runId: eventParams.runId,
+            sessionKey: eventParams.sessionKey,
+          }),
         logGateway: { warn: context.logGateway.warn },
       };
       const result = await handleNodeEvent(
@@ -1326,7 +1333,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           event: p.event,
           payloadJSON,
         },
-        { deviceId: client?.connect?.device?.id },
+        { connId: client?.connId, deviceId: client?.connect?.device?.id },
       );
       respond(true, result ?? { ok: true }, undefined);
     });

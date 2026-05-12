@@ -159,7 +159,9 @@ const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
 
-function buildCtx(): NodeEventContext {
+function buildCtx(
+  opts: { hasPendingNodeSystemRunEvent?: NodeEventContext["hasPendingNodeSystemRunEvent"] } = {},
+): NodeEventContext {
   return {
     deps: {} as CliDeps,
     broadcast: () => {},
@@ -178,8 +180,13 @@ function buildCtx(): NodeEventContext {
     getHealthCache: () => null,
     refreshHealthSnapshot: async () => ({}) as HealthSummary,
     loadGatewayModelCatalog: async () => [],
+    hasPendingNodeSystemRunEvent: opts.hasPendingNodeSystemRunEvent ?? (() => false),
     logGateway: { warn: () => {} },
   };
+}
+
+function buildExecCtx() {
+  return buildCtx({ hasPendingNodeSystemRunEvent: () => true });
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
@@ -231,7 +238,7 @@ describe("node exec events", () => {
   });
 
   it("enqueues exec.started events", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-1", {
       event: "exec.started",
       payloadJSON: JSON.stringify({
@@ -251,8 +258,35 @@ describe("node exec events", () => {
     });
   });
 
-  it("enqueues exec.finished events with output", async () => {
+  it("rejects exec lifecycle events without a pending node run", async () => {
     const ctx = buildCtx();
+    const result = await handleNodeEvent(
+      ctx,
+      "node-1",
+      {
+        event: "exec.finished",
+        payloadJSON: JSON.stringify({
+          sessionKey: "agent:main:main",
+          runId: "forged-run",
+          exitCode: 0,
+          output: "done",
+        }),
+      },
+      { connId: "conn-1" },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "exec.finished",
+      handled: false,
+      reason: "unmatched_exec_event",
+    });
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+  });
+
+  it("enqueues exec.finished events with output", async () => {
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -271,7 +305,7 @@ describe("node exec events", () => {
   });
 
   it("dedupes duplicate exec.finished events for the same runId on the same session", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     const payloadJSON = JSON.stringify({
       sessionKey: "agent:main:main",
       runId: "run-dup-finished",
@@ -306,7 +340,7 @@ describe("node exec events", () => {
       ...buildSessionLookup("node-node-2"),
       canonicalKey: "agent:main:node-node-2",
     });
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -329,7 +363,7 @@ describe("node exec events", () => {
   });
 
   it("suppresses noisy exec.finished success events with empty output", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -345,7 +379,7 @@ describe("node exec events", () => {
   });
 
   it("truncates long exec.finished output in system events", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -365,7 +399,7 @@ describe("node exec events", () => {
   });
 
   it("enqueues exec.denied events with reason", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-3", {
       event: "exec.denied",
       payloadJSON: JSON.stringify({
@@ -394,7 +428,7 @@ describe("node exec events", () => {
       session: { mainKey: string };
       tools: { exec: { notifyOnExit: boolean } };
     });
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-1", {
       event: "exec.started",
       payloadJSON: JSON.stringify({
@@ -416,7 +450,7 @@ describe("node exec events", () => {
       session: { mainKey: string };
       tools: { exec: { notifyOnExit: boolean } };
     });
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -439,7 +473,7 @@ describe("node exec events", () => {
       session: { mainKey: string };
       tools: { exec: { notifyOnExit: boolean } };
     });
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-3", {
       event: "exec.denied",
       payloadJSON: JSON.stringify({
@@ -455,7 +489,7 @@ describe("node exec events", () => {
   });
 
   it("sanitizes remote exec event content before enqueue", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-4", {
       event: "exec.denied",
       payloadJSON: JSON.stringify({

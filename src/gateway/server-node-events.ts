@@ -365,7 +365,7 @@ export const handleNodeEvent = async (
   ctx: NodeEventContext,
   nodeId: string,
   evt: NodeEvent,
-  opts?: { deviceId?: string },
+  opts?: { connId?: string; deviceId?: string },
 ): Promise<NodeEventHandleResult | undefined> => {
   switch (evt.event) {
     case "voice.transcript": {
@@ -707,6 +707,22 @@ export const handleNodeEvent = async (
       }
 
       const runId = normalizeOptionalString(obj.runId) ?? "";
+      if (
+        !runId ||
+        !ctx.hasPendingNodeSystemRunEvent({
+          nodeId,
+          connId: opts?.connId,
+          runId,
+          sessionKey: sessionKeyRaw,
+        })
+      ) {
+        return {
+          ok: true,
+          event: evt.event,
+          handled: false,
+          reason: "unmatched_exec_event",
+        };
+      }
       const command = sanitizeInboundSystemTags(normalizeOptionalString(obj.command) ?? "");
       const exitCode =
         typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode)

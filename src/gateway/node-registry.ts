@@ -26,9 +26,15 @@ type PendingInvoke = {
   nodeId: string;
   connId: string;
   command: string;
+  systemRunEvent?: PendingSystemRunEvent;
   resolve: (value: NodeInvokeResult) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+};
+
+type PendingSystemRunEvent = {
+  runId: string;
+  sessionKey: string;
 };
 
 type NodeInvokeResult = {
@@ -60,6 +66,28 @@ function isSerializedEventPayload(value: unknown): value is SerializedEventPaylo
     (value as { [SERIALIZED_EVENT_PAYLOAD]?: unknown })[SERIALIZED_EVENT_PAYLOAD] === true &&
     typeof (value as { json?: unknown }).json === "string"
   );
+}
+
+function normalizeString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function resolvePendingSystemRunEvent(params: {
+  command: string;
+  params?: unknown;
+}): PendingSystemRunEvent | undefined {
+  if (params.command !== "system.run" || !params.params || typeof params.params !== "object") {
+    return undefined;
+  }
+  const obj = params.params as Record<string, unknown>;
+  const runId = normalizeString(obj.runId);
+  if (!runId) {
+    return undefined;
+  }
+  return {
+    runId,
+    sessionKey: normalizeString(obj.sessionKey) || "node",
+  };
 }
 
 export class NodeRegistry {
@@ -168,6 +196,10 @@ export class NodeRegistry {
       };
     }
     const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 30_000;
+    const systemRunEvent = resolvePendingSystemRunEvent({
+      command: params.command,
+      params: params.params,
+    });
     return await new Promise<NodeInvokeResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingInvokes.delete(requestId);
@@ -180,11 +212,36 @@ export class NodeRegistry {
         nodeId: params.nodeId,
         connId: node.connId,
         command: params.command,
+        systemRunEvent,
         resolve,
         reject,
         timer,
       });
     });
+  }
+
+  hasPendingSystemRunEvent(params: {
+    nodeId: string;
+    connId?: string;
+    runId: string;
+    sessionKey: string;
+  }): boolean {
+    if (!params.connId || !params.runId || !params.sessionKey) {
+      return false;
+    }
+    for (const pending of this.pendingInvokes.values()) {
+      const event = pending.systemRunEvent;
+      if (
+        pending.nodeId === params.nodeId &&
+        pending.connId === params.connId &&
+        event !== undefined &&
+        event.runId === params.runId &&
+        event.sessionKey === params.sessionKey
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   handleInvokeResult(params: {

@@ -55,6 +55,65 @@ describe("gateway/node-registry", () => {
     await expect(oldDisconnected).resolves.toBeInstanceOf(Error);
   });
 
+  it("matches pending system.run events to the issuing connection", async () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-1", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+
+    expect(
+      registry.hasPendingSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-1",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe(true);
+    expect(
+      registry.hasPendingSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-other",
+        runId: "run-1",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe(false);
+    expect(
+      registry.hasPendingSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-other",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe(false);
+
+    registry.handleInvokeResult({
+      id: request.payload?.id ?? "",
+      nodeId: "node-1",
+      connId: "conn-1",
+      ok: true,
+    });
+    await expect(invoke).resolves.toEqual({
+      ok: true,
+      payload: undefined,
+      payloadJSON: null,
+      error: null,
+    });
+    expect(
+      registry.hasPendingSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-1",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe(false);
+  });
+
   it("sends raw event payload JSON without changing the envelope shape", () => {
     const registry = new NodeRegistry();
     const frames: string[] = [];
