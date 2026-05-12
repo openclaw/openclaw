@@ -43,7 +43,7 @@ import {
   toPluginMessageContext,
   toPluginMessageReceivedEvent,
 } from "../../hooks/message-hook-mappers.js";
-import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -88,6 +88,7 @@ import type { BlockReplyContext } from "../get-reply-options.types.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
+import { isSilentReplyPayloadText } from "../tokens.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import {
   createInternalHookEvent,
@@ -169,6 +170,48 @@ const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
 const normalizeMediaType = (value: string): string =>
   normalizeOptionalLowercaseString(value.split(";")[0]) ?? "";
+
+const isSubstantiveSuppressedFinalReply = (reply: ReplyPayload): boolean => {
+  if (reply.isReasoning === true) {
+    return false;
+  }
+  const parts = resolveSendableOutboundReplyParts(reply);
+  if (!parts.hasContent) {
+    return false;
+  }
+  if (!parts.hasMedia && isSilentReplyPayloadText(parts.text)) {
+    return false;
+  }
+  return true;
+};
+
+const emitSuppressedFinalReplyAudit = (params: {
+  channel?: string;
+  sessionKey?: string;
+  sourceReplyDeliveryMode: string;
+  suppressedFinalCount: number;
+  suppressedFinalTextChars: number;
+  sendPolicyDenied: boolean;
+}): void => {
+  if (params.suppressedFinalCount <= 0) {
+    return;
+  }
+  emitTrustedDiagnosticEvent({
+    type: "log.record",
+    level: "warning",
+    loggerName: "auto-reply.dispatch",
+    message:
+      "Normal assistant final reply was suppressed by message-tool-only source delivery; visible output must be sent with the message tool, then the normal final should be NO_REPLY.",
+    attributes: {
+      channel: params.channel ?? "unknown",
+      sessionKey: params.sessionKey ?? "unknown",
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      suppressedFinalCount: params.suppressedFinalCount,
+      suppressedFinalTextChars: params.suppressedFinalTextChars,
+      sendPolicyDenied: params.sendPolicyDenied,
+    },
+  });
+};
 
 const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   const rawTypes = [
@@ -1596,6 +1639,8 @@ export async function dispatchReplyFromConfig(
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
+    let suppressedFinalCount = 0;
+    let suppressedFinalTextChars = 0;
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
       !sendPolicyDenied &&
@@ -1606,7 +1651,16 @@ export async function dispatchReplyFromConfig(
       if (reply.isReasoning === true) {
         continue;
       }
-      if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
+      const deliverDespiteSourceSuppression = shouldDeliverDespiteSourceReplySuppression(reply);
+      if (suppressDelivery && !deliverDespiteSourceSuppression) {
+        if (
+          suppressAutomaticSourceDelivery &&
+          !sendPolicyDenied &&
+          isSubstantiveSuppressedFinalReply(reply)
+        ) {
+          suppressedFinalCount += 1;
+          suppressedFinalTextChars += resolveSendableOutboundReplyParts(reply).trimmedText.length;
+        }
         continue;
       }
       attemptedFinalDelivery = true;
@@ -1622,6 +1676,17 @@ export async function dispatchReplyFromConfig(
       await clearPendingFinalDeliveryAfterSuccess({
         storePath: sessionStoreEntry.storePath,
         sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+      });
+    }
+
+    if (suppressedFinalCount > 0) {
+      emitSuppressedFinalReplyAudit({
+        channel: deliveryChannel,
+        sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+        sourceReplyDeliveryMode,
+        suppressedFinalCount,
+        suppressedFinalTextChars,
+        sendPolicyDenied,
       });
     }
 

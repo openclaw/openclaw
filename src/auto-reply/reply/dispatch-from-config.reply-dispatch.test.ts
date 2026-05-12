@@ -1,5 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import {
@@ -54,6 +59,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     clearAgentHarnesses();
     setDiscordTestRegistry();
     resetInboundDedupe();
+    resetDiagnosticEventsForTest();
     mocks.routeReply.mockReset().mockResolvedValue({ ok: true, messageId: "mock" });
     mocks.tryFastAbortFromMessage.mockReset().mockResolvedValue({
       handled: false,
@@ -205,6 +211,199 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastError).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toBeUndefined();
+  });
+
+  it("audits substantive finals suppressed by message-tool-only delivery", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+      diagnosticEvents.push(event);
+    });
+
+    try {
+      const result = await dispatchReplyFromConfig({
+        ctx: {
+          ...createHookCtx(),
+          ChatType: "channel",
+          Surface: "discord",
+          Provider: "discord",
+        },
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyResolver: async () => ({ text: "model reply" }),
+      });
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const auditEvent = diagnosticEvents.find(
+        (event) =>
+          event.type === "log.record" &&
+          event.message.includes("Normal assistant final reply was suppressed"),
+      );
+
+      expect(result.queuedFinal).toBe(false);
+      expect(auditEvent?.type).toBe("log.record");
+      if (auditEvent?.type === "log.record") {
+        expect(auditEvent.level).toBe("warning");
+        expect(auditEvent.attributes).toMatchObject({
+          channel: "discord",
+          sessionKey: "agent:test:session",
+          sourceReplyDeliveryMode: "message_tool_only",
+          suppressedFinalCount: 1,
+          suppressedFinalTextChars: 11,
+          sendPolicyDenied: false,
+        });
+        expect(auditEvent.message).not.toContain("model reply");
+      }
+    } finally {
+      stopDiagnostics();
+    }
+  });
+
+  it("does not audit silent NO_REPLY finals suppressed by message-tool-only delivery", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+      diagnosticEvents.push(event);
+    });
+
+    try {
+      await dispatchReplyFromConfig({
+        ctx: {
+          ...createHookCtx(),
+          ChatType: "channel",
+          Surface: "discord",
+          Provider: "discord",
+        },
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyResolver: async () => ({ text: "NO_REPLY" }),
+      });
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(
+        diagnosticEvents.some(
+          (event) =>
+            event.type === "log.record" &&
+            event.message.includes("Normal assistant final reply was suppressed"),
+        ),
+      ).toBe(false);
+    } finally {
+      stopDiagnostics();
+    }
+  });
+
+  it("does not audit suppressed finals when send policy denies delivery", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+      diagnosticEvents.push(event);
+    });
+
+    try {
+      await dispatchReplyFromConfig({
+        ctx: {
+          ...createHookCtx(),
+          ChatType: "channel",
+          Surface: "discord",
+          Provider: "discord",
+        },
+        cfg: {
+          ...emptyConfig,
+          session: { sendPolicy: { default: "deny" } },
+        },
+        dispatcher: createDispatcher(),
+        replyResolver: async () => ({ text: "model reply" }),
+      });
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(
+        diagnosticEvents.some(
+          (event) =>
+            event.type === "log.record" &&
+            event.message.includes("Normal assistant final reply was suppressed"),
+        ),
+      ).toBe(false);
+    } finally {
+      stopDiagnostics();
+    }
+  });
+
+  it("audits media-only finals suppressed by message-tool-only delivery", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+      diagnosticEvents.push(event);
+    });
+
+    try {
+      await dispatchReplyFromConfig({
+        ctx: {
+          ...createHookCtx(),
+          ChatType: "channel",
+          Surface: "discord",
+          Provider: "discord",
+        },
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyResolver: async () => ({ mediaUrls: ["file:///tmp/result.png"] }),
+      });
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const auditEvent = diagnosticEvents.find(
+        (event) =>
+          event.type === "log.record" &&
+          event.message.includes("Normal assistant final reply was suppressed"),
+      );
+      expect(auditEvent?.type).toBe("log.record");
+      if (auditEvent?.type === "log.record") {
+        expect(auditEvent.attributes).toMatchObject({
+          suppressedFinalCount: 1,
+          suppressedFinalTextChars: 0,
+        });
+      }
+    } finally {
+      stopDiagnostics();
+    }
+  });
+
+  it("audits aggregate suppressed final counts without recording text", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+      diagnosticEvents.push(event);
+    });
+
+    try {
+      await dispatchReplyFromConfig({
+        ctx: {
+          ...createHookCtx(),
+          ChatType: "channel",
+          Surface: "discord",
+          Provider: "discord",
+        },
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyResolver: async () => [{ text: "first" }, { text: "second reply" }],
+      });
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const auditEvent = diagnosticEvents.find(
+        (event) =>
+          event.type === "log.record" &&
+          event.message.includes("Normal assistant final reply was suppressed"),
+      );
+      expect(auditEvent?.type).toBe("log.record");
+      if (auditEvent?.type === "log.record") {
+        expect(auditEvent.attributes).toMatchObject({
+          suppressedFinalCount: 2,
+          suppressedFinalTextChars: 17,
+        });
+        expect(auditEvent.message).not.toContain("first");
+        expect(auditEvent.message).not.toContain("second reply");
+      }
+    } finally {
+      stopDiagnostics();
+    }
   });
 
   it("preserves pending final delivery when final dispatch fails", async () => {
