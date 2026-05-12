@@ -27,6 +27,17 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   })),
 );
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let error: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
+
 vi.mock("./cli.host.runtime.js", async () => {
   const [runtimeCli, runtimeCore, runtimeFiles] = await Promise.all([
     import("openclaw/plugin-sdk/memory-core-host-runtime-cli"),
@@ -634,6 +645,48 @@ describe("memory cli", () => {
       });
       await runMemoryCli(["status", "--fix"]);
       expectNotLogged(log, "Fix: openclaw memory status --fix --agent main");
+    });
+  });
+
+  it("repairs contaminated dreaming artifacts during status --fix", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+      await fs.mkdir(sessionCorpusDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionCorpusDir, "2026-04-11.txt"),
+        [
+          "[main/dreaming-main.jsonl#L3] ordinary session line",
+          "[main/dreaming-narrative-light.jsonl#L1] Write a dream diary entry from these memory fragments:",
+        ].join("\n"),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
+        JSON.stringify({ version: 3, files: {}, seenMessages: {} }, null, 2),
+        "utf-8",
+      );
+      await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "# Dream Diary\n", "utf-8");
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--fix"]);
+
+      expectLogged(log, "Dream repair: archived session corpus");
+      expectLogged(log, "Dream archive:");
+      await expectPathMissing(sessionCorpusDir);
+      await expectPathMissing(
+        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
+      );
+      await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
+        "# Dream Diary",
+      );
+      expect(close).toHaveBeenCalled();
     });
   });
 
@@ -1740,6 +1793,7 @@ describe("memory cli", () => {
       });
       expect(entries).toHaveLength(1);
       const entry = entries[0];
+      expect(entry).toBeDefined();
       if (!entry) {
         throw new Error("Expected short-term recall entry");
       }
