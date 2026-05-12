@@ -8,7 +8,7 @@ function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParam
     minProtocol: 1,
     maxProtocol: 1,
     client: {
-      id: "ios-node-1",
+      id: "openclaw-ios",
       version: "test",
       platform: "ios",
       mode: "node",
@@ -20,7 +20,7 @@ function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParam
 
 function makePairedNode(overrides?: Partial<NodePairingPairedNode>): NodePairingPairedNode {
   return {
-    nodeId: "ios-node-1",
+    nodeId: "openclaw-ios",
     token: "token-1",
     createdAtMs: 1,
     approvedAtMs: 1,
@@ -47,7 +47,7 @@ describe("reconcileNodePairingOnConnect", () => {
 
     expect(requestPairing).toHaveBeenCalledWith(
       expect.objectContaining({
-        nodeId: "ios-node-1",
+        nodeId: "openclaw-ios",
         permissions: { camera: true, notifications: false },
       }),
     );
