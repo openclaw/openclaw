@@ -356,6 +356,62 @@ describe("createTelegramBot channel_post media", () => {
     }
   });
 
+  it("does not spam groups with requireMention: true when media download fails (#81181)", async () => {
+    // Regression for #81181: in groups configured with requireMention: true,
+    // failed media downloads were sending "⚠️ Failed to download media" to the
+    // group on every untagged photo from any user. The expectation is that
+    // groups requiring a bot mention should silently log the fetch error and
+    // skip the user-visible reply, because the message is very likely not
+    // addressed to the bot in the first place. The diagnostic must still be
+    // logged so operators can correlate ECONNRESET storms.
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-100777111222": {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      throw new Error("MediaFetchError: ECONNRESET");
+    });
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: -100777111222, type: "supergroup", title: "Mention-Required Group" },
+          message_id: 511,
+          date: 1736380800,
+          photo: [{ file_id: "p_no_mention" }],
+          from: { id: 77, is_bot: false, first_name: "stranger" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/p_no_mention.jpg" }),
+      });
+
+      // The user-visible "Failed to download media" reply must NOT fire in
+      // requireMention groups. (DM equivalent above still does fire.)
+      expect(sendMessageSpy).not.toHaveBeenCalledWith(
+        -100777111222,
+        "⚠️ Failed to download media. Please try again.",
+        expect.anything(),
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("processes remaining media group photos when one photo download fails", async () => {
     replySpy.mockReset();
     setOpenChannelPostConfig();

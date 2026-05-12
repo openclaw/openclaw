@@ -1303,6 +1303,8 @@ export const registerTelegramHandlers = ({
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
     promptContextMinTimestampMs?: number;
+    isGroup: boolean;
+    requireMention: boolean;
   }) => {
     const {
       ctx,
@@ -1314,6 +1316,8 @@ export const registerTelegramHandlers = ({
       sendOversizeWarning,
       oversizeLogMessage,
       promptContextMinTimestampMs,
+      isGroup,
+      requireMention,
     } = params;
 
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
@@ -1451,6 +1455,17 @@ export const registerTelegramHandlers = ({
         return;
       }
       logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
+      // In groups configured with requireMention: true, the message likely came
+      // from a user who did not mention the bot, but we cannot perform the
+      // mention check until after media resolution (it consumes media metadata
+      // for audio preflight). Sending "Failed to download media" to such groups
+      // on every transient fetch error spams the chat with bot replies the
+      // user never asked for. Keep the diagnostic in logger.warn above and
+      // skip the user-visible reply on group + requireMention configurations.
+      // Fixes #81181.
+      if (isGroup && requireMention) {
+        return;
+      }
       await withTelegramApiErrorLogging({
         operation: "sendMessage",
         runtime,
@@ -2387,6 +2402,16 @@ export const registerTelegramHandlers = ({
       );
 
       recordMessageForReplyChain(event.msg, resolvedThreadId ?? dmThreadId);
+      // For groups (TelegramGroupConfig has `requireMention?: boolean`; the
+      // union TelegramGroupConfig | TelegramDirectConfig is opaque on this
+      // field for DMs, so guard with `'requireMention' in ...`).
+      const groupRequireMention =
+        topicConfig && "requireMention" in topicConfig
+          ? Boolean(topicConfig.requireMention)
+          : groupConfig && "requireMention" in groupConfig
+            ? Boolean(groupConfig.requireMention)
+            : false;
+      const effectiveRequireMention = event.isGroup && groupRequireMention;
       await processInboundMessage({
         ctx: event.ctx,
         msg: event.msg,
@@ -2396,6 +2421,8 @@ export const registerTelegramHandlers = ({
         storeAllowFrom,
         sendOversizeWarning: event.sendOversizeWarning,
         oversizeLogMessage: event.oversizeLogMessage,
+        isGroup: event.isGroup,
+        requireMention: effectiveRequireMention,
         ...promptContextBoundaryOptions(promptContextMinTimestampMs),
       });
     } catch (err) {
