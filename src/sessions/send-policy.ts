@@ -63,7 +63,7 @@ export function resolveSendPolicy(params: {
     channel ??=
       normalizeMatchValue(params.channel) ??
       normalizeMatchValue(params.entry?.channel) ??
-      normalizeMatchValue(params.entry?.lastChannel);
+      normalizeMatchValue(params.entry?.deliveryContext?.channel);
     return channel;
   };
   const getChatType = () => {
