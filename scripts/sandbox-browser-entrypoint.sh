@@ -187,12 +187,14 @@ import select
 import socket
 import socketserver
 import sys
+import time
 
 LISTEN_PORT = int(os.environ["OPENCLAW_BROWSER_CDP_PORT"])
 UPSTREAM_PORT = int(os.environ["OPENCLAW_BROWSER_CHROME_CDP_PORT"])
 AUTH_TOKEN = os.environ["OPENCLAW_BROWSER_CDP_AUTH_TOKEN"]
 SOURCE_RANGE = os.environ.get("OPENCLAW_BROWSER_CDP_SOURCE_RANGE", "").strip()
 MAX_HEADER_BYTES = 65536
+HEADER_READ_TIMEOUT_SECONDS = 5.0
 
 try:
     SOURCE_NETWORK = ipaddress.ip_network(SOURCE_RANGE, strict=False) if SOURCE_RANGE else None
@@ -228,10 +230,17 @@ def has_auth(header_bytes):
     return False
 
 
-def read_headers(conn):
+def read_headers(conn, deadline):
     data = b""
     while b"\r\n\r\n" not in data:
-        chunk = conn.recv(4096)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return b""
+        conn.settimeout(remaining)
+        try:
+            chunk = conn.recv(4096)
+        except socket.timeout:
+            return b""
         if not chunk:
             return b""
         data += chunk
@@ -268,7 +277,8 @@ class Handler(socketserver.BaseRequestHandler):
         client_host = self.client_address[0]
         if not source_allowed(client_host):
             return
-        header_bytes = read_headers(self.request)
+        header_deadline = time.monotonic() + HEADER_READ_TIMEOUT_SECONDS
+        header_bytes = read_headers(self.request, header_deadline)
         if not header_bytes:
             return
         if not has_auth(header_bytes):
