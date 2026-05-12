@@ -277,13 +277,13 @@ function buildFetchSchema() {
     before: Type.Optional(
       Type.String({
         description:
-          "Read messages before this bound. Providers may accept native message timestamps, Unix epoch seconds, or ISO 8601 timestamps.",
+          "Read messages before this bound. Providers may accept native message timestamps, Unix epoch seconds, or ISO 8601 timestamps with timezone.",
       }),
     ),
     after: Type.Optional(
       Type.String({
         description:
-          "Read messages after this bound. Providers may accept native message timestamps, Unix epoch seconds, or ISO 8601 timestamps.",
+          "Read messages after this bound. Providers may accept native message timestamps, Unix epoch seconds, or ISO 8601 timestamps with timezone.",
       }),
     ),
     around: Type.Optional(Type.String()),

@@ -104,6 +104,41 @@ async function resolveBotUserId(client: WebClient) {
   return auth.user_id;
 }
 
+const ISO_8601_TIMESTAMP_WITH_TIMEZONE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+
+function isIso8601TimestampWithTimezone(value: string) {
+  const match = ISO_8601_TIMESTAMP_WITH_TIMEZONE.exec(value);
+  if (!match) {
+    return false;
+  }
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText = "0", zone] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) {
+    return false;
+  }
+  const maxDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (day < 1 || day > maxDay) {
+    return false;
+  }
+  if (zone !== "Z") {
+    const offsetHour = Number(zone.slice(1, 3));
+    const offsetMinute = Number(zone.slice(4, 6));
+    if (offsetHour > 23 || offsetMinute > 59) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function normalizeSlackReadTimestampBound(value: string | undefined, field: string) {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -112,12 +147,12 @@ function normalizeSlackReadTimestampBound(value: string | undefined, field: stri
   if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
     return trimmed;
   }
-  const parsed = Date.parse(trimmed);
+  const parsed = isIso8601TimestampWithTimezone(trimmed) ? Date.parse(trimmed) : Number.NaN;
   if (!Number.isNaN(parsed)) {
     return String(parsed / 1000);
   }
   throw new Error(
-    `Invalid Slack message read ${field} value: expected a Slack timestamp, Unix epoch seconds, or ISO 8601 timestamp.`,
+    `Invalid Slack message read ${field} value: expected a Slack timestamp, Unix epoch seconds, or ISO 8601 timestamp with timezone.`,
   );
 }
 

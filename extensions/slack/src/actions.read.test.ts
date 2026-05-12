@@ -93,7 +93,7 @@ describe("readSlackMessages", () => {
     expect(result.messages.map((message) => message.ts)).toEqual(["1"]);
   });
 
-  it("normalizes ISO read bounds before calling Slack history", async () => {
+  it("normalizes ISO read bounds with timezones before calling Slack history", async () => {
     const client = createClient();
     client.conversations.history.mockResolvedValueOnce({
       messages: [{ ts: "1778472000.000000" }],
@@ -103,7 +103,7 @@ describe("readSlackMessages", () => {
     await readSlackMessages("C1", {
       client,
       after: "2026-05-11T04:00:00Z",
-      before: "2026-05-11T05:30:00Z",
+      before: "2026-05-11T01:30:00-04:00",
       token: "xoxb-test",
     });
 
@@ -143,13 +143,32 @@ describe("readSlackMessages", () => {
         token: "xoxb-test",
       }),
     ).rejects.toThrow(
-      "Invalid Slack message read after value: expected a Slack timestamp, Unix epoch seconds, or ISO 8601 timestamp.",
+      "Invalid Slack message read after value: expected a Slack timestamp, Unix epoch seconds, or ISO 8601 timestamp with timezone.",
     );
     expect(client.conversations.history).not.toHaveBeenCalled();
     expect(client.conversations.replies).not.toHaveBeenCalled();
   });
 
-  it("normalizes ISO read bounds before calling Slack replies", async () => {
+  it.each(["05/11/2026", "May 11, 2026 04:00", "2026-05-11T04:00:00"])(
+    "rejects ambiguous or timezone-less read bound %s",
+    async (after) => {
+      const client = createClient();
+
+      await expect(
+        readSlackMessages("C1", {
+          client,
+          after,
+          token: "xoxb-test",
+        }),
+      ).rejects.toThrow(
+        "Invalid Slack message read after value: expected a Slack timestamp, Unix epoch seconds, or ISO 8601 timestamp with timezone.",
+      );
+      expect(client.conversations.history).not.toHaveBeenCalled();
+      expect(client.conversations.replies).not.toHaveBeenCalled();
+    },
+  );
+
+  it("normalizes ISO read bounds with timezones before calling Slack replies", async () => {
     const client = createClient();
     client.conversations.replies.mockResolvedValueOnce({
       messages: [{ ts: "171234.567" }, { ts: "1778472000.000000" }],
