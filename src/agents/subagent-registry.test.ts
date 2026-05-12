@@ -469,7 +469,7 @@ describe("subagent registry seam flow", () => {
       "function",
     );
 
-    const updateStore = mocks.updateSessionStore.mock.calls[0]?.[1] as
+    const updateStore = mocks.updateSessionStore.mock.calls.at(0)?.[1] as
       | ((store: Record<string, Record<string, unknown>>) => void)
       | undefined;
     expect(updateStore).toBeTypeOf("function");
