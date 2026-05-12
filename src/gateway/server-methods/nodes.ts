@@ -1142,6 +1142,19 @@ export const nodeHandlers: GatewayRequestHandlers = {
         return;
       }
 
+      if (commandRequiresNodePairingApproval(command)) {
+        const pairedNode = await getPairedNode(nodeId);
+        if (!pairedNode || !(pairedNode.commands ?? []).includes(command)) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "node pairing approval required", {
+              details: { code: "NODE_PAIRING_APPROVAL_REQUIRED", nodeId, command },
+            }),
+          );
+          return;
+        }
+      }
       const forwardedParams = sanitizeNodeInvokeParamsForForwarding({
         nodeId,
         command,
@@ -1158,19 +1171,6 @@ export const nodeHandlers: GatewayRequestHandlers = {
           }),
         );
         return;
-      }
-      if (commandRequiresNodePairingApproval(command)) {
-        const pairedNode = await getPairedNode(nodeId);
-        if (!pairedNode || !(pairedNode.commands ?? []).includes(command)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "node pairing approval required", {
-              details: { code: "NODE_PAIRING_APPROVAL_REQUIRED", nodeId, command },
-            }),
-          );
-          return;
-        }
       }
       const policyResult = await applyPluginNodeInvokePolicy({
         context,

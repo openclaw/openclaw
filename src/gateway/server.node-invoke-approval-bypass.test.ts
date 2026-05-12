@@ -299,6 +299,7 @@ describe("node.invoke approval bypass", () => {
     onInvoke: (payload: unknown) => void,
     deviceIdentity?: DeviceIdentity,
     commands: string[] = ["system.run"],
+    opts: { approveNodePairing?: boolean } = {},
   ) => {
     let readyResolve: (() => void) | null = null;
     const ready = new Promise<void>((resolve) => {
@@ -360,12 +361,35 @@ describe("node.invoke approval bypass", () => {
         clearTimeout(timer);
       }
     }
+    if (opts.approveNodePairing !== false) {
+      await vi.waitFor(
+        async () => {
+          const list = await listNodePairing();
+          const pending = list.pending.find(
+            (entry) => entry.nodeId === resolvedDeviceIdentity.deviceId,
+          );
+          if (!pending) {
+            throw new Error("expected pending node pairing request");
+          }
+          const approved = await approveNodePairing(pending.requestId, {
+            callerScopes: ["operator.admin"],
+          });
+          expect(approved && "node" in approved).toBe(true);
+        },
+        {
+          timeout: NODE_CONNECT_TIMEOUT_MS,
+          interval: 50,
+        },
+      );
+    }
+    return client;
+  };
+
+  const approvePendingNodePairingForTest = async (nodeId: string) => {
     await vi.waitFor(
       async () => {
         const list = await listNodePairing();
-        const pending = list.pending.find(
-          (entry) => entry.nodeId === resolvedDeviceIdentity.deviceId,
-        );
+        const pending = list.pending.find((entry) => entry.nodeId === nodeId);
         if (!pending) {
           throw new Error("expected pending node pairing request");
         }
@@ -379,7 +403,6 @@ describe("node.invoke approval bypass", () => {
         interval: 50,
       },
     );
-    return client;
   };
 
   test("rejects malformed/forbidden node.invoke payloads before forwarding", async () => {
@@ -470,6 +493,75 @@ describe("node.invoke approval bypass", () => {
         "node.invoke cannot mutate persistent browser profiles via browser.proxy",
       );
       await expectNoForwardedInvoke(() => sawInvoke);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
+  test("keeps allow-once approval available when node pairing blocks forwarding", async () => {
+    let invokeCount = 0;
+    let lastInvokeParams: Record<string, unknown> | null = null;
+    const node = await connectLinuxNode(
+      (payload) => {
+        invokeCount += 1;
+        const obj = payload as { paramsJSON?: unknown };
+        const raw = typeof obj?.paramsJSON === "string" ? obj.paramsJSON : "";
+        lastInvokeParams = raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
+      },
+      undefined,
+      ["system.run"],
+      { approveNodePairing: false },
+    );
+    const ws = await connectOperator(["operator.write", "operator.approvals"]);
+
+    try {
+      const nodeId = await getConnectedNodeId(ws);
+      const approvalId = await requestAllowOnceApproval(ws, "echo hi", nodeId);
+      const blocked = await rpcReq(ws, "node.invoke", {
+        nodeId,
+        command: "system.run",
+        params: {
+          command: ["echo", "hi"],
+          rawCommand: "echo hi",
+          runId: approvalId,
+          approved: true,
+          approvalDecision: "allow-once",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(blocked.ok).toBe(false);
+      expect(blocked.error?.message).toBe("node pairing approval required");
+      await expectNoForwardedInvoke(() => invokeCount > 0);
+
+      await approvePendingNodePairingForTest(nodeId);
+
+      const allowed = await rpcReq(ws, "node.invoke", {
+        nodeId,
+        command: "system.run",
+        params: {
+          command: ["echo", "hi"],
+          rawCommand: "echo hi",
+          runId: approvalId,
+          approved: true,
+          approvalDecision: "allow-once",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(allowed.ok).toBe(true);
+      await vi.waitFor(
+        () => {
+          if (!lastInvokeParams) {
+            throw new Error("expected forwarded invoke params");
+          }
+        },
+        {
+          timeout: 5_000,
+          interval: 50,
+        },
+      );
+      expect(invokeCount).toBe(1);
+      expect(lastInvokeParams?.["approvalDecision"]).toBe("allow-once");
     } finally {
       ws.close();
       node.stop();
