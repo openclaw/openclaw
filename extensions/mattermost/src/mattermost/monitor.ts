@@ -66,6 +66,10 @@ import {
   type MattermostEventPayload,
   type MattermostWebSocketFactory,
 } from "./monitor-websocket.js";
+import {
+  evaluateMattermostNoVisibleReply,
+  formatMattermostNoVisibleReplyLog,
+} from "./no-visible-reply-diagnostic.js";
 import { runWithReconnect } from "./reconnect.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import type {
@@ -1680,7 +1684,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 previewState,
                 logVerboseMessage,
                 deliverFinal: async () => {
-                  await deliverMattermostReplyPayload({
+                  const outcome = await deliverMattermostReplyPayload({
                     core,
                     cfg,
                     payload,
@@ -1696,7 +1700,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     tableMode,
                     sendMessage: sendMessageMattermost,
                   });
-                  runtime.log?.(`delivered reply to ${to}`);
+                  const violation = evaluateMattermostNoVisibleReply({ outcome, payload });
+                  if (violation) {
+                    runtime.log?.(
+                      formatMattermostNoVisibleReplyLog({
+                        violation,
+                        to,
+                        accountId: account.accountId,
+                        agentId: route.agentId,
+                      }),
+                    );
+                  } else if (outcome !== "reasoning_skipped") {
+                    runtime.log?.(`delivered reply to ${to}`);
+                  }
                 },
               });
             },
