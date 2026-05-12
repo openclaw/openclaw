@@ -289,10 +289,12 @@ async function runNodeModule(
 describe("SSRF external proxy routing", () => {
   let target: Server | null = null;
   let wsTarget: Server | null = null;
+  let gatewayBypassWsTarget: Server | null = null;
   let httpsLikeTarget: Server | null = null;
   let tlsTarget: Server | null = null;
   let proxy: Server | null = null;
   let wss: WebSocketServer | null = null;
+  let gatewayBypassWss: WebSocketServer | null = null;
 
   afterEach(async () => {
     await new Promise<void>((resolve) => {
@@ -302,15 +304,25 @@ describe("SSRF external proxy routing", () => {
       }
       wss.close(() => resolve());
     });
+    await new Promise<void>((resolve) => {
+      if (!gatewayBypassWss) {
+        resolve();
+        return;
+      }
+      gatewayBypassWss.close(() => resolve());
+    });
     await closeServer(proxy);
     await closeServer(tlsTarget);
     await closeServer(httpsLikeTarget);
+    await closeServer(gatewayBypassWsTarget);
     await closeServer(wsTarget);
     await closeServer(target);
+    gatewayBypassWss = null;
     wss = null;
     proxy = null;
     tlsTarget = null;
     httpsLikeTarget = null;
+    gatewayBypassWsTarget = null;
     wsTarget = null;
     target = null;
   });
@@ -325,8 +337,14 @@ describe("SSRF external proxy routing", () => {
     wss.on("connection", (ws) => {
       ws.close(1000, "done");
     });
+    gatewayBypassWsTarget = createServer();
+    gatewayBypassWss = new WebSocketServer({ server: gatewayBypassWsTarget });
+    gatewayBypassWss.on("connection", (ws) => {
+      ws.close(1000, "done");
+    });
     const targetPort = await listenOnLoopback(target);
     const wsTargetPort = await listenOnLoopback(wsTarget);
+    const gatewayBypassWsTargetPort = await listenOnLoopback(gatewayBypassWsTarget);
 
     httpsLikeTarget = createServer((_req, res) => {
       res.writeHead(200, { "content-type": "text/plain" });
@@ -345,7 +363,7 @@ describe("SSRF external proxy routing", () => {
         import { fetch as undiciFetch } from "undici";
         import { WebSocket } from "ws";
         import { startProxy, stopProxy } from "./src/infra/net/proxy/proxy-lifecycle.ts";
-        import { registerManagedProxyGatewayLoopbackNoProxy } from "./src/infra/net/proxy/proxy-lifecycle.ts";
+        import { registerManagedProxyGatewayLoopbackBypass } from "./src/infra/net/proxy/proxy-lifecycle.ts";
 
         async function nodeHttpGet(url, options = {}) {
           return new Promise((resolve, reject) => {
@@ -401,7 +419,7 @@ describe("SSRF external proxy routing", () => {
 
         async function gatewayLoopbackBypassProbe(url) {
           return new Promise((resolve, reject) => {
-            const unregister = registerManagedProxyGatewayLoopbackNoProxy(url);
+            const unregister = registerManagedProxyGatewayLoopbackBypass(url);
             const ws = new WebSocket(url, { handshakeTimeout: ${PROBE_TIMEOUT_MS} });
             const cleanup = () => unregister?.();
             ws.once("open", () => {
@@ -454,7 +472,7 @@ describe("SSRF external proxy routing", () => {
         OPENCLAW_TEST_EXPLICIT_AGENT_TARGET_URL: `http://127.0.0.1:${targetPort}/explicit-agent`,
         OPENCLAW_TEST_NODE_HTTPS_TARGET_URL: `https://127.0.0.1:${httpsLikeTargetPort}/https-connect-proof`,
         OPENCLAW_TEST_WS_TARGET_URL: `ws://127.0.0.1:${wsTargetPort}/websocket-proxied`,
-        OPENCLAW_TEST_GATEWAY_BYPASS_WS_URL: `ws://127.0.0.1:${wsTargetPort}/gateway-bypass`,
+        OPENCLAW_TEST_GATEWAY_BYPASS_WS_URL: `ws://127.0.0.1:${gatewayBypassWsTargetPort}/gateway-bypass`,
         NO_PROXY: "127.0.0.1,localhost",
         no_proxy: "localhost",
       },
@@ -470,7 +488,7 @@ describe("SSRF external proxy routing", () => {
     expect(seenConnectTargets).toContain(`127.0.0.1:${httpsLikeTargetPort}`);
     expect(seenConnectTargets).toContain(`http://127.0.0.1:${targetPort}/node-http-metadata`);
     expect(seenConnectTargets).toContain(`http://127.0.0.1:${targetPort}/explicit-agent`);
-    expect(seenConnectTargets).not.toContain(`http://127.0.0.1:${wsTargetPort}/gateway-bypass`);
+    expect(seenConnectTargets).not.toContain(`127.0.0.1:${gatewayBypassWsTargetPort}`);
   });
 
   it("preserves the target TLS hostname for Node HTTPS requests through the managed proxy", async () => {

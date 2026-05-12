@@ -146,7 +146,7 @@ describe("GatewayClient", () => {
     expect(last?.opts.agent).toBeUndefined();
   });
 
-  test("scopes Gateway loopback NO_PROXY to WebSocket construction", () => {
+  test("scopes Gateway loopback bypass to WebSocket construction without mutating NO_PROXY", () => {
     process.env["NO_PROXY"] = "corp.example.com";
     process.env["no_proxy"] = "corp.example.com";
     const registration = registerActiveManagedProxyUrl(
@@ -159,7 +159,7 @@ describe("GatewayClient", () => {
       client.start();
       const last = wsMockState.last as { noProxyDuringConstruction: unknown } | null;
 
-      expect(last?.noProxyDuringConstruction).toBe("corp.example.com,127.0.0.1:18789");
+      expect(last?.noProxyDuringConstruction).toBe("corp.example.com");
       expect(process.env["NO_PROXY"]).toBe("corp.example.com");
       expect(process.env["no_proxy"]).toBe("corp.example.com");
     } finally {
@@ -167,7 +167,7 @@ describe("GatewayClient", () => {
     }
   });
 
-  test("adds IPv6 loopback to NO_PROXY during Gateway-only proxy mode construction", () => {
+  test("scopes IPv6 loopback bypass during Gateway-only proxy mode construction", () => {
     process.env["NO_PROXY"] = "corp.example.com";
     process.env["no_proxy"] = "corp.example.com";
     process.env["HTTP_PROXY"] = "http://127.0.0.1:3128";
@@ -186,7 +186,7 @@ describe("GatewayClient", () => {
         httpsProxyDuringConstruction: unknown;
       } | null;
 
-      expect(last?.noProxyDuringConstruction).toBe("corp.example.com,[::1]:18789");
+      expect(last?.noProxyDuringConstruction).toBe("corp.example.com");
       expect(last?.httpProxyDuringConstruction).toBe("http://127.0.0.1:3128");
       expect(last?.httpsProxyDuringConstruction).toBe("http://127.0.0.1:3128");
       expect(process.env["NO_PROXY"]).toBe("corp.example.com");

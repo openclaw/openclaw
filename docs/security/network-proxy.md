@@ -81,8 +81,8 @@ proxy:
   loopbackMode: gateway-only # gateway-only, proxy, or block
 ```
 
-- `gateway-only` (default): OpenClaw registers the Gateway loopback authority in `NO_PROXY` so local Gateway WebSocket traffic can connect directly. Custom loopback Gateway ports work because the active Gateway URL's host and port are registered.
-- `proxy`: OpenClaw does not register a Gateway loopback `NO_PROXY` authority, so local Gateway traffic is sent through the managed proxy. If the proxy is remote, it must provide special routing for the OpenClaw host's loopback service, such as mapping it to a proxy-reachable hostname, IP, or tunnel. Standard remote proxies resolve `127.0.0.1` and `localhost` from the proxy host, not from the OpenClaw host.
+- `gateway-only` (default): OpenClaw registers the Gateway loopback authority in Proxyline's managed bypass policy so local Gateway WebSocket traffic can connect directly. Custom loopback Gateway ports work because the active Gateway URL's host and port are registered.
+- `proxy`: OpenClaw does not register a Gateway loopback bypass, so local Gateway traffic is sent through the managed proxy. If the proxy is remote, it must provide special routing for the OpenClaw host's loopback service, such as mapping it to a proxy-reachable hostname, IP, or tunnel. Standard remote proxies resolve `127.0.0.1` and `localhost` from the proxy host, not from the OpenClaw host.
 - `block`: OpenClaw denies loopback Gateway control-plane connections before opening a socket.
 
 If `enabled=true` but no valid proxy URL is configured, protected commands fail startup instead of falling back to direct network access.
@@ -209,7 +209,7 @@ proxy:
 ## Limits
 
 - The proxy improves coverage for process-local JavaScript HTTP and WebSocket clients, but it is not an OS-level network sandbox.
-- Gateway loopback control-plane traffic defaults to direct local bypass through `proxy.loopbackMode: "gateway-only"`. OpenClaw implements that bypass by registering the active Gateway loopback authority in `NO_PROXY` for Proxyline. Operators can set `proxy.loopbackMode: "proxy"` to send Gateway loopback traffic through the managed proxy, or `proxy.loopbackMode: "block"` to deny loopback Gateway connections. See [Gateway Loopback Mode](#gateway-loopback-mode) for the remote-proxy caveat.
+- Gateway loopback control-plane traffic defaults to direct local bypass through `proxy.loopbackMode: "gateway-only"`. OpenClaw implements that bypass by registering the active Gateway loopback authority in Proxyline's managed bypass policy. Operators can set `proxy.loopbackMode: "proxy"` to send Gateway loopback traffic through the managed proxy, or `proxy.loopbackMode: "block"` to deny loopback Gateway connections. See [Gateway Loopback Mode](#gateway-loopback-mode) for the remote-proxy caveat.
 - Raw `net`, `tls`, and `http2` sockets, native addons, and non-OpenClaw child processes may bypass Node-level proxy routing unless they inherit and respect proxy environment variables. Forked OpenClaw child CLIs inherit the managed proxy URL and `proxy.loopbackMode` state.
 - IRC is a raw TCP/TLS channel outside operator-managed forward proxy routing. In deployments that require all egress through that forward proxy, set `channels.irc.enabled=false` unless direct IRC egress is explicitly approved.
 - The local debug proxy is diagnostic tooling and its direct upstream forwarding for proxy requests and CONNECT tunnels is disabled by default while managed proxy mode is active; enable direct forwarding only for approved local diagnostics.

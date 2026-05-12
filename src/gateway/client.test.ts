@@ -324,10 +324,13 @@ describe("GatewayClient security checks", () => {
     expect(onConnectError).not.toHaveBeenCalled();
     expect(wsInstances.length).toBe(1);
     expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
-    expect(installGlobalProxyMock).toHaveBeenCalledWith({
-      mode: "managed",
-      proxyUrl: "http://127.0.0.1:3128",
-    });
+    expect(installGlobalProxyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "managed",
+        proxyUrl: "http://127.0.0.1:3128",
+        bypassPolicy: expect.any(Function),
+      }),
+    );
     client.stop();
   });
 

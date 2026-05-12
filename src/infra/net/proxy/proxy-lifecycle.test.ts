@@ -21,11 +21,12 @@ vi.mock("../../../logger.js", () => ({
   logWarn: vi.fn(),
 }));
 
+import type { ProxylineBypassPolicy } from "@openclaw/proxyline";
 import { logInfo, logWarn } from "../../../logger.js";
 import { _resetActiveManagedProxyStateForTests } from "./active-proxy-state.js";
 import {
   _resetGlobalAgentBootstrapForTests,
-  registerManagedProxyGatewayLoopbackNoProxy,
+  registerManagedProxyGatewayLoopbackBypass,
   startProxy,
   stopProxy,
   type ProxyHandle,
@@ -42,14 +43,30 @@ function expectProxyHandle(handle: Awaited<ReturnType<typeof startProxy>>): Prox
   return handle;
 }
 
-function expectNoProxyUnregister(
-  unregister: ReturnType<typeof registerManagedProxyGatewayLoopbackNoProxy>,
+function expectBypassUnregister(
+  unregister: ReturnType<typeof registerManagedProxyGatewayLoopbackBypass>,
 ): () => void {
   expect(unregister).toBeTypeOf("function");
   if (typeof unregister !== "function") {
-    throw new Error("Expected Gateway NO_PROXY unregister callback");
+    throw new Error("Expected Gateway bypass unregister callback");
   }
   return unregister;
+}
+
+function expectLastProxylineBypassPolicy(): ProxylineBypassPolicy {
+  const calls: unknown = installGlobalProxyMock.mock.calls;
+  const lastCall = Array.isArray(calls) ? calls.at(-1) : undefined;
+  const optionsUnknown = Array.isArray(lastCall) ? lastCall[0] : undefined;
+  const options =
+    typeof optionsUnknown === "object" && optionsUnknown !== null
+      ? (optionsUnknown as Record<string, unknown>)
+      : undefined;
+  const bypassPolicy = options?.["bypassPolicy"];
+  expect(bypassPolicy).toBeTypeOf("function");
+  if (typeof bypassPolicy !== "function") {
+    throw new Error("Expected Proxyline bypass policy");
+  }
+  return (request) => Boolean(bypassPolicy(request));
 }
 
 describe("startProxy", () => {
@@ -230,10 +247,13 @@ describe("startProxy", () => {
       proxyUrl: "http://127.0.0.1:3128",
     });
 
-    expect(installGlobalProxyMock).toHaveBeenCalledWith({
-      mode: "managed",
-      proxyUrl: "http://127.0.0.1:3128",
-    });
+    expect(installGlobalProxyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "managed",
+        proxyUrl: "http://127.0.0.1:3128",
+        bypassPolicy: expect.any(Function),
+      }),
+    );
 
     await stopProxy(expectProxyHandle(handle));
 
@@ -344,65 +364,67 @@ describe("startProxy", () => {
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBeUndefined();
   });
 
-  it("registers exact Gateway loopback authorities in NO_PROXY", async () => {
+  it("registers exact Gateway loopback authorities in Proxyline bypass policy", async () => {
     const handle = await startProxy({
       enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
     });
 
-    const unregister = expectNoProxyUnregister(
-      registerManagedProxyGatewayLoopbackNoProxy("ws://127.0.0.1:18789"),
+    const bypassPolicy = expectLastProxylineBypassPolicy();
+    const unregister = expectBypassUnregister(
+      registerManagedProxyGatewayLoopbackBypass("ws://127.0.0.1:18789"),
     );
-    expect(process.env["NO_PROXY"]).toBe("127.0.0.1:18789");
-    expect(process.env["no_proxy"]).toBe("127.0.0.1:18789");
+    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(true);
+    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:3000" })).toBe(false);
 
     unregister();
-    expect(process.env["NO_PROXY"]).toBe("");
-    expect(process.env["no_proxy"]).toBe("");
+    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(false);
     await stopProxy(handle);
   });
 
-  it("accepts literal loopback IPs and localhost for Gateway NO_PROXY registration", async () => {
+  it("accepts literal loopback IPs and localhost for Gateway bypass registration", async () => {
     const handle = await startProxy({
       enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
     });
+    const bypassPolicy = expectLastProxylineBypassPolicy();
 
-    const unregisterIpv6 = expectNoProxyUnregister(
-      registerManagedProxyGatewayLoopbackNoProxy("ws://[::1]:18789"),
+    const unregisterIpv6 = expectBypassUnregister(
+      registerManagedProxyGatewayLoopbackBypass("ws://[::1]:18789"),
     );
-    expect(process.env["NO_PROXY"]).toBe("[::1]:18789");
+    expect(bypassPolicy({ surface: "websocket", url: "ws://[::1]:18789" })).toBe(true);
     unregisterIpv6();
 
-    const unregisterLocalhost = expectNoProxyUnregister(
-      registerManagedProxyGatewayLoopbackNoProxy("ws://localhost.:18789"),
+    const unregisterLocalhost = expectBypassUnregister(
+      registerManagedProxyGatewayLoopbackBypass("ws://localhost.:18789"),
     );
-    expect(process.env["NO_PROXY"]).toBe("localhost.:18789");
+    expect(bypassPolicy({ surface: "websocket", url: "ws://localhost.:18789" })).toBe(true);
     unregisterLocalhost();
 
     await stopProxy(handle);
   });
 
-  it("does not register Gateway NO_PROXY for non-loopback URLs", () => {
-    expect(registerManagedProxyGatewayLoopbackNoProxy("wss://gateway.example.com")).toBeUndefined();
+  it("does not register Gateway bypass for non-loopback URLs", () => {
+    expect(registerManagedProxyGatewayLoopbackBypass("wss://gateway.example.com")).toBeUndefined();
   });
 
-  it("allows Gateway NO_PROXY registration for custom configured loopback ports", async () => {
+  it("allows Gateway bypass registration for custom configured loopback ports", async () => {
     const handle = await startProxy({
       enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
     });
+    const bypassPolicy = expectLastProxylineBypassPolicy();
 
-    const unregister = expectNoProxyUnregister(
-      registerManagedProxyGatewayLoopbackNoProxy("ws://127.0.0.1:3000"),
+    const unregister = expectBypassUnregister(
+      registerManagedProxyGatewayLoopbackBypass("ws://127.0.0.1:3000"),
     );
-    expect(process.env["NO_PROXY"]).toBe("127.0.0.1:3000");
+    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:3000" })).toBe(true);
 
     unregister();
     await stopProxy(handle);
   });
 
-  it("blocks Gateway NO_PROXY registration when active proxy loopbackMode is block", async () => {
+  it("blocks Gateway bypass registration when active proxy loopbackMode is block", async () => {
     const handle = await startProxy({
       enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
@@ -410,7 +432,7 @@ describe("startProxy", () => {
     });
 
     try {
-      expect(() => registerManagedProxyGatewayLoopbackNoProxy("ws://127.0.0.1:18789")).toThrow(
+      expect(() => registerManagedProxyGatewayLoopbackBypass("ws://127.0.0.1:18789")).toThrow(
         "blocked by proxy.loopbackMode",
       );
     } finally {
@@ -418,23 +440,24 @@ describe("startProxy", () => {
     }
   });
 
-  it("does not register Gateway NO_PROXY when active proxy loopbackMode is proxy", async () => {
+  it("does not register Gateway bypass when active proxy loopbackMode is proxy", async () => {
     const handle = await startProxy({
       enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
       loopbackMode: "proxy",
     });
+    const bypassPolicy = expectLastProxylineBypassPolicy();
 
     try {
-      const unregister = registerManagedProxyGatewayLoopbackNoProxy("ws://127.0.0.1:18789");
-      expect(process.env["NO_PROXY"]).toBe("");
+      const unregister = registerManagedProxyGatewayLoopbackBypass("ws://127.0.0.1:18789");
+      expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(false);
       expect(unregister).toBeUndefined();
     } finally {
       await stopProxy(handle);
     }
   });
 
-  it("restores the active NO_PROXY value after Gateway registration", async () => {
+  it("does not mutate NO_PROXY while registering Gateway bypass", async () => {
     const handle = await startProxy({
       enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
@@ -442,11 +465,11 @@ describe("startProxy", () => {
     process.env["NO_PROXY"] = "corp.example.com";
     process.env["no_proxy"] = "corp.example.com";
 
-    const unregister = expectNoProxyUnregister(
-      registerManagedProxyGatewayLoopbackNoProxy("ws://127.0.0.1:18789"),
+    const unregister = expectBypassUnregister(
+      registerManagedProxyGatewayLoopbackBypass("ws://127.0.0.1:18789"),
     );
-    expect(process.env["NO_PROXY"]).toBe("corp.example.com,127.0.0.1:18789");
-    expect(process.env["no_proxy"]).toBe("corp.example.com,127.0.0.1:18789");
+    expect(process.env["NO_PROXY"]).toBe("corp.example.com");
+    expect(process.env["no_proxy"]).toBe("corp.example.com");
 
     unregister();
     expect(process.env["NO_PROXY"]).toBe("corp.example.com");

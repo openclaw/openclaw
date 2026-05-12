@@ -7,7 +7,11 @@
  * restores the previous process state on shutdown.
  */
 
-import { installGlobalProxy, type ProxylineHandle } from "@openclaw/proxyline";
+import {
+  installGlobalProxy,
+  type ProxylineBypassPolicy,
+  type ProxylineHandle,
+} from "@openclaw/proxyline";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 
 export type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
@@ -43,11 +47,13 @@ type ProxyEnvSnapshot = Record<ProxyEnvKey, string | undefined>;
 
 let baseProxyEnvSnapshot: ProxyEnvSnapshot | null = null;
 let proxylineHandle: ProxylineHandle | null = null;
+const gatewayLoopbackBypassAuthorities = new Set<string>();
 
 export function _resetGlobalAgentBootstrapForTests(): void {
   baseProxyEnvSnapshot = null;
   proxylineHandle?.stop();
   proxylineHandle = null;
+  gatewayLoopbackBypassAuthorities.clear();
 }
 
 function captureProxyEnv(): ProxyEnvSnapshot {
@@ -163,7 +169,11 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
   if (!proxyUrl || !isSupportedProxyUrl(proxyUrl)) {
     return;
   }
-  proxylineHandle ??= installGlobalProxy({ mode: "managed", proxyUrl });
+  proxylineHandle ??= installGlobalProxy({
+    mode: "managed",
+    proxyUrl,
+    bypassPolicy: shouldBypassManagedProxyForGatewayLoopback,
+  });
 }
 
 export async function startProxy(config: ProxyConfig | undefined): Promise<ProxyHandle | null> {
@@ -196,7 +206,11 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
 
   try {
     injectedEnvSnapshot = injectProxyEnv(proxyUrl, loopbackMode);
-    proxylineHandle ??= installGlobalProxy({ mode: "managed", proxyUrl });
+    proxylineHandle ??= installGlobalProxy({
+      mode: "managed",
+      proxyUrl,
+      bypassPolicy: shouldBypassManagedProxyForGatewayLoopback,
+    });
     registration = registerActiveManagedProxyUrl(new URL(proxyUrl), loopbackMode);
   } catch (err) {
     restoreAfterFailedProxyActivation(lifecycleBaseEnvSnapshot);
@@ -247,7 +261,7 @@ function isGatewayControlPlaneProtocol(protocol: string): boolean {
   return protocol === "ws:" || protocol === "wss:" || protocol === "http:" || protocol === "https:";
 }
 
-function getGatewayControlPlaneNoProxyAuthority(value: string): string | null {
+function getGatewayControlPlaneBypassAuthority(value: string): string | null {
   const url = parseGatewayControlPlaneUrl(value);
   if (
     url === null ||
@@ -259,32 +273,13 @@ function getGatewayControlPlaneNoProxyAuthority(value: string): string | null {
   return url.port ? `${url.hostname}:${url.port}` : url.hostname;
 }
 
-function readGlobalAgentNoProxy(): string {
-  return process.env["NO_PROXY"] ?? "";
-}
+const shouldBypassManagedProxyForGatewayLoopback: ProxylineBypassPolicy = ({ url }) => {
+  const authority = getGatewayControlPlaneBypassAuthority(url);
+  return authority !== null && gatewayLoopbackBypassAuthorities.has(authority);
+};
 
-function writeGlobalAgentNoProxy(value: string): void {
-  if (value === "") {
-    process.env["NO_PROXY"] = "";
-    process.env["no_proxy"] = "";
-  } else {
-    process.env["NO_PROXY"] = value;
-    process.env["no_proxy"] = value;
-  }
-}
-
-function appendNoProxyAuthority(noProxy: string, authority: string): string {
-  const entries = noProxy.split(/[\s,]+/).filter(Boolean);
-  return entries.includes(authority) ? noProxy : [...entries, authority].join(",");
-}
-
-function disableGlobalAgentProxyForIpv6GatewayLoopback(url: string): (() => void) | undefined {
-  void url;
-  return undefined;
-}
-
-export function registerManagedProxyGatewayLoopbackNoProxy(url: string): (() => void) | undefined {
-  const authority = getGatewayControlPlaneNoProxyAuthority(url);
+export function registerManagedProxyGatewayLoopbackBypass(url: string): (() => void) | undefined {
+  const authority = getGatewayControlPlaneBypassAuthority(url);
   if (!authority) {
     return undefined;
   }
@@ -298,28 +293,24 @@ export function registerManagedProxyGatewayLoopbackNoProxy(url: string): (() => 
     return undefined;
   }
 
-  const previousNoProxy = readGlobalAgentNoProxy();
-  writeGlobalAgentNoProxy(appendNoProxyAuthority(previousNoProxy, authority));
+  gatewayLoopbackBypassAuthorities.add(authority);
   let stopped = false;
   return () => {
     if (stopped) {
       return;
     }
     stopped = true;
-    writeGlobalAgentNoProxy(previousNoProxy);
+    gatewayLoopbackBypassAuthorities.delete(authority);
   };
 }
 
 export function withManagedProxyGatewayLoopbackRouting<T>(url: string, run: () => T): T {
-  let unregisterNoProxy: (() => void) | undefined;
-  let restoreIpv6Bypass: (() => void) | undefined;
+  let unregisterBypass: (() => void) | undefined;
   try {
-    unregisterNoProxy = registerManagedProxyGatewayLoopbackNoProxy(url);
-    restoreIpv6Bypass = disableGlobalAgentProxyForIpv6GatewayLoopback(url);
+    unregisterBypass = registerManagedProxyGatewayLoopbackBypass(url);
     return run();
   } finally {
-    restoreIpv6Bypass?.();
-    unregisterNoProxy?.();
+    unregisterBypass?.();
   }
 }
 
