@@ -11,6 +11,7 @@ import {
   clearActiveEmbeddedRun,
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
+  estimatePrePromptTokens,
   finalizeHarnessContextEngineTurn,
   formatErrorMessage,
   isActiveHarnessContextEngine,
@@ -621,12 +622,19 @@ export async function runCodexAppServerAttempt(
   let prePromptMessageCount = historyMessages.length;
   if (activeContextEngine) {
     try {
+      // Pre-assembly token estimate so engines can bound any systemPromptAddition against tokenBudget.
+      const preassemblyCurrentTokenCount = estimatePrePromptTokens({
+        messages: historyMessages,
+        systemPrompt: developerInstructions,
+        prompt: params.prompt ?? "",
+      });
       const assembled = await assembleHarnessContextEngine({
         contextEngine: activeContextEngine,
         sessionId: params.sessionId,
         sessionKey: sandboxSessionKey,
         messages: historyMessages,
         tokenBudget: params.contextTokenBudget,
+        currentTokenCount: preassemblyCurrentTokenCount,
         availableTools: new Set(toolBridge.specs.map((tool) => tool.name).filter(isNonEmptyString)),
         citationsMode: params.config?.memory?.citations,
         modelId: params.modelId,
