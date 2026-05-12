@@ -8,6 +8,7 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/pi-embedded-runner/delivery-evidence.js";
 import {
   formatEmbeddedPiQueueFailureSummary,
   queueEmbeddedPiMessageWithOutcome,
@@ -148,9 +149,7 @@ function hasSuccessfulSideEffectDelivery(params: {
   return Boolean(
     (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
-    (params.messagingToolSentTexts?.length ?? 0) > 0 ||
-    (params.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
-    (params.messagingToolSentTargets?.length ?? 0) > 0,
+    hasCommittedMessagingToolDeliveryEvidence(params),
   );
 }
 
@@ -1554,10 +1553,42 @@ export async function runReplyAgent(params: {
       cliSessionBinding,
     });
 
+    const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
+      const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
+        fallbackTransition,
+        fallbackAttempts,
+        isHeartbeat,
+        hasSuccessfulSideEffectDelivery: hasSuccessfulSideEffectDelivery({
+          blockReplyPipeline,
+          directlySentBlockKeys,
+          messagingToolSentTexts: runResult.messagingToolSentTexts,
+          messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+          messagingToolSentTargets: runResult.messagingToolSentTargets,
+        }),
+        allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
+        silentExpected: followupRun.run.silentExpected,
+      });
+      if (!silentFallbackFailurePayload) {
+        return undefined;
+      }
+      replyOperation.fail(
+        "run_failed",
+        new Error(
+          `configured model backend ${fallbackTransition.selectedModelRef} failed and fallback ${fallbackTransition.activeModelRef} produced no visible reply`,
+        ),
+      );
+      await signalTypingIfNeeded([silentFallbackFailurePayload], typingSignals);
+      return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
+    };
+
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
+      const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
+      if (silentFallbackFailurePayload) {
+        return silentFallbackFailurePayload;
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 
@@ -1590,29 +1621,9 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
-      const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
-        fallbackTransition,
-        fallbackAttempts,
-        isHeartbeat,
-        hasSuccessfulSideEffectDelivery: hasSuccessfulSideEffectDelivery({
-          blockReplyPipeline,
-          directlySentBlockKeys,
-          messagingToolSentTexts: runResult.messagingToolSentTexts,
-          messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-          messagingToolSentTargets: runResult.messagingToolSentTargets,
-        }),
-        allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
-        silentExpected: followupRun.run.silentExpected,
-      });
+      const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
-        replyOperation.fail(
-          "run_failed",
-          new Error(
-            `configured model backend ${fallbackTransition.selectedModelRef} failed and fallback ${fallbackTransition.activeModelRef} produced no visible reply`,
-          ),
-        );
-        await signalTypingIfNeeded([silentFallbackFailurePayload], typingSignals);
-        return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
+        return silentFallbackFailurePayload;
       }
       return returnWithQueuedFollowupDrain(undefined);
     }
