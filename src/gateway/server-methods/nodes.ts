@@ -1317,12 +1317,13 @@ export const nodeHandlers: GatewayRequestHandlers = {
         getHealthCache: context.getHealthCache,
         refreshHealthSnapshot: context.refreshHealthSnapshot,
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-        hasPendingNodeSystemRunEvent: (eventParams) =>
-          context.nodeRegistry.hasPendingSystemRunEvent({
+        authorizeNodeSystemRunEvent: (eventParams) =>
+          context.nodeRegistry.authorizeSystemRunEvent({
             nodeId: eventParams.nodeId,
             connId: eventParams.connId,
             runId: eventParams.runId,
             sessionKey: eventParams.sessionKey,
+            terminal: eventParams.terminal,
           }),
         logGateway: { warn: context.logGateway.warn },
       };

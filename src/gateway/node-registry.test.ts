@@ -68,27 +68,30 @@ describe("gateway/node-registry", () => {
     const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
 
     expect(
-      registry.hasPendingSystemRunEvent({
+      registry.authorizeSystemRunEvent({
         nodeId: "node-1",
         connId: "conn-1",
         runId: "run-1",
         sessionKey: "agent:main:main",
+        terminal: false,
       }),
     ).toBe(true);
     expect(
-      registry.hasPendingSystemRunEvent({
+      registry.authorizeSystemRunEvent({
         nodeId: "node-1",
         connId: "conn-other",
         runId: "run-1",
         sessionKey: "agent:main:main",
+        terminal: false,
       }),
     ).toBe(false);
     expect(
-      registry.hasPendingSystemRunEvent({
+      registry.authorizeSystemRunEvent({
         nodeId: "node-1",
         connId: "conn-1",
         runId: "run-other",
         sessionKey: "agent:main:main",
+        terminal: false,
       }),
     ).toBe(false);
 
@@ -105,13 +108,102 @@ describe("gateway/node-registry", () => {
       error: null,
     });
     expect(
-      registry.hasPendingSystemRunEvent({
+      registry.authorizeSystemRunEvent({
         nodeId: "node-1",
         connId: "conn-1",
         runId: "run-1",
         sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(true);
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-1",
+        sessionKey: "agent:main:main",
+        terminal: false,
       }),
     ).toBe(false);
+  });
+
+  it("keeps system.run event authorization after invoke timeout", async () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-timeout", sessionKey: "agent:main:main" },
+      timeoutMs: 1,
+    });
+
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      error: { code: "TIMEOUT", message: "node invoke timed out" },
+    });
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-timeout",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("matches a single system.run event when legacy payload omits runId", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-legacy", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(true);
+    registry.unregister("conn-1");
+    void invoke.catch(() => {});
+  });
+
+  it("rejects runId-less system.run events when the connection has multiple matches", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const first = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-a", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+    const second = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-b", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(false);
+    registry.unregister("conn-1");
+    void first.catch(() => {});
+    void second.catch(() => {});
   });
 
   it("sends raw event payload JSON without changing the envelope shape", () => {

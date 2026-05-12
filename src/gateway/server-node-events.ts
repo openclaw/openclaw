@@ -695,25 +695,15 @@ export const handleNodeEvent = async (
       }
       const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
 
-      // Respect tools.exec.notifyOnExit setting (default: true)
-      // When false, skip system event notifications for node exec events.
       const cfg = getRuntimeConfig();
-      const notifyOnExit = cfg.tools?.exec?.notifyOnExit !== false;
-      if (!notifyOnExit) {
-        return undefined;
-      }
-      if (obj.suppressNotifyOnExit === true) {
-        return undefined;
-      }
-
       const runId = normalizeOptionalString(obj.runId) ?? "";
       if (
-        !runId ||
-        !ctx.hasPendingNodeSystemRunEvent({
+        !ctx.authorizeNodeSystemRunEvent({
           nodeId,
           connId: opts?.connId,
-          runId,
+          ...(runId ? { runId } : {}),
           sessionKey: sessionKeyRaw,
+          terminal: evt.event === "exec.finished" || evt.event === "exec.denied",
         })
       ) {
         return {
@@ -722,6 +712,15 @@ export const handleNodeEvent = async (
           handled: false,
           reason: "unmatched_exec_event",
         };
+      }
+      // Respect tools.exec.notifyOnExit setting (default: true)
+      // When false, skip system event notifications for node exec events.
+      const notifyOnExit = cfg.tools?.exec?.notifyOnExit !== false;
+      if (!notifyOnExit) {
+        return undefined;
+      }
+      if (obj.suppressNotifyOnExit === true) {
+        return undefined;
       }
       const command = sanitizeInboundSystemTags(normalizeOptionalString(obj.command) ?? "");
       const exitCode =

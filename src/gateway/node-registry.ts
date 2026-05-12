@@ -37,6 +37,12 @@ type PendingSystemRunEvent = {
   sessionKey: string;
 };
 
+type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
+  nodeId: string;
+  connId: string;
+  expiresAtMs: number;
+};
+
 type NodeInvokeResult = {
   ok: boolean;
   payload?: unknown;
@@ -45,6 +51,7 @@ type NodeInvokeResult = {
 };
 
 const SERIALIZED_EVENT_PAYLOAD = Symbol("openclaw.serializedEventPayload");
+const AUTHORIZED_SYSTEM_RUN_EVENT_TTL_MS = 60 * 60 * 1000;
 
 export type SerializedEventPayload = {
   readonly json: string;
@@ -94,6 +101,7 @@ export class NodeRegistry {
   private nodesById = new Map<string, NodeSession>();
   private nodesByConn = new Map<string, string>();
   private pendingInvokes = new Map<string, PendingInvoke>();
+  private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
 
   register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
     const connect = client.connect;
@@ -153,6 +161,11 @@ export class NodeRegistry {
       pending.reject(new Error(`node disconnected (${pending.command})`));
       this.pendingInvokes.delete(id);
     }
+    for (const [key, event] of this.authorizedSystemRunEvents) {
+      if (event.connId === connId) {
+        this.authorizedSystemRunEvents.delete(key);
+      }
+    }
     return unregistersCurrentNode ? nodeId : null;
   }
 
@@ -195,11 +208,18 @@ export class NodeRegistry {
         error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
       };
     }
-    const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 30_000;
     const systemRunEvent = resolvePendingSystemRunEvent({
       command: params.command,
       params: params.params,
     });
+    if (systemRunEvent) {
+      this.rememberAuthorizedSystemRunEvent({
+        nodeId: params.nodeId,
+        connId: node.connId,
+        ...systemRunEvent,
+      });
+    }
+    const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 30_000;
     return await new Promise<NodeInvokeResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingInvokes.delete(requestId);
@@ -220,28 +240,97 @@ export class NodeRegistry {
     });
   }
 
-  hasPendingSystemRunEvent(params: {
+  authorizeSystemRunEvent(params: {
     nodeId: string;
     connId?: string;
-    runId: string;
+    runId?: string;
     sessionKey: string;
+    terminal: boolean;
   }): boolean {
-    if (!params.connId || !params.runId || !params.sessionKey) {
+    if (!params.connId || !params.sessionKey) {
       return false;
     }
-    for (const pending of this.pendingInvokes.values()) {
-      const event = pending.systemRunEvent;
+    this.pruneAuthorizedSystemRunEvents();
+    const match = params.runId
+      ? this.matchAuthorizedSystemRunEvent({
+          nodeId: params.nodeId,
+          connId: params.connId,
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+        })
+      : this.matchSingleAuthorizedSystemRunEvent({
+          nodeId: params.nodeId,
+          connId: params.connId,
+          sessionKey: params.sessionKey,
+        });
+    if (!match) {
+      return false;
+    }
+    if (params.terminal) {
+      this.authorizedSystemRunEvents.delete(match.key);
+    }
+    return true;
+  }
+
+  private rememberAuthorizedSystemRunEvent(
+    event: Omit<AuthorizedSystemRunEvent, "expiresAtMs">,
+  ): void {
+    this.pruneAuthorizedSystemRunEvents();
+    const authorized: AuthorizedSystemRunEvent = {
+      ...event,
+      expiresAtMs: Date.now() + AUTHORIZED_SYSTEM_RUN_EVENT_TTL_MS,
+    };
+    this.authorizedSystemRunEvents.set(this.authorizedSystemRunEventKey(authorized), authorized);
+  }
+
+  private matchAuthorizedSystemRunEvent(params: {
+    nodeId: string;
+    connId: string;
+    runId: string;
+    sessionKey: string;
+  }): { key: string; event: AuthorizedSystemRunEvent } | null {
+    const key = this.authorizedSystemRunEventKey(params);
+    const event = this.authorizedSystemRunEvents.get(key);
+    return event ? { key, event } : null;
+  }
+
+  private matchSingleAuthorizedSystemRunEvent(params: {
+    nodeId: string;
+    connId: string;
+    sessionKey: string;
+  }): { key: string; event: AuthorizedSystemRunEvent } | null {
+    let match: { key: string; event: AuthorizedSystemRunEvent } | null = null;
+    for (const [key, event] of this.authorizedSystemRunEvents) {
       if (
-        pending.nodeId === params.nodeId &&
-        pending.connId === params.connId &&
-        event !== undefined &&
-        event.runId === params.runId &&
-        event.sessionKey === params.sessionKey
+        event.nodeId !== params.nodeId ||
+        event.connId !== params.connId ||
+        event.sessionKey !== params.sessionKey
       ) {
-        return true;
+        continue;
+      }
+      if (match) {
+        return null;
+      }
+      match = { key, event };
+    }
+    return match;
+  }
+
+  private pruneAuthorizedSystemRunEvents(now = Date.now()): void {
+    for (const [key, event] of this.authorizedSystemRunEvents) {
+      if (event.expiresAtMs <= now) {
+        this.authorizedSystemRunEvents.delete(key);
       }
     }
-    return false;
+  }
+
+  private authorizedSystemRunEventKey(params: {
+    nodeId: string;
+    connId: string;
+    runId: string;
+    sessionKey: string;
+  }): string {
+    return `${params.nodeId}\0${params.connId}\0${params.sessionKey}\0${params.runId}`;
   }
 
   handleInvokeResult(params: {

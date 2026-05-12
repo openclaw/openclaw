@@ -160,7 +160,7 @@ const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
 
 function buildCtx(
-  opts: { hasPendingNodeSystemRunEvent?: NodeEventContext["hasPendingNodeSystemRunEvent"] } = {},
+  opts: { authorizeNodeSystemRunEvent?: NodeEventContext["authorizeNodeSystemRunEvent"] } = {},
 ): NodeEventContext {
   return {
     deps: {} as CliDeps,
@@ -180,13 +180,13 @@ function buildCtx(
     getHealthCache: () => null,
     refreshHealthSnapshot: async () => ({}) as HealthSummary,
     loadGatewayModelCatalog: async () => [],
-    hasPendingNodeSystemRunEvent: opts.hasPendingNodeSystemRunEvent ?? (() => false),
+    authorizeNodeSystemRunEvent: opts.authorizeNodeSystemRunEvent ?? (() => false),
     logGateway: { warn: () => {} },
   };
 }
 
 function buildExecCtx() {
-  return buildCtx({ hasPendingNodeSystemRunEvent: () => true });
+  return buildCtx({ authorizeNodeSystemRunEvent: () => true });
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
@@ -302,6 +302,40 @@ describe("node exec events", () => {
       { sessionKey: "node-node-2", contextKey: "exec:run-2", trusted: false },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({ reason: "exec-event" });
+  });
+
+  it("accepts legacy exec.finished events when authorization matches without runId", async () => {
+    const authorizeNodeSystemRunEvent = vi.fn(() => true);
+    const ctx = buildCtx({ authorizeNodeSystemRunEvent });
+    await handleNodeEvent(
+      ctx,
+      "node-2",
+      {
+        event: "exec.finished",
+        payloadJSON: JSON.stringify({
+          sessionKey: "agent:main:main",
+          exitCode: 0,
+          timedOut: false,
+          output: "done",
+        }),
+      },
+      { connId: "conn-1" },
+    );
+
+    expect(authorizeNodeSystemRunEvent).toHaveBeenCalledWith({
+      nodeId: "node-2",
+      connId: "conn-1",
+      sessionKey: "agent:main:main",
+      terminal: true,
+    });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2, code 0)\ndone",
+      { sessionKey: "agent:main:main", contextKey: "exec", trusted: false },
+    );
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
   });
 
   it("dedupes duplicate exec.finished events for the same runId on the same session", async () => {
