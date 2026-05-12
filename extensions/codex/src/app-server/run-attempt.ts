@@ -38,7 +38,7 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -73,7 +73,11 @@ import {
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./config.js";
-import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
+import {
+  projectContextEngineAssemblyForCodex,
+  resolveCodexContextEngineProjectionMaxChars,
+  resolveCodexContextEngineProjectionReserveTokens,
+} from "./context-engine-projection.js";
 import { filterCodexDynamicTools, normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -99,6 +103,7 @@ import {
   type CodexDynamicToolSpec,
   type CodexDynamicToolCallParams,
   type CodexDynamicToolCallResponse,
+  type CodexThreadItem,
   type CodexTurnStartResponse,
   type JsonObject,
   type JsonValue,
@@ -106,6 +111,7 @@ import {
 import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
 import {
   formatCodexUsageLimitErrorMessage,
+  resolveCodexUsageLimitResetAtMs,
   shouldRefreshCodexRateLimitsForUsageLimitMessage,
 } from "./rate-limits.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
@@ -139,8 +145,10 @@ const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
+const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
 const CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS = 5_000;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
+const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
@@ -427,6 +435,19 @@ function resolveCodexPluginAppCacheCodexHome(
   return appServer.start.transport === "stdio" ? resolveCodexAppServerHomeDir(agentDir) : undefined;
 }
 
+function restrictCodexAppServerSandboxForOpenClawSandbox(
+  appServer: CodexAppServerRuntimeOptions,
+  sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>,
+): CodexAppServerRuntimeOptions {
+  if (!sandbox?.enabled || appServer.sandbox !== "danger-full-access") {
+    return appServer;
+  }
+  return {
+    ...appServer,
+    sandbox: "workspace-write",
+  };
+}
+
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -440,18 +461,14 @@ export async function runCodexAppServerAttempt(
       hookTimeoutSec?: number;
     };
     turnCompletionIdleTimeoutMs?: number;
+    turnAssistantCompletionIdleTimeoutMs?: number;
     turnTerminalIdleTimeoutMs?: number;
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
   const attemptClientFactory = resolveCodexAppServerClientFactory();
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
-  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-  let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
-  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
-    configuredEvents: options.nativeHookRelay?.events,
-    appServer,
-  });
+  const configuredAppServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =
@@ -467,6 +484,12 @@ export async function runCodexAppServerAttempt(
       : sandbox.workspaceDir
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
+  const appServer = restrictCodexAppServerSandboxForOpenClawSandbox(configuredAppServer, sandbox);
+  let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
+  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
+    configuredEvents: options.nativeHookRelay?.events,
+    appServer,
+  });
 
   const runAbortController = new AbortController();
   const abortFromUpstream = () => {
@@ -617,6 +640,12 @@ export async function runCodexAppServerAttempt(
         originalHistoryMessages: historyMessages,
         prompt: params.prompt,
         systemPromptAddition: assembled.systemPromptAddition,
+        maxRenderedContextChars: resolveCodexContextEngineProjectionMaxChars({
+          contextTokenBudget: params.contextTokenBudget,
+          reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
+            config: params.config,
+          }),
+        }),
       });
       promptText = projection.promptText;
       developerInstructions = joinPresentSections(
@@ -875,18 +904,26 @@ export async function runCodexAppServerAttempt(
   const turnCompletionIdleTimeoutMs = resolveCodexTurnCompletionIdleTimeoutMs(
     options.turnCompletionIdleTimeoutMs ?? appServer.turnCompletionIdleTimeoutMs,
   );
+  const turnAssistantCompletionIdleTimeoutMs = resolveCodexTurnAssistantCompletionIdleTimeoutMs(
+    options.turnAssistantCompletionIdleTimeoutMs,
+  );
   const turnTerminalIdleTimeoutMs = resolveCodexTurnTerminalIdleTimeoutMs(
     options.turnTerminalIdleTimeoutMs,
   );
   let turnCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnCompletionIdleWatchArmed = false;
   let turnCompletionIdleWatchPinnedByTerminalError = false;
+  let turnAssistantCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
+  let turnAssistantCompletionIdleWatchArmed = false;
+  let turnAssistantCompletionLastActivityAt = Date.now();
+  let turnAssistantCompletionLastActivityDetails: Record<string, unknown> | undefined;
   let turnTerminalIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnTerminalIdleWatchArmed = false;
   let turnCompletionLastActivityAt = Date.now();
   let turnCompletionLastActivityReason = "startup";
   let turnCompletionLastActivityDetails: Record<string, unknown> | undefined;
   let activeAppServerTurnRequests = 0;
+  const activeTurnItemIds = new Set<string>();
 
   const clearTurnCompletionIdleTimer = () => {
     if (turnCompletionIdleTimer) {
@@ -900,6 +937,57 @@ export async function runCodexAppServerAttempt(
       clearTimeout(turnTerminalIdleTimer);
       turnTerminalIdleTimer = undefined;
     }
+  };
+
+  const clearTurnAssistantCompletionIdleTimer = () => {
+    if (turnAssistantCompletionIdleTimer) {
+      clearTimeout(turnAssistantCompletionIdleTimer);
+      turnAssistantCompletionIdleTimer = undefined;
+    }
+  };
+
+  const fireTurnAssistantCompletionIdleRelease = () => {
+    if (completed || runAbortController.signal.aborted || !turnAssistantCompletionIdleWatchArmed) {
+      return;
+    }
+    if (activeAppServerTurnRequests > 0 || activeTurnItemIds.size > 0) {
+      scheduleTurnAssistantCompletionIdleWatch();
+      return;
+    }
+    const idleMs = Math.max(0, Date.now() - turnAssistantCompletionLastActivityAt);
+    if (idleMs < turnAssistantCompletionIdleTimeoutMs) {
+      scheduleTurnAssistantCompletionIdleWatch();
+      return;
+    }
+    turnAssistantCompletionIdleWatchArmed = false;
+    clearTurnCompletionIdleTimer();
+    clearTurnTerminalIdleTimer();
+    trajectoryRecorder?.recordEvent("turn.assistant_completion_idle_release", {
+      threadId: thread.threadId,
+      turnId,
+      idleMs,
+      timeoutMs: turnAssistantCompletionIdleTimeoutMs,
+      ...turnAssistantCompletionLastActivityDetails,
+    });
+    embeddedAgentLog.warn(
+      "codex app-server turn released after completed assistant item without terminal event",
+      {
+        threadId: thread.threadId,
+        turnId,
+        idleMs,
+        timeoutMs: turnAssistantCompletionIdleTimeoutMs,
+        ...turnAssistantCompletionLastActivityDetails,
+      },
+    );
+    if (turnId) {
+      interruptCodexTurnBestEffort(client, {
+        threadId: thread.threadId,
+        turnId,
+        timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+      });
+    }
+    completed = true;
+    resolveCompletion?.();
   };
 
   const fireTurnCompletionIdleTimeout = () => {
@@ -994,6 +1082,17 @@ export async function runCodexAppServerAttempt(
     turnCompletionIdleTimer.unref?.();
   }
 
+  function scheduleTurnAssistantCompletionIdleWatch() {
+    clearTurnAssistantCompletionIdleTimer();
+    if (completed || runAbortController.signal.aborted || !turnAssistantCompletionIdleWatchArmed) {
+      return;
+    }
+    const elapsedMs = Math.max(0, Date.now() - turnAssistantCompletionLastActivityAt);
+    const delayMs = Math.max(1, turnAssistantCompletionIdleTimeoutMs - elapsedMs);
+    turnAssistantCompletionIdleTimer = setTimeout(fireTurnAssistantCompletionIdleRelease, delayMs);
+    turnAssistantCompletionIdleTimer.unref?.();
+  }
+
   function scheduleTurnTerminalIdleWatch() {
     clearTurnTerminalIdleTimer();
     if (
@@ -1038,6 +1137,19 @@ export async function runCodexAppServerAttempt(
     clearTurnCompletionIdleTimer();
   };
 
+  const disarmTurnAssistantCompletionIdleWatch = () => {
+    turnAssistantCompletionIdleWatchArmed = false;
+    turnAssistantCompletionLastActivityDetails = undefined;
+    clearTurnAssistantCompletionIdleTimer();
+  };
+
+  const armTurnAssistantCompletionIdleWatch = (details?: Record<string, unknown>) => {
+    turnAssistantCompletionIdleWatchArmed = true;
+    turnAssistantCompletionLastActivityAt = Date.now();
+    turnAssistantCompletionLastActivityDetails = details;
+    scheduleTurnAssistantCompletionIdleWatch();
+  };
+
   const armTurnCompletionIdleWatch = (options?: { pinnedByTerminalError?: boolean }) => {
     turnCompletionIdleWatchArmed = true;
     turnCompletionIdleWatchPinnedByTerminalError = options?.pinnedByTerminalError === true;
@@ -1067,6 +1179,46 @@ export async function runCodexAppServerAttempt(
     lifecycleTerminalEmitted = true;
   };
 
+  const executionPhaseKeys = new Set<string>();
+  const emitExecutionPhaseOnce = (
+    key: string,
+    info: Parameters<NonNullable<EmbeddedRunAttemptParams["onExecutionPhase"]>>[0],
+  ) => {
+    if (executionPhaseKeys.has(key)) {
+      return;
+    }
+    executionPhaseKeys.add(key);
+    params.onExecutionPhase?.({
+      provider: params.provider,
+      model: params.modelId,
+      backend: "codex-app-server",
+      ...info,
+    });
+  };
+  const reportCodexExecutionNotification = (notification: CodexServerNotification) => {
+    if (notification.method === "turn/started") {
+      emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
+      return;
+    }
+    if (notification.method === "item/agentMessage/delta") {
+      emitExecutionPhaseOnce("assistant_output_started", { phase: "assistant_output_started" });
+      return;
+    }
+    if (notification.method !== "item/started") {
+      return;
+    }
+    const item = readCodexNotificationItem(notification.params);
+    const tool = item ? codexExecutionToolName(item) : undefined;
+    if (!item || !tool) {
+      return;
+    }
+    emitExecutionPhaseOnce(`tool:${item.id}`, {
+      phase: "tool_execution_started",
+      tool,
+      itemId: item.id,
+    });
+  };
+
   const handleNotification = async (notification: CodexServerNotification) => {
     userInputBridge?.handleNotification(notification);
     if (!projector || !turnId) {
@@ -1078,18 +1230,41 @@ export async function runCodexAppServerAttempt(
       thread.threadId,
       turnId,
     );
+    const isTurnCompletion = notification.method === "turn/completed" && isCurrentTurnNotification;
     if (isCurrentTurnNotification) {
       touchTurnCompletionActivity(`notification:${notification.method}`, {
         details: describeNotificationActivity(notification),
       });
+      reportCodexExecutionNotification(notification);
     }
+    if (isCurrentTurnNotification) {
+      updateActiveTurnItemIds(notification, activeTurnItemIds);
+    }
+    const unblockedAssistantCompletionRelease =
+      isCurrentTurnNotification &&
+      turnAssistantCompletionIdleWatchArmed &&
+      notification.method === "item/completed" &&
+      activeTurnItemIds.size === 0;
     if (isCurrentTurnNotification && notification.method === "error") {
       if (isRetryableErrorNotification(notification.params)) {
         disarmTurnCompletionIdleWatch();
       } else {
         armTurnCompletionIdleWatch({ pinnedByTerminalError: true });
       }
+      disarmTurnAssistantCompletionIdleWatch();
+    } else if (isTurnCompletion) {
+      disarmTurnAssistantCompletionIdleWatch();
+    } else if (isCurrentTurnNotification && isCompletedAssistantNotification(notification)) {
+      armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
+    } else if (unblockedAssistantCompletionRelease) {
+      armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
     } else if (
+      isCurrentTurnNotification &&
+      shouldDisarmAssistantCompletionIdleWatch(notification)
+    ) {
+      disarmTurnAssistantCompletionIdleWatch();
+    }
+    if (
       turnCompletionIdleWatchArmed &&
       !turnCompletionIdleWatchPinnedByTerminalError &&
       notification.method !== "turn/completed" &&
@@ -1104,7 +1279,10 @@ export async function runCodexAppServerAttempt(
     // Determine terminal-turn status before invoking the projector so a throw
     // inside projector.handleNotification still releases the session lane.
     // See openclaw/openclaw#67996.
-    const isTurnCompletion = notification.method === "turn/completed" && isCurrentTurnNotification;
+    const isTurnAbortMarker =
+      isCurrentTurnNotification &&
+      isCodexTurnAbortMarkerNotification(notification, { currentPromptText: promptBuild.prompt });
+    const isTurnTerminal = isTurnCompletion || isTurnAbortMarker;
     try {
       await projector.handleNotification(notification);
     } catch (error) {
@@ -1113,12 +1291,16 @@ export async function runCodexAppServerAttempt(
         error,
       });
     } finally {
-      if (isTurnCompletion) {
+      if (isTurnTerminal) {
+        if (isTurnAbortMarker) {
+          projector.markAborted();
+        }
         if (!timedOut && !runAbortController.signal.aborted) {
           await steeringQueue?.flushPending();
         }
         completed = true;
         clearTurnCompletionIdleTimer();
+        clearTurnAssistantCompletionIdleTimer();
         clearTurnTerminalIdleTimer();
         resolveCompletion?.();
       }
@@ -1136,6 +1318,7 @@ export async function runCodexAppServerAttempt(
   const requestCleanup = client.addRequestHandler(async (request) => {
     activeAppServerTurnRequests += 1;
     clearTurnCompletionIdleTimer();
+    disarmTurnAssistantCompletionIdleWatch();
     touchTurnCompletionActivity(`request:${request.method}`);
     let armCompletionWatchOnResponse = false;
     try {
@@ -1197,6 +1380,11 @@ export async function runCodexAppServerAttempt(
         callId: call.callId,
         tool: call.tool,
         arguments: call.arguments,
+      });
+      emitExecutionPhaseOnce(`tool:${call.callId}`, {
+        phase: "tool_execution_started",
+        tool: call.tool,
+        toolCallId: call.callId,
       });
       const toolProgressDetailMode = resolveCodexToolProgressDetailMode(params.toolProgressDetail);
       const toolMeta = inferCodexDynamicToolMeta(call, toolProgressDetailMode);
@@ -1277,8 +1465,9 @@ export async function runCodexAppServerAttempt(
   const turnStartFailureMessages = [
     ...historyMessages,
     {
-      role: "user",
-      content: [{ type: "text", text: promptBuild.prompt }],
+      role: "user" as const,
+      content: promptBuild.prompt,
+      timestamp: Date.now(),
     },
   ];
 
@@ -1312,7 +1501,7 @@ export async function runCodexAppServerAttempt(
       timeoutMs: appServer.requestTimeoutMs,
       signal: runAbortController.signal,
     });
-    const turnStartErrorMessage = usageLimitError ?? formatErrorMessage(error);
+    const turnStartErrorMessage = usageLimitError?.message ?? formatErrorMessage(error);
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "turn_start_failed", error: turnStartErrorMessage },
@@ -1363,14 +1552,23 @@ export async function runCodexAppServerAttempt(
     });
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     if (usageLimitError) {
-      throw new Error(usageLimitError, {
-        cause: error,
+      await markCodexAuthProfileBlockedFromRateLimits({
+        params,
+        authProfileId: startupAuthProfileId,
+        rateLimits: usageLimitError.rateLimitsForProfile,
+      });
+      return buildCodexTurnStartFailureResult({
+        params,
+        message: usageLimitError.message,
+        messagesSnapshot: turnStartFailureMessages,
+        systemPromptReport,
       });
     }
     throw error;
   }
   turnId = turn.turn.id;
   const activeTurnId = turn.turn.id;
+  emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
   userInputBridge = createCodexUserInputBridge({
     paramsForRun: params,
     threadId: thread.threadId,
@@ -1383,7 +1581,10 @@ export async function runCodexAppServerAttempt(
     prompt: promptBuild.prompt,
     imagesCount: params.images?.length ?? 0,
   });
-  projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId);
+  projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId, {
+    nativePostToolUseRelayEnabled:
+      nativeHookRelay?.allowedEvents.includes("post_tool_use") === true,
+  });
   emitLifecycleStart();
   const activeProjector = projector;
   for (const notification of pendingNotifications.splice(0)) {
@@ -1431,10 +1632,19 @@ export async function runCodexAppServerAttempt(
   );
 
   const abortListener = () => {
+    const shouldRetireClient = timedOut;
     interruptCodexTurnBestEffort(client, {
       threadId: thread.threadId,
       turnId: activeTurnId,
+      timeoutMs: shouldRetireClient ? CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS : undefined,
     });
+    if (shouldRetireClient) {
+      retireCodexAppServerClientAfterTimedOutTurn(client, {
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+        reason: String(runAbortController.signal.reason ?? "timeout"),
+      });
+    }
     resolveCompletion?.();
   };
   runAbortController.signal.addEventListener("abort", abortListener, { once: true });
@@ -1604,6 +1814,7 @@ export async function runCodexAppServerAttempt(
     userInputBridge?.cancelPending();
     clearTimeout(timeout);
     clearTurnCompletionIdleTimer();
+    clearTurnAssistantCompletionIdleTimer();
     clearTurnTerminalIdleTimer();
     notificationCleanup();
     requestCleanup();
@@ -1613,6 +1824,75 @@ export async function runCodexAppServerAttempt(
     steeringQueue?.cancel();
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   }
+}
+
+async function markCodexAuthProfileBlockedFromRateLimits(params: {
+  params: EmbeddedRunAttemptParams;
+  authProfileId?: string;
+  rateLimits?: JsonValue;
+}): Promise<void> {
+  const authProfileId = params.authProfileId?.trim();
+  if (!authProfileId || !params.params.authProfileStore) {
+    return;
+  }
+  const blockedUntil = resolveCodexUsageLimitResetAtMs(params.rateLimits);
+  if (!blockedUntil) {
+    return;
+  }
+  try {
+    await markAuthProfileBlockedUntil({
+      store: params.params.authProfileStore,
+      profileId: authProfileId,
+      blockedUntil,
+      source: "codex_rate_limits",
+      agentDir: params.params.agentDir,
+      runId: params.params.runId,
+      modelId: params.params.modelId,
+    });
+  } catch (error) {
+    embeddedAgentLog.debug("failed to mark Codex auth profile blocked from app-server limits", {
+      authProfileId,
+      error: formatErrorMessage(error),
+    });
+  }
+}
+
+function buildCodexTurnStartFailureResult(params: {
+  params: EmbeddedRunAttemptParams;
+  message: string;
+  messagesSnapshot: AgentMessage[];
+  systemPromptReport: ReturnType<typeof buildCodexSystemPromptReport>;
+}): EmbeddedRunAttemptResult {
+  return {
+    aborted: false,
+    externalAbort: false,
+    timedOut: false,
+    idleTimedOut: false,
+    timedOutDuringCompaction: false,
+    timedOutDuringToolExecution: false,
+    promptError: params.message,
+    promptErrorSource: "prompt",
+    sessionIdUsed: params.params.sessionId,
+    messagesSnapshot: params.messagesSnapshot,
+    assistantTexts: [],
+    toolMetas: [],
+    lastAssistant: undefined,
+    didSendViaMessagingTool: false,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
+    cloudCodeAssistFormatError: false,
+    replayMetadata: {
+      hadPotentialSideEffects: false,
+      replaySafe: true,
+    },
+    itemLifecycle: {
+      startedCount: 0,
+      completedCount: 0,
+      activeCount: 0,
+    },
+    systemPromptReport: params.systemPromptReport,
+  };
 }
 
 async function handleDynamicToolCallWithTimeout(params: {
@@ -1840,13 +2120,47 @@ function interruptCodexTurnBestEffort(
   params: {
     threadId: string;
     turnId: string;
+    timeoutMs?: number;
   },
 ): void {
-  void Promise.resolve()
-    .then(() => client.request("turn/interrupt", params))
-    .catch((error: unknown) => {
+  const requestOptions =
+    params.timeoutMs && Number.isFinite(params.timeoutMs) && params.timeoutMs > 0
+      ? { timeoutMs: params.timeoutMs }
+      : undefined;
+  const requestParams = { threadId: params.threadId, turnId: params.turnId };
+  try {
+    const interrupt = requestOptions
+      ? client.request("turn/interrupt", requestParams, requestOptions)
+      : client.request("turn/interrupt", requestParams);
+    void Promise.resolve(interrupt).catch((error: unknown) => {
       embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
     });
+  } catch (error) {
+    embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
+  }
+}
+
+function retireCodexAppServerClientAfterTimedOutTurn(
+  client: CodexAppServerClient,
+  params: {
+    threadId: string;
+    turnId: string;
+    reason: string;
+  },
+): void {
+  const clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(client);
+  if (!clearedSharedClient) {
+    const close = (client as { close?: () => void }).close;
+    if (typeof close === "function") {
+      close.call(client);
+    }
+  }
+  embeddedAgentLog.warn("codex app-server client retired after timed-out turn", {
+    threadId: params.threadId,
+    turnId: params.turnId,
+    reason: params.reason,
+    clearedSharedClient,
+  });
 }
 
 type DynamicToolBuildParams = {
@@ -2060,6 +2374,16 @@ function resolveCodexTurnCompletionIdleTimeoutMs(value: number | undefined): num
   return Math.max(1, Math.floor(value));
 }
 
+function resolveCodexTurnAssistantCompletionIdleTimeoutMs(value: number | undefined): number {
+  if (value === undefined) {
+    return CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS;
+  }
+  if (!Number.isFinite(value)) {
+    return CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
 function resolveCodexTurnTerminalIdleTimeoutMs(value: number | undefined): number {
   if (value === undefined) {
     return CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
@@ -2080,6 +2404,12 @@ type CodexUsageLimitErrorSource = {
   message?: string | null;
   codexErrorInfo?: JsonValue | null;
   rateLimits?: JsonValue;
+  rateLimitsTrustedForProfile?: boolean;
+};
+
+type CodexUsageLimitErrorResult = {
+  message: string;
+  rateLimitsForProfile?: JsonValue;
 };
 
 async function formatCodexTurnStartUsageLimitError(params: {
@@ -2088,8 +2418,8 @@ async function formatCodexTurnStartUsageLimitError(params: {
   pendingNotifications: CodexServerNotification[];
   timeoutMs?: number;
   signal?: AbortSignal;
-}): Promise<string | undefined> {
-  return refreshCodexUsageLimitErrorMessage({
+}): Promise<CodexUsageLimitErrorResult | undefined> {
+  return refreshCodexUsageLimitError({
     client: params.client,
     source: readCodexTurnStartUsageLimitErrorSource(params.error, params.pendingNotifications),
     timeoutMs: params.timeoutMs,
@@ -2103,9 +2433,32 @@ async function refreshCodexUsageLimitErrorMessage(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<string | undefined> {
+  return (
+    await refreshCodexUsageLimitError({
+      client: params.client,
+      source: params.source,
+      timeoutMs: params.timeoutMs,
+      signal: params.signal,
+    })
+  )?.message;
+}
+
+async function refreshCodexUsageLimitError(params: {
+  client: CodexAppServerClient;
+  source: CodexUsageLimitErrorSource;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<CodexUsageLimitErrorResult | undefined> {
   const initialMessage = formatCodexUsageLimitErrorMessage(params.source);
   if (!shouldRefreshCodexRateLimitsForUsageLimitMessage(initialMessage)) {
-    return initialMessage ?? undefined;
+    return initialMessage
+      ? {
+          message: initialMessage,
+          ...(params.source.rateLimitsTrustedForProfile
+            ? { rateLimitsForProfile: params.source.rateLimits }
+            : {}),
+        }
+      : undefined;
   }
   const rateLimits = await readCodexRateLimitsFromAppServerForUsageLimitError({
     client: params.client,
@@ -2113,14 +2466,22 @@ async function refreshCodexUsageLimitErrorMessage(params: {
     signal: params.signal,
   });
   if (!rateLimits) {
-    return initialMessage;
+    return initialMessage
+      ? {
+          message: initialMessage,
+          ...(params.source.rateLimitsTrustedForProfile
+            ? { rateLimitsForProfile: params.source.rateLimits }
+            : {}),
+        }
+      : undefined;
   }
   const refreshedMessage = formatCodexUsageLimitErrorMessage({
     message: params.source.message,
     codexErrorInfo: params.source.codexErrorInfo,
     rateLimits,
   });
-  return refreshedMessage ?? initialMessage;
+  const message = refreshedMessage ?? initialMessage;
+  return message ? { message, rateLimitsForProfile: rateLimits } : undefined;
 }
 
 async function readCodexRateLimitsFromAppServerForUsageLimitError(params: {
@@ -2158,14 +2519,16 @@ function readCodexTurnStartUsageLimitErrorSource(
   pendingNotifications: CodexServerNotification[],
 ): CodexUsageLimitErrorSource {
   const notificationError = readLatestCodexErrorNotification(pendingNotifications);
+  const notificationRateLimits = readLatestRateLimitNotificationPayload(pendingNotifications);
   const errorPayload = readCodexErrorPayload(error);
+  const rateLimits =
+    notificationRateLimits ?? errorPayload.rateLimits ?? readRecentCodexRateLimits();
   return {
     message: notificationError?.message ?? errorPayload.message ?? formatErrorMessage(error),
     codexErrorInfo: notificationError?.codexErrorInfo ?? errorPayload.codexErrorInfo,
-    rateLimits:
-      readLatestRateLimitNotificationPayload(pendingNotifications) ??
-      errorPayload.rateLimits ??
-      readRecentCodexRateLimits(),
+    rateLimits,
+    rateLimitsTrustedForProfile:
+      notificationRateLimits !== undefined || errorPayload.rateLimits !== undefined,
   };
 }
 
@@ -2216,10 +2579,14 @@ function readCodexErrorPayload(error: unknown): {
     return { message };
   }
   const nestedError = isJsonObject(data.error) ? data.error : data;
+  const rateLimits = nestedError.rateLimits ?? data.rateLimits;
+  if (rateLimits !== undefined) {
+    rememberCodexRateLimits(rateLimits);
+  }
   return {
     message: readString(nestedError, "message") ?? message,
     codexErrorInfo: nestedError.codexErrorInfo,
-    rateLimits: nestedError.rateLimits ?? data.rateLimits,
+    rateLimits,
   };
 }
 
@@ -2243,6 +2610,64 @@ function describeNotificationActivity(
     lastNotificationItemRole: readString(item, "role"),
     lastAssistantTextPreview: readRawAssistantTextPreview(item),
   };
+}
+
+function updateActiveTurnItemIds(
+  notification: CodexServerNotification,
+  activeItemIds: Set<string>,
+): void {
+  if (notification.method !== "item/started" && notification.method !== "item/completed") {
+    return;
+  }
+  const itemId = readNotificationItemId(notification);
+  if (!itemId) {
+    return;
+  }
+  if (notification.method === "item/started") {
+    activeItemIds.add(itemId);
+    return;
+  }
+  activeItemIds.delete(itemId);
+}
+
+function isCompletedAssistantNotification(notification: CodexServerNotification): boolean {
+  if (!isJsonObject(notification.params)) {
+    return false;
+  }
+  if (notification.method !== "item/completed") {
+    return false;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  return Boolean(
+    item &&
+    readString(item, "type") === "agentMessage" &&
+    readString(item, "phase") !== "commentary",
+  );
+}
+
+function shouldDisarmAssistantCompletionIdleWatch(notification: CodexServerNotification): boolean {
+  if (!isJsonObject(notification.params)) {
+    return false;
+  }
+  if (notification.method === "item/started") {
+    return true;
+  }
+  if (notification.method === "item/agentMessage/delta") {
+    return true;
+  }
+  return false;
+}
+
+function readNotificationItemId(notification: CodexServerNotification): string | undefined {
+  if (!isJsonObject(notification.params)) {
+    return undefined;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  return (
+    (item ? readString(item, "id") : undefined) ??
+    readString(notification.params, "itemId") ??
+    readString(notification.params, "id")
+  );
 }
 
 function readRawAssistantTextPreview(item: JsonObject): string | undefined {
@@ -2294,6 +2719,68 @@ function readNotificationTurnId(record: JsonObject): string | undefined {
 function readNestedTurnId(record: JsonObject): string | undefined {
   const turn = record.turn;
   return isJsonObject(turn) ? readString(turn, "id") : undefined;
+}
+
+const CODEX_TURN_ABORT_MARKER_START = "<turn_aborted>";
+const CODEX_TURN_ABORT_MARKER_END = "</turn_aborted>";
+const CODEX_INTERRUPTED_USER_GUIDANCE =
+  "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
+const CODEX_INTERRUPTED_DEVELOPER_GUIDANCE =
+  "The previous turn was interrupted on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
+
+function isCodexTurnAbortMarkerNotification(
+  notification: CodexServerNotification,
+  options: { currentPromptText?: string } = {},
+): boolean {
+  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
+    return false;
+  }
+  const item = notification.params.item;
+  const role = isJsonObject(item) ? readString(item, "role") : undefined;
+  if (!isJsonObject(item) || (role !== "user" && role !== "developer")) {
+    return false;
+  }
+  const text = extractRawResponseItemText(item).trim();
+  if (role === "user" && text === options.currentPromptText?.trim()) {
+    return false;
+  }
+  const markerBody = readCodexTurnAbortMarkerBody(text);
+  return (
+    markerBody === CODEX_INTERRUPTED_USER_GUIDANCE ||
+    markerBody === CODEX_INTERRUPTED_DEVELOPER_GUIDANCE
+  );
+}
+
+function readCodexTurnAbortMarkerBody(text: string): string | undefined {
+  if (
+    !text.startsWith(CODEX_TURN_ABORT_MARKER_START) ||
+    !text.endsWith(CODEX_TURN_ABORT_MARKER_END)
+  ) {
+    return undefined;
+  }
+  return text
+    .slice(CODEX_TURN_ABORT_MARKER_START.length, -CODEX_TURN_ABORT_MARKER_END.length)
+    .trim();
+}
+
+function extractRawResponseItemText(item: JsonObject): string {
+  const content = item.content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .flatMap((entry) => {
+      if (!isJsonObject(entry)) {
+        return [];
+      }
+      const type = readString(entry, "type");
+      if (type !== "input_text" && type !== "text") {
+        return [];
+      }
+      const text = readString(entry, "text");
+      return text ? [text] : [];
+    })
+    .join("");
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
@@ -2595,6 +3082,36 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function readCodexNotificationItem(params: JsonValue | undefined): CodexThreadItem | undefined {
+  if (!isJsonObject(params) || !isJsonObject(params.item)) {
+    return undefined;
+  }
+  const item = params.item;
+  return typeof item.id === "string" && typeof item.type === "string"
+    ? (item as CodexThreadItem)
+    : undefined;
+}
+
+function codexExecutionToolName(item: CodexThreadItem): string | undefined {
+  if (item.type === "dynamicToolCall" && typeof item.tool === "string") {
+    return item.tool;
+  }
+  if (item.type === "mcpToolCall" && typeof item.tool === "string") {
+    const server = typeof item.server === "string" && item.server ? item.server : undefined;
+    return server ? `${server}.${item.tool}` : item.tool;
+  }
+  if (item.type === "commandExecution") {
+    return "bash";
+  }
+  if (item.type === "fileChange") {
+    return "apply_patch";
+  }
+  if (item.type === "webSearch") {
+    return "web_search";
+  }
+  return undefined;
+}
+
 function joinPresentSections(...sections: Array<string | undefined>): string {
   return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
@@ -2639,6 +3156,7 @@ export const __testing = {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
   resolveCodexPluginAppCacheEndpoint,
+  restrictCodexAppServerSandboxForOpenClawSandbox,
   resolveOpenClawCodingToolsSessionKeys,
   shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {

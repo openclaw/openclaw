@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
+import "../test-support/browser-security.mock.js";
 import {
   type AriaSnapshotNode,
   captureScreenshot,
@@ -143,7 +144,7 @@ describe("cdp internal", () => {
           return;
         }
         if (msg.method === "Page.captureScreenshot") {
-          expect(msg.params).toMatchObject({ format: "png" });
+          expect(msg.params?.format).toBe("png");
           expect(msg.params).not.toHaveProperty("captureBeyondViewport");
           socket.send(
             JSON.stringify({

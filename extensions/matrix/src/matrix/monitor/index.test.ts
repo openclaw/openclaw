@@ -5,6 +5,7 @@ import type { MatrixRoomInfo } from "./room-info.js";
 
 type DirectRoomTrackerOptions = {
   canPromoteRecentInvite?: (roomId: string) => boolean | Promise<boolean>;
+  canPromoteUnmappedStrictRoom?: (roomId: string) => boolean | Promise<boolean>;
   shouldKeepLocallyPromotedDirectRoom?:
     | ((roomId: string) => boolean | undefined | Promise<boolean | undefined>)
     | undefined;
@@ -811,7 +812,9 @@ describe("monitorMatrixProvider", () => {
     await startMonitorAndAbortAfterStartup();
 
     const textLimitCall = hoisted.resolveTextChunkLimit.mock.calls[0];
-    expect(textLimitCall?.[0]).toBeDefined();
+    if (textLimitCall?.[0] === undefined) {
+      throw new Error("Expected Matrix text chunk limit config argument");
+    }
     expect(textLimitCall?.[1]).toBe("matrix");
     expect(textLimitCall?.[2]).toBe("default");
   });
@@ -979,6 +982,40 @@ describe("monitorMatrixProvider", () => {
     });
 
     await expect(trackerOpts.canPromoteRecentInvite("!room:example.org")).resolves.toBe(false);
+  });
+
+  it("does not wire unmapped strict room promotion for per-user DM scope", async () => {
+    await startMonitorAndAbortAfterStartup();
+
+    const trackerOpts = hoisted.createDirectRoomTracker.mock.calls[0]?.[1];
+
+    expect(trackerOpts?.canPromoteUnmappedStrictRoom).toBeUndefined();
+  });
+
+  it("wires per-room unmapped strict room promotion through the room metadata gate", async () => {
+    hoisted.accountConfig.dm = { sessionScope: "per-room" };
+
+    await startMonitorAndAbortAfterStartup();
+
+    const trackerOpts = hoisted.createDirectRoomTracker.mock.calls[0]?.[1];
+    if (!trackerOpts?.canPromoteUnmappedStrictRoom) {
+      throw new Error("per-room strict fallback callback was not wired");
+    }
+
+    hoisted.getRoomInfo.mockResolvedValueOnce({
+      altAliases: [],
+      nameResolved: true,
+      aliasesResolved: true,
+    });
+    await expect(trackerOpts.canPromoteUnmappedStrictRoom("!dm:example.org")).resolves.toBe(true);
+
+    hoisted.getRoomInfo.mockResolvedValueOnce({
+      name: "Ops Room",
+      altAliases: [],
+      nameResolved: true,
+      aliasesResolved: true,
+    });
+    await expect(trackerOpts.canPromoteUnmappedStrictRoom("!ops:example.org")).resolves.toBe(false);
   });
 
   it("treats unresolved room metadata as indeterminate for local promotion revalidation", async () => {

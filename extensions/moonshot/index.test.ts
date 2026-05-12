@@ -34,8 +34,9 @@ describe("moonshot provider plugin", () => {
       modelId: "kimi-k2.6",
     } as never);
 
-    expect(policy).toMatchObject({
+    expect(policy).toEqual({
       applyAssistantFirstOrderingFix: true,
+      dropReasoningFromHistory: true,
       validateGeminiTurns: true,
       validateAnthropicTurns: true,
     });
@@ -64,7 +65,7 @@ describe("moonshot provider plugin", () => {
       {},
     );
 
-    expect(capturedStream.getCapturedPayload()).toMatchObject({
+    expect(capturedStream.getCapturedPayload()).toEqual({
       config: { thinkingConfig: { thinkingBudget: -1 } },
       thinking: { type: "disabled" },
     });

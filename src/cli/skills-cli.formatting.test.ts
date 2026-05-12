@@ -55,7 +55,7 @@ describe("skills-cli (e2e)", () => {
       entries,
     });
 
-    expect(report.skills.length).toBeGreaterThan(0);
+    expect(report.skills).toHaveLength(1);
 
     const listOutput = formatSkillsList(report, {});
     expect(listOutput).toContain("Skills");

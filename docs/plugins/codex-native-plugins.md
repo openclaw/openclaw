@@ -58,7 +58,7 @@ config looks like this:
         config: {
           codexPlugins: {
             enabled: true,
-            allow_destructive_actions: false,
+            allow_destructive_actions: true,
             plugins: {
               "google-calendar": {
                 enabled: true,
@@ -137,14 +137,16 @@ are emitted with `open_world_enabled: true`; OpenClaw does not expose a separate
 plugin open-world policy knob and does not maintain per-plugin destructive
 tool-name deny lists.
 
-Tool approval mode is prompted by default for plugin apps because OpenClaw does
-not have an interactive app-elicitation UI in this same-thread path.
+Tool approval mode is automatic by default for plugin apps so non-destructive
+read tools can run without a same-thread approval UI. Destructive tools remain
+controlled by each app's `destructive_enabled` policy.
 
 ## Destructive action policy
 
-Destructive plugin elicitations fail closed by default:
+Destructive plugin elicitations are allowed by default for migrated Codex
+plugins, while unsafe schemas and ambiguous ownership still fail closed:
 
-- Global `allow_destructive_actions` defaults to `false`.
+- Global `allow_destructive_actions` defaults to `true`.
 - Per-plugin `allow_destructive_actions` overrides the global policy for that
   plugin.
 - When policy is `false`, OpenClaw returns a deterministic decline.

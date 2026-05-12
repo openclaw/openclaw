@@ -71,6 +71,7 @@ import {
   buildCrossContextDecoration,
   type CrossContextDecoration,
   enforceCrossContextPolicy,
+  enforceMessageActionAllowlist,
   resolveEffectiveMessageToolsConfig,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
@@ -1042,6 +1043,11 @@ export async function runMessageAction(
   parseInteractiveParam(params);
 
   const action = input.action;
+  enforceMessageActionAllowlist({
+    cfg,
+    agentId: resolvedAgentId,
+    action,
+  });
   if (action === "broadcast") {
     return handleBroadcastAction(input, params);
   }

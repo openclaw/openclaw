@@ -223,7 +223,7 @@ describe("handleDiscordMessagingAction", () => {
     );
 
     expect(reactMessageDiscord).toHaveBeenCalledTimes(1);
-    expect(reactMessageDiscord.mock.calls[0]).toEqual([
+    expect(mockCall(reactMessageDiscord, "reactMessageDiscord")).toEqual([
       "C1",
       "M1",
       "✅",
@@ -738,7 +738,14 @@ describe("handleDiscordGuildAction - channel management", () => {
       },
       { cfg: DISCORD_TEST_CFG },
     );
-    expect(result.details).toMatchObject({ ok: true });
+    expect(result.details).toEqual({
+      ok: true,
+      channel: {
+        id: "new-channel",
+        name: "test",
+        type: 0,
+      },
+    });
   });
 
   it("respects channel gating for channelCreate", async () => {

@@ -373,7 +373,7 @@ describe("processGatewayAllowlist", () => {
     });
 
     await vi.waitFor(() => {
-      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalled();
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
     });
     const followupTargetInput = buildExecApprovalFollowupTargetMock.mock.calls[0]?.[0] as
       | { direct?: boolean }
@@ -421,6 +421,7 @@ describe("processGatewayAllowlist", () => {
         "Exec denied (gateway id=req-1, approval-timeout): python3 -c 'print(1)'",
       );
     });
+    expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
     expect(runExecProcessMock).not.toHaveBeenCalled();
   });
 
@@ -438,6 +439,7 @@ describe("processGatewayAllowlist", () => {
         "Exec denied (gateway id=req-1, approval-timeout): python3 -c 'print(1)'",
       );
     });
+    expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
     expect(runExecProcessMock).not.toHaveBeenCalled();
   });
 });

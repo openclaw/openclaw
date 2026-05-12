@@ -76,6 +76,14 @@ function requireThreadStarter(
   return result;
 }
 
+function firstRestGetPath(get: ReturnType<typeof vi.fn>): unknown {
+  const [call] = get.mock.calls;
+  if (!call) {
+    throw new Error("expected Discord REST GET call");
+  }
+  return call[0];
+}
+
 async function resolveStarter(params: {
   message: ThreadStarterRestMessage;
   parentId?: string;
@@ -111,10 +119,13 @@ describe("resolveDiscordThreadStarter", () => {
       resolveTimestampMs: () => 123,
     });
 
-    expect(result).toMatchObject({
+    expect(requireThreadStarter(result)).toEqual({
       text: "Alert\nDetails",
       author: "Alice",
       authorId: "u1",
+      authorName: "Alice",
+      authorTag: "Alice",
+      memberRoleIds: undefined,
       timestamp: 123,
     });
   });
@@ -144,12 +155,14 @@ describe("resolveDiscordThreadStarter", () => {
       }),
     });
 
-    expect(result).toMatchObject({
+    expect(requireThreadStarter(result)).toEqual({
+      text: "starter content",
       author: "Alice#1234",
       authorId: "u1",
       authorName: "Alice",
       authorTag: "Alice#1234",
       memberRoleIds: ["role-1", "role-2"],
+      timestamp: undefined,
     });
   });
 
@@ -253,7 +266,7 @@ describe("resolveDiscordThreadStarter", () => {
 
     expect(requireThreadStarter(result).text).toBe("starter content");
     expect(get).toHaveBeenCalledTimes(1);
-    expect(get.mock.calls[0]?.[0]).toBe("/channels/thread-1/messages/thread-1");
+    expect(firstRestGetPath(get)).toBe("/channels/thread-1/messages/thread-1");
   });
 
   it("returns null when content, embeds, and snapshots are all empty", async () => {

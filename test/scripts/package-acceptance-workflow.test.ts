@@ -683,7 +683,7 @@ describe("package artifact reuse", () => {
       for (const [jobName, job] of Object.entries(jobs)) {
         for (const step of job.steps ?? []) {
           if (step.run === "pnpm build") {
-            expect(step.env, `${workflowPath}:${jobName}:${step.name}`).toMatchObject({
+            expect(step.env, `${workflowPath}:${jobName}:${step.name}`).toEqual({
               NODE_OPTIONS: "--max-old-space-size=8192",
             });
           }
@@ -874,6 +874,28 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("Unreleased prerelease fallback");
     expect(workflow).not.toContain("gh api --repo");
     expect(workflow).not.toContain("timeout-minutes: 360");
+  });
+
+  it("keeps beta release verification and ClawHub publish repair hooks wired", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const clawHubWorkflow = readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8");
+
+    expect(packageJson.scripts?.["release:verify-beta"]).toBe(
+      "node --import tsx scripts/release-verify-beta.ts",
+    );
+    expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
+      "bash scripts/release-fast-pretag-check.sh",
+    );
+    expect(clawHubWorkflow).toContain("Verify published ClawHub package");
+    expect(clawHubWorkflow).toContain("bun install failed while preparing ClawHub CLI; retrying");
+    expect(clawHubWorkflow).toContain("max-parallel: 32");
+    expect(releaseWorkflow).toContain("Plugin npm run ID");
+    expect(releaseWorkflow).toContain("Plugin ClawHub run ID");
+    expect(releaseWorkflow).toContain("OpenClaw npm run ID");
+    expect(releaseWorkflow).toContain("finished with ${conclusion} in ${duration_label}");
   });
 
   it("keeps release workflow setup and timeout budgets bounded", () => {
