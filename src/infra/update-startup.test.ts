@@ -419,7 +419,7 @@ describe("update-startup", () => {
     }
 
     expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
-    const [argv, options] = requireFirstRunCommandCall();
+    const [argv, options] = vi.mocked(runCommandWithTimeout).mock.calls[0] ?? [];
     expect(argv).toEqual([
       process.execPath,
       "/opt/openclaw/dist/entry.js",
