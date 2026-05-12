@@ -26,19 +26,15 @@ type MatrixCryptoRuntimeDeps = {
 };
 
 function resolveMissingMatrixPackages(resolveFn?: (id: string) => string): string[] {
-  try {
-    const resolve = resolveFn ?? defaultResolveFn;
-    return REQUIRED_MATRIX_PACKAGES.filter((pkg) => {
-      try {
-        resolve(pkg);
-        return false;
-      } catch {
-        return true;
-      }
-    });
-  } catch {
-    return [...REQUIRED_MATRIX_PACKAGES];
-  }
+  const resolve = resolveFn ?? defaultResolveFn;
+  return REQUIRED_MATRIX_PACKAGES.filter((pkg) => {
+    try {
+      resolve(pkg);
+      return false;
+    } catch {
+      return true;
+    }
+  });
 }
 
 export function isMatrixSdkAvailable(): boolean {
@@ -46,9 +42,8 @@ export function isMatrixSdkAvailable(): boolean {
 }
 
 function buildMatrixDepsMissingMessage(missing: string[]): string {
-  const packages = missing.length > 0 ? missing.join(", ") : REQUIRED_MATRIX_PACKAGES.join(", ");
   return [
-    `Matrix plugin dependencies are missing: ${packages}.`,
+    `Matrix plugin dependencies are missing: ${missing.join(", ")}.`,
     "Repair this plugin with `openclaw plugins update matrix` or run `openclaw doctor --fix`.",
   ].join(" ");
 }
