@@ -79,10 +79,13 @@ function mockDangerousSkillScanFinding(skillDir: string) {
   });
 }
 
-function loadTestWorkspaceSkillEntries(workspaceDir: string): SkillEntry[] {
+function loadTestWorkspaceSkillEntries(
+  workspaceDir: string,
+  source = "openclaw-workspace",
+): SkillEntry[] {
   const skills = loadSkillsFromDirSafe({
     dir: path.join(workspaceDir, "skills"),
-    source: "openclaw-workspace",
+    source,
   }).skills;
   return skills.map((skill) => {
     const frontmatter =
@@ -224,6 +227,34 @@ describe("installSkill code safety scanning", () => {
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     });
   });
+
+  it.each(["openclaw-managed", "openclaw-extra"])(
+    "allows trusted %s installs that use a bundled skill key",
+    async (source) => {
+      await withWorkspaceCase(async ({ workspaceDir }) => {
+        await writeInstallableSkill(workspaceDir, "trusted-tts", {
+          skillKey: "sherpa-onnx-tts",
+        });
+        setSkillsInstallTestDeps({
+          loadWorkspaceSkillEntries: (dir) => loadTestWorkspaceSkillEntries(dir, source),
+          resolveBundledSkillsContext: () => ({
+            names: new Set(["sherpa-onnx-tts"]),
+            skillKeys: new Set(["sherpa-onnx-tts"]),
+          }),
+        });
+
+        const result = await installSkill({
+          workspaceDir,
+          skillName: "trusted-tts",
+          installId: "deps",
+        });
+
+        expect(result.ok).toBe(true);
+        expect(result.warnings ?? []).toEqual([]);
+        expect(runCommandWithTimeoutMock).toHaveBeenCalled();
+      });
+    },
+  );
 
   it("blocks non-bundled installs whose tools directory collides with another skill", async () => {
     await withWorkspaceCase(async ({ workspaceDir }) => {
