@@ -178,9 +178,13 @@ jobs:
         run: |
           pnpm test \
             extensions/qa-lab/src/providers/mock-openai/server.test.ts \
+            extensions/qa-lab/src/gateway-log-sentinel.test.ts \
+            extensions/qa-lab/src/runtime-transcript.test.ts \
             extensions/qa-lab/src/runtime-tool-fixture.test.ts \
             extensions/qa-lab/src/runtime-parity.test.ts \
             extensions/qa-lab/src/runtime-suite.test.ts \
+            extensions/qa-lab/src/scenario-runtime-api.test.ts \
+            extensions/qa-lab/src/suite-runtime-flow.test.ts \
             extensions/qa-lab/src/suite.test.ts \
             extensions/qa-lab/src/cli.runtime.test.ts \
             extensions/qa-lab/src/tool-coverage-report.test.ts \
