@@ -121,7 +121,18 @@ describe("msteams pending uploads (sqlite-backed)", () => {
       },
       { env },
     );
-    expect(await getPendingUploadState("upload-rm", { env })).toBeDefined();
+    const loaded = await getPendingUploadState("upload-rm", { env });
+    expect(loaded).toBeDefined();
+    if (!loaded) {
+      throw new Error("Expected pending upload");
+    }
+    expect(loaded.id).toBe("upload-rm");
+    expect(loaded.filename).toBe("rm.bin");
+    expect(loaded.contentType).toBeUndefined();
+    expect(loaded.conversationId).toBe("19:conv@thread.v2");
+    expect(loaded.consentCardActivityId).toBeUndefined();
+    expect(loaded.buffer.toString("utf8")).toBe("x");
+    expect(Number.isFinite(loaded.createdAt)).toBe(true);
 
     await removePendingUploadState("upload-rm", { env });
     expect(await getPendingUploadState("upload-rm", { env })).toBeUndefined();
