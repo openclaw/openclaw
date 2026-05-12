@@ -21,10 +21,34 @@ describe("resolveInlineCommandMatch", () => {
       expected: { command: "Get-ChildItem", valueTokenIndex: 2 },
     },
     {
+      name: "extracts the next token for PowerShell -CommandWithArgs",
+      argv: ["pwsh", "-CommandWithArgs", "Get-ChildItem"],
+      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
+      expected: { command: "Get-ChildItem", valueTokenIndex: 2 },
+    },
+    {
       name: "extracts the next token for PowerShell -File",
       argv: ["pwsh", "-File", "script.ps1"],
       flags: POWERSHELL_INLINE_COMMAND_FLAGS,
       expected: { command: "script.ps1", valueTokenIndex: 2 },
+    },
+    {
+      name: "extracts the next token for PowerShell -ec",
+      argv: ["pwsh", "-ec", "ZQBjAGgAbwA="],
+      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 2 },
+    },
+    {
+      name: "extracts the next token for PowerShell /ec",
+      argv: ["pwsh", "/NoProfile", "/ec", "ZQBjAGgAbwA="],
+      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 3 },
+    },
+    {
+      name: "extracts the next token for PowerShell -en",
+      argv: ["pwsh", "-en", "ZQBjAGgAbwA="],
+      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 2 },
     },
     {
       name: "extracts the next token for PowerShell -f",
@@ -180,6 +204,93 @@ describe("resolveInlineCommandMatch", () => {
     {
       name: "stops at slash paths before PowerShell script args",
       argv: ["/usr/bin/pwsh", "/tmp/script.ps1", "/ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expected: { command: null, valueTokenIndex: null },
+    },
+  ])("$name", ({ argv, expected }) => {
+    expect(resolvePowerShellInlineCommandMatch(argv)).toEqual(expected);
+  });
+});
+
+describe("resolvePowerShellInlineCommandMatch", () => {
+  it.each([
+    {
+      name: "slash encoded-command alias",
+      argv: ["pwsh", "/NoProfile", "/ec", "ZQBjAGgAbwA="],
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 3 },
+    },
+    {
+      name: "encoded-command prefix abbreviation",
+      argv: ["pwsh", "-en", "ZQBjAGgAbwA="],
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 2 },
+    },
+    {
+      name: "option value before slash encoded-command alias",
+      argv: ["pwsh", "-WorkingDir", "/tmp/project", "/ec", "ZQBjAGgAbwA="],
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 4 },
+    },
+    {
+      name: "input format value before encoded command",
+      argv: ["pwsh", "-if", "XML", "-EncodedCommand", "ZQBjAGgAbwA="],
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 4 },
+    },
+    {
+      name: "configuration value before encoded-command alias",
+      argv: ["pwsh", "-config", "SomeConfig", "-ec", "ZQBjAGgAbwA="],
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 4 },
+    },
+    {
+      name: "window style value before slash encoded-command alias",
+      argv: ["pwsh", "-win", "hidden", "/ec", "ZQBjAGgAbwA="],
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 4 },
+    },
+    {
+      name: "error action alias value before command",
+      argv: ["pwsh", "-ea", "stop", "-Command", "Get-Date"],
+      expected: { command: "Get-Date", valueTokenIndex: 4 },
+    },
+    {
+      name: "slash error action alias value before command",
+      argv: ["pwsh", "/ea", "stop", "-Command", "Get-Date"],
+      expected: { command: "Get-Date", valueTokenIndex: 4 },
+    },
+    {
+      name: "execution policy alias value before slash command",
+      argv: ["pwsh", "/ep", "Bypass", "/c", "Get-Date"],
+      expected: { command: "Get-Date", valueTokenIndex: 4 },
+    },
+    {
+      name: "custom pipe name value before encoded-command alias",
+      argv: ["pwsh", "-cus", "pipe-name", "-ec", "ZQBjAGgAbwA="],
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 4 },
+    },
+    {
+      name: "token value before command",
+      argv: ["pwsh", "-to", "token-value", "-Command", "Get-Date"],
+      expected: { command: "Get-Date", valueTokenIndex: 4 },
+    },
+    {
+      name: "utc timestamp value before command",
+      argv: ["pwsh", "-utc", "1234", "-Command", "Get-Date"],
+      expected: { command: "Get-Date", valueTokenIndex: 4 },
+    },
+    {
+      name: "encoded arguments value before command",
+      argv: ["pwsh", "-encodeda", "YQByAGcA", "-Command", "Get-Date"],
+      expected: { command: "Get-Date", valueTokenIndex: 4 },
+    },
+    {
+      name: "file script arguments",
+      argv: ["pwsh", "-File", "script.ps1", "-ExtraArg"],
+      expected: { command: "script.ps1", valueTokenIndex: 2 },
+    },
+    {
+      name: "stops at the first positional argument",
+      argv: ["pwsh", "script.ps1", "/ec", "ZQBjAGgAbwA="],
+      expected: { command: null, valueTokenIndex: null },
+    },
+    {
+      name: "does not treat an option value as an encoded-command flag",
+      argv: ["pwsh", "-WorkingDir", "/ec", "ZQBjAGgAbwA="],
       expected: { command: null, valueTokenIndex: null },
     },
   ])("$name", ({ argv, expected }) => {

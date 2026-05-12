@@ -11,23 +11,29 @@ function expandPowerShellSwitchPrefixForms(match: string, smallestMatch: string)
   return forms;
 }
 
-export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
+function expandPowerShellSwitchForms(names: readonly string[]): string[] {
+  return names.flatMap((name) => {
+    const normalized = normalizeLowercaseStringOrEmpty(name);
+    return [`-${normalized}`, `--${normalized}`, `/${normalized}`];
+  });
+}
+
+const POWERSHELL_COMMAND_FLAGS = [
   ...expandPowerShellSwitchPrefixForms("command", "c"),
   ...expandPowerShellSwitchPrefixForms("commandwithargs", "cwa"),
   ...expandPowerShellSwitchForms(["cwa"]),
-  ...expandPowerShellSwitchPrefixForms("file", "f"),
+];
+const POWERSHELL_FILE_FLAGS = expandPowerShellSwitchPrefixForms("file", "f");
+const POWERSHELL_INLINE_FILE_FLAGS = new Set(POWERSHELL_FILE_FLAGS);
+
+export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
+  ...POWERSHELL_COMMAND_FLAGS,
+  ...POWERSHELL_FILE_FLAGS,
   ...expandPowerShellSwitchPrefixForms("encodedcommand", "e"),
   ...expandPowerShellSwitchPrefixForms("ec", "e"),
 ]);
 
-const POWERSHELL_INLINE_REST_COMMAND_FLAGS = new Set([
-  ...expandPowerShellSwitchPrefixForms("commandwithargs", "cwa"),
-  ...expandPowerShellSwitchForms(["cwa"]),
-]);
-
-function expandPowerShellSwitchForms(names: readonly string[]): string[] {
-  return names.flatMap((name) => [`-${name}`, `--${name}`, `/${name}`]);
-}
+const POWERSHELL_INLINE_REST_COMMAND_FLAGS = new Set(POWERSHELL_COMMAND_FLAGS);
 
 const POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
   ...expandPowerShellSwitchPrefixForms("configurationfile", "conf"),
@@ -219,6 +225,10 @@ export function resolvePowerShellInlineCommandMatch(argv: string[]): {
 
 export function isPowerShellInlineRestCommandFlag(token: string): boolean {
   return POWERSHELL_INLINE_REST_COMMAND_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
+}
+
+export function isPowerShellInlineFileCommandFlag(token: string): boolean {
+  return POWERSHELL_INLINE_FILE_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
 }
 
 export function hasPosixInteractiveStartupBeforeInlineCommand(
