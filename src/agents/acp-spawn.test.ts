@@ -364,7 +364,7 @@ function expectSessionPatchFields(expected: Record<string, unknown>): void {
 }
 
 function expectInitializeSessionFields(expected: Record<string, unknown>): Record<string, unknown> {
-  return expectRecordFields(hoisted.initializeSessionMock.mock.calls[0]?.[0], expected);
+  return expectRecordFields(hoisted.initializeSessionMock.mock.calls.at(0)?.[0], expected);
 }
 
 function expectBindingCallFields(expected: {
@@ -1942,7 +1942,7 @@ describe("spawnAcpDirect", () => {
     expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
     if (expectTranscriptPersistence) {
-      expectRecordFields(hoisted.resolveSessionTranscriptFileMock.mock.calls[0]?.[0], {
+      expectRecordFields(hoisted.resolveSessionTranscriptFileMock.mock.calls.at(0)?.[0], {
         sessionId: "sess-123",
         storePath: "/tmp/codex-sessions.json",
         agentId: "codex",
@@ -2162,7 +2162,7 @@ describe("spawnAcpDirect", () => {
     expect(relayRuns).toContain(agentCall?.params?.idempotencyKey);
     expect(relayRuns).toContain(accepted.runId);
     const streamPathInput = expectRecordFields(
-      hoisted.resolveAcpSpawnStreamLogPathMock.mock.calls[0]?.[0],
+      hoisted.resolveAcpSpawnStreamLogPathMock.mock.calls.at(0)?.[0],
       {},
     );
     expect(streamPathInput.childSessionKey).toMatch(/^agent:codex:acp:/);

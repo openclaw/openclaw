@@ -247,9 +247,7 @@ describe("createPinnedDispatcher", () => {
     const callback = vi.fn();
     lookup?.("example.com", callback);
 
-    const originalLookupCall = originalLookupMock.mock.calls[0];
-    expect(originalLookupCall?.[0]).toBe("example.com");
-    expect(typeof originalLookupCall?.[1]).toBe("function");
+    expect(originalLookupMock).toHaveBeenCalledWith("example.com", expect.any(Function));
     expect(callback).toHaveBeenCalledWith(null, "93.184.216.34", 4);
   });
 
