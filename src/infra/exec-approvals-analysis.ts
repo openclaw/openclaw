@@ -25,6 +25,7 @@ export {
 export type ExecCommandSegment = {
   raw: string;
   argv: string[];
+  sourceArgv?: string[];
   resolution: CommandResolution | null;
 };
 
@@ -1129,6 +1130,7 @@ export function analyzeArgvCommand(params: {
       {
         raw: argv.join(" "),
         argv,
+        sourceArgv: [...params.argv],
         resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
       },
     ],

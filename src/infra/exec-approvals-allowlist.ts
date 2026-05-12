@@ -444,7 +444,7 @@ function resolvePowerShellFileScriptArgv(params: {
   segment: ExecCommandSegment;
   cwd?: string;
 }): string[] | null {
-  const argv = params.segment.argv;
+  const argv = params.segment.sourceArgv ?? params.segment.argv;
   if (!Array.isArray(argv) || argv.length < 3) {
     return null;
   }
