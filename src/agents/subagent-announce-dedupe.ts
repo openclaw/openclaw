@@ -1,3 +1,4 @@
+import { defaultRuntime } from "../runtime.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
 // Defense-in-depth dedup for `deliverSubagentAnnouncement`. The gateway already
@@ -70,10 +71,14 @@ export async function runDedupedAnnounceDelivery(
   const namespaced = namespaceKey(key);
   const cached = getCachedDelivered(namespaced);
   if (cached) {
+    defaultRuntime.log(
+      `[subagent-announce] dedup cache hit for ${key}; suppressed duplicate dispatch (path=${cached.path})`,
+    );
     return cached;
   }
   const existing = state.inflight.get(namespaced);
   if (existing) {
+    defaultRuntime.log(`[subagent-announce] dedup coalesce for ${key}; joining in-flight dispatch`);
     return existing;
   }
   const promise = (async () => {
