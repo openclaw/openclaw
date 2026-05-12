@@ -6,7 +6,12 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import {
+  formatErrorMessage,
+  resolvePinnedHostnameWithPolicy,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 
 const MIN_SEND_INTERVAL_MS = 500;
@@ -112,7 +117,7 @@ export async function sendMessage(
     }
 
     if (attempt < maxRetries - 1) {
-      await sleep(baseDelay * Math.pow(2, attempt));
+      await sleep(baseDelay * 2 ** attempt);
     }
   }
 
@@ -128,9 +133,16 @@ export async function sendFileUrl(
   userId?: string | number,
   allowInsecureSsl = false,
 ): Promise<boolean> {
-  const body = buildWebhookBody({ file_url: fileUrl }, userId);
-
   try {
+    const safeFileUrl = await assertSafeWebhookFileUrl(fileUrl);
+    const body = buildWebhookBody({ file_url: safeFileUrl }, userId);
+
+    const now = Date.now();
+    const elapsed = now - lastSendTime;
+    if (elapsed < MIN_SEND_INTERVAL_MS) {
+      await sleep(MIN_SEND_INTERVAL_MS - elapsed);
+    }
+
     const ok = await doPost(incomingUrl, body, allowInsecureSsl);
     lastSendTime = Date.now();
     return ok;
@@ -206,6 +218,22 @@ export async function fetchChatUsers(
   });
 }
 
+async function assertSafeWebhookFileUrl(fileUrl: string): Promise<string> {
+  let parsed: URL;
+  try {
+    parsed = new URL(fileUrl);
+  } catch (err) {
+    throw new Error(`Invalid Synology Chat file URL: ${formatErrorMessage(err)}`, { cause: err });
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Synology Chat file URL must use HTTP or HTTPS");
+  }
+
+  await resolvePinnedHostnameWithPolicy(parsed.hostname);
+  return parsed.toString();
+}
+
 /**
  * Resolve a mutable webhook username/nickname to the correct Chat API user_id.
  *
@@ -251,7 +279,7 @@ function parseNumericUserId(userId?: string | number): number | undefined {
   if (userId === undefined) {
     return undefined;
   }
-  const numericId = typeof userId === "number" ? userId : parseInt(userId, 10);
+  const numericId = typeof userId === "number" ? userId : Number.parseInt(userId, 10);
   return Number.isNaN(numericId) ? undefined : numericId;
 }
 
@@ -298,8 +326,4 @@ function doPost(url: string, body: string, allowInsecureSsl = false): Promise<bo
     req.write(body);
     req.end();
   });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

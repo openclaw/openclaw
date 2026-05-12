@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 
-let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
+let configOverride: ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]> = {
   session: createPerSenderSessionConfig(),
 };
 
@@ -10,7 +10,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    loadConfig: () => configOverride,
+    getRuntimeConfig: () => configOverride,
     resolveGatewayPort: () => 18789,
   };
 });
@@ -44,15 +44,14 @@ describe("agents_list", () => {
     };
     const tool = createTool();
     const result = await tool.execute("call1", {});
-    expect(result.details).toMatchObject({
-      requester: "main",
-      allowAny: false,
-    });
+    const details = result.details as { requester?: string; allowAny?: boolean };
+    expect(details.requester).toBe("main");
+    expect(details.allowAny).toBe(false);
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main"]);
   });
 
-  it("includes allowlisted targets plus requester", async () => {
+  it("includes configured allowlisted targets", async () => {
     setConfigWithAgentList([
       {
         id: "main",
@@ -70,7 +69,7 @@ describe("agents_list", () => {
     const tool = createTool();
     const result = await tool.execute("call2", {});
     const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
+    expect(agents?.map((agent) => agent.id)).toEqual(["research"]);
   });
 
   it("falls back to default allowlist when the requester agent omits allowAgents", async () => {
@@ -98,7 +97,7 @@ describe("agents_list", () => {
     const tool = createTool();
     const result = await tool.execute("call2b", {});
     const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
+    expect(agents?.map((agent) => agent.id)).toEqual(["research"]);
   });
 
   it("returns configured agents when allowlist is *", async () => {
@@ -121,9 +120,8 @@ describe("agents_list", () => {
 
     const tool = createTool();
     const result = await tool.execute("call3", {});
-    expect(result.details).toMatchObject({
-      allowAny: true,
-    });
+    const details = result.details as { allowAny?: boolean };
+    expect(details.allowAny).toBe(true);
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "coder", "research"]);
   });
@@ -141,7 +139,7 @@ describe("agents_list", () => {
     const tool = createTool();
     const result = await tool.execute("call4", {});
     const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
+    expect(agents?.map((agent) => agent.id)).toEqual(["research"]);
     const research = agents?.find((agent) => agent.id === "research");
     expect(research?.configured).toBe(false);
   });

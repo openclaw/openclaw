@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "./config/config.js";
+import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
 import { createBrowserPluginService } from "./plugin-service.js";
 
 const SERVICE_CONTEXT = {
@@ -18,7 +20,7 @@ const runtimeMocks = vi.hoisted(() => ({
   startLazyPluginServiceModule: vi.fn(async (_params: StartLazyPluginServiceModuleParams) => null),
 }));
 
-vi.mock("openclaw/plugin-sdk/browser-node-runtime", () => ({
+vi.mock("./sdk-node-runtime.js", () => ({
   startLazyPluginServiceModule: runtimeMocks.startLazyPluginServiceModule,
 }));
 
@@ -28,7 +30,11 @@ describe("createBrowserPluginService", () => {
   });
 
   function getStartParams(): StartLazyPluginServiceModuleParamsWithValidator {
-    const params = runtimeMocks.startLazyPluginServiceModule.mock.calls[0]?.[0];
+    const [call] = runtimeMocks.startLazyPluginServiceModule.mock.calls;
+    if (!call) {
+      throw new Error("expected browser plugin service lazy loader call");
+    }
+    const [params] = call;
     if (!params?.validateOverrideSpecifier) {
       throw new Error("expected browser plugin service to pass validateOverrideSpecifier");
     }
@@ -59,5 +65,25 @@ describe("createBrowserPluginService", () => {
     expect(() => params.validateOverrideSpecifier("node:fs")).toThrow(
       "Refusing unsafe browser control override specifier",
     );
+  });
+});
+
+describe("isDefaultBrowserPluginEnabled", () => {
+  it("defaults to enabled", () => {
+    expect(isDefaultBrowserPluginEnabled({} as OpenClawConfig)).toBe(true);
+  });
+
+  it("respects explicit plugin disablement", () => {
+    expect(
+      isDefaultBrowserPluginEnabled({
+        plugins: {
+          entries: {
+            browser: {
+              enabled: false,
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toBe(false);
   });
 });

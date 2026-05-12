@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { __testing, validateConfigObjectRaw } from "./validation.js";
-import { SignalConfigSchema } from "./zod-schema.providers-core.js";
+
+function requireIssue<T extends { path: string }>(issues: T[], path: string): T {
+  const issue = issues.find((entry) => entry.path === path);
+  if (!issue) {
+    throw new Error(`expected validation issue at ${path}`);
+  }
+  return issue;
+}
 
 function mapFirstIssue(
   schema: { safeParse: (value: unknown) => { success: true } | { success: false; error: unknown } },
@@ -12,7 +20,9 @@ function mapFirstIssue(
     throw new Error("expected schema parse failure");
   }
   const issue = (result.error as { issues?: unknown[] }).issues?.[0];
-  expect(issue).toBeDefined();
+  if (!issue) {
+    throw new Error("expected first zod issue");
+  }
   return __testing.mapZodIssueToConfigIssue(issue);
 }
 
@@ -24,16 +34,18 @@ describe("config validation allowed-values metadata", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      const issue = result.issues.find((entry) => entry.path === "update.channel");
-      expect(issue).toBeDefined();
-      expect(issue?.message).toContain('(allowed: "stable", "beta", "dev")');
-      expect(issue?.allowedValues).toEqual(["stable", "beta", "dev"]);
-      expect(issue?.allowedValuesHiddenCount).toBe(0);
+      const issue = requireIssue(result.issues, "update.channel");
+      expect(issue.message).toContain('(allowed: "stable", "beta", "dev")');
+      expect(issue.allowedValues).toEqual(["stable", "beta", "dev"]);
+      expect(issue.allowedValuesHiddenCount).toBe(0);
     }
   });
 
   it("keeps native enum messages while attaching allowed values metadata", () => {
-    const issue = mapFirstIssue(SignalConfigSchema, { dmPolicy: "maybe" });
+    const issue = mapFirstIssue(
+      z.object({ dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]) }),
+      { dmPolicy: "maybe" },
+    );
     expect(issue.path).toBe("dmPolicy");
     expect(issue.message).toContain("expected one of");
     expect(issue.message).not.toContain("(allowed:");
@@ -62,11 +74,10 @@ describe("config validation allowed-values metadata", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      const issue = result.issues.find((entry) => entry.path === "cron.sessionRetention");
-      expect(issue).toBeDefined();
-      expect(issue?.allowedValues).toBeUndefined();
-      expect(issue?.allowedValuesHiddenCount).toBeUndefined();
-      expect(issue?.message).not.toContain("(allowed:");
+      const issue = requireIssue(result.issues, "cron.sessionRetention");
+      expect(issue.allowedValues).toBeUndefined();
+      expect(issue.allowedValuesHiddenCount).toBeUndefined();
+      expect(issue.message).not.toContain("(allowed:");
     }
   });
 
@@ -84,14 +95,12 @@ describe("config validation allowed-values metadata", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.issues).not.toContainEqual({
-        path: "bindings.0",
-        message: "Invalid input",
-      });
-      expect(result.issues).toContainEqual({
-        path: "bindings.0.acp",
-        message: 'Unrecognized key: "agent"',
-      });
+      expect(result.issues).toEqual([
+        {
+          path: "bindings.0.acp",
+          message: 'Unrecognized key: "agent"',
+        },
+      ]);
     }
   });
 
@@ -110,14 +119,12 @@ describe("config validation allowed-values metadata", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.issues).not.toContainEqual({
-        path: "bindings.0.type",
-        message: 'Invalid input: expected "route"',
-      });
-      expect(result.issues).toContainEqual({
-        path: "bindings.0",
-        message: 'Unrecognized key: "extraTopLevel"',
-      });
+      expect(result.issues).toEqual([
+        {
+          path: "bindings.0",
+          message: 'Unrecognized key: "extraTopLevel"',
+        },
+      ]);
     }
   });
 
@@ -130,18 +137,12 @@ describe("config validation allowed-values metadata", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.issues).not.toContainEqual({
-        path: "agents.list.0.model",
-        message: "Invalid input: expected string, received boolean",
-      });
-      expect(result.issues).not.toContainEqual({
-        path: "agents.list.0.model",
-        message: "Invalid input: expected object, received boolean",
-      });
-      expect(result.issues).toContainEqual({
-        path: "agents.list.0.model",
-        message: "Invalid input",
-      });
+      expect(result.issues).toEqual([
+        {
+          path: "agents.list.0.model",
+          message: "Invalid input",
+        },
+      ]);
     }
   });
 });

@@ -1,8 +1,7 @@
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
-import type { OpenClawPluginApi } from "../runtime-api.js";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildFeishuConversationId, parseFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuTarget } from "./targets.js";
 import { getFeishuThreadBindingManager } from "./thread-bindings.js";
@@ -395,10 +394,4 @@ export function handleFeishuSubagentDeliveryTarget(
 export function handleFeishuSubagentEnded(event: FeishuSubagentEndedEvent) {
   const manager = getFeishuThreadBindingManager(event.accountId);
   manager?.unbindBySessionKey(event.targetSessionKey);
-}
-
-export function registerFeishuSubagentHooks(api: OpenClawPluginApi) {
-  api.on("subagent_spawning", (event, ctx) => handleFeishuSubagentSpawning(event, ctx));
-  api.on("subagent_delivery_target", (event) => handleFeishuSubagentDeliveryTarget(event));
-  api.on("subagent_ended", (event) => handleFeishuSubagentEnded(event));
 }

@@ -15,6 +15,7 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 - [x] Request camera/location and other permissions in onboarding/settings flow
 - [x] Push notifications for gateway/chat status updates
 - [x] Security hardening (biometric lock, token handling, safer defaults)
+- [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
 - [x] Screen tab full functionality
 - [ ] Full end-to-end QA and release hardening
@@ -284,7 +285,7 @@ Common failure quick-fixes:
 - `pairing required` before tests start:
   - approve pending device pairing (`openclaw devices approve --latest`) and rerun.
 - `A2UI host not reachable` / `A2UI_HOST_NOT_CONFIGURED`:
-  - ensure gateway canvas host is running and reachable, keep the app on the **Screen** tab. The app will auto-refresh canvas capability once; if it still fails, reconnect app and rerun.
+  - ensure the Canvas plugin host is running and reachable, keep the app on the **Screen** tab. The app refreshes the Canvas plugin surface URL once before failing; if it still fails, reconnect app and rerun.
 - `NODE_BACKGROUND_UNAVAILABLE: canvas unavailable`:
   - app is not effectively ready for canvas commands; keep app foregrounded and **Screen** tab active.
 

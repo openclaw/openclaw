@@ -24,35 +24,53 @@ function normalizeObservation(
   });
 }
 
+function firstWarnCall(warnSpy: { mock: { calls: unknown[][] } }): unknown[] {
+  const call = warnSpy.mock.calls[0];
+  if (!call) {
+    throw new Error("Expected warning log");
+  }
+  return call;
+}
+
+function firstWarnDetails(warnSpy: { mock: { calls: unknown[][] } }): {
+  consoleMessage?: string;
+  model?: string;
+  provider?: string;
+  sourceModel?: string;
+  sourceProvider?: string;
+} {
+  return firstWarnCall(warnSpy)[1] as {
+    consoleMessage?: string;
+    model?: string;
+    provider?: string;
+    sourceModel?: string;
+    sourceProvider?: string;
+  };
+}
+
 describe("normalizeFailoverDecisionObservationBase", () => {
   it("fills timeout observation reasons for deadline timeouts without provider error text", () => {
-    expect(
-      normalizeObservation({
-        runId: "run:timeout",
-        timedOut: true,
-      }),
-    ).toMatchObject({
-      failoverReason: "timeout",
-      profileFailureReason: "timeout",
+    const observation = normalizeObservation({
+      runId: "run:timeout",
       timedOut: true,
     });
+    expect(observation.failoverReason).toBe("timeout");
+    expect(observation.profileFailureReason).toBe("timeout");
+    expect(observation.timedOut).toBe(true);
   });
 
   it("preserves explicit failover reasons", () => {
-    expect(
-      normalizeObservation({
-        runId: "run:overloaded",
-        rawError: '{"error":{"type":"overloaded_error"}}',
-        failoverReason: "overloaded",
-        profileFailureReason: "overloaded",
-        fallbackConfigured: true,
-        timedOut: true,
-      }),
-    ).toMatchObject({
+    const observation = normalizeObservation({
+      runId: "run:overloaded",
+      rawError: '{"error":{"type":"overloaded_error"}}',
       failoverReason: "overloaded",
       profileFailureReason: "overloaded",
+      fallbackConfigured: true,
       timedOut: true,
     });
+    expect(observation.failoverReason).toBe("overloaded");
+    expect(observation.profileFailureReason).toBe("overloaded");
+    expect(observation.timedOut).toBe(true);
   });
 });
 
@@ -81,19 +99,15 @@ describe("createFailoverDecisionLogger", () => {
 
     logDecision("fallback_model");
 
-    expect(warnSpy).toHaveBeenCalledWith(
-      "embedded run failover decision",
-      expect.objectContaining({
-        sourceProvider: "github-copilot",
-        sourceModel: "gpt-5.4-mini",
-        provider: "openai",
-        model: "gpt-5.4",
-        consoleMessage: expect.stringContaining("from=github-copilot/gpt-5.4-mini"),
-      }),
-    );
-    expect(
-      (warnSpy.mock.calls[0]?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage,
-    ).toContain("to=openai/gpt-5.4");
+    const [message] = firstWarnCall(warnSpy);
+    expect(message).toBe("embedded run failover decision");
+    const observation = firstWarnDetails(warnSpy);
+    expect(observation.sourceProvider).toBe("github-copilot");
+    expect(observation.sourceModel).toBe("gpt-5.4-mini");
+    expect(observation.provider).toBe("openai");
+    expect(observation.model).toBe("gpt-5.4");
+    expect(observation.consoleMessage).toContain("from=github-copilot/gpt-5.4-mini");
+    expect(observation.consoleMessage).toContain("to=openai/gpt-5.4");
   });
 
   it("omits to model refs when the source matches the selected target", () => {
@@ -116,11 +130,7 @@ describe("createFailoverDecisionLogger", () => {
 
     logDecision("surface_error");
 
-    expect(
-      (warnSpy.mock.calls[0]?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage,
-    ).toContain("from=openai/gpt-5.4");
-    expect(
-      (warnSpy.mock.calls[0]?.[1] as { consoleMessage?: string } | undefined)?.consoleMessage,
-    ).not.toContain("to=openai/gpt-5.4");
+    expect(firstWarnDetails(warnSpy).consoleMessage).toContain("from=openai/gpt-5.4");
+    expect(firstWarnDetails(warnSpy).consoleMessage).not.toContain("to=openai/gpt-5.4");
   });
 });

@@ -1,4 +1,3 @@
-import { exec } from "node:child_process";
 import {
   createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicy,
@@ -17,8 +16,8 @@ import {
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
-import { createMSTeamsSetupWizardBase, msteamsSetupAdapter } from "./setup-core.js";
-import { resolveMSTeamsCredentials } from "./token.js";
+import { createMSTeamsSetupWizardBase } from "./setup-core.js";
+import { resolveMSTeamsCredentials, saveDelegatedTokens } from "./token.js";
 
 const channel = "msteams" as const;
 const setMSTeamsAllowFrom = createTopLevelChannelAllowFromSetter({
@@ -28,6 +27,12 @@ const setMSTeamsGroupPolicy = createTopLevelChannelGroupPolicySetter({
   channel,
   enabled: true,
 });
+
+export function openDelegatedOAuthUrl(url: string): Promise<void> {
+  return Promise.reject(
+    new Error(`Automatic browser launch is not available. Open this URL manually: ${url}`),
+  );
+}
 
 function looksLikeGuid(value: string): boolean {
   return /^[0-9a-fA-F-]{16,}$/.test(value);
@@ -228,8 +233,6 @@ const msteamsDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   promptAllowFrom: promptMSTeamsAllowFrom,
 });
 
-export { msteamsSetupAdapter } from "./setup-core.js";
-
 const msteamsSetupWizardBase = createMSTeamsSetupWizardBase();
 
 export const msteamsSetupWizard: ChannelSetupWizard = {
@@ -263,18 +266,11 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
         };
         try {
           const { loginMSTeamsDelegated } = await import("./oauth.js");
-          const { saveDelegatedTokens } = await import("./token.js");
-          const { shouldUseManualOAuthFlow } = await import("./oauth.flow.js");
-          const isRemote = Boolean(process.env.SSH_TTY || process.env.SSH_CONNECTION);
           const progress = params.prompter.progress("MSTeams Delegated OAuth");
           const tokens = await loginMSTeamsDelegated(
             {
-              isRemote: shouldUseManualOAuthFlow(isRemote),
-              openUrl: (url) =>
-                new Promise<void>((resolve, reject) => {
-                  const cmd = process.platform === "darwin" ? "open" : "xdg-open";
-                  exec(`${cmd} ${JSON.stringify(url)}`, (err) => (err ? reject(err) : resolve()));
-                }),
+              isRemote: true,
+              openUrl: openDelegatedOAuthUrl,
               log: (msg) => params.prompter.note(msg),
               note: (msg, title) => params.prompter.note(msg, title),
               prompt: (msg) => params.prompter.text({ message: msg }),

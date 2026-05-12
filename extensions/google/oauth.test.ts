@@ -1,25 +1,43 @@
 import { join, parse } from "node:path";
-import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../src/infra/wsl.js", () => ({
-  isWSL2Sync: () => false,
-}));
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    isWSL2Sync: () => false,
+  };
+});
 
-vi.mock("../../src/infra/net/fetch-guard.js", () => ({
-  fetchWithSsrFGuard: async (params: {
-    url: string;
-    init?: RequestInit;
-    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-  }) => {
-    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
-    const response = await fetchImpl(params.url, params.init);
-    return {
-      response,
-      finalUrl: params.url,
-      release: async () => {},
-    };
-  },
-}));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
+  return {
+    ...actual,
+    fetchWithSsrFGuard: async (params: {
+      url: string;
+      init?: RequestInit;
+      fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    }) => {
+      const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+      const response = await fetchImpl(params.url, params.init);
+      return {
+        response,
+        finalUrl: params.url,
+        release: async () => {},
+      };
+    },
+  };
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
 
 const mockExistsSync = vi.fn();
 const mockReadFileSync = vi.fn();
@@ -27,6 +45,16 @@ const mockRealpathSync = vi.fn();
 const mockReaddirSync = vi.fn();
 const mockSettingsExistsSync = vi.fn();
 const mockSettingsReadFileSync = vi.fn();
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
 
 describe("resolveGeminiCliSelectedAuthType", () => {
   const ENV_KEYS = ["GOOGLE_GENAI_USE_GCA"] as const;
@@ -432,7 +460,7 @@ describe("extractGeminiCliCredentials", () => {
     setOAuthCredentialsFsForTest();
   });
 
-  it("returns null when gemini binary is not in PATH", async () => {
+  it("returns null when gemini binary is not in PATH", () => {
     process.env.PATH = "/nonexistent";
     mockExistsSync.mockReturnValue(false);
 
@@ -440,7 +468,7 @@ describe("extractGeminiCliCredentials", () => {
     expect(extractGeminiCliCredentials()).toBeNull();
   });
 
-  it("extracts credentials from oauth2.js in known path", async () => {
+  it("extracts credentials from oauth2.js in known path", () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
     clearCredentialsCache();
@@ -449,7 +477,7 @@ describe("extractGeminiCliCredentials", () => {
     expectFakeCliCredentials(result);
   });
 
-  it("extracts credentials when PATH entry is an npm global shim", async () => {
+  it("extracts credentials when PATH entry is an npm global shim", () => {
     installNpmShimLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
     clearCredentialsCache();
@@ -458,7 +486,7 @@ describe("extractGeminiCliCredentials", () => {
     expectFakeCliCredentials(result);
   });
 
-  it("extracts credentials from bundled npm installs", async () => {
+  it("extracts credentials from bundled npm installs", () => {
     installBundledNpmLayout({
       bundleContent: `
         const OAUTH_CLIENT_ID = "${FAKE_CLIENT_ID}";
@@ -472,7 +500,7 @@ describe("extractGeminiCliCredentials", () => {
     expectFakeCliCredentials(result);
   });
 
-  it("extracts credentials from Homebrew libexec installs", async () => {
+  it("extracts credentials from Homebrew libexec installs", () => {
     installHomebrewLibexecLayout({ oauth2Content: FAKE_OAUTH2_CONTENT });
 
     clearCredentialsCache();
@@ -481,28 +509,28 @@ describe("extractGeminiCliCredentials", () => {
     expectFakeCliCredentials(result);
   });
 
-  it("returns null when oauth2.js cannot be found", async () => {
+  it("returns null when oauth2.js cannot be found", () => {
     installGeminiLayout({ oauth2Exists: false, readdir: [] });
 
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
   });
 
-  it("returns null when oauth2.js lacks credentials", async () => {
+  it("returns null when oauth2.js lacks credentials", () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: "// no credentials here" });
 
     clearCredentialsCache();
     expect(extractGeminiCliCredentials()).toBeNull();
   });
 
-  it("caches credentials after first extraction", async () => {
+  it("caches credentials after first extraction", () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
     clearCredentialsCache();
 
     // First call
     const result1 = extractGeminiCliCredentials();
-    expect(result1).not.toBeNull();
+    expectFakeCliCredentials(result1);
 
     // Second call should use cache (readFileSync not called again)
     const readCount = mockReadFileSync.mock.calls.length;
@@ -511,7 +539,7 @@ describe("extractGeminiCliCredentials", () => {
     expect(mockReadFileSync.mock.calls.length).toBe(readCount);
   });
 
-  it("skips unrelated oauth2.js files when gemini resolves inside a Windows nvm root", async () => {
+  it("skips unrelated oauth2.js files when gemini resolves inside a Windows nvm root", () => {
     const { unrelatedOauth2Path } = installWindowsNvmLayoutWithUnrelatedOauth({
       oauth2Content: FAKE_OAUTH2_CONTENT,
       unrelatedOauth2Content: "// unrelated oauth file",
@@ -583,6 +611,48 @@ describe("loginGeminiCliOAuth", () => {
     });
   }
 
+  function tokenResponse(): Response {
+    return responseJson({
+      access_token: "access-token",
+      refresh_token: "refresh-token",
+      expires_in: 3600,
+    });
+  }
+
+  function userInfoResponse(): Response {
+    return responseJson({ email: "lobster@openclaw.ai" });
+  }
+
+  type RecordedFetchRequest = {
+    url: string;
+    init?: RequestInit;
+  };
+
+  function installGeminiOAuthFetchMock(
+    handleRequest: (request: RecordedFetchRequest) => Response | undefined,
+  ) {
+    const requests: RecordedFetchRequest[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const request = { url: getRequestUrl(input), init };
+      requests.push(request);
+
+      if (request.url === TOKEN_URL) {
+        return tokenResponse();
+      }
+      if (request.url === USERINFO_URL) {
+        return userInfoResponse();
+      }
+
+      const response = handleRequest(request);
+      if (response) {
+        return response;
+      }
+      throw new Error(`Unexpected request: ${request.url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return { fetchMock, requests };
+  }
+
   function getFormField(body: RequestInit["body"], name: string): string | null {
     if (!(body instanceof URLSearchParams)) {
       throw new Error("Expected URLSearchParams body");
@@ -595,6 +665,23 @@ describe("loginGeminiCliOAuth", () => {
       throw new Error(`Expected ${label} JSON string`);
     }
     return JSON.parse(value);
+  }
+
+  function requireString(value: string | null | undefined, label: string): string {
+    if (!value) {
+      throw new Error(`Expected ${label}`);
+    }
+    return value;
+  }
+
+  function requireRecordedRequest(
+    request: RecordedFetchRequest | undefined,
+    label: string,
+  ): RecordedFetchRequest {
+    if (!request) {
+      throw new Error(`Expected ${label} request`);
+    }
+    return request;
   }
 
   type LoginGeminiCliOAuthFn = (options: {
@@ -627,11 +714,9 @@ describe("loginGeminiCliOAuth", () => {
     return { result, authUrl };
   }
 
-  async function runRemoteLoginExpectingProjectId(
-    loginGeminiCliOAuth: LoginGeminiCliOAuthFn,
-    projectId: string,
-  ) {
-    const { result } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+  async function runProjectDiscoveryExpectingProjectId(projectId: string) {
+    const { resolveGoogleOAuthIdentity } = await import("./oauth.project.js");
+    const result = await resolveGoogleOAuthIdentity("access-token");
     expect(result.projectId).toBe(projectId);
   }
 
@@ -675,21 +760,7 @@ describe("loginGeminiCliOAuth", () => {
   });
 
   it("falls back across loadCodeAssist endpoints with aligned headers and metadata", async () => {
-    const requests: Array<{ url: string; init?: RequestInit }> = [];
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = getRequestUrl(input);
-      requests.push({ url, init });
-
-      if (url === TOKEN_URL) {
-        return responseJson({
-          access_token: "access-token",
-          refresh_token: "refresh-token",
-          expires_in: 3600,
-        });
-      }
-      if (url === USERINFO_URL) {
-        return responseJson({ email: "lobster@openclaw.ai" });
-      }
+    const { requests } = installGeminiOAuthFetchMock(({ url }) => {
       if (url === LOAD_PROD) {
         return responseJson({ error: { message: "temporary failure" } }, 503);
       }
@@ -699,12 +770,10 @@ describe("loginGeminiCliOAuth", () => {
           cloudaicompanionProject: { id: "daily-project" },
         });
       }
-      throw new Error(`Unexpected request: ${url}`);
+      return undefined;
     });
-    vi.stubGlobal("fetch", fetchMock);
 
-    const { loginGeminiCliOAuth } = await import("./oauth.js");
-    await runRemoteLoginExpectingProjectId(loginGeminiCliOAuth, "daily-project");
+    await runProjectDiscoveryExpectingProjectId("daily-project");
     const loadRequests = requests.filter((request) =>
       request.url.includes("v1internal:loadCodeAssist"),
     );
@@ -715,8 +784,10 @@ describe("loginGeminiCliOAuth", () => {
       `gl-node/${process.versions.node}`,
     );
 
-    const clientMetadata = getHeaderValue(firstHeaders, "Client-Metadata");
-    expect(clientMetadata).toBeDefined();
+    const clientMetadata = requireString(
+      getHeaderValue(firstHeaders, "Client-Metadata"),
+      "Client-Metadata",
+    );
     expect(parseJsonString(clientMetadata, "Client-Metadata")).toEqual(
       EXPECTED_LOAD_CODE_ASSIST_METADATA,
     );
@@ -729,41 +800,29 @@ describe("loginGeminiCliOAuth", () => {
   });
 
   it("keeps OAuth state separate from the PKCE verifier during manual login", async () => {
-    const requests: Array<{ url: string; init?: RequestInit }> = [];
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = getRequestUrl(input);
-      requests.push({ url, init });
-
-      if (url === TOKEN_URL) {
-        return responseJson({
-          access_token: "access-token",
-          refresh_token: "refresh-token",
-          expires_in: 3600,
-        });
-      }
-      if (url === USERINFO_URL) {
-        return responseJson({ email: "lobster@openclaw.ai" });
-      }
+    const { requests } = installGeminiOAuthFetchMock(({ url }) => {
       if (url === LOAD_PROD) {
         return responseJson({
           currentTier: { id: "standard-tier" },
           cloudaicompanionProject: { id: "prod-project" },
         });
       }
-      throw new Error(`Unexpected request: ${url}`);
+      return undefined;
     });
-    vi.stubGlobal("fetch", fetchMock);
 
     const { loginGeminiCliOAuth } = await import("./oauth.js");
     const { authUrl } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
 
-    const authState = new URL(authUrl).searchParams.get("state");
-    expect(authState).toBeTruthy();
+    const authState = requireString(new URL(authUrl).searchParams.get("state"), "OAuth state");
 
-    const tokenRequest = requests.find((request) => request.url === TOKEN_URL);
-    expect(tokenRequest).toBeDefined();
-    const codeVerifier = getFormField(tokenRequest?.init?.body, "code_verifier");
-    expect(codeVerifier).toBeTruthy();
+    const tokenRequest = requireRecordedRequest(
+      requests.find((request) => request.url === TOKEN_URL),
+      "token",
+    );
+    const codeVerifier = requireString(
+      getFormField(tokenRequest.init?.body, "code_verifier"),
+      "PKCE code verifier",
+    );
     expect(codeVerifier).not.toBe(authState);
   });
 
@@ -786,32 +845,16 @@ describe("loginGeminiCliOAuth", () => {
   it("falls back to GOOGLE_CLOUD_PROJECT when all loadCodeAssist endpoints fail", async () => {
     process.env.GOOGLE_CLOUD_PROJECT = "env-project";
 
-    const requests: string[] = [];
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const url = getRequestUrl(input);
-      requests.push(url);
-
-      if (url === TOKEN_URL) {
-        return responseJson({
-          access_token: "access-token",
-          refresh_token: "refresh-token",
-          expires_in: 3600,
-        });
-      }
-      if (url === USERINFO_URL) {
-        return responseJson({ email: "lobster@openclaw.ai" });
-      }
+    const { requests } = installGeminiOAuthFetchMock(({ url }) => {
       if ([LOAD_PROD, LOAD_DAILY, LOAD_AUTOPUSH].includes(url)) {
         return responseJson({ error: { message: "unavailable" } }, 503);
       }
-      throw new Error(`Unexpected request: ${url}`);
+      return undefined;
     });
-    vi.stubGlobal("fetch", fetchMock);
 
-    const { loginGeminiCliOAuth } = await import("./oauth.js");
-    await runRemoteLoginExpectingProjectId(loginGeminiCliOAuth, "env-project");
-    expect(requests.filter((url) => url.includes("v1internal:loadCodeAssist"))).toHaveLength(3);
-    expect(requests.some((url) => url.includes("v1internal:onboardUser"))).toBe(false);
+    await runProjectDiscoveryExpectingProjectId("env-project");
+    expect(countMatching(requests, ({ url }) => url.includes("v1internal:loadCodeAssist"))).toBe(3);
+    expect(countMatching(requests, ({ url }) => url.includes("v1internal:onboardUser"))).toBe(0);
   });
 
   it("skips loadCodeAssist entirely when Gemini CLI is configured for personal OAuth", async () => {
@@ -826,29 +869,11 @@ describe("loginGeminiCliOAuth", () => {
       }),
     );
 
-    const requests: string[] = [];
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const url = getRequestUrl(input);
-      requests.push(url);
-
-      if (url === TOKEN_URL) {
-        return responseJson({
-          access_token: "access-token",
-          refresh_token: "refresh-token",
-          expires_in: 3600,
-        });
-      }
-      if (url === USERINFO_URL) {
-        return responseJson({ email: "lobster@openclaw.ai" });
-      }
-      throw new Error(`Unexpected request: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const { loginGeminiCliOAuth } = await import("./oauth.js");
-    const { result } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+    const { requests } = installGeminiOAuthFetchMock(() => undefined);
+    const { exchangeCodeForTokens } = await import("./oauth.token.js");
+    const result = await exchangeCodeForTokens("oauth-code", "pkce-verifier");
 
     expect(result.projectId).toBeUndefined();
-    expect(requests).toEqual([TOKEN_URL, USERINFO_URL]);
+    expect(requests.map(({ url }) => url)).toEqual([TOKEN_URL, USERINFO_URL]);
   });
 });

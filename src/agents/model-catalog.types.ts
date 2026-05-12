@@ -1,4 +1,6 @@
-export type ModelInputType = "text" | "image" | "document";
+import type { ModelCompatConfig } from "../config/types.models.js";
+
+export type ModelInputType = "text" | "image" | "audio" | "video" | "document";
 
 export type ModelCatalogEntry = {
   id: string;
@@ -6,6 +8,8 @@ export type ModelCatalogEntry = {
   provider: string;
   alias?: string;
   contextWindow?: number;
+  contextTokens?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
+  compat?: ModelCompatConfig;
 };

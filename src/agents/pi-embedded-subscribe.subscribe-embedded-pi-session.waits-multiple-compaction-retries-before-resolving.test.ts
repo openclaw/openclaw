@@ -2,14 +2,27 @@ import { describe, expect, it, vi } from "vitest";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubscribedSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
 
+function toolResultPayloadAt(
+  onToolResult: ReturnType<typeof vi.fn>,
+  index: number,
+): {
+  text?: string;
+} {
+  const [payload] = onToolResult.mock.calls[index] ?? [];
+  if (!payload || typeof payload !== "object") {
+    throw new Error(`expected tool result payload for call ${index + 1}`);
+  }
+  return payload as { text?: string };
+}
+
 describe("subscribeEmbeddedPiSession", () => {
   it("waits for multiple compaction retries before resolving", async () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-3",
     });
 
-    emit({ type: "auto_compaction_end", willRetry: true });
-    emit({ type: "auto_compaction_end", willRetry: true });
+    emit({ type: "compaction_end", willRetry: true });
+    emit({ type: "compaction_end", willRetry: true });
 
     let resolved = false;
     const waitPromise = subscription.waitForCompactionRetry().then(() => {
@@ -30,37 +43,47 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(resolved).toBe(true);
   });
 
-  it("does not count compaction until end event", async () => {
+  it("does not count compaction until end event", () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-compaction-count",
     });
 
-    emit({ type: "auto_compaction_start" });
+    emit({ type: "compaction_start" });
     expect(subscription.getCompactionCount()).toBe(0);
 
     // willRetry with result — counter IS incremented (overflow compaction succeeded)
-    emit({ type: "auto_compaction_end", willRetry: true, result: { summary: "s" } });
+    emit({
+      type: "compaction_end",
+      willRetry: true,
+      result: { summary: "s", tokensAfter: 12_345 },
+    });
     expect(subscription.getCompactionCount()).toBe(1);
+    expect(subscription.getLastCompactionTokensAfter()).toBe(12_345);
 
     // willRetry=false with result — counter incremented again
-    emit({ type: "auto_compaction_end", willRetry: false, result: { summary: "s2" } });
+    emit({
+      type: "compaction_end",
+      willRetry: false,
+      result: { summary: "s2", tokensAfter: 6_789 },
+    });
     expect(subscription.getCompactionCount()).toBe(2);
+    expect(subscription.getLastCompactionTokensAfter()).toBe(6_789);
   });
 
-  it("does not count compaction when result is absent", async () => {
+  it("does not count compaction when result is absent", () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-compaction-no-result",
     });
 
     // No result (e.g. aborted or cancelled) — counter stays at 0
-    emit({ type: "auto_compaction_end", willRetry: false, result: undefined });
+    emit({ type: "compaction_end", willRetry: false, result: undefined });
     expect(subscription.getCompactionCount()).toBe(0);
 
-    emit({ type: "auto_compaction_end", willRetry: false, aborted: true });
+    emit({ type: "compaction_end", willRetry: false, aborted: true });
     expect(subscription.getCompactionCount()).toBe(0);
   });
 
-  it("emits compaction events on the agent event bus", async () => {
+  it("emits compaction events on the agent event bus", () => {
     const { emit } = createSubscribedSessionHarness({
       runId: "run-compaction",
     });
@@ -79,9 +102,9 @@ describe("subscribeEmbeddedPiSession", () => {
       });
     });
 
-    emit({ type: "auto_compaction_start" });
-    emit({ type: "auto_compaction_end", willRetry: true });
-    emit({ type: "auto_compaction_end", willRetry: false });
+    emit({ type: "compaction_start" });
+    emit({ type: "compaction_end", willRetry: true });
+    emit({ type: "compaction_end", willRetry: false });
 
     stop();
 
@@ -99,15 +122,19 @@ describe("subscribeEmbeddedPiSession", () => {
       sessionExtras: { isCompacting: true, abortCompaction },
     });
 
-    emit({ type: "auto_compaction_start" });
+    emit({ type: "compaction_start" });
 
     const waitPromise = subscription.waitForCompactionRetry();
     subscription.unsubscribe();
 
-    await expect(waitPromise).rejects.toMatchObject({ name: "AbortError" });
-    await expect(subscription.waitForCompactionRetry()).rejects.toMatchObject({
-      name: "AbortError",
-    });
+    const firstAbort = await waitPromise.catch((error: unknown) => error);
+    expect(firstAbort).toBeInstanceOf(Error);
+    expect((firstAbort as Error).name).toBe("AbortError");
+    const secondAbort = await subscription
+      .waitForCompactionRetry()
+      .catch((error: unknown) => error);
+    expect(secondAbort).toBeInstanceOf(Error);
+    expect((secondAbort as Error).name).toBe("AbortError");
     expect(abortCompaction).toHaveBeenCalledTimes(1);
   });
 
@@ -130,8 +157,8 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
-    const payload = onToolResult.mock.calls[0][0];
-    expect(payload.text).toContain("/tmp/a.txt");
+    const payload = toolResultPayloadAt(onToolResult, 0);
+    expect(payload?.text).toContain("/tmp/a.txt");
 
     toolHarness.emit({
       type: "tool_execution_end",
@@ -163,10 +190,10 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
-    const payload = onToolResult.mock.calls[0][0];
-    expect(payload.text).toContain("🌐");
-    expect(payload.text).toContain("Browser");
-    expect(payload.text).toContain("https://example.com");
+    const payload = toolResultPayloadAt(onToolResult, 0);
+    expect(payload?.text).toContain("🌐");
+    expect(payload?.text).toContain("Browser");
+    expect(payload?.text).toContain("https://example.com");
   });
 
   it("emits exec output in full verbose mode and includes PTY indicator", async () => {
@@ -188,9 +215,9 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
-    const summary = onToolResult.mock.calls[0][0];
-    expect(summary.text).toContain("Exec");
-    expect(summary.text).toContain("pty");
+    const summary = toolResultPayloadAt(onToolResult, 0);
+    expect(summary?.text).toContain("pty");
+    expect(summary?.text).toContain("claude");
 
     toolHarness.emit({
       type: "tool_execution_end",
@@ -203,9 +230,9 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(2);
-    const output = onToolResult.mock.calls[1][0];
-    expect(output.text).toContain("hello");
-    expect(output.text).toContain("```txt");
+    const output = toolResultPayloadAt(onToolResult, 1);
+    expect(output?.text).toContain("hello");
+    expect(output?.text).toContain("```txt");
 
     toolHarness.emit({
       type: "tool_execution_end",
@@ -218,7 +245,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await Promise.resolve();
 
     expect(onToolResult).toHaveBeenCalledTimes(3);
-    const readOutput = onToolResult.mock.calls[2][0];
-    expect(readOutput.text).toContain("file data");
+    const readOutput = toolResultPayloadAt(onToolResult, 2);
+    expect(readOutput?.text).toContain("file data");
   });
 });

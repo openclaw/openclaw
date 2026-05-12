@@ -4,7 +4,7 @@ import { GRAPH_ROOT } from "./attachments/shared.js";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
-import { resolveMSTeamsCredentials } from "./token.js";
+import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
 
 export type GraphUser = {
@@ -14,12 +14,12 @@ export type GraphUser = {
   mail?: string;
 };
 
-export type GraphGroup = {
+type GraphGroup = {
   id?: string;
   displayName?: string;
 };
 
-export type GraphChannel = {
+type GraphChannel = {
   id?: string;
   displayName?: string;
 };
@@ -125,13 +125,13 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
 }
 
 /** Graph collection response with optional pagination link. */
-export type GraphPagedResponse<T> = {
+type GraphPagedResponse<T> = {
   value?: T[];
   "@odata.nextLink"?: string;
 };
 
 /** Result of a paginated Graph API fetch. */
-export type PaginatedResult<T> = {
+type PaginatedResult<T> = {
   items: T[];
   truncated: boolean;
   found?: T;
@@ -199,8 +199,6 @@ export async function resolveGraphToken(
 
   // Try delegated token if requested and configured
   if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled && creds.type === "secret") {
-    // Dynamic import to avoid circular dependency (token.ts imports from graph.ts indirectly)
-    const { resolveDelegatedAccessToken } = await import("./token.js");
     const delegated = await resolveDelegatedAccessToken({
       tenantId: creds.tenantId,
       clientId: creds.appId,

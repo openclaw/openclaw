@@ -4,8 +4,10 @@ import {
   stripSystemPromptCacheBoundary,
 } from "./system-prompt-cache-boundary.js";
 
+/** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export type AnthropicServiceTier = "auto" | "standard_only";
 
+/** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export type AnthropicEphemeralCacheControl = {
   type: "ephemeral";
   ttl?: "1h";
@@ -20,6 +22,7 @@ type AnthropicPayloadPolicyInput = {
   serviceTier?: AnthropicServiceTier;
 };
 
+/** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export type AnthropicPayloadPolicy = {
   allowsServiceTier: boolean;
   cacheControl: AnthropicEphemeralCacheControl | undefined;
@@ -58,7 +61,12 @@ function resolveAnthropicEphemeralCacheControl(
   if (retention === "none") {
     return undefined;
   }
-  const ttl = retention === "long" && isLongTtlEligibleEndpoint(baseUrl) ? "1h" : undefined;
+  // Trust explicit long-retention opt-ins for Anthropic-compatible custom providers.
+  // Keep hostname gating for implicit/env-driven long retention so defaults stay conservative.
+  const ttl =
+    retention === "long" && (cacheRetention === "long" || isLongTtlEligibleEndpoint(baseUrl))
+      ? "1h"
+      : undefined;
   return { type: "ephemeral", ...(ttl ? { ttl } : {}) };
 }
 
@@ -171,6 +179,7 @@ function applyAnthropicCacheControlToMessages(
   }
 }
 
+/** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export function resolveAnthropicPayloadPolicy(
   input: AnthropicPayloadPolicyInput,
 ): AnthropicPayloadPolicy {
@@ -192,6 +201,7 @@ export function resolveAnthropicPayloadPolicy(
   };
 }
 
+/** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export function applyAnthropicPayloadPolicyToParams(
   payloadObj: Record<string, unknown>,
   policy: AnthropicPayloadPolicy,
@@ -218,6 +228,7 @@ export function applyAnthropicPayloadPolicyToParams(
   applyAnthropicCacheControlToMessages(payloadObj.messages, policy.cacheControl);
 }
 
+/** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export function applyAnthropicEphemeralCacheControlMarkers(
   payloadObj: Record<string, unknown>,
 ): void {

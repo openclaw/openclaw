@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedBrowserConfig } from "./config.js";
 
 export type BrowserExecutable = {
@@ -14,6 +14,7 @@ export type BrowserExecutable = {
 };
 
 const CHROME_VERSION_RE = /\b(\d+)(?:\.\d+){1,3}\b/g;
+const PLAYWRIGHT_BROWSERS_PATH_ENV = "PLAYWRIGHT_BROWSERS_PATH";
 
 const CHROMIUM_BUNDLE_IDS = new Set([
   "com.google.Chrome",
@@ -485,6 +486,48 @@ function findFirstChromeExecutable(candidates: string[]): BrowserExecutable | nu
   return null;
 }
 
+function findPlaywrightChromiumExecutableCandidatesLinux(): Array<BrowserExecutable> {
+  const candidates: Array<BrowserExecutable> = [];
+  for (const browserPath of getPlaywrightBrowserCachePaths()) {
+    for (const entry of readSortedDirNames(browserPath)) {
+      if (!entry.startsWith("chromium-")) {
+        continue;
+      }
+      for (const linuxDir of ["chrome-linux64", "chrome-linux"]) {
+        candidates.push({
+          kind: "chromium",
+          path: path.join(browserPath, entry, linuxDir, "chrome"),
+        });
+      }
+    }
+  }
+  return candidates;
+}
+
+function getPlaywrightBrowserCachePaths(): string[] {
+  const configured = normalizeOptionalString(process.env[PLAYWRIGHT_BROWSERS_PATH_ENV]);
+  const candidates = [
+    configured && configured !== "0" ? configured : null,
+    path.join(os.homedir(), ".cache", "ms-playwright"),
+  ];
+  const seen = new Set<string>();
+  return candidates.filter((candidate): candidate is string => {
+    if (!candidate || seen.has(candidate)) {
+      return false;
+    }
+    seen.add(candidate);
+    return true;
+  });
+}
+
+function readSortedDirNames(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir).toSorted();
+  } catch {
+    return [];
+  }
+}
+
 export function findChromeExecutableMac(): BrowserExecutable | null {
   const candidates: Array<BrowserExecutable> = [
     {
@@ -538,7 +581,7 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
   return findFirstExecutable(candidates);
 }
 
-export function findGoogleChromeExecutableMac(): BrowserExecutable | null {
+function findGoogleChromeExecutableMac(): BrowserExecutable | null {
   return findFirstChromeExecutable([
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
@@ -555,26 +598,32 @@ export function findChromeExecutableLinux(): BrowserExecutable | null {
     { kind: "chrome", path: "/usr/bin/google-chrome" },
     { kind: "chrome", path: "/usr/bin/google-chrome-stable" },
     { kind: "chrome", path: "/usr/bin/chrome" },
+    { kind: "chrome", path: "/opt/google/chrome/chrome" },
     { kind: "brave", path: "/usr/bin/brave-browser" },
     { kind: "brave", path: "/usr/bin/brave-browser-stable" },
     { kind: "brave", path: "/usr/bin/brave" },
     { kind: "brave", path: "/snap/bin/brave" },
+    { kind: "brave", path: "/opt/brave.com/brave/brave-browser" },
     { kind: "edge", path: "/usr/bin/microsoft-edge" },
     { kind: "edge", path: "/usr/bin/microsoft-edge-stable" },
     { kind: "chromium", path: "/usr/bin/chromium" },
     { kind: "chromium", path: "/usr/bin/chromium-browser" },
+    { kind: "chromium", path: "/usr/lib/chromium/chromium" },
+    { kind: "chromium", path: "/usr/lib/chromium-browser/chromium-browser" },
     { kind: "chromium", path: "/snap/bin/chromium" },
+    ...findPlaywrightChromiumExecutableCandidatesLinux(),
   ];
 
   return findFirstExecutable(candidates);
 }
 
-export function findGoogleChromeExecutableLinux(): BrowserExecutable | null {
+function findGoogleChromeExecutableLinux(): BrowserExecutable | null {
   return findFirstChromeExecutable([
     "/usr/bin/google-chrome",
     "/usr/bin/google-chrome-stable",
     "/usr/bin/google-chrome-beta",
     "/usr/bin/google-chrome-unstable",
+    "/opt/google/chrome/chrome",
     "/snap/bin/google-chrome",
   ]);
 }
@@ -649,7 +698,7 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
   return findFirstExecutable(candidates);
 }
 
-export function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
+function findGoogleChromeExecutableWindows(): BrowserExecutable | null {
   const localAppData = process.env.LOCALAPPDATA ?? "";
   const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
   const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";

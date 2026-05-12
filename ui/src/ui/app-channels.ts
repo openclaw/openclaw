@@ -1,3 +1,4 @@
+import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import {
   loadChannels,
   logoutWhatsApp,
@@ -6,7 +7,6 @@ import {
   type ChannelsState,
 } from "./controllers/channels.ts";
 import { loadConfig, saveConfig, type ConfigState } from "./controllers/config.ts";
-import { normalizeOptionalString } from "./string-coerce.ts";
 import type { NostrProfile } from "./types.ts";
 import { createNostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
@@ -37,13 +37,20 @@ export async function handleWhatsAppLogout(host: ChannelsActionHost) {
 }
 
 export async function handleChannelConfigSave(host: ChannelsActionHost) {
-  await saveConfig(host as ConfigState);
-  await loadConfig(host as ConfigState);
+  const saved = await saveConfig(host as ConfigState);
+  const saveError = host.lastError;
+  if (!saved) {
+    await loadConfig(host as ConfigState);
+    if (saveError && !host.lastError) {
+      host.lastError = saveError;
+    }
+    return;
+  }
   await loadChannels(host as ChannelsState, true);
 }
 
 export async function handleChannelConfigReload(host: ChannelsActionHost) {
-  await loadConfig(host as ConfigState);
+  await loadConfig(host as ConfigState, { discardPendingChanges: true });
   await loadChannels(host as ChannelsState, true);
 }
 
@@ -78,24 +85,8 @@ function buildNostrProfileUrl(accountId: string, suffix = ""): string {
   return `/api/channels/nostr/${encodeURIComponent(accountId)}/profile${suffix}`;
 }
 
-function resolveGatewayHttpAuthHeader(host: ChannelsActionHost): string | null {
-  const deviceToken = normalizeOptionalString(host.hello?.auth?.deviceToken);
-  if (deviceToken) {
-    return `Bearer ${deviceToken}`;
-  }
-  const token = normalizeOptionalString(host.settings.token);
-  if (token) {
-    return `Bearer ${token}`;
-  }
-  const password = normalizeOptionalString(host.password);
-  if (password) {
-    return `Bearer ${password}`;
-  }
-  return null;
-}
-
 function buildGatewayHttpHeaders(host: ChannelsActionHost): Record<string, string> {
-  const authorization = resolveGatewayHttpAuthHeader(host);
+  const authorization = resolveControlUiAuthHeader(host);
   return authorization ? { Authorization: authorization } : {};
 }
 

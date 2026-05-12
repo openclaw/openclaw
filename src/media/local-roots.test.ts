@@ -118,14 +118,18 @@ describe("local media roots", () => {
       ],
     );
 
-    expect(roots.map(normalizeHostPath)).toEqual(
-      expect.arrayContaining([
-        normalizeHostPath("/tmp/base"),
-        normalizeHostPath(picturesDir),
-        normalizeHostPath(moviesDir),
-      ]),
-    );
+    expect(roots.map(normalizeHostPath)).toStrictEqual([
+      normalizeHostPath("/tmp/base"),
+      normalizeHostPath(picturesDir),
+      normalizeHostPath(moviesDir),
+    ]);
     expect(roots.map(normalizeHostPath)).not.toContain(normalizeHostPath("/"));
+  });
+
+  it("does not widen local roots for pass-through remote media schemes", () => {
+    const roots = appendLocalMediaParentRoots(["/tmp/base"], ["mxc://matrix.org/abc123def456"]);
+
+    expect(roots.map(normalizeHostPath)).toEqual([normalizeHostPath("/tmp/base")]);
   });
 
   it.each([
@@ -148,11 +152,23 @@ describe("local media roots", () => {
       shouldContainPictures: false,
     },
     {
-      name: "widens media roots again when messaging-profile agents explicitly enable filesystem tools",
+      name: "does not widen media roots when messaging-profile agents only configure filesystem guards",
       stateDir: path.join("/tmp", "openclaw-messaging-fs-media-roots-state"),
       cfg: {
         tools: {
           profile: "messaging",
+          fs: { workspaceOnly: false },
+        },
+      },
+      shouldContainPictures: false,
+    },
+    {
+      name: "widens media roots when messaging-profile agents explicitly allow reads",
+      stateDir: path.join("/tmp", "openclaw-messaging-read-media-roots-state"),
+      cfg: {
+        tools: {
+          profile: "messaging",
+          alsoAllow: ["read"] as string[],
           fs: { workspaceOnly: false },
         },
       },

@@ -20,8 +20,24 @@ describe("provider auth env trust", () => {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
-    expect(credential).toMatchObject({
+    expect(credential).toEqual({
+      type: "api_key",
+      provider: "whisperx",
       keyRef: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
+    });
+  });
+
+  it("buildApiKeyCredential keeps secret-ref-like input literal in plaintext mode", async () => {
+    const { buildApiKeyCredential } = await import("./provider-auth-helpers.js");
+
+    const credential = buildApiKeyCredential("ollama", "${AWS_SECRET_ACCESS_KEY}", undefined, {
+      secretInputMode: "plaintext",
+    });
+
+    expect(credential).toEqual({
+      type: "api_key",
+      provider: "ollama",
+      key: "${AWS_SECRET_ACCESS_KEY}",
     });
   });
 
@@ -39,7 +55,7 @@ describe("provider auth env trust", () => {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ref: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
       resolvedValue: "test-secret",
     });
@@ -65,7 +81,7 @@ describe("provider auth env trust", () => {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ref: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
       resolvedValue: "test-secret",
     });

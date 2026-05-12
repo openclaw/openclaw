@@ -1,9 +1,5 @@
 package ai.openclaw.app
 
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.viewModelScope
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
@@ -13,6 +9,10 @@ import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.voice.VoiceConversationEntry
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -22,7 +22,9 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class MainViewModel(app: Application) : AndroidViewModel(app) {
+class MainViewModel(
+  app: Application,
+) : AndroidViewModel(app) {
   private val nodeApp = app as NodeApp
   private val prefs = nodeApp.prefs
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
@@ -101,7 +103,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
-  val micEnabled: StateFlow<Boolean> = prefs.talkEnabled
+  val voiceCaptureMode: StateFlow<VoiceCaptureMode> = runtimeState(initial = VoiceCaptureMode.Off) { it.voiceCaptureMode }
+  val micEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.micEnabled }
 
   val micCooldown: StateFlow<Boolean> = runtimeState(initial = false) { it.micCooldown }
   val micStatusText: StateFlow<String> = runtimeState(initial = "Mic off") { it.micStatusText }
@@ -111,6 +114,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val micConversation: StateFlow<List<VoiceConversationEntry>> = runtimeState(initial = emptyList()) { it.micConversation }
   val micInputLevel: StateFlow<Float> = runtimeState(initial = 0f) { it.micInputLevel }
   val micIsSending: StateFlow<Boolean> = runtimeState(initial = false) { it.micIsSending }
+  val talkModeEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeEnabled }
+  val talkModeListening: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeListening }
+  val talkModeSpeaking: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeSpeaking }
+  val talkModeStatusText: StateFlow<String> = runtimeState(initial = "Off") { it.talkModeStatusText }
 
   val chatSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.chatSessionKey }
   val chatSessionId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionId }
@@ -138,7 +145,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val sms: SmsManager
     get() = ensureRuntime().sms
 
-  fun attachRuntimeUi(owner: LifecycleOwner, permissionRequester: PermissionRequester) {
+  fun attachRuntimeUi(
+    owner: LifecycleOwner,
+    permissionRequester: PermissionRequester,
+  ) {
     val runtime = runtimeRef.value ?: return
     runtime.camera.attachLifecycleOwner(owner)
     runtime.camera.attachPermissionRequester(permissionRequester)
@@ -240,9 +250,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     enabled: Boolean,
     start: String,
     end: String,
-  ): Boolean {
-    return ensureRuntime().setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
-  }
+  ): Boolean = ensureRuntime().setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
 
   fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
     ensureRuntime().setNotificationForwardingMaxEventsPerMinute(value)
@@ -281,6 +289,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setMicEnabled(enabled: Boolean) {
     ensureRuntime().setMicEnabled(enabled)
+  }
+
+  fun setTalkModeEnabled(enabled: Boolean) {
+    ensureRuntime().setTalkModeEnabled(enabled)
   }
 
   fun setSpeakerEnabled(enabled: Boolean) {
@@ -331,9 +343,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ensureRuntime().handleCanvasA2UIActionFromWebView(payloadJson)
   }
 
-  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean {
-    return ensureRuntime().isTrustedCanvasActionUrl(rawUrl)
-  }
+  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean = ensureRuntime().isTrustedCanvasActionUrl(rawUrl)
 
   fun requestCanvasRehydrate(source: String = "screen_tab") {
     ensureRuntime().requestCanvasRehydrate(source = source, force = true)
@@ -367,7 +377,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ensureRuntime().abortChat()
   }
 
-  fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {
+  fun sendChat(
+    message: String,
+    thinking: String,
+    attachments: List<OutgoingAttachment>,
+  ) {
     ensureRuntime().sendChat(message = message, thinking = thinking, attachments = attachments)
   }
 
@@ -375,11 +389,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     message: String,
     thinking: String,
     attachments: List<OutgoingAttachment>,
-  ): Boolean {
-    return ensureRuntime().sendChatAwaitAcceptance(
+  ): Boolean =
+    ensureRuntime().sendChatAwaitAcceptance(
       message = message,
       thinking = thinking,
       attachments = attachments,
     )
-  }
 }

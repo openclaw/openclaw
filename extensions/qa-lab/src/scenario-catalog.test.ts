@@ -17,13 +17,32 @@ describe("qa scenario catalog", () => {
     expect(pack.agent.identityMarkdown).toContain("Dev C-3PO");
     expect(pack.kickoffTask).toContain("Lobster Invaders");
     expect(listQaScenarioMarkdownPaths().length).toBe(pack.scenarios.length);
-    expect(pack.scenarios.some((scenario) => scenario.id === "image-generation-roundtrip")).toBe(
-      true,
+    expect(listQaScenarioMarkdownPaths()).toContain(
+      "qa/scenarios/media/image-generation-roundtrip.md",
     );
-    expect(pack.scenarios.some((scenario) => scenario.id === "character-vibes-gollum")).toBe(true);
-    expect(pack.scenarios.some((scenario) => scenario.id === "character-vibes-c3po")).toBe(true);
-    expect(pack.scenarios.every((scenario) => scenario.execution?.kind === "flow")).toBe(true);
-    expect(pack.scenarios.some((scenario) => scenario.execution.flow?.steps.length)).toBe(true);
+    const scenarioIds = pack.scenarios.map((scenario) => scenario.id);
+    const requiredScenarioIds = [
+      "image-generation-roundtrip",
+      "character-vibes-gollum",
+      "character-vibes-c3po",
+    ].toSorted();
+    expect(
+      scenarioIds.filter((scenarioId) => requiredScenarioIds.includes(scenarioId)).toSorted(),
+    ).toEqual(requiredScenarioIds);
+    expect(
+      pack.scenarios
+        .filter((scenario) => scenario.execution?.kind !== "flow")
+        .map((scenario) => scenario.id),
+    ).toStrictEqual([]);
+    expect(
+      pack.scenarios.filter((scenario) => (scenario.execution.flow?.steps.length ?? 0) > 0),
+    ).not.toStrictEqual([]);
+    expect(
+      pack.scenarios
+        .filter((scenario) => !(scenario.coverage?.primary.length ?? 0))
+        .map((scenario) => scenario.id),
+    ).toStrictEqual([]);
+    expect(readQaScenarioById("memory-recall").coverage?.primary).toContain("memory.recall");
   });
 
   it("exposes bootstrap data from the markdown pack", () => {
@@ -31,14 +50,11 @@ describe("qa scenario catalog", () => {
 
     expect(catalog.agentIdentityMarkdown).toContain("protocol-minded");
     expect(catalog.kickoffTask).toContain("Track what worked");
-    expect(catalog.scenarios.some((scenario) => scenario.id === "subagent-fanout-synthesis")).toBe(
-      true,
-    );
+    const scenarioIds = catalog.scenarios.map((scenario) => scenario.id);
+    expect(scenarioIds).toContain("subagent-fanout-synthesis");
     expect(
-      QA_AGENTIC_PARITY_SCENARIO_IDS.every((scenarioId) =>
-        catalog.scenarios.some((scenario) => scenario.id === scenarioId),
-      ),
-    ).toBe(true);
+      QA_AGENTIC_PARITY_SCENARIO_IDS.filter((scenarioId) => !scenarioIds.includes(scenarioId)),
+    ).toStrictEqual([]);
   });
 
   it("loads scenario-specific execution config from per-scenario markdown", () => {
@@ -48,7 +64,6 @@ describe("qa scenario catalog", () => {
     const codexLeakConfig = readQaScenarioExecutionConfig("codex-harness-no-meta-leak") as
       | {
           harnessRuntime?: string;
-          harnessFallback?: string;
           expectedReply?: string;
           forbiddenReplySubstrings?: string[];
         }
@@ -68,7 +83,8 @@ describe("qa scenario catalog", () => {
     );
     expect(codexLeak.title).toBe("Codex harness no meta leak");
     expect(codexLeakConfig?.harnessRuntime).toBe("codex");
-    expect(codexLeakConfig?.harnessFallback).toBe("none");
+    expect(JSON.stringify(codexLeak.execution.flow)).toContain("agentRuntime");
+    expect(JSON.stringify(codexLeak.execution.flow)).not.toContain("embeddedHarness");
     expect(codexLeakConfig?.expectedReply).toBe("QA_LEAK_OK");
     expect(codexLeakConfig?.forbiddenReplySubstrings).toContain("checking thread context");
     expect(fallbackConfig?.gracefulFallbackAny as string[] | undefined).toContain(
@@ -112,10 +128,135 @@ describe("qa scenario catalog", () => {
       (candidate) => candidate.id === "codex-harness-no-meta-leak",
     );
 
-    expect(scenario?.sourcePath).toBe("qa/scenarios/codex-harness-no-meta-leak.md");
+    expect(scenario?.sourcePath).toBe("qa/scenarios/models/codex-harness-no-meta-leak.md");
     expect(scenario?.execution.flow?.steps.map((step) => step.name)).toContain(
       "keeps codex coordination chatter out of the visible reply",
     );
+  });
+
+  it("includes the GPT-5.5 thinking visibility switch scenario", () => {
+    const scenario = readQaScenarioById("gpt55-thinking-visibility-switch");
+    const config = readQaScenarioExecutionConfig("gpt55-thinking-visibility-switch") as
+      | {
+          requiredLiveProvider?: string;
+          requiredLiveModel?: string;
+          offDirective?: string;
+          maxDirective?: string;
+          reasoningDirective?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/gpt55-thinking-visibility-switch.md");
+    expect(config?.requiredLiveProvider).toBe("openai");
+    expect(config?.requiredLiveModel).toBe("gpt-5.5");
+    expect(config?.offDirective).toBe("/think off");
+    expect(config?.maxDirective).toBe("/think medium");
+    expect(config?.reasoningDirective).toBe("/reasoning on");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "enables reasoning display and disables thinking",
+      "switches to medium thinking",
+      "verifies medium thinking emits visible reasoning",
+      "verifies medium thinking completes the answer",
+    ]);
+  });
+
+  it("includes the OpenAI native web search live scenario", () => {
+    const scenario = readQaScenarioById("openai-native-web-search-live");
+    const config = readQaScenarioExecutionConfig("openai-native-web-search-live") as
+      | {
+          requiredProvider?: string;
+          requiredModel?: string;
+          expectedMarker?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/openai-native-web-search-live.md");
+    expect(scenario.gatewayConfigPatch?.tools).toEqual({
+      web: {
+        search: {
+          enabled: true,
+          provider: null,
+        },
+      },
+    });
+    expect(config?.requiredProvider).toBe("openai");
+    expect(config?.requiredModel).toBe("gpt-5.5");
+    expect(config?.expectedMarker).toBe("WEB-SEARCH-OK");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "confirms live OpenAI GPT-5.5 web search auto mode",
+      "searches official OpenAI News through the live model",
+    ]);
+  });
+
+  it("includes the Kitchen Sink live OpenAI plugin gauntlet", () => {
+    const scenario = readQaScenarioById("kitchen-sink-live-openai");
+    const config = readQaScenarioExecutionConfig("kitchen-sink-live-openai") as
+      | {
+          requiredProviderMode?: string;
+          requiredProvider?: string;
+          pluginSpec?: string;
+          pluginId?: string;
+          pluginPersonality?: string;
+          adversarialPersonality?: string;
+          expectedSurfaceIds?: Record<string, string[]>;
+          expectedAdversarialDiagnostics?: string[];
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/plugins/kitchen-sink-live-openai.md");
+    expect(config?.requiredProviderMode).toBe("live-frontier");
+    expect(config?.requiredProvider).toBe("openai");
+    expect(config?.pluginSpec).toBe("npm:@openclaw/kitchen-sink@latest");
+    expect(config?.pluginId).toBe("openclaw-kitchen-sink-fixture");
+    expect(config?.pluginPersonality).toBe("conformance");
+    expect(config?.adversarialPersonality).toBe("adversarial");
+    expect(config?.expectedSurfaceIds?.webSearchProviderIds).toContain(
+      "kitchen-sink-web-search-provider",
+    );
+    expect(config?.expectedSurfaceIds?.realtimeVoiceProviderIds).toContain(
+      "kitchen-sink-realtime-voice-provider",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "only bundled plugins can register agent tool result middleware",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "control UI descriptor registration requires id, surface, label, and valid optional fields",
+    );
+    expect(
+      config?.expectedAdversarialDiagnostics?.every((entry) => typeof entry === "string"),
+    ).toBe(true);
+    expect(JSON.stringify(scenario.execution.flow)).toContain("--runtime");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "installs and inspects the Kitchen Sink plugin",
+      "restarts gateway with Kitchen Sink configured",
+      "exercises command inventory and MCP tool surfaces",
+      "runs live OpenAI turn with Kitchen Sink loaded",
+      "records gateway CPU RSS and log anomaly evidence",
+      "verifies adversarial diagnostics personality",
+    ]);
+  });
+
+  it("includes the thinking slash model remap scenario", () => {
+    const scenario = readQaScenarioById("thinking-slash-model-remap");
+    const config = readQaScenarioExecutionConfig("thinking-slash-model-remap") as
+      | {
+          requiredProviderMode?: string;
+          anthropicModelRef?: string;
+          openAiXhighModelRef?: string;
+          noXhighModelRef?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/thinking-slash-model-remap.md");
+    expect(config?.requiredProviderMode).toBe("live-frontier");
+    expect(config?.anthropicModelRef).toBe("anthropic/claude-sonnet-4-6");
+    expect(config?.openAiXhighModelRef).toBe("openai/gpt-5.5");
+    expect(config?.noXhighModelRef).toBe("anthropic/claude-sonnet-4-6");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "selects Anthropic and verifies adaptive options",
+      "maps adaptive to medium when switching to OpenAI",
+      "maps xhigh to high on a model without xhigh",
+    ]);
   });
 
   it("includes the seeded mock-only broken-turn scenarios in the markdown pack", () => {
@@ -135,7 +276,7 @@ describe("qa scenario catalog", () => {
           }
         | undefined;
 
-      expect(scenario.sourcePath).toBe(`qa/scenarios/${scenarioId}.md`);
+      expect(scenario.sourcePath).toBe(`qa/scenarios/runtime/${scenarioId}.md`);
       expect(config?.requiredProvider).toBe("mock-openai");
       expect(config?.prompt).toContain("check");
       expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);

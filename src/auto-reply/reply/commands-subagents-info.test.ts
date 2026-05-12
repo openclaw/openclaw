@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   addSubagentRunForTests,
@@ -9,6 +11,25 @@ import { failTaskRunByRunId } from "../../tasks/task-executor.js";
 import { createTaskRecord, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import type { ReplyPayload } from "../types.js";
 import { handleSubagentsInfoAction } from "./commands-subagents/action-info.js";
+import {
+  baseCommandTestConfig,
+  configureInMemoryTaskRegistryStoreForTests,
+} from "./commands.test-harness.js";
+
+const TEST_SESSION_STORE_PATH = path.join(
+  os.tmpdir(),
+  `openclaw-commands-subagents-info-${process.pid}.json`,
+);
+
+function buildCommandTestConfig(): OpenClawConfig {
+  return {
+    ...baseCommandTestConfig,
+    session: {
+      ...baseCommandTestConfig.session,
+      store: TEST_SESSION_STORE_PATH,
+    },
+  };
+}
 
 function buildInfoContext(params: { cfg: OpenClawConfig; runs: object[]; restTokens: string[] }) {
   return {
@@ -24,12 +45,15 @@ function buildInfoContext(params: { cfg: OpenClawConfig; runs: object[]; restTok
 }
 
 function requireReplyText(reply: ReplyPayload | undefined): string {
-  expect(reply?.text).toBeDefined();
-  return reply?.text as string;
+  if (reply?.text === undefined) {
+    throw new Error("expected reply text");
+  }
+  return reply.text;
 }
 
 beforeEach(() => {
-  resetTaskRegistryForTests();
+  resetTaskRegistryForTests({ persist: false });
+  configureInMemoryTaskRegistryStoreForTests();
   resetSubagentRegistryForTests();
 });
 
@@ -37,7 +61,7 @@ describe("subagents info", () => {
   it("returns usage for missing targets", () => {
     const cfg = {
       commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
+      channels: { quietchat: { allowFrom: ["*"] } },
     } as OpenClawConfig;
     const result = handleSubagentsInfoAction(buildInfoContext({ cfg, runs: [], restTokens: [] }));
     expect(result.shouldContinue).toBe(false);
@@ -71,11 +95,7 @@ describe("subagents info", () => {
       terminalSummary: "Completed the requested task",
       deliveryStatus: "delivered",
     });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
+    const cfg = buildCommandTestConfig();
     const result = handleSubagentsInfoAction(
       buildInfoContext({ cfg, runs: [run], restTokens: ["1"] }),
     );
@@ -135,11 +155,7 @@ describe("subagents info", () => {
       ].join("\n"),
       terminalSummary: "Needs manual follow-up.",
     });
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { mainKey: "main", scope: "per-sender" },
-    } as OpenClawConfig;
+    const cfg = buildCommandTestConfig();
     const result = handleSubagentsInfoAction(
       buildInfoContext({ cfg, runs: [run], restTokens: ["1"] }),
     );
@@ -182,8 +198,8 @@ describe("subagents info", () => {
     });
     const cfg = {
       commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { mainKey: "main", scope: "per-sender" },
+      channels: { quietchat: { allowFrom: ["*"] } },
+      session: { mainKey: "main", scope: "per-sender", store: TEST_SESSION_STORE_PATH },
     } as OpenClawConfig;
     const result = handleSubagentsInfoAction({
       params: {

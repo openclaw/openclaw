@@ -34,11 +34,14 @@ describe("minimax model definitions", () => {
       contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
     });
-    expect(model).toMatchObject({
+    expect(model).toEqual({
+      contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+      cost: MINIMAX_API_COST,
       id: "MiniMax-M2.7",
+      input: ["text"],
+      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
       name: "MiniMax M2.7",
       reasoning: true,
-      input: ["text", "image"], // M2.7 supports images
     });
   });
 
@@ -49,11 +52,14 @@ describe("minimax model definitions", () => {
       contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
     });
-    expect(model).toMatchObject({
+    expect(model).toEqual({
+      contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+      cost: MINIMAX_API_COST,
       id: "MiniMax-M2.5",
+      input: ["text"],
+      maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
       name: "MiniMax MiniMax-M2.5",
       reasoning: false,
-      input: ["text"], // M2.5 is not image-capable
     });
   });
 
@@ -62,7 +68,7 @@ describe("minimax model definitions", () => {
     expect(model.cost).toEqual(MINIMAX_API_COST);
     expect(model.contextWindow).toBe(DEFAULT_MINIMAX_CONTEXT_WINDOW);
     expect(model.maxTokens).toBe(DEFAULT_MINIMAX_MAX_TOKENS);
-    expect(model.input).toEqual(["text", "image"]);
+    expect(model.input).toEqual(["text"]);
   });
 
   it("falls back to generated name for unknown model id", () => {
@@ -71,14 +77,14 @@ describe("minimax model definitions", () => {
     expect(model.reasoning).toBe(false);
   });
 
-  it("M2.7 model includes image input", () => {
+  it("keeps M2.7 text-only on the Anthropic-compatible chat path", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M2.7");
-    expect(model.input).toEqual(["text", "image"]);
+    expect(model.input).toEqual(["text"]);
   });
 
-  it("M2.7-highspeed model includes image input", () => {
+  it("keeps M2.7-highspeed text-only on the Anthropic-compatible chat path", () => {
     const model = buildMinimaxApiModelDefinition("MiniMax-M2.7-highspeed");
-    expect(model.input).toEqual(["text", "image"]);
+    expect(model.input).toEqual(["text"]);
     expect(model.cost).toEqual(MINIMAX_API_HIGHSPEED_COST);
   });
 

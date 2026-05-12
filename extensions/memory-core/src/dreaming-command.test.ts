@@ -1,8 +1,9 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
 } from "openclaw/plugin-sdk/core";
-import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/memory-core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { registerDreamingCommand } from "./dreaming-command.js";
 
@@ -25,7 +26,11 @@ function createHarness(initialConfig: OpenClawConfig = {}) {
 
   const runtime = {
     config: {
+      current: vi.fn(() => runtimeConfig),
       loadConfig: vi.fn(() => runtimeConfig),
+      replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
+        runtimeConfig = nextConfig;
+      }),
       writeConfigFile: vi.fn(async (nextConfig: OpenClawConfig) => {
         runtimeConfig = nextConfig;
       }),
@@ -111,11 +116,10 @@ describe("memory-core /dreaming command", () => {
 
     const result = await command.handler(createCommandContext("off"));
 
-    expect(runtime.config.writeConfigFile).toHaveBeenCalledTimes(1);
-    expect(resolveStoredDreaming(getRuntimeConfig())).toMatchObject({
-      enabled: false,
-      frequency: "0 */6 * * *",
-    });
+    expect(runtime.config.replaceConfigFile).toHaveBeenCalledTimes(1);
+    const storedDreaming = resolveStoredDreaming(getRuntimeConfig());
+    expect(storedDreaming.enabled).toBe(false);
+    expect(storedDreaming.frequency).toBe("0 */6 * * *");
     expect(result.text).toContain("Dreaming disabled.");
   });
 
@@ -129,7 +133,7 @@ describe("memory-core /dreaming command", () => {
     );
 
     expect(result.text).toContain("requires operator.admin");
-    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+    expect(runtime.config.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("blocks write-scoped gateway callers from persisting dreaming config", async () => {
@@ -142,7 +146,7 @@ describe("memory-core /dreaming command", () => {
     );
 
     expect(result.text).toContain("requires operator.admin");
-    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+    expect(runtime.config.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("allows admin-scoped gateway callers to persist dreaming config", async () => {
@@ -154,10 +158,8 @@ describe("memory-core /dreaming command", () => {
       }),
     );
 
-    expect(runtime.config.writeConfigFile).toHaveBeenCalledTimes(1);
-    expect(resolveStoredDreaming(getRuntimeConfig())).toMatchObject({
-      enabled: true,
-    });
+    expect(runtime.config.replaceConfigFile).toHaveBeenCalledTimes(1);
+    expect(resolveStoredDreaming(getRuntimeConfig()).enabled).toBe(true);
     expect(result.text).toContain("Dreaming enabled.");
   });
 
@@ -187,7 +189,7 @@ describe("memory-core /dreaming command", () => {
     expect(result.text).toContain("- enabled: off (America/Los_Angeles)");
     expect(result.text).toContain("- sweep cadence: 15 */8 * * *");
     expect(result.text).toContain("- promotion policy: score>=0.8, recalls>=3, uniqueQueries>=3");
-    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+    expect(runtime.config.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("shows usage for invalid args and does not mutate config", async () => {
@@ -195,6 +197,6 @@ describe("memory-core /dreaming command", () => {
     const result = await command.handler(createCommandContext("unknown-mode"));
 
     expect(result.text).toContain("Usage: /dreaming status");
-    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+    expect(runtime.config.replaceConfigFile).not.toHaveBeenCalled();
   });
 });

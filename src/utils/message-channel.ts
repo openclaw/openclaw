@@ -12,28 +12,23 @@ export {
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
   listDeliverableMessageChannels,
-  listGatewayAgentChannelAliases,
-  listGatewayAgentChannelValues,
-  listGatewayMessageChannels,
   normalizeMessageChannel,
   resolveGatewayMessageChannel,
   resolveMessageChannel,
   type DeliverableMessageChannel,
-  type GatewayAgentChannelHint,
   type GatewayMessageChannel,
 } from "./message-channel-normalize.js";
 export {
   INTERNAL_MESSAGE_CHANNEL,
+  INTERNAL_NON_DELIVERY_CHANNELS,
+  isInternalNonDeliveryChannel,
   type InternalMessageChannel,
 } from "./message-channel-constants.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   type InternalMessageChannel,
 } from "./message-channel-constants.js";
-import {
-  normalizeMessageChannel,
-  type DeliverableMessageChannel,
-} from "./message-channel-normalize.js";
+import { normalizeMessageChannel } from "./message-channel-normalize.js";
 
 export { GATEWAY_CLIENT_NAMES, GATEWAY_CLIENT_MODES };
 export type { GatewayClientName, GatewayClientMode };

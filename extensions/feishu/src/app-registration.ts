@@ -5,8 +5,8 @@
  * Replaces axios with native fetch, removes inquirer/ora/chalk in favor of
  * the openclaw WizardPrompter surface.
  */
-
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { renderQrTerminal } from "./qr-terminal.js";
 import type { FeishuDomain } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -167,7 +167,7 @@ export async function pollAppRegistration(params: {
   expireIn: number;
   initialDomain?: FeishuDomain;
   abortSignal?: AbortSignal;
-  /** Registration type parameter: "ob_user" for user mode, "ob_app" for bot mode. */
+  /** Registration type parameter. The CLI bot QR flow uses "ob_cli_app". */
   tp?: string;
 }): Promise<PollOutcome> {
   const { deviceCode, expireIn, initialDomain = "feishu", abortSignal, tp } = params;
@@ -252,9 +252,8 @@ export async function pollAppRegistration(params: {
  * otherwise the pattern is corrupted and cannot be scanned.
  */
 export async function printQrCode(url: string): Promise<void> {
-  const mod = await import("qrcode-terminal");
-  const qrcode = mod.default ?? mod;
-  qrcode.generate(url, { small: true });
+  const output = await renderQrTerminal(url);
+  process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
 
 /**

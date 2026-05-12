@@ -1,14 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildWorkspaceSkillsPrompt } from "./skills.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeSkill } from "./skills.test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "./skills/home-env.test-support.js";
+import { buildWorkspaceSkillsPrompt } from "./skills/workspace.js";
+
+vi.mock("./skills/plugin-skills.js", () => ({
+  resolvePluginSkillDirs: () => [],
+}));
 
 const tempDirs: string[] = [];
 
@@ -47,8 +51,10 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
     await restoreMockSkillsHomeEnv(envSnapshot, async () => {
       await Promise.all(
         tempDirs
-          .splice(0, tempDirs.length)
-          .map((dir) => fs.rm(dir, { recursive: true, force: true })),
+          .splice(0)
+          .map((dir) =>
+            fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }),
+          ),
       );
     });
   });

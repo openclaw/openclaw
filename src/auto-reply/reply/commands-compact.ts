@@ -1,6 +1,7 @@
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -8,6 +9,12 @@ import {
 } from "../../shared/string-coerce.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+
+const compactRuntimeLoader = createLazyImportLoader(() => import("./commands-compact.runtime.js"));
+
+function loadCompactRuntime(): Promise<typeof import("./commands-compact.runtime.js")> {
+  return compactRuntimeLoader.load();
+}
 
 function extractCompactInstructions(params: {
   rawBody?: string;
@@ -88,7 +95,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       reply: { text: "⚙️ Compaction unavailable (missing session id)." },
     };
   }
-  const runtime = await import("./commands-compact.runtime.js");
+  const runtime = await loadCompactRuntime();
   const sessionId = targetSessionEntry.sessionId;
   if (runtime.isEmbeddedPiRunActive(sessionId)) {
     runtime.abortEmbeddedPiRun(sessionId);
@@ -136,6 +143,8 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     skillsSnapshot: targetSessionEntry.skillsSnapshot,
     provider: params.provider,
     model: params.model,
+    agentHarnessId:
+      targetSessionEntry.sessionId === sessionId ? targetSessionEntry.agentHarnessId : undefined,
     thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
     bashElevated: {
       enabled: false,
@@ -167,6 +176,8 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       storePath: params.storePath,
       // Update token counts after compaction
       tokensAfter: result.result?.tokensAfter,
+      newSessionId: result.result?.sessionId,
+      newSessionFile: result.result?.sessionFile,
     });
   }
   // Use the post-compaction token count for context summary if available

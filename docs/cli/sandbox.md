@@ -1,11 +1,9 @@
 ---
-title: Sandbox CLI
 summary: "Manage sandbox runtimes and inspect effective sandbox policy"
+title: Sandbox CLI
 read_when: "You are managing sandbox runtimes or debugging sandbox/tool-policy behavior."
 status: active
 ---
-
-# Sandbox CLI
 
 Manage sandbox runtimes for isolated agent execution.
 
@@ -77,9 +75,11 @@ openclaw sandbox recreate --all --force        # Skip confirmation
 - `--browser`: Only recreate browser containers
 - `--force`: Skip confirmation prompt
 
-**Important:** Runtimes are automatically recreated when the agent is next used.
+<Note>
+Runtimes are automatically recreated when the agent is next used.
+</Note>
 
-## Use Cases
+## Use cases
 
 ### After updating a Docker image
 
@@ -150,18 +150,28 @@ openclaw sandbox recreate --agent family
 openclaw sandbox recreate --agent alfred
 ```
 
-## Why is this needed?
+## Why this is needed
 
-**Problem:** When you update sandbox configuration:
+When you update sandbox configuration:
 
-- Existing runtimes continue running with old settings
-- Runtimes are only pruned after 24h of inactivity
-- Regularly-used agents keep old runtimes alive indefinitely
+- Existing runtimes continue running with old settings.
+- Runtimes are only pruned after 24h of inactivity.
+- Regularly-used agents keep old runtimes alive indefinitely.
 
-**Solution:** Use `openclaw sandbox recreate` to force removal of old runtimes. They'll be recreated automatically with current settings when next needed.
+Use `openclaw sandbox recreate` to force removal of old runtimes. They are recreated automatically with current settings when next needed.
 
-Tip: prefer `openclaw sandbox recreate` over manual backend-specific cleanup.
-It uses the Gateway’s runtime registry and avoids mismatches when scope/session keys change.
+<Tip>
+Prefer `openclaw sandbox recreate` over manual backend-specific cleanup. It uses the Gateway's runtime registry and avoids mismatches when scope or session keys change.
+</Tip>
+
+## Registry migration
+
+OpenClaw stores sandbox runtime metadata as one JSON shard per container/browser entry under the sandbox state directory. Older installs may still have monolithic legacy files:
+
+- `~/.openclaw/sandbox/containers.json`
+- `~/.openclaw/sandbox/browsers.json`
+
+Regular sandbox runtime reads do not rewrite those files. Run `openclaw doctor --fix` to migrate valid legacy entries into the sharded registry directories. Invalid legacy files are quarantined so one bad old registry cannot hide current runtime entries.
 
 ## Configuration
 
@@ -190,8 +200,9 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
 }
 ```
 
-## See Also
+## Related
 
-- [Sandbox Documentation](/gateway/sandboxing)
-- [Agent Configuration](/concepts/agent-workspace)
-- [Doctor Command](/gateway/doctor) - Check sandbox setup
+- [CLI reference](/cli)
+- [Sandboxing](/gateway/sandboxing)
+- [Agent workspace](/concepts/agent-workspace)
+- [Doctor](/gateway/doctor): checks sandbox setup.

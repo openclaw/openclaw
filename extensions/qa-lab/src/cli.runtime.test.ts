@@ -8,7 +8,7 @@ const {
   runQaSuiteFromRuntime,
   runQaCharacterEval,
   runQaMultipass,
-  runMatrixQaLive,
+  listTelegramQaScenarioCatalog,
   runTelegramQaLive,
   startQaLabServer,
   writeQaDockerHarnessFiles,
@@ -20,20 +20,14 @@ const {
   runQaSuiteFromRuntime: vi.fn(),
   runQaCharacterEval: vi.fn(),
   runQaMultipass: vi.fn(),
-  runMatrixQaLive: vi.fn(),
+  listTelegramQaScenarioCatalog: vi.fn(),
   runTelegramQaLive: vi.fn(),
   startQaLabServer: vi.fn(),
   writeQaDockerHarnessFiles: vi.fn(),
   buildQaDockerHarnessImage: vi.fn(),
   runQaDockerUp: vi.fn(),
-  defaultQaRuntimeModelForMode: vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(
-    (mode, options) =>
-      mode === "live-frontier"
-        ? "openai/gpt-5.4"
-        : options?.alternate
-          ? "mock-openai/gpt-5.4-alt"
-          : "mock-openai/gpt-5.4",
-  ),
+  defaultQaRuntimeModelForMode:
+    vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(),
 }));
 
 vi.mock("./manual-lane.runtime.js", () => ({
@@ -52,11 +46,8 @@ vi.mock("./multipass.runtime.js", () => ({
   runQaMultipass,
 }));
 
-vi.mock("./live-transports/matrix/matrix-live.runtime.js", () => ({
-  runMatrixQaLive,
-}));
-
 vi.mock("./live-transports/telegram/telegram-live.runtime.js", () => ({
+  listTelegramQaScenarioCatalog,
   runTelegramQaLive,
 }));
 
@@ -84,23 +75,73 @@ import {
   runQaDockerScaffoldCommand,
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
+  runQaCoverageReportCommand,
   runQaManualLaneCommand,
   runQaParityReportCommand,
   runQaSuiteCommand,
 } from "./cli.runtime.js";
-import { runQaMatrixCommand } from "./live-transports/matrix/cli.runtime.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
+import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
+import type { QaProviderModeInput } from "./run-config.js";
+
+function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
+  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
+  const [arg] = calls[0] ?? [];
+  if (!arg || typeof arg !== "object") {
+    throw new Error("expected first mock object argument");
+  }
+  return arg as Record<string, unknown>;
+}
+
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+function expectWriteContains(mock: unknown, fragment: string): void {
+  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
+  expect(
+    calls.some(([value]) => String(value).includes(fragment)),
+    `write contains ${fragment}`,
+  ).toBe(true);
+}
 
 describe("qa cli runtime", () => {
   let stdoutWrite: ReturnType<typeof vi.spyOn>;
+  let stderrWrite: ReturnType<typeof vi.spyOn>;
+  let suiteArtifactsDir: string;
+  let suiteReportPath: string;
+  let suiteSummaryPath: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    suiteArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-runtime-"));
+    suiteReportPath = path.join(suiteArtifactsDir, "qa-suite-report.md");
+    suiteSummaryPath = path.join(suiteArtifactsDir, "qa-suite-summary.json");
+    await fs.writeFile(suiteReportPath, "# QA Suite Report\n", "utf8");
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: {
+          total: 1,
+          passed: 1,
+          failed: 0,
+        },
+        scenarios: [],
+      }),
+      "utf8",
+    );
     stdoutWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     runQaSuiteFromRuntime.mockReset();
     runQaCharacterEval.mockReset();
     runQaManualLane.mockReset();
     runQaMultipass.mockReset();
-    runMatrixQaLive.mockReset();
+    listTelegramQaScenarioCatalog.mockReset();
     runTelegramQaLive.mockReset();
     startQaLabServer.mockReset();
     writeQaDockerHarnessFiles.mockReset();
@@ -108,23 +149,20 @@ describe("qa cli runtime", () => {
     runQaDockerUp.mockReset();
     defaultQaRuntimeModelForMode.mockImplementation(
       (mode: string, options?: { alternate?: boolean }) =>
-        mode === "live-frontier"
-          ? "openai/gpt-5.4"
-          : options?.alternate
-            ? "mock-openai/gpt-5.4-alt"
-            : "mock-openai/gpt-5.4",
+        defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
     runQaSuiteFromRuntime.mockResolvedValue({
       watchUrl: "http://127.0.0.1:43124",
-      reportPath: "/tmp/report.md",
-      summaryPath: "/tmp/summary.json",
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
+      scenarios: [],
     });
     runQaCharacterEval.mockResolvedValue({
       reportPath: "/tmp/character-report.md",
       summaryPath: "/tmp/character-summary.json",
     });
     runQaManualLane.mockResolvedValue({
-      model: "openai/gpt-5.4",
+      model: "openai/gpt-5.5",
       waited: { status: "ok" },
       reply: "done",
       watchUrl: "http://127.0.0.1:43124",
@@ -139,13 +177,6 @@ describe("qa cli runtime", () => {
       vmName: "openclaw-qa-test",
       scenarioIds: ["channel-chat-baseline"],
     });
-    runMatrixQaLive.mockResolvedValue({
-      outputDir: "/tmp/matrix",
-      reportPath: "/tmp/matrix/report.md",
-      summaryPath: "/tmp/matrix/summary.json",
-      observedEventsPath: "/tmp/matrix/observed.json",
-      scenarios: [],
-    });
     runTelegramQaLive.mockResolvedValue({
       outputDir: "/tmp/telegram",
       reportPath: "/tmp/telegram/report.md",
@@ -153,6 +184,15 @@ describe("qa cli runtime", () => {
       observedMessagesPath: "/tmp/telegram/observed.json",
       scenarios: [],
     });
+    listTelegramQaScenarioCatalog.mockReturnValue([
+      {
+        id: "telegram-status-command",
+        title: "Telegram status command reply",
+        defaultEnabled: true,
+        rationale: "status rationale",
+        regressionRefs: ["openclaw/openclaw#74698"],
+      },
+    ]);
     startQaLabServer.mockResolvedValue({
       baseUrl: "http://127.0.0.1:58000",
       runSelfCheck: vi.fn().mockResolvedValue({
@@ -174,9 +214,11 @@ describe("qa cli runtime", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     stdoutWrite.mockRestore();
+    stderrWrite.mockRestore();
     vi.clearAllMocks();
+    await fs.rm(suiteArtifactsDir, { recursive: true, force: true });
   });
 
   it("resolves suite repo-root-relative paths before dispatching", async () => {
@@ -184,9 +226,10 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa/frontier",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
       alternateModel: "anthropic/claude-sonnet-4-6",
       fastMode: true,
+      thinking: "medium",
       scenarioIds: ["approval-turn-tool-followthrough"],
     });
 
@@ -195,10 +238,53 @@ describe("qa cli runtime", () => {
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/frontier"),
       transportId: "qa-channel",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
       alternateModel: "anthropic/claude-sonnet-4-6",
       fastMode: true,
+      thinkingDefault: "medium",
       scenarioIds: ["approval-turn-tool-followthrough"],
+    });
+  });
+
+  it("passes explicit suite plugin enablements into the host gateway run", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      scenarioIds: ["channel-chat-baseline"],
+      enabledPluginIds: ["browser", "memory-core"],
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: undefined,
+      transportId: "qa-channel",
+      providerMode: "mock-openai",
+      primaryModel: undefined,
+      alternateModel: undefined,
+      fastMode: undefined,
+      scenarioIds: ["channel-chat-baseline"],
+      enabledPluginIds: ["browser", "memory-core"],
+    });
+  });
+
+  it("drops blank suite model refs so provider defaults apply", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      primaryModel: " ",
+      alternateModel: "",
+      scenarioIds: ["thread-memory-isolation"],
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: undefined,
+      transportId: "qa-channel",
+      providerMode: "mock-openai",
+      primaryModel: undefined,
+      alternateModel: undefined,
+      fastMode: undefined,
+      scenarioIds: ["thread-memory-isolation"],
     });
   });
 
@@ -207,8 +293,8 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa/telegram",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       fastMode: true,
       scenarioIds: ["telegram-help-command"],
       sutAccountId: "sut-live",
@@ -218,34 +304,11 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/telegram"),
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       fastMode: true,
+      allowFailures: undefined,
       scenarioIds: ["telegram-help-command"],
-      sutAccountId: "sut-live",
-    });
-  });
-
-  it("resolves matrix qa repo-root-relative paths before dispatching", async () => {
-    await runQaMatrixCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      outputDir: ".artifacts/qa/matrix",
-      providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
-      fastMode: true,
-      scenarioIds: ["matrix-thread-follow-up"],
-      sutAccountId: "sut-live",
-    });
-
-    expect(runMatrixQaLive).toHaveBeenCalledWith({
-      repoRoot: path.resolve("/tmp/openclaw-repo"),
-      outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/matrix"),
-      providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
-      fastMode: true,
-      scenarioIds: ["matrix-thread-follow-up"],
       sutAccountId: "sut-live",
     });
   });
@@ -265,42 +328,83 @@ describe("qa cli runtime", () => {
       scenarioIds: ["telegram-help-command"],
     });
 
-    expect(runTelegramQaLive).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: path.resolve("/tmp/openclaw-repo"),
-        providerMode: "live-frontier",
-      }),
+    expectFields(mockFirstObjectArg(runTelegramQaLive), {
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      providerMode: "live-frontier",
+      allowFailures: undefined,
+    });
+  });
+
+  it("prints telegram scenario catalog without starting the live lane", async () => {
+    await runQaTelegramCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      listScenarios: true,
+    });
+
+    expect(listTelegramQaScenarioCatalog).toHaveBeenCalledWith("mock-openai");
+    expect(runTelegramQaLive).not.toHaveBeenCalled();
+    expectWriteContains(
+      stdoutWrite,
+      "telegram-status-command\tdefault\tTelegram status command reply\tstatus rationale refs=openclaw/openclaw#74698",
     );
   });
 
-  it("defaults matrix qa runs onto the live provider lane", async () => {
-    await runQaMatrixCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      scenarioIds: ["matrix-thread-follow-up"],
+  it("sets a failing exit code when telegram scenarios fail", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    runTelegramQaLive.mockResolvedValueOnce({
+      outputDir: "/tmp/telegram",
+      reportPath: "/tmp/telegram/report.md",
+      summaryPath: "/tmp/telegram/summary.json",
+      observedMessagesPath: "/tmp/telegram/observed.json",
+      scenarios: [
+        {
+          id: "telegram-help-command",
+          title: "Telegram help command reply",
+          status: "fail",
+          details: "missing expected text",
+        },
+      ],
     });
 
-    expect(runMatrixQaLive).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: path.resolve("/tmp/openclaw-repo"),
-        providerMode: "live-frontier",
-      }),
-    );
+    try {
+      await runQaTelegramCommand({
+        repoRoot: "/tmp/openclaw-repo",
+      });
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = priorExitCode;
+    }
   });
 
-  it("normalizes legacy live-openai suite runs onto the frontier provider mode", async () => {
-    await runQaSuiteCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      providerMode: "live-openai",
-      scenarioIds: ["approval-turn-tool-followthrough"],
+  it("keeps telegram exit code clear when --allow-failures is set", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    runTelegramQaLive.mockResolvedValueOnce({
+      outputDir: "/tmp/telegram",
+      reportPath: "/tmp/telegram/report.md",
+      summaryPath: "/tmp/telegram/summary.json",
+      observedMessagesPath: "/tmp/telegram/observed.json",
+      scenarios: [
+        {
+          id: "telegram-help-command",
+          title: "Telegram help command reply",
+          status: "fail",
+          details: "missing expected text",
+        },
+      ],
     });
 
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: path.resolve("/tmp/openclaw-repo"),
-        transportId: "qa-channel",
-        providerMode: "live-frontier",
-      }),
-    );
+    try {
+      await runQaTelegramCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        allowFailures: true,
+      });
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+    }
   });
 
   it("passes host suite concurrency through", async () => {
@@ -310,14 +414,283 @@ describe("qa cli runtime", () => {
       concurrency: 3,
     });
 
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: path.resolve("/tmp/openclaw-repo"),
-        transportId: "qa-channel",
-        scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
-        concurrency: 3,
+    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      transportId: "qa-channel",
+      scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
+      concurrency: 3,
+    });
+  });
+
+  it("sets a failing exit code when host suite scenarios fail", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: {
+          total: 1,
+          passed: 0,
+          failed: 1,
+        },
+        scenarios: [{ name: "channel chat baseline", status: "fail" }],
       }),
+      "utf8",
     );
+    runQaSuiteFromRuntime.mockResolvedValueOnce({
+      watchUrl: "http://127.0.0.1:43124",
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
+      scenarios: [
+        {
+          name: "channel chat baseline",
+          status: "fail",
+          steps: [],
+        },
+      ],
+    });
+
+    try {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+      });
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("keeps host suite exit code clear when --allow-failures is set", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: {
+          total: 1,
+          passed: 0,
+          failed: 1,
+        },
+        scenarios: [{ name: "channel chat baseline", status: "fail" }],
+      }),
+      "utf8",
+    );
+    runQaSuiteFromRuntime.mockResolvedValueOnce({
+      watchUrl: "http://127.0.0.1:43124",
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
+      scenarios: [
+        {
+          name: "channel chat baseline",
+          status: "fail",
+          steps: [],
+        },
+      ],
+    });
+
+    try {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        allowFailures: true,
+      });
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("retries host suite runs once for retryable infra failures", async () => {
+    runQaSuiteFromRuntime
+      .mockRejectedValueOnce(new Error("agent.wait timeout while waiting for transport ready"))
+      .mockResolvedValueOnce({
+        watchUrl: "http://127.0.0.1:43124",
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        scenarios: [],
+      });
+
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(2);
+    expectWriteContains(stderrWrite, "[qa-suite] infra retry 1/1: agent.wait timeout");
+  });
+
+  it("retries host suite runs once for qa-channel readiness timeouts", async () => {
+    runQaSuiteFromRuntime
+      .mockRejectedValueOnce(
+        new Error(
+          "timed out after 180000ms waiting for qa-channel ready; last status: no qa-channel accounts reported",
+        ),
+      )
+      .mockResolvedValueOnce({
+        watchUrl: "http://127.0.0.1:43124",
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        scenarios: [],
+      });
+
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(2);
+    expectWriteContains(
+      stderrWrite,
+      "[qa-suite] infra retry 1/1: timed out after 180000ms waiting for qa-channel ready",
+    );
+  });
+
+  it("does not retry host suite runs for generic timeout wording", async () => {
+    runQaSuiteFromRuntime.mockRejectedValueOnce(
+      new Error("approval-turn timed out waiting for post-approval read"),
+    );
+
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+      }),
+    ).rejects.toThrow("approval-turn timed out waiting for post-approval read");
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry host suite runs for semantic failures", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: {
+          total: 1,
+          passed: 0,
+          failed: 1,
+        },
+        scenarios: [{ name: "channel chat baseline", status: "fail" }],
+      }),
+      "utf8",
+    );
+    runQaSuiteFromRuntime.mockResolvedValueOnce({
+      watchUrl: "http://127.0.0.1:43124",
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
+      scenarios: [
+        {
+          name: "channel chat baseline",
+          status: "fail",
+          steps: [],
+        },
+      ],
+    });
+
+    try {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+      });
+      expect(runQaSuiteFromRuntime).toHaveBeenCalledTimes(1);
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("runs a host-only parity preflight against the sentinel scenario", async () => {
+    const repoRoot = path.resolve("/tmp/openclaw-repo");
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "anthropic/claude-opus-4-6",
+      preflight: true,
+    });
+
+    const preflightArgs = mockFirstObjectArg(runQaSuiteFromRuntime);
+    expectFields(preflightArgs, {
+      repoRoot,
+      transportId: "qa-channel",
+      providerMode: "mock-openai",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "anthropic/claude-opus-4-6",
+      scenarioIds: ["approval-turn-tool-followthrough"],
+      concurrency: 1,
+    });
+    expect(String(preflightArgs.outputDir)).toContain(
+      path.join(repoRoot, ".artifacts", "qa-e2e", "preflight", "suite-"),
+    );
+    expectWriteContains(stdoutWrite, "QA parity preflight summary:");
+  });
+
+  it("throws when parity preflight finds a failing sentinel scenario", async () => {
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: {
+          total: 1,
+          passed: 0,
+          failed: 1,
+        },
+        scenarios: [{ name: "approval turn tool followthrough", status: "fail" }],
+      }),
+      "utf8",
+    );
+    runQaSuiteFromRuntime.mockResolvedValueOnce({
+      watchUrl: "http://127.0.0.1:43124",
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
+      scenarios: [{ name: "approval turn tool followthrough", status: "fail", steps: [] }],
+    });
+
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        preflight: true,
+      }),
+    ).rejects.toThrow("QA parity preflight failed with 1 failing scenario.");
+  });
+
+  it("keeps parity preflight exit code clear when --allow-failures is set", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: {
+          total: 1,
+          passed: 0,
+          failed: 1,
+        },
+        scenarios: [{ name: "approval turn tool followthrough", status: "fail" }],
+      }),
+      "utf8",
+    );
+    runQaSuiteFromRuntime.mockResolvedValueOnce({
+      watchUrl: "http://127.0.0.1:43124",
+      reportPath: suiteReportPath,
+      summaryPath: suiteSummaryPath,
+      scenarios: [{ name: "approval turn tool followthrough", status: "fail", steps: [] }],
+    });
+
+    try {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        preflight: true,
+        allowFailures: true,
+      });
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("rejects preflight on the multipass runner", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runner: "multipass",
+        preflight: true,
+      }),
+    ).rejects.toThrow("--preflight requires --runner host.");
   });
 
   it("passes host suite CLI auth mode through", async () => {
@@ -330,16 +703,14 @@ describe("qa cli runtime", () => {
       scenarioIds: ["claude-cli-provider-capabilities-subscription"],
     });
 
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: path.resolve("/tmp/openclaw-repo"),
-        providerMode: "live-frontier",
-        primaryModel: "claude-cli/claude-sonnet-4-6",
-        alternateModel: "claude-cli/claude-sonnet-4-6",
-        claudeCliAuthMode: "subscription",
-        scenarioIds: ["claude-cli-provider-capabilities-subscription"],
-      }),
-    );
+    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      providerMode: "live-frontier",
+      primaryModel: "claude-cli/claude-sonnet-4-6",
+      alternateModel: "claude-cli/claude-sonnet-4-6",
+      claudeCliAuthMode: "subscription",
+      scenarioIds: ["claude-cli-provider-capabilities-subscription"],
+    });
   });
 
   it("expands the agentic parity pack onto the suite scenario list", async () => {
@@ -349,25 +720,24 @@ describe("qa cli runtime", () => {
       scenarioIds: ["channel-chat-baseline"],
     });
 
-    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: path.resolve("/tmp/openclaw-repo"),
-        scenarioIds: [
-          "channel-chat-baseline",
-          "approval-turn-tool-followthrough",
-          "model-switch-tool-continuity",
-          "source-docs-discovery-report",
-          "image-understanding-attachment",
-          "compaction-retry-mutating-tool",
-          "subagent-handoff",
-          "subagent-fanout-synthesis",
-          "memory-recall",
-          "thread-memory-isolation",
-          "config-restart-capability-flip",
-          "instruction-followthrough-repo-contract",
-        ],
-      }),
-    );
+    expectFields(mockFirstObjectArg(runQaSuiteFromRuntime), {
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      scenarioIds: [
+        "channel-chat-baseline",
+        "approval-turn-tool-followthrough",
+        "model-switch-tool-continuity",
+        "source-docs-discovery-report",
+        "image-understanding-attachment",
+        "compaction-retry-mutating-tool",
+        "subagent-handoff",
+        "subagent-fanout-synthesis",
+        "subagent-stale-child-links",
+        "memory-recall",
+        "thread-memory-isolation",
+        "config-restart-capability-flip",
+        "instruction-followthrough-repo-contract",
+      ],
+    });
   });
 
   it("rejects unknown suite CLI auth modes", async () => {
@@ -413,60 +783,70 @@ describe("qa cli runtime", () => {
     }
   });
 
+  it("prints a markdown coverage report from scenario metadata", async () => {
+    await runQaCoverageReportCommand({ repoRoot: process.cwd() });
+
+    expectWriteContains(stdoutWrite, "# QA Coverage Inventory");
+    expectWriteContains(stdoutWrite, "memory.recall");
+  });
+
   it("resolves character eval paths and passes model refs through", async () => {
     await runQaCharacterEvalCommand({
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa/character",
       model: [
-        "openai/gpt-5.4,thinking=xhigh,fast=false",
+        "openai/gpt-5.5,thinking=xhigh,fast=false",
         "codex-cli/test-model,thinking=high,fast",
       ],
       scenario: "character-vibes-gollum",
       fast: true,
       thinking: "medium",
       modelThinking: ["codex-cli/test-model=medium"],
-      judgeModel: ["openai/gpt-5.4,thinking=xhigh,fast", "anthropic/claude-opus-4-6,thinking=high"],
+      judgeModel: ["openai/gpt-5.5,thinking=xhigh,fast", "anthropic/claude-opus-4-6,thinking=high"],
       judgeTimeoutMs: 180_000,
       blindJudgeModels: true,
       concurrency: 4,
       judgeConcurrency: 3,
     });
 
-    expect(runQaCharacterEval).toHaveBeenCalledWith({
+    const characterEvalArgs = mockFirstObjectArg(runQaCharacterEval);
+    expect(typeof characterEvalArgs.progress).toBe("function");
+    expectFields(characterEvalArgs, {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/character"),
-      models: ["openai/gpt-5.4", "codex-cli/test-model"],
+      models: ["openai/gpt-5.5", "codex-cli/test-model"],
       scenarioId: "character-vibes-gollum",
       candidateFastMode: true,
       candidateThinkingDefault: "medium",
       candidateThinkingByModel: { "codex-cli/test-model": "medium" },
       candidateModelOptions: {
-        "openai/gpt-5.4": { thinkingDefault: "xhigh", fastMode: false },
+        "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: false },
         "codex-cli/test-model": { thinkingDefault: "high", fastMode: true },
       },
-      judgeModels: ["openai/gpt-5.4", "anthropic/claude-opus-4-6"],
+      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-6"],
       judgeModelOptions: {
-        "openai/gpt-5.4": { thinkingDefault: "xhigh", fastMode: true },
+        "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: true },
         "anthropic/claude-opus-4-6": { thinkingDefault: "high" },
       },
       judgeTimeoutMs: 180_000,
       judgeBlindModels: true,
       candidateConcurrency: 4,
       judgeConcurrency: 3,
-      progress: expect.any(Function),
     });
   });
 
   it("lets character eval auto-select candidate fast mode when --fast is omitted", async () => {
     await runQaCharacterEvalCommand({
       repoRoot: "/tmp/openclaw-repo",
-      model: ["openai/gpt-5.4"],
+      model: ["openai/gpt-5.5"],
     });
 
-    expect(runQaCharacterEval).toHaveBeenCalledWith({
+    const characterEvalArgs = mockFirstObjectArg(runQaCharacterEval);
+    expect(typeof characterEvalArgs.progress).toBe("function");
+    expectFields(characterEvalArgs, {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputDir: undefined,
-      models: ["openai/gpt-5.4"],
+      models: ["openai/gpt-5.5"],
       scenarioId: undefined,
       candidateFastMode: undefined,
       candidateThinkingDefault: undefined,
@@ -478,7 +858,6 @@ describe("qa cli runtime", () => {
       judgeBlindModels: undefined,
       candidateConcurrency: undefined,
       judgeConcurrency: undefined,
-      progress: expect.any(Function),
     });
   });
 
@@ -486,7 +865,7 @@ describe("qa cli runtime", () => {
     await expect(
       runQaCharacterEvalCommand({
         repoRoot: "/tmp/openclaw-repo",
-        model: ["openai/gpt-5.4"],
+        model: ["openai/gpt-5.5"],
         thinking: "enormous",
       }),
     ).rejects.toThrow("--thinking must be one of");
@@ -494,22 +873,22 @@ describe("qa cli runtime", () => {
     await expect(
       runQaCharacterEvalCommand({
         repoRoot: "/tmp/openclaw-repo",
-        model: ["openai/gpt-5.4,thinking=galaxy"],
+        model: ["openai/gpt-5.5,thinking=galaxy"],
       }),
     ).rejects.toThrow("--model thinking must be one of");
 
     await expect(
       runQaCharacterEvalCommand({
         repoRoot: "/tmp/openclaw-repo",
-        model: ["openai/gpt-5.4,warp"],
+        model: ["openai/gpt-5.5,warp"],
       }),
     ).rejects.toThrow("--model options must be thinking=<level>");
 
     await expect(
       runQaCharacterEvalCommand({
         repoRoot: "/tmp/openclaw-repo",
-        model: ["openai/gpt-5.4"],
-        modelThinking: ["openai/gpt-5.4"],
+        model: ["openai/gpt-5.5"],
+        modelThinking: ["openai/gpt-5.5"],
       }),
     ).rejects.toThrow("--model-thinking must use provider/model=level");
   });
@@ -518,8 +897,8 @@ describe("qa cli runtime", () => {
     await runQaManualLaneCommand({
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       fastMode: true,
       message: "read qa kickoff and reply short",
       timeoutMs: 45_000,
@@ -529,8 +908,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       fastMode: true,
       message: "read qa kickoff and reply short",
       timeoutMs: 45_000,
@@ -544,6 +923,7 @@ describe("qa cli runtime", () => {
       runner: "multipass",
       providerMode: "mock-openai",
       scenarioIds: ["channel-chat-baseline"],
+      allowFailures: true,
       concurrency: 3,
       image: "lts",
       cpus: 2,
@@ -559,6 +939,7 @@ describe("qa cli runtime", () => {
       primaryModel: undefined,
       alternateModel: undefined,
       fastMode: undefined,
+      allowFailures: true,
       scenarioIds: ["channel-chat-baseline"],
       concurrency: 3,
       image: "lts",
@@ -574,23 +955,182 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       runner: "multipass",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       fastMode: true,
+      allowFailures: true,
       scenarioIds: ["channel-chat-baseline"],
     });
 
-    expect(runQaMultipass).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: path.resolve("/tmp/openclaw-repo"),
-        transportId: "qa-channel",
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.4",
-        alternateModel: "openai/gpt-5.4",
-        fastMode: true,
-        scenarioIds: ["channel-chat-baseline"],
+    expectFields(mockFirstObjectArg(runQaMultipass), {
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      transportId: "qa-channel",
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
+      fastMode: true,
+      allowFailures: true,
+      scenarioIds: ["channel-chat-baseline"],
+    });
+  });
+
+  it("sets a failing exit code when multipass summary reports failed scenarios", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-multipass-summary-"));
+    const summaryPath = path.join(repoRoot, "qa-suite-summary.json");
+    await fs.writeFile(
+      summaryPath,
+      JSON.stringify({
+        counts: {
+          total: 2,
+          passed: 1,
+          failed: 1,
+        },
       }),
+      "utf8",
     );
+    runQaMultipass.mockResolvedValueOnce({
+      outputDir: repoRoot,
+      reportPath: path.join(repoRoot, "qa-suite-report.md"),
+      summaryPath,
+      hostLogPath: path.join(repoRoot, "multipass-host.log"),
+      bootstrapLogPath: path.join(repoRoot, "multipass-guest-bootstrap.log"),
+      guestScriptPath: path.join(repoRoot, "multipass-guest-run.sh"),
+      vmName: "openclaw-qa-test",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    try {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runner: "multipass",
+      });
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed multipass summary JSON", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-multipass-summary-"));
+    const summaryPath = path.join(repoRoot, "qa-suite-summary.json");
+    await fs.writeFile(summaryPath, "{not-json", "utf8");
+    runQaMultipass.mockResolvedValueOnce({
+      outputDir: repoRoot,
+      reportPath: path.join(repoRoot, "qa-suite-report.md"),
+      summaryPath,
+      hostLogPath: path.join(repoRoot, "multipass-host.log"),
+      bootstrapLogPath: path.join(repoRoot, "multipass-guest-bootstrap.log"),
+      guestScriptPath: path.join(repoRoot, "multipass-guest-run.sh"),
+      vmName: "openclaw-qa-test",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    try {
+      await expect(
+        runQaSuiteCommand({
+          repoRoot: "/tmp/openclaw-repo",
+          runner: "multipass",
+        }),
+      ).rejects.toThrow("Could not parse QA summary JSON");
+    } finally {
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unreadable multipass summary JSON with read/parse wording", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-multipass-summary-"));
+    const summaryPath = path.join(repoRoot, "qa-suite-summary.json");
+    runQaMultipass.mockResolvedValueOnce({
+      outputDir: repoRoot,
+      reportPath: path.join(repoRoot, "qa-suite-report.md"),
+      summaryPath,
+      hostLogPath: path.join(repoRoot, "multipass-host.log"),
+      bootstrapLogPath: path.join(repoRoot, "multipass-guest-bootstrap.log"),
+      guestScriptPath: path.join(repoRoot, "multipass-guest-run.sh"),
+      vmName: "openclaw-qa-test",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    try {
+      await expect(
+        runQaSuiteCommand({
+          repoRoot: "/tmp/openclaw-repo",
+          runner: "multipass",
+        }),
+      ).rejects.toThrow("Could not read QA summary JSON");
+    } finally {
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects partial multipass summary JSON without failure fields", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-multipass-summary-"));
+    const summaryPath = path.join(repoRoot, "qa-suite-summary.json");
+    await fs.writeFile(summaryPath, JSON.stringify({ counts: { total: 2, passed: 2 } }), "utf8");
+    runQaMultipass.mockResolvedValueOnce({
+      outputDir: repoRoot,
+      reportPath: path.join(repoRoot, "qa-suite-report.md"),
+      summaryPath,
+      hostLogPath: path.join(repoRoot, "multipass-host.log"),
+      bootstrapLogPath: path.join(repoRoot, "multipass-guest-bootstrap.log"),
+      guestScriptPath: path.join(repoRoot, "multipass-guest-run.sh"),
+      vmName: "openclaw-qa-test",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    try {
+      await expect(
+        runQaSuiteCommand({
+          repoRoot: "/tmp/openclaw-repo",
+          runner: "multipass",
+        }),
+      ).rejects.toThrow("did not include counts.failed or scenarios[].status");
+    } finally {
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps multipass exit code clear when --allow-failures is set", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-multipass-summary-"));
+    const summaryPath = path.join(repoRoot, "qa-suite-summary.json");
+    await fs.writeFile(
+      summaryPath,
+      JSON.stringify({
+        counts: {
+          total: 2,
+          passed: 1,
+          failed: 1,
+        },
+      }),
+      "utf8",
+    );
+    runQaMultipass.mockResolvedValueOnce({
+      outputDir: repoRoot,
+      reportPath: path.join(repoRoot, "qa-suite-report.md"),
+      summaryPath,
+      hostLogPath: path.join(repoRoot, "multipass-host.log"),
+      bootstrapLogPath: path.join(repoRoot, "multipass-guest-bootstrap.log"),
+      guestScriptPath: path.join(repoRoot, "multipass-guest-run.sh"),
+      vmName: "openclaw-qa-test",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    try {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runner: "multipass",
+        allowFailures: true,
+      });
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
   });
 
   it("passes provider-qualified mock parity suite selection through to the host runner", async () => {
@@ -598,7 +1138,7 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
       parityPack: "agentic",
-      primaryModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
       alternateModel: "anthropic/claude-opus-4-6",
     });
 
@@ -607,7 +1147,7 @@ describe("qa cli runtime", () => {
       outputDir: undefined,
       transportId: "qa-channel",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
       alternateModel: "anthropic/claude-opus-4-6",
       fastMode: undefined,
       scenarioIds: [
@@ -618,6 +1158,7 @@ describe("qa cli runtime", () => {
         "compaction-retry-mutating-tool",
         "subagent-handoff",
         "subagent-fanout-synthesis",
+        "subagent-stale-child-links",
         "memory-recall",
         "thread-memory-isolation",
         "config-restart-capability-flip",
@@ -647,8 +1188,27 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.4",
-      alternateModel: "mock-openai/gpt-5.4-alt",
+      primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: "mock-openai/gpt-5.5-alt",
+      fastMode: undefined,
+      message: "read qa kickoff and reply short",
+      timeoutMs: undefined,
+    });
+  });
+
+  it("defaults manual aimock runs onto the aimock model lane", async () => {
+    await runQaManualLaneCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "aimock",
+      message: "read qa kickoff and reply short",
+    });
+
+    expect(runQaManualLane).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      transportId: "qa-channel",
+      providerMode: "aimock",
+      primaryModel: "aimock/gpt-5.5",
+      alternateModel: "aimock/gpt-5.5-alt",
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,
@@ -665,8 +1225,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,
@@ -693,31 +1253,11 @@ describe("qa cli runtime", () => {
     });
   });
 
-  it("normalizes legacy live-openai manual runs onto the frontier provider mode", async () => {
-    await runQaManualLaneCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      providerMode: "live-openai",
-      message: "read qa kickoff and reply short",
-    });
-
-    expect(runQaManualLane).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: path.resolve("/tmp/openclaw-repo"),
-        transportId: "qa-channel",
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.4",
-        alternateModel: "openai/gpt-5.4",
-      }),
-    );
-  });
-
   it("defaults manual frontier runs onto Codex OAuth when the runtime resolver prefers it", async () => {
     defaultQaRuntimeModelForMode.mockImplementation((mode, options) =>
       mode === "live-frontier"
-        ? "openai-codex/gpt-5.4"
-        : options?.alternate
-          ? "mock-openai/gpt-5.4-alt"
-          : "mock-openai/gpt-5.4",
+        ? "openai/gpt-5.5"
+        : defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
 
     await runQaManualLaneCommand({
@@ -729,8 +1269,8 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       transportId: "qa-channel",
       providerMode: "live-frontier",
-      primaryModel: "openai-codex/gpt-5.4",
-      alternateModel: "openai-codex/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       fastMode: undefined,
       message: "read qa kickoff and reply short",
       timeoutMs: undefined,

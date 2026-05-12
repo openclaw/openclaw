@@ -38,6 +38,7 @@ export async function dashboardCommand(
     bind: bind === "lan" ? "loopback" : bind,
     customBindHost,
     basePath,
+    tlsEnabled: cfg.gateway?.tls?.enabled === true,
   });
   // Avoid embedding externally managed SecretRef tokens in terminal/clipboard/browser args.
   const includeTokenInUrl = token.length > 0 && !resolvedToken.secretRefConfigured;
@@ -46,7 +47,10 @@ export async function dashboardCommand(
     ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
     : links.httpUrl;
 
-  runtime.log(`Dashboard URL: ${dashboardUrl}`);
+  runtime.log(`Dashboard URL: ${links.httpUrl}`);
+  if (includeTokenInUrl) {
+    runtime.log("Token auto-auth included in browser/clipboard URL.");
+  }
   if (resolvedToken.secretRefConfigured && token) {
     runtime.log(
       "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
@@ -73,16 +77,27 @@ export async function dashboardCommand(
       hint = formatControlUiSshHint({
         port,
         basePath,
-        token: includeTokenInUrl ? token || undefined : undefined,
       });
     }
   } else {
-    hint = "Browser launch disabled (--no-open). Use the URL above.";
+    hint =
+      copied && includeTokenInUrl
+        ? "Browser launch disabled (--no-open). Token-authenticated URL copied to clipboard."
+        : "Browser launch disabled (--no-open). Use the URL above.";
   }
+
+  const fallbackToManualAuth = !copied && !opened && includeTokenInUrl;
+  const suppressNoOpenHint = options.noOpen === true && fallbackToManualAuth;
 
   if (opened) {
     runtime.log("Opened in your browser. Keep that tab to control OpenClaw.");
-  } else if (hint) {
+  } else if (hint && !suppressNoOpenHint) {
     runtime.log(hint);
+  }
+
+  if (fallbackToManualAuth) {
+    runtime.log(
+      "Token auto-auth not delivered. Append your gateway token (from OPENCLAW_GATEWAY_TOKEN or gateway.auth.token) as a URL fragment with key `token` to authenticate.",
+    );
   }
 }

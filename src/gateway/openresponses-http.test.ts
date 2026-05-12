@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -108,8 +109,10 @@ async function postResponses(port: number, body: unknown, headers?: Record<strin
   return res;
 }
 
-function parseSseEvents(text: string): Array<{ event?: string; data: string }> {
-  const events: Array<{ event?: string; data: string }> = [];
+type SseEvent = { event?: string; data: string };
+
+function parseSseEvents(text: string): SseEvent[] {
+  const events: SseEvent[] = [];
   const lines = text.split("\n");
   let currentEvent: string | undefined;
   let currentData: string[] = [];
@@ -127,6 +130,43 @@ function parseSseEvents(text: string): Array<{ event?: string; data: string }> {
   }
 
   return events;
+}
+
+function collectSseEventTypes(events: readonly SseEvent[]): string[] {
+  const eventTypes: string[] = [];
+  for (const event of events) {
+    if (event.event) {
+      eventTypes.push(event.event);
+    }
+  }
+  return eventTypes;
+}
+
+function findSseEvent(events: SseEvent[], eventName: string): SseEvent {
+  const event = events.find((candidate) => candidate.event === eventName);
+  if (!event) {
+    throw new Error(`expected SSE event ${eventName}`);
+  }
+  return event;
+}
+
+function parseSseData(event: SseEvent): unknown {
+  return JSON.parse(event.data) as unknown;
+}
+
+function requireSessionKey(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label} sessionKey`);
+  }
+  return value;
+}
+
+function firstAgentOpts(callIndex = 0): Record<string, unknown> {
+  const call = agentCommand.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`expected agentCommand call #${callIndex + 1}`);
+  }
+  return call[0] as Record<string, unknown>;
 }
 
 async function ensureResponseConsumed(res: Response) {
@@ -254,7 +294,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { "x-openclaw-agent-id": "beta" },
       );
       expect(resHeader.status).toBe(200);
-      const optsHeader = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsHeader = firstAgentOpts();
       expect((optsHeader as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
       );
@@ -266,7 +306,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       mockAgentOnce([{ text: "hello" }]);
       const resModel = await postResponses(port, { model: "openclaw/beta", input: "hi" });
       expect(resModel.status).toBe(200);
-      const optsModel = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsModel = firstAgentOpts();
       expect((optsModel as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
       );
@@ -275,7 +315,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       mockAgentOnce([{ text: "hello" }]);
       const resDefaultAlias = await postResponses(port, { model: "openclaw/default", input: "hi" });
       expect(resDefaultAlias.status).toBe(200);
-      const optsDefaultAlias = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsDefaultAlias = firstAgentOpts();
       expect((optsDefaultAlias as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:main:/,
       );
@@ -288,7 +328,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { "x-openclaw-message-channel": "custom-client-channel" },
       );
       expect(resChannelHeader.status).toBe(200);
-      const optsChannelHeader = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsChannelHeader = firstAgentOpts();
       expect((optsChannelHeader as { messageChannel?: string } | undefined)?.messageChannel).toBe(
         "custom-client-channel",
       );
@@ -304,7 +344,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         { "x-openclaw-model": "openai/gpt-5.4" },
       );
       expect(resModelOverride.status).toBe(200);
-      const optsModelOverride = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsModelOverride = firstAgentOpts();
       expect((optsModelOverride as { model?: string } | undefined)?.model).toBe("openai/gpt-5.4");
       await ensureResponseConsumed(resModelOverride);
 
@@ -323,6 +363,21 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(agentCommand).toHaveBeenCalledTimes(0);
       await ensureResponseConsumed(resInvalidOverride);
 
+      agentCommand.mockClear();
+      agentCommand.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
+      const resToolConflict = await postResponses(port, {
+        model: "openclaw",
+        input: "hi",
+        tools: WEATHER_TOOL,
+      });
+      expect(resToolConflict.status).toBe(400);
+      const toolConflictJson = (await resToolConflict.json()) as {
+        error?: { code?: string; message?: string };
+      };
+      expect(toolConflictJson.error?.code).toBe("invalid_request_error");
+      expect(toolConflictJson.error?.message).toBe("invalid tool configuration");
+      await ensureResponseConsumed(resToolConflict);
+
       mockAgentOnce([{ text: "hello" }]);
       const resUser = await postResponses(port, {
         user: "alice",
@@ -330,7 +385,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         input: "hi",
       });
       expect(resUser.status).toBe(200);
-      const optsUser = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsUser = firstAgentOpts();
       expect((optsUser as { sessionKey?: string } | undefined)?.sessionKey ?? "").toContain(
         "openresponses-user:alice",
       );
@@ -342,7 +397,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         input: "hello world",
       });
       expect(resString.status).toBe(200);
-      const optsString = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsString = firstAgentOpts();
       expect((optsString as { message?: string } | undefined)?.message).toBe("hello world");
       await ensureResponseConsumed(resString);
 
@@ -352,7 +407,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         input: [{ type: "message", role: "user", content: "hello there" }],
       });
       expect(resArray.status).toBe(200);
-      const optsArray = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsArray = firstAgentOpts();
       expect((optsArray as { message?: string } | undefined)?.message).toBe("hello there");
       await ensureResponseConsumed(resArray);
 
@@ -366,7 +421,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resSystemDeveloper.status).toBe(200);
-      const optsSystemDeveloper = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsSystemDeveloper = firstAgentOpts();
       const extraSystemPrompt =
         (optsSystemDeveloper as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ??
         "";
@@ -381,7 +436,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         instructions: "Always respond in French.",
       });
       expect(resInstructions.status).toBe(200);
-      const optsInstructions = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsInstructions = firstAgentOpts();
       const instructionPrompt =
         (optsInstructions as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
       expect(instructionPrompt).toContain("Always respond in French.");
@@ -398,7 +453,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resHistory.status).toBe(200);
-      const optsHistory = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsHistory = firstAgentOpts();
       const historyMessage = (optsHistory as { message?: string } | undefined)?.message ?? "";
       expect(historyMessage).toContain(HISTORY_CONTEXT_MARKER);
       expect(historyMessage).toContain("User: Hello, who are you?");
@@ -416,7 +471,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resFunctionOutput.status).toBe(200);
-      const optsFunctionOutput = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsFunctionOutput = firstAgentOpts();
       const functionOutputMessage =
         (optsFunctionOutput as { message?: string } | undefined)?.message ?? "";
       expect(functionOutputMessage).toContain("Sunny, 70F.");
@@ -445,7 +500,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resInputFile.status).toBe(200);
-      const optsInputFile = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsInputFile = firstAgentOpts();
       const inputFileMessage = (optsInputFile as { message?: string } | undefined)?.message ?? "";
       const inputFilePrompt =
         (optsInputFile as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
@@ -478,7 +533,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resInputFileWhitespace.status).toBe(200);
-      const optsInputFileWhitespace = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsInputFileWhitespace = firstAgentOpts();
       const inputFileWhitespacePrompt =
         (optsInputFileWhitespace as { extraSystemPrompt?: string } | undefined)
           ?.extraSystemPrompt ?? "";
@@ -510,7 +565,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ],
       });
       expect(resInputFileInjection.status).toBe(200);
-      const optsInputFileInjection = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsInputFileInjection = firstAgentOpts();
       const inputFileInjectionPrompt =
         (optsInputFileInjection as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ??
         "";
@@ -532,7 +587,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         tool_choice: "none",
       });
       expect(resToolNone.status).toBe(200);
-      const optsToolNone = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsToolNone = firstAgentOpts();
       expect(
         (optsToolNone as { clientTools?: unknown[] } | undefined)?.clientTools,
       ).toBeUndefined();
@@ -558,7 +613,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         tool_choice: { type: "function", function: { name: "get_time" } },
       });
       expect(resToolChoice.status).toBe(200);
-      const optsToolChoice = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsToolChoice = firstAgentOpts();
       const clientTools =
         (
           optsToolChoice as
@@ -588,7 +643,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         max_output_tokens: 123,
       });
       expect(resMaxTokens.status).toBe(200);
-      const optsMaxTokens = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const optsMaxTokens = firstAgentOpts();
       expect(
         (optsMaxTokens as { streamParams?: { maxTokens?: number } } | undefined)?.streamParams
           ?.maxTokens,
@@ -673,7 +728,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const deltaText = await resDelta.text();
       const deltaEvents = parseSseEvents(deltaText);
 
-      const eventTypes = deltaEvents.map((e) => e.event).filter(Boolean);
+      const eventTypes = collectSseEventTypes(deltaEvents);
       expect(eventTypes).toContain("response.created");
       expect(eventTypes).toContain("response.output_item.added");
       expect(eventTypes).toContain("response.in_progress");
@@ -682,7 +737,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(eventTypes).toContain("response.output_text.done");
       expect(eventTypes).toContain("response.content_part.done");
       expect(eventTypes).toContain("response.completed");
-      expect(deltaEvents.some((e) => e.data === "[DONE]")).toBe(true);
+      expect(deltaEvents.map((event) => event.data)).toContain("[DONE]");
 
       const deltas = deltaEvents
         .filter((e) => e.event === "response.output_text.delta")
@@ -753,9 +808,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: "hi",
     });
     expect(writeScopeResponse.status).toBe(200);
-    const writeScopeOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-      | { senderIsOwner?: boolean }
-      | undefined;
+    const writeScopeOpts = firstAgentOpts() as { senderIsOwner?: boolean } | undefined;
     expect(writeScopeOpts?.senderIsOwner).toBe(false);
     await ensureResponseConsumed(writeScopeResponse);
 
@@ -768,9 +821,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       { "x-openclaw-scopes": "operator.admin, operator.write" },
     );
     expect(adminScopeResponse.status).toBe(200);
-    const adminScopeOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-      | { senderIsOwner?: boolean }
-      | undefined;
+    const adminScopeOpts = firstAgentOpts() as { senderIsOwner?: boolean } | undefined;
     expect(adminScopeOpts?.senderIsOwner).toBe(true);
     await ensureResponseConsumed(adminScopeResponse);
 
@@ -789,12 +840,10 @@ describe("OpenResponses HTTP API (e2e)", () => {
       { "x-openclaw-scopes": "operator.admin, operator.write" },
     );
     expect(streamingResponse.status).toBe(200);
-    const streamingOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-      | { senderIsOwner?: boolean }
-      | undefined;
+    const streamingOpts = firstAgentOpts() as { senderIsOwner?: boolean } | undefined;
     expect(streamingOpts?.senderIsOwner).toBe(true);
     const streamingEvents = parseSseEvents(await streamingResponse.text());
-    expect(streamingEvents.some((event) => event.event === "response.completed")).toBe(true);
+    expect(streamingEvents.map((event) => event.event)).toContain("response.completed");
   });
 
   it("treats shared-secret bearer callers as owner operators", async () => {
@@ -818,9 +867,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       });
 
       expect(res.status).toBe(200);
-      const firstCall = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { senderIsOwner?: boolean }
-        | undefined;
+      const firstCall = firstAgentOpts() as { senderIsOwner?: boolean } | undefined;
       expect(firstCall?.senderIsOwner).toBe(true);
       await ensureResponseConsumed(res);
     } finally {
@@ -896,16 +943,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     const events = parseSseEvents(text);
-    const outputTextDone = events.find((event) => event.event === "response.output_text.done");
-    expect(outputTextDone).toBeTruthy();
-    expect((JSON.parse(outputTextDone?.data ?? "{}") as { text?: string }).text).toBe(
-      "Let me check that.",
-    );
+    const outputTextDone = findSseEvent(events, "response.output_text.done");
+    expect((parseSseData(outputTextDone) as { text?: string }).text).toBe("Let me check that.");
 
-    const completed = events.find((event) => event.event === "response.completed");
-    expect(completed).toBeTruthy();
+    const completed = findSseEvent(events, "response.completed");
     const response = (
-      JSON.parse(completed?.data ?? "{}") as {
+      parseSseData(completed) as {
         response?: { status?: string; output?: Array<Record<string, unknown>> };
       }
     ).response;
@@ -917,7 +960,152 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ?.text as string | undefined) ?? "",
     ).toBe("Let me check that.");
     expect(response?.output?.[1]?.name).toBe("get_weather");
-    expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+    expect(events.map((event) => event.data)).toContain("[DONE]");
+  });
+
+  it("returns every client tool call when an agent invokes multiple tools in one turn (#52288)", async () => {
+    // Pre-fix: the non-streaming `/v1/responses` handler read only
+    // `pendingToolCalls[0]`, so a turn that called three client tools
+    // collapsed to a single `function_call` item. Here we mock three pending
+    // calls and assert the response surfaces all three in arrival order
+    // alongside the assistant text. This locks in the contract for callers
+    // who run multi-tool agents (graph orchestration, planners, etc.).
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Calling all three tools now." }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          { id: "call_1", name: "create_graph", arguments: '{"nodes":["a","b"]}' },
+          { id: "call_2", name: "activate_graph", arguments: "{}" },
+          { id: "call_3", name: "get_status", arguments: "{}" },
+        ],
+      },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "call all three tools",
+      tools: [
+        { type: "function", name: "create_graph", description: "Create graph" },
+        { type: "function", name: "activate_graph", description: "Activate graph" },
+        { type: "function", name: "get_status", description: "Get status" },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      status?: string;
+      output?: Array<Record<string, unknown>>;
+    };
+    expect(json.status).toBe("incomplete");
+    expect(json.output?.map((item) => item.type)).toEqual([
+      "message",
+      "function_call",
+      "function_call",
+      "function_call",
+    ]);
+    expect(json.output?.slice(1).map((item) => item.name)).toEqual([
+      "create_graph",
+      "activate_graph",
+      "get_status",
+    ]);
+    expect(json.output?.slice(1).map((item) => item.call_id)).toEqual([
+      "call_1",
+      "call_2",
+      "call_3",
+    ]);
+    expect(json.output?.[1]?.arguments).toBe('{"nodes":["a","b"]}');
+    await ensureResponseConsumed(res);
+  });
+
+  it("emits one SSE function_call per pending call at incrementing output_index (#52288)", async () => {
+    // Streaming counterpart to the non-streaming regression above. Pre-fix
+    // the streaming branch hard-coded `output_index: 1` and only emitted
+    // one `output_item.added`/`done` pair, so multi-tool turns silently
+    // dropped every call past the first. Verify that:
+    //   - we get one `output_item.added` and one `output_item.done` for
+    //     each pending call,
+    //   - their `output_index` values count up monotonically from 1 (the
+    //     assistant message owns index 0), and
+    //   - the final `response.completed` payload contains the assistant
+    //     message followed by all three function_call items in order.
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Calling all three tools now." }],
+      meta: {
+        stopReason: "tool_calls",
+        pendingToolCalls: [
+          { id: "call_1", name: "create_graph", arguments: '{"nodes":["a","b"]}' },
+          { id: "call_2", name: "activate_graph", arguments: "{}" },
+          { id: "call_3", name: "get_status", arguments: "{}" },
+        ],
+      },
+    } as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "call all three tools",
+      tools: [
+        { type: "function", name: "create_graph", description: "Create graph" },
+        { type: "function", name: "activate_graph", description: "Activate graph" },
+        { type: "function", name: "get_status", description: "Get status" },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const events = parseSseEvents(text);
+
+    type FunctionCallEvent = {
+      output_index: number;
+      item: { type: string; name?: string; call_id?: string; arguments?: string };
+    };
+    const addedFunctionCalls = events
+      .filter((e) => e.event === "response.output_item.added")
+      .map((e) => JSON.parse(e.data) as FunctionCallEvent)
+      .filter((evt) => evt.item.type === "function_call");
+    expect(addedFunctionCalls.map((evt) => evt.item.name)).toEqual([
+      "create_graph",
+      "activate_graph",
+      "get_status",
+    ]);
+    expect(addedFunctionCalls.map((evt) => evt.output_index)).toEqual([1, 2, 3]);
+    expect(addedFunctionCalls.map((evt) => evt.item.call_id)).toEqual([
+      "call_1",
+      "call_2",
+      "call_3",
+    ]);
+
+    const doneFunctionCalls = events
+      .filter((e) => e.event === "response.output_item.done")
+      .map((e) => JSON.parse(e.data) as FunctionCallEvent)
+      .filter((evt) => evt.item.type === "function_call");
+    expect(doneFunctionCalls.map((evt) => evt.output_index)).toEqual([1, 2, 3]);
+
+    const completed = findSseEvent(events, "response.completed");
+    const response = (
+      parseSseData(completed) as {
+        response?: { status?: string; output?: Array<Record<string, unknown>> };
+      }
+    ).response;
+    expect(response?.status).toBe("incomplete");
+    expect(response?.output?.map((item) => item.type)).toEqual([
+      "message",
+      "function_call",
+      "function_call",
+      "function_call",
+    ]);
+    expect(response?.output?.slice(1).map((item) => item.name)).toEqual([
+      "create_graph",
+      "activate_graph",
+      "get_status",
+    ]);
+    expect(events.map((event) => event.data)).toContain("[DONE]");
   });
 
   it("reuses the prior session when previous_response_id is provided", async () => {
@@ -945,11 +1133,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
     });
     expect(firstResponse.status).toBe(200);
     const firstJson = (await firstResponse.json()) as { id?: string };
-    const firstOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-      | { sessionKey?: string }
-      | undefined;
+    const firstOpts = firstAgentOpts() as { sessionKey?: string } | undefined;
     expect(firstJson.id).toMatch(/^resp_/);
-    expect(firstOpts?.sessionKey).toBeTruthy();
+    const firstSessionKey = requireSessionKey(firstOpts?.sessionKey, "first response");
 
     agentCommand.mockResolvedValueOnce({
       payloads: [{ text: "It is sunny." }],
@@ -962,10 +1148,8 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: [{ type: "function_call_output", call_id: "call_1", output: "Sunny, 70F." }],
     });
     expect(secondResponse.status).toBe(200);
-    const secondOpts = (agentCommand.mock.calls[1] as unknown[] | undefined)?.[0] as
-      | { sessionKey?: string }
-      | undefined;
-    expect(secondOpts?.sessionKey).toBe(firstOpts?.sessionKey);
+    const secondOpts = agentCommand.mock.calls.at(1)?.[0] as { sessionKey?: string } | undefined;
+    expect(secondOpts?.sessionKey).toBe(firstSessionKey);
     await ensureResponseConsumed(secondResponse);
   });
 
@@ -984,9 +1168,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     });
     expect(firstResponse.status).toBe(200);
     const firstJson = (await firstResponse.json()) as { id?: string };
-    const firstOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-      | { sessionKey?: string }
-      | undefined;
+    const firstOpts = firstAgentOpts() as { sessionKey?: string } | undefined;
     expect(firstOpts?.sessionKey ?? "").toContain("openresponses-user:alice");
 
     agentCommand.mockResolvedValueOnce({
@@ -1001,9 +1183,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: "hello again",
     });
     expect(secondResponse.status).toBe(200);
-    const secondOpts = (agentCommand.mock.calls[1] as unknown[] | undefined)?.[0] as
-      | { sessionKey?: string }
-      | undefined;
+    const secondOpts = agentCommand.mock.calls.at(1)?.[0] as { sessionKey?: string } | undefined;
     expect(secondOpts?.sessionKey).toBe(firstOpts?.sessionKey);
     await ensureResponseConsumed(secondResponse);
   });
@@ -1026,12 +1206,10 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: "delayed hello",
     });
 
-    for (let i = 0; i < 20 && agentCommand.mock.calls.length === 0; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-
-    expect(agentCommand.mock.calls).toHaveLength(1);
-    expect(openResponsesTesting.getResponseSessionIds()).toEqual([]);
+    await vi.waitFor(() => {
+      expect(agentCommand.mock.calls).toHaveLength(1);
+    });
+    expect(openResponsesTesting.getResponseSessionIds()).toStrictEqual([]);
 
     release?.({ payloads: [{ text: "hello" }] });
 

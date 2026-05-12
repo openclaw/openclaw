@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   connectReq,
@@ -9,6 +9,7 @@ import {
   getPreauthHandshakeTimeoutMsFromEnv,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
+  MIN_PROBE_PROTOCOL_VERSION,
   NODE_CLIENT,
   onceMessage,
   openWs,
@@ -28,20 +29,13 @@ export function registerDefaultAuthTokenSuite(): void {
   describe("default auth (token)", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
     let port: number;
-    const testsWithoutDefaultServer = new Set([
-      "closes silent handshakes after timeout",
-      "prefers OPENCLAW_HANDSHAKE_TIMEOUT_MS and falls back on empty string",
-    ]);
 
-    beforeEach(async (context) => {
-      if (testsWithoutDefaultServer.has(context.task.name)) {
-        return;
-      }
+    beforeAll(async () => {
       port = await getFreePort();
       server = await startGatewayServer(port);
     });
 
-    afterEach(async () => {
+    afterAll(async () => {
       await server?.close();
       server = undefined;
     });
@@ -128,7 +122,8 @@ export function registerDefaultAuthTokenSuite(): void {
     });
 
     test("connect (req) handshake returns hello-ok payload", async () => {
-      const { STATE_DIR, createConfigIO } = await import("../config/config.js");
+      const { createConfigIO } = await import("../config/config.js");
+      const { STATE_DIR } = await import("../config/paths.js");
       const ws = await openWs(port);
 
       const res = await connectReq(ws);
@@ -248,6 +243,91 @@ export function registerDefaultAuthTokenSuite(): void {
       }
     });
 
+    test("hello-ok reports granted auth metadata for device-less shared token auth", async () => {
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, { scopes: ["operator.read"], device: null });
+        expect(res.ok).toBe(true);
+        const helloOk = res.payload as
+          | {
+              auth?: {
+                role?: unknown;
+                scopes?: unknown;
+                deviceToken?: unknown;
+              };
+            }
+          | undefined;
+        expect(helloOk?.auth?.role).toBe("operator");
+        expect(helloOk?.auth?.scopes).toEqual([]);
+        expect(helloOk?.auth?.deviceToken).toBeUndefined();
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("hello-ok reports persisted token scopes when reusing an existing device token", async () => {
+      const { randomUUID } = await import("node:crypto");
+      const os = await import("node:os");
+      const path = await import("node:path");
+      const token = resolveGatewayTokenOrEnv();
+      const deviceIdentityPath = path.join(
+        os.tmpdir(),
+        `openclaw-shared-auth-scope-reuse-${randomUUID()}.json`,
+      );
+      const wsInitial = await openWs(port);
+      let pairedDeviceToken: string | undefined;
+      let pairedDeviceScopes: unknown;
+      try {
+        const initial = await connectReq(wsInitial, {
+          token,
+          scopes: ["operator.admin"],
+          deviceIdentityPath,
+        });
+        expect(initial.ok).toBe(true);
+        const helloOk = initial.payload as
+          | {
+              auth?: {
+                role?: unknown;
+                scopes?: unknown;
+                deviceToken?: unknown;
+              };
+            }
+          | undefined;
+        expect(helloOk?.auth?.role).toBe("operator");
+        expect(Array.isArray(helloOk?.auth?.scopes)).toBe(true);
+        expect(typeof helloOk?.auth?.deviceToken).toBe("string");
+        pairedDeviceToken = helloOk?.auth?.deviceToken as string | undefined;
+        pairedDeviceScopes = helloOk?.auth?.scopes;
+      } finally {
+        wsInitial.close();
+      }
+
+      const wsReconnect = await openWs(port);
+      try {
+        const reconnect = await connectReq(wsReconnect, {
+          token,
+          scopes: ["operator.read"],
+          deviceIdentityPath,
+        });
+        expect(reconnect.ok).toBe(true);
+        const helloOk = reconnect.payload as
+          | {
+              auth?: {
+                role?: unknown;
+                scopes?: unknown;
+                deviceToken?: unknown;
+              };
+            }
+          | undefined;
+        expect(helloOk?.auth?.role).toBe("operator");
+        expect(helloOk?.auth?.deviceToken).toBe(pairedDeviceToken);
+        expect(helloOk?.auth?.scopes).toEqual(pairedDeviceScopes);
+        expect(helloOk?.auth?.scopes).not.toEqual(["operator.read"]);
+      } finally {
+        wsReconnect.close();
+      }
+    });
+
     test("does not grant admin when scopes are omitted", async () => {
       const ws = await openWs(port);
       const token = resolveGatewayTokenOrEnv();
@@ -282,7 +362,9 @@ export function registerDefaultAuthTokenSuite(): void {
       const presence = helloOk?.snapshot?.presence;
       expect(Array.isArray(presence)).toBe(true);
       const mine = presence?.find((entry) => entry.deviceId === identity.deviceId);
-      expect(mine).toBeTruthy();
+      if (!mine) {
+        throw new Error(`expected presence entry for device ${identity.deviceId}`);
+      }
       const presenceScopes = Array.isArray(mine?.scopes) ? mine?.scopes : [];
       expect(presenceScopes).toEqual([]);
       expect(presenceScopes).not.toContain("operator.admin");
@@ -339,6 +421,37 @@ export function registerDefaultAuthTokenSuite(): void {
         const res = await connectReq(ws, {
           minProtocol: PROTOCOL_VERSION + 1,
           maxProtocol: PROTOCOL_VERSION + 2,
+        });
+        expect(res.ok).toBe(false);
+      } catch {
+        // If the server closed before we saw the frame, that's acceptable.
+      }
+      ws.close();
+    });
+
+    test("allows previous protocol for restart health probes", async () => {
+      const ws = await openWs(port);
+      const res = await connectReq(ws, {
+        minProtocol: MIN_PROBE_PROTOCOL_VERSION,
+        maxProtocol: MIN_PROBE_PROTOCOL_VERSION,
+        client: {
+          id: GATEWAY_CLIENT_NAMES.PROBE,
+          version: "2026.5.7",
+          platform: "cli",
+          mode: GATEWAY_CLIENT_MODES.PROBE,
+        },
+      });
+      expect(res.ok).toBe(true);
+      expect((res.payload as { type?: unknown } | undefined)?.type).toBe("hello-ok");
+      ws.close();
+    });
+
+    test("keeps previous protocol rejected for non-probe clients", async () => {
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          minProtocol: MIN_PROBE_PROTOCOL_VERSION,
+          maxProtocol: MIN_PROBE_PROTOCOL_VERSION,
         });
         expect(res.ok).toBe(false);
       } catch {

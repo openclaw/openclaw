@@ -22,6 +22,13 @@ const NONCE_REFUSAL_MARKERS = [
   "can't comply",
   "can’t comply",
   "cannot comply",
+  "no `read`",
+  "no read tool",
+  "no `read`/`read` tool",
+  "no read/read tool",
+  "no read tool available",
+  "won't output",
+  "won’t output",
   "isn't a real openclaw probe",
   "is not a real openclaw probe",
   "not a real openclaw probe",
@@ -33,6 +40,8 @@ const PROBE_REFUSAL_MARKERS = [
   "not a legitimate self-test",
   "not legitimate self-test",
   "authorized integration probe",
+  "authorizing me to execute",
+  "authorizing me to run",
 ];
 
 export function isLikelyToolNonceRefusal(text: string): boolean {

@@ -1,4 +1,4 @@
-import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.shared.js";
+import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -7,8 +7,9 @@ import {
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { legacyModelKey, modelKey, normalizeProviderId } from "./model-selection-normalize.js";
 import { normalizeModelSelection } from "./model-selection-resolve.js";
+import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 
-type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
 
 export function resolveThinkingDefault(params: {
   cfg: OpenClawConfig;
@@ -46,13 +47,20 @@ export function resolveThinkingDefault(params: {
     perModelThinking === "medium" ||
     perModelThinking === "high" ||
     perModelThinking === "xhigh" ||
-    perModelThinking === "adaptive"
+    perModelThinking === "adaptive" ||
+    perModelThinking === "max"
   ) {
     return perModelThinking;
   }
   const configured = params.cfg.agents?.defaults?.thinkingDefault;
   if (configured) {
     return configured;
+  }
+  if (
+    normalizedProvider === "anthropic" &&
+    (normalizedModel.startsWith("claude-opus-4-7") || normalizedModel.startsWith("claude-opus-4.7"))
+  ) {
+    return "off";
   }
   if (
     normalizedProvider === "anthropic" &&
@@ -68,5 +76,35 @@ export function resolveThinkingDefault(params: {
     provider: params.provider,
     model: params.model,
     catalog: params.catalog,
+  });
+}
+
+export async function resolveThinkingDefaultWithRuntimeCatalog(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+  loadModelCatalog: () => Promise<ModelCatalogEntry[]>;
+}): Promise<ThinkLevel> {
+  const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
+  const configuredSelectedEntry = configuredCatalog.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
+  const needsRuntimeCatalog =
+    configuredCatalog.length === 0 ||
+    !configuredSelectedEntry ||
+    configuredSelectedEntry.reasoning === undefined;
+  const runtimeCatalog = needsRuntimeCatalog ? await params.loadModelCatalog() : undefined;
+  const runtimeSelectedEntry = runtimeCatalog?.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
+  const catalog =
+    runtimeSelectedEntry || configuredCatalog.length === 0
+      ? (runtimeCatalog ?? configuredCatalog)
+      : configuredCatalog;
+  return resolveThinkingDefault({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    catalog,
   });
 }

@@ -6,8 +6,6 @@ read_when:
 title: "Z.AI"
 ---
 
-# Z.AI
-
 Z.AI is the API platform for **GLM** models. It provides REST APIs for GLM and uses API keys
 for authentication. Create your API key in the Z.AI console. OpenClaw uses the `zai` provider
 with a Z.AI API key.
@@ -36,9 +34,9 @@ with a Z.AI API key.
         }
         ```
       </Step>
-      <Step title="Verify the model is available">
+      <Step title="Verify the model is listed">
         ```bash
-        openclaw models list --provider zai
+        openclaw models list --all --provider zai
         ```
       </Step>
     </Steps>
@@ -72,9 +70,9 @@ with a Z.AI API key.
         }
         ```
       </Step>
-      <Step title="Verify the model is available">
+      <Step title="Verify the model is listed">
         ```bash
-        openclaw models list --provider zai
+        openclaw models list --all --provider zai
         ```
       </Step>
     </Steps>
@@ -82,9 +80,16 @@ with a Z.AI API key.
   </Tab>
 </Tabs>
 
-## Bundled GLM catalog
+## Built-in catalog
 
-OpenClaw currently seeds the bundled `zai` provider with:
+OpenClaw ships the bundled `zai` provider catalog in the plugin manifest, so read-only
+listing can show known GLM rows without loading provider runtime:
+
+```bash
+openclaw models list --all --provider zai
+```
+
+The manifest-backed catalog currently includes:
 
 | Model ref            | Notes         |
 | -------------------- | ------------- |
@@ -134,6 +139,38 @@ GLM models are available as `zai/<model>` (example: `zai/glm-5`). The default bu
 
   </Accordion>
 
+  <Accordion title="Thinking and preserved thinking">
+    Z.AI thinking follows OpenClaw's `/think` controls. With thinking off,
+    OpenClaw sends `thinking: { type: "disabled" }` to avoid responses that
+    spend the output budget on `reasoning_content` before visible text.
+
+    Preserved thinking is opt-in because Z.AI requires the full historical
+    `reasoning_content` to be replayed, which increases prompt tokens. Enable it
+    per model:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "zai/glm-5.1": {
+              params: { preserveThinking: true },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    When enabled and thinking is on, OpenClaw sends
+    `thinking: { type: "enabled", clear_thinking: false }` and replays prior
+    `reasoning_content` for the same OpenAI-compatible transcript.
+
+    Advanced users can still override the exact provider payload with
+    `params.extra_body.thinking`.
+
+  </Accordion>
+
   <Accordion title="Image understanding">
     The bundled Z.AI plugin registers image understanding.
 
@@ -150,6 +187,7 @@ GLM models are available as `zai/<model>` (example: `zai/glm-5`). The default bu
     - Z.AI uses Bearer auth with your API key.
     - The `zai-api-key` onboarding choice auto-detects the matching Z.AI endpoint from the key prefix.
     - Use the explicit regional choices (`zai-coding-global`, `zai-coding-cn`, `zai-global`, `zai-cn`) when you want to force a specific API surface.
+
   </Accordion>
 </AccordionGroup>
 

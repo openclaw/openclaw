@@ -5,9 +5,15 @@ export {
   failDelivery,
   loadPendingDelivery,
   loadPendingDeliveries,
+  markDeliveryPlatformOutcomeUnknown,
+  markDeliveryPlatformSendAttemptStarted,
   moveToFailed,
 } from "./delivery-queue-storage.js";
-export type { QueuedDelivery, QueuedDeliveryPayload } from "./delivery-queue-storage.js";
+export type {
+  QueuedDelivery,
+  QueuedDeliveryPayload,
+  QueuedRenderedMessageBatchPlan,
+} from "./delivery-queue-storage.js";
 export {
   computeBackoffMs,
   drainPendingDeliveries,
@@ -15,8 +21,10 @@ export {
   isPermanentDeliveryError,
   MAX_RETRIES,
   recoverPendingDeliveries,
+  withActiveDeliveryClaim,
 } from "./delivery-queue-recovery.js";
 export type {
+  ActiveDeliveryClaimResult,
   DeliverFn,
   PendingDeliveryDrainDecision,
   RecoveryLogger,

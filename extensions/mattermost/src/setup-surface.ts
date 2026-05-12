@@ -1,14 +1,16 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  applySetupAccountConfigPatch,
   createStandardChannelSetupStatus,
   formatDocsLink,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
 import {
-  applySetupAccountConfigPatch,
-  DEFAULT_ACCOUNT_ID,
-  type OpenClawConfig,
-} from "./runtime-api.js";
-import { isMattermostConfigured, resolveMattermostAccountWithSecrets } from "./setup-core.js";
+  applyMattermostSetupConfigPatch,
+  isMattermostConfigured,
+  resolveMattermostAccountWithSecrets,
+} from "./setup-core.js";
 import { normalizeMattermostBaseUrl } from "./setup.client.runtime.js";
 import { hasConfiguredSecretInput } from "./setup.secret-input.runtime.js";
 
@@ -83,6 +85,12 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
           hasConfiguredValue: hasConfiguredSecretInput(resolvedAccount.config.botToken),
         };
       },
+      applySet: async ({ cfg, accountId, value }) =>
+        applyMattermostSetupConfigPatch({
+          cfg,
+          accountId,
+          patch: { botToken: value },
+        }),
     },
   ],
   textInputs: [
@@ -108,6 +116,12 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
           ? undefined
           : "Mattermost base URL must include a valid base URL.",
       normalizeValue: ({ value }) => normalizeMattermostBaseUrl(value) ?? value.trim(),
+      applySet: async ({ cfg, accountId, value }) =>
+        applyMattermostSetupConfigPatch({
+          cfg,
+          accountId,
+          patch: { baseUrl: value },
+        }),
     },
   ],
   disable: (cfg: OpenClawConfig) => ({

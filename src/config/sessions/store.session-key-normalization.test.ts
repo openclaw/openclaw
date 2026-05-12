@@ -78,12 +78,8 @@ describe("session store key normalization", () => {
 
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(Object.keys(store)).toEqual([CANONICAL_KEY]);
-    expect(store[CANONICAL_KEY]).toEqual(
-      expect.objectContaining({
-        lastChannel: "webchat",
-        lastTo: "webchat:user-1",
-      }),
-    );
+    expect(store[CANONICAL_KEY]?.lastChannel).toBe("webchat");
+    expect(store[CANONICAL_KEY]?.lastTo).toBe("webchat:user-1");
   });
 
   it("migrates legacy mixed-case entries to the canonical key on update", async () => {
@@ -118,13 +114,14 @@ describe("session store key normalization", () => {
   });
 
   it("preserves updatedAt when recording inbound metadata for an existing session", async () => {
+    const existingUpdatedAt = Date.now();
     await fs.writeFile(
       storePath,
       JSON.stringify(
         {
           [CANONICAL_KEY]: {
             sessionId: "existing-session",
-            updatedAt: 1111,
+            updatedAt: existingUpdatedAt,
             chatType: "direct",
             channel: "webchat",
             origin: {
@@ -150,7 +147,7 @@ describe("session store key normalization", () => {
 
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(store[CANONICAL_KEY]?.sessionId).toBe("existing-session");
-    expect(store[CANONICAL_KEY]?.updatedAt).toBe(1111);
+    expect(store[CANONICAL_KEY]?.updatedAt).toBe(existingUpdatedAt);
     expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
   });
 });

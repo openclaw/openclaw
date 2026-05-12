@@ -1,14 +1,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
+vi.mock("../plugins/provider-hook-runtime.js", async () => {
   const replayHelpers = await vi.importActual<
     typeof import("../plugins/provider-replay-helpers.js")
   >("../plugins/provider-replay-helpers.js");
   return {
-    ...actual,
     resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) => {
       if (
         !provider ||
@@ -17,6 +15,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           "anthropic",
           "google",
           "github-copilot",
+          "env-sensitive",
           "kilocode",
           "kimi",
           "kimi-code",
@@ -42,9 +41,20 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         return {};
       }
       return {
-        buildReplayPolicy: (context?: { modelId?: string; modelApi?: string }) => {
+        buildReplayPolicy: (context?: {
+          modelId?: string;
+          modelApi?: string;
+          env?: NodeJS.ProcessEnv;
+        }) => {
           const modelId = context?.modelId?.toLowerCase() ?? "";
           switch (provider) {
+            case "env-sensitive":
+              return {
+                sanitizeToolCallIds: context?.env?.OPENCLAW_TEST_TRANSCRIPT_POLICY === "strict",
+                ...(context?.env?.OPENCLAW_TEST_TRANSCRIPT_POLICY === "strict"
+                  ? { toolCallIdMode: "strict" as const }
+                  : {}),
+              };
             case "amazon-bedrock":
             case "anthropic":
               return {
@@ -189,12 +199,12 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         },
       };
     }),
-    resetProviderRuntimeHookCacheForTest: vi.fn(),
   };
 });
 
 let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
 let shouldAllowProviderOwnedThinkingReplay: typeof import("./transcript-policy.js").shouldAllowProviderOwnedThinkingReplay;
+const mockResolveProviderRuntimePlugin = vi.mocked(resolveProviderRuntimePlugin);
 
 describe("resolveTranscriptPolicy", () => {
   beforeAll(async () => {
@@ -206,6 +216,20 @@ describe("resolveTranscriptPolicy", () => {
     vi.clearAllMocks();
   });
 
+  function expectStrictOpenAiCompatibleReplayDefaults(provider: string): void {
+    const policy = resolveTranscriptPolicy({
+      provider,
+      modelId: "demo-model",
+      modelApi: "openai-completions",
+    });
+
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.applyGoogleTurnOrdering).toBe(true);
+    expect(policy.validateGeminiTurns).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  }
+
   it("enables sanitizeToolCallIds for Anthropic provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "anthropic",
@@ -214,6 +238,56 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.sanitizeToolCallIds).toBe(true);
     expect(policy.toolCallIdMode).toBe("strict");
+  });
+
+  it("memoizes replay policy resolution for the same config and process env", () => {
+    const config = {} as OpenClawConfig;
+
+    resolveTranscriptPolicy({
+      provider: "mistral",
+      modelId: "mistral-large-latest",
+      config,
+      env: process.env,
+    });
+    resolveTranscriptPolicy({
+      provider: "mistral",
+      modelId: "mistral-large-latest",
+      config,
+      env: process.env,
+    });
+
+    expect(mockResolveProviderRuntimePlugin).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse cached replay policies across custom env objects", () => {
+    const config = {} as OpenClawConfig;
+    const strictEnv = {
+      ...process.env,
+      OPENCLAW_TEST_TRANSCRIPT_POLICY: "strict",
+    };
+    const looseEnv = {
+      ...process.env,
+      OPENCLAW_TEST_TRANSCRIPT_POLICY: "loose",
+    };
+
+    const strictPolicy = resolveTranscriptPolicy({
+      provider: "env-sensitive",
+      modelId: "env-demo",
+      config,
+      env: strictEnv,
+    });
+    const loosePolicy = resolveTranscriptPolicy({
+      provider: "env-sensitive",
+      modelId: "env-demo",
+      config,
+      env: looseEnv,
+    });
+
+    expect(strictPolicy.sanitizeToolCallIds).toBe(true);
+    expect(strictPolicy.toolCallIdMode).toBe("strict");
+    expect(loosePolicy.sanitizeToolCallIds).toBe(false);
+    expect(loosePolicy.toolCallIdMode).toBeUndefined();
+    expect(mockResolveProviderRuntimePlugin).toHaveBeenCalledTimes(2);
   });
 
   it("enables sanitizeToolCallIds for Google provider", () => {
@@ -272,18 +346,43 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
-  it("falls back to unowned transport defaults when no owning plugin exists", () => {
+  it("strips historical reasoning for strict OpenAI-compatible providers", () => {
     const policy = resolveTranscriptPolicy({
       provider: "custom-openai-proxy",
-      modelId: "demo-model",
+      modelId: "qwen3.6-27b",
       modelApi: "openai-completions",
     });
+    expect(policy.dropReasoningFromHistory).toBe(true);
 
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
-    expect(policy.applyGoogleTurnOrdering).toBe(true);
-    expect(policy.validateGeminiTurns).toBe(true);
-    expect(policy.validateAnthropicTurns).toBe(true);
+    const responsesPolicy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "qwen3.6-27b",
+      modelApi: "openai-responses",
+    });
+    expect(responsesPolicy.dropReasoningFromHistory).toBe(false);
+  });
+
+  it("falls back to unowned transport defaults when no owning plugin exists", () => {
+    expectStrictOpenAiCompatibleReplayDefaults("custom-openai-proxy");
+  });
+
+  it("enables assistant prefill stripping for unowned Claude OpenAI Responses routes (#79688)", () => {
+    const claudePolicy = resolveTranscriptPolicy({
+      provider: "anthropic-foundry",
+      modelId: "anthropic-foundry/claude-opus-4-7",
+      modelApi: "openai-responses",
+    });
+    expect(claudePolicy.sanitizeToolCallIds).toBe(true);
+    expect(claudePolicy.toolCallIdMode).toBe("strict");
+    expect(claudePolicy.validateAnthropicTurns).toBe(true);
+    expect(claudePolicy.validateGeminiTurns).toBe(false);
+
+    const gptPolicy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+    });
+    expect(gptPolicy.validateAnthropicTurns).toBe(false);
   });
 
   it("preserves thinking blocks for newer Claude models in unowned Anthropic transport fallback", () => {
@@ -312,18 +411,66 @@ describe("resolveTranscriptPolicy", () => {
     expect(sonnet37.dropThinkingBlocks).toBe(true);
   });
 
-  it("preserves transport defaults when a runtime plugin has not adopted replay hooks", () => {
+  it("strips thinking blocks for unowned Anthropic-compatible models that opt out of reasoning", () => {
     const policy = resolveTranscriptPolicy({
-      provider: "vllm",
-      modelId: "demo-model",
-      modelApi: "openai-completions",
+      provider: "qiniu",
+      modelId: "moonshotai/kimi-k2.5",
+      modelApi: "anthropic-messages",
+      model: {
+        id: "moonshotai/kimi-k2.5",
+        name: "Kimi K2.5",
+        provider: "qiniu",
+        api: "anthropic-messages",
+        baseUrl: "https://api.qnaigc.com",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256_000,
+        maxTokens: 16_384,
+        compat: { supportsReasoningEffort: false },
+      },
     });
 
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
-    expect(policy.applyGoogleTurnOrdering).toBe(true);
-    expect(policy.validateGeminiTurns).toBe(true);
+    expect(policy.dropThinkingBlocks).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
+  it("does not reuse cached unowned Anthropic policies across reasoning compat changes", () => {
+    const config = {} as OpenClawConfig;
+    const model = {
+      id: "moonshotai/kimi-k2.5",
+      name: "Kimi K2.5",
+      provider: "qiniu",
+      api: "anthropic-messages" as const,
+      baseUrl: "https://api.qnaigc.com",
+      reasoning: false,
+      input: ["text" as const, "image" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 256_000,
+      maxTokens: 16_384,
+    };
+
+    const defaultPolicy = resolveTranscriptPolicy({
+      config,
+      provider: "qiniu",
+      modelId: "moonshotai/kimi-k2.5",
+      modelApi: "anthropic-messages",
+      model,
+    });
+    const noReasoningPolicy = resolveTranscriptPolicy({
+      config,
+      provider: "qiniu",
+      modelId: "moonshotai/kimi-k2.5",
+      modelApi: "anthropic-messages",
+      model: { ...model, compat: { supportsReasoningEffort: false } },
+    });
+
+    expect(defaultPolicy.dropThinkingBlocks).toBe(false);
+    expect(noReasoningPolicy.dropThinkingBlocks).toBe(true);
+  });
+
+  it("preserves transport defaults when a runtime plugin has not adopted replay hooks", () => {
+    expectStrictOpenAiCompatibleReplayDefaults("vllm");
   });
 
   it("uses provider-owned Anthropic replay policy for MiniMax transports", () => {

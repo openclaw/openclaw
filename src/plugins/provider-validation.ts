@@ -2,25 +2,13 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
+import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";
+
+const warnedDeprecatedDiscoveryProviders = new Set<string>();
 
 type ProviderWizardSetup = NonNullable<NonNullable<ProviderPlugin["wizard"]>["setup"]>;
 type ProviderWizardModelPicker = NonNullable<NonNullable<ProviderPlugin["wizard"]>["modelPicker"]>;
 type ProviderWizardModelAllowlist = NonNullable<ProviderWizardSetup["modelAllowlist"]>;
-
-function pushProviderDiagnostic(params: {
-  level: PluginDiagnostic["level"];
-  pluginId: string;
-  source: string;
-  message: string;
-  pushDiagnostic: (diag: PluginDiagnostic) => void;
-}) {
-  params.pushDiagnostic({
-    level: params.level,
-    pluginId: params.pluginId,
-    source: params.source,
-    message: params.message,
-  });
-}
 
 function normalizeTextList(values: string[] | undefined): string[] | undefined {
   const normalized = Array.from(new Set(normalizeTrimmedStringList(values)));
@@ -78,7 +66,7 @@ function resolveWizardMethodId(params: {
   if (params.auth.some((method) => method.id === params.methodId)) {
     return params.methodId;
   }
-  pushProviderDiagnostic({
+  pushPluginValidationDiagnostic({
     level: "warn",
     pluginId: params.pluginId,
     source: params.source,
@@ -96,13 +84,15 @@ function buildNormalizedModelAllowlist(
   }
   const allowedKeys = normalizeTextList(modelAllowlist.allowedKeys);
   const initialSelections = normalizeTextList(modelAllowlist.initialSelections);
+  const loadCatalog = modelAllowlist.loadCatalog === true;
   const message = normalizeOptionalString(modelAllowlist.message);
-  if (!allowedKeys && !initialSelections && !message) {
+  if (!allowedKeys && !initialSelections && !loadCatalog && !message) {
     return undefined;
   }
   return {
     ...(allowedKeys ? { allowedKeys } : {}),
     ...(initialSelections ? { initialSelections } : {}),
+    ...(loadCatalog ? { loadCatalog } : {}),
     ...(message ? { message } : {}),
   };
 }
@@ -166,7 +156,7 @@ function normalizeProviderWizardSetup(params: {
     return undefined;
   }
   if (!hasAuthMethods) {
-    pushProviderDiagnostic({
+    pushPluginValidationDiagnostic({
       level: "warn",
       pluginId: params.pluginId,
       source: params.source,
@@ -203,7 +193,7 @@ function normalizeProviderAuthMethods(params: {
   for (const method of params.auth) {
     const methodId = normalizeOptionalString(method.id);
     if (!methodId) {
-      pushProviderDiagnostic({
+      pushPluginValidationDiagnostic({
         level: "error",
         pluginId: params.pluginId,
         source: params.source,
@@ -213,7 +203,7 @@ function normalizeProviderAuthMethods(params: {
       continue;
     }
     if (seenMethodIds.has(methodId)) {
-      pushProviderDiagnostic({
+      pushPluginValidationDiagnostic({
         level: "error",
         pluginId: params.pluginId,
         source: params.source,
@@ -282,7 +272,7 @@ function normalizeProviderWizard(params: {
       return undefined;
     }
     if (!hasAuthMethods) {
-      pushProviderDiagnostic({
+      pushPluginValidationDiagnostic({
         level: "warn",
         pluginId: params.pluginId,
         source: params.source,
@@ -324,7 +314,7 @@ export function normalizeRegisteredProvider(params: {
 }): ProviderPlugin | null {
   const id = normalizeOptionalString(params.provider.id);
   if (!id) {
-    pushProviderDiagnostic({
+    pushPluginValidationDiagnostic({
       level: "error",
       pluginId: params.pluginId,
       source: params.source,
@@ -359,13 +349,26 @@ export function normalizeRegisteredProvider(params: {
   const catalog = params.provider.catalog;
   const discovery = params.provider.discovery;
   if (catalog && discovery) {
-    pushProviderDiagnostic({
+    pushPluginValidationDiagnostic({
       level: "warn",
       pluginId: params.pluginId,
       source: params.source,
       message: `provider "${id}" registered both catalog and discovery; using catalog`,
       pushDiagnostic: params.pushDiagnostic,
     });
+  }
+  if (!catalog && discovery) {
+    const warningKey = `${params.pluginId}:${id}:discovery`;
+    if (!warnedDeprecatedDiscoveryProviders.has(warningKey)) {
+      warnedDeprecatedDiscoveryProviders.add(warningKey);
+      pushPluginValidationDiagnostic({
+        level: "warn",
+        pluginId: params.pluginId,
+        source: params.source,
+        message: `provider "${id}" uses deprecated discovery; use catalog`,
+        pushDiagnostic: params.pushDiagnostic,
+      });
+    }
   }
   const {
     wizard: _ignoredWizard,

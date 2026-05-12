@@ -55,6 +55,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     waitForAgentRun: fn,
     listCronJobs: fn,
     waitForCronRunCompletion: fn,
+    findManagedDreamingCronJob: fn,
     readDoctorMemoryStatus: fn,
     forceMemoryIndex: fn,
     findSkill: fn,
@@ -86,6 +87,19 @@ const constants: QaScenarioRuntimeConstants = {
   imageUnderstandingLargePngBase64: "png-large",
   imageUnderstandingValidPngBase64: "png-valid",
 };
+
+const browserAndWebRuntimeTools = [
+  "browserRequest",
+  "waitForBrowserReady",
+  "browserOpenTab",
+  "browserSnapshot",
+  "browserAct",
+  "webOpenPage",
+  "webWait",
+  "webType",
+  "webSnapshot",
+  "webEvaluate",
+] as const;
 
 describe("createQaScenarioRuntimeApi", () => {
   it("builds a markdown-flow runtime surface from generic transport capabilities", async () => {
@@ -127,11 +141,12 @@ describe("createQaScenarioRuntimeApi", () => {
         },
       },
     };
+    const deps = createDeps({ sleep });
 
     const api = createQaScenarioRuntimeApi({
       env,
       scenario,
-      deps: createDeps({ sleep }),
+      deps,
       constants,
     });
 
@@ -140,33 +155,26 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.config).toEqual({ expected: "value" });
     expect(api.waitForCondition).toBe(waitForCondition);
     expect(api.waitForChannelReady).toBe(api.waitForTransportReady);
-    expect(api.browserRequest).toBeDefined();
-    expect(api.waitForBrowserReady).toBeDefined();
-    expect(api.browserOpenTab).toBeDefined();
-    expect(api.browserSnapshot).toBeDefined();
-    expect(api.browserAct).toBeDefined();
-    expect(api.webOpenPage).toBeDefined();
-    expect(api.webWait).toBeDefined();
-    expect(api.webType).toBeDefined();
-    expect(api.webSnapshot).toBeDefined();
-    expect(api.webEvaluate).toBeDefined();
+    for (const toolName of browserAndWebRuntimeTools) {
+      expect(api[toolName]).toBe(deps[toolName]);
+    }
     expect(api.getTransportSnapshot()).toEqual(state.getSnapshot());
     expect(api.imageUnderstandingPngBase64).toBe("png-small");
 
-    const inbound = await api.injectInboundMessage({
+    const inbound = api.injectInboundMessage({
       accountId: "qa-channel",
       conversation: { id: "qa-operator", kind: "direct" },
       senderId: "qa-operator",
       text: "hello",
     });
-    const outbound = await api.injectOutboundMessage({
+    const outbound = api.injectOutboundMessage({
       accountId: "qa-channel",
       to: "dm:qa-operator",
       text: "hi",
     });
-    expect(inbound.id).toBeTruthy();
-    expect(outbound.id).toBeTruthy();
-    await api.readTransportMessage({ accountId: "qa-channel", messageId: outbound.id });
+    expect(inbound.id.trim()).not.toBe("");
+    expect(outbound.id.trim()).not.toBe("");
+    api.readTransportMessage({ accountId: "qa-channel", messageId: outbound.id });
     await api.reset();
     await api.resetBus();
     await api.resetTransport();

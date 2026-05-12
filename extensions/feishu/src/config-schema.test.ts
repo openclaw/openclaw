@@ -7,7 +7,7 @@ function expectSchemaIssue(
 ) {
   expect(result.success).toBe(false);
   if (!result.success) {
-    expect(result.error.issues.some((issue) => issue.path.join(".") === issuePath)).toBe(true);
+    expect(result.error.issues.map((issue) => issue.path.join("."))).toContain(issuePath);
   }
 }
 
@@ -206,6 +206,20 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(result.resolveSenderNames).toBe(true);
   });
 
+  it("accepts top-level and account-level block streaming", () => {
+    const result = FeishuConfigSchema.parse({
+      blockStreaming: true,
+      accounts: {
+        main: {
+          blockStreaming: false,
+        },
+      },
+    });
+
+    expect(result.blockStreaming).toBe(true);
+    expect(result.accounts?.main?.blockStreaming).toBe(false);
+  });
+
   it("accepts account-level optimization flags", () => {
     const result = FeishuConfigSchema.parse({
       accounts: {
@@ -217,6 +231,50 @@ describe("FeishuConfigSchema optimization flags", () => {
     });
     expect(result.accounts?.main?.typingIndicator).toBe(false);
     expect(result.accounts?.main?.resolveSenderNames).toBe(false);
+  });
+});
+
+describe("FeishuConfigSchema TTS overrides", () => {
+  it("accepts top-level and account-level TTS overrides", () => {
+    const result = FeishuConfigSchema.parse({
+      tts: {
+        auto: "always",
+        provider: "openai",
+        providers: {
+          openai: {
+            voice: "alloy",
+          },
+        },
+      },
+      accounts: {
+        english: {
+          tts: {
+            providers: {
+              openai: {
+                voice: "shimmer",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.tts).toEqual({
+      auto: "always",
+      provider: "openai",
+      providers: {
+        openai: {
+          voice: "alloy",
+        },
+      },
+    });
+    expect(result.accounts?.english?.tts).toEqual({
+      providers: {
+        openai: {
+          voice: "shimmer",
+        },
+      },
+    });
   });
 });
 
@@ -262,9 +320,7 @@ describe("FeishuConfigSchema defaultAccount", () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues.some((issue) => issue.path.join(".") === "defaultAccount")).toBe(
-        true,
-      );
+      expect(result.error.issues.map((issue) => issue.path.join("."))).toContain("defaultAccount");
     }
   });
 });

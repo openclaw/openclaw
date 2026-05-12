@@ -1,3 +1,4 @@
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromPrivateNetworkOptIn,
@@ -5,8 +6,8 @@ import {
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
-import { z } from "openclaw/plugin-sdk/zod";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { z } from "zod";
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -329,7 +330,7 @@ export async function createMattermostDirectChannelWithRetry(
       // Calculate exponential backoff delay with full-jitter
       // Jitter is proportional to the exponential delay, not a fixed 1000ms
       // This ensures backoff behaves correctly for small delay configurations
-      const exponentialDelay = initialDelayMs * Math.pow(2, attempt);
+      const exponentialDelay = initialDelayMs * 2 ** attempt;
       const jitter = Math.random() * exponentialDelay;
       const delayMs = Math.min(exponentialDelay + jitter, maxDelayMs);
 
@@ -377,7 +378,7 @@ function isRetryableError(error: Error): boolean {
     if (!clientErrorMatch) {
       continue;
     }
-    const statusCode = parseInt(clientErrorMatch[1], 10);
+    const statusCode = Number.parseInt(clientErrorMatch[1], 10);
     if (statusCode >= 400 && statusCode < 500) {
       return false;
     }
@@ -394,16 +395,24 @@ function isRetryableError(error: Error): boolean {
     return false;
   }
 
-  const codes = candidates
-    .map((candidate) => readErrorCode(candidate))
-    .filter((code): code is string => Boolean(code));
+  const codes: string[] = [];
+  for (const candidate of candidates) {
+    const code = readErrorCode(candidate);
+    if (code) {
+      codes.push(code);
+    }
+  }
   if (codes.some((code) => RETRYABLE_NETWORK_ERROR_CODES.has(code))) {
     return true;
   }
 
-  const names = candidates
-    .map((candidate) => readErrorName(candidate))
-    .filter((name): name is string => Boolean(name));
+  const names: string[] = [];
+  for (const candidate of candidates) {
+    const name = readErrorName(candidate);
+    if (name) {
+      names.push(name);
+    }
+  }
   if (names.some((name) => RETRYABLE_NETWORK_ERROR_NAMES.has(name))) {
     return true;
   }
@@ -415,11 +424,13 @@ function isRetryableError(error: Error): boolean {
 
 function collectErrorCandidates(error: unknown): unknown[] {
   const queue: unknown[] = [error];
+  let queueIndex = 0;
   const seen = new Set<unknown>();
   const candidates: unknown[] = [];
 
-  while (queue.length > 0) {
-    const current = queue.shift();
+  while (queueIndex < queue.length) {
+    const current = queue[queueIndex];
+    queueIndex += 1;
     if (!current || seen.has(current)) {
       continue;
     }
@@ -476,10 +487,6 @@ function readErrorCode(error: unknown): string | undefined {
     return String(raw);
   }
   return undefined;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function createMattermostPost(
@@ -542,6 +549,15 @@ export async function updateMattermostPost(
   return await client.request<MattermostPost>(`/posts/${postId}`, {
     method: "PUT",
     body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteMattermostPost(
+  client: MattermostClient,
+  postId: string,
+): Promise<void> {
+  await client.request<void>(`/posts/${postId}`, {
+    method: "DELETE",
   });
 }
 

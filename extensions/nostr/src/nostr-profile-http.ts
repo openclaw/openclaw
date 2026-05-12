@@ -12,16 +12,16 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   readStringValue,
-} from "openclaw/plugin-sdk/text-runtime";
-import { z } from "openclaw/plugin-sdk/zod";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { z } from "zod";
+import { publishNostrProfile, getNostrProfileState } from "./channel.js";
+import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
 import {
   createFixedWindowRateLimiter,
   getPluginRuntimeGatewayRequestScope,
   readJsonBodyWithLimit,
   requestBodyErrorToText,
-} from "../runtime-api.js";
-import { publishNostrProfile, getNostrProfileState } from "./channel.js";
-import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
+} from "./nostr-profile-http-runtime.js";
 import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
 import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
@@ -103,9 +103,6 @@ async function withPublishLock<T>(accountId: string, fn: () => Promise<T>): Prom
     }
   }
 }
-
-// Export for use in import validation
-export { validateUrlSafety };
 
 // ============================================================================
 // Validation Schemas

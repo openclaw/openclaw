@@ -4,13 +4,13 @@ import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 // Unit tests: don't pay the runtime cost of loading/parsing the real skills loader.
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   loadSkillsFromDir: () => ({ skills: [] }),
   formatSkillsForPrompt: () => "",
 }));
 
 function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntry {
-  return {
+  const skill: SkillStatusEntry = {
     name: "test-skill",
     description: "A test skill",
     source: "bundled",
@@ -23,10 +23,21 @@ function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatus
     always: false,
     disabled: false,
     blockedByAllowlist: false,
+    blockedByAgentFilter: false,
     eligible: true,
+    modelVisible: true,
+    userInvocable: true,
+    commandVisible: true,
     ...createEmptyInstallChecks(),
     ...overrides,
   };
+  if (overrides.modelVisible === undefined) {
+    skill.modelVisible = skill.eligible && !skill.blockedByAgentFilter;
+  }
+  if (overrides.commandVisible === undefined) {
+    skill.commandVisible = skill.eligible && !skill.blockedByAgentFilter && skill.userInvocable;
+  }
+  return skill;
 }
 
 function createMockReport(skills: SkillStatusEntry[]): SkillStatusReport {
@@ -107,6 +118,26 @@ describe("skills-cli", () => {
       const output = formatSkillsList(report, { eligible: true });
       expect(output).toContain("eligible-one");
       expect(output).not.toContain("not-eligible");
+    });
+
+    it("does not label agent-excluded skills as ready", () => {
+      const report = createMockReport([
+        createMockSkill({ name: "ready-one", eligible: true }),
+        createMockSkill({
+          name: "agent-excluded",
+          eligible: true,
+          blockedByAgentFilter: true,
+        }),
+      ]);
+
+      const output = formatSkillsList(report, {});
+      expect(output).toContain("1/2 ready");
+      expect(output).toContain("agent-excluded");
+      expect(output).toContain("excluded");
+
+      const eligibleOnly = formatSkillsList(report, { eligible: true });
+      expect(eligibleOnly).toContain("ready-one");
+      expect(eligibleOnly).not.toContain("agent-excluded");
     });
   });
 
@@ -190,6 +221,22 @@ describe("skills-cli", () => {
       const output = formatSkillInfo(report, "info-emoji", {});
       expect(output).toContain("🎛️");
     });
+
+    it("shows agent exclusion and visibility details in skill info", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "agent-excluded",
+          eligible: true,
+          blockedByAgentFilter: true,
+        }),
+      ]);
+
+      const output = formatSkillInfo(report, "agent-excluded", {});
+      expect(output).toContain("Excluded by agent allowlist");
+      expect(output).toContain("Visible to model");
+      expect(output).toContain("Available as command");
+      expect(output).toContain("excludes this skill");
+    });
   });
 
   describe("formatSkillsCheck", () => {
@@ -227,6 +274,126 @@ describe("skills-cli", () => {
       const output = formatSkillsCheck(report, {});
       expect(output).toContain("🎛️ ready-emoji");
       expect(output).toContain("🎙️ missing-emoji");
+    });
+
+    it("shows agent-filtered and loaded-but-not-injected skills", () => {
+      const report = {
+        ...createMockReport([
+          createMockSkill({ name: "visible", eligible: true, modelVisible: true }),
+          createMockSkill({
+            name: "prompt-hidden",
+            eligible: true,
+            modelVisible: false,
+            commandVisible: true,
+          }),
+          createMockSkill({
+            name: "not-assigned",
+            eligible: true,
+            blockedByAgentFilter: true,
+          }),
+        ]),
+        agentId: "specialist",
+        agentSkillFilter: ["visible", "prompt-hidden"],
+      };
+
+      const output = formatSkillsCheck(report, {});
+      expect(output).toContain("Agent:");
+      expect(output).toContain("specialist");
+      expect(output).toContain("Ready and visible to model");
+      expect(output).toContain("visible");
+      expect(output).toContain("Ready but hidden from model prompt");
+      expect(output).toContain("prompt-hidden");
+      expect(output).toContain("Excluded by agent allowlist");
+      expect(output).toContain("not-assigned");
+      expect(output).toContain("What this means");
+      expect(output).toContain("the agent may still exclude it");
+      expect(output).toContain("people, scripts, or cron jobs can call the skill explicitly");
+      expect(output).toContain("kept out of normal chat");
+      expect(output).toContain("commands/cron may still use it");
+    });
+
+    it("does not imply prompt-hidden non-command skills can be called explicitly", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "internal-hidden",
+          eligible: true,
+          modelVisible: false,
+          commandVisible: false,
+          userInvocable: false,
+        }),
+      ]);
+
+      const output = formatSkillsCheck(report, {});
+      expect(output).toContain("internal-hidden");
+      expect(output).toContain("is not exposed as a command");
+      expect(output).not.toContain("commands/cron may still use it");
+    });
+
+    it("summarizes a mixed bad skill pack in JSON", () => {
+      const output = formatSkillsCheck(
+        {
+          ...createMockReport([
+            createMockSkill({ name: "ready", eligible: true }),
+            createMockSkill({
+              name: "prompt-hidden",
+              eligible: true,
+              modelVisible: false,
+              commandVisible: true,
+            }),
+            createMockSkill({
+              name: "slash-hidden",
+              eligible: true,
+              modelVisible: true,
+              userInvocable: false,
+              commandVisible: false,
+            }),
+            createMockSkill({
+              name: "agent-filtered",
+              eligible: true,
+              blockedByAgentFilter: true,
+            }),
+            createMockSkill({
+              name: "missing-bin",
+              eligible: false,
+              missing: { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] },
+            }),
+            createMockSkill({ name: "disabled", eligible: false, disabled: true }),
+            createMockSkill({
+              name: "blocked-bundled",
+              eligible: false,
+              blockedByAllowlist: true,
+            }),
+          ]),
+          agentId: "specialist",
+          agentSkillFilter: ["ready", "prompt-hidden", "slash-hidden", "missing-bin"],
+        },
+        { json: true },
+      );
+
+      const parsed = JSON.parse(output) as {
+        summary: Record<string, number>;
+        modelVisible: string[];
+        commandVisible: string[];
+        agentFiltered: string[];
+        notInjected: Array<{ name: string; reason: string }>;
+        missingRequirements: Array<{ name: string }>;
+      };
+      expect(parsed.summary.total).toBe(7);
+      expect(parsed.summary.eligible).toBe(4);
+      expect(parsed.summary.modelVisible).toBe(2);
+      expect(parsed.summary.commandVisible).toBe(2);
+      expect(parsed.summary.disabled).toBe(1);
+      expect(parsed.summary.blocked).toBe(1);
+      expect(parsed.summary.agentFiltered).toBe(1);
+      expect(parsed.summary.notInjected).toBe(1);
+      expect(parsed.summary.missingRequirements).toBe(1);
+      expect(parsed.modelVisible).toEqual(["ready", "slash-hidden"]);
+      expect(parsed.commandVisible).toEqual(["ready", "prompt-hidden"]);
+      expect(parsed.agentFiltered).toEqual(["agent-filtered"]);
+      expect(parsed.notInjected).toEqual([
+        { name: "prompt-hidden", reason: "disable-model-invocation" },
+      ]);
+      expect(parsed.missingRequirements.map((entry) => entry.name)).toEqual(["missing-bin"]);
     });
   });
 
@@ -266,6 +433,7 @@ describe("skills-cli", () => {
         assert: (parsed: Record<string, unknown>) => {
           const summary = parsed.summary as Record<string, unknown>;
           expect(summary.eligible).toBe(1);
+          expect(summary.modelVisible).toBe(1);
           expect(summary.total).toBe(2);
         },
       },

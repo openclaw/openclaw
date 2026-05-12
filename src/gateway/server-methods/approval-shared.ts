@@ -9,9 +9,20 @@ import type {
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-export const APPROVAL_NOT_FOUND_DETAILS = {
+const APPROVAL_NOT_FOUND_DETAILS = {
   reason: ErrorCodes.APPROVAL_NOT_FOUND,
+  remediation: "Re-request the action; pending approvals are cleared after expiry or restart.",
 } as const;
+
+const APPROVAL_ALREADY_RESOLVED_DETAILS = {
+  reason: "APPROVAL_ALREADY_RESOLVED",
+} as const;
+
+function resolveRecordedApprovalDecision<TPayload>(
+  record: ExecApprovalRecord<TPayload>,
+): ExecApprovalDecision | undefined {
+  return record.decision ?? record.consumedDecision;
+}
 
 type PendingApprovalLookupError =
   | "missing"
@@ -40,7 +51,7 @@ export function isApprovalDecision(value: string): value is ExecApprovalDecision
   return value === "allow-once" || value === "allow-always" || value === "deny";
 }
 
-export function respondUnknownOrExpiredApproval(respond: RespondFn): void {
+function respondUnknownOrExpiredApproval(respond: RespondFn): void {
   respond(
     false,
     undefined,
@@ -92,6 +103,37 @@ export function resolvePendingApprovalRecord<TPayload>(params: {
   }
   const snapshot = params.manager.getSnapshot(resolvedId.id);
   if (!snapshot || snapshot.resolvedAtMs !== undefined) {
+    return { ok: false, response: "missing" };
+  }
+  return { ok: true, approvalId: resolvedId.id, snapshot };
+}
+
+function resolveResolvedApprovalRecord<TPayload>(params: {
+  manager: ExecApprovalManager<TPayload>;
+  inputId: string;
+  exposeAmbiguousPrefixError?: boolean;
+}):
+  | {
+      ok: true;
+      approvalId: string;
+      snapshot: ExecApprovalRecord<TPayload>;
+    }
+  | {
+      ok: false;
+      response: PendingApprovalLookupError;
+    } {
+  const resolvedId = params.manager.lookupApprovalId(params.inputId, { includeResolved: true });
+  if (resolvedId.kind !== "exact" && resolvedId.kind !== "prefix") {
+    return {
+      ok: false,
+      response: resolvePendingApprovalLookupError({
+        resolvedId,
+        exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
+      }),
+    };
+  }
+  const snapshot = params.manager.getSnapshot(resolvedId.id);
+  if (!snapshot || snapshot.resolvedAtMs === undefined) {
     return { ok: false, response: "missing" };
   }
   return { ok: true, approvalId: resolvedId.id, snapshot };
@@ -163,12 +205,15 @@ export async function handlePendingApprovalRequest<
   params.context.broadcast(params.requestEventName, params.requestEvent, { dropIfSlow: true });
 
   const hasApprovalClients = params.context.hasExecApprovalClients?.(params.clientConnId) ?? false;
-  const hasTurnSourceRoute = hasApprovalTurnSourceRoute({
-    turnSourceChannel: params.record.request.turnSourceChannel,
-    turnSourceAccountId: params.record.request.turnSourceAccountId,
-  });
   const deliveredResult = params.deliverRequest();
   const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
+  const hasTurnSourceRoute =
+    !hasApprovalClients &&
+    !delivered &&
+    hasApprovalTurnSourceRoute({
+      turnSourceChannel: params.record.request.turnSourceChannel,
+      turnSourceAccountId: params.record.request.turnSourceAccountId,
+    });
 
   if (!hasApprovalClients && !hasTurnSourceRoute && !delivered) {
     params.manager.expire(params.record.id, "no-approval-route");
@@ -256,6 +301,25 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
     exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
   });
   if (!resolved.ok) {
+    const resolvedRepeat = resolveResolvedApprovalRecord({
+      manager: params.manager,
+      inputId: params.inputId,
+      exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
+    });
+    if (resolvedRepeat.ok) {
+      if (resolveRecordedApprovalDecision(resolvedRepeat.snapshot) === params.decision) {
+        params.respond(true, { ok: true }, undefined);
+        return;
+      }
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "approval already resolved", {
+          details: APPROVAL_ALREADY_RESOLVED_DETAILS,
+        }),
+      );
+      return;
+    }
     respondPendingApprovalLookupError({ respond: params.respond, response: resolved.response });
     return;
   }

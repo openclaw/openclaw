@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getHeader } from "./http-headers.js";
 import type { WebhookContext } from "./types.js";
 
@@ -79,7 +80,7 @@ function markReplay(cache: ReplayCache, replayKey: string): boolean {
  *
  * @see https://www.twilio.com/docs/usage/webhooks/webhooks-security
  */
-export function validateTwilioSignature(
+function validateTwilioSignature(
   authToken: string,
   signature: string | undefined,
   url: string,
@@ -129,7 +130,7 @@ function timingSafeEqual(a: string, b: string): boolean {
 /**
  * Configuration for secure URL reconstruction.
  */
-export interface WebhookUrlOptions {
+interface WebhookUrlOptions {
   /**
    * Whitelist of allowed hostnames. If provided, only these hosts will be
    * accepted from forwarding headers. This prevents host header injection attacks.
@@ -190,7 +191,7 @@ function extractHostname(hostHeader: string): string | null {
     if (endBracket === -1) {
       return null; // Malformed IPv6
     }
-    hostname = hostHeader.substring(1, endBracket);
+    hostname = hostHeader.slice(1, endBracket);
     return normalizeLowercaseStringOrEmpty(hostname);
   }
 
@@ -360,19 +361,6 @@ function buildTwilioVerificationUrl(
   }
 }
 
-function isLoopbackAddress(address?: string): boolean {
-  if (!address) {
-    return false;
-  }
-  if (address === "127.0.0.1" || address === "::1") {
-    return true;
-  }
-  if (address.startsWith("::ffff:127.")) {
-    return true;
-  }
-  return false;
-}
-
 function stripPortFromUrl(url: string): string {
   try {
     const parsed = new URL(url);
@@ -411,7 +399,7 @@ function extractPortFromHostHeader(hostHeader?: string): string | undefined {
 /**
  * Result of Twilio webhook verification with detailed info.
  */
-export interface TwilioVerificationResult {
+interface TwilioVerificationResult {
   ok: boolean;
   reason?: string;
   /** The URL that was used for verification (for debugging) */
@@ -424,7 +412,7 @@ export interface TwilioVerificationResult {
   verifiedRequestKey?: string;
 }
 
-export interface TelnyxVerificationResult {
+interface TelnyxVerificationResult {
   ok: boolean;
   reason?: string;
   /** Request is cryptographically valid but was already processed recently. */
@@ -520,7 +508,7 @@ export function verifyTelnyxWebhook(
     return { ok: false, reason: "Missing signature or timestamp header" };
   }
 
-  const eventTimeSec = parseInt(timestamp, 10);
+  const eventTimeSec = Number.parseInt(timestamp, 10);
   if (!Number.isFinite(eventTimeSec)) {
     return { ok: false, reason: "Invalid timestamp header" };
   }
@@ -614,7 +602,7 @@ export function verifyTwilioWebhook(
     return { ok: false, reason: "Missing X-Twilio-Signature header" };
   }
 
-  const isLoopback = isLoopbackAddress(options?.remoteIP ?? ctx.remoteAddress);
+  const isLoopback = isLoopbackHost(options?.remoteIP ?? ctx.remoteAddress ?? "");
   const allowLoopbackForwarding = options?.allowNgrokFreeTierLoopbackBypass && isLoopback;
 
   // Reconstruct the URL Twilio used
@@ -698,7 +686,7 @@ export function verifyTwilioWebhook(
 /**
  * Result of Plivo webhook verification with detailed info.
  */
-export interface PlivoVerificationResult {
+interface PlivoVerificationResult {
   ok: boolean;
   reason?: string;
   verificationUrl?: string;

@@ -8,7 +8,7 @@ const profileAction = "set-profile" as const;
 
 const runtimeStub = {
   config: {
-    loadConfig: () => ({}),
+    current: () => ({}),
   },
   media: {
     loadWebMedia: async () => {
@@ -92,9 +92,20 @@ describe("matrixMessageActions", () => {
 
     expect(actions).toContain(profileAction);
     expect(supportsAction({ action: profileAction } as never)).toBe(true);
-    expect(properties.displayName).toBeDefined();
-    expect(properties.avatarUrl).toBeDefined();
-    expect(properties.avatarPath).toBeDefined();
+    expect(discovery.mediaSourceParams).toEqual({
+      "set-profile": ["avatarUrl", "avatarPath"],
+    });
+    expect(Object.keys(properties).toSorted()).toEqual([
+      "avatarPath",
+      "avatarUrl",
+      "avatar_path",
+      "avatar_url",
+      "displayName",
+      "display_name",
+    ]);
+    expect(properties.displayName).toHaveProperty("type", "string");
+    expect(properties.avatarUrl).toHaveProperty("type", "string");
+    expect(properties.avatarPath).toHaveProperty("type", "string");
   });
 
   it("hides self-profile updates for non-owner discovery", () => {
@@ -190,7 +201,7 @@ describe("matrixMessageActions", () => {
     }
     const actions = discovery.actions;
 
-    expect(actions).toEqual([]);
+    expect(actions).toStrictEqual([]);
   });
 
   it("honors the selected Matrix account during discovery", () => {

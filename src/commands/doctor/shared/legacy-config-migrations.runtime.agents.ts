@@ -54,6 +54,47 @@ const LEGACY_SANDBOX_SCOPE_RULES: LegacyConfigRule[] = [
   },
 ];
 
+const LEGACY_AGENT_RUNTIME_POLICY_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "agentRuntime", "fallback"],
+    message:
+      'agents.defaults.agentRuntime is ignored; set models.providers.<provider>.agentRuntime or a model-scoped agentRuntime instead. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["agents", "defaults", "embeddedHarness"],
+    message:
+      'agents.defaults.embeddedHarness is legacy and ignored; set provider/model runtime policy instead. Run "openclaw doctor --fix".',
+    match: (value) => getRecord(value) !== null,
+  },
+  {
+    path: ["agents", "defaults", "agentRuntime"],
+    message:
+      'agents.defaults.agentRuntime is ignored; set models.providers.<provider>.agentRuntime or a model-scoped agentRuntime instead. Run "openclaw doctor --fix".',
+    match: (value) => getRecord(value) !== null,
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].agentRuntime is ignored; set provider/model runtime policy instead. Run "openclaw doctor --fix".',
+    match: (value) => hasAgentListRuntimePolicy(value),
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].embeddedHarness is legacy and ignored; set provider/model runtime policy instead. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAgentListEmbeddedHarness(value),
+  },
+];
+
+const LEGACY_AGENT_LLM_TIMEOUT_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "llm"],
+    message:
+      'agents.defaults.llm is legacy; use models.providers.<id>.timeoutSeconds for slow model/provider timeouts. Run "openclaw doctor --fix".',
+    match: (value) => getRecord(value) !== null,
+  },
+];
+
 function sandboxScopeFromPerSession(perSession: boolean): "session" | "shared" {
   return perSession ? "session" : "shared";
 }
@@ -124,6 +165,20 @@ function hasLegacyAgentListSandboxPerSession(value: unknown): boolean {
   return value.some((agent) => hasLegacySandboxPerSession(getRecord(agent)?.sandbox));
 }
 
+function hasLegacyAgentListEmbeddedHarness(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) => getRecord(getRecord(agent)?.embeddedHarness) !== null);
+}
+
+function hasAgentListRuntimePolicy(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) => getRecord(getRecord(agent)?.agentRuntime) !== null);
+}
+
 function migrateLegacySandboxPerSession(
   sandbox: Record<string, unknown>,
   pathLabel: string,
@@ -145,7 +200,60 @@ function migrateLegacySandboxPerSession(
   delete sandbox.perSession;
 }
 
+function removeLegacyAgentRuntimePolicy(
+  container: Record<string, unknown>,
+  pathLabel: string,
+  changes: string[],
+): void {
+  if (getRecord(container.embeddedHarness) !== null) {
+    delete container.embeddedHarness;
+    changes.push(`Removed ${pathLabel}.embeddedHarness; runtime is now provider/model scoped.`);
+  }
+  if (getRecord(container.agentRuntime) !== null) {
+    delete container.agentRuntime;
+    changes.push(`Removed ${pathLabel}.agentRuntime; runtime is now provider/model scoped.`);
+  }
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "agents.defaults.llm->models.providers.timeoutSeconds",
+    describe: "Remove legacy agents.defaults.llm timeout config",
+    legacyRules: LEGACY_AGENT_LLM_TIMEOUT_RULES,
+    apply: (raw, changes) => {
+      const defaults = getRecord(getRecord(raw.agents)?.defaults);
+      if (!defaults || getRecord(defaults.llm) === null) {
+        return;
+      }
+      delete defaults.llm;
+      changes.push(
+        "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "agents.agentRuntime-ignored",
+    describe: "Remove ignored agent-wide runtime policy",
+    legacyRules: LEGACY_AGENT_RUNTIME_POLICY_RULES,
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      const defaults = getRecord(agents?.defaults);
+      if (defaults) {
+        removeLegacyAgentRuntimePolicy(defaults, "agents.defaults", changes);
+      }
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        const agentRecord = getRecord(agent);
+        if (!agentRecord) {
+          continue;
+        }
+        removeLegacyAgentRuntimePolicy(agentRecord, `agents.list.${index}`, changes);
+      }
+    },
+  }),
   defineLegacyConfigMigration({
     id: "agents.sandbox.perSession->scope",
     describe: "Move legacy agent sandbox perSession aliases to sandbox.scope",

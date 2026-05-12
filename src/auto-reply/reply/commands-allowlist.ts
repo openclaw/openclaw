@@ -3,8 +3,8 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeChannelId } from "../../channels/registry.js";
 import {
   readConfigFileSnapshot,
+  replaceConfigFile,
   validateConfigObjectWithPlugins,
-  writeConfigFile,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -22,7 +22,7 @@ import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
-  requireGatewayClientScopeForInternalChannel,
+  requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
@@ -421,7 +421,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     return { shouldContinue: false, reply: { text: lines.join("\n") } };
   }
 
-  const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
+  const missingAdminScope = requireGatewayClientScope(params, {
     label: "/allowlist write",
     allowedScopes: ["operator.admin"],
     missingText: "❌ /allowlist add|remove requires operator.admin for gateway clients.",
@@ -515,7 +515,10 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
           reply: { text: `⚠️ Config invalid after update (${issue.path}: ${issue.message}).` },
         };
       }
-      await writeConfigFile(validated.config);
+      await replaceConfigFile({
+        nextConfig: validated.config,
+        afterWrite: { mode: "auto" },
+      });
     }
 
     if (!configChanged && !shouldTouchStore) {

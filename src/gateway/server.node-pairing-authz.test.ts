@@ -1,6 +1,11 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
+import {
+  approveNodePairing,
+  getPairedNode,
+  listNodePairing,
+  requestNodePairing,
+} from "../infra/node-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   issueOperatorToken,
@@ -40,13 +45,15 @@ async function connectNodeClient(params: {
 }
 
 async function expectPairingApprovalRejected(params: {
+  started: Awaited<ReturnType<typeof startServerWithClient>>;
+  nodeId: string;
   approverName: string;
   tokenScopes: string[];
   connectedScopes: string[];
   requestCommands?: string[];
   expectedMessage: string;
 }) {
-  const started = await startServerWithClient("secret");
+  const { started } = params;
   const approver = await issueOperatorToken({
     name: params.approverName,
     approvedScopes: ["operator.admin"],
@@ -58,7 +65,7 @@ async function expectPairingApprovalRejected(params: {
   let pairingWs: WebSocket | undefined;
   try {
     const request = await requestNodePairing({
-      nodeId: "node-approve-target",
+      nodeId: params.nodeId,
       platform: "darwin",
       ...(params.requestCommands ? { commands: params.requestCommands } : {}),
     });
@@ -77,14 +84,9 @@ async function expectPairingApprovalRejected(params: {
     expect(approve.ok).toBe(false);
     expect(approve.error?.message).toBe(params.expectedMessage);
 
-    await expect(
-      import("../infra/node-pairing.js").then((m) => m.getPairedNode("node-approve-target")),
-    ).resolves.toBeNull();
+    await expect(getPairedNode(params.nodeId)).resolves.toBeNull();
   } finally {
     pairingWs?.close();
-    started.ws.close();
-    await started.server.close();
-    started.envSnapshot.restore();
   }
 }
 
@@ -134,13 +136,13 @@ async function expectRePairingRequest(params: {
       deviceIdentity: pairedNode.identity,
       commands: params.reconnectCommands,
     });
+    const connectedControlWs = controlWs;
 
-    const deadline = Date.now() + 2_000;
     let lastNodes: Array<{ nodeId: string; connected?: boolean; commands?: string[] }> = [];
-    while (Date.now() < deadline) {
+    await vi.waitFor(async () => {
       const list = await rpcReq<{
         nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
-      }>(controlWs, "node.list", {});
+      }>(connectedControlWs, "node.list", {});
       lastNodes = list.payload?.nodes ?? [];
       const node = lastNodes.find(
         (entry) => entry.nodeId === pairedNode.identity.deviceId && entry.connected,
@@ -149,10 +151,10 @@ async function expectRePairingRequest(params: {
         JSON.stringify(node?.commands?.toSorted() ?? []) ===
         JSON.stringify(params.expectedVisibleCommands)
       ) {
-        break;
+        return;
       }
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
+      throw new Error(`node commands not visible yet: ${JSON.stringify(lastNodes)}`);
+    });
 
     expect(
       lastNodes
@@ -161,16 +163,10 @@ async function expectRePairingRequest(params: {
       JSON.stringify(lastNodes),
     ).toEqual(params.expectedVisibleCommands);
 
-    await expect(listNodePairing()).resolves.toEqual(
-      expect.objectContaining({
-        pending: [
-          expect.objectContaining({
-            nodeId: pairedNode.identity.deviceId,
-            commands: params.reconnectCommands,
-          }),
-        ],
-      }),
-    );
+    const pairing = await listNodePairing();
+    const pending = pairing.pending?.find((entry) => entry.nodeId === pairedNode.identity.deviceId);
+    expect(pending?.nodeId).toBe(pairedNode.identity.deviceId);
+    expect(pending?.commands).toEqual(params.reconnectCommands);
   } finally {
     controlWs?.close();
     await firstClient?.stopAndWait();
@@ -182,38 +178,38 @@ async function expectRePairingRequest(params: {
 }
 
 describe("gateway node pairing authorization", () => {
-  test("requires operator.admin for exec-capable node pairing approvals", async () => {
-    await expectPairingApprovalRejected({
-      approverName: "node-pair-approve-pairing-only",
-      tokenScopes: ["operator.pairing"],
-      connectedScopes: ["operator.pairing"],
-      requestCommands: ["system.run"],
-      expectedMessage: "missing scope: operator.admin",
-    });
-  });
-
-  test("requires operator.pairing before node pairing approvals", async () => {
-    await expectPairingApprovalRejected({
-      approverName: "node-pair-approve-attacker",
-      tokenScopes: ["operator.write"],
-      connectedScopes: ["operator.write"],
-      requestCommands: ["system.run"],
-      expectedMessage: "missing scope: operator.pairing",
-    });
-  });
-
-  test("allows pairing-only operators to approve commandless node requests", async () => {
+  test("enforces node pairing approval scopes", async () => {
     const started = await startServerWithClient("secret");
-    const approver = await issueOperatorToken({
-      name: "node-pair-approve-commandless",
-      approvedScopes: ["operator.admin"],
-      tokenScopes: ["operator.pairing"],
-      clientId: GATEWAY_CLIENT_NAMES.TEST,
-      clientMode: GATEWAY_CLIENT_MODES.TEST,
-    });
-
     let pairingWs: WebSocket | undefined;
     try {
+      await expectPairingApprovalRejected({
+        started,
+        nodeId: "node-approve-reject-admin",
+        approverName: "node-pair-approve-pairing-only",
+        tokenScopes: ["operator.pairing"],
+        connectedScopes: ["operator.pairing"],
+        requestCommands: ["system.run"],
+        expectedMessage: "missing scope: operator.admin",
+      });
+
+      await expectPairingApprovalRejected({
+        started,
+        nodeId: "node-approve-reject-pairing",
+        approverName: "node-pair-approve-attacker",
+        tokenScopes: ["operator.write"],
+        connectedScopes: ["operator.write"],
+        requestCommands: ["system.run"],
+        expectedMessage: "missing scope: operator.pairing",
+      });
+
+      const approver = await issueOperatorToken({
+        name: "node-pair-approve-commandless",
+        approvedScopes: ["operator.admin"],
+        tokenScopes: ["operator.pairing"],
+        clientId: GATEWAY_CLIENT_NAMES.TEST,
+        clientMode: GATEWAY_CLIENT_MODES.TEST,
+      });
+
       const request = await requestNodePairing({
         nodeId: "node-approve-target",
         platform: "darwin",
@@ -237,13 +233,8 @@ describe("gateway node pairing authorization", () => {
       expect(approve.payload?.requestId).toBe(request.request.requestId);
       expect(approve.payload?.node?.nodeId).toBe("node-approve-target");
 
-      await expect(
-        import("../infra/node-pairing.js").then((m) => m.getPairedNode("node-approve-target")),
-      ).resolves.toEqual(
-        expect.objectContaining({
-          nodeId: "node-approve-target",
-        }),
-      );
+      const pairedNode = await getPairedNode("node-approve-target");
+      expect(pairedNode?.nodeId).toBe("node-approve-target");
     } finally {
       pairingWs?.close();
       started.ws.close();
@@ -255,17 +246,17 @@ describe("gateway node pairing authorization", () => {
   test("requests re-pairing when a paired node reconnects with upgraded commands", async () => {
     await expectRePairingRequest({
       pairedName: "node-command-pin",
-      initialCommands: ["canvas.snapshot"],
-      reconnectCommands: ["canvas.snapshot", "system.run"],
+      initialCommands: ["screen.snapshot"],
+      reconnectCommands: ["screen.snapshot", "system.run"],
       approvalScopes: ["operator.pairing", "operator.write"],
-      expectedVisibleCommands: ["canvas.snapshot"],
+      expectedVisibleCommands: ["screen.snapshot"],
     });
   });
 
   test("requests re-pairing when a commandless paired node reconnects with system.run", async () => {
     await expectRePairingRequest({
       pairedName: "node-command-empty",
-      reconnectCommands: ["canvas.snapshot", "system.run"],
+      reconnectCommands: ["screen.snapshot", "system.run"],
       approvalScopes: ["operator.pairing"],
       expectedVisibleCommands: [],
     });

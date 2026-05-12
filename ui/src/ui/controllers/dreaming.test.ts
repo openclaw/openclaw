@@ -22,6 +22,7 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
       request,
     } as unknown as DreamingState["client"],
     connected: true,
+    hello: null,
     configSnapshot: { hash: "hash-1" },
     applySessionKey: "main",
     dreamingStatusLoading: false,
@@ -48,9 +49,35 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
 
 function getConfigPatchRawPayload(request: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const patchCall = request.mock.calls.find((entry) => entry[0] === "config.patch");
-  expect(patchCall).toBeDefined();
-  const requestPayload = patchCall?.[1] as { raw?: string };
+  if (!patchCall) {
+    throw new Error("Expected config.patch request");
+  }
+  const requestPayload = patchCall[1] as { raw?: string };
   return JSON.parse(String(requestPayload.raw)) as Record<string, unknown>;
+}
+
+function getRequestPayload(
+  request: ReturnType<typeof vi.fn>,
+  method: string,
+): Record<string, unknown> {
+  const call = request.mock.calls.find((entry) => entry[0] === method);
+  if (!call) {
+    throw new Error(`Expected ${method} request`);
+  }
+  const payload = call[1];
+  if (
+    payload === undefined ||
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload)
+  ) {
+    throw new Error(`Expected ${method} payload object`);
+  }
+  return payload as Record<string, unknown>;
+}
+
+function hasRequestMethodCall(request: ReturnType<typeof vi.fn>, method: string): boolean {
+  return request.mock.calls.some((entry) => entry[0] === method);
 }
 
 describe("dreaming controller", () => {
@@ -160,35 +187,26 @@ describe("dreaming controller", () => {
     await loadDreamingStatus(state);
 
     expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
-    expect(state.dreamingStatus).toEqual(
-      expect.objectContaining({
-        enabled: true,
-        shortTermCount: 8,
-        groundedSignalCount: 5,
-        totalSignalCount: 20,
-        phaseSignalCount: 11,
-        promotedToday: 2,
-        shortTermEntries: [
-          expect.objectContaining({
-            snippet: "Emma prefers shorter, lower-pressure check-ins.",
-            totalSignalCount: 3,
-            groundedCount: 1,
-            phaseHitCount: 3,
-          }),
-        ],
-        promotedEntries: [
-          expect.objectContaining({
-            snippet: "Use the Happy Together calendar for flights.",
-          }),
-        ],
-        phases: expect.objectContaining({
-          deep: expect.objectContaining({
-            minScore: 0.8,
-            nextRunAtMs: 23456,
-          }),
-        }),
-      }),
+    const status = state.dreamingStatus;
+    expect(status?.enabled).toBe(true);
+    expect(status?.shortTermCount).toBe(8);
+    expect(status?.groundedSignalCount).toBe(5);
+    expect(status?.totalSignalCount).toBe(20);
+    expect(status?.phaseSignalCount).toBe(11);
+    expect(status?.promotedToday).toBe(2);
+    expect(status?.shortTermEntries).toHaveLength(1);
+    expect(status?.shortTermEntries[0]?.snippet).toBe(
+      "Emma prefers shorter, lower-pressure check-ins.",
     );
+    expect(status?.shortTermEntries[0]?.totalSignalCount).toBe(3);
+    expect(status?.shortTermEntries[0]?.groundedCount).toBe(1);
+    expect(status?.shortTermEntries[0]?.phaseHitCount).toBe(3);
+    expect(status?.promotedEntries).toHaveLength(1);
+    expect(status?.promotedEntries[0]?.snippet).toBe(
+      "Use the Happy Together calendar for flights.",
+    );
+    expect(status?.phases?.deep?.minScore).toBe(0.8);
+    expect(status?.phases?.deep?.nextRunAtMs).toBe(23456);
     expect(state.dreamingStatusLoading).toBe(false);
     expect(state.dreamingStatusError).toBeNull();
   });
@@ -216,17 +234,19 @@ describe("dreaming controller", () => {
 
     await loadDreamingStatus(state);
 
-    expect(state.dreamingStatus).toEqual(
-      expect.objectContaining({
-        enabled: true,
-      }),
-    );
+    expect(state.dreamingStatus?.enabled).toBe(true);
     expect(state.dreamingStatus?.phases).toBeUndefined();
     expect(state.dreamingStatusError).toBeNull();
   });
 
   it("loads and normalizes wiki import insights", async () => {
     const { state, request } = createState();
+    state.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      features: { methods: ["wiki.importInsights"] },
+    };
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -280,19 +300,42 @@ describe("dreaming controller", () => {
     await loadWikiImportInsights(state);
 
     expect(request).toHaveBeenCalledWith("wiki.importInsights", {});
-    expect(state.wikiImportInsights).toEqual(
-      expect.objectContaining({
-        totalItems: 2,
-        totalClusters: 1,
-        clusters: [
-          expect.objectContaining({
-            key: "topic/travel",
-            itemCount: 2,
-            withheldCount: 1,
-          }),
-        ],
-      }),
-    );
+    expect(state.wikiImportInsights?.totalItems).toBe(2);
+    expect(state.wikiImportInsights?.totalClusters).toBe(1);
+    expect(state.wikiImportInsights?.clusters).toHaveLength(1);
+    expect(state.wikiImportInsights?.clusters[0]?.key).toBe("topic/travel");
+    expect(state.wikiImportInsights?.clusters[0]?.itemCount).toBe(2);
+    expect(state.wikiImportInsights?.clusters[0]?.withheldCount).toBe(1);
+    expect(state.wikiImportInsightsError).toBeNull();
+    expect(state.wikiImportInsightsLoading).toBe(false);
+  });
+
+  it("falls back to config gating for wiki import insights when methods are not advertised", async () => {
+    const { state, request } = createState();
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          entries: {
+            "memory-wiki": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    };
+    request.mockResolvedValue({
+      sourceType: "chatgpt",
+      totalItems: 1,
+      totalClusters: 1,
+      clusters: [],
+    });
+
+    await loadWikiImportInsights(state);
+
+    expect(request).toHaveBeenCalledWith("wiki.importInsights", {});
+    expect(state.wikiImportInsights?.totalItems).toBe(1);
+    expect(state.wikiImportInsights?.totalClusters).toBe(1);
     expect(state.wikiImportInsightsError).toBeNull();
     expect(state.wikiImportInsightsLoading).toBe(false);
   });
@@ -321,8 +364,50 @@ describe("dreaming controller", () => {
     expect(state.wikiImportInsightsLoading).toBe(false);
   });
 
+  it("skips wiki import insights when the gateway does not advertise the method", async () => {
+    const { state, request } = createState();
+    state.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      features: { methods: ["doctor.memory.status"] },
+    };
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          entries: {
+            "memory-wiki": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    };
+    state.wikiImportInsights = {
+      sourceType: "chatgpt",
+      totalItems: 1,
+      totalClusters: 1,
+      clusters: [],
+    };
+    state.wikiImportInsightsError = "unknown method: wiki.importInsights";
+
+    await loadWikiImportInsights(state);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.wikiImportInsights).toBeNull();
+    expect(state.wikiImportInsightsError).toBeNull();
+    expect(state.wikiImportInsightsLoading).toBe(false);
+  });
+
   it("loads and normalizes the wiki memory palace", async () => {
     const { state, request } = createState();
+    state.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      features: { methods: ["wiki.palace"] },
+    };
     state.configSnapshot = {
       hash: "hash-1",
       config: {
@@ -369,24 +454,47 @@ describe("dreaming controller", () => {
     await loadWikiMemoryPalace(state);
 
     expect(request).toHaveBeenCalledWith("wiki.palace", {});
-    expect(state.wikiMemoryPalace).toEqual(
-      expect.objectContaining({
-        totalItems: 2,
-        totalClaims: 3,
-        clusters: [
-          expect.objectContaining({
-            key: "synthesis",
-            label: "Syntheses",
-            items: [
-              expect.objectContaining({
-                title: "Travel system",
-                claims: ["prefers direct receipts"],
-              }),
-            ],
-          }),
-        ],
-      }),
-    );
+    expect(state.wikiMemoryPalace?.totalItems).toBe(2);
+    expect(state.wikiMemoryPalace?.totalClaims).toBe(3);
+    expect(state.wikiMemoryPalace?.clusters).toHaveLength(1);
+    expect(state.wikiMemoryPalace?.clusters[0]?.key).toBe("synthesis");
+    expect(state.wikiMemoryPalace?.clusters[0]?.label).toBe("Syntheses");
+    expect(state.wikiMemoryPalace?.clusters[0]?.items).toHaveLength(1);
+    expect(state.wikiMemoryPalace?.clusters[0]?.items[0]?.title).toBe("Travel system");
+    expect(state.wikiMemoryPalace?.clusters[0]?.items[0]?.claims).toEqual([
+      "prefers direct receipts",
+    ]);
+    expect(state.wikiMemoryPalaceError).toBeNull();
+    expect(state.wikiMemoryPalaceLoading).toBe(false);
+  });
+
+  it("falls back to config gating for wiki memory palace when methods are not advertised", async () => {
+    const { state, request } = createState();
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          entries: {
+            "memory-wiki": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    };
+    request.mockResolvedValue({
+      totalItems: 1,
+      totalClaims: 2,
+      totalQuestions: 0,
+      totalContradictions: 0,
+      clusters: [],
+    });
+
+    await loadWikiMemoryPalace(state);
+
+    expect(request).toHaveBeenCalledWith("wiki.palace", {});
+    expect(state.wikiMemoryPalace?.totalItems).toBe(1);
+    expect(state.wikiMemoryPalace?.totalClaims).toBe(2);
     expect(state.wikiMemoryPalaceError).toBeNull();
     expect(state.wikiMemoryPalaceLoading).toBe(false);
   });
@@ -397,6 +505,43 @@ describe("dreaming controller", () => {
       hash: "hash-1",
       config: {
         plugins: {},
+      },
+    };
+    state.wikiMemoryPalace = {
+      totalItems: 1,
+      totalClaims: 1,
+      totalQuestions: 0,
+      totalContradictions: 0,
+      clusters: [],
+    };
+    state.wikiMemoryPalaceError = "unknown method: wiki.palace";
+
+    await loadWikiMemoryPalace(state);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.wikiMemoryPalace).toBeNull();
+    expect(state.wikiMemoryPalaceError).toBeNull();
+    expect(state.wikiMemoryPalaceLoading).toBe(false);
+  });
+
+  it("skips wiki memory palace when the gateway does not advertise the method", async () => {
+    const { state, request } = createState();
+    state.hello = {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
+      features: { methods: ["doctor.memory.status"] },
+    };
+    state.configSnapshot = {
+      hash: "hash-1",
+      config: {
+        plugins: {
+          entries: {
+            "memory-wiki": {
+              enabled: true,
+            },
+          },
+        },
       },
     };
     state.wikiMemoryPalace = {
@@ -442,13 +587,9 @@ describe("dreaming controller", () => {
     const ok = await updateDreamingEnabled(state, false);
 
     expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith(
-      "config.patch",
-      expect.objectContaining({
-        baseHash: "hash-1",
-        sessionKey: "main",
-      }),
-    );
+    const patchPayload = getRequestPayload(request, "config.patch");
+    expect(patchPayload.baseHash).toBe("hash-1");
+    expect(patchPayload.sessionKey).toBe("main");
     expect(getConfigPatchRawPayload(request)).toEqual({
       plugins: {
         entries: {
@@ -535,9 +676,10 @@ describe("dreaming controller", () => {
     expect(request).toHaveBeenCalledWith("config.schema.lookup", {
       path: "plugins.entries.memory-lancedb.config",
     });
-    expect(request).not.toHaveBeenCalledWith("config.patch", expect.anything());
-    expect(state.dreamingStatusError).toContain("memory-lancedb");
-    expect(state.dreamingStatusError).toContain("does not support dreaming settings");
+    expect(hasRequestMethodCall(request, "config.patch")).toBe(false);
+    expect(state.dreamingStatusError).toBe(
+      'Selected memory plugin "memory-lancedb" does not support dreaming settings.',
+    );
   });
 
   it("reads dreaming enabled state from the selected memory slot plugin", () => {
@@ -603,7 +745,7 @@ describe("dreaming controller", () => {
 
     expect(ok).toBe(false);
     expect(request).not.toHaveBeenCalled();
-    expect(state.dreamingStatusError).toContain("Config hash missing");
+    expect(state.dreamingStatusError).toBe("Config hash missing; refresh and retry.");
   });
 
   it("loads dream diary content", async () => {
@@ -618,7 +760,7 @@ describe("dreaming controller", () => {
 
     expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
     expect(state.dreamDiaryPath).toBe("DREAMS.md");
-    expect(state.dreamDiaryContent).toContain("glacier");
+    expect(state.dreamDiaryContent).toBe("## Dream Diary\n- recurring glacier thoughts");
     expect(state.dreamDiaryError).toBeNull();
   });
 
@@ -642,7 +784,7 @@ describe("dreaming controller", () => {
 
     await loadDreamDiary(state);
 
-    expect(state.dreamDiaryError).toContain("dream diary read failed");
+    expect(state.dreamDiaryError).toBe("Error: dream diary read failed");
     expect(state.dreamDiaryLoading).toBe(false);
   });
 
