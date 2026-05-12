@@ -1116,11 +1116,16 @@ export function wrapToolWriteWithAppend(
     description: `${tool.description} Pass \`append: true\` to append to an existing file instead of overwriting it.`,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const record = getToolParamsRecord(args);
+      if (record && Object.hasOwn(record, "append") && typeof record.append !== "boolean") {
+        throw new Error(
+          "Invalid append parameter: expected boolean when provided. Supply correct parameters before retrying.",
+        );
+      }
       const doAppend = record?.append === true;
       if (!doAppend) {
         return tool.execute(toolCallId, args, signal, onUpdate);
       }
-      // Delegate validation of required params to the underlying tool when append is missing/invalid.
+      // Delegate validation of required params to the underlying tool when append is missing.
       const filePath = typeof record?.path === "string" ? record.path : undefined;
       const content = typeof record?.content === "string" ? record.content : undefined;
       if (!filePath || !filePath.trim() || content === undefined || !content.trim()) {

@@ -282,6 +282,25 @@ describe("FS tools with workspaceOnly=false", () => {
     expect(content).toBe("new content");
   });
 
+  it("rejects malformed append values before falling back to overwrite", async () => {
+    await fs.writeFile(outsideFile, "old content");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    await expect(
+      writeTool!.execute("test-invalid-append", {
+        path: outsideFile,
+        content: "new content",
+        append: "true",
+      }),
+    ).rejects.toThrow(/append parameter.*boolean/);
+
+    const content = await fs.readFile(outsideFile, "utf-8");
+    expect(content).toBe("old content");
+  });
+
   it("should append within workspace boundary when append=true and workspaceOnly=true", async () => {
     const insideFile = path.join(workspaceDir, "log.txt");
     await fs.writeFile(insideFile, "entry 1\n");
