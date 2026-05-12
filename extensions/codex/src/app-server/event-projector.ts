@@ -521,6 +521,7 @@ export class CodexAppServerEventProjector {
         data: {
           phase: "end",
           backend: "codex-app-server",
+          completed: true,
           threadId: this.threadId,
           turnId: this.turnId,
           itemId,

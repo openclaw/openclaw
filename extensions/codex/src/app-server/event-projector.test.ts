@@ -452,7 +452,6 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
-
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
     const projector = await createProjector();
 
@@ -883,6 +882,12 @@ describe("CodexAppServerEventProjector", () => {
     ]);
     expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "start" }).data.itemId).toBe(
       "compact-1",
+    );
+    expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "end" }).data).toMatchObject(
+      {
+        completed: true,
+        itemId: "compact-1",
+      },
     );
     expect(result.toolMetas).toEqual([{ toolName: "sessions_send" }]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
