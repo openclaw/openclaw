@@ -590,6 +590,35 @@ describe("resolveModel", () => {
     });
   });
 
+  it("resolves Anthropic inline entries that rely on provider policy api defaults", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            models: [
+              {
+                id: "claude-sonnet-4-6",
+                name: "Claude Sonnet 4.6",
+                contextWindow: 200_000,
+                maxTokens: 64_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("anthropic", "claude-sonnet-4-6", "/tmp/agent", cfg);
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+      api: "anthropic-messages",
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+    });
+  });
+
   it("normalizes Google fallback baseUrls for custom providers", () => {
     const cfg = {
       models: {

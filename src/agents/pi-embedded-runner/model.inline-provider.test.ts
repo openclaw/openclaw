@@ -68,6 +68,22 @@ describe("buildInlineProviderModels", () => {
     ]);
   });
 
+  it("applies Anthropic provider policy api defaults to inline models", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      anthropic: {
+        models: [makeModel("claude-sonnet-4-6")],
+      },
+      custom: {
+        models: [makeModel("custom-model")],
+      },
+    };
+
+    const result = buildInlineProviderModels(providers);
+
+    expect(result.find((model) => model.provider === "anthropic")?.api).toBe("anthropic-messages");
+    expect(result.find((model) => model.provider === "custom")?.api).toBeUndefined();
+  });
+
   it("model-level api takes precedence over provider-level api", () => {
     const providers: Parameters<typeof buildInlineProviderModels>[0] = {
       custom: {
