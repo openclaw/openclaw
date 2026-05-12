@@ -161,6 +161,25 @@ describe("device bootstrap tokens", () => {
     ).resolves.toEqual({ ok: true });
   });
 
+  it("rejects a mismatched device id before binding a bootstrap token", async () => {
+    const baseDir = await createTempDir();
+    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "default-device.json"));
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        deviceId: "not-the-derived-device-id",
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        publicKeyProof: createPublicKeyProof(identity),
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+
+    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
+    const parsed = JSON.parse(raw) as Record<string, { deviceId?: string; publicKey?: string }>;
+    expect(parsed[issued.token]?.deviceId).toBeUndefined();
+    expect(parsed[issued.token]?.publicKey).toBeUndefined();
+  });
+
   it("loads the issued bootstrap profile for a valid token", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
