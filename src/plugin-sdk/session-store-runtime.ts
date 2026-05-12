@@ -1,11 +1,7 @@
 // Narrow SQLite session row helpers for channel hot paths.
 
+export { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 export { resolveSessionRowEntry } from "../config/sessions/store-entry.js";
-export {
-  resolveSessionTranscriptPath,
-  resolveSessionTranscriptPathInDir,
-} from "../config/sessions/paths.js";
-export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
