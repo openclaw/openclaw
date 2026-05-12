@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { updateLastRoute, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getMatrixExecApprovalApprovers,
@@ -341,7 +341,7 @@ describe("matrix exec approvals", () => {
     ).toBe(false);
   });
 
-  it("scopes non-matrix turn sources to the stored matrix account", () => {
+  it("scopes non-matrix turn sources to the stored matrix account", async () => {
     const tmpDir = createTempDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
     upsertSessionEntry({
@@ -350,14 +350,14 @@ describe("matrix exec approvals", () => {
       entry: {
         sessionId: "main",
         updatedAt: 1,
-        origin: {
-          provider: "matrix",
-          accountId: "ops",
-        },
-        lastChannel: "slack",
-        lastTo: "channel:C999",
-        lastAccountId: "work",
       },
+    });
+    await updateLastRoute({
+      agentId: "ops-agent",
+      sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+      channel: "matrix",
+      to: "channel:!room:example.org",
+      accountId: "ops",
     });
     const cfg = buildMultiAccountMatrixConfig({});
     const request = makeForeignChannelApprovalRequest({

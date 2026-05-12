@@ -5,10 +5,7 @@ import {
   saveCommitmentStore,
   type CommitmentStoreSnapshot,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  createCorePluginStateKeyedStore,
-  createPluginStateKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type {
@@ -39,8 +36,7 @@ function createActiveMemorySessionToggleStore(env: Pick<QaSuiteRuntimeEnv, "gate
 }
 
 function createCrestodianAuditStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
-  return createCorePluginStateKeyedStore<QaCrestodianAuditEntry>({
-    ownerId: "core:crestodian",
+  return createPluginStateKeyedStore<QaCrestodianAuditEntry>("crestodian", {
     namespace: "audit",
     maxEntries: 50_000,
     env: env.gateway.runtimeEnv,
@@ -173,7 +169,9 @@ async function setQaActiveMemorySessionDisabled(
 
 async function readQaCrestodianAuditEntries(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
   const auditStore = createCrestodianAuditStore(env);
-  return (await auditStore.entries()).map((entry) => entry.value);
+  return (await auditStore.entries()).map(
+    (entry: { value: QaCrestodianAuditEntry }) => entry.value,
+  );
 }
 
 async function seedQaCommitmentStore(

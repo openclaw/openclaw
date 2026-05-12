@@ -253,7 +253,7 @@ export function createWhatsAppPluginBase(params: {
     config: base.config!,
     messaging: {
       defaultMarkdownTableMode: "bullets",
-      resolveGroupSessionKey,
+      resolveLegacyGroupSessionKey: resolveGroupSessionKey,
     },
     secrets: {
       unsupportedSecretRefSurfacePatterns,

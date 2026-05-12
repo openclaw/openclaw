@@ -275,7 +275,7 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
       continue;
     }
     // Session reads can fail transiently; never auto-unbind on uncertain reads.
-    if (session.readFailed) {
+    if (session.storeReadFailed) {
       continue;
     }
 

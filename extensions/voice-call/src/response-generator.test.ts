@@ -251,6 +251,7 @@ describe("generateVoiceResponse", () => {
       resolveAgentDir,
       resolveAgentWorkspaceDir,
       resolveAgentIdentity,
+      sessionStore,
     } = createAgentRuntime([{ text: '{"spoken":"Default agent."}' }]);
     const coreConfig = {} as CoreConfig;
 
@@ -287,6 +288,7 @@ describe("generateVoiceResponse", () => {
       resolveAgentDir,
       resolveAgentWorkspaceDir,
       resolveAgentIdentity,
+      sessionStore,
     } = createAgentRuntime([{ text: '{"spoken":"Voice agent."}' }]);
     const coreConfig = {} as CoreConfig;
 

@@ -202,6 +202,21 @@ export function rememberIMessageReplyCache(
   return fullEntry;
 }
 
+export function isKnownFromMeIMessageMessageId(
+  messageId: string,
+  ctx?: IMessageChatContext & { accountId?: string },
+): boolean {
+  hydrateFromDiskOnce();
+  const cached = imessageReplyCacheByMessageId.get(messageId.trim());
+  if (!cached || cached.isFromMe !== true) {
+    return false;
+  }
+  if (ctx?.accountId && cached.accountId !== ctx.accountId) {
+    return false;
+  }
+  return !ctx || !hasChatScope(ctx) || !isCrossChatMismatch(cached, ctx);
+}
+
 function hasChatScope(ctx?: IMessageChatContext): boolean {
   if (!ctx) {
     return false;

@@ -268,6 +268,7 @@ export async function createMatrixThreadBindingManager(params: {
     existingEntry.manager.stop();
   }
   const loaded = loadBindingsFromSqlite({
+    auth: params.auth,
     accountId: params.accountId,
     env: params.env,
     stateDir: params.stateDir,

@@ -300,11 +300,6 @@ export class DiffArtifactStore {
     return candidate;
   }
 
-  private relativeStoredPath(storedPath: string): string {
-    const relativePath = path.relative(this.rootDir, this.normalizeStoredPath(storedPath, "path"));
-    return relativePath.split(path.sep).join(path.posix.sep);
-  }
-
   private assertWithinRoot(candidate: string, label = "path"): void {
     const relative = path.relative(this.rootDir, candidate);
     if (

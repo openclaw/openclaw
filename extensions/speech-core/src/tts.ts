@@ -1,4 +1,3 @@
-import path from "node:path";
 import { resolveChannelTtsVoiceDelivery } from "openclaw/plugin-sdk/channel-targets";
 import type {
   OpenClawConfig,
@@ -451,7 +450,7 @@ export function resolveTtsConfig(
   };
 }
 
-export function resolveTtsPrefsPath(config: ResolvedTtsConfig): string {
+export function resolveTtsPrefsPath(_config: ResolvedTtsConfig): string {
   return resolveTtsPrefsPathValue();
 }
 

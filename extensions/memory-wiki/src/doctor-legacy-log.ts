@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { type MemoryWikiLogEntry, writeMemoryWikiLogEntryForMigration } from "./log.js";
+import { appendMemoryWikiLog, type MemoryWikiLogEntry } from "./log.js";
 
 export function resolveMemoryWikiLegacyLogPath(vaultRoot: string): string {
   return path.join(vaultRoot, ".openclaw-wiki", "log.jsonl");
@@ -33,7 +33,7 @@ export async function importMemoryWikiLegacyLog(params: {
         warnings.push(`Skipped invalid Memory Wiki log entry at ${sourcePath}:${index + 1}`);
         continue;
       }
-      await writeMemoryWikiLogEntryForMigration(params.vaultRoot, parsed, `legacy-${index + 1}`);
+      await appendMemoryWikiLog(params.vaultRoot, parsed);
       imported++;
     } catch (error) {
       warnings.push(

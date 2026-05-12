@@ -439,7 +439,6 @@ describe("maybeCompactCodexAppServerSession", () => {
     };
 
     const result = await maybeCompactCodexAppServerSession({
-      sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       sessionId: "missing-binding",
       workspaceDir: tempDir,

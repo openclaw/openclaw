@@ -39,7 +39,7 @@ async function runOpenAICodexProviderAuthMethod(
   return method.run(ctx);
 }
 
-function buildOpenAISetupProvider(): ProviderPlugin {
+export function buildOpenAISetupProvider(): ProviderPlugin {
   const apiKeyMethod = {
     id: "api-key",
     label: OPENAI_API_KEY_LABEL,
@@ -62,7 +62,7 @@ function buildOpenAISetupProvider(): ProviderPlugin {
   };
 }
 
-function buildOpenAICodexSetupProvider(): ProviderPlugin {
+export function buildOpenAICodexSetupProvider(): ProviderPlugin {
   const oauthMethod = {
     id: "oauth",
     label: OPENAI_CODEX_LOGIN_LABEL,

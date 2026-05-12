@@ -9,6 +9,8 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import type { QQBotInboundAccess } from "../../adapter/index.js";
+import { createMemoryKeyedStore } from "../../state/keyed-store.js";
 import type { InboundPipelineDeps } from "../inbound-context.js";
 import type { QueuedMessage } from "../message-queue.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "../types.js";
@@ -68,6 +70,9 @@ function buildRuntime(
       text: { chunkMarkdownText: vi.fn(() => []) },
     },
     tts: { textToSpeech: vi.fn() },
+    state: {
+      openKeyedStore: <T>() => createMemoryKeyedStore<T>(),
+    },
   };
 }
 

@@ -39,7 +39,7 @@ import {
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./manager-db.js";
+import { openMemoryDatabaseAtPath } from "./manager-db.js";
 import {
   applyMemoryFallbackProviderState,
   resolveMemoryFallbackProviderRequest,

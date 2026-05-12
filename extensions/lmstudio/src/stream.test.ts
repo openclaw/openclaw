@@ -1,5 +1,5 @@
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/provider-ai";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
 

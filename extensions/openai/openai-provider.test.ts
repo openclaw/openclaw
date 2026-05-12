@@ -1,5 +1,5 @@
-import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/provider-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";

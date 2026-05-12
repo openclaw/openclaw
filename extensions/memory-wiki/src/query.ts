@@ -1250,7 +1250,7 @@ async function createSessionMemoryPathVisibilityChecker(params: {
       return false;
     }
     const keys = resolveTranscriptStemToSessionKeys({
-      store: combinedSessionEntries,
+      entries: combinedSessionEntries,
       stem,
     });
     return keys.some((key) => guard.check(key).allowed);

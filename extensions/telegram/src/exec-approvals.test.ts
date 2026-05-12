@@ -6,7 +6,7 @@ import type {
   TelegramAccountConfig,
   TelegramExecApprovalConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { updateLastRoute, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getTelegramExecApprovalApprovers,
@@ -228,7 +228,7 @@ describe("telegram exec approvals", () => {
     ).toBe(true);
   });
 
-  it("scopes non-telegram turn sources to the stored telegram account", () => {
+  it("scopes non-telegram turn sources to the stored telegram account", async () => {
     const tmpDir = createTempDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
     upsertSessionEntry({
@@ -237,14 +237,14 @@ describe("telegram exec approvals", () => {
       entry: {
         sessionId: "main",
         updatedAt: 1,
-        origin: {
-          provider: "telegram",
-          accountId: "ops",
-        },
-        lastChannel: "slack",
-        lastTo: "channel:C999",
-        lastAccountId: "work",
       },
+    });
+    await updateLastRoute({
+      agentId: "ops",
+      sessionKey: "agent:ops:telegram:direct:123",
+      channel: "telegram",
+      to: "telegram:123",
+      accountId: "ops",
     });
     const cfg = buildMultiAccountTelegramConfig({});
     const request = makeForeignChannelApprovalRequest({

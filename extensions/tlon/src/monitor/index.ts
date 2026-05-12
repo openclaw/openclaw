@@ -603,7 +603,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       accountId: route.accountId,
       agentId: route.agentId,
       routeSessionKey: route.sessionKey,
-      messageId: rawTurnMessage.messageId,
+      messageId,
       ctxPayload,
       recordInboundSession: core.channel.session.recordInboundSession,
       dispatchReplyWithBufferedBlockDispatcher:

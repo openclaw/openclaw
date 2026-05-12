@@ -68,6 +68,20 @@ function createLogger() {
   };
 }
 
+function collectLogText(mock: ReturnType<typeof vi.fn>): string {
+  return mock.mock.calls
+    .map((call: unknown[]) => call.map((entry) => String(entry)).join(" "))
+    .join("\n");
+}
+
+function expectLogContains(mock: ReturnType<typeof vi.fn>, text: string): void {
+  expect(collectLogText(mock)).toContain(text);
+}
+
+function expectLogNotContains(mock: ReturnType<typeof vi.fn>, text: string): void {
+  expect(collectLogText(mock)).not.toContain(text);
+}
+
 async function writeDailyMemoryNote(
   workspaceDir: string,
   date: string,

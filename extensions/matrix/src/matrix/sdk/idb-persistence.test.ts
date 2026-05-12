@@ -49,9 +49,9 @@ describe("Matrix IndexedDB persistence", () => {
     if (restored) {
       return;
     }
-    const warnings = warnSpy.mock.calls.map((call) =>
+    const warnings = warnSpy.mock.calls.map((call: unknown[]) =>
       call
-        .map((entry) =>
+        .map((entry: unknown) =>
           entry instanceof Error ? `${entry.name}: ${entry.message}` : String(entry),
         )
         .join(" "),

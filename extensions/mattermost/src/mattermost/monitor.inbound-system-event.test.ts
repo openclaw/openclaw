@@ -462,16 +462,20 @@ describe("mattermost inbound user posts", () => {
     await monitor;
 
     expect(runtimeCore.channel.session.recordInboundSession).toHaveBeenCalledTimes(1);
-    const [recordCall] = runtimeCore.channel.session.recordInboundSession.mock.calls[0] ?? [];
+    const recordMock = runtimeCore.channel.session.recordInboundSession as unknown as {
+      mock: { calls: Array<[Record<string, unknown>]> };
+    };
+    const [recordCall] = recordMock.mock.calls[0] ?? [];
     expect(recordCall?.sessionKey).toBe("mattermost:default:channel:chan-1");
-    const updateLastRoute = recordCall?.updateLastRoute;
+    const updateLastRoute = recordCall?.updateLastRoute as Record<string, unknown> | undefined;
     expect(updateLastRoute?.sessionKey).toBe("mattermost:default:channel:chan-1");
     expect(updateLastRoute?.channel).toBe("mattermost");
     expect(updateLastRoute?.to).toBe("user:user-1");
     expect(updateLastRoute?.accountId).toBe("default");
-    expect(updateLastRoute?.mainDmOwnerPin?.ownerRecipient).toBe("user-1");
-    expect(updateLastRoute?.mainDmOwnerPin?.senderRecipient).toBe("user-1");
-    expect(typeof updateLastRoute?.mainDmOwnerPin?.onSkip).toBe("function");
+    const mainDmOwnerPin = updateLastRoute?.mainDmOwnerPin as Record<string, unknown> | undefined;
+    expect(mainDmOwnerPin?.ownerRecipient).toBe("user-1");
+    expect(mainDmOwnerPin?.senderRecipient).toBe("user-1");
+    expect(typeof mainDmOwnerPin?.onSkip).toBe("function");
     expect(recordCall?.createIfMissing).toBeUndefined();
     expect(recordCall?.groupResolution).toBeUndefined();
     expect(recordCall?.onRecordError).toBeInstanceOf(Function);
