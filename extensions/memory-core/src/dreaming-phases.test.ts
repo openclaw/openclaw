@@ -1487,6 +1487,19 @@ describe("memory-core dreaming phases", () => {
     expect(corpus).not.toContain("Run the qmd sync");
   });
 
+  it("omits possible lasting truths section when rem finds no candidate truths", () => {
+    const preview = __testing.previewRemDreaming({
+      entries: [],
+      limit: 5,
+      minPatternStrength: 0,
+    });
+
+    expect(preview.candidateTruths).toStrictEqual([]);
+    expect(preview.bodyLines.join("\n")).toContain("### Reflections");
+    expect(preview.bodyLines.join("\n")).not.toContain("### Possible Lasting Truths");
+    expect(preview.bodyLines.join("\n")).not.toContain("No strong candidate truths surfaced");
+  });
+
   it("ignores chat scaffolding tags when building rem reflections", () => {
     const preview = __testing.previewRemDreaming({
       entries: [
