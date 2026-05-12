@@ -1766,7 +1766,7 @@ export async function runHeartbeatOnce(opts: {
     const execFallbackText =
       !heartbeatToolResponse &&
       hasRelayableExecCompletion &&
-      normalized.silent !== true &&
+      !normalized.silent &&
       !normalized.text.trim() &&
       replyPayload?.text?.trim()
         ? replyPayload.text.trim()
@@ -1778,7 +1778,7 @@ export async function runHeartbeatOnce(opts: {
     const shouldSkipMain =
       normalized.shouldSkip &&
       !normalized.hasMedia &&
-      (!hasRelayableExecCompletion || normalized.silent === true);
+      (!hasRelayableExecCompletion || normalized.silent);
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,
@@ -1940,7 +1940,7 @@ export async function runHeartbeatOnce(opts: {
               },
             ]),
       ],
-      ...(normalized.silent === true ? { silent: true } : {}),
+      ...(normalized.silent ? { silent: true } : {}),
       deps: opts.deps,
     });
     if (send.status === "failed" || send.status === "partial_failed") {
@@ -1976,7 +1976,7 @@ export async function runHeartbeatOnce(opts: {
       hasMedia: mediaUrls.length > 0,
       channel: delivery.channel,
       accountId: delivery.accountId,
-      ...(normalized.silent === true ? { silent: true } : {}),
+      ...(normalized.silent ? { silent: true } : {}),
       indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
     await updateTaskTimestamps();
