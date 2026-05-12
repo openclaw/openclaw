@@ -778,3 +778,65 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
     ]);
   });
 });
+
+describe("legacy migrate invalid compat.thinkingFormat", () => {
+  it("removes an unrecognized thinkingFormat value from a provider model entry", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          bailian: {
+            models: [
+              {
+                id: "qwen-turbo",
+                compat: { thinkingFormat: "bailian" },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(
+      (res.config?.models?.providers?.bailian?.models?.[0] as Record<string, unknown> | undefined)
+        ?.compat,
+    ).toEqual({});
+    expect(res.changes).toStrictEqual([
+      'Removed models.providers.bailian.models.0.compat.thinkingFormat (unrecognized value "bailian"; runtime default applies).',
+    ]);
+  });
+
+  it("preserves a valid thinkingFormat value unchanged", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          bailian: {
+            models: [
+              {
+                id: "qwen-turbo",
+                compat: { thinkingFormat: "openai" },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("leaves model entries without a thinkingFormat field untouched", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          bailian: {
+            models: [{ id: "qwen-turbo", compat: { requiresToolResultName: true } }],
+          },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+});
