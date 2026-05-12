@@ -18,7 +18,7 @@ There are two related systems:
     Standalone `/...` messages.
   </Accordion>
   <Accordion title="Directives">
-    `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue`.
+    `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/progress`, `/elevated`, `/exec`, `/model`, `/queue`.
 
     - Directives are stripped from the message before the model sees it.
     - In normal chat messages (not directive-only), they are treated as "inline hints" and do **not** persist session settings.
@@ -140,6 +140,7 @@ Current source-of-truth:
     - `/trace on|off` toggles plugin trace output for the current session.
     - `/fast [status|on|off|default]` shows, sets, or clears fast mode.
     - `/reasoning [on|off|stream]` toggles reasoning visibility. Alias: `/reason`.
+    - `/progress [on|off|default]` toggles tool-call progress in streaming preview for this session. `default` clears the override and falls back to `streaming.preview.toolProgress`.
     - `/elevated [on|off|ask|full]` toggles elevated mode. Alias: `/elev`.
     - `/exec host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` shows or sets exec defaults.
     - `/model [name|#|status]` shows or sets the model.
