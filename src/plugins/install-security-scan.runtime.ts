@@ -517,6 +517,18 @@ async function collectInstalledPackageScanRoots(params: {
   return scanRoots;
 }
 
+async function collectNonOverlappingPackageScanRoots(packageDirs: string[]): Promise<string[]> {
+  const selectedRoots: InstalledPackageScanRoot[] = [];
+  for (const packageDir of packageDirs) {
+    const realPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
+    if (selectedRoots.some((selectedRoot) => isSamePathOrInside(selectedRoot.realPath, realPath))) {
+      continue;
+    }
+    selectedRoots.push({ packageDir, realPath });
+  }
+  return selectedRoots.map((selectedRoot) => selectedRoot.packageDir);
+}
+
 async function collectPackageManifestPaths(params: {
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
   rootDir: string;
@@ -1107,7 +1119,8 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
     dependencyScanRootDir: params.dependencyScanRootDir,
     packageDir: params.packageDir,
   });
-  for (const packageDir of scanRoots) {
+  const directoryScanRoots = await collectNonOverlappingPackageScanRoots(scanRoots);
+  for (const packageDir of directoryScanRoots) {
     const dependencyBlocked = await scanManifestDependencyDenylist({
       logger: params.logger,
       packageDir,
@@ -1120,7 +1133,7 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
   }
 
   let remainingMaxFiles = resolveInstalledPackageCodeScanMaxFiles();
-  for (const packageDir of scanRoots) {
+  for (const packageDir of directoryScanRoots) {
     if (remainingMaxFiles <= 0) {
       return resolveBuiltinScanDecision({
         builtinScan: buildBuiltinScanFromError(

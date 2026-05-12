@@ -3137,6 +3137,47 @@ describe("installPluginFromDir", () => {
     }
   });
 
+  it("does not double-count nested dependency files against the installed tree scan cap", async () => {
+    vi.stubEnv("OPENCLAW_INSTALL_SCAN_MAX_CODE_FILES", "4");
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const pluginDir = path.join(caseDir, "isolated-plugin");
+    const dependencyDir = path.join(pluginDir, "node_modules", "nested-runtime-helper");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(dependencyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "isolated-plugin",
+        version: "1.0.0",
+        dependencies: {
+          "nested-runtime-helper": "1.0.0",
+        },
+        openclaw: { extensions: ["index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(dependencyDir, "package.json"),
+      JSON.stringify({
+        name: "nested-runtime-helper",
+        version: "1.0.0",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(dependencyDir, "first.cjs"), "module.exports = 1;\n", "utf-8");
+    fs.writeFileSync(path.join(dependencyDir, "second.cjs"), "module.exports = 2;\n", "utf-8");
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: pluginDir,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("isolated-plugin");
+    }
+  });
+
   it.each([
     {
       name: "rejects plugins whose minHostVersion is newer than the current host",
