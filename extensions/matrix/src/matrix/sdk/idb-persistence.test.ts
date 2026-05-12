@@ -49,9 +49,9 @@ describe("Matrix IndexedDB persistence", () => {
     if (restored) {
       return;
     }
-    const warnings = (warnSpy.mock.calls as unknown[][]).map((call) =>
+    const warnings = warnSpy.mock.calls.map((call) =>
       call
-        .map((entry: unknown) =>
+        .map((entry) =>
           entry instanceof Error ? `${entry.name}: ${entry.message}` : String(entry),
         )
         .join(" "),
@@ -123,11 +123,11 @@ describe("Matrix IndexedDB persistence", () => {
 
     const restored = await restoreIdbFromState(ref);
     expect(restored).toBe(false);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    const [scope, message, error] = warnSpy.mock.calls[0] ?? [];
-    expect(scope).toBe("IdbPersistence");
-    expect(message).toBe("Failed to restore IndexedDB snapshot from SQLite state:");
-    expect(error).toBeInstanceOf(Error);
+    expect(warnSpy).toHaveBeenCalledWith(
+      "IdbPersistence",
+      "Failed to restore IndexedDB snapshot from SQLite state:",
+      expect.any(Error),
+    );
   });
 
   it("returns false for empty snapshot payloads without restoring databases", async () => {

@@ -33,8 +33,10 @@ Automatic migration covers:
 
 - creating or reusing a pre-migration snapshot under `~/Backups/openclaw-migrations/`
 - reusing your cached Matrix credentials
+- moving legacy top-level Matrix credentials to the selected named account
 - keeping the same account selection and `channels.matrix` config
 - importing old Matrix sync stores into SQLite plugin state
+- importing old Matrix IndexedDB crypto snapshots into SQLite plugin blobs
 - moving the oldest flat Matrix crypto store into the current account-scoped location when the target account can be resolved safely
 - extracting a previously saved Matrix room-key backup decryption key from the old rust crypto store, when that key exists locally
 - reusing the most complete existing token-hash storage root for the same Matrix account, homeserver, and user when the access token changes later
