@@ -153,6 +153,14 @@ function firstHeaderValue(value: string | string[] | undefined): string | undefi
   return Array.isArray(value) ? value[0] : value;
 }
 
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const rightSet = new Set(right);
+  return left.every((value) => rightSet.has(value));
+}
+
 function resolveTrustedProxyControlUiScopes(params: {
   requestedScopes: string[];
   upgradeReq: IncomingMessage;
@@ -1323,6 +1331,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               scopes: bootstrapRoleScopes,
             });
             if (!extraToken) {
+              issuedAllBootstrapRoles = false;
+              continue;
+            }
+            if (!sameStringSet(extraToken.scopes, bootstrapRoleScopes)) {
               issuedAllBootstrapRoles = false;
               continue;
             }

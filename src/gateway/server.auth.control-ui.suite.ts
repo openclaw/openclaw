@@ -1240,6 +1240,80 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
+  test("does not expose broader operator token through bootstrap handoff", async () => {
+    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+    const { approveDevicePairing, getPairedDevice, requestDevicePairing } =
+      await import("../infra/device-pairing.js");
+    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
+    const { server, port, prevToken } = await startControlUiServer("secret");
+
+    const { identityPath, identity } = await createOperatorIdentityFixture(
+      "openclaw-bootstrap-admin-token-",
+    );
+    const client = {
+      id: "openclaw-ios",
+      version: "2026.3.30",
+      platform: "iOS 26.3.1",
+      mode: "node",
+      deviceFamily: "iPhone",
+    };
+
+    try {
+      const seededRequest = await requestDevicePairing({
+        deviceId: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        role: "node",
+        roles: ["node", "operator"],
+        scopes: ["operator.admin"],
+        clientId: client.id,
+        clientMode: client.mode,
+        platform: client.platform,
+        deviceFamily: client.deviceFamily,
+      });
+      await expect(
+        approveDevicePairing(seededRequest.request.requestId, {
+          callerScopes: ["operator.admin"],
+        }),
+      ).resolves.toMatchObject({
+        status: "approved",
+      });
+      const pairedBefore = await getPairedDevice(identity.deviceId);
+      expect(pairedBefore?.tokens?.operator?.scopes).toEqual(["operator.admin"]);
+
+      const issued = await issueDeviceBootstrapToken();
+      const wsBootstrap = await openWs(port);
+      const initial = await connectReq(wsBootstrap, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client,
+        deviceIdentityPath: identityPath,
+      });
+      expect(initial.ok).toBe(true);
+      const payload = initial.payload as
+        | {
+            auth?: {
+              deviceTokens?: Array<{
+                role?: string;
+                scopes?: string[];
+              }>;
+            };
+          }
+        | undefined;
+      expect(payload?.auth?.deviceTokens?.some((entry) => entry.role === "operator") ?? false).toBe(
+        false,
+      );
+      const pairedAfter = await getPairedDevice(identity.deviceId);
+      expect(pairedAfter?.tokens?.operator?.token).toBe(pairedBefore?.tokens?.operator?.token);
+      expect(pairedAfter?.tokens?.operator?.scopes).toEqual(["operator.admin"]);
+      wsBootstrap.close();
+    } finally {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("requires approval for bootstrap-auth role upgrades on already-paired devices", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
     const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
