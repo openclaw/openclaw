@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Enforce Slack plugin approval button authorization [AI]. (#80899) Thanks @pgondhi987.
 - Recognize PowerShell -ec inline commands [AI]. (#80893) Thanks @pgondhi987.
 - fix(qqbot): authorize approval button callbacks [AI]. (#80892) Thanks @pgondhi987.
 - Telegram: render supported HTML tags in streamed and durable replies instead of showing literal markup. (#80977)
