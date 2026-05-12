@@ -71,11 +71,7 @@ import {
   execSchema,
 } from "./bash-tools.exec-runtime.js";
 import { resolveTrustedExecAllowlist } from "./bash-tools.exec-trusted-env.js";
-import type {
-  ExecElevatedDefaults,
-  ExecToolDefaults,
-  ExecToolDetails,
-} from "./bash-tools.exec-types.js";
+import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import {
   buildSandboxEnv,
   clampWithDefault,

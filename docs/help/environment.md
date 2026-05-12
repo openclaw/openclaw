@@ -36,6 +36,7 @@ Use one of these trusted sources for provider credentials:
 If you previously stored provider keys only in a workspace `.env`, move them to one of the trusted sources above. Workspace `.env` can still provide ordinary project variables that are not credentials, endpoint redirects, host overrides, or `OPENCLAW_*` runtime controls.
 
 See [Workspace `.env` files](/gateway/security#workspace-env-files) for the security rationale.
+
 ## Durable service env
 
 `~/.openclaw/.env` is an operator-curated, owner-only durable file. When you run `openclaw gateway install`, every key in this file is recorded under `OPENCLAW_SERVICE_MANAGED_ENV_KEYS` so the managed service (launchd LaunchAgent on macOS, systemd unit on Linux) sources its values from a service-env file rather than inlining them in the unit file.
