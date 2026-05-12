@@ -247,6 +247,102 @@ describe("agent event handler", () => {
     return payload;
   }
 
+  it("injects isHeartbeat into agent broadcast payloads when present in run context", () => {
+    const harness = createHarness();
+    registerAgentRunContext("run-heartbeat-true", { sessionKey: "session-1", isHeartbeat: true });
+    registerAgentRunContext("run-heartbeat-false", { sessionKey: "session-2", isHeartbeat: false });
+
+    // 1. isHeartbeat: true
+    harness.handler({
+      runId: "run-heartbeat-true",
+      seq: 1,
+      stream: "assistant",
+      ts: 100,
+      data: { text: "hello" },
+    });
+
+    const agentPayload1 = harness.broadcast.mock.calls.find(
+      ([event]) => event === "agent",
+    )?.[1] as Record<string, unknown>;
+    expect(agentPayload1).toBeDefined();
+    expect(agentPayload1.isHeartbeat).toBe(true);
+
+    // sessionKey is required for nodeSendToSession to be called
+    harness.chatRunState.registry.add("run-heartbeat-true", {
+      sessionKey: "session-1",
+      clientRunId: "run-heartbeat-true",
+    });
+    harness.handler({
+      runId: "run-heartbeat-true",
+      seq: 2,
+      stream: "assistant",
+      ts: 100,
+      data: { text: "hello" },
+    });
+
+    const nodeSendPayload1 = harness.nodeSendToSession.mock.calls.find(
+      ([, event]) => event === "agent",
+    )?.[2] as Record<string, unknown>;
+    expect(nodeSendPayload1).toBeDefined();
+    expect(nodeSendPayload1.isHeartbeat).toBe(true);
+
+    harness.broadcast.mockClear();
+    harness.nodeSendToSession.mockClear();
+
+    // 2. isHeartbeat: false
+    harness.chatRunState.registry.add("run-heartbeat-false", {
+      sessionKey: "session-2",
+      clientRunId: "run-heartbeat-false",
+    });
+    harness.handler({
+      runId: "run-heartbeat-false",
+      seq: 1,
+      stream: "assistant",
+      ts: 101,
+      data: { text: "hello" },
+    });
+
+    const agentPayload2 = harness.broadcast.mock.calls.find(
+      ([event]) => event === "agent",
+    )?.[1] as Record<string, unknown>;
+    expect(agentPayload2).toBeDefined();
+    expect(agentPayload2.isHeartbeat).toBe(false);
+
+    const nodeSendPayload2 = harness.nodeSendToSession.mock.calls.find(
+      ([, event]) => event === "agent",
+    )?.[2] as Record<string, unknown>;
+    expect(nodeSendPayload2).toBeDefined();
+    expect(nodeSendPayload2.isHeartbeat).toBe(false);
+
+    harness.broadcast.mockClear();
+    harness.nodeSendToSession.mockClear();
+
+    // 3. isHeartbeat: undefined (absent)
+    harness.chatRunState.registry.add("run-normal", {
+      sessionKey: "session-3",
+      clientRunId: "run-normal",
+    });
+    harness.handler({
+      runId: "run-normal",
+      seq: 1,
+      stream: "assistant",
+      ts: 102,
+      data: { text: "hello" },
+    });
+
+    const normalBroadcast = harness.broadcast.mock.calls.find(
+      ([event]) => event === "agent",
+    )?.[1] as Record<string, unknown>;
+    expect(normalBroadcast).toBeDefined();
+    expect("isHeartbeat" in normalBroadcast).toBe(false);
+
+    const normalNodeSend = harness.nodeSendToSession.mock.calls.find(
+      ([, event]) => event === "agent",
+    )?.[2] as Record<string, unknown>;
+    expect(normalNodeSend).toBeDefined();
+    expect("isHeartbeat" in normalNodeSend).toBe(false);
+  });
+
   it("emits chat delta for assistant text-only events", () => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),

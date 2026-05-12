@@ -408,7 +408,7 @@ function expectArgMenuLayout(respond: ReturnType<typeof vi.fn>): {
   elements?: Array<{ type?: string; action_id?: string; confirm?: unknown }>;
 } {
   expect(respond).toHaveBeenCalledTimes(1);
-  const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+  const payload = respond.mock.calls.at(0)?.[0] as { blocks?: Array<{ type: string }> };
   expect(payload.blocks?.[0]?.type).toBe("header");
   expect(payload.blocks?.[1]?.type).toBe("section");
   expect(payload.blocks?.[2]?.type).toBe("context");
@@ -421,7 +421,7 @@ function expectArgMenuLayout(respond: ReturnType<typeof vi.fn>): {
 
 function expectSingleDispatchedSlashBody(expectedBody: string) {
   expect(dispatchMock).toHaveBeenCalledTimes(1);
-  const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
+  const call = dispatchMock.mock.calls.at(0)?.[0] as { ctx?: { Body?: string } };
   expect(call.ctx?.Body).toBe(expectedBody);
 }
 
@@ -437,7 +437,7 @@ async function runCommandAndResolveActionsBlock(
   blockId?: string;
 }> {
   const { respond } = await runCommandHandler(handler);
-  const payload = respond.mock.calls[0]?.[0] as ActionsBlockPayload;
+  const payload = respond.mock.calls.at(0)?.[0] as ActionsBlockPayload;
   const blockId = payload.blocks?.find((block) => block.type === "actions")?.block_id;
   return { respond, payload, blockId };
 }
@@ -445,7 +445,7 @@ async function runCommandAndResolveActionsBlock(
 async function getFirstActionElementFromCommand(handler: (args: unknown) => Promise<void>) {
   const { respond } = await runCommandHandler(handler);
   expect(respond).toHaveBeenCalledTimes(1);
-  const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+  const payload = respond.mock.calls.at(0)?.[0] as { blocks?: Array<{ type: string }> };
   const actions = findFirstActionsBlock(payload);
   const element = actions?.elements?.[0];
   if (!element) {
@@ -486,7 +486,7 @@ async function runArgMenuAction(
 
 function firstCallPayload(mock: ReturnType<typeof vi.fn>, label: string): Record<string, unknown> {
   expect(mock).toHaveBeenCalled();
-  const [payload] = mock.mock.calls[0] ?? [];
+  const [payload] = mock.mock.calls.at(0) ?? [];
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error(`expected ${label} payload`);
   }
@@ -633,7 +633,7 @@ describe("Slack native command argument menus", () => {
       respond,
     });
     expect(respond).toHaveBeenCalledTimes(1);
-    const payload = respond.mock.calls[0]?.[0] as { blocks?: Array<{ type: string }> };
+    const payload = respond.mock.calls.at(0)?.[0] as { blocks?: Array<{ type: string }> };
     const actionsBlock = findFirstActionsBlock(payload);
     // Should be static_select (fallback) not external_select
     expect(actionsBlock?.elements?.[0]?.type).toBe("static_select");
@@ -687,7 +687,7 @@ describe("Slack native command argument menus", () => {
   it("caps large button fallback menus to Slack's block limit", async () => {
     const { respond } = await runCommandHandler(reportHugeButtonHandler);
     expect(respond).toHaveBeenCalledTimes(1);
-    const payload = respond.mock.calls[0]?.[0] as {
+    const payload = respond.mock.calls.at(0)?.[0] as {
       blocks?: Array<{ type: string; elements?: unknown[] }>;
     };
     const actionBlocks = (payload.blocks ?? []).filter((block) => block.type === "actions");
@@ -699,7 +699,7 @@ describe("Slack native command argument menus", () => {
   it("drops fallback buttons whose encoded values exceed Slack's button value limit", async () => {
     const { respond } = await runCommandHandler(reportHugeValueHandler);
     expect(respond).toHaveBeenCalledTimes(1);
-    const payload = respond.mock.calls[0]?.[0] as {
+    const payload = respond.mock.calls.at(0)?.[0] as {
       blocks?: Array<{
         type: string;
         elements?: Array<{ text?: { text?: string }; value?: string }>;
@@ -747,7 +747,7 @@ describe("Slack native command argument menus", () => {
     });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
+    const call = dispatchMock.mock.calls.at(0)?.[0] as { ctx?: { Body?: string } };
     expect(call.ctx?.Body).toBe("/usage tokens");
   });
 
@@ -825,7 +825,7 @@ describe("Slack native command argument menus", () => {
     });
 
     expect(ackOptions).toHaveBeenCalledTimes(1);
-    const optionsPayload = ackOptions.mock.calls[0]?.[0] as {
+    const optionsPayload = ackOptions.mock.calls.at(0)?.[0] as {
       options?: Array<{ text?: { text?: string }; value?: string }>;
     };
     const optionTexts = (optionsPayload.options ?? []).map((option) => option.text?.text ?? "");
@@ -1161,7 +1161,7 @@ describe("slack slash commands access groups", () => {
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(responseTexts(respond)).not.toContain("You are not authorized to use this command.");
-    const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
+    const dispatchArg = dispatchMock.mock.calls.at(0)?.[0] as {
       ctx?: { CommandAuthorized?: boolean };
     };
     expect(dispatchArg?.ctx?.CommandAuthorized).toBe(true);
@@ -1185,7 +1185,7 @@ describe("slack slash commands access groups", () => {
     });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
+    const dispatchArg = dispatchMock.mock.calls.at(0)?.[0] as {
       ctx?: { CommandAuthorized?: boolean };
     };
     expect(dispatchArg?.ctx?.CommandAuthorized).toBe(true);
@@ -1200,7 +1200,7 @@ describe("slack slash commands access groups", () => {
     await registerAndRunPolicySlash({ harness });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
+    const dispatchArg = dispatchMock.mock.calls.at(0)?.[0] as {
       ctx?: { ChatType?: string; From?: string };
     };
     expect(dispatchArg?.ctx?.ChatType).toBe("group");
@@ -1229,7 +1229,7 @@ describe("slack slash command session metadata", () => {
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
-    const call = recordSessionMetaFromInboundMock.mock.calls[0]?.[0] as {
+    const call = recordSessionMetaFromInboundMock.mock.calls.at(0)?.[0] as {
       sessionKey?: string;
       ctx?: { GroupSpace?: string; OriginatingChannel?: string };
     };

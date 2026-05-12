@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 - fix(node-pairing): replace changed pending requests [AI]. (#80894) Thanks @pgondhi987.
 - Rate limit Google Chat webhook requests [AI]. (#80974) Thanks @pgondhi987.
 - Docker: mount the auth-profile secret key directory so OAuth-backed auth profiles survive container rebuilds. (#80991)
+- Onboarding: accept Codex auth profiles for canonical OpenAI model checks, avoiding false missing-auth warnings. (#80913) Thanks @rubencu.
 - fix(feishu): normalize webhook rate-limit client keys [AI]. (#80975) Thanks @pgondhi987.
 - fix(auth): prevent bootstrap pairing scope changes [AI]. (#80976) Thanks @pgondhi987.
 - Validate Control UI loopback retry endpoints [AI]. (#80900) Thanks @pgondhi987.
@@ -25,13 +26,17 @@ Docs: https://docs.openclaw.ai
 - memory-wiki: require write scope for Obsidian search [AI]. (#80904) Thanks @pgondhi987.
 - Build: skip copied metadata for bundled plugins that are excluded from build entries, preventing update/status rebuilds from advertising missing QQ Bot runtime files. (#80925)
 - Control UI/sessions: nest subagent sessions under their parent session in the session picker dropdown using a visual `└─ ` prefix, making the parent-child relationship clear. Fixes #77628. (#78623) Thanks @chinar-amrutkar.
+- Auto-reply: surface a visible error when the configured model backend fails and fallback produces no visible reply, while preserving intentional silent turns and side-effect-only deliveries. (#80917) Thanks @dutifulbob.
 
 ### Changes
 
+- Gateway/OpenAI HTTP: honor `max_completion_tokens` and `max_tokens` on inbound `/v1/chat/completions` requests so client-provided token caps reach the upstream provider via `streamParams.maxTokens`, with `max_completion_tokens` taking precedence when both are sent. Thanks @Lellansin.
 - Models/OpenAI CLI auth: make `openclaw models auth login --provider openai` start the ChatGPT/Codex account login by default, while `--method api-key` remains the explicit OpenAI API-key setup path.
+- Google/Gemini: normalize retired Gemini 3 Pro Preview ids inside explicit SDK OAuth auth-result config patches, so provider helpers emit `google/gemini-3.1-pro-preview` for Gemini 3.1 testing.
 - Google/Gemini: normalize retired Gemini 3 Pro Preview ids inside SDK OAuth auth-result default config patches, so helper-built provider auth flows emit `google/gemini-3.1-pro-preview` for Gemini 3.1 testing.
 - Google/Gemini: normalize retired Gemini 3 Pro Preview ids returned by direct `openclaw models auth login --set-default` provider auth flows before writing config, so Gemini testing targets `google/gemini-3.1-pro-preview`.
 - Google/Gemini: normalize retired Gemini 3 Pro Preview ids in provider catalog rows when API-key onboarding only reapplies the agent default, so emitted config keeps testing `google/gemini-3.1-pro-preview`.
+- Google/Gemini: canonicalize provider-qualified retired Gemini 3 Pro Preview refs during Google forward-compatible model resolution, so emitted config uses `google/gemini-3.1-pro-preview` for Gemini 3.1 testing.
 - Docs/subagents: document `agents.defaults.subagents.announceTimeoutMs` in the sub-agent and configuration references. (#75509) Thanks @akrimm702.
 - Cron: add direct `cron.get`, `openclaw cron get <id>`, and agent-tool `get` support for inspecting one stored cron job by id. (#75117) Thanks @samzong.
 - Agents/tools: add per-sender tool policies with canonical channel-scoped sender keys, so operators can restrict dangerous tools by requester identity across global, agent, group, core, bundled, and plugin tool surfaces. (#66933) Thanks @JerranC.
@@ -93,6 +98,8 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK/media-understanding: add `extractStructuredWithModel(...)` plus the optional provider-side `extractStructured(...)` seam so trusted plugins can run bounded image-first structured extraction with optional supplemental text context through provider-owned runtimes such as Codex.
 - Exec approvals: add `tools.exec.commandHighlighting` so parser-derived command highlighting in approval prompts can be enabled globally or per agent. (#79348) Thanks @jesse-merhi.
 - Codex app-server: mirror native Codex subagent spawn lifecycle events into Task Registry so app-server child agents appear in task/status surfaces without relying on transcript text. (#79512) Thanks @mbelinky.
+- Gateway: expose optional `isHeartbeat` metadata on agent event payloads so clients can distinguish scheduled heartbeat runs from ordinary chat runs. (#80610) Thanks @medns.
+- Agents: add `agents.defaults.runRetries` and `agents.list[].runRetries` config for embedded Pi runner retry loop limits. (#80661) Thanks @medns.
 
 ### Fixes
 
@@ -339,6 +346,7 @@ Docs: https://docs.openclaw.ai
 - Agents: abort generic repeated no-progress tool loops at the critical threshold when identical calls keep returning identical outcomes. (#80668) Thanks @frankekn.
 - Exec approvals: omit generated command highlights for non-POSIX Windows and shell-wrapper approval commands until those command languages have native highlighting support. (#80566) Thanks @jesse-merhi.
 - Telegram: keep verbose tool progress and result drafts separate from the final assistant answer so tool output no longer blends into the final Telegram message. (#80294) Thanks @jalehman.
+- Plugin SDK/Windows: enable the native require fast path for root `openclaw/plugin-sdk` dist aliases instead of forcing Jiti transforms. (#80878) Thanks @medns.
 
 ## 2026.5.9
 

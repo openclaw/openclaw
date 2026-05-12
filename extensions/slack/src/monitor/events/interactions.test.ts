@@ -313,7 +313,7 @@ function mockCallArg(mock: unknown, index: number, label: string, argIndex = 0):
   if (!Array.isArray(calls)) {
     throw new Error(`Expected ${label} to be a mock`);
   }
-  const call = calls[index];
+  const call = calls.at(index);
   if (!call) {
     throw new Error(`Expected ${label} call ${index + 1}`);
   }
@@ -342,6 +342,14 @@ function slackInteractionPayload(callIndex = 0): Record<string, unknown> {
     throw new Error("Expected Slack interaction event text");
   }
   return JSON.parse(eventText.replace("Slack interaction: ", "")) as Record<string, unknown>;
+}
+
+function enqueueSystemEventText(callIndex = 0): string {
+  const eventText = mockCallArg(enqueueSystemEventMock, callIndex, "enqueueSystemEvent");
+  if (typeof eventText !== "string") {
+    throw new Error("Expected Slack interaction event text");
+  }
+  return eventText;
 }
 
 function chatUpdateCall(app: { client: { chat: { update: unknown } } }, callIndex = 0) {
@@ -506,8 +514,11 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(ack).toHaveBeenCalled();
-    const dispatchCalls = dispatchPluginInteractiveHandlerMock.mock.calls as unknown[][];
-    const dispatchCall = dispatchCalls[0]?.[0] as
+    const dispatchCall = mockCallArg(
+      dispatchPluginInteractiveHandlerMock,
+      0,
+      "plugin interactive dispatcher",
+    ) as
       | {
           channel?: string;
           data?: string;
@@ -598,7 +609,11 @@ describe("registerSlackInteractionEvents", () => {
       },
     });
 
-    const dispatchCall = dispatchPluginInteractiveHandlerMock.mock.calls[0]?.[0] as
+    const dispatchCall = mockCallArg(
+      dispatchPluginInteractiveHandlerMock,
+      0,
+      "plugin interactive dispatcher",
+    ) as
       | {
           invoke?: (params: {
             registration: { handler: (ctx: unknown) => unknown };
@@ -667,7 +682,11 @@ describe("registerSlackInteractionEvents", () => {
       },
     });
 
-    const dispatchCall = dispatchPluginInteractiveHandlerMock.mock.calls[0]?.[0] as
+    const dispatchCall = mockCallArg(
+      dispatchPluginInteractiveHandlerMock,
+      0,
+      "plugin interactive dispatcher",
+    ) as
       | {
           invoke?: (params: {
             registration: { handler: (ctx: unknown) => unknown };
@@ -1390,7 +1409,7 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       actionType: string;
       selectedValues?: string[];
@@ -1747,7 +1766,7 @@ describe("registerSlackInteractionEvents", () => {
       threadTs: "222.111",
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       channelId?: string;
       messageTs?: string;
@@ -1985,7 +2004,7 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       actionType: string;
       selectedValues?: string[];
@@ -2046,7 +2065,7 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       actionType?: string;
       workflowTriggerUrl?: string;
@@ -2126,7 +2145,7 @@ describe("registerSlackInteractionEvents", () => {
       senderId: "U777",
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       interactionType: string;
       actionId: string;
@@ -2361,7 +2380,7 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       inputs: Array<{
         actionId: string;
@@ -2478,7 +2497,7 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(ack).toHaveBeenCalled();
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       inputs: Array<{ actionId: string; richTextPreview?: string }>;
     };
@@ -2534,10 +2553,11 @@ describe("registerSlackInteractionEvents", () => {
     expect(ack).toHaveBeenCalled();
     expect(resolveSessionKey).not.toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText, options] = enqueueSystemEventMock.mock.calls[0] as [
-      string,
-      { sessionKey?: string },
-    ];
+    const eventText = enqueueSystemEventText();
+    const options = requireRecord(
+      mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1),
+      "enqueueSystemEvent options",
+    ) as { sessionKey?: string };
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       interactionType: string;
       actionId: string;
@@ -2596,7 +2616,7 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       interactionType: string;
       isCleared?: boolean;
@@ -2651,7 +2671,7 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
+    const eventText = enqueueSystemEventText();
     expect(eventText.length).toBeLessThanOrEqual(2400);
     const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
       payloadTruncated?: boolean;
