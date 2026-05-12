@@ -117,16 +117,19 @@ export function validateRuntimeCwdInput(rawCwd: unknown): string {
 }
 
 function validateRuntimeTimeoutSecondsInput(rawTimeout: unknown): number {
-  if (typeof rawTimeout !== "number" || !Number.isFinite(rawTimeout)) {
+  if (
+    typeof rawTimeout !== "number" ||
+    !Number.isFinite(rawTimeout) ||
+    !Number.isInteger(rawTimeout)
+  ) {
     failInvalidOption("Timeout must be a positive integer in seconds.");
   }
-  const timeout = Math.round(rawTimeout);
-  if (timeout < MIN_TIMEOUT_SECONDS || timeout > MAX_TIMEOUT_SECONDS) {
+  if (rawTimeout < MIN_TIMEOUT_SECONDS || rawTimeout > MAX_TIMEOUT_SECONDS) {
     failInvalidOption(
       `Timeout must be between ${MIN_TIMEOUT_SECONDS} and ${MAX_TIMEOUT_SECONDS} seconds.`,
     );
   }
-  return timeout;
+  return rawTimeout;
 }
 
 export function parseRuntimeTimeoutSecondsInput(rawTimeout: unknown): number {
