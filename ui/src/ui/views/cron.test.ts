@@ -138,11 +138,27 @@ describe("cron view", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Latest runs across all jobs.");
-    expect(container.textContent).toContain("Status");
-    expect(container.textContent).toContain("All statuses");
-    expect(container.textContent).toContain("Delivery");
-    expect(container.textContent).toContain("All delivery");
+    const cards = Array.from(container.querySelectorAll(".card"));
+    const runHistoryCard = cards.find(
+      (card) => card.querySelector(".card-title")?.textContent?.trim() === "Run history",
+    );
+    expect(runHistoryCard).toBeInstanceOf(Element);
+    if (!(runHistoryCard instanceof Element)) {
+      throw new Error("Expected run history card");
+    }
+    expect(runHistoryCard.querySelector(".card-sub")?.textContent?.trim()).toBe(
+      "Latest runs across all jobs.",
+    );
+    const runFilterSummaries = Array.from(
+      runHistoryCard.querySelectorAll(".cron-filter-dropdown"),
+    ).map((dropdown) => ({
+      label: dropdown.firstElementChild?.textContent?.trim(),
+      summary: dropdown.querySelector(".cron-filter-dropdown__trigger span")?.textContent?.trim(),
+    }));
+    expect(runFilterSummaries).toEqual([
+      { label: "Status", summary: "All statuses" },
+      { label: "Delivery", summary: "All delivery" },
+    ]);
     expect(container.textContent).not.toContain("multi-select");
 
     const statusOk = getElement(

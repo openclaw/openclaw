@@ -95,6 +95,14 @@ function collectQuickSettingsCardKinds(container: Element): string[] {
   return kinds;
 }
 
+function expectAssistantAvatarSource(container: Element): { label: string; source: string } {
+  const source = container.querySelector(".qs-identity-card--assistant .qs-identity-card__source");
+  return {
+    label: source?.querySelector("span")?.textContent?.trim() ?? "",
+    source: source?.querySelector("code")?.textContent?.trim() ?? "",
+  };
+}
+
 describe("renderQuickSettings", () => {
   it("uses direct dashboard cards for the compact settings layout", () => {
     const container = document.createElement("div");
@@ -147,9 +155,11 @@ describe("renderQuickSettings", () => {
 
     expectButtonByText(container, "full").click();
     expect(onToolProfileChange).toHaveBeenCalledWith("full");
-    expect(expectButtonByText(container, "messaging").classList).toContain(
+    expect([...expectButtonByText(container, "messaging").classList]).toEqual([
+      "qs-segmented__btn",
+      "qs-segmented__btn--compact",
       "qs-segmented__btn--active",
-    );
+    ]);
   });
 
   it("keeps the local user name fixed and shows the assistant identity", () => {
@@ -169,8 +179,7 @@ describe("renderQuickSettings", () => {
     const titles = Array.from(container.querySelectorAll(".qs-identity-card__title")).map((node) =>
       node.textContent?.trim(),
     );
-    expect(titles).toContain("You");
-    expect(titles).toContain("Nova");
+    expect(titles).toEqual(["You", "Nova"]);
     expect(container.querySelector('input[placeholder="You"]')).toBeNull();
     expect(
       Array.from(container.querySelectorAll(".qs-row__label")).some(
@@ -221,9 +230,10 @@ describe("renderQuickSettings", () => {
     expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
       "apple-touch-icon.png",
     );
-    expect(container.querySelector(".qs-identity-card__source")?.textContent).toContain(
-      "assets/avatars/nova-portrait.png",
-    );
+    expect(expectAssistantAvatarSource(container)).toEqual({
+      label: "IDENTITY.md",
+      source: "assets/avatars/nova-portrait.png",
+    });
     expect(container.querySelector(".qs-identity-card__issue")?.textContent?.trim()).toBe(
       "File not found",
     );
@@ -315,9 +325,10 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    expect(container.querySelector(".qs-identity-card__source")?.textContent).toContain(
-      "UI override",
-    );
+    expect(expectAssistantAvatarSource(container)).toEqual({
+      label: "UI override",
+      source: "data:image/png;base64,...",
+    });
     expectButtonByText(container, "Clear override").dispatchEvent(new Event("click"));
 
     expect(onAssistantAvatarClearOverride).toHaveBeenCalledTimes(1);
@@ -343,9 +354,10 @@ describe("renderQuickSettings", () => {
     );
 
     expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(dataUrl);
-    expect(container.querySelector(".qs-identity-card__source")?.textContent).toContain(
-      "UI override",
-    );
+    expect(expectAssistantAvatarSource(container)).toEqual({
+      label: "UI override",
+      source: "data:image/png;base64,...",
+    });
     expect(container.querySelector(".qs-identity-card__issue")).toBeNull();
     expect(
       Array.from(container.querySelectorAll("label.btn")).some(
