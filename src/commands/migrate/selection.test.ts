@@ -422,6 +422,12 @@ describe("applyMigrationSkillSelection", () => {
     ).toEqual(["skill:alpha"]);
 
     expect(
+      reconcileInteractiveMigrationEnterValues(["skill:beta"], "skill:alpha", selectable, {
+        preserveDeselectedActivatedValue: true,
+      }),
+    ).toEqual(["skill:beta"]);
+
+    expect(
       reconcileInteractiveMigrationEnterValues(["skill:alpha"], undefined, selectable),
     ).toEqual(["skill:alpha"]);
   });

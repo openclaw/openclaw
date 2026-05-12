@@ -173,17 +173,28 @@ export function promptMigrationSkillSelectionValues(
     },
   });
   let lastSelectedValues = [...(prompt.value ?? [])];
+  let lastSpaceDeselectedValue: string | undefined;
 
   prompt.on("cursor", (key) => {
     if (key !== "space") {
+      lastSpaceDeselectedValue = undefined;
       return;
     }
     const activatedValue = prompt.options[prompt.cursor]?.value;
+    const previousValues = lastSelectedValues;
+    const selectedValuesAfterClack = prompt.value ?? [];
     prompt.value = reconcileInteractiveMigrationSkillToggleValues(
-      prompt.value ?? [],
+      selectedValuesAfterClack,
       activatedValue,
       opts.selectableValues,
     );
+    lastSpaceDeselectedValue =
+      activatedValue !== undefined &&
+      opts.selectableValues.includes(activatedValue) &&
+      previousValues.includes(activatedValue) &&
+      !(prompt.value ?? []).includes(activatedValue)
+        ? activatedValue
+        : undefined;
     lastSelectedValues = [...(prompt.value ?? [])];
   });
 
@@ -195,7 +206,14 @@ export function promptMigrationSkillSelectionValues(
         prompt.value ?? [],
         activatedValue,
         opts.selectableValues,
+        {
+          preserveDeselectedActivatedValue:
+            activatedValue !== undefined &&
+            activatedValue === lastSpaceDeselectedValue &&
+            !(prompt.value ?? []).includes(activatedValue),
+        },
       );
+      lastSpaceDeselectedValue = undefined;
       lastSelectedValues = [...(prompt.value ?? [])];
       return;
     }
@@ -208,6 +226,7 @@ export function promptMigrationSkillSelectionValues(
       opts.selectableValues,
       key,
     );
+    lastSpaceDeselectedValue = undefined;
     lastSelectedValues = [...(prompt.value ?? [])];
   });
 

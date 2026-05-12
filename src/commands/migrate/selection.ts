@@ -497,6 +497,7 @@ export function reconcileInteractiveMigrationEnterValues(
   selectedValues: readonly string[],
   activatedValue: string | undefined,
   selectableValues: readonly string[],
+  opts: { preserveDeselectedActivatedValue?: boolean } = {},
 ): string[] {
   if (activatedValue === MIGRATION_SELECTION_SKIP) {
     return [MIGRATION_SELECTION_SKIP];
@@ -508,17 +509,16 @@ export function reconcileInteractiveMigrationEnterValues(
     return [MIGRATION_SELECTION_TOGGLE_ALL_OFF];
   }
   if (activatedValue !== undefined && selectableValues.includes(activatedValue)) {
-    return Array.from(
-      new Set([
-        ...selectedValues.filter(
-          (value) =>
-            value !== MIGRATION_SELECTION_TOGGLE_ALL_ON &&
-            value !== MIGRATION_SELECTION_TOGGLE_ALL_OFF &&
-            value !== MIGRATION_SELECTION_SKIP,
-        ),
-        activatedValue,
-      ]),
+    const selectedSelectableValues = selectedValues.filter(
+      (value) =>
+        value !== MIGRATION_SELECTION_TOGGLE_ALL_ON &&
+        value !== MIGRATION_SELECTION_TOGGLE_ALL_OFF &&
+        value !== MIGRATION_SELECTION_SKIP,
     );
+    if (opts.preserveDeselectedActivatedValue && !selectedValues.includes(activatedValue)) {
+      return selectedSelectableValues;
+    }
+    return Array.from(new Set([...selectedSelectableValues, activatedValue]));
   }
   return [...selectedValues];
 }

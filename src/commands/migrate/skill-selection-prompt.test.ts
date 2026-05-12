@@ -20,9 +20,10 @@ function createPromptOutput(): NodeJS.WriteStream {
   return output as NodeJS.WriteStream;
 }
 
-async function runPromptWithReturn(params: {
+async function runPromptWithKeys(params: {
   cursorAt: string;
   initialValues?: string[];
+  keys: string[];
 }): Promise<string[] | symbol | undefined> {
   const input = new PassThrough() as unknown as NodeJS.ReadStream;
   const result = promptMigrationSkillSelectionValues({
@@ -42,8 +43,30 @@ async function runPromptWithReturn(params: {
     output: createPromptOutput(),
     withGuide: false,
   });
-  setTimeout(() => input.write("\r"), 0);
+  params.keys.forEach((key, index) => {
+    setTimeout(
+      () => {
+        if (key === " ") {
+          input.emit("keypress", " ", { name: "space" });
+          return;
+        }
+        if (key === "\r") {
+          input.emit("keypress", "\r", { name: "return" });
+          return;
+        }
+        input.write(key);
+      },
+      20 + index * 20,
+    );
+  });
   return await result;
+}
+
+async function runPromptWithReturn(params: {
+  cursorAt: string;
+  initialValues?: string[];
+}): Promise<string[] | symbol | undefined> {
+  return await runPromptWithKeys({ ...params, keys: ["\r"] });
 }
 
 describe("promptMigrationSkillSelectionValues", () => {
@@ -63,6 +86,16 @@ describe("promptMigrationSkillSelectionValues", () => {
         initialValues: ["skill:alpha"],
       }),
     ).resolves.toEqual(["skill:alpha"]);
+  });
+
+  it("preserves a cursor item deselected with space before return", async () => {
+    await expect(
+      runPromptWithKeys({
+        cursorAt: "skill:alpha",
+        initialValues: ["skill:alpha", "skill:beta"],
+        keys: [" ", "\r"],
+      }),
+    ).resolves.toEqual(["skill:beta"]);
   });
 
   it("activates Toggle all off before submitting with return", async () => {
