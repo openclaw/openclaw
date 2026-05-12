@@ -203,7 +203,7 @@ function extractPosixShellInlineCommand(argv: string[]): string | null {
 function extractCmdInlineCommand(argv: string[]): string | null {
   const idx = argv.findIndex((item) => {
     const token = normalizeLowercaseStringOrEmpty(item);
-    return token === "/c" || token === "/k";
+    return token === "/c" || token === "/k" || token === "-c" || token === "-k";
   });
   if (idx === -1) {
     return null;

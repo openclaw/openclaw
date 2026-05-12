@@ -380,22 +380,22 @@ describe("node.pair.request", () => {
         permissions: { camera: true },
       }),
     );
-    expect(broadcast.mock.calls[0]?.[0]).toBe("node.pair.resolved");
-    expect(broadcast.mock.calls[0]?.[1]).toEqual({
+    expect(broadcast.mock.calls.at(0)?.[0]).toBe("node.pair.resolved");
+    expect(broadcast.mock.calls.at(0)?.[1]).toEqual({
       requestId: "req-old",
       nodeId: "ios-node-1",
       decision: "rejected",
       ts: expect.any(Number),
     });
-    expect(broadcast.mock.calls[1]?.[0]).toBe("node.pair.requested");
-    expect(broadcast.mock.calls[1]?.[1]).toEqual(
+    expect(broadcast.mock.calls.at(1)?.[0]).toBe("node.pair.requested");
+    expect(broadcast.mock.calls.at(1)?.[1]).toEqual(
       expect.objectContaining({
         requestId: "req-new",
         nodeId: "ios-node-1",
         permissions: { camera: true },
       }),
     );
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls.at(0)?.[0]).toBe(true);
   });
 });
 
@@ -426,7 +426,7 @@ describe("node plugin surface refresh", () => {
     });
 
     expect(respond).toHaveBeenCalledTimes(1);
-    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const call = respond.mock.calls.at(0) as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
     expect(call?.[2]).toBeUndefined();
     const payload = requireRecord(call?.[1], "refresh payload");
@@ -482,7 +482,7 @@ describe("node.invoke APNs wake path", () => {
     };
 
     const respond = await invokeNode({ nodeRegistry });
-    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const call = respond.mock.calls.at(0) as RespondCall | undefined;
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
     expect(call?.[2]?.message).toBe("node not connected");
@@ -591,11 +591,11 @@ describe("node.invoke APNs wake path", () => {
 
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
     expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
-    expectRecordFields(nodeRegistry.invoke.mock.calls[0]?.[0], "node invoke payload", {
+    expectRecordFields(nodeRegistry.invoke.mock.calls.at(0)?.[0], "node invoke payload", {
       nodeId: "ios-node-reconnect",
       command: "camera.capture",
     });
-    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const call = respond.mock.calls.at(0) as RespondCall | undefined;
     expect(call?.[0]).toBe(true);
     expectRecordFields(call?.[1], "respond payload", { ok: true, nodeId: "ios-node-reconnect" });
   });
@@ -635,12 +635,16 @@ describe("node.invoke APNs wake path", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(broadcast.mock.calls[0]?.[0]).toBe("talk.event");
-    const broadcastPayload = expectRecordFields(broadcast.mock.calls[0]?.[1], "broadcast payload", {
-      nodeId: "android-talk-node",
-      command: "talk.ptt.start",
-    });
+    expect(respond.mock.calls.at(0)?.[0]).toBe(true);
+    expect(broadcast.mock.calls.at(0)?.[0]).toBe("talk.event");
+    const broadcastPayload = expectRecordFields(
+      broadcast.mock.calls.at(0)?.[1],
+      "broadcast payload",
+      {
+        nodeId: "android-talk-node",
+        command: "talk.ptt.start",
+      },
+    );
     const talkEvent = expectRecordFields(broadcastPayload.talkEvent, "talk event", {
       type: "capture.started",
       sessionId: "node:android-talk-node:talk:capture-1",
@@ -655,7 +659,7 @@ describe("node.invoke APNs wake path", () => {
       nodeId: "android-talk-node",
       command: "talk.ptt.start",
     });
-    expect(broadcast.mock.calls[0]?.[2]).toEqual({ dropIfSlow: true });
+    expect(broadcast.mock.calls.at(0)?.[2]).toEqual({ dropIfSlow: true });
   });
 
   it("clears stale registrations after an invalid device token wake failure", async () => {
@@ -768,14 +772,14 @@ describe("node.invoke APNs wake path", () => {
         idempotencyKey: "idem-queued",
       },
     });
-    const call = respond.mock.calls[0] as RespondCall | undefined;
+    const call = respond.mock.calls.at(0) as RespondCall | undefined;
     expect(call?.[0]).toBe(false);
     expect(call?.[2]?.code).toBe(ErrorCodes.UNAVAILABLE);
     expect(call?.[2]?.message).toBe("node command queued until iOS returns to foreground");
     expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
 
     const pullRespond = await pullPending("ios-node-queued", ["canvas.navigate"]);
-    const pullCall = pullRespond.mock.calls[0] as RespondCall | undefined;
+    const pullCall = pullRespond.mock.calls.at(0) as RespondCall | undefined;
     const pullPayload = requireRespondPayload(pullCall, "pull response");
     expectRecordFields(pullPayload, "pull payload", {
       nodeId: "ios-node-queued",
@@ -786,7 +790,7 @@ describe("node.invoke APNs wake path", () => {
     });
 
     const repeatedPullRespond = await pullPending("ios-node-queued", ["canvas.navigate"]);
-    const repeatedPullCall = repeatedPullRespond.mock.calls[0] as RespondCall | undefined;
+    const repeatedPullCall = repeatedPullRespond.mock.calls.at(0) as RespondCall | undefined;
     const repeatedPullPayload = requireRespondPayload(repeatedPullCall, "repeated pull response");
     expectRecordFields(repeatedPullPayload, "repeated pull payload", {
       nodeId: "ios-node-queued",
@@ -803,7 +807,7 @@ describe("node.invoke APNs wake path", () => {
     expect(isUuidV4(queuedActionId)).toBe(true);
 
     const ackRespond = await ackPending("ios-node-queued", [queuedActionId], ["canvas.navigate"]);
-    const ackCall = ackRespond.mock.calls[0] as RespondCall | undefined;
+    const ackCall = ackRespond.mock.calls.at(0) as RespondCall | undefined;
     expectRecordFields(requireRespondPayload(ackCall, "ack response"), "ack payload", {
       nodeId: "ios-node-queued",
       ackedIds: [queuedActionId],
@@ -811,7 +815,7 @@ describe("node.invoke APNs wake path", () => {
     });
 
     const emptyPullRespond = await pullPending("ios-node-queued", ["canvas.navigate"]);
-    const emptyPullCall = emptyPullRespond.mock.calls[0] as RespondCall | undefined;
+    const emptyPullCall = emptyPullRespond.mock.calls.at(0) as RespondCall | undefined;
     expectRecordFields(
       requireRespondPayload(emptyPullCall, "empty pull response"),
       "empty pull payload",
@@ -867,7 +871,7 @@ describe("node.invoke APNs wake path", () => {
       "camera.snap",
       "canvas.navigate",
     ]);
-    const preChangePullCall = preChangePullRespond.mock.calls[0] as RespondCall | undefined;
+    const preChangePullCall = preChangePullRespond.mock.calls.at(0) as RespondCall | undefined;
     const preChangePayload = requireRespondPayload(preChangePullCall, "pre-change pull response");
     expectRecordFields(preChangePayload, "pre-change pull payload", {
       nodeId: "ios-node-policy",
@@ -880,7 +884,7 @@ describe("node.invoke APNs wake path", () => {
     allowlistedCommands.delete("camera.snap");
 
     const pullRespond = await pullPending("ios-node-policy", ["camera.snap", "canvas.navigate"]);
-    const pullCall = pullRespond.mock.calls[0] as RespondCall | undefined;
+    const pullCall = pullRespond.mock.calls.at(0) as RespondCall | undefined;
     expectRecordFields(requireRespondPayload(pullCall, "pull response"), "pull payload", {
       nodeId: "ios-node-policy",
       actions: [],
@@ -925,7 +929,7 @@ describe("node.invoke APNs wake path", () => {
     });
 
     const pullRespond = await pullPending("ios-node-dedupe", ["canvas.navigate"]);
-    const pullCall = pullRespond.mock.calls[0] as RespondCall | undefined;
+    const pullCall = pullRespond.mock.calls.at(0) as RespondCall | undefined;
     const pullPayload = requireRespondPayload(pullCall, "pull response");
     expectRecordFields(pullPayload, "pull payload", {
       nodeId: "ios-node-dedupe",
