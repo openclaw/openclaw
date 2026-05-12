@@ -86,13 +86,10 @@ describe("withTempDownloadPath", () => {
       expect(capturedPath).toContain(path.join(resolvePreferredOpenClawTmpDir(), "line-media-"));
     }
     if (expectCleanup) {
-      let statError: NodeJS.ErrnoException | undefined;
-      try {
-        await fs.stat(capturedPath);
-      } catch (error) {
-        statError = error as NodeJS.ErrnoException;
-      }
-      expect(statError?.code).toBe("ENOENT");
+      await expect(fs.stat(capturedPath)).rejects.toSatisfy((error) => {
+        expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+        return true;
+      });
     }
   });
 });

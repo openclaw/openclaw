@@ -138,7 +138,19 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(String(runtimeLoadCall?.workspaceDir).length).toBeGreaterThan(0);
 
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledOnce();
-    const [replyDispatchEvent, replyDispatchRuntime] = firstReplyDispatchCall() ?? [];
+    const [replyDispatchEvent, replyDispatchRuntime] =
+      (hookMocks.runner.runReplyDispatch.mock.calls[0] as
+        | [
+            {
+              sessionKey?: string;
+              sendPolicy?: string;
+              inboundAudio?: boolean;
+            },
+            {
+              cfg?: unknown;
+            },
+          ]
+        | undefined) ?? [];
     expect(replyDispatchEvent?.sessionKey).toBe("agent:test:session");
     expect(replyDispatchEvent?.sendPolicy).toBe("allow");
     expect(replyDispatchEvent?.inboundAudio).toBe(false);
