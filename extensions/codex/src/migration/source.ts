@@ -1,16 +1,10 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   defaultCodexAppInventoryCache,
   type CodexAppInventoryRequest,
 } from "../app-server/app-inventory-cache.js";
-import {
-  resolveCodexAppServerAuthAccountCacheKey,
-  resolveCodexAppServerAuthProfileIdForAgent,
-  resolveCodexAppServerEnvApiKeyCacheKey,
-} from "../app-server/auth-bridge.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import type { CodexAppServerStartOptions } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
@@ -118,15 +112,11 @@ type CodexSource = {
 
 type CodexSourceDiscoveryOptions = {
   input?: string;
-  config?: MigrationProviderContext["config"];
-  agentDir?: string;
   evaluatePluginAppReadiness?: boolean;
 };
 
 type SourceAppServerRequestOptions = {
   startOptions: CodexAppServerStartOptions;
-  config?: MigrationProviderContext["config"];
-  agentDir?: string;
 };
 
 type PluginReadResult =
@@ -228,7 +218,7 @@ async function discoverInstalledCuratedPlugins(
   error?: string;
 }> {
   const startOptions = sourceCodexAppServerStartOptions(codexHome);
-  const requestOptions = { startOptions, config: options.config, agentDir: options.agentDir };
+  const requestOptions = { startOptions };
   try {
     const response = await requestSourceCodexAppServerJson<v2.PluginListResponse>(requestOptions, {
       method: "plugin/list",
@@ -293,8 +283,7 @@ async function requestSourceCodexAppServerJson<T>(
     requestParams: params.requestParams,
     timeoutMs: 60_000,
     startOptions: options.startOptions,
-    agentDir: options.agentDir,
-    config: options.config,
+    authProfileId: null,
   });
 }
 
@@ -455,26 +444,8 @@ async function readPluginDetail(
 async function refreshSourceAppInventory(
   options: SourceAppServerRequestOptions,
 ): Promise<Awaited<ReturnType<typeof defaultCodexAppInventoryCache.refreshNow>>> {
-  const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
-    agentDir: options.agentDir,
-    config: options.config,
-  });
-  const accountId = await resolveCodexAppServerAuthAccountCacheKey({
-    authProfileId,
-    agentDir: options.agentDir,
-    config: options.config,
-  });
-  const envApiKeyFingerprint = authProfileId
-    ? undefined
-    : resolveCodexAppServerEnvApiKeyCacheKey({
-        startOptions: options.startOptions,
-      });
   const key = buildCodexPluginAppCacheKey({
     appServer: { start: options.startOptions },
-    agentDir: options.agentDir,
-    authProfileId,
-    accountId,
-    envApiKeyFingerprint,
   });
   const request: CodexAppInventoryRequest = async (method, requestParams) =>
     await requestSourceCodexAppServerJson<v2.AppsListResponse>(options, {
@@ -504,9 +475,7 @@ function sourceAppReadiness(
     ? "inaccessible"
     : !info.isEnabled
       ? "disabled"
-      : app.needsAuth
-        ? "auth_required"
-        : "ready";
+      : "ready";
   return {
     id: app.id,
     name: app.name,

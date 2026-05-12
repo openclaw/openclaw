@@ -325,6 +325,62 @@ describe("buildCodexMigrationProvider", () => {
     );
   });
 
+  it("reads source plugin readiness with native source auth instead of target agent auth", async () => {
+    const fixture = await createCodexFixture();
+    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginRead("google-calendar", [
+          pluginApp("app-google-calendar", { name: "Google Calendar", needsAuth: false }),
+        ]);
+      }
+      if (method === "app/list") {
+        return appsList([appInfo("app-google-calendar")]);
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+    const provider = buildCodexMigrationProvider();
+
+    await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+        config: {
+          agents: {
+            defaults: {
+              workspace: fixture.workspaceDir,
+            },
+          },
+          auth: {
+            order: {
+              "openai-codex": ["openai-codex:target"],
+            },
+          },
+        } as MigrationProviderContext["config"],
+      }),
+    );
+
+    expect(appServerRequest).toHaveBeenCalledTimes(3);
+    for (const [arg] of appServerRequest.mock.calls) {
+      expect(arg).toEqual(
+        expect.objectContaining({
+          authProfileId: null,
+          startOptions: expect.objectContaining({
+            env: {
+              CODEX_HOME: fixture.codexHome,
+              HOME: path.dirname(fixture.codexHome),
+            },
+          }),
+        }),
+      );
+      expect(arg).not.toHaveProperty("agentDir");
+      expect(arg).not.toHaveProperty("config");
+    }
+  });
+
   it("reports inaccessible before missing when multiple owned apps are blocked", async () => {
     const fixture = await createCodexFixture();
     appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
@@ -500,7 +556,7 @@ describe("buildCodexMigrationProvider", () => {
     expect(plan.items.some((item) => item.id === "plugin:readwise")).toBe(false);
   });
 
-  it("blocks auth-required and mixed multi-app readiness while preserving per-app details", async () => {
+  it("treats auth-required source apps as ready when app inventory says they are accessible", async () => {
     const fixture = await createCodexFixture();
     appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
       if (method === "plugin/list") {
@@ -527,34 +583,18 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    const manualItem = findItemByReason(plan.items, "app_auth_required");
-    expectRecordFields(manualItem, {
-      reason: "app_auth_required",
-      status: "skipped",
+    const pluginItem = findItem(plan.items, "plugin:reader");
+    expectRecordFields(pluginItem, {
+      kind: "plugin",
+      action: "install",
+      status: "planned",
     });
-    const details = expectRecordFields(manualItem.details, {
-      code: "app_auth_required",
+    expectRecordFields(pluginItem.details, {
+      configKey: "reader",
       pluginName: "reader",
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
     });
-    expect(details.apps).toEqual([
-      {
-        id: "auth-app",
-        name: "Auth App",
-        status: "auth_required",
-        isAccessible: true,
-        isEnabled: true,
-        needsAuth: true,
-      },
-      {
-        id: "ready-app",
-        name: "Ready App",
-        status: "ready",
-        isAccessible: true,
-        isEnabled: true,
-        needsAuth: false,
-      },
-    ]);
+    expect(plan.items.some((item) => item.reason === "app_auth_required")).toBe(false);
   });
 
   it("copies planned skills and archives native config during apply", async () => {

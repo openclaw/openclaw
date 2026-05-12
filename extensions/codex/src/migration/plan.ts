@@ -379,8 +379,6 @@ export async function buildCodexMigrationPlan(
   const targets = resolveCodexMigrationTargets(ctx);
   const source = await discoverCodexSource({
     input: ctx.source,
-    config: ctx.config,
-    agentDir: targets.agentDir,
     evaluatePluginAppReadiness: true,
   });
   if (!hasCodexSource(source)) {
