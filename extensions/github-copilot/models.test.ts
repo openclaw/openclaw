@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models-defaults.js";
 import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
@@ -33,16 +33,6 @@ vi.mock("openclaw/plugin-sdk/state-paths", () => ({
 
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/core";
 import { fetchCopilotModelCatalog, resolveCopilotForwardCompatModel } from "./models.js";
-
-afterAll(() => {
-  vi.doUnmock("@mariozechner/pi-ai/oauth");
-  vi.doUnmock("openclaw/plugin-sdk/provider-model-shared");
-  vi.doUnmock("openclaw/plugin-sdk/state-paths");
-  vi.resetModules();
-});
-
-let deriveCopilotApiBaseUrlFromToken: typeof import("./token.js").deriveCopilotApiBaseUrlFromToken;
-let resolveCopilotApiToken: typeof import("./token.js").resolveCopilotApiToken;
 
 function createMockCtx(
   modelId: string,
@@ -337,11 +327,6 @@ describe("github-copilot token", () => {
       OPENCLAW_STATE_DIR: fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-token-")),
     };
   }
-
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } = await import("./token.js"));
-  });
 
   it("derives baseUrl from token", () => {
     expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=proxy.example.com;")).toBe(
