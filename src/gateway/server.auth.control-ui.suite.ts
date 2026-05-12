@@ -981,8 +981,11 @@ export function registerControlUiAndPairingSuite(): void {
   });
 
   test("requires approval for fresh node bootstrap pairing from setup code", async () => {
-    const { getDeviceBootstrapTokenProfile, issueDeviceBootstrapToken } =
-      await import("../infra/device-bootstrap.js");
+    const {
+      getDeviceBootstrapTokenProfile,
+      issueDeviceBootstrapToken,
+      resolveDeviceBootstrapTokenBindingId,
+    } = await import("../infra/device-bootstrap.js");
     const { approveDevicePairing, getPairedDevice, listDevicePairing, verifyDeviceToken } =
       await import("../infra/device-pairing.js");
     const { server, port, prevToken } = await startControlUiServer("secret");
@@ -1032,6 +1035,9 @@ export function registerControlUiAndPairingSuite(): void {
         roles: ["node", "operator"],
         scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
       });
+      expect(pending[0]?.bootstrapTokenBindingId).toBe(
+        resolveDeviceBootstrapTokenBindingId(issued.token),
+      );
       expect(pending[0]?.silent).toBe(false);
       expect(await getPairedDevice(identity.deviceId)).toBeNull();
 
@@ -1071,6 +1077,9 @@ export function registerControlUiAndPairingSuite(): void {
         roles: ["node", "operator"],
         scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
       });
+      expect(retryPending[0]?.bootstrapTokenBindingId).toBe(
+        resolveDeviceBootstrapTokenBindingId(issued.token),
+      );
       expect(await getPairedDevice(identity.deviceId)).toBeNull();
       wsRetry.close();
 

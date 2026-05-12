@@ -3,7 +3,11 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
+import {
+  issueDeviceBootstrapToken,
+  resolveDeviceBootstrapTokenBindingId,
+  verifyDeviceBootstrapToken,
+} from "./device-bootstrap.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -1066,6 +1070,95 @@ describe("device pairing tokens", () => {
         baseDir,
       ),
     ).resolves.toEqual(expect.objectContaining({ status: "approved" }));
+  });
+
+  test("bootstrap-marked pairing binds the token only after approval", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const firstIdentity = loadOrCreateDeviceIdentity(path.join(baseDir, "first-device.json"));
+    const secondIdentity = loadOrCreateDeviceIdentity(path.join(baseDir, "second-device.json"));
+    const firstPublicKey = publicKeyRawBase64UrlFromPem(firstIdentity.publicKeyPem);
+    const secondPublicKey = publicKeyRawBase64UrlFromPem(secondIdentity.publicKeyPem);
+    const firstPayload = `openclaw-device-pairing-test:${firstIdentity.deviceId}`;
+    const secondPayload = `openclaw-device-pairing-test:${secondIdentity.deviceId}`;
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(
+      verifyDeviceBootstrapToken({
+        token: issued.token,
+        deviceId: firstIdentity.deviceId,
+        publicKey: firstPublicKey,
+        publicKeyProof: {
+          payload: firstPayload,
+          signature: signDevicePayload(firstIdentity.privateKeyPem, firstPayload),
+        },
+        role: "node",
+        scopes: [],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      verifyDeviceBootstrapToken({
+        token: issued.token,
+        deviceId: secondIdentity.deviceId,
+        publicKey: secondPublicKey,
+        publicKeyProof: {
+          payload: secondPayload,
+          signature: signDevicePayload(secondIdentity.privateKeyPem, secondPayload),
+        },
+        role: "node",
+        scopes: [],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    const request = await requestDevicePairing(
+      {
+        deviceId: firstIdentity.deviceId,
+        publicKey: firstPublicKey,
+        role: "node",
+        roles: PAIRING_SETUP_BOOTSTRAP_PROFILE.roles,
+        scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+        bootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        bootstrapTokenBindingId: resolveDeviceBootstrapTokenBindingId(issued.token),
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveDevicePairing(
+        request.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      ),
+    ).resolves.toEqual(expect.objectContaining({ status: "approved" }));
+    await expect(
+      verifyDeviceBootstrapToken({
+        token: issued.token,
+        deviceId: firstIdentity.deviceId,
+        publicKey: firstPublicKey,
+        publicKeyProof: {
+          payload: firstPayload,
+          signature: signDevicePayload(firstIdentity.privateKeyPem, firstPayload),
+        },
+        role: "node",
+        scopes: [],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      verifyDeviceBootstrapToken({
+        token: issued.token,
+        deviceId: secondIdentity.deviceId,
+        publicKey: secondPublicKey,
+        publicKeyProof: {
+          payload: secondPayload,
+          signature: signDevicePayload(secondIdentity.privateKeyPem, secondPayload),
+        },
+        role: "node",
+        scopes: [],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
   });
 
   test("bootstrap-issued operator tokens accept handoff scopes and reject admin or pairing", async () => {

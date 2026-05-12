@@ -4,12 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
+  bindDeviceBootstrapToken,
   clearDeviceBootstrapTokens,
   DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
   issueDeviceBootstrapToken,
   redeemDeviceBootstrapTokenProfile,
+  resolveDeviceBootstrapTokenBindingId,
   restoreDeviceBootstrapToken,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
@@ -92,9 +94,8 @@ describe("device bootstrap tokens", () => {
     });
   });
 
-  it("verifies valid bootstrap tokens and binds them to the first device identity", async () => {
+  it("verifies valid bootstrap tokens without binding before approval", async () => {
     const baseDir = await createTempDir();
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "default-device.json"));
     const issued = await issueDeviceBootstrapToken({ baseDir });
 
     await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
@@ -110,10 +111,53 @@ describe("device bootstrap tokens", () => {
       }
     >;
     expect(parsed[issued.token]?.token).toBe(issued.token);
-    expect(parsed[issued.token]?.deviceId).toBe(identity.deviceId);
-    expect(parsed[issued.token]?.publicKey).toBe(
-      publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-    );
+    expect(parsed[issued.token]?.deviceId).toBeUndefined();
+    expect(parsed[issued.token]?.publicKey).toBeUndefined();
+  });
+
+  it("binds bootstrap tokens only after approval selects the device identity", async () => {
+    const baseDir = await createTempDir();
+    const firstIdentity = loadOrCreateDeviceIdentity(path.join(baseDir, "first-device.json"));
+    const secondIdentity = loadOrCreateDeviceIdentity(path.join(baseDir, "second-device.json"));
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        deviceId: firstIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(firstIdentity.publicKeyPem),
+        publicKeyProof: createPublicKeyProof(firstIdentity),
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        deviceId: secondIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(secondIdentity.publicKeyPem),
+        publicKeyProof: createPublicKeyProof(secondIdentity),
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    await expect(
+      bindDeviceBootstrapToken({
+        baseDir,
+        tokenBindingId: resolveDeviceBootstrapTokenBindingId(issued.token),
+        deviceId: secondIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(secondIdentity.publicKeyPem),
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        deviceId: firstIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(firstIdentity.publicKeyPem),
+        publicKeyProof: createPublicKeyProof(firstIdentity),
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        deviceId: secondIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(secondIdentity.publicKeyPem),
+        publicKeyProof: createPublicKeyProof(secondIdentity),
+      }),
+    ).resolves.toEqual({ ok: true });
   });
 
   it("requires public key proof before binding a bootstrap token", async () => {
@@ -280,9 +324,8 @@ describe("device bootstrap tokens", () => {
     await expect(verifyBootstrapToken(baseDir, second.token)).resolves.toEqual({ ok: true });
   });
 
-  it("verifies bootstrap tokens by the persisted map key and binds them", async () => {
+  it("verifies bootstrap tokens by the persisted map key", async () => {
     const baseDir = await createTempDir();
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "default-device.json"));
     const issued = await issueDeviceBootstrapToken({ baseDir });
     const issuedAtMs = Date.now();
     const bootstrapPath = path.join(baseDir, "devices", "bootstrap.json");
@@ -319,10 +362,8 @@ describe("device bootstrap tokens", () => {
       { token: string; deviceId?: string; publicKey?: string }
     >;
     expect(parsed["legacy-key"]?.token).toBe(issued.token);
-    expect(parsed["legacy-key"]?.deviceId).toBe(identity.deviceId);
-    expect(parsed["legacy-key"]?.publicKey).toBe(
-      publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-    );
+    expect(parsed["legacy-key"]?.deviceId).toBeUndefined();
+    expect(parsed["legacy-key"]?.publicKey).toBeUndefined();
   });
 
   it("keeps the token when required verification fields are blank", async () => {
@@ -498,9 +539,8 @@ describe("device bootstrap tokens", () => {
     });
   });
 
-  it("accepts trimmed bootstrap tokens and binds them", async () => {
+  it("accepts trimmed bootstrap tokens without binding them", async () => {
     const baseDir = await createTempDir();
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "default-device.json"));
     const issued = await issueDeviceBootstrapToken({ baseDir });
 
     await expect(verifyBootstrapToken(baseDir, `  ${issued.token}  `)).resolves.toEqual({
@@ -509,7 +549,7 @@ describe("device bootstrap tokens", () => {
 
     const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
     const parsed = JSON.parse(raw) as Record<string, { deviceId?: string }>;
-    expect(parsed[issued.token]?.deviceId).toBe(identity.deviceId);
+    expect(parsed[issued.token]?.deviceId).toBeUndefined();
   });
 
   it("rejects blank or unknown tokens", async () => {
@@ -564,6 +604,14 @@ describe("device bootstrap tokens", () => {
       }),
     ).resolves.toEqual({ ok: true });
     await expect(
+      bindDeviceBootstrapToken({
+        baseDir,
+        tokenBindingId: resolveDeviceBootstrapTokenBindingId(issued.token),
+        deviceId: identity.deviceId,
+        publicKey: rawPublicKey,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
       verifyBootstrapToken(baseDir, issued.token, {
         deviceId: identity.deviceId,
         publicKey: rawPublicKey,
@@ -583,12 +631,27 @@ describe("device bootstrap tokens", () => {
     });
   });
 
-  it("rejects a second device identity after the first verification binds the token", async () => {
+  it("rejects a second device identity after approval binds the token", async () => {
     const baseDir = await createTempDir();
+    const firstIdentity = loadOrCreateDeviceIdentity(path.join(baseDir, "first-device.json"));
     const secondIdentity = loadOrCreateDeviceIdentity(path.join(baseDir, "second-device.json"));
     const issued = await issueDeviceBootstrapToken({ baseDir });
 
-    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        deviceId: firstIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(firstIdentity.publicKeyPem),
+        publicKeyProof: createPublicKeyProof(firstIdentity),
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      bindDeviceBootstrapToken({
+        baseDir,
+        tokenBindingId: resolveDeviceBootstrapTokenBindingId(issued.token),
+        deviceId: firstIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(firstIdentity.publicKeyPem),
+      }),
+    ).resolves.toEqual({ ok: true });
     await expect(
       verifyBootstrapToken(baseDir, issued.token, {
         deviceId: secondIdentity.deviceId,

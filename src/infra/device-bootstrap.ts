@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -37,6 +38,10 @@ export type DeviceBootstrapPublicKeyProof = {
   payload: string;
   signature: string;
 };
+
+export function resolveDeviceBootstrapTokenBindingId(token: string): string {
+  return crypto.createHash("sha256").update(token.trim()).digest("hex");
+}
 
 type DeviceBootstrapStateFile = Record<string, DeviceBootstrapTokenRecord>;
 
@@ -418,9 +423,47 @@ export async function verifyDeviceBootstrapToken(params: {
       return { ok: true };
     }
 
+    return { ok: true };
+  });
+}
+
+export async function bindDeviceBootstrapToken(params: {
+  tokenBindingId: string;
+  deviceId: string;
+  publicKey: string;
+  baseDir?: string;
+}): Promise<{ ok: true } | { ok: false; reason: string }> {
+  return await withLock(async () => {
+    const tokenBindingId = params.tokenBindingId.trim();
+    if (!tokenBindingId) {
+      return { ok: false, reason: "bootstrap_token_invalid" };
+    }
+    const state = await loadState(params.baseDir);
+    const found = Object.entries(state).find(
+      ([, candidate]) => resolveDeviceBootstrapTokenBindingId(candidate.token) === tokenBindingId,
+    );
+    if (!found) {
+      return { ok: false, reason: "bootstrap_token_invalid" };
+    }
+    const [tokenKey, record] = found;
+    const deviceId = params.deviceId.trim();
+    const publicKey = normalizeBootstrapPublicKey(params.publicKey);
+    if (!deviceId || !publicKey || deriveDeviceIdFromPublicKey(publicKey) !== deviceId) {
+      return { ok: false, reason: "bootstrap_token_invalid" };
+    }
+    const boundDeviceId = record.deviceId?.trim();
+    const boundPublicKey =
+      typeof record.publicKey === "string"
+        ? normalizeBootstrapPublicKey(record.publicKey)
+        : undefined;
+    if (boundDeviceId || boundPublicKey) {
+      if (boundDeviceId !== deviceId || boundPublicKey !== publicKey) {
+        return { ok: false, reason: "bootstrap_token_invalid" };
+      }
+    }
     state[tokenKey] = {
       ...record,
-      profile: allowedProfile,
+      profile: resolvePersistedBootstrapProfile(record),
       deviceId,
       publicKey,
       lastUsedAtMs: Date.now(),
@@ -431,11 +474,11 @@ export async function verifyDeviceBootstrapToken(params: {
 }
 
 /**
- * Reads the already-bound bootstrap profile for a verified device identity.
+ * Reads the bootstrap profile after approval has bound the token to a device.
  *
  * Call this only after `verifyDeviceBootstrapToken()` has returned `{ ok: true }`
- * for the same `token` / `deviceId` / `publicKey` tuple and public-key proof
- * in the current handshake.
+ * for the same `token` / `deviceId` / `publicKey` tuple and the pairing
+ * approval path has called `bindDeviceBootstrapToken()`.
  */
 export async function getBoundDeviceBootstrapProfile(params: {
   token: string;

@@ -10,6 +10,7 @@ import {
   resolveScopeOutsideRequestedRoles,
   roleScopesAllow,
 } from "../shared/operator-scope-compat.js";
+import { bindDeviceBootstrapToken } from "./device-bootstrap.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
@@ -35,6 +36,7 @@ export type DevicePairingPendingRequest = {
   roles?: string[];
   scopes?: string[];
   bootstrapProfile?: DeviceBootstrapProfile;
+  bootstrapTokenBindingId?: string;
   remoteIp?: string;
   silent?: boolean;
   isRepair?: boolean;
@@ -111,7 +113,8 @@ export type DevicePairingForbiddenReason =
   | "caller-missing-scope"
   | "scope-outside-requested-roles"
   | "bootstrap-role-not-allowed"
-  | "bootstrap-scope-not-allowed";
+  | "bootstrap-scope-not-allowed"
+  | "bootstrap-token-binding-mismatch";
 
 export type DevicePairingForbiddenResult = {
   status: "forbidden";
@@ -150,6 +153,8 @@ export function formatDevicePairingForbiddenMessage(result: DevicePairingForbidd
       return `bootstrap profile does not allow role: ${result.role ?? "unknown"}`;
     case "bootstrap-scope-not-allowed":
       return `bootstrap profile does not allow scope: ${result.scope ?? "unknown"}`;
+    case "bootstrap-token-binding-mismatch":
+      return "bootstrap token is bound to a different device";
   }
   throw new Error("Unsupported device pairing forbidden reason");
 }
@@ -339,6 +344,9 @@ function samePendingApprovalSnapshot(
   ) {
     return false;
   }
+  if (existing.bootstrapTokenBindingId !== incoming.bootstrapTokenBindingId) {
+    return false;
+  }
   return true;
 }
 
@@ -356,6 +364,7 @@ function refreshPendingDevicePairingRequest(
     clientId: incoming.clientId ?? existing.clientId,
     clientMode: incoming.clientMode ?? existing.clientMode,
     bootstrapProfile: incoming.bootstrapProfile ?? existing.bootstrapProfile,
+    bootstrapTokenBindingId: incoming.bootstrapTokenBindingId ?? existing.bootstrapTokenBindingId,
     remoteIp: incoming.remoteIp ?? existing.remoteIp,
     // If either request is interactive, keep the pending request visible for approval.
     silent: Boolean(existing.silent && incoming.silent),
@@ -396,6 +405,7 @@ function buildPendingDevicePairingRequest(params: {
     roles: mergeRoles(params.req.roles, role),
     scopes: mergeScopes(params.req.scopes),
     bootstrapProfile: params.req.bootstrapProfile,
+    bootstrapTokenBindingId: params.req.bootstrapTokenBindingId,
     remoteIp: params.req.remoteIp,
     silent: params.req.silent,
     isRepair: params.isRepair,
@@ -407,6 +417,22 @@ function callerCanApproveBootstrapProfile(callerScopes: readonly string[] | unde
   return Boolean(
     callerScopes?.includes(OPERATOR_PAIRING_SCOPE) || callerScopes?.includes(OPERATOR_ADMIN_SCOPE),
   );
+}
+
+async function bindBootstrapTokenForPending(
+  pending: DevicePairingPendingRequest,
+  baseDir: string | undefined,
+): Promise<DevicePairingForbiddenResult | null> {
+  if (!pending.bootstrapTokenBindingId) {
+    return null;
+  }
+  const bound = await bindDeviceBootstrapToken({
+    tokenBindingId: pending.bootstrapTokenBindingId,
+    deviceId: pending.deviceId,
+    publicKey: pending.publicKey,
+    baseDir,
+  });
+  return bound.ok ? null : { status: "forbidden", reason: "bootstrap-token-binding-mismatch" };
 }
 
 function newToken() {
@@ -568,6 +594,9 @@ export async function requestDevicePairing(
           ...existing.map((pending) => pending.scopes),
           incoming.scopes,
         );
+        const bootstrapProfile = incoming.bootstrapProfile ?? latestPending?.bootstrapProfile;
+        const bootstrapTokenBindingId =
+          incoming.bootstrapTokenBindingId ?? latestPending?.bootstrapTokenBindingId;
         return buildPendingDevicePairingRequest({
           deviceId,
           isRepair,
@@ -576,6 +605,8 @@ export async function requestDevicePairing(
             role: normalizeRole(incoming.role) ?? latestPending?.role,
             roles: mergedRoles,
             scopes: mergedScopes,
+            bootstrapProfile,
+            bootstrapTokenBindingId,
             // Preserve interactive visibility when superseding pending requests:
             // if any previous pending request was interactive, keep this one interactive.
             silent: resolveSupersededPendingSilent({
@@ -630,6 +661,10 @@ export async function approveDevicePairing(
         bootstrapProfile: pending.bootstrapProfile,
       });
       if (approved.status === "approved") {
+        const bindingFailure = await bindBootstrapTokenForPending(pending, baseDir);
+        if (bindingFailure) {
+          return bindingFailure;
+        }
         await persistState(state, baseDir, "both");
       }
       return approved;
@@ -832,6 +867,10 @@ export async function approveBootstrapDevicePairing(
       bootstrapProfile,
     });
     if (approved.status === "approved") {
+      const bindingFailure = await bindBootstrapTokenForPending(pending, baseDir);
+      if (bindingFailure) {
+        return bindingFailure;
+      }
       await persistState(state, baseDir, "both");
     }
     return approved;

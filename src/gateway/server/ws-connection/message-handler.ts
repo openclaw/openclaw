@@ -5,6 +5,7 @@ import { getRuntimeConfig } from "../../../config/io.js";
 import {
   getDeviceBootstrapTokenProfile,
   redeemDeviceBootstrapTokenProfile,
+  resolveDeviceBootstrapTokenBindingId,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
@@ -1064,6 +1065,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                     roles: bootstrapPairingRoles,
                     scopes: bootstrapPairingScopes,
                     bootstrapProfile: bootstrapPairingProfile,
+                    ...(bootstrapTokenCandidate
+                      ? {
+                          bootstrapTokenBindingId:
+                            resolveDeviceBootstrapTokenBindingId(bootstrapTokenCandidate),
+                        }
+                      : {}),
                   }
                 : {}),
               silent:
