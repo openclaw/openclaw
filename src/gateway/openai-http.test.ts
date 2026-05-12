@@ -1273,6 +1273,67 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
+  it("forwards inbound max_completion_tokens and max_tokens into streamParams", async () => {
+    const port = enabledPort;
+    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({ payloads } as never);
+    };
+    const getFirstAgentMaxTokens = () => {
+      const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      return (opts as { streamParams?: { maxTokens?: number } } | undefined)?.streamParams
+        ?.maxTokens;
+    };
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        max_completion_tokens: 256,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getFirstAgentMaxTokens()).toBe(256);
+      await res.text();
+    }
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        max_tokens: 128,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getFirstAgentMaxTokens()).toBe(128);
+      await res.text();
+    }
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        max_completion_tokens: 64,
+        max_tokens: 999,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getFirstAgentMaxTokens()).toBe(64);
+      await res.text();
+    }
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getFirstAgentMaxTokens()).toBeUndefined();
+      await res.text();
+    }
+  });
+
   it("returns 429 for repeated failed auth when gateway.auth.rateLimit is configured", async () => {
     testState.gatewayAuth = {
       mode: "token",
