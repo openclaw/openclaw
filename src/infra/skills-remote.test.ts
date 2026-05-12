@@ -12,6 +12,7 @@ import {
   getRemoteSkillEligibility,
   recordRemoteNodeBins,
   recordRemoteNodeInfo,
+  recordRemoteNodeApproval,
   removeRemoteNodeInfo,
   refreshRemoteNodeBins,
   setSkillsRemoteRegistry,
@@ -46,6 +47,7 @@ describe("skills-remote", () => {
       platform: "darwin",
       commands: ["system.run"],
     });
+    recordRemoteNodeApproval({ nodeId, platform: "darwin", commands: ["system.run"] });
     recordRemoteNodeBins(nodeId, [bin]);
 
     expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
@@ -71,6 +73,7 @@ describe("skills-remote", () => {
       platform: "darwin",
       commands: ["system.run"],
     });
+    recordRemoteNodeApproval({ nodeId, platform: "darwin", commands: ["system.run"] });
 
     const before = getSkillsSnapshotVersion(workspaceDir);
     removeRemoteNodeInfo(nodeId);
@@ -119,6 +122,7 @@ describe("skills-remote", () => {
         platform: "darwin",
         commands: ["system.run"],
       });
+      recordRemoteNodeApproval({ nodeId: nodeA, platform: "darwin", commands: ["system.run"] });
       recordRemoteNodeBins(nodeA, [binA]);
 
       recordRemoteNodeInfo({
@@ -126,6 +130,7 @@ describe("skills-remote", () => {
         platform: "macOS",
         commands: ["system.run"],
       });
+      recordRemoteNodeApproval({ nodeId: nodeB, platform: "macOS", commands: ["system.run"] });
       recordRemoteNodeBins(nodeB, [binB]);
 
       const eligibility = getRemoteSkillEligibility();
@@ -150,12 +155,35 @@ describe("skills-remote", () => {
         platform: "darwin",
         commands: ["system.run"],
       });
+      recordRemoteNodeApproval({ nodeId, platform: "darwin", commands: ["system.run"] });
       recordRemoteNodeBins(nodeId, [bin]);
 
       const eligibility = getRemoteSkillEligibility({ advertiseExecNode: false });
 
       expect(eligibility?.hasBin(bin)).toBe(true);
       expect(eligibility?.note).toBeUndefined();
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+    }
+  });
+
+  it("hides connected mac nodes until system.run is approved", () => {
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    try {
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Remote Mac",
+        platform: "darwin",
+        commands: ["system.run"],
+      });
+      recordRemoteNodeBins(nodeId, [bin]);
+
+      expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
+
+      recordRemoteNodeApproval({ nodeId, platform: "darwin", commands: ["system.run"] });
+
+      expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
     } finally {
       removeRemoteNodeInfo(nodeId);
     }

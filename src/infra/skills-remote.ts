@@ -17,6 +17,7 @@ type RemoteNodeRecord = {
   platform?: string;
   deviceFamily?: string;
   commands?: string[];
+  approvedCommands: Set<string>;
   bins: Set<string>;
   connected: boolean;
   remoteIp?: string;
@@ -119,8 +120,33 @@ function supportsSystemWhich(commands?: string[]): boolean {
   return Array.isArray(commands) && commands.includes("system.which");
 }
 
+function supportsApprovedSystemRun(node: RemoteNodeRecord): boolean {
+  return node.approvedCommands.has("system.run");
+}
+
+function isEligibleRemoteMacNode(node: RemoteNodeRecord): boolean {
+  return (
+    node.connected &&
+    isMacPlatform(node.platform, node.deviceFamily) &&
+    supportsSystemRun(node.commands) &&
+    supportsApprovedSystemRun(node)
+  );
+}
+
 async function hasApprovedRemoteProbeCommand(nodeId: string, command: string): Promise<boolean> {
   const pairedNode = await getPairedNode(nodeId);
+  if (pairedNode) {
+    recordRemoteNodeApproval({
+      nodeId,
+      commands: pairedNode.commands,
+      platform: pairedNode.platform,
+      deviceFamily: pairedNode.deviceFamily,
+      remoteIp: pairedNode.remoteIp,
+      bins: pairedNode.bins,
+    });
+  } else {
+    clearRemoteNodeApproval(nodeId);
+  }
   return pairedNode?.commands?.includes(command) === true;
 }
 
@@ -132,10 +158,14 @@ function upsertNode(record: {
   commands?: string[];
   remoteIp?: string;
   bins?: string[];
+  approvedCommands?: string[];
   connected?: boolean;
 }) {
   const existing = remoteNodes.get(record.nodeId);
   const bins = new Set<string>(record.bins ?? existing?.bins ?? []);
+  const approvedCommands = new Set<string>(
+    record.approvedCommands ?? [...(existing?.approvedCommands ?? [])],
+  );
   remoteNodes.set(record.nodeId, {
     nodeId: record.nodeId,
     displayName: record.displayName ?? existing?.displayName,
@@ -144,6 +174,7 @@ function upsertNode(record: {
     commands: record.commands ?? existing?.commands,
     remoteIp: record.remoteIp ?? existing?.remoteIp,
     bins,
+    approvedCommands,
     connected: record.connected ?? existing?.connected ?? false,
   });
 }
@@ -172,6 +203,7 @@ export async function primeRemoteSkillsCache() {
         platform: node.platform,
         deviceFamily: node.deviceFamily,
         commands: node.commands,
+        approvedCommands: node.commands,
         remoteIp: node.remoteIp,
         bins: node.bins,
         connected: false,
@@ -208,14 +240,49 @@ export function recordRemoteNodeBins(nodeId: string, bins: string[]) {
   upsertNode({ nodeId, bins });
 }
 
+export function recordRemoteNodeApproval(node: {
+  nodeId: string;
+  displayName?: string;
+  platform?: string;
+  deviceFamily?: string;
+  commands?: string[];
+  remoteIp?: string;
+  bins?: string[];
+}) {
+  const before = remoteNodes.get(node.nodeId);
+  const wasEligible = before ? isEligibleRemoteMacNode(before) : false;
+  upsertNode({
+    nodeId: node.nodeId,
+    displayName: node.displayName,
+    platform: node.platform,
+    deviceFamily: node.deviceFamily,
+    approvedCommands: node.commands ?? [],
+    remoteIp: node.remoteIp,
+    bins: node.bins,
+  });
+  const after = remoteNodes.get(node.nodeId);
+  if (after && isEligibleRemoteMacNode(after) !== wasEligible) {
+    bumpSkillsSnapshotVersion({ reason: "remote-node" });
+  }
+}
+
+export function clearRemoteNodeApproval(nodeId: string) {
+  const existing = remoteNodes.get(nodeId);
+  if (!existing || existing.approvedCommands.size === 0) {
+    return;
+  }
+  const wasEligible = isEligibleRemoteMacNode(existing);
+  existing.approvedCommands = new Set();
+  clearRemoteNodeBins(nodeId);
+  if (wasEligible) {
+    bumpSkillsSnapshotVersion({ reason: "remote-node" });
+  }
+}
+
 export function removeRemoteNodeInfo(nodeId: string) {
   const existing = remoteNodes.get(nodeId);
   remoteNodes.delete(nodeId);
-  if (
-    existing &&
-    isMacPlatform(existing.platform, existing.deviceFamily) &&
-    supportsSystemRun(existing.commands)
-  ) {
+  if (existing && isEligibleRemoteMacNode(existing)) {
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   }
 }
@@ -410,12 +477,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
 export function getRemoteSkillEligibility(options?: {
   advertiseExecNode?: boolean;
 }): SkillEligibilityContext["remote"] | undefined {
-  const macNodes = [...remoteNodes.values()].filter(
-    (node) =>
-      node.connected &&
-      isMacPlatform(node.platform, node.deviceFamily) &&
-      supportsSystemRun(node.commands),
-  );
+  const macNodes = [...remoteNodes.values()].filter((node) => isEligibleRemoteMacNode(node));
   if (macNodes.length === 0) {
     return undefined;
   }

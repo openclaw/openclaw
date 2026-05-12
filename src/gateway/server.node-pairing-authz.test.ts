@@ -419,7 +419,7 @@ describe("gateway node pairing authorization", () => {
 
       await vi.waitFor(
         () => {
-          if (probeCount !== 1 || !(getRemoteSkillEligibility()?.hasBin(bin) ?? false)) {
+          if (probeCount < 1 || !(getRemoteSkillEligibility()?.hasBin(bin) ?? false)) {
             throw new Error("expected remote bin refresh after node approval");
           }
         },

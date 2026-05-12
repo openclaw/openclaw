@@ -23,7 +23,11 @@ import {
   resolveApnsAuthConfigFromEnv,
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
-import { refreshRemoteNodeBins } from "../../infra/skills-remote.js";
+import {
+  clearRemoteNodeApproval,
+  recordRemoteNodeApproval,
+  refreshRemoteNodeBins,
+} from "../../infra/skills-remote.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -752,6 +756,15 @@ export const nodeHandlers: GatewayRequestHandlers = {
         { dropIfSlow: true },
       );
       const connectedNode = context.nodeRegistry.get(approvedNode.nodeId);
+      recordRemoteNodeApproval({
+        nodeId: approvedNode.nodeId,
+        displayName: approvedNode.displayName,
+        platform: approvedNode.platform,
+        deviceFamily: approvedNode.deviceFamily,
+        commands: approvedNode.commands,
+        remoteIp: approvedNode.remoteIp,
+        bins: approvedNode.bins,
+      });
       if (connectedNode) {
         void refreshRemoteNodeBins({
           nodeId: connectedNode.nodeId,
@@ -825,6 +838,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         },
         { dropIfSlow: true },
       );
+      clearRemoteNodeApproval(removed.nodeId);
       respond(true, removed, undefined);
     });
   },
