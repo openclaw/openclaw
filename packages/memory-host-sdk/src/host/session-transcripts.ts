@@ -1,42 +1,47 @@
-import path from "node:path";
 import { hashText } from "./hash.js";
 import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-io.js";
 import {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
   hasInterSessionUserProvenance,
-  isCompactionCheckpointTranscriptFileName,
   isCronRunSessionKey,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
   isSilentReplyPayloadText,
   listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScopeForPath,
-  parseUsageCountedSessionIdFromFileName,
   stripInboundMetadata,
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
 
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
-// Keep the historical one-line-per-message export shape for normal turns, but
-// wrap pathological long messages so downstream indexers never ingest a single
-// toxic line. Wrapped continuation lines still map back to the same JSONL line.
+// Keep the one-line-per-message export shape for normal turns, but wrap
+// pathological long messages so downstream indexers never ingest a single toxic
+// line. Wrapped continuation lines still map back to the same transcript event.
 // This limit applies to content only; the role label adds up to 11 chars.
 const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 const SESSION_ENTRY_PARSE_YIELD_LINES = 250;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
-const SQLITE_TRANSCRIPT_REF_PREFIX = "sqlite-transcript://";
+
+export type SessionTranscriptScope = {
+  agentId: string;
+  sessionId: string;
+};
 
 export type SessionTranscriptEntry = {
+  scope: SessionTranscriptScope;
+  /**
+   * Search/display path for SQLite transcript hits. Durable identity is the
+   * source row (`source_kind=sessions`, `source_key=session:<sessionId>`) plus
+   * `session_id`, not this value.
+   */
   path: string;
-  absPath: string;
   mtimeMs: number;
   size: number;
   messageCount: number;
   hash: string;
   content: string;
-  /** Maps each content line (0-indexed) to its 1-indexed JSONL source line. */
+  /** Maps each content line (0-indexed) to its 1-indexed transcript event ordinal. */
   lineMap: number[];
   /** Maps each content line (0-indexed) to epoch ms; 0 means unknown timestamp. */
   messageTimestampsMs: number[];
@@ -55,26 +60,11 @@ export type BuildSessionTranscriptEntryOptions = {
   parseYieldEveryLines?: number;
 };
 
-export type SessionTranscriptClassification = {
-  dreamingNarrativeTranscriptPaths: ReadonlySet<string>;
-  cronRunTranscriptPaths: ReadonlySet<string>;
-};
-
 export type SessionTranscriptDeltaStats = {
   size: number;
   messageCount: number;
   updatedAt: number;
 };
-
-function shouldSkipTranscriptFileForDreaming(absPath: string): boolean {
-  const fileName = path.basename(absPath);
-  // Compaction checkpoints are always skipped: they are derived snapshots of an
-  // active session and would double-index the same content.
-  if (isCompactionCheckpointTranscriptFileName(fileName)) {
-    return true;
-  }
-  return false;
-}
 
 function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
@@ -139,11 +129,19 @@ function isCronRunGeneratedRecord(record: unknown): boolean {
     return false;
   }
   const candidate = record as {
+    message?: unknown;
     sessionKey?: unknown;
     data?: unknown;
   };
   if (hasCronRunSessionKey(candidate.sessionKey)) {
     return true;
+  }
+  const message = candidate.message as { role?: unknown; content?: unknown } | undefined;
+  if (message?.role === "user") {
+    const rawText = collectRawSessionText(message.content);
+    if (rawText !== null && isGeneratedCronPromptMessage(normalizeSessionText(rawText), "user")) {
+      return true;
+    }
   }
   if (!candidate.data || typeof candidate.data !== "object" || Array.isArray(candidate.data)) {
     return false;
@@ -154,140 +152,23 @@ function isCronRunGeneratedRecord(record: unknown): boolean {
   return hasCronRunSessionKey(nested.sessionKey);
 }
 
-function normalizeComparablePath(pathname: string): string {
-  const resolved = path.resolve(pathname);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
-export function normalizeSessionTranscriptPathForComparison(pathname: string): string {
-  return normalizeComparablePath(pathname);
-}
-
-export function loadDreamingNarrativeTranscriptPathSetForSessionsDir(
-  sessionsDir: string,
-): ReadonlySet<string> {
-  void sessionsDir;
-  return new Set<string>();
-}
-
-export function loadSessionTranscriptClassificationForSessionsDir(
-  sessionsDir: string,
-): SessionTranscriptClassification {
-  void sessionsDir;
-  return {
-    dreamingNarrativeTranscriptPaths: new Set<string>(),
-    cronRunTranscriptPaths: new Set<string>(),
-  };
-}
-
-export function loadDreamingNarrativeTranscriptPathSetForAgent(
+export async function listSessionTranscriptScopesForAgent(
   agentId: string,
-): ReadonlySet<string> {
-  return loadSessionTranscriptClassificationForAgent(agentId).dreamingNarrativeTranscriptPaths;
+): Promise<SessionTranscriptScope[]> {
+  return listSqliteSessionTranscripts({ agentId }).map((transcript) => ({
+    agentId: transcript.agentId,
+    sessionId: transcript.sessionId,
+  }));
 }
 
-export function loadSessionTranscriptClassificationForAgent(
-  agentId: string,
-): SessionTranscriptClassification {
-  void agentId;
-  return {
-    dreamingNarrativeTranscriptPaths: new Set<string>(),
-    cronRunTranscriptPaths: new Set<string>(),
-  };
-}
-
-function createSqliteSessionTranscriptRef(params: { agentId: string; sessionId: string }): string {
-  return `${SQLITE_TRANSCRIPT_REF_PREFIX}${encodeURIComponent(params.agentId)}/${encodeURIComponent(
-    params.sessionId,
-  )}.jsonl`;
-}
-
-export async function listSessionTranscriptsForAgent(agentId: string): Promise<string[]> {
-  return listSqliteSessionTranscripts({ agentId }).map(
-    (transcript) =>
-      transcript.path ??
-      createSqliteSessionTranscriptRef({
-        agentId: transcript.agentId,
-        sessionId: transcript.sessionId,
-      }),
-  );
-}
-
-function parseSqliteSessionTranscriptRef(locator: string): {
-  agentId: string;
-  sessionId: string;
-} | null {
-  if (!locator.startsWith(SQLITE_TRANSCRIPT_REF_PREFIX)) {
-    return null;
-  }
-  try {
-    const url = new URL(locator);
-    const agentId = decodeURIComponent(url.hostname).trim();
-    const fileName = decodeURIComponent(url.pathname.replace(/^\/+/u, "")).trim();
-    const sessionId = parseUsageCountedSessionIdFromFileName(fileName);
-    if (!agentId || !sessionId) {
-      return null;
-    }
-    return { agentId, sessionId };
-  } catch {
-    return null;
-  }
-}
-
-function extractAgentIdFromSessionPath(absPath: string): string | null {
-  const parts = path.normalize(path.resolve(absPath)).split(path.sep).filter(Boolean);
-  const sessionsIndex = parts.lastIndexOf("sessions");
-  if (sessionsIndex < 2 || parts[sessionsIndex - 2] !== "agents") {
-    return null;
-  }
-  return parts[sessionsIndex - 1] || null;
-}
-
-function resolveSessionIdFromTranscriptPath(absPath: string): string | null {
-  return parseUsageCountedSessionIdFromFileName(path.basename(absPath));
-}
-
-export function sessionPathForTranscript(absPath: string): string {
-  const sqliteRef = parseSqliteSessionTranscriptRef(absPath);
-  if (sqliteRef) {
-    return path
-      .join("sessions", sqliteRef.agentId, `${sqliteRef.sessionId}.jsonl`)
-      .replace(/\\/g, "/");
-  }
-  const agentId = extractAgentIdFromSessionPath(absPath);
-  return path
-    .join("sessions", ...(agentId ? [agentId] : []), path.basename(absPath))
-    .replace(/\\/g, "/");
-}
-
-export function resolveSessionTranscriptScope(locator: string): {
-  agentId: string;
-  sessionId: string;
-  transcriptPath?: string;
-} | null {
-  const sqliteRef = parseSqliteSessionTranscriptRef(locator);
-  if (sqliteRef) {
-    return sqliteRef;
-  }
-  const transcriptPath = path.resolve(locator);
-  const rememberedScope = resolveSqliteSessionTranscriptScopeForPath({ transcriptPath });
-  const agentId = rememberedScope?.agentId ?? extractAgentIdFromSessionPath(transcriptPath);
-  const sessionId =
-    rememberedScope?.sessionId ?? resolveSessionIdFromTranscriptPath(transcriptPath);
-  if (!agentId || !sessionId) {
-    return null;
-  }
-  return { agentId, sessionId, transcriptPath };
+export function sessionTranscriptKeyForScope(scope: SessionTranscriptScope): string {
+  return `transcript:${scope.agentId}:${scope.sessionId}`;
 }
 
 export function readSessionTranscriptDeltaStats(
-  absPath: string,
+  scope: SessionTranscriptScope,
 ): SessionTranscriptDeltaStats | null {
   try {
-    const scope = resolveSessionTranscriptScope(absPath);
-    if (!scope) {
-      return null;
-    }
     const transcriptEvents = loadSqliteSessionTranscriptEvents(scope);
     if (transcriptEvents.length === 0) {
       return null;
@@ -301,14 +182,17 @@ export function readSessionTranscriptDeltaStats(
       updatedAt: Math.max(0, ...transcriptEvents.map((entry) => entry.createdAt)),
     };
   } catch (err) {
-    void logSessionTranscriptReadFailure(absPath, err);
+    void logSessionTranscriptReadFailure(scope, err);
     return null;
   }
 }
 
-async function logSessionTranscriptReadFailure(absPath: string, err: unknown): Promise<void> {
+async function logSessionTranscriptReadFailure(
+  scope: SessionTranscriptScope,
+  err: unknown,
+): Promise<void> {
   createSubsystemLogger("memory").debug(
-    `Failed reading session transcript ${absPath}: ${String(err)}`,
+    `Failed reading session transcript ${scope.agentId}/${scope.sessionId}: ${String(err)}`,
   );
 }
 
@@ -526,14 +410,10 @@ async function yieldSessionEntryParseIfNeeded(
 }
 
 export async function buildSessionTranscriptEntry(
-  absPath: string,
+  scope: SessionTranscriptScope,
   opts: BuildSessionTranscriptEntryOptions = {},
 ): Promise<SessionTranscriptEntry | null> {
   try {
-    const scope = resolveSessionTranscriptScope(absPath);
-    if (!scope) {
-      return null;
-    }
     const transcriptEvents = loadSqliteSessionTranscriptEvents(scope);
     if (transcriptEvents.length === 0) {
       return null;
@@ -544,19 +424,6 @@ export async function buildSessionTranscriptEntry(
       (total, entry) => total + JSON.stringify(entry.event).length + 1,
       0,
     );
-    if (shouldSkipTranscriptFileForDreaming(absPath)) {
-      return {
-        path: sessionPathForTranscript(absPath),
-        absPath,
-        mtimeMs,
-        size,
-        messageCount,
-        hash: hashText("\n\n"),
-        content: "",
-        lineMap: [],
-        messageTimestampsMs: [],
-      };
-    }
     const collected: string[] = [];
     const lineMap: number[] = [];
     const messageTimestampsMs: number[] = [];
@@ -629,8 +496,8 @@ export async function buildSessionTranscriptEntry(
     }
     const content = collected.join("\n");
     return {
-      path: sessionPathForTranscript(absPath),
-      absPath,
+      scope,
+      path: sessionTranscriptKeyForScope(scope),
       mtimeMs,
       size,
       messageCount,
@@ -642,7 +509,7 @@ export async function buildSessionTranscriptEntry(
       ...(generatedByCronRun ? { generatedByCronRun: true } : {}),
     };
   } catch (err) {
-    void logSessionTranscriptReadFailure(absPath, err);
+    void logSessionTranscriptReadFailure(scope, err);
     return null;
   }
 }

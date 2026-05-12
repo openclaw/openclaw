@@ -1,24 +1,6 @@
-// Real workspace contract for QMD/session/query helpers used by the memory engine.
+// Real workspace contract for QMD helpers used by the memory engine.
 
 export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js";
-export {
-  buildSessionTranscriptEntry,
-  listSessionTranscriptsForAgent,
-  loadDreamingNarrativeTranscriptPathSetForAgent,
-  loadSessionTranscriptClassificationForAgent,
-  normalizeSessionTranscriptPathForComparison,
-  readSessionTranscriptDeltaStats,
-  resolveSessionTranscriptScope,
-  sessionPathForTranscript,
-  type BuildSessionTranscriptEntryOptions,
-  type SessionTranscriptEntry,
-  type SessionTranscriptDeltaStats,
-  type SessionTranscriptClassification,
-} from "./host/session-transcripts.js";
-export {
-  isUsageCountedSessionTranscriptFileName,
-  parseUsageCountedSessionIdFromFileName,
-} from "./host/openclaw-runtime-session.js";
 export { parseQmdQueryJson, type QmdQueryResult } from "./host/qmd-query-parser.js";
 export {
   deriveQmdScopeChannel,
@@ -30,3 +12,15 @@ export {
   resolveCliSpawnInvocation,
   runCliCommand,
 } from "./host/qmd-process.js";
+// Compatibility only. New code imports SQLite-backed transcript helpers from
+// engine-session-transcripts so the QMD surface stays about QMD.
+export {
+  buildSessionTranscriptEntry,
+  listSessionTranscriptScopesForAgent,
+  readSessionTranscriptDeltaStats,
+  sessionTranscriptKeyForScope,
+  type BuildSessionTranscriptEntryOptions,
+  type SessionTranscriptDeltaStats,
+  type SessionTranscriptEntry,
+  type SessionTranscriptScope,
+} from "./engine-session-transcripts.js";
