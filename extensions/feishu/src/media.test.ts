@@ -859,7 +859,7 @@ describe("downloadMessageResourceFeishu", () => {
     expect(result.fileName).toBe("café-Â©.txt");
   });
 
-  it("keeps JSON-derived file_name metadata unchanged", async () => {
+  it("recovers UTF-8 CJK names from JSON-derived file_name metadata", async () => {
     const fileName = "武汉15座山登山信息汇总.csv";
     const latin1LookingFileName = Buffer.from(fileName, "utf8").toString("latin1");
     messageResourceGetMock.mockResolvedValueOnce({
@@ -874,6 +874,22 @@ describe("downloadMessageResourceFeishu", () => {
       type: "file",
     });
 
-    expect(result.fileName).toBe(latin1LookingFileName);
+    expect(result.fileName).toBe(fileName);
+  });
+
+  it("keeps valid Latin-1 filenames from JSON-derived file_name metadata unchanged", async () => {
+    messageResourceGetMock.mockResolvedValueOnce({
+      data: Buffer.from("fake-file-data"),
+      file_name: "café-Â©.txt",
+    });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_json_latin1_msg",
+      fileKey: "file_key_json_latin1",
+      type: "file",
+    });
+
+    expect(result.fileName).toBe("café-Â©.txt");
   });
 });

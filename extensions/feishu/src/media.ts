@@ -180,7 +180,7 @@ function containsEastAsianScript(value: string): boolean {
   return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(value);
 }
 
-function recoverUtf8FileNameFromLatin1Header(value: string): string {
+function recoverUtf8FileNameFromLatin1Value(value: string): string {
   const recovered = Buffer.from(value, "latin1").toString("utf8");
   if (recovered !== value && !recovered.includes("\uFFFD") && containsEastAsianScript(recovered)) {
     return recovered;
@@ -200,7 +200,7 @@ function decodeDispositionFileName(value: string): string | undefined {
 
   const plainMatch = value.match(/filename="?([^";]+)"?/i);
   const plainFileName = plainMatch?.[1]?.trim();
-  return plainFileName ? recoverUtf8FileNameFromLatin1Header(plainFileName) : undefined;
+  return plainFileName ? recoverUtf8FileNameFromLatin1Value(plainFileName) : undefined;
 }
 
 function extractFeishuDownloadMetadata(response: FeishuDownloadResponse): {
@@ -239,7 +239,10 @@ function extractFeishuDownloadMetadata(response: FeishuDownloadResponse): {
     responseWithOptionalFields.data?.file_name ??
     responseWithOptionalFields.data?.fileName;
 
-  return { contentType, fileName };
+  return {
+    contentType,
+    fileName: fileName ? recoverUtf8FileNameFromLatin1Value(fileName) : undefined,
+  };
 }
 
 async function readReadableBuffer(stream: Readable): Promise<Buffer> {
