@@ -1,9 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   codexNativeSubagentRunId,
   CodexNativeSubagentTaskMirror,
+  resetCodexNativeTaskMirrorRuntimeForTests,
+  resolveCodexNativeTaskRuntimeForTests,
   type TaskLifecycleRuntime,
 } from "./native-subagent-task-mirror.js";
+
+const tempDirs: string[] = [];
 
 function createRuntime() {
   return {
@@ -13,7 +21,85 @@ function createRuntime() {
   } as unknown as TaskLifecycleRuntime;
 }
 
+function makeOpenClawRuntimeRoot() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-runtime-"));
+  tempDirs.push(root);
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+    "utf-8",
+  );
+  return root;
+}
+
+function writeSourceRuntime(root: string) {
+  const runtimePath = path.join(root, "src", "plugin-sdk", "codex-native-task-runtime.ts");
+  fs.mkdirSync(path.dirname(runtimePath), { recursive: true });
+  fs.writeFileSync(runtimePath, "export {};\n", "utf-8");
+  return runtimePath;
+}
+
+function sourceMirrorModuleUrl(root: string) {
+  return pathToFileURL(
+    path.join(root, "extensions", "codex", "src", "app-server", "native-subagent-task-mirror.ts"),
+  ).href;
+}
+
+afterEach(() => {
+  resetCodexNativeTaskMirrorRuntimeForTests();
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 describe("CodexNativeSubagentTaskMirror", () => {
+  it("resolves the private runtime from OpenClaw source when package subpath resolution is unavailable", () => {
+    const root = makeOpenClawRuntimeRoot();
+    const sourceRuntimePath = writeSourceRuntime(root);
+    const runtime = createRuntime();
+    const requireModule = vi.fn((specifier: string) => {
+      throw new Error(`missing ${specifier}`);
+    });
+    const loadSourceRuntime = vi.fn((specifier: string) => {
+      expect(specifier).toBe(sourceRuntimePath);
+      return runtime;
+    });
+    const createJiti = vi.fn(() => loadSourceRuntime);
+
+    const resolved = resolveCodexNativeTaskRuntimeForTests({
+      moduleUrl: sourceMirrorModuleUrl(root),
+      argv1: "",
+      requireModule,
+      createJiti,
+    });
+
+    expect(resolved).toBe(runtime);
+    expect(requireModule).toHaveBeenCalledWith("openclaw/plugin-sdk/codex-native-task-runtime");
+    expect(requireModule).toHaveBeenCalledWith(sourceRuntimePath);
+    expect(createJiti).toHaveBeenCalledTimes(1);
+    expect(loadSourceRuntime).toHaveBeenCalledWith(sourceRuntimePath);
+  });
+
+  it("uses a no-op runtime when the private runtime helper is absent", () => {
+    const root = makeOpenClawRuntimeRoot();
+    const requireModule = vi.fn((specifier: string) => {
+      throw new Error(`missing ${specifier}`);
+    });
+    const createJiti = vi.fn();
+
+    const resolved = resolveCodexNativeTaskRuntimeForTests({
+      moduleUrl: sourceMirrorModuleUrl(root),
+      argv1: "",
+      requireModule,
+      createJiti,
+    });
+
+    expect(resolved.createRunningTaskRun({})).toBeUndefined();
+    expect(resolved.recordTaskRunProgressByRunId({})).toBeUndefined();
+    expect(resolved.finalizeTaskRunByRunId({})).toBeUndefined();
+    expect(createJiti).not.toHaveBeenCalled();
+  });
+
   it("creates a silent task-registry task for a native Codex subagent thread", () => {
     const runtime = createRuntime();
     const mirror = new CodexNativeSubagentTaskMirror(

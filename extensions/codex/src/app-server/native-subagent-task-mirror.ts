@@ -1,4 +1,7 @@
+import fs from "node:fs";
 import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   CodexServerNotification,
   CodexSessionSource,
@@ -14,6 +17,17 @@ import { isJsonObject } from "./protocol.js";
 
 const CODEX_NATIVE_SUBAGENT_RUNTIME = "subagent";
 const CODEX_NATIVE_SUBAGENT_TASK_KIND = "codex-native";
+const CODEX_NATIVE_TASK_RUNTIME_MODULE_ID = "openclaw/plugin-sdk/codex-native-task-runtime";
+const CODEX_NATIVE_TASK_RUNTIME_SOURCE_FILE = path.join(
+  "src",
+  "plugin-sdk",
+  "codex-native-task-runtime.ts",
+);
+const CODEX_NATIVE_TASK_RUNTIME_DIST_FILE = path.join(
+  "dist",
+  "plugin-sdk",
+  "codex-native-task-runtime.js",
+);
 const requireCodexAppServerTaskRuntime = createRequire(import.meta.url);
 
 export type TaskLifecycleRuntime = {
@@ -29,6 +43,23 @@ export type CodexNativeSubagentTaskMirrorParams = {
   now?: () => number;
 };
 
+type RuntimeModuleRequire = (id: string) => unknown;
+type RuntimeModuleLoader = (id: string) => unknown;
+type RuntimeModuleLoaderFactory = (
+  filename: string,
+  options: Record<string, unknown>,
+) => RuntimeModuleLoader;
+type RuntimeResolutionContext = {
+  moduleUrl: string;
+  requireModule: RuntimeModuleRequire;
+  argv1?: string;
+  createJiti?: RuntimeModuleLoaderFactory;
+};
+type RuntimeArtifactCandidate = {
+  filePath: string;
+  packageRoot: string;
+};
+
 const unavailableRuntime: TaskLifecycleRuntime = {
   createRunningTaskRun: () => undefined,
   recordTaskRunProgressByRunId: () => undefined,
@@ -37,26 +68,234 @@ const unavailableRuntime: TaskLifecycleRuntime = {
 
 let defaultRuntime: TaskLifecycleRuntime | undefined;
 
-function resolveDefaultRuntime(): TaskLifecycleRuntime {
-  if (defaultRuntime !== undefined) {
-    return defaultRuntime;
+function normalizeRuntimeModule(value: unknown): TaskLifecycleRuntime | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const runtime = value as Partial<TaskLifecycleRuntime>;
+  if (
+    typeof runtime.createRunningTaskRun === "function" &&
+    typeof runtime.recordTaskRunProgressByRunId === "function" &&
+    typeof runtime.finalizeTaskRunByRunId === "function"
+  ) {
+    return runtime as TaskLifecycleRuntime;
+  }
+  return null;
+}
+
+function filePathFromModuleUrl(moduleUrl: string): string | null {
+  try {
+    return fileURLToPath(moduleUrl);
+  } catch {
+    return null;
+  }
+}
+
+function readPackageName(packageRoot: string): string | null {
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(packageRoot, "package.json"), "utf-8"),
+    ) as { name?: unknown };
+    return typeof parsed.name === "string" ? parsed.name : null;
+  } catch {
+    return null;
+  }
+}
+
+function isOpenClawRuntimePackageRoot(packageRoot: string): boolean {
+  return (
+    readPackageName(packageRoot) === "openclaw" &&
+    (fs.existsSync(path.join(packageRoot, CODEX_NATIVE_TASK_RUNTIME_SOURCE_FILE)) ||
+      fs.existsSync(path.join(packageRoot, CODEX_NATIVE_TASK_RUNTIME_DIST_FILE)))
+  );
+}
+
+function findOpenClawRuntimePackageRoot(startDir: string, maxDepth = 12): string | null {
+  let cursor = path.resolve(startDir);
+  for (let i = 0; i < maxDepth; i += 1) {
+    if (isOpenClawRuntimePackageRoot(cursor)) {
+      return cursor;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) {
+      break;
+    }
+    cursor = parent;
+  }
+  return null;
+}
+
+function listArgv1CandidateDirs(argv1: string): string[] {
+  const normalized = path.resolve(argv1);
+  const candidates = [path.dirname(normalized)];
+  try {
+    const real = fs.realpathSync(normalized);
+    if (real !== normalized) {
+      candidates.push(path.dirname(real));
+    }
+  } catch {
+    // Keep the unresolved argv path if the executable is not readable.
+  }
+  const parts = normalized.split(path.sep);
+  const binIndex = parts.lastIndexOf(".bin");
+  if (binIndex > 0 && parts[binIndex - 1] === "node_modules") {
+    candidates.push(path.join(parts.slice(0, binIndex).join(path.sep), path.basename(normalized)));
+  }
+  return candidates;
+}
+
+function dedupePaths(paths: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of paths) {
+    const resolved = path.resolve(entry);
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    result.push(resolved);
+  }
+  return result;
+}
+
+function shouldPreferSourceRuntime(modulePath: string): boolean {
+  const normalized = modulePath.replace(/\\/g, "/");
+  return (
+    normalized.includes("/extensions/codex/") &&
+    !normalized.includes("/dist/extensions/codex/") &&
+    !normalized.includes("/dist-runtime/extensions/codex/")
+  );
+}
+
+function listRuntimePackageRoots(context: RuntimeResolutionContext): string[] {
+  const modulePath = filePathFromModuleUrl(context.moduleUrl);
+  const startDirs = [
+    ...(modulePath ? [path.dirname(modulePath)] : []),
+    ...(context.argv1 ? listArgv1CandidateDirs(context.argv1) : []),
+  ];
+  const roots = startDirs.flatMap((dir) => {
+    const root = findOpenClawRuntimePackageRoot(dir);
+    return root ? [root] : [];
+  });
+  return dedupePaths(roots);
+}
+
+function listRuntimeArtifactCandidates(context: RuntimeResolutionContext): RuntimeArtifactCandidate[] {
+  const modulePath = filePathFromModuleUrl(context.moduleUrl);
+  const relativeFiles =
+    modulePath && shouldPreferSourceRuntime(modulePath)
+      ? [CODEX_NATIVE_TASK_RUNTIME_SOURCE_FILE, CODEX_NATIVE_TASK_RUNTIME_DIST_FILE]
+      : [CODEX_NATIVE_TASK_RUNTIME_DIST_FILE, CODEX_NATIVE_TASK_RUNTIME_SOURCE_FILE];
+  return listRuntimePackageRoots(context).flatMap((packageRoot) =>
+    relativeFiles.flatMap((relativeFile) => {
+      const filePath = path.join(packageRoot, relativeFile);
+      return fs.existsSync(filePath) ? [{ filePath, packageRoot }] : [];
+    }),
+  );
+}
+
+function loadCreateJiti(
+  candidate: RuntimeArtifactCandidate,
+  context: RuntimeResolutionContext,
+): RuntimeModuleLoaderFactory | null {
+  if (context.createJiti) {
+    return context.createJiti;
   }
   try {
-    const runtime = requireCodexAppServerTaskRuntime(
-      "openclaw/plugin-sdk/codex-native-task-runtime",
-    ) as Partial<TaskLifecycleRuntime>;
-    if (
-      typeof runtime.createRunningTaskRun === "function" &&
-      typeof runtime.recordTaskRunProgressByRunId === "function" &&
-      typeof runtime.finalizeTaskRunByRunId === "function"
-    ) {
-      defaultRuntime = runtime as TaskLifecycleRuntime;
-      return defaultRuntime;
+    const requireFromRoot = createRequire(path.join(candidate.packageRoot, "package.json"));
+    const loaded = requireFromRoot("jiti") as { createJiti?: unknown };
+    return typeof loaded.createJiti === "function"
+      ? (loaded.createJiti as RuntimeModuleLoaderFactory)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadRuntimeWithJiti(
+  candidate: RuntimeArtifactCandidate,
+  context: RuntimeResolutionContext,
+): TaskLifecycleRuntime | null {
+  const createJiti = loadCreateJiti(candidate, context);
+  if (!createJiti) {
+    return null;
+  }
+  const modulePath = filePathFromModuleUrl(context.moduleUrl) ?? context.moduleUrl;
+  try {
+    const loader = createJiti(modulePath, {
+      interopDefault: true,
+      tryNative: false,
+      extensions: [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".json"],
+    });
+    return normalizeRuntimeModule(loader(candidate.filePath));
+  } catch {
+    return null;
+  }
+}
+
+function loadRuntimeFromArtifact(
+  candidate: RuntimeArtifactCandidate,
+  context: RuntimeResolutionContext,
+): TaskLifecycleRuntime | null {
+  try {
+    const runtime = normalizeRuntimeModule(context.requireModule(candidate.filePath));
+    if (runtime) {
+      return runtime;
+    }
+  } catch {
+    // Source artifacts can contain .js specifiers that only the plugin loader can rewrite.
+  }
+  return loadRuntimeWithJiti(candidate, context);
+}
+
+function createRuntimeResolutionContext(params?: {
+  moduleUrl?: string;
+  argv1?: string;
+  requireModule?: RuntimeModuleRequire;
+  createJiti?: RuntimeModuleLoaderFactory;
+}): RuntimeResolutionContext {
+  const context: RuntimeResolutionContext = {
+    moduleUrl: params?.moduleUrl ?? import.meta.url,
+    requireModule: params?.requireModule ?? requireCodexAppServerTaskRuntime,
+  };
+  const argv1 = params?.argv1 ?? process.argv[1];
+  if (argv1) {
+    context.argv1 = argv1;
+  }
+  if (params?.createJiti) {
+    context.createJiti = params.createJiti;
+  }
+  return context;
+}
+
+function resolveCodexNativeTaskRuntime(
+  params?: Parameters<typeof createRuntimeResolutionContext>[0],
+): TaskLifecycleRuntime | null {
+  const context = createRuntimeResolutionContext(params);
+  try {
+    const runtime = normalizeRuntimeModule(
+      context.requireModule(CODEX_NATIVE_TASK_RUNTIME_MODULE_ID),
+    );
+    if (runtime) {
+      return runtime;
     }
   } catch {
     // The npm-installed Codex plugin may run without this private host-only helper.
   }
-  defaultRuntime = unavailableRuntime;
+  // Source-loaded Codex gets this private subpath from the plugin loader alias
+  // layer, which raw createRequire cannot see. Load the equivalent helper from
+  // a trusted OpenClaw root before falling back to a no-op runtime.
+  for (const candidate of listRuntimeArtifactCandidates(context)) {
+    const runtime = loadRuntimeFromArtifact(candidate, context);
+    if (runtime) {
+      return runtime;
+    }
+  }
+  return null;
+}
+
+function resolveDefaultRuntime(): TaskLifecycleRuntime {
+  defaultRuntime ??= resolveCodexNativeTaskRuntime() ?? unavailableRuntime;
   return defaultRuntime;
 }
 
@@ -436,4 +675,14 @@ function secondsToMillis(value: number | null | undefined): number | undefined {
 function trimOptional(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+export function resetCodexNativeTaskMirrorRuntimeForTests(): void {
+  defaultRuntime = undefined;
+}
+
+export function resolveCodexNativeTaskRuntimeForTests(
+  params?: Parameters<typeof resolveCodexNativeTaskRuntime>[0],
+): TaskLifecycleRuntime {
+  return resolveCodexNativeTaskRuntime(params) ?? unavailableRuntime;
 }
