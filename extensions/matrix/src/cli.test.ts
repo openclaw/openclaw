@@ -1512,7 +1512,7 @@ describe("matrix CLI verification commands", () => {
     });
 
     expect(process.exitCode).toBe(1);
-    expect(JSON.parse(String(stdoutWriteMock.mock.calls[0]?.[0]))).toEqual({
+    expect(JSON.parse(String(stdoutWriteMock.mock.calls.at(0)?.[0]))).toEqual({
       error: "Matrix requires --homeserver",
     });
   });

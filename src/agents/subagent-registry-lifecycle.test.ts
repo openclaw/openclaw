@@ -115,7 +115,7 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 function firstCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const [arg] = mock.mock.calls[0] ?? [];
+  const [arg] = mock.mock.calls.at(0) ?? [];
   if (!arg || typeof arg !== "object") {
     throw new Error("expected first call argument object");
   }
@@ -206,8 +206,8 @@ describe("subagent registry lifecycle hardening", () => {
     ).resolves.toBeUndefined();
 
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toBe("failed to finalize subagent background task state");
-    expectFields(warn.mock.calls[0]?.[1], {
+    expect(warn.mock.calls.at(0)?.[0]).toBe("failed to finalize subagent background task state");
+    expectFields(warn.mock.calls.at(0)?.[1], {
       error: { name: "Error", message: "task store boom" },
       runId: "***",
       childSessionKey: "agent:main:…",
@@ -250,10 +250,10 @@ describe("subagent registry lifecycle hardening", () => {
     ).resolves.toBeUndefined();
 
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toBe(
+    expect(warn.mock.calls.at(0)?.[0]).toBe(
       "failed to update subagent background task delivery state",
     );
-    expectFields(warn.mock.calls[0]?.[1], {
+    expectFields(warn.mock.calls.at(0)?.[1], {
       error: { name: "Error", message: "delivery state boom" },
       runId: "***",
       childSessionKey: "agent:main:…",
@@ -677,10 +677,10 @@ describe("subagent registry lifecycle hardening", () => {
     ).resolves.toBeUndefined();
 
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]?.[0]).toBe(
+    expect(warn.mock.calls.at(0)?.[0]).toBe(
       "failed to update subagent background task delivery state",
     );
-    expectFields(warn.mock.calls[0]?.[1], {
+    expectFields(warn.mock.calls.at(0)?.[1], {
       error: { name: "Error", message: "delivery status boom" },
       deliveryStatus: "delivered",
     });
