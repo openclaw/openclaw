@@ -64,11 +64,23 @@ describe("isAllowedParsedChatSender", () => {
       expected: true,
     },
     {
-      name: "matches chat IDs when provided",
+      name: "does not match chat IDs by default",
       input: {
         allowFrom: ["chat_id:42"],
         sender: "+15551234567",
         chatId: 42,
+        normalizeSender: (sender: string) => sender,
+        parseAllowTarget,
+      },
+      expected: false,
+    },
+    {
+      name: "matches chat IDs when conversation targets are enabled",
+      input: {
+        allowFrom: ["chat_id:42"],
+        sender: "+15551234567",
+        chatId: 42,
+        allowConversationTargets: true,
         normalizeSender: (sender: string) => sender,
         parseAllowTarget,
       },

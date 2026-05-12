@@ -183,6 +183,7 @@ export function isAllowedIMessageSender(params: ChatSenderAllowParams): boolean 
 const isAllowedIMessageReplyContextSenderMatcher = createAllowedChatSenderMatcher({
   normalizeSender: normalizeIMessageHandle,
   parseAllowTarget: parseIMessageAllowTarget,
+  allowConversationTargets: true,
 });
 
 export function isAllowedIMessageReplyContextSender(params: ChatSenderAllowParams): boolean {
