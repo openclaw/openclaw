@@ -11,6 +11,7 @@ import {
 import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
+  type ChannelIngressIdentityDescriptor,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   resolveChannelGroupPolicy,
@@ -158,11 +159,28 @@ export function resolveIMessageReactionContext(
 
 const normalizeNonEmpty = (value: string) => value.trim() || null;
 
+const imessageConversationIdentityKinds = new Set([
+  "plugin:imessage-chat-id",
+  "plugin:imessage-chat-guid",
+  "plugin:imessage-chat-identifier",
+]);
+
+const matchIMessageIngressEntry: NonNullable<ChannelIngressIdentityDescriptor["matchEntry"]> = ({
+  entry,
+  context,
+}) => {
+  if (imessageConversationIdentityKinds.has(entry.kind) && context !== "group") {
+    return false;
+  }
+  return undefined;
+};
+
 const imessageIngressIdentity = defineStableChannelIngressIdentity({
   key: "imessage-sender",
   normalizeEntry: normalizeIMessageHandleEntry,
   normalizeSubject: normalizeIMessageHandle,
   sensitivity: "pii",
+  matchEntry: matchIMessageIngressEntry,
   aliases: (
     [
       ["imessage-chat-id", "plugin:imessage-chat-id", normalizeIMessageChatIdEntry],

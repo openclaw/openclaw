@@ -432,6 +432,38 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(allowed.kind).toBe("dispatch");
   });
 
+  it("does not authorize group control commands from conversation allowlist entries", async () => {
+    const cfg = baseCfg();
+    cfg.channels ??= {};
+    cfg.channels.imessage ??= {};
+    cfg.channels.imessage.groupPolicy = "allowlist";
+
+    const decision = await resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: {
+        id: 34,
+        chat_id: 101,
+        sender: "+15550003333",
+        is_from_me: false,
+        text: "/status",
+        is_group: true,
+      },
+      opts: {},
+      messageText: "/status",
+      bodyText: "/status",
+      allowFrom: [],
+      groupAllowFrom: ["chat_id:101"],
+      groupPolicy: "allowlist",
+      dmPolicy: "pairing",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "control command (unauthorized)" });
+  });
+
   it("blocks group messages when groupPolicy is disabled", async () => {
     const cfg = baseCfg();
     cfg.channels ??= {};
