@@ -177,6 +177,10 @@ function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyPayload 
   return isTtsSupplementPayload(payload) ? { ...payload, text: undefined } : payload;
 }
 
+function stripVisibleTextFromMediaSupplement(payload: ReplyPayload): ReplyPayload {
+  return isMediaBearingPayload(payload) ? { ...payload, text: undefined } : payload;
+}
+
 async function buildWebchatAssistantMediaMessage(
   payloads: ReplyPayload[],
   options?: {
@@ -1534,17 +1538,15 @@ async function replaceLatestAssistantMediaDirectiveTranscriptMessage(params: {
       return { replaced: false, error: result.reason };
     }
     const updatedIndex = await readSessionTranscriptIndex(params.transcriptPath);
-    const messageId = [...(updatedIndex?.entries ?? [])]
-      .toReversed()
-      .find((entry) => {
-        const message = entry.record.message as Record<string, unknown> | undefined;
-        return (
-          message?.role === "assistant" &&
-          (params.idempotencyKey
-            ? message.idempotencyKey === params.idempotencyKey
-            : entry.id === latest.id)
-        );
-      })?.id;
+    const messageId = [...(updatedIndex?.entries ?? [])].toReversed().find((entry) => {
+      const message = entry.record.message as Record<string, unknown> | undefined;
+      return (
+        message?.role === "assistant" &&
+        (params.idempotencyKey
+          ? message.idempotencyKey === params.idempotencyKey
+          : entry.id === latest.id)
+      );
+    })?.id;
     return { replaced: true, ...(messageId ? { messageId } : {}), message: replacement };
   } catch (err) {
     return { replaced: false, error: formatErrorMessage(err) };
@@ -2562,7 +2564,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           sessionKey,
           agentId,
           accountId,
-          payloads: [stripVisibleTextFromTtsSupplement(payload)],
+          payloads: [stripVisibleTextFromMediaSupplement(payload)],
         });
         if (!transcriptPayload) {
           return;
@@ -2642,6 +2644,14 @@ export const chatHandlers: GatewayRequestHandlers = {
                 blocks: assistantContent,
               });
             }
+            if (replaced.message && resolvedTranscriptPath) {
+              emitSessionTranscriptUpdate({
+                sessionFile: resolvedTranscriptPath,
+                sessionKey,
+                message: replaced.message,
+                messageId: replaced.messageId,
+              });
+            }
             appendedWebchatAgentMedia = true;
             return;
           }
@@ -2662,6 +2672,14 @@ export const chatHandlers: GatewayRequestHandlers = {
             await attachManagedOutgoingImagesToMessage({
               messageId: appended.messageId,
               blocks: assistantContent,
+            });
+          }
+          if (appended.message && resolvedTranscriptPath) {
+            emitSessionTranscriptUpdate({
+              sessionFile: resolvedTranscriptPath,
+              sessionKey,
+              message: appended.message,
+              messageId: appended.messageId,
             });
           }
           appendedWebchatAgentMedia = true;
