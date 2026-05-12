@@ -110,6 +110,17 @@ function requireMockCall<T extends unknown[]>(call: T | undefined, label: string
   return call;
 }
 
+function firstMockCall(mock: ReturnType<typeof vi.fn>, label: string): unknown[] {
+  return requireMockCall(mock.mock.calls.at(0), label);
+}
+
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`expected ${label} to be a string`);
+  }
+  return value;
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null) {
     throw new Error(`expected ${label}`);
@@ -539,7 +550,7 @@ describe("sendMessageTelegram", () => {
         chat: { id: "123" },
       });
       await sendMessageTelegram("123", "hi", { ...testCase.opts, cfg: testCase.cfg });
-      const [token, options] = requireMockCall(botCtorSpy.mock.calls.at(0), "bot constructor call");
+      const [token, options] = firstMockCall(botCtorSpy, "bot constructor call");
       expect(token, testCase.name).toBe("tok");
       const client = requireRecord(requireRecord(options, "bot options").client, "bot client");
       expect(client.timeoutSeconds, testCase.name).toBe(testCase.expectedTimeout);
@@ -563,7 +574,7 @@ describe("sendMessageTelegram", () => {
 
     await sendMessageTelegram("123", "hi", { cfg, token: "tok", accountId: "foo" });
 
-    const [token, options] = requireMockCall(botCtorSpy.mock.calls.at(0), "bot constructor call");
+    const [token, options] = firstMockCall(botCtorSpy, "bot constructor call");
     expect(token).toBe("tok");
     const client = requireRecord(requireRecord(options, "bot options").client, "bot client");
     expect(client.apiRoot).toBe("https://api.telegram.org");
@@ -574,7 +585,7 @@ describe("sendMessageTelegram", () => {
 
     await sendMessageTelegram("123", "hi", { cfg: TELEGRAM_TEST_CFG, token: "tok" });
 
-    const [middleware] = requireMockCall(botConfigUseSpy.mock.calls.at(0), "bot config use call");
+    const [middleware] = firstMockCall(botConfigUseSpy, "bot config use call");
     expect(middleware).toBeTypeOf("function");
   });
 
@@ -753,8 +764,11 @@ describe("sendMessageTelegram", () => {
     });
     try {
       await sendMessageTelegram("123", "hi", { cfg: TELEGRAM_TEST_CFG, token: "tok" });
-      const clientFetch = (botCtorSpy.mock.calls.at(0)?.[1] as { client?: { fetch?: unknown } })
-        ?.client?.fetch;
+      const clientFetch = (
+        firstMockCall(botCtorSpy, "bot constructor call")[1] as {
+          client?: { fetch?: unknown };
+        }
+      )?.client?.fetch;
       expect(clientFetch).toBeTypeOf("function");
       expect(clientFetch).not.toBe(fetchSpy);
     } finally {
@@ -855,7 +869,7 @@ describe("sendMessageTelegram", () => {
       messageThreadId: 99,
     });
 
-    expectMediaSendCall(sendPhoto.mock.calls.at(0), "send photo call", chatId, {
+    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
       caption: "photo in topic",
       parse_mode: "HTML",
       message_thread_id: 99,
@@ -892,7 +906,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expectMediaSendCall(sendPhoto.mock.calls.at(0), "send photo call", chatId, {
+    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
       caption: undefined,
     });
     expect(sendMessage).toHaveBeenCalledWith(chatId, longText, {
@@ -931,7 +945,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expectMediaSendCall(sendPhoto.mock.calls.at(0), "send photo call", chatId, {
+    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
       caption: undefined,
     });
     expect(sendMessage).toHaveBeenCalledTimes(2);
@@ -968,7 +982,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expectMediaSendCall(sendPhoto.mock.calls.at(0), "send photo call", chatId, {
+    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
       caption: shortText,
       parse_mode: "HTML",
     });
@@ -1001,7 +1015,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expectMediaSendCall(sendPhoto.mock.calls.at(0), "send photo call", chatId, {
+    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
       caption: "hi <b>boss</b>",
       parse_mode: "HTML",
     });
@@ -1039,7 +1053,12 @@ describe("sendMessageTelegram", () => {
         asVideoNote: true,
       });
 
-      expectMediaSendCall(sendVideoNote.mock.calls.at(0), "send video note call", chatId, {});
+      expectMediaSendCall(
+        firstMockCall(sendVideoNote, "send video note call"),
+        "send video note call",
+        chatId,
+        {},
+      );
       expect(sendMessage).toHaveBeenCalledWith(chatId, text, {
         parse_mode: "HTML",
       });
@@ -1070,8 +1089,8 @@ describe("sendMessageTelegram", () => {
         asVideoNote: false,
       });
 
-      const [, media, videoParams] = requireMockCall(sendVideo.mock.calls.at(0), "send video call");
-      expect(sendVideo.mock.calls.at(0)?.[0]).toBe(chatId);
+      const [actualChatId, media, videoParams] = firstMockCall(sendVideo, "send video call");
+      expect(actualChatId).toBe(chatId);
       if (media === undefined) {
         throw new Error("expected send video media");
       }
@@ -1109,7 +1128,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(probeVideoDimensions).toHaveBeenCalledWith(videoBuffer);
-    expectMediaSendCall(sendVideo.mock.calls.at(0), "send video call", chatId, {
+    expectMediaSendCall(firstMockCall(sendVideo, "send video call"), "send video call", chatId, {
       caption: "my caption",
       parse_mode: "HTML",
       width: 720,
@@ -1147,7 +1166,12 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(probeVideoDimensions).not.toHaveBeenCalled();
-    expectMediaSendCall(sendVideoNote.mock.calls.at(0), "send video note call", chatId, {});
+    expectMediaSendCall(
+      firstMockCall(sendVideoNote, "send video note call"),
+      "send video note call",
+      chatId,
+      {},
+    );
   });
 
   it("applies reply markup and thread options to split video-note sends", async () => {
@@ -1224,7 +1248,7 @@ describe("sendMessageTelegram", () => {
       await sendMessageTelegram(chatId, testCase.text, sendOptions);
 
       expectMediaSendCall(
-        sendVideoNote.mock.calls.at(0),
+        firstMockCall(sendVideoNote, "send video note call"),
         "send video note call",
         chatId,
         testCase.expectedVideoNote,
@@ -1261,7 +1285,7 @@ describe("sendMessageTelegram", () => {
 
     await vi.runAllTimersAsync();
     await expect(promise).resolves.toEqual({ messageId: "1", chatId });
-    expect(setTimeoutSpy.mock.calls.at(0)?.[1]).toBe(500);
+    expect(firstMockCall(setTimeoutSpy, "setTimeout call")[1]).toBe(500);
     setTimeoutSpy.mockRestore();
     vi.useRealTimers();
   });
@@ -1364,10 +1388,15 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendAnimation).toHaveBeenCalledTimes(1);
-    expectMediaSendCall(sendAnimation.mock.calls.at(0), "send animation call", chatId, {
-      caption: "caption",
-      parse_mode: "HTML",
-    });
+    expectMediaSendCall(
+      firstMockCall(sendAnimation, "send animation call"),
+      "send animation call",
+      chatId,
+      {
+        caption: "caption",
+        parse_mode: "HTML",
+      },
+    );
     expect(probeVideoDimensions).not.toHaveBeenCalled();
     expect(res.messageId).toBe("9");
   });
@@ -1425,7 +1454,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expectMediaSendCall(
-      sendDocument.mock.calls.at(0),
+      firstMockCall(sendDocument, "send document call"),
       `send document call ${testCase.name}`,
       chatId,
       {
@@ -1471,10 +1500,15 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.png",
     });
 
-    expectMediaSendCall(sendDocument.mock.calls.at(0), "send document call", chatId, {
-      caption: "caption",
-      parse_mode: "HTML",
-    });
+    expectMediaSendCall(
+      firstMockCall(sendDocument, "send document call"),
+      "send document call",
+      chatId,
+      {
+        caption: "caption",
+        parse_mode: "HTML",
+      },
+    );
     expect(sendPhoto).not.toHaveBeenCalled();
     expect(res.messageId).toBe("10");
   });
@@ -1506,10 +1540,15 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.png",
     });
 
-    expectMediaSendCall(sendDocument.mock.calls.at(0), "send document call", chatId, {
-      caption: "caption",
-      parse_mode: "HTML",
-    });
+    expectMediaSendCall(
+      firstMockCall(sendDocument, "send document call"),
+      "send document call",
+      chatId,
+      {
+        caption: "caption",
+        parse_mode: "HTML",
+      },
+    );
     expect(sendPhoto).not.toHaveBeenCalled();
     expect(res.messageId).toBe("10");
   });
@@ -1537,10 +1576,15 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/report.pdf",
     });
 
-    expectMediaSendCall(sendDocument.mock.calls.at(0), "send document call", chatId, {
-      caption: "caption",
-      parse_mode: "HTML",
-    });
+    expectMediaSendCall(
+      firstMockCall(sendDocument, "send document call"),
+      "send document call",
+      chatId,
+      {
+        caption: "caption",
+        parse_mode: "HTML",
+      },
+    );
     expect(res.messageId).toBe("11");
   });
 
@@ -1658,7 +1702,7 @@ describe("sendMessageTelegram", () => {
       const called = testCase.expectedMethod === "sendVoice" ? sendVoice : sendAudio;
       const notCalled = testCase.expectedMethod === "sendVoice" ? sendAudio : sendVoice;
       expectMediaSendCall(
-        called.mock.calls.at(0),
+        firstMockCall(called, "called mock call"),
         `${testCase.expectedMethod} call ${testCase.name}`,
         testCase.chatId,
         testCase.expectedOptions,
@@ -1931,11 +1975,16 @@ describe("sendMessageTelegram", () => {
       messageThreadId: 271,
     });
 
-    expectMediaSendCall(sendPhoto.mock.calls.at(0), "first send photo call", chatId, {
-      caption: "photo",
-      parse_mode: "HTML",
-      message_thread_id: 271,
-    });
+    expectMediaSendCall(
+      firstMockCall(sendPhoto, "first send photo call"),
+      "first send photo call",
+      chatId,
+      {
+        caption: "photo",
+        parse_mode: "HTML",
+        message_thread_id: 271,
+      },
+    );
     expectMediaSendCall(sendPhoto.mock.calls.at(1), "second send photo call", chatId, {
       caption: "photo",
       parse_mode: "HTML",
@@ -1967,7 +2016,7 @@ describe("sendMessageTelegram", () => {
     });
 
     const [mediaUrl, options] = requireMockCall(
-      loadWebMedia.mock.calls.at(0),
+      firstMockCall(loadWebMedia, "loadWebMedia call"),
       "load web media call",
     );
     expect(mediaUrl).toBe("https://example.com/photo.jpg");
@@ -2006,7 +2055,7 @@ describe("sendMessageTelegram", () => {
     });
 
     const [mediaUrl, options] = requireMockCall(
-      loadWebMedia.mock.calls.at(0),
+      firstMockCall(loadWebMedia, "loadWebMedia call"),
       "load web media call",
     );
     expect(mediaUrl).toBe("https://example.com/photo.jpg");
@@ -2032,12 +2081,14 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    const firstCall = requireMockCall(sendMessage.mock.calls.at(0), "first sendMessage call");
+    const firstCall = firstMockCall(sendMessage, "first sendMessage call");
     const secondCall = requireMockCall(sendMessage.mock.calls.at(1), "second sendMessage call");
+    const firstParams = requireRecord(firstCall[2], "first sendMessage params");
+    const secondParams = requireRecord(secondCall[2], "second sendMessage params");
     expect((firstCall[1] as string).length).toBeLessThanOrEqual(4000);
     expect((secondCall[1] as string).length).toBeLessThanOrEqual(4000);
-    expect(firstCall[2]?.reply_markup).toBeUndefined();
-    expect(secondCall[2]?.reply_markup).toEqual({
+    expect(firstParams.reply_markup).toBeUndefined();
+    expect(secondParams.reply_markup).toEqual({
       inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
     });
     expect(res.messageId).toBe("91");
@@ -2061,16 +2112,20 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    const firstCall = requireMockCall(sendMessage.mock.calls.at(0), "first sendMessage call");
+    const firstCall = firstMockCall(sendMessage, "first sendMessage call");
     const secondCall = requireMockCall(sendMessage.mock.calls.at(1), "second sendMessage call");
-    expect(String(firstCall[1] ?? "").length).toBeLessThanOrEqual(4000);
-    expect(String(secondCall[1] ?? "").length).toBeLessThanOrEqual(4000);
-    expect(firstCall[2]?.parse_mode).toBe("HTML");
-    expect(secondCall[2]?.parse_mode).toBe("HTML");
-    expect(String(firstCall[1] ?? "")).toMatch(/^<b>[\s\S]*<\/b>$/);
-    expect(String(secondCall[1] ?? "")).toMatch(/^<b>[\s\S]*<\/b>$/);
-    expect(firstCall[2]?.reply_markup).toBeUndefined();
-    expect(secondCall[2]?.reply_markup).toEqual({
+    const firstParams = requireRecord(firstCall[2], "first sendMessage params");
+    const secondParams = requireRecord(secondCall[2], "second sendMessage params");
+    const firstText = requireString(firstCall[1], "first sendMessage text");
+    const secondText = requireString(secondCall[1], "second sendMessage text");
+    expect(firstText.length).toBeLessThanOrEqual(4000);
+    expect(secondText.length).toBeLessThanOrEqual(4000);
+    expect(firstParams.parse_mode).toBe("HTML");
+    expect(secondParams.parse_mode).toBe("HTML");
+    expect(firstText).toMatch(/^<b>[\s\S]*<\/b>$/);
+    expect(secondText).toMatch(/^<b>[\s\S]*<\/b>$/);
+    expect(firstParams.reply_markup).toBeUndefined();
+    expect(secondParams.reply_markup).toEqual({
       inline_keyboard: [[{ text: "OK", callback_data: "ok" }]],
     });
     expect(res.messageId).toBe("91");
@@ -2130,7 +2185,9 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(4);
-    expect(String(sendMessage.mock.calls.at(0)?.[1] ?? "")).toMatch(/^&/);
+    expect(
+      requireString(firstMockCall(sendMessage, "sendMessage call")[1], "sendMessage text"),
+    ).toMatch(/^&/);
     const plainFallbackCalls = [sendMessage.mock.calls.at(1), sendMessage.mock.calls.at(3)];
     expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
     expect(plainFallbackCalls.every((call) => String(call?.[1] ?? "").length > 0)).toBe(true);
@@ -2408,7 +2465,7 @@ describe("sendStickerTelegram", () => {
 
     await vi.runAllTimersAsync();
     await expect(promise).resolves.toEqual({ messageId: "109", chatId });
-    expect(setTimeoutSpy.mock.calls.at(0)?.[1]).toBe(1000);
+    expect(firstMockCall(setTimeoutSpy, "setTimeout call")[1]).toBe(1000);
     expect(sendSticker).toHaveBeenCalledTimes(2);
     setTimeoutSpy.mockRestore();
     vi.useRealTimers();
@@ -2669,11 +2726,11 @@ describe("editMessageTelegram", () => {
     });
 
     expect(botCtorSpy, testCase.name).toHaveBeenCalledTimes(1);
-    expect(botCtorSpy.mock.calls.at(0)?.[0], testCase.name).toBe("tok");
+    expect(firstMockCall(botCtorSpy, "bot constructor call")[0], testCase.name).toBe("tok");
     expect(botApi.editMessageText, testCase.name).toHaveBeenCalledTimes(testCase.expectedCalls);
 
     const firstParams = requireRecord(
-      (botApi.editMessageText.mock.calls.at(0) ?? [])[3],
+      firstMockCall(botApi.editMessageText, "editMessageText call")[3],
       "first edit params",
     );
     expect(firstParams.parse_mode, testCase.name).toBe("HTML");
@@ -2735,7 +2792,10 @@ describe("editMessageTelegram", () => {
     });
 
     expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
-    const params = requireRecord((botApi.editMessageText.mock.calls.at(0) ?? [])[3], "edit params");
+    const params = requireRecord(
+      firstMockCall(botApi.editMessageText, "editMessageText call")[3],
+      "edit params",
+    );
     expect(params.parse_mode).toBe("HTML");
     expect(params.link_preview_options).toEqual({ is_disabled: true });
   });
@@ -2781,12 +2841,11 @@ describe("sendPollTelegram", () => {
     expect(res).toEqual({ messageId: "123", chatId: "555", pollId: "p1" });
     expect(api.sendPoll).toHaveBeenCalledTimes(1);
     const sendPollMock = api.sendPoll as ReturnType<typeof vi.fn>;
-    expect(sendPollMock.mock.calls.at(0)?.[0]).toBe("123");
-    expect(sendPollMock.mock.calls.at(0)?.[1]).toBe("Q");
-    expect(sendPollMock.mock.calls.at(0)?.[2]).toEqual(["A", "B"]);
-    expect(requireRecord(sendPollMock.mock.calls.at(0)?.[3], "send poll params").open_period).toBe(
-      60,
-    );
+    const sendPollCall = firstMockCall(sendPollMock, "send poll call");
+    expect(sendPollCall[0]).toBe("123");
+    expect(sendPollCall[1]).toBe("Q");
+    expect(sendPollCall[2]).toEqual(["A", "B"]);
+    expect(requireRecord(sendPollCall[3], "send poll params").open_period).toBe(60);
   });
 
   it("retries without message_thread_id on thread-not-found", async () => {
@@ -2816,7 +2875,8 @@ describe("sendPollTelegram", () => {
     expect(res).toEqual({ messageId: "1", chatId: "2", pollId: "p2" });
     expect(api.sendPoll).toHaveBeenCalledTimes(2);
     expect(
-      requireRecord(api.sendPoll.mock.calls.at(0)?.[3], "send poll params").message_thread_id,
+      requireRecord(firstMockCall(api.sendPoll, "send poll call")[3], "send poll params")
+        .message_thread_id,
     ).toBe(99);
     expect(
       (api.sendPoll.mock.calls.at(1)?.[3] as { message_thread_id?: unknown } | undefined)

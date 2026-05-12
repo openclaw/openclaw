@@ -1795,7 +1795,10 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = replySpy.mock.calls[0][0];
+    const payload = requireRecord(
+      mockArg(replySpy as unknown as MockCallSource, 0, 0, "reply payload"),
+      "reply payload",
+    );
     const [conversationContext] = requireArray(
       payload.UntrustedStructuredContext,
       "structured context",
