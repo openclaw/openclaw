@@ -4,6 +4,7 @@ import {
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
   isHeartbeatContentEffectivelyEmpty,
   parseHeartbeatTasks,
+  resolveAmbientInitiativePromptForResponseTool,
   resolveHeartbeatPromptForResponseTool,
   stripHeartbeatToken,
 } from "./heartbeat.js";
@@ -285,6 +286,21 @@ describe("resolveHeartbeatPromptForResponseTool", () => {
     expect(prompt).toContain("Check the deployment queue");
     expect(prompt).toContain("heartbeat_respond");
     expect(prompt).toContain("notify=false");
+  });
+});
+
+describe("resolveAmbientInitiativePromptForResponseTool", () => {
+  it("builds an ambient wake contract on top of the heartbeat response tool", () => {
+    const prompt = resolveAmbientInitiativePromptForResponseTool(
+      "Use HEARTBEAT.md and recent context.",
+      2,
+    );
+
+    expect(prompt).toContain("Use HEARTBEAT.md and recent context.");
+    expect(prompt).toContain("ambient initiative wake");
+    expect(prompt).toContain("heartbeat_respond");
+    expect(prompt).toContain("Visible message budget for this wake: 2");
+    expect(prompt).toContain("Do not send messages just to use the budget");
   });
 });
 

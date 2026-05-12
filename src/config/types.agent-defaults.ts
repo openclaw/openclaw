@@ -363,6 +363,15 @@ export type AgentDefaultsConfig = {
   heartbeat?: {
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
     every?: string;
+    /**
+     * Heartbeat behavior mode.
+     *
+     * "heartbeat" keeps the traditional task/check-in semantics.
+     * "ambient" treats each wake as a low-priority ambient initiative:
+     * inspect context, decide whether to do nothing, and optionally send a
+     * short natural message sequence before recording the outcome.
+     */
+    mode?: "heartbeat" | "ambient";
     /** Optional active-hours window (local time); heartbeats run only inside this window. */
     activeHours?: {
       /** Start time (24h, HH:MM). Inclusive. */
@@ -386,6 +395,8 @@ export type AgentDefaultsConfig = {
     accountId?: string;
     /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."). */
     prompt?: string;
+    /** Max visible messages an ambient heartbeat may send in one wake (default: 3). */
+    maxMessages?: number;
     /** Include the ## Heartbeats system prompt section for the default agent (default: true). */
     includeSystemPromptSection?: boolean;
     /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */

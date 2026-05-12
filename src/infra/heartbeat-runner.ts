@@ -29,6 +29,7 @@ import {
   isHeartbeatContentEffectivelyEmpty,
   isTaskDue,
   parseHeartbeatTasks,
+  resolveAmbientInitiativePromptForResponseTool,
   resolveHeartbeatPrompt as resolveHeartbeatPromptText,
   resolveHeartbeatPromptForResponseTool,
   stripHeartbeatToken,
@@ -356,6 +357,12 @@ export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: Heartbea
 }
 
 function resolveHeartbeatResponseToolPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
+  if (heartbeat?.mode === "ambient") {
+    return resolveAmbientInitiativePromptForResponseTool(
+      resolveHeartbeatPromptRaw(cfg, heartbeat),
+      heartbeat.maxMessages,
+    );
+  }
   return resolveHeartbeatPromptForResponseTool(resolveHeartbeatPromptRaw(cfg, heartbeat));
 }
 
