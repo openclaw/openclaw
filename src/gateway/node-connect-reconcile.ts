@@ -93,19 +93,21 @@ function intersectPermissionSurface(params: {
   approved: Record<string, boolean> | undefined;
   declared: Record<string, boolean> | undefined;
 }): Record<string, boolean> | undefined {
-  const entries = Object.entries(params.declared ?? {}).flatMap(([key, declaredValue]) => {
+  const entries: Array<[string, boolean]> = [];
+  for (const [key, declaredValue] of Object.entries(params.declared ?? {})) {
     const approvedValue = params.approved?.[key];
     if (declaredValue === false) {
-      return [[key, false] as const];
+      entries.push([key, false]);
+      continue;
     }
     if (approvedValue === true) {
-      return [[key, true] as const];
+      entries.push([key, true]);
+      continue;
     }
     if (approvedValue === false) {
-      return [[key, false] as const];
+      entries.push([key, false]);
     }
-    return [];
-  });
+  }
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
