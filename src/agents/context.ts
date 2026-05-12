@@ -11,6 +11,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
+import { listLegacyRuntimeModelProviderAliases } from "./model-runtime-aliases.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
@@ -321,6 +322,46 @@ function resolveProviderModelRef(params: {
   return { provider, model };
 }
 
+function resolvePositiveContextTokenValue(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function stripProviderPrefixForMatch(provider: string, model: string): string {
+  const slash = model.indexOf("/");
+  if (slash <= 0) {
+    return model;
+  }
+  const modelProvider = normalizeProviderId(model.slice(0, slash));
+  if (modelProvider !== normalizeProviderId(provider)) {
+    return model;
+  }
+  return model.slice(slash + 1).trim() || model;
+}
+
+function configuredModelIdMatches(provider: string, configuredId: string, model: string): boolean {
+  if (configuredId === model) {
+    return true;
+  }
+  return (
+    stripProviderPrefixForMatch(provider, configuredId) ===
+    stripProviderPrefixForMatch(provider, model)
+  );
+}
+
+function providerLookupCandidates(provider: string): string[] {
+  const normalizedProvider = normalizeProviderId(provider);
+  const candidates = [provider, normalizedProvider];
+  const runtimeAlias = listLegacyRuntimeModelProviderAliases().find(
+    (entry) => normalizeProviderId(entry.legacyProvider) === normalizedProvider,
+  );
+  if (runtimeAlias) {
+    candidates.push(runtimeAlias.provider, normalizeProviderId(runtimeAlias.provider));
+  }
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
 // Look up an explicit runtime context cap for a specific provider+model
 // directly from config, without going through the shared discovery cache.
 // This avoids the cache keyspace collision where "provider/model" synthetic
@@ -362,7 +403,7 @@ function resolveConfiguredProviderContextTokens(
                 : undefined;
           if (
             typeof m?.id === "string" &&
-            m.id === model &&
+            configuredModelIdMatches(providerId, m.id, model) &&
             typeof contextTokens === "number" &&
             contextTokens > 0
           ) {
@@ -389,6 +430,40 @@ function resolveConfiguredProviderContextTokens(
   // 2. Normalized fallback: covers alias keys such as "z.ai" → "zai".
   const normalizedProvider = normalizeProviderId(provider);
   return findContextTokens((id) => normalizeProviderId(id) === normalizedProvider);
+}
+
+function resolveConfiguredProviderContextTokenCap(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  model: string,
+): number | undefined {
+  const providers = (cfg?.models as ModelsConfig | undefined)?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  for (const candidate of providerLookupCandidates(provider)) {
+    const normalizedCandidate = normalizeProviderId(candidate);
+    for (const [providerId, providerConfig] of Object.entries(providers)) {
+      if (normalizeProviderId(providerId) !== normalizedCandidate) {
+        continue;
+      }
+      if (Array.isArray(providerConfig?.models)) {
+        for (const m of providerConfig.models) {
+          if (typeof m?.id === "string" && configuredModelIdMatches(providerId, m.id, model)) {
+            const modelCap = resolvePositiveContextTokenValue(m.contextTokens);
+            if (modelCap !== undefined) {
+              return modelCap;
+            }
+          }
+        }
+      }
+      const providerCap = resolvePositiveContextTokenValue(providerConfig?.contextTokens);
+      if (providerCap !== undefined) {
+        return providerCap;
+      }
+    }
+  }
+  return undefined;
 }
 
 function isAnthropic1MModel(provider: string, model: string): boolean {
@@ -456,6 +531,16 @@ export function resolveContextTokensForModel(params: {
   });
   const explicitProvider = params.provider?.trim();
   if (ref) {
+    if (explicitProvider) {
+      const configuredContextTokenCap = resolveConfiguredProviderContextTokenCap(
+        params.cfg,
+        explicitProvider,
+        ref.model,
+      );
+      if (configuredContextTokenCap !== undefined) {
+        return configuredContextTokenCap;
+      }
+    }
     if (explicitProvider && isAnthropic1MModel(ref.provider, ref.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
     }

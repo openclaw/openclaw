@@ -439,6 +439,58 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
+  it("honors configured contextTokens caps for Anthropic models routed through claude-cli", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  ...testModelContextWindow("claude-opus-4-7", ANTHROPIC_CONTEXT_1M_TOKENS),
+                  contextTokens: 100_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      provider: "claude-cli",
+      model: "anthropic/claude-opus-4-7",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(100_000);
+  });
+
+  it("honors configured non-1M Anthropic caps routed through claude-cli", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  ...testModelContextWindow("claude-haiku-3-5", 200_000),
+                  contextTokens: 64_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      provider: "claude-cli",
+      model: "anthropic/claude-haiku-3-5",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(64_000);
+  });
+
   it("does not force 1M context for non-Anthropic providers with opus 4.7 ids", () => {
     const result = resolveContextTokensForModel({
       provider: "github-copilot",

@@ -226,6 +226,118 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("persists configured Anthropic contextTokens for claude-cli runtime models", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  id: "claude-opus-4-7",
+                  contextWindow: 1_048_576,
+                  contextTokens: 100_000,
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-claude-cli-context-cap";
+      const sessionId = "test-claude-cli-context-cap-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 1,
+          executionTrace: { runner: "cli" },
+          agentMeta: {
+            sessionId,
+            provider: "claude-cli",
+            model: "anthropic/claude-opus-4-7",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "anthropic/claude-opus-4-7",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(100_000);
+      expect(loadSessionStore(storePath)[sessionKey]?.contextTokens).toBe(100_000);
+    });
+  });
+
+  it("persists configured non-1M Anthropic contextTokens for claude-cli runtime models", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  id: "claude-haiku-3-5",
+                  contextWindow: 200_000,
+                  contextTokens: 64_000,
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-claude-cli-haiku-context-cap";
+      const sessionId = "test-claude-cli-haiku-context-cap-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 1,
+          executionTrace: { runner: "cli" },
+          agentMeta: {
+            sessionId,
+            provider: "claude-cli",
+            model: "anthropic/claude-haiku-3-5",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "anthropic/claude-haiku-3-5",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(64_000);
+      expect(loadSessionStore(storePath)[sessionKey]?.contextTokens).toBe(64_000);
+    });
+  });
+
   it("clears the embedded harness pin after a CLI run", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
