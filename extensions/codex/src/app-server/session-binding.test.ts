@@ -102,6 +102,27 @@ describe("codex app-server session binding", () => {
     expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
+  it("round-trips context-engine binding metadata", async () => {
+    const sessionFile = path.join(tempDir, "session.json");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-123",
+      cwd: tempDir,
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "lossless-policy-1",
+      },
+    });
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+
+    expect(binding?.contextEngine).toEqual({
+      schemaVersion: 1,
+      engineId: "lossless-claw",
+      policyFingerprint: "lossless-policy-1",
+    });
+  });
+
   it("rejects old plugin app policy entries that duplicate the app id", async () => {
     const sessionFile = path.join(tempDir, "session.json");
     await fs.writeFile(

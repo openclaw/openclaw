@@ -43,8 +43,15 @@ export type CodexAppServerThreadBinding = {
   pluginAppsFingerprint?: string;
   pluginAppsInputFingerprint?: string;
   pluginAppPolicyContext?: PluginAppPolicyContext;
+  contextEngine?: CodexAppServerContextEngineBinding;
   createdAt: string;
   updatedAt: string;
+};
+
+export type CodexAppServerContextEngineBinding = {
+  schemaVersion: 1;
+  engineId: string;
+  policyFingerprint: string;
 };
 
 export function resolveCodexAppServerBindingPath(sessionFile: string): string {
@@ -99,6 +106,7 @@ export async function readCodexAppServerBinding(
           ? parsed.pluginAppsInputFingerprint
           : undefined,
       pluginAppPolicyContext: readPluginAppPolicyContext(parsed.pluginAppPolicyContext),
+      contextEngine: readContextEngineBinding(parsed.contextEngine),
       createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
     };
@@ -138,6 +146,7 @@ export async function writeCodexAppServerBinding(
     pluginAppsFingerprint: binding.pluginAppsFingerprint,
     pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
     pluginAppPolicyContext: binding.pluginAppPolicyContext,
+    contextEngine: binding.contextEngine,
     createdAt: binding.createdAt ?? now,
     updatedAt: now,
   };
@@ -145,6 +154,25 @@ export async function writeCodexAppServerBinding(
     resolveCodexAppServerBindingPath(sessionFile),
     `${JSON.stringify(payload, null, 2)}\n`,
   );
+}
+
+function readContextEngineBinding(value: unknown): CodexAppServerContextEngineBinding | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.schemaVersion !== 1 ||
+    typeof record.engineId !== "string" ||
+    typeof record.policyFingerprint !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    engineId: record.engineId,
+    policyFingerprint: record.policyFingerprint,
+  };
 }
 
 function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | undefined {
