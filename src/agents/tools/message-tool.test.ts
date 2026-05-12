@@ -371,17 +371,25 @@ async function executeSend(params: {
   toolOptions?: Partial<Parameters<typeof createMessageTool>[0]>;
   toolCallId?: string;
 }) {
+  return (await executeSendWithResult(params)).call;
+}
+
+async function executeSendWithResult(params: {
+  action: Record<string, unknown>;
+  toolOptions?: Partial<Parameters<typeof createMessageTool>[0]>;
+  toolCallId?: string;
+}) {
   const { config, getRuntimeConfig, ...toolOptions } = params.toolOptions ?? {};
   const tool = createMessageTool({
     getRuntimeConfig: getRuntimeConfig ?? (config ? () => config : mocks.getRuntimeConfig),
     runMessageAction: mocks.runMessageAction as never,
     ...toolOptions,
   });
-  await tool.execute(params.toolCallId ?? "1", {
+  const result = await tool.execute(params.toolCallId ?? "1", {
     action: "send",
     ...params.action,
   });
-  return lastRunMessageActionInput();
+  return { call: lastRunMessageActionInput(), result };
 }
 
 describe("message tool gateway timeout", () => {
@@ -2054,23 +2062,46 @@ describe("message tool boot-echo guard", () => {
     resetBootEchoContextForTests();
   });
 
-  it("collapses outbound text that echoes a substantial chunk of the registered boot prompt without preserving the wrapper markers (#53732)", async () => {
+  it("suppresses text-only sends that echo a substantial chunk of the registered boot prompt without preserving the wrapper markers (#53732)", async () => {
     setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
 
     // The model is paraphrasing out the wrapper but copying the BOOT.md
     // sentence verbatim — exactly the leak vector clawsweeper called out
     // on #75128 that the marker-only strip would miss.
     const echoedText =
       "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
+    const { call, result } = await executeSendWithResult({
       action: {
         target: "telegram:123",
         text: echoedText,
       },
       toolOptions: { agentSessionKey: "agent:main" },
     });
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "internal_runtime_context_echo",
+    });
+    expect(JSON.stringify(result)).not.toContain("thoughtful greeting");
+  });
+
+  it("sanitizes boot echo text and still sends when media content remains", async () => {
+    setBootEchoContextForSession("agent:main", longBootPrompt);
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const echoedText =
+      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        text: echoedText,
+        mediaUrl: "file:///tmp/status.png",
+      },
+      toolOptions: { agentSessionKey: "agent:main" },
+    });
     expect(call?.params?.text).toBe("");
+    expect(call?.params?.mediaUrl).toBe("file:///tmp/status.png");
   });
 
   it("preserves a short legitimate BOOT.md-directed send that does not reproduce a long boot-prompt chunk", async () => {
@@ -2109,6 +2140,7 @@ describe("message tool boot-echo guard", () => {
     const call = await executeSend({
       action: {
         target: "slack:C123",
+        mediaUrl: "file:///tmp/proof.png",
         presentation: {
           title: echoedBootText,
           blocks: [
@@ -2158,8 +2190,9 @@ describe("message tool internal-runtime-context sanitization", () => {
     },
     {
       field: "content",
-      input: "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nleaked\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-      expected: "",
+      input:
+        "Before\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nleaked\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\nAfter",
+      expected: "Before\n\nAfter",
       target: "discord:123",
       channel: "discord",
     },
@@ -2185,6 +2218,25 @@ describe("message tool internal-runtime-context sanitization", () => {
       expect(call?.params?.[field]).toBe(expected);
     },
   );
+
+  it("suppresses pure internal-runtime-context sends before generic raw-params logging can see original args", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        target: "discord:123",
+        content:
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "internal_runtime_context_echo",
+    });
+    expect(JSON.stringify(result)).not.toContain("BOOT.md");
+    expect(JSON.stringify(result)).not.toContain("Wake up and report");
+  });
 });
 
 describe("message tool sandbox passthrough", () => {
