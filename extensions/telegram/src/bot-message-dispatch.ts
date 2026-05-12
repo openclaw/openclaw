@@ -1382,7 +1382,37 @@ export const dispatchTelegramMessage = async ({
                       }
                       return;
                     }
-                    const delivered = await sendPayload(effectivePayload, {
+                    // When a final voice payload arrives after partial/block streaming already sent the
+                    // text, delete the streamed text message and attach the spoken text as caption so
+                    // voice+text arrive as one combined message (restores pre-bca16d0f00 behavior).
+                    // Note: audioAsVoice payloads don't set mediaUrls (reply.hasMedia=false) and in
+                    // partial streaming mode the payload carries text (reply.trimmedText non-empty),
+                    // so we key only on audioAsVoice + hasStreamedMessage.
+                    let payloadForSend = effectivePayload;
+                    if (
+                      info.kind === "final" &&
+                      effectivePayload.audioAsVoice === true &&
+                      answerLane.hasStreamedMessage
+                    ) {
+                      const streamedMessageId = answerLane.stream?.messageId();
+                      const spokenText =
+                        typeof (effectivePayload as Record<string, unknown>).spokenText === "string"
+                          ? ((effectivePayload as Record<string, unknown>).spokenText as string)
+                          : (reply.trimmedText || lastAnswerPartialText);
+                      const captionText = spokenText.trim();
+                      if (typeof streamedMessageId === "number" && captionText) {
+                        void bot.api.deleteMessage(chatId, streamedMessageId).catch((err: unknown) => {
+                          logVerbose(
+                            `telegram: voice-combine stream cleanup failed (${streamedMessageId}): ${String(err)}`,
+                          );
+                        });
+                        payloadForSend = { ...effectivePayload, text: captionText };
+                        answerLane.hasStreamedMessage = false;
+                        answerLane.lastPartialText = "";
+                        lastAnswerPartialText = "";
+                      }
+                    }
+                    const delivered = await sendPayload(payloadForSend, {
                       durable: info.kind === "final",
                     });
                     if (info.kind === "final") {
