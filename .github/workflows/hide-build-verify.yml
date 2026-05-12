@@ -75,19 +75,22 @@ jobs:
           fi
           SHORT_SHA="${GH_SHA:0:7}"
           RUN_URL="https://github.com/${GH_REPO}/actions/runs/${GH_RUN}"
-          PAYLOAD=$(SHORT_SHA="$SHORT_SHA" RUN_URL="$RUN_URL" python3 -c '
-import json, os
-print(json.dumps({
-  "username": "GitHub CI",
-  "embeds": [{
-    "title": "Build failed: " + os.environ["GH_REPO"],
-    "color": 15158332,
-    "fields": [
-      {"name": "branch", "value": os.environ["GH_REF"], "inline": True},
-      {"name": "commit", "value": os.environ["SHORT_SHA"], "inline": True},
-      {"name": "log",    "value": "[run #" + os.environ["GH_RUN"] + "](" + os.environ["RUN_URL"] + ")"},
-    ],
-  }],
-}))
-')
+          PAYLOAD=$(jq -nc \
+            --arg repo "$GH_REPO" \
+            --arg branch "$GH_REF" \
+            --arg sha "$SHORT_SHA" \
+            --arg run "$GH_RUN" \
+            --arg url "$RUN_URL" \
+            '{
+              username: "GitHub CI",
+              embeds: [{
+                title: ("Build failed: " + $repo),
+                color: 15158332,
+                fields: [
+                  { name: "branch", value: $branch, inline: true },
+                  { name: "commit", value: $sha,    inline: true },
+                  { name: "log",    value: ("[run #" + $run + "](" + $url + ")") }
+                ]
+              }]
+            }')
           curl -fsS -H "Content-Type: application/json" -d "$PAYLOAD" "$HIDE_NOTIFY_URL" >/dev/null
