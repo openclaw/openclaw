@@ -48,7 +48,7 @@ describe("isAllowedParsedChatSender", () => {
     ).toBe(true);
   });
 
-  it("matches conversation targets by default and can explicitly disable them", () => {
+  it("does not match conversation targets unless explicitly enabled", () => {
     for (const entry of ["chat_id:123", "chat_guid:thread-123", "chat_identifier:team"]) {
       expect(
         isAllowedParsedChatSender({
@@ -60,7 +60,7 @@ describe("isAllowedParsedChatSender", () => {
           normalizeSender,
           parseAllowTarget,
         }),
-      ).toBe(true);
+      ).toBe(false);
 
       expect(
         isAllowedParsedChatSender({
@@ -69,40 +69,20 @@ describe("isAllowedParsedChatSender", () => {
           chatId: 123,
           chatGuid: "thread-123",
           chatIdentifier: "team",
-          allowConversationTargets: false,
+          allowConversationTargets: true,
           normalizeSender,
           parseAllowTarget,
         }),
-      ).toBe(false);
+      ).toBe(true);
     }
   });
 });
 
 describe("createAllowedChatSenderMatcher", () => {
-  it("matches conversation targets by default", () => {
+  it("keeps conversation targets disabled unless the matcher opts in", () => {
     const matcher = createAllowedChatSenderMatcher({
       normalizeSender,
       parseAllowTarget,
-    });
-
-    for (const entry of ["chat_id:123", "chat_guid:thread-123", "chat_identifier:team"]) {
-      expect(
-        matcher({
-          allowFrom: [entry],
-          sender: "other@example.com",
-          chatId: 123,
-          chatGuid: "thread-123",
-          chatIdentifier: "team",
-        }),
-      ).toBe(true);
-    }
-  });
-
-  it("does not match conversation targets when the matcher explicitly opts out", () => {
-    const matcher = createAllowedChatSenderMatcher({
-      normalizeSender,
-      parseAllowTarget,
-      allowConversationTargets: false,
     });
 
     for (const entry of ["chat_id:123", "chat_guid:thread-123", "chat_identifier:team"]) {
@@ -115,6 +95,26 @@ describe("createAllowedChatSenderMatcher", () => {
           chatIdentifier: "team",
         }),
       ).toBe(false);
+    }
+  });
+
+  it("matches conversation targets when the matcher explicitly opts in", () => {
+    const matcher = createAllowedChatSenderMatcher({
+      normalizeSender,
+      parseAllowTarget,
+      allowConversationTargets: true,
+    });
+
+    for (const entry of ["chat_id:123", "chat_guid:thread-123", "chat_identifier:team"]) {
+      expect(
+        matcher({
+          allowFrom: [entry],
+          sender: "other@example.com",
+          chatId: 123,
+          chatGuid: "thread-123",
+          chatIdentifier: "team",
+        }),
+      ).toBe(true);
     }
   });
 });
