@@ -73,6 +73,7 @@ and reports settings that do not conform.
 openclaw policy check
 openclaw policy check --json
 openclaw policy check --severity-min error
+openclaw policy watch --once
 ```
 
 `policy check` runs only the policy check set and emits the observed workspace
@@ -119,13 +120,24 @@ records the observed OpenClaw state used by the policy checks. The
 `workspace.hash` value identifies that evidence payload for the checked scope.
 The findings hash identifies the exact finding set returned by the check.
 `checkedAt` records when the evaluation ran. The attestation hash identifies
-the whole claim, including the timestamp and whether the result was clean.
-Together, these form the audit tuple for this policy check.
+the stable claim: policy hash, evidence hash, findings hash, and whether the
+result was clean. It intentionally does not include `checkedAt`, so the same
+policy state produces the same attestation across repeated checks. Together,
+these form the audit tuple for this policy check.
 
 If a later gateway or supervisor uses policy to block, approve, or annotate a
 runtime action, it should record the attestation hash from the last clean policy
 check. That single value binds the policy file, observed evidence, findings,
-and check time used to justify the decision.
+and clean result used to justify the decision. The `checkedAt` field remains in
+the JSON output for audit logs, but it is not part of the stable attestation
+hash.
+
+`policy watch` repeats the same evaluation and compares the current
+attestation with `expectedAttestationHash`. Use it when a supervisor or gateway
+has accepted a clean policy check and the workspace needs a local signal when
+policy evidence changes. A stale watch result means the workspace should run
+`policy check`, review the new attestation, and update the out-of-band accepted
+attestation before relying on the previous approval.
 
 Policy findings can include both `target` and `requirement`. `target` is the
 observed workspace thing that does not conform. `requirement` is the authored
@@ -147,6 +159,7 @@ Policy config lives under `plugins.entries.policy.config`:
           "enabled": true,
           "workspaceRepairs": false,
           "expectedHash": "sha256:...",
+          "expectedAttestationHash": "sha256:...",
           "path": "policy.jsonc",
         },
       },
@@ -155,12 +168,13 @@ Policy config lives under `plugins.entries.policy.config`:
 }
 ```
 
-| Setting            | Purpose                                                         |
-| ------------------ | --------------------------------------------------------------- |
-| `enabled`          | Enable policy checks even before `policy.jsonc` exists.         |
-| `workspaceRepairs` | Allow `doctor --fix` to edit policy-managed workspace settings. |
-| `expectedHash`     | Optional hash-lock for the approved policy artifact.            |
-| `path`             | Workspace-relative location of the policy artifact.             |
+| Setting                   | Purpose                                                         |
+| ------------------------- | --------------------------------------------------------------- |
+| `enabled`                 | Enable policy checks even before `policy.jsonc` exists.         |
+| `workspaceRepairs`        | Allow `doctor --fix` to edit policy-managed workspace settings. |
+| `expectedHash`            | Optional hash-lock for the approved policy artifact.            |
+| `expectedAttestationHash` | Optional hash-lock for the last accepted clean policy check.    |
+| `path`                    | Workspace-relative location of the policy artifact.             |
 
 Set `plugins.entries.policy.config.enabled` to `false` to disable policy
 checks for a workspace.
@@ -169,12 +183,13 @@ checks for a workspace.
 
 Policy currently verifies:
 
-| Check id                          | Finding                                          |
-| --------------------------------- | ------------------------------------------------ |
-| `policy/policy-jsonc-missing`     | Policy is enabled but `policy.jsonc` is missing. |
-| `policy/policy-jsonc-invalid`     | Policy cannot be parsed or has malformed rules.  |
-| `policy/policy-hash-mismatch`     | Policy does not match configured `expectedHash`. |
-| `policy/channels-denied-provider` | An enabled channel matches a channel deny rule.  |
+| Check id                           | Finding                                                             |
+| ---------------------------------- | ------------------------------------------------------------------- |
+| `policy/policy-jsonc-missing`      | Policy is enabled but `policy.jsonc` is missing.                    |
+| `policy/policy-jsonc-invalid`      | Policy cannot be parsed or has malformed rules.                     |
+| `policy/policy-hash-mismatch`      | Policy does not match configured `expectedHash`.                    |
+| `policy/attestation-hash-mismatch` | Current policy evidence no longer matches the accepted attestation. |
+| `policy/channels-denied-provider`  | An enabled channel matches a channel deny rule.                     |
 
 Example JSON finding:
 
@@ -205,9 +220,10 @@ but denied by `channels.denyRules`.
 
 ## Exit Codes
 
-| Command        | `0`                           | `1`                                     | `2`                          |
-| -------------- | ----------------------------- | --------------------------------------- | ---------------------------- |
-| `policy check` | No findings at the threshold. | One or more findings met the threshold. | Argument or runtime failure. |
+| Command               | `0`                                                                           | `1`                                                        | `2`                          |
+| --------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------- |
+| `policy check`        | No findings at the threshold.                                                 | One or more findings met the threshold.                    | Argument or runtime failure. |
+| `policy watch --once` | Current policy evidence matches the accepted attestation and has no findings. | Findings are present or the accepted attestation is stale. | Argument or runtime failure. |
 
 ## Related
 

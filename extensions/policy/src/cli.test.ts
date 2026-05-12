@@ -2,8 +2,9 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearConfigCache } from "../../../src/config/config.js";
 import { clearHealthChecksForTest } from "../../../src/flows/health-check-registry.js";
-import { policyCheckCommand } from "./cli.js";
+import { policyCheckCommand, policyWatchCommand } from "./cli.js";
 import { resetPolicyDoctorChecksForTest } from "./doctor/register.js";
 import {
   policyAttestationHash,
@@ -21,6 +22,7 @@ describe("policy commands", () => {
 
   afterEach(async () => {
     vi.unstubAllEnvs();
+    clearConfigCache();
     await fs.rm(workspaceDir, { recursive: true, force: true });
     clearHealthChecksForTest();
     resetPolicyDoctorChecksForTest();
@@ -69,7 +71,6 @@ describe("policy commands", () => {
         findingsHash,
         attestationHash: policyAttestationHash({
           ok: true,
-          checkedAt: parsed.attestation.checkedAt,
           policyHash,
           workspaceHash,
           findingsHash,
@@ -203,6 +204,55 @@ describe("policy commands", () => {
         },
       ],
     });
+  });
+
+  it("reports stale accepted attestations in policy watch", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        plugins: {
+          entries: {
+            policy: {
+              enabled: true,
+              config: { enabled: true, expectedAttestationHash: "sha256:not-current" },
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ channels: { denyRules: [] } }),
+      "utf-8",
+    );
+    const output: string[] = [];
+
+    const exitCode = await policyWatchCommand(
+      { cwd: workspaceDir, json: true, once: true },
+      {
+        writeStdout(value) {
+          output.push(value);
+        },
+        error(value) {
+          output.push(value);
+        },
+      },
+    );
+
+    const parsed = JSON.parse(output.at(-1) ?? "{}");
+    expect(parsed).toMatchObject({
+      status: "stale",
+      expectedAttestationHash: "sha256:not-current",
+      findings: [
+        {
+          checkId: "policy/attestation-hash-mismatch",
+        },
+      ],
+    });
+    expect(exitCode).toBe(1);
   });
 
   it("rejects invalid severity thresholds", async () => {

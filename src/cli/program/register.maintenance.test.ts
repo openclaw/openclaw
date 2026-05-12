@@ -131,7 +131,7 @@ describe("registerMaintenanceCommands doctor action", () => {
 
     expect(doctorCommand).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
-      "--skip and --only are only supported with doctor --lint.",
+      "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
     );
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });

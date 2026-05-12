@@ -39,12 +39,45 @@ export function policyFindingsHash(findings: readonly unknown[]): string {
 
 export function policyAttestationHash(input: {
   readonly ok: boolean;
-  readonly checkedAt: string;
   readonly policyHash?: string;
   readonly workspaceHash: string;
   readonly findingsHash: string;
 }): string {
   return sha256(stableJson(input));
+}
+
+export function createPolicyAttestation(input: {
+  readonly ok: boolean;
+  readonly checkedAt: string;
+  readonly policyPath: string;
+  readonly policyHash?: string;
+  readonly evidence: PolicyEvidence;
+  readonly findings: readonly unknown[];
+}): PolicyAttestation {
+  const workspaceHash = policyWorkspaceHash(input.evidence);
+  const findingsHash = policyFindingsHash(input.findings);
+  return {
+    checkedAt: input.checkedAt,
+    ...(input.policyHash === undefined
+      ? {}
+      : {
+          policy: {
+            path: input.policyPath,
+            hash: input.policyHash,
+          },
+        }),
+    workspace: {
+      scope: "policy",
+      hash: workspaceHash,
+    },
+    findingsHash,
+    attestationHash: policyAttestationHash({
+      ok: input.ok,
+      policyHash: input.policyHash,
+      workspaceHash,
+      findingsHash,
+    }),
+  };
 }
 
 export function collectPolicyEvidence(cfg: Record<string, unknown>): PolicyEvidence {

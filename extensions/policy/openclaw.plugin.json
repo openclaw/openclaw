@@ -28,6 +28,10 @@
         "type": "string",
         "description": "Optional sha256 hash for hash-locking the approved policy artifact."
       },
+      "expectedAttestationHash": {
+        "type": "string",
+        "description": "Optional sha256 hash for the last accepted clean policy check."
+      },
       "path": {
         "type": "string",
         "description": "Optional policy.jsonc path. Relative paths resolve from the active workspace."

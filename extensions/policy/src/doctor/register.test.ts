@@ -13,7 +13,7 @@ import type {
   HealthCheckContext,
   HealthRepairContext,
 } from "../../../../src/flows/health-checks.js";
-import { policyDocumentHash } from "../policy-state.js";
+import { createPolicyAttestation, policyDocumentHash } from "../policy-state.js";
 import { registerPolicyDoctorChecks, resetPolicyDoctorChecksForTest } from "./register.js";
 
 let workspaceDir: string;
@@ -71,6 +71,7 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/policy-jsonc-missing",
       "policy/policy-jsonc-invalid",
       "policy/policy-hash-mismatch",
+      "policy/attestation-hash-mismatch",
       "policy/channels-denied-provider",
     ]);
   });
@@ -163,6 +164,31 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
+  it("does not emit repairable channel findings when the policy hash is not accepted", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ expectedHash: "sha256:not-the-policy", workspaceRepairs: true }),
+      channels: { telegram: { enabled: true } },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        channels: {
+          denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings.map((finding) => finding.checkId)).toEqual([
+      "policy/policy-hash-mismatch",
+    ]);
+  });
+
   it("accepts a policy file that matches the configured expectedHash", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const policy = { channels: { denyRules: [] } };
@@ -172,6 +198,77 @@ describe("registerPolicyDoctorChecks", () => {
     registerPolicyDoctorChecks();
     const result = await runDoctorLintChecks(
       ctx(configPath, cfgWithPolicy({ expectedHash: policyDocumentHash(policy) })),
+    );
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports an attestation mismatch when expectedAttestationHash is configured", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ channels: { denyRules: [] } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(
+      ctx(configPath, cfgWithPolicy({ expectedAttestationHash: "sha256:not-current" })),
+    );
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/attestation-hash-mismatch",
+        severity: "error",
+        path: "policy attestation",
+      }),
+    ]);
+  });
+
+  it("does not emit repairable channel findings when the accepted attestation changed", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ expectedAttestationHash: "sha256:not-current", workspaceRepairs: true }),
+      channels: { telegram: { enabled: true } },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        channels: {
+          denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings.map((finding) => finding.checkId)).toEqual([
+      "policy/attestation-hash-mismatch",
+    ]);
+  });
+
+  it("accepts a policy check that matches the configured expectedAttestationHash", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const policy = { channels: { denyRules: [] } };
+    const policyHash = policyDocumentHash(policy);
+    const acceptedAttestationHash = createPolicyAttestation({
+      ok: true,
+      checkedAt: "2026-05-10T20:00:00.000Z",
+      policyPath: "policy.jsonc",
+      policyHash,
+      evidence: { channels: [] },
+      findings: [],
+    }).attestationHash;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(
+      ctx(configPath, cfgWithPolicy({ expectedAttestationHash: acceptedAttestationHash })),
     );
 
     expect(result.findings).toEqual([]);

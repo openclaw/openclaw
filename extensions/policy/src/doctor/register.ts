@@ -7,9 +7,15 @@ import {
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
 import { jsoncValueToUnknown } from "../jsonc-value.js";
-import { collectPolicyEvidence, policyDocumentHash, type PolicyEvidence } from "../policy-state.js";
+import {
+  collectPolicyEvidence,
+  createPolicyAttestation,
+  policyDocumentHash,
+  type PolicyEvidence,
+} from "../policy-state.js";
 
 const CHECK_IDS = {
+  policyAttestationMismatch: "policy/attestation-hash-mismatch",
   policyDeniedChannelProvider: "policy/channels-denied-provider",
   policyHashMismatch: "policy/policy-hash-mismatch",
   policyInvalidFile: "policy/policy-jsonc-invalid",
@@ -20,6 +26,7 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyMissingFile,
   CHECK_IDS.policyInvalidFile,
   CHECK_IDS.policyHashMismatch,
+  CHECK_IDS.policyAttestationMismatch,
   CHECK_IDS.policyDeniedChannelProvider,
 ] as const;
 
@@ -37,6 +44,7 @@ export type PolicyEvaluation = {
     readonly hash: string;
   };
   readonly evidence: PolicyEvidence;
+  readonly expectedAttestationHash?: string;
   readonly findings: readonly HealthFinding[];
 };
 
@@ -48,6 +56,7 @@ export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost):
   registerHealthCheck(policyMissingFileCheck);
   registerHealthCheck(policyInvalidFileCheck);
   registerHealthCheck(policyHashMismatchCheck);
+  registerHealthCheck(policyAttestationMismatchCheck);
   registerHealthCheck(policyChannelsDeniedProviderCheck);
   registered = true;
 }
@@ -83,6 +92,16 @@ const policyHashMismatchCheck: HealthCheck = {
   source: "policy",
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyHashMismatch);
+  },
+};
+
+const policyAttestationMismatchCheck: HealthCheck = {
+  id: CHECK_IDS.policyAttestationMismatch,
+  kind: "plugin",
+  description: "The current policy check matches the accepted attestation.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAttestationMismatch);
   },
 };
 
@@ -138,7 +157,12 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   const findings: HealthFinding[] = [];
 
   if (settings.enabled === false) {
-    return { policyPath, evidence, findings };
+    return {
+      policyPath,
+      evidence,
+      expectedAttestationHash: settings.expectedAttestationHash,
+      findings,
+    };
   }
 
   const policyFile = await readPolicyFile(ctx);
@@ -151,7 +175,12 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       path: policyPath,
       fixHint: `Restore ${policyPath} or add the policy artifact for this workspace.`,
     });
-    return { policyPath, evidence, findings };
+    return {
+      policyPath,
+      evidence,
+      expectedAttestationHash: settings.expectedAttestationHash,
+      findings,
+    };
   }
 
   const parsedPolicy = parsePolicyFile(policyFile.raw, policyFile.displayName);
@@ -163,7 +192,12 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
         parsedPolicy.diagnostics,
       ),
     );
-    return { policyPath, evidence, findings };
+    return {
+      policyPath,
+      evidence,
+      expectedAttestationHash: settings.expectedAttestationHash,
+      findings,
+    };
   }
 
   const policy = parsedPolicy.ast.root === null ? {} : jsoncValueToUnknown(parsedPolicy.ast.root);
@@ -184,14 +218,34 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       requirement: "oc://openclaw.config/plugins/entries/policy/config/expectedHash",
       fixHint: `Restore the approved policy artifact or update plugins.entries.policy.config.expectedHash after review.`,
     });
+    return {
+      policyPath,
+      policy: { value: policy, hash: policyHash },
+      evidence,
+      expectedAttestationHash: settings.expectedAttestationHash,
+      findings,
+    };
   }
 
-  findings.push(...channelFindings(policy, policyFile.ocDocName, evidence));
+  const policyFindings = channelFindings(policy, policyFile.ocDocName, evidence);
+  const attestationFindings = policyAttestationFindings(
+    policyFile.displayName,
+    policyHash,
+    evidence,
+    policyFindings,
+    settings,
+  );
+  if (attestationFindings.length > 0) {
+    findings.push(...attestationFindings);
+  } else {
+    findings.push(...policyFindings);
+  }
 
   return {
     policyPath,
     policy: { value: policy, hash: policyHash },
     evidence,
+    expectedAttestationHash: settings.expectedAttestationHash,
     findings,
   };
 }
@@ -262,6 +316,58 @@ function channelFindings(
       },
     ];
   });
+}
+
+function policyAttestationFindings(
+  policyPath: string,
+  policyHash: string,
+  evidence: PolicyEvidence,
+  findings: readonly HealthFinding[],
+  settings: PolicySettings,
+): readonly HealthFinding[] {
+  const expected = settings.expectedAttestationHash?.trim();
+  if (!expected) {
+    return [];
+  }
+  const current = createPolicyAttestation({
+    ok: findings.length === 0,
+    checkedAt: new Date(0).toISOString(),
+    policyPath,
+    policyHash,
+    evidence,
+    findings: findings.map(toAttestedFinding),
+  });
+  if (current.attestationHash === expected) {
+    return [];
+  }
+  return [
+    {
+      checkId: CHECK_IDS.policyAttestationMismatch,
+      severity: "error",
+      message: "The current policy check no longer matches the accepted policy attestation.",
+      source: "policy",
+      path: "policy attestation",
+      target: "oc://policy/attestation/current",
+      requirement: "oc://openclaw.config/plugins/entries/policy/config/expectedAttestationHash",
+      fixHint: `Run policy check, review attestation ${current.attestationHash}, then update plugins.entries.policy.config.expectedAttestationHash and the supervisor/gateway accepted attestation.`,
+    },
+  ];
+}
+
+function toAttestedFinding(finding: HealthFinding): Record<string, unknown> {
+  return {
+    checkId: finding.checkId,
+    severity: finding.severity,
+    message: finding.message,
+    ...(finding.source !== undefined ? { source: finding.source } : {}),
+    ...(finding.path !== undefined ? { path: finding.path } : {}),
+    ...(finding.line !== undefined ? { line: finding.line } : {}),
+    ...(finding.column !== undefined ? { column: finding.column } : {}),
+    ...(finding.ocPath !== undefined ? { ocPath: finding.ocPath } : {}),
+    ...(finding.target !== undefined ? { target: finding.target } : {}),
+    ...(finding.requirement !== undefined ? { requirement: finding.requirement } : {}),
+    ...(finding.fixHint !== undefined ? { fixHint: finding.fixHint } : {}),
+  };
 }
 
 function invalidChannelDenyRuleFindings(
@@ -466,12 +572,15 @@ function disableChannels(
   return { config: { ...cfg, channels }, changed };
 }
 
-function policySettings(ctx: HealthCheckContext): {
+type PolicySettings = {
   readonly enabled?: boolean;
   readonly workspaceRepairs?: boolean;
   readonly expectedHash?: string;
+  readonly expectedAttestationHash?: string;
   readonly path?: string;
-} {
+};
+
+function policySettings(ctx: HealthCheckContext): PolicySettings {
   const pluginConfig = ctx.cfg.plugins?.entries?.["policy"]?.config;
   if (!isRecord(pluginConfig)) {
     return {};
