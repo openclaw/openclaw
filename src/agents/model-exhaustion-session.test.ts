@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { runWithModelFallback } from "./model-fallback.js";
-import { updateSessionStoreEntry, resolveStoredSessionKeyForSessionId } from "../config/sessions.js";
+import { updateSessionStoreEntry, resolveStoredSessionKeyForSessionId } from "./command/session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FailoverError } from "./failover-error.js";
 
