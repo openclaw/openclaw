@@ -385,6 +385,7 @@ export async function resolveFeishuMediaList(params: {
           fileKey: imageKey,
           type: "image",
           accountId,
+          maxBytes,
         });
         const contentType =
           result.contentType ?? (await core.media.detectMime({ buffer: result.buffer }));
@@ -413,6 +414,7 @@ export async function resolveFeishuMediaList(params: {
           fileKey: media.fileKey,
           type: "file",
           accountId,
+          maxBytes,
         });
         const contentType =
           result.contentType ?? (await core.media.detectMime({ buffer: result.buffer }));
@@ -451,6 +453,7 @@ export async function resolveFeishuMediaList(params: {
       fileKey,
       type: toMessageResourceType(messageType),
       accountId,
+      maxBytes,
     });
     const contentType =
       result.contentType ?? (await core.media.detectMime({ buffer: result.buffer }));

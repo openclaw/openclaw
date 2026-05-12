@@ -1796,6 +1796,7 @@ describe("handleFeishuMessage command authorization", () => {
       channels: {
         feishu: {
           dmPolicy: "open",
+          mediaMaxMb: 1,
         },
       },
     } as ClawdbotConfig;
@@ -1823,18 +1824,20 @@ describe("handleFeishuMessage command authorization", () => {
 
     const videoDownloadRequest = mockCallArg<{
       fileKey?: string;
+      maxBytes?: number;
       messageId?: string;
       type?: string;
     }>(mockDownloadMessageResourceFeishu, 0, 0);
     expect(videoDownloadRequest.messageId).toBe("msg-video-inbound");
     expect(videoDownloadRequest.fileKey).toBe("file_video_payload");
     expect(videoDownloadRequest.type).toBe("file");
+    expect(videoDownloadRequest.maxBytes).toBe(1024 * 1024);
     const mediaBuffer = mockCallArg<Buffer>(mockSaveMediaBuffer, 0, 0);
     expect(Buffer.isBuffer(mediaBuffer)).toBe(true);
     expect(mediaBuffer.toString()).toBe("video");
     expect(mockCallArg(mockSaveMediaBuffer, 0, 1)).toBe("video/mp4");
     expect(mockCallArg(mockSaveMediaBuffer, 0, 2)).toBe("inbound");
-    expect(typeof mockCallArg(mockSaveMediaBuffer, 0, 3)).toBe("number");
+    expect(mockCallArg(mockSaveMediaBuffer, 0, 3)).toBe(1024 * 1024);
     expect(mockCallArg(mockSaveMediaBuffer, 0, 4)).toBe("clip.mp4");
   });
 

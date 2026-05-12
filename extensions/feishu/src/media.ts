@@ -242,25 +242,82 @@ function extractFeishuDownloadMetadata(response: FeishuDownloadResponse): {
   return { contentType, fileName };
 }
 
-async function readReadableBuffer(stream: Readable): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+function createFeishuDownloadSizeError(params: { errorPrefix: string; maxBytes: number }): Error {
+  return new Error(`${params.errorPrefix}: payload exceeds maxBytes ${params.maxBytes}`);
+}
+
+function checkedFeishuDownloadBuffer(
+  buffer: Buffer,
+  params: { errorPrefix: string; maxBytes?: number },
+): Buffer {
+  if (params.maxBytes !== undefined && buffer.byteLength > params.maxBytes) {
+    throw createFeishuDownloadSizeError({
+      errorPrefix: params.errorPrefix,
+      maxBytes: params.maxBytes,
+    });
   }
-  return Buffer.concat(chunks);
+  return buffer;
+}
+
+function toReadableBufferChunk(chunk: Buffer | Uint8Array | string): Buffer {
+  return Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+}
+
+async function readReadableBuffer(
+  stream: Readable,
+  params: { errorPrefix: string; maxBytes?: number },
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of stream) {
+    const buffer = toReadableBufferChunk(chunk);
+    const nextTotal = total + buffer.byteLength;
+    if (params.maxBytes !== undefined && nextTotal > params.maxBytes) {
+      stream.destroy();
+      throw createFeishuDownloadSizeError({
+        errorPrefix: params.errorPrefix,
+        maxBytes: params.maxBytes,
+      });
+    }
+    chunks.push(buffer);
+    total = nextTotal;
+  }
+  return Buffer.concat(chunks, total);
+}
+
+async function readAsyncIterableBuffer(
+  asyncIterable: AsyncIterable<Buffer | Uint8Array | string>,
+  params: { errorPrefix: string; maxBytes?: number },
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of asyncIterable) {
+    const buffer = toReadableBufferChunk(chunk);
+    const nextTotal = total + buffer.byteLength;
+    if (params.maxBytes !== undefined && nextTotal > params.maxBytes) {
+      throw createFeishuDownloadSizeError({
+        errorPrefix: params.errorPrefix,
+        maxBytes: params.maxBytes,
+      });
+    }
+    chunks.push(buffer);
+    total = nextTotal;
+  }
+  return Buffer.concat(chunks, total);
 }
 
 async function readFeishuResponseBuffer(params: {
   response: FeishuDownloadResponse;
   tmpDirPrefix: string;
   errorPrefix: string;
+  maxBytes?: number;
 }): Promise<Buffer> {
   const { response } = params;
   if (Buffer.isBuffer(response)) {
-    return response;
+    return checkedFeishuDownloadBuffer(response, params);
   }
   if (response instanceof ArrayBuffer) {
-    return Buffer.from(response);
+    return checkedFeishuDownloadBuffer(Buffer.from(response), params);
   }
   const responseWithOptionalFields = response as FeishuDownloadResponse & {
     code?: number;
@@ -275,30 +332,35 @@ async function readFeishuResponseBuffer(params: {
   }
 
   if (responseWithOptionalFields.data && Buffer.isBuffer(responseWithOptionalFields.data)) {
-    return responseWithOptionalFields.data;
+    return checkedFeishuDownloadBuffer(responseWithOptionalFields.data, params);
   }
   if (responseWithOptionalFields.data instanceof ArrayBuffer) {
-    return Buffer.from(responseWithOptionalFields.data);
+    return checkedFeishuDownloadBuffer(Buffer.from(responseWithOptionalFields.data), params);
   }
   if (typeof response.getReadableStream === "function") {
-    return readReadableBuffer(response.getReadableStream());
+    return readReadableBuffer(response.getReadableStream(), params);
   }
   if (typeof response.writeFile === "function") {
     return await withTempDownloadPath({ prefix: params.tmpDirPrefix }, async (tmpPath) => {
       await response.writeFile(tmpPath);
+      if (params.maxBytes !== undefined) {
+        const stat = await fs.promises.stat(tmpPath);
+        if (stat.size > params.maxBytes) {
+          throw createFeishuDownloadSizeError({
+            errorPrefix: params.errorPrefix,
+            maxBytes: params.maxBytes,
+          });
+        }
+      }
       return await fs.promises.readFile(tmpPath);
     });
   }
   if (responseWithOptionalFields[Symbol.asyncIterator]) {
     const asyncIterable = responseWithOptionalFields as AsyncIterable<Buffer | Uint8Array | string>;
-    const chunks: Buffer[] = [];
-    for await (const chunk of asyncIterable) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    return Buffer.concat(chunks);
+    return readAsyncIterableBuffer(asyncIterable, params);
   }
   if (response instanceof Readable) {
-    return readReadableBuffer(response);
+    return readReadableBuffer(response, params);
   }
 
   const keys = Object.keys(response as object);
@@ -313,8 +375,9 @@ export async function downloadImageFeishu(params: {
   cfg: ClawdbotConfig;
   imageKey: string;
   accountId?: string;
+  maxBytes?: number;
 }): Promise<DownloadImageResult> {
-  const { cfg, imageKey, accountId } = params;
+  const { cfg, imageKey, accountId, maxBytes } = params;
   const normalizedImageKey = normalizeFeishuExternalKey(imageKey);
   if (!normalizedImageKey) {
     throw new Error("Feishu image download failed: invalid image_key");
@@ -329,6 +392,7 @@ export async function downloadImageFeishu(params: {
     response,
     tmpDirPrefix: "openclaw-feishu-img-",
     errorPrefix: "Feishu image download failed",
+    maxBytes,
   });
   const meta = extractFeishuDownloadMetadata(response);
   return { buffer, contentType: meta.contentType };
@@ -339,6 +403,7 @@ async function downloadMessageResourceWithType(params: {
   messageId: string;
   fileKey: string;
   type: FeishuMessageResourceDownloadType;
+  maxBytes?: number;
 }): Promise<DownloadMessageResourceResult> {
   const response = await params.client.im.messageResource.get({
     path: { message_id: params.messageId, file_key: params.fileKey },
@@ -349,6 +414,7 @@ async function downloadMessageResourceWithType(params: {
     response,
     tmpDirPrefix: "openclaw-feishu-resource-",
     errorPrefix: "Feishu message resource download failed",
+    maxBytes: params.maxBytes,
   });
   return { buffer, ...extractFeishuDownloadMetadata(response) };
 }
@@ -363,8 +429,9 @@ export async function downloadMessageResourceFeishu(params: {
   fileKey: string;
   type: "image" | "file";
   accountId?: string;
+  maxBytes?: number;
 }): Promise<DownloadMessageResourceResult> {
-  const { cfg, messageId, fileKey, type, accountId } = params;
+  const { cfg, messageId, fileKey, type, accountId, maxBytes } = params;
   const normalizedFileKey = normalizeFeishuExternalKey(fileKey);
   if (!normalizedFileKey) {
     throw new Error("Feishu message resource download failed: invalid file_key");
@@ -377,6 +444,7 @@ export async function downloadMessageResourceFeishu(params: {
       messageId,
       fileKey: normalizedFileKey,
       type,
+      maxBytes,
     });
   } catch (err) {
     if (type !== "file" || !isHttpStatusError(err, 502)) {
@@ -388,6 +456,7 @@ export async function downloadMessageResourceFeishu(params: {
         messageId,
         fileKey: normalizedFileKey,
         type: "media",
+        maxBytes,
       });
     } catch {
       throw err;

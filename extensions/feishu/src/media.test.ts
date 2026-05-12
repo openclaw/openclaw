@@ -1,6 +1,7 @@
-import { realpathSync } from "node:fs";
+import { promises as nodeFsPromises, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -93,6 +94,11 @@ function mockCallArg<T>(
   const call = mock.mock.calls[callIndex];
   expect(call).toBeDefined();
   return call?.[argIndex] as T;
+}
+
+function arrayBufferFromText(text: string): ArrayBuffer {
+  const buffer = Buffer.from(text);
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }
 
 function callData<T>(
@@ -706,6 +712,89 @@ describe("downloadMessageResourceFeishu", () => {
     expect(request.params).toEqual({ type: "image" });
     expectMediaTimeoutClientConfigured();
     expect(result.buffer).toBeInstanceOf(Buffer);
+  });
+
+  it("rejects buffer-like message resources that exceed maxBytes", async () => {
+    const responses: unknown[] = [
+      Buffer.from("abcde"),
+      arrayBufferFromText("abcde"),
+      { data: Buffer.from("abcde") },
+      { data: arrayBufferFromText("abcde") },
+    ];
+
+    for (const [index, response] of responses.entries()) {
+      messageResourceGetMock.mockResolvedValueOnce(response);
+
+      await expect(
+        downloadMessageResourceFeishu({
+          cfg: emptyConfig,
+          messageId: `om_over_limit_${index}`,
+          fileKey: `file_key_over_limit_${index}`,
+          type: "file",
+          maxBytes: 4,
+        }),
+      ).rejects.toThrow("payload exceeds maxBytes 4");
+    }
+  });
+
+  it("rejects readable message resources when chunks exceed maxBytes", async () => {
+    messageResourceGetMock.mockResolvedValueOnce({
+      getReadableStream: () => Readable.from([Buffer.from("abc"), Buffer.from("de")]),
+    });
+
+    await expect(
+      downloadMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_stream_over_limit",
+        fileKey: "file_key_stream_over_limit",
+        type: "file",
+        maxBytes: 4,
+      }),
+    ).rejects.toThrow("payload exceeds maxBytes 4");
+  });
+
+  it("rejects async-iterable message resources when chunks exceed maxBytes", async () => {
+    messageResourceGetMock.mockResolvedValueOnce({
+      async *[Symbol.asyncIterator]() {
+        yield Buffer.from("abc");
+        yield "de";
+      },
+    });
+
+    await expect(
+      downloadMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_async_over_limit",
+        fileKey: "file_key_async_over_limit",
+        type: "file",
+        maxBytes: 4,
+      }),
+    ).rejects.toThrow("payload exceeds maxBytes 4");
+  });
+
+  it("rejects over-limit writeFile downloads before reading the temp file", async () => {
+    const readFileSpy = vi.spyOn(nodeFsPromises, "readFile");
+    messageResourceGetMock.mockResolvedValueOnce({
+      writeFile: async (tmpPath: string) => {
+        await fs.writeFile(tmpPath, Buffer.from("abcde"));
+      },
+    });
+
+    try {
+      await expect(
+        downloadMessageResourceFeishu({
+          cfg: emptyConfig,
+          messageId: "om_write_file_over_limit",
+          fileKey: "file_key_write_file_over_limit",
+          type: "file",
+          maxBytes: 4,
+        }),
+      ).rejects.toThrow("payload exceeds maxBytes 4");
+
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 
   it("extracts content-type and filename metadata from download headers", async () => {
