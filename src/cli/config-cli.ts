@@ -1815,13 +1815,28 @@ export async function runConfigUnset(opts: {
           })),
         );
       }
-      // SecretRef fallout check: collect refs that might be affected by provider removal
+      // SecretRef fallout check: collect refs that might be affected by provider/default removal
+      // Check if unsetting secrets, secrets.providers, secrets.providers.<alias>, secrets.defaults, or secrets.defaults.<alias>
+      const isSecretsPath = pathStartsWith(parsedPath, parsePath("secrets"));
       const isProviderPath = pathStartsWith(parsedPath, parsePath("secrets.providers"));
+      const isDefaultsPath = pathStartsWith(parsedPath, parsePath("secrets.defaults"));
+      // Affects SecretRef resolution if removing providers or defaults
+      const affectsSecretResolution = isProviderPath || isDefaultsPath ||
+        (parsedPath.length === 1 && parsedPath[0] === "secrets"); // top-level secrets removal
       let skippedExecRefs: SecretRef[] = [];
-      if (isProviderPath) {
-        const providerAlias = parsedPath[2]?.toString();
-        // If providerAlias is undefined, we're removing the entire secrets.providers map
-        const refs = collectAffectedRefsForProviderRemoval(nextConfig, providerAlias);
+      if (affectsSecretResolution) {
+        let refs: SecretRef[];
+        if (isProviderPath) {
+          const providerAlias = parsedPath[2]?.toString();
+          // If providerAlias is undefined, we're removing the entire secrets.providers map
+          refs = collectAffectedRefsForProviderRemoval(nextConfig, providerAlias);
+        } else if (isDefaultsPath) {
+          // Removing defaults affects ref resolution - collect all refs to check resolvability
+          refs = collectAffectedRefsForProviderRemoval(nextConfig, undefined);
+        } else {
+          // Top-level secrets removal - collect all refs
+          refs = collectAffectedRefsForProviderRemoval(nextConfig, undefined);
+        }
         // Filter out exec refs since config unset doesn't support --allow-exec
         const { refsToResolve, skippedExecRefs: execRefs } = selectDryRunRefsForResolution({
           refs,
@@ -1859,7 +1874,7 @@ export async function runConfigUnset(opts: {
         writeRuntimeJson(runtime, {
           ok: true,
           operations: 1,
-          checks: { schema: true, resolvability: isProviderPath },
+          checks: { schema: true, resolvability: affectsSecretResolution },
           skippedExecRefs: skippedExecRefs.length,
         });
       } else {
