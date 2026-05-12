@@ -633,15 +633,15 @@ export async function attachWebInboxToSocket(
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
     let mediaFileName: string | undefined;
+    const maxMb =
+      typeof options.mediaMaxMb === "number" && options.mediaMaxMb > 0 ? options.mediaMaxMb : 50;
+    const maxBytes = maxMb * 1024 * 1024;
     const saveInboundMedia = async (
       inboundMedia: Awaited<ReturnType<typeof downloadInboundMedia>>,
     ) => {
       if (!inboundMedia) {
         return;
       }
-      const maxMb =
-        typeof options.mediaMaxMb === "number" && options.mediaMaxMb > 0 ? options.mediaMaxMb : 50;
-      const maxBytes = maxMb * 1024 * 1024;
       const saved = await saveMediaBuffer(
         inboundMedia.buffer,
         inboundMedia.mimetype,
@@ -654,11 +654,11 @@ export async function attachWebInboxToSocket(
       mediaFileName = inboundMedia.fileName;
     };
     try {
-      const inboundMedia = await downloadInboundMedia(msg as proto.IWebMessageInfo, sock);
+      const inboundMedia = await downloadInboundMedia(msg as proto.IWebMessageInfo, sock, maxBytes);
       await saveInboundMedia(inboundMedia);
       if (!mediaPath && replyContext) {
         await saveInboundMedia(
-          await downloadQuotedInboundMedia(msg as proto.IWebMessageInfo, sock),
+          await downloadQuotedInboundMedia(msg as proto.IWebMessageInfo, sock, maxBytes),
         );
       }
     } catch (err) {

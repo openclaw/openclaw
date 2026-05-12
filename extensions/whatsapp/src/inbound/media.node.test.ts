@@ -5,7 +5,14 @@ type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
 
 const { normalizeMessageContent, downloadMediaMessage } = vi.hoisted(() => ({
   normalizeMessageContent: vi.fn((msg: MockMessageInput) => mockNormalizeMessageContent(msg)),
-  downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("fake-media-data")),
+  downloadMediaMessage: vi.fn(async (_message: unknown, type: "buffer" | "stream") => {
+    const buffer = Buffer.from("fake-media-data");
+    if (type === "stream") {
+      const { Readable } = await import("node:stream");
+      return Readable.from([buffer]);
+    }
+    return buffer;
+  }),
 }));
 
 vi.mock("baileys", async () => {

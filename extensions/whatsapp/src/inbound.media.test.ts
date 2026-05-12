@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mockExtractMessageContent,
@@ -15,6 +16,7 @@ type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
 const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
 const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
 const saveMediaBufferSpy = vi.fn();
+const downloadMediaMessageMock = vi.fn();
 let currentMockSocket:
   | {
       ev: import("node:events").EventEmitter;
@@ -110,7 +112,10 @@ vi.mock("baileys", async () => {
   return {
     ...actual,
     DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
-    downloadMediaMessage: vi.fn().mockResolvedValue(jpegBuffer),
+    downloadMediaMessage: downloadMediaMessageMock.mockImplementation(
+      async (_message: unknown, type: "buffer" | "stream") =>
+        type === "stream" ? Readable.from([jpegBuffer]) : jpegBuffer,
+    ),
     extractMessageContent: vi.fn((message: MockMessageInput) => mockExtractMessageContent(message)),
     getContentType: vi.fn((message: MockMessageInput) => mockGetContentType(message)),
     isJidGroup: vi.fn((jid: string | undefined | null) => mockIsJidGroup(jid)),
@@ -173,6 +178,7 @@ describe("web inbound media saves with extension", () => {
   beforeEach(() => {
     vi.useRealTimers();
     currentMockSocket = undefined;
+    downloadMediaMessageMock.mockClear();
     saveMediaBufferSpy.mockClear();
     resetWebInboundDedupe();
   });
@@ -325,6 +331,97 @@ describe("web inbound media saves with extension", () => {
     expect(saveMediaBufferSpy).toHaveBeenCalled();
     const lastCall = saveMediaBufferSpy.mock.calls.at(-1);
     expect(lastCall?.[3]).toBe(1 * 1024 * 1024);
+
+    await listener.close();
+  });
+
+  it("rejects over-limit inbound media before saving", async () => {
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: { messagePrefix: undefined, responsePrefix: undefined },
+      } as never,
+      verbose: false,
+      onMessage,
+      mediaMaxMb: 0.000001,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+    });
+    const realSock = await getMockSocket();
+    downloadMediaMessageMock.mockImplementationOnce(
+      async (_message: unknown, type: "buffer" | "stream") => {
+        const chunks = [Buffer.alloc(2), Buffer.alloc(2)];
+        return type === "stream" ? Readable.from(chunks) : Buffer.concat(chunks);
+      },
+    );
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "img-over-limit", fromMe: false, remoteJid: "222@s.whatsapp.net" },
+          message: { imageMessage: { mimetype: "image/jpeg" } },
+          messageTimestamp: 1_700_000_006,
+        },
+      ],
+    });
+
+    const inbound = await waitForMessage(onMessage);
+    expect(downloadMediaMessageMock.mock.calls.at(-1)?.[1]).toBe("stream");
+    expect(inbound.mediaPath).toBeUndefined();
+    expect(saveMediaBufferSpy).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
+  it("does not fall back to quoted media after rejecting over-limit current media", async () => {
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: { messagePrefix: undefined, responsePrefix: undefined },
+      } as never,
+      verbose: false,
+      onMessage,
+      mediaMaxMb: 0.000001,
+      accountId: "default",
+      authDir: path.join(HOME, "wa-auth"),
+    });
+    const realSock = await getMockSocket();
+    downloadMediaMessageMock.mockImplementationOnce(
+      async (_message: unknown, type: "buffer" | "stream") => {
+        const chunks = [Buffer.alloc(2), Buffer.alloc(2)];
+        return type === "stream" ? Readable.from(chunks) : Buffer.concat(chunks);
+      },
+    );
+
+    realSock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "img-over-limit-with-quote", fromMe: false, remoteJid: "222@s.whatsapp.net" },
+          message: {
+            imageMessage: {
+              mimetype: "image/jpeg",
+              contextInfo: {
+                stanzaId: "quoted-image",
+                participant: "333@s.whatsapp.net",
+                quotedMessage: {
+                  imageMessage: { mimetype: "image/jpeg" },
+                },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_007,
+        },
+      ],
+    });
+
+    const inbound = await waitForMessage(onMessage);
+    expect(downloadMediaMessageMock).toHaveBeenCalledTimes(1);
+    expect(inbound.mediaPath).toBeUndefined();
+    expect(saveMediaBufferSpy).not.toHaveBeenCalled();
 
     await listener.close();
   });
