@@ -37,19 +37,19 @@ describe("short-term promotion", () => {
 
   async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
     const workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
-    await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await run(workspaceDir);
   }
 
   async function readRecallStore(workspaceDir: string) {
-    return await __testing.readStore(workspaceDir, "2026-04-04T00:00:00.000Z");
+    return await __testing.readShortTermRecallState(workspaceDir, "2026-04-04T00:00:00.000Z");
   }
 
   async function writeRecallStore(
     workspaceDir: string,
     store: Awaited<ReturnType<typeof readRecallStore>>,
   ) {
-    await __testing.writeStore(workspaceDir, store);
+    await __testing.writeShortTermRecallState(workspaceDir, store);
   }
 
   async function readPhaseSignalStore(workspaceDir: string) {
@@ -106,7 +106,7 @@ describe("short-term promotion", () => {
   it("detects short-term daily memory paths", () => {
     expect(isShortTermMemoryPath("memory/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("2026-04-03.md")).toBe(true);
-    expect(isShortTermMemoryPath("memory/.dreams/session-corpus/2026-04-03.txt")).toBe(true);
+    expect(isShortTermMemoryPath("memory/session-ingestion/2026-04-03.txt")).toBe(true);
     expect(isShortTermMemoryPath("notes/2026-04-03.md")).toBe(false);
     expect(isShortTermMemoryPath("MEMORY.md")).toBe(false);
     expect(isShortTermMemoryPath("memory/network.md")).toBe(false);
@@ -243,7 +243,7 @@ describe("short-term promotion", () => {
             endLine: 1,
             score: 0.92,
             snippet:
-              "Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+              "Candidate: Default to action. confidence: 0.76 evidence: memory/session-ingestion/2026-04-08.txt:1-1 recalls: 3 status: staged",
           },
         ],
       });
@@ -270,7 +270,7 @@ describe("short-term promotion", () => {
             snippet: [
               "- Candidate: Default to action.",
               "  - confidence: 0.76",
-              "  - evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1",
+              "  - evidence: memory/session-ingestion/2026-04-08.txt:1-1",
               "  - recalls: 3",
               "  - status: staged",
             ].join("\n"),
@@ -803,7 +803,7 @@ describe("short-term promotion", () => {
       expect(ranked[0].score).toBeGreaterThan(ranked[1].score);
 
       const phaseStore = await readPhaseSignalStore(workspaceDir);
-      expect(phaseStore.entries[boostedKey!]).toMatchObject({
+      expect(phaseStore.entries[boostedKey]).toMatchObject({
         lightHits: 1,
         remHits: 1,
       });
@@ -1058,7 +1058,7 @@ describe("short-term promotion", () => {
             endLine: 1,
             source: "memory",
             snippet:
-              "Reflections: Theme: assistant. confidence: 1.00 evidence: memory/.dreams/session-corpus/2026-04-08.txt:2-2 recalls: 4 status: staged",
+              "Reflections: Theme: assistant. confidence: 1.00 evidence: memory/session-ingestion/2026-04-08.txt:2-2 recalls: 4 status: staged",
             recallCount: 4,
             dailyCount: 0,
             groundedCount: 0,
@@ -1087,7 +1087,7 @@ describe("short-term promotion", () => {
   it("treats diff-prefixed dreaming snippets as contaminated", () => {
     expect(
       __testing.isContaminatedDreamingSnippet(
-        "@@ -1,1 - Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+        "@@ -1,1 - Candidate: Default to action. confidence: 0.76 evidence: memory/session-ingestion/2026-04-08.txt:1-1 recalls: 3 status: staged",
       ),
     ).toBe(true);
   });
@@ -1095,7 +1095,7 @@ describe("short-term promotion", () => {
   it("treats bracket-prefixed dreaming snippets as contaminated", () => {
     expect(
       __testing.isContaminatedDreamingSnippet(
-        "([ Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+        "([ Candidate: Default to action. confidence: 0.76 evidence: memory/session-ingestion/2026-04-08.txt:1-1 recalls: 3 status: staged",
       ),
     ).toBe(true);
   });
@@ -1315,7 +1315,7 @@ describe("short-term promotion", () => {
             endLine: 1,
             source: "memory",
             snippet:
-              "Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+              "Candidate: Default to action. confidence: 0.76 evidence: memory/session-ingestion/2026-04-08.txt:1-1 recalls: 3 status: staged",
             recallCount: 4,
             avgScore: 0.97,
             maxScore: 0.97,
@@ -1725,7 +1725,7 @@ describe("short-term promotion", () => {
       });
 
       const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
-      expect(audit.storePath).toBe(
+      expect(audit.storeLabel).toBe(
         "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
       );
       expect(audit.invalidEntryCount).toBe(0);
