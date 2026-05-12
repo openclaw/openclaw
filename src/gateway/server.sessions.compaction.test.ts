@@ -395,6 +395,8 @@ test("sessions.compaction.* discovers checkpoint transcript files when store met
     `${path.parse(fixture.sessionFile).name}.checkpoint.${checkpointId}.jsonl`,
   );
   await fs.copyFile(fixture.preCompactionSessionFile, checkpointFile);
+  await fs.utimes(checkpointFile, 1_700_000_000.123, 1_700_000_001.789);
+  const expectedCreatedAt = Math.trunc((await fs.stat(checkpointFile)).mtimeMs);
   const expectedCheckpointFile = await fs.realpath(checkpointFile);
   const expectedSessionFile = await fs.realpath(fixture.sessionFile);
   await writeSessionStore({
@@ -423,15 +425,23 @@ test("sessions.compaction.* discovers checkpoint transcript files when store met
     );
     expect(main?.compactionCheckpointCount).toBe(1);
     expect(main?.latestCompactionCheckpoint?.checkpointId).toBe(checkpointId);
+    expect(Number.isInteger(main?.latestCompactionCheckpoint?.createdAt)).toBe(true);
+    expect(main?.latestCompactionCheckpoint?.createdAt).toBe(expectedCreatedAt);
 
     const listedCheckpoints = await rpcReq<{
       ok: true;
       key: string;
-      checkpoints: Array<{ checkpointId: string; preCompaction: { sessionFile: string } }>;
+      checkpoints: Array<{
+        checkpointId: string;
+        createdAt: number;
+        preCompaction: { sessionFile: string };
+      }>;
     }>(ws, "sessions.compaction.list", { key: "main" });
     expect(listedCheckpoints.ok).toBe(true);
     expect(listedCheckpoints.payload?.checkpoints).toHaveLength(1);
     expect(listedCheckpoints.payload?.checkpoints[0]?.checkpointId).toBe(checkpointId);
+    expect(Number.isInteger(listedCheckpoints.payload?.checkpoints[0]?.createdAt)).toBe(true);
+    expect(listedCheckpoints.payload?.checkpoints[0]?.createdAt).toBe(expectedCreatedAt);
     expect(listedCheckpoints.payload?.checkpoints[0]?.preCompaction.sessionFile).toBe(
       expectedCheckpointFile,
     );
