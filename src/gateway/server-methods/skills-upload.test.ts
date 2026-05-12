@@ -130,6 +130,28 @@ function sha256(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+    throw new Error(`Expected path to be missing: ${targetPath}`);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+  }
+}
+
+function expectError(result: CallResult, code: string, message: string): void {
+  expect(result.error?.code).toBe(code);
+  expect(result.error?.message).toBe(message);
+}
+
+function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("Expected first mock call");
+  }
+  return call[0] as T;
+}
+
 async function makeSkillArchive(params: {
   name?: string;
   description?: string;
