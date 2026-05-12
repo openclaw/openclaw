@@ -41,6 +41,7 @@ function buildNodePairingRequestInput(params: {
     modelIdentifier: params.connectParams.client.modelIdentifier,
     caps: params.connectParams.caps,
     commands: params.commands,
+    permissions: params.connectParams.permissions,
     remoteIp: params.remoteIp,
   };
 }

@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   sendApnsBackgroundWake: vi.fn(),
   sendApnsAlert: vi.fn(),
   shouldClearStoredApnsRegistration: vi.fn(() => false),
+  requestNodePairing: vi.fn(),
 }));
 
 vi.mock("../../config/io.js", () => ({
@@ -58,6 +59,16 @@ vi.mock("../../infra/push-apns.js", () => ({
   sendApnsAlert: mocks.sendApnsAlert,
   shouldClearStoredApnsRegistration: mocks.shouldClearStoredApnsRegistration,
 }));
+
+vi.mock("../../infra/node-pairing.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/node-pairing.js")>(
+    "../../infra/node-pairing.js",
+  );
+  return {
+    ...actual,
+    requestNodePairing: mocks.requestNodePairing,
+  };
+});
 
 type RespondCall = [
   boolean,
@@ -326,6 +337,62 @@ async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
   });
   return respond;
 }
+
+describe("node.pair.request", () => {
+  it("passes permissions and resolves superseded prompts before broadcasting replacement requests", async () => {
+    mocks.requestNodePairing.mockResolvedValue({
+      status: "pending",
+      created: true,
+      request: {
+        requestId: "req-new",
+        nodeId: "ios-node-1",
+        commands: ["canvas.snapshot"],
+        permissions: { camera: true },
+        ts: 1,
+      },
+      superseded: [{ requestId: "req-old", nodeId: "ios-node-1" }],
+    });
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+
+    await nodeHandlers["node.pair.request"]({
+      params: {
+        nodeId: "ios-node-1",
+        commands: ["canvas.snapshot"],
+        permissions: { camera: true },
+      },
+      respond: respond as never,
+      context: { broadcast } as never,
+      client: null,
+      req: { type: "req", id: "req-node-pair", method: "node.pair.request" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.requestNodePairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "ios-node-1",
+        commands: ["canvas.snapshot"],
+        permissions: { camera: true },
+      }),
+    );
+    expect(broadcast.mock.calls[0]?.[0]).toBe("node.pair.resolved");
+    expect(broadcast.mock.calls[0]?.[1]).toEqual({
+      requestId: "req-old",
+      nodeId: "ios-node-1",
+      decision: "rejected",
+      ts: expect.any(Number),
+    });
+    expect(broadcast.mock.calls[1]?.[0]).toBe("node.pair.requested");
+    expect(broadcast.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        requestId: "req-new",
+        nodeId: "ios-node-1",
+        permissions: { camera: true },
+      }),
+    );
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+  });
+});
 
 describe("node plugin surface refresh", () => {
   it("refreshes generic plugin surface capability urls", async () => {
