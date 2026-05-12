@@ -1542,7 +1542,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
   });
 
-  it("closes the app-server client when the active turn exceeds the attempt timeout", async () => {
+  it("closes the app-server client when the active turn goes idle past the attempt timeout", async () => {
     const close = vi.fn();
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
@@ -1575,7 +1575,9 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(result.aborted).toBe(true);
     expect(result.timedOut).toBe(true);
-    expect(result.promptError).toBe("codex app-server attempt timed out");
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
     expect(request).toHaveBeenCalledWith(
       "turn/interrupt",
       {
@@ -1586,6 +1588,60 @@ describe("runCodexAppServerAttempt", () => {
     );
     expect(close).toHaveBeenCalledTimes(1);
     expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
+  });
+
+  it("keeps a progressing active turn alive beyond the original attempt timeout", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 100;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 300,
+      turnAssistantCompletionIdleTimeoutMs: 300,
+      turnTerminalIdleTimeoutMs: 300,
+    });
+    await harness.waitForMethod("turn/start");
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "message",
+          id: "raw-progress-1",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Still working." }],
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "message",
+          id: "raw-progress-2",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Almost done." }],
+        },
+      },
+    });
+
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    const result = await run;
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
   });
 
   it("does not count account rate-limit updates as turn completion activity", async () => {

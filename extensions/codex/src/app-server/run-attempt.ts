@@ -1060,6 +1060,9 @@ export async function runCodexAppServerAttempt(
   let turnAssistantCompletionIdleWatchArmed = false;
   let turnAssistantCompletionLastActivityAt = Date.now();
   let turnAssistantCompletionLastActivityDetails: Record<string, unknown> | undefined;
+  const turnAttemptIdleTimeoutMs = Math.max(100, Math.floor(params.timeoutMs));
+  let turnAttemptIdleTimer: ReturnType<typeof setTimeout> | undefined;
+  let turnAttemptIdleWatchArmed = false;
   let turnTerminalIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnTerminalIdleWatchArmed = false;
   let turnCompletionLastActivityAt = Date.now();
@@ -1088,6 +1091,13 @@ export async function runCodexAppServerAttempt(
     if (turnAssistantCompletionIdleTimer) {
       clearTimeout(turnAssistantCompletionIdleTimer);
       turnAssistantCompletionIdleTimer = undefined;
+    }
+  };
+
+  const clearTurnAttemptIdleTimer = () => {
+    if (turnAttemptIdleTimer) {
+      clearTimeout(turnAttemptIdleTimer);
+      turnAttemptIdleTimer = undefined;
     }
   };
 
@@ -1133,6 +1143,44 @@ export async function runCodexAppServerAttempt(
     }
     completed = true;
     resolveCompletion?.();
+  };
+
+  const fireTurnAttemptIdleTimeout = () => {
+    if (
+      completed ||
+      runAbortController.signal.aborted ||
+      !turnAttemptIdleWatchArmed ||
+      activeAppServerTurnRequests > 0
+    ) {
+      return;
+    }
+    const idleMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
+    if (idleMs < turnAttemptIdleTimeoutMs) {
+      scheduleTurnAttemptIdleWatch();
+      return;
+    }
+    timedOut = true;
+    turnCompletionIdleTimedOut = true;
+    turnCompletionIdleTimeoutMessage =
+      "codex app-server turn idle timed out waiting for turn/completed";
+    projector?.markTimedOut();
+    trajectoryRecorder?.recordEvent("turn.progress_idle_timeout", {
+      threadId: thread.threadId,
+      turnId,
+      idleMs,
+      timeoutMs: turnAttemptIdleTimeoutMs,
+      lastActivityReason: turnCompletionLastActivityReason,
+      ...turnCompletionLastActivityDetails,
+    });
+    embeddedAgentLog.warn("codex app-server turn idle timed out waiting for progress", {
+      threadId: thread.threadId,
+      turnId,
+      idleMs,
+      timeoutMs: turnAttemptIdleTimeoutMs,
+      lastActivityReason: turnCompletionLastActivityReason,
+      ...turnCompletionLastActivityDetails,
+    });
+    runAbortController.abort("turn_progress_idle_timeout");
   };
 
   const fireTurnCompletionIdleTimeout = () => {
@@ -1238,6 +1286,22 @@ export async function runCodexAppServerAttempt(
     turnAssistantCompletionIdleTimer.unref?.();
   }
 
+  function scheduleTurnAttemptIdleWatch() {
+    clearTurnAttemptIdleTimer();
+    if (
+      completed ||
+      runAbortController.signal.aborted ||
+      !turnAttemptIdleWatchArmed ||
+      activeAppServerTurnRequests > 0
+    ) {
+      return;
+    }
+    const elapsedMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
+    const delayMs = Math.max(1, turnAttemptIdleTimeoutMs - elapsedMs);
+    turnAttemptIdleTimer = setTimeout(fireTurnAttemptIdleTimeout, delayMs);
+    turnAttemptIdleTimer.unref?.();
+  }
+
   function scheduleTurnTerminalIdleWatch() {
     clearTurnTerminalIdleTimer();
     if (
@@ -1272,6 +1336,7 @@ export async function runCodexAppServerAttempt(
       turnCompletionIdleWatchArmed = true;
       turnCompletionIdleWatchPinnedByTerminalError = false;
     }
+    scheduleTurnAttemptIdleWatch();
     scheduleTurnCompletionIdleWatch();
     scheduleTurnTerminalIdleWatch();
   };
@@ -1932,15 +1997,9 @@ export async function runCodexAppServerAttempt(
     abort: () => runAbortController.abort("aborted"),
   };
   setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
-
-  const timeout = setTimeout(
-    () => {
-      timedOut = true;
-      projector?.markTimedOut();
-      runAbortController.abort("timeout");
-    },
-    Math.max(100, params.timeoutMs),
-  );
+  turnAttemptIdleWatchArmed = true;
+  turnTerminalIdleWatchArmed = true;
+  touchTurnCompletionActivity("turn:start", { arm: true });
 
   const abortListener = () => {
     const shouldRetireClient = timedOut;
@@ -2127,7 +2186,7 @@ export async function runCodexAppServerAttempt(
       await steeringQueue?.flushPending();
     }
     userInputBridge?.cancelPending();
-    clearTimeout(timeout);
+    clearTurnAttemptIdleTimer();
     clearTurnCompletionIdleTimer();
     clearTurnAssistantCompletionIdleTimer();
     clearTurnTerminalIdleTimer();
