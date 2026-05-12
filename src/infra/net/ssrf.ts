@@ -670,7 +670,7 @@ export function destroyDispatcher(candidate?: ClosableDispatcher | null): void {
   }
   try {
     if (typeof candidate.destroy === "function") {
-      void candidate.destroy();
+      candidate.destroy();
     } else if (typeof candidate.close === "function") {
       void candidate.close();
     }
