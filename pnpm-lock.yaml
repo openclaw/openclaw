@@ -31,7 +31,7 @@ overrides:
   protobufjs: 7.5.5
   uuid: 14.0.0
 
-packageExtensionsChecksum: sha256-dYQ0sWkVmDP3h45qaFTG+rd1lBoV5PWy5sLOMeDND7g=
+packageExtensionsChecksum: sha256-oc/FAHkBR844HBfph1RZWyRMHHBpIFya25tyv5SGf6s=
 
 patchedDependencies:
   '@agentclientprotocol/claude-agent-acp@0.33.1': 3995624bb834cc60fea1461c7ef33f1fcdd8fb58b8f43f2f1490bc689f6e1be2
@@ -48,7 +48,7 @@ importers:
         specifier: 0.95.1
         version: 0.95.1(zod@4.4.3)
       '@anthropic-ai/vertex-sdk':
-        specifier: ^0.16.0
+        specifier: 0.16.0
         version: 0.16.0(zod@4.4.3)
       '@aws-sdk/client-bedrock':
         specifier: 3.1045.0
@@ -60,13 +60,13 @@ importers:
         specifier: 3.972.39
         version: 3.972.39
       '@aws/bedrock-token-generator':
-        specifier: ^1.1.0
+        specifier: 1.1.0
         version: 1.1.0
       '@clack/core':
-        specifier: ^1.3.0
+        specifier: 1.3.0
         version: 1.3.0
       '@clack/prompts':
-        specifier: ^1.3.0
+        specifier: 1.3.0
         version: 1.3.0
       '@earendil-works/pi-agent-core':
         specifier: 0.74.0
@@ -81,16 +81,16 @@ importers:
         specifier: 0.74.0
         version: 0.74.0
       '@google/genai':
-        specifier: ^2.0.1
+        specifier: 2.0.1
         version: 2.0.1(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
       '@grammyjs/runner':
-        specifier: ^2.0.3
+        specifier: 2.0.3
         version: 2.0.3(grammy@1.42.0)
       '@grammyjs/transformer-throttler':
-        specifier: ^1.2.1
+        specifier: 1.2.1
         version: 1.2.1(grammy@1.42.0)
       '@homebridge/ciao':
-        specifier: ^1.3.8
+        specifier: 1.3.8
         version: 1.3.8
       '@lydell/node-pty':
         specifier: 1.2.0-beta.12
@@ -99,40 +99,40 @@ importers:
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
       '@mozilla/readability':
-        specifier: ^0.6.0
+        specifier: 0.6.0
         version: 0.6.0
       '@openclaw/fs-safe':
-        specifier: ^0.2.2
+        specifier: 0.2.2
         version: 0.2.2
       '@slack/bolt':
-        specifier: ^4.7.2
+        specifier: 4.7.2
         version: 4.7.2(@types/express@5.0.6)
       '@slack/types':
-        specifier: ^2.21.1
+        specifier: 2.21.1
         version: 2.21.1
       '@slack/web-api':
-        specifier: ^7.15.2
+        specifier: 7.15.2
         version: 7.15.2
       ajv:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
       audio-decode:
-        specifier: ^2.2.3
+        specifier: 2.2.3
         version: 2.2.3
       chalk:
-        specifier: ^5.6.2
+        specifier: 5.6.2
         version: 5.6.2
       chokidar:
-        specifier: ^5.0.0
+        specifier: 5.0.0
         version: 5.0.0
       commander:
-        specifier: ^14.0.3
+        specifier: 14.0.3
         version: 14.0.3
       croner:
-        specifier: ^10.0.1
+        specifier: 10.0.1
         version: 10.0.1
       dotenv:
-        specifier: ^17.4.2
+        specifier: 17.4.2
         version: 17.4.2
       express:
         specifier: 5.2.1
@@ -141,31 +141,31 @@ importers:
         specifier: 22.0.1
         version: 22.0.1
       global-agent:
-        specifier: ^4.1.3
+        specifier: 4.1.3
         version: 4.1.3
       grammy:
-        specifier: ^1.42.0
+        specifier: 1.42.0
         version: 1.42.0
       https-proxy-agent:
-        specifier: ^9.0.0
+        specifier: 9.0.0
         version: 9.0.0
       ipaddr.js:
-        specifier: ^2.4.0
+        specifier: 2.4.0
         version: 2.4.0
       jiti:
-        specifier: ^2.7.0
+        specifier: 2.7.0
         version: 2.7.0
       json5:
-        specifier: ^2.2.3
+        specifier: 2.2.3
         version: 2.2.3
       jszip:
-        specifier: ^3.10.1
+        specifier: 3.10.1
         version: 3.10.1
       kysely:
         specifier: 0.29.0
         version: 0.29.0
       linkedom:
-        specifier: ^0.18.12
+        specifier: 0.18.12
         version: 0.18.12
       markdown-it:
         specifier: 14.1.1
@@ -174,22 +174,22 @@ importers:
         specifier: 10.2.5
         version: 10.2.5
       node-edge-tts:
-        specifier: ^1.2.10
+        specifier: 1.2.10
         version: 1.2.10
       openai:
-        specifier: ^6.37.0
+        specifier: 6.37.0
         version: 6.37.0(ws@8.20.0)(zod@4.4.3)
       openshell:
         specifier: 0.1.0
         version: 0.1.0
       pdfjs-dist:
-        specifier: ^5.7.284
+        specifier: 5.7.284
         version: 5.7.284
       playwright-core:
         specifier: 1.60.0
         version: 1.60.0
       proxy-agent:
-        specifier: ^8.0.1
+        specifier: 8.0.1
         version: 8.0.1
       qrcode:
         specifier: 1.5.4
@@ -201,10 +201,10 @@ importers:
         specifier: 0.7.0
         version: 0.7.0
       tree-sitter-bash:
-        specifier: ^0.25.1
+        specifier: 0.25.1
         version: 0.25.1
       tslog:
-        specifier: ^4.10.2
+        specifier: 4.10.2
         version: 4.10.2
       typebox:
         specifier: 1.1.38
@@ -213,19 +213,19 @@ importers:
         specifier: 8.2.0
         version: 8.2.0
       web-push:
-        specifier: ^3.6.7
+        specifier: 3.6.7
         version: 3.6.7
       web-tree-sitter:
-        specifier: ^0.26.8
+        specifier: 0.26.8
         version: 0.26.8
       ws:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
       yaml:
-        specifier: ^2.9.0
+        specifier: 2.9.0
         version: 2.9.0
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@a2ui/lit':
@@ -235,52 +235,52 @@ importers:
         specifier: 1.22.0
         version: 1.22.0(vitest@4.1.6)
       '@grammyjs/types':
-        specifier: ^3.26.0
+        specifier: 3.26.0
         version: 3.26.0
       '@lit-labs/signals':
-        specifier: ^0.2.0
+        specifier: 0.2.0
         version: 0.2.0
       '@lit/context':
-        specifier: ^1.1.6
+        specifier: 1.1.6
         version: 1.1.6
       '@mdx-js/mdx':
-        specifier: ^3.1.1
+        specifier: 3.1.1
         version: 3.1.1
       '@types/express':
-        specifier: ^5.0.6
+        specifier: 5.0.6
         version: 5.0.6
       '@types/markdown-it':
-        specifier: ^14.1.2
+        specifier: 14.1.2
         version: 14.1.2
       '@types/node':
         specifier: 25.7.0
         version: 25.7.0
       '@types/ws':
-        specifier: ^8.18.1
+        specifier: 8.18.1
         version: 8.18.1
       '@typescript/native-preview':
         specifier: 7.0.0-dev.20260511.1
         version: 7.0.0-dev.20260511.1
       '@vitest/coverage-v8':
-        specifier: ^4.1.6
+        specifier: 4.1.6
         version: 4.1.6(@vitest/browser@4.1.6)(vitest@4.1.6)
       jscpd:
         specifier: 4.1.0
         version: 4.1.0
       jsdom:
-        specifier: ^29.1.1
+        specifier: 29.1.1
         version: 29.1.1(@noble/hashes@2.0.1)
       lit:
-        specifier: ^3.3.2
+        specifier: 3.3.2
         version: 3.3.2
       oxfmt:
         specifier: 0.49.0
         version: 0.49.0
       oxlint:
-        specifier: ^1.64.0
+        specifier: 1.64.0
         version: 1.64.0(oxlint-tsgolint@0.22.1)
       oxlint-tsgolint:
-        specifier: ^0.22.1
+        specifier: 0.22.1
         version: 0.22.1
       signal-utils:
         specifier: 0.21.1
@@ -289,16 +289,16 @@ importers:
         specifier: 0.22.0
         version: 0.22.0(@typescript/native-preview@7.0.0-dev.20260511.1)(tsx@4.21.0)(typescript@6.0.3)(unrun@0.3.0)
       tsx:
-        specifier: ^4.21.0
+        specifier: 4.21.0
         version: 4.21.0
       typescript:
-        specifier: ^6.0.3
+        specifier: 6.0.3
         version: 6.0.3
       unrun:
         specifier: 0.3.0
         version: 0.3.0
       vitest:
-        specifier: ^4.1.6
+        specifier: 4.1.6
         version: 4.1.6(@opentelemetry/api@1.9.1)(@types/node@25.7.0)(@vitest/browser-playwright@4.1.6)(@vitest/coverage-v8@4.1.6)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@8.0.12(@types/node@25.7.0)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0))
     optionalDependencies:
       sqlite-vec:
@@ -317,7 +317,7 @@ importers:
         specifier: 0.7.0
         version: 0.7.0
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -358,7 +358,7 @@ importers:
         specifier: 0.95.1
         version: 0.95.1(zod@4.4.3)
       '@aws/bedrock-token-generator':
-        specifier: ^1.1.0
+        specifier: 1.1.0
         version: 1.1.0
       '@earendil-works/pi-ai':
         specifier: 0.74.0
@@ -381,7 +381,7 @@ importers:
   extensions/anthropic-vertex:
     dependencies:
       '@anthropic-ai/vertex-sdk':
-        specifier: ^0.16.0
+        specifier: 0.16.0
         version: 0.16.0(zod@4.4.3)
       '@earendil-works/pi-agent-core':
         specifier: 0.74.0
@@ -409,7 +409,7 @@ importers:
   extensions/bonjour:
     dependencies:
       '@homebridge/ciao':
-        specifier: ^1.3.8
+        specifier: 1.3.8
         version: 1.3.8
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -428,7 +428,7 @@ importers:
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
       commander:
-        specifier: ^14.0.3
+        specifier: 14.0.3
         version: 14.0.3
       express:
         specifier: 5.2.1
@@ -440,7 +440,7 @@ importers:
         specifier: 1.1.38
         version: 1.1.38
       ws:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -462,19 +462,19 @@ importers:
         specifier: 0.9.3
         version: 0.9.3(signal-polyfill@0.2.2)
       '@lit/context':
-        specifier: ^1.1.6
+        specifier: 1.1.6
         version: 1.1.6
       chokidar:
-        specifier: ^5.0.0
+        specifier: 5.0.0
         version: 5.0.0
       lit:
-        specifier: ^3.3.2
+        specifier: 3.3.2
         version: 3.3.2
       typebox:
         specifier: 1.1.38
         version: 1.1.38
       ws:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -496,10 +496,10 @@ importers:
   extensions/clickclack:
     dependencies:
       ws:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -524,13 +524,13 @@ importers:
         specifier: 0.130.0
         version: 0.130.0
       ajv:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
       ws:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -570,37 +570,37 @@ importers:
   extensions/diagnostics-otel:
     dependencies:
       '@opentelemetry/api':
-        specifier: ^1.9.1
+        specifier: 1.9.1
         version: 1.9.1
       '@opentelemetry/api-logs':
-        specifier: ^0.217.0
+        specifier: 0.217.0
         version: 0.217.0
       '@opentelemetry/exporter-logs-otlp-proto':
-        specifier: ^0.217.0
+        specifier: 0.217.0
         version: 0.217.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/exporter-metrics-otlp-proto':
-        specifier: ^0.217.0
+        specifier: 0.217.0
         version: 0.217.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/exporter-trace-otlp-proto':
-        specifier: ^0.217.0
+        specifier: 0.217.0
         version: 0.217.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/resources':
-        specifier: ^2.7.1
+        specifier: 2.7.1
         version: 2.7.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-logs':
-        specifier: ^0.217.0
+        specifier: 0.217.0
         version: 0.217.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-metrics':
-        specifier: ^2.7.1
+        specifier: 2.7.1
         version: 2.7.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-node':
-        specifier: ^0.217.0
+        specifier: 0.217.0
         version: 0.217.0(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-trace-base':
-        specifier: ^2.7.1
+        specifier: 2.7.1
         version: 2.7.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/semantic-conventions':
-        specifier: ^1.40.0
+        specifier: 1.40.0
         version: 1.40.0
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -628,7 +628,7 @@ importers:
         specifier: 1.1.38
         version: 1.1.38
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -638,16 +638,16 @@ importers:
   extensions/discord:
     dependencies:
       '@discordjs/voice':
-        specifier: ^0.19.2
+        specifier: 0.19.2
         version: 0.19.2(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(opusscript@0.1.1)
       discord-api-types:
-        specifier: ^0.38.47
+        specifier: 0.38.47
         version: 0.38.47
       https-proxy-agent:
-        specifier: ^9.0.0
+        specifier: 9.0.0
         version: 9.0.0
       opusscript:
-        specifier: ^0.1.1
+        specifier: 0.1.1
         version: 0.1.1
       typebox:
         specifier: 1.1.38
@@ -656,7 +656,7 @@ importers:
         specifier: 8.2.0
         version: 8.2.0
       ws:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -672,7 +672,7 @@ importers:
         specifier: ^0.1.89
         version: 0.1.99
       pdfjs-dist:
-        specifier: ^5.7.284
+        specifier: 5.7.284
         version: 5.7.284
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -706,13 +706,13 @@ importers:
   extensions/feishu:
     dependencies:
       '@larksuiteoapi/node-sdk':
-        specifier: ^1.63.1
+        specifier: 1.63.1
         version: 1.63.1
       typebox:
         specifier: 1.1.38
         version: 1.1.38
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -758,7 +758,7 @@ importers:
   extensions/github-copilot:
     dependencies:
       '@clack/prompts':
-        specifier: ^1.3.0
+        specifier: 1.3.0
         version: 1.3.0
     devDependencies:
       '@earendil-works/pi-ai':
@@ -774,7 +774,7 @@ importers:
         specifier: 0.74.0
         version: 0.74.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)
       '@google/genai':
-        specifier: ^2.0.1
+        specifier: 2.0.1
         version: 2.0.1(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -784,7 +784,7 @@ importers:
   extensions/google-meet:
     dependencies:
       commander:
-        specifier: ^14.0.3
+        specifier: 14.0.3
         version: 14.0.3
       typebox:
         specifier: 1.1.38
@@ -806,7 +806,7 @@ importers:
         specifier: 10.6.2
         version: 10.6.2
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -855,7 +855,7 @@ importers:
   extensions/irc:
     dependencies:
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -881,10 +881,10 @@ importers:
   extensions/line:
     dependencies:
       '@line/bot-sdk':
-        specifier: ^11.0.0
+        specifier: 11.0.0
         version: 11.0.0
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -922,7 +922,7 @@ importers:
         specifier: 2026.4.6
         version: 2026.4.6
       ajv:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
       typebox:
         specifier: 1.1.38
@@ -935,13 +935,13 @@ importers:
   extensions/matrix:
     dependencies:
       '@matrix-org/matrix-sdk-crypto-nodejs':
-        specifier: ^0.5.1
+        specifier: 0.5.1
         version: 0.5.1
       '@matrix-org/matrix-sdk-crypto-wasm':
         specifier: 18.2.0
         version: 18.2.0
       fake-indexeddb:
-        specifier: ^6.2.5
+        specifier: 6.2.5
         version: 6.2.5
       markdown-it:
         specifier: 14.1.1
@@ -950,13 +950,13 @@ importers:
         specifier: 41.5.0-rc.0
         version: 41.5.0-rc.0
       music-metadata:
-        specifier: ^11.12.3
+        specifier: 11.12.3
         version: 11.12.3
       typebox:
         specifier: 1.1.38
         version: 1.1.38
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -969,10 +969,10 @@ importers:
   extensions/mattermost:
     dependencies:
       ws:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -985,7 +985,7 @@ importers:
   extensions/media-understanding-core:
     dependencies:
       sharp:
-        specifier: ^0.34.5
+        specifier: 0.34.5
         version: 0.34.5
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -995,10 +995,10 @@ importers:
   extensions/memory-core:
     dependencies:
       chokidar:
-        specifier: ^5.0.0
+        specifier: 5.0.0
         version: 5.0.0
       json5:
-        specifier: ^2.2.3
+        specifier: 2.2.3
         version: 2.2.3
       typebox:
         specifier: 1.1.38
@@ -1014,13 +1014,13 @@ importers:
   extensions/memory-lancedb:
     dependencies:
       '@lancedb/lancedb':
-        specifier: ^0.27.2
+        specifier: 0.27.2
         version: 0.27.2(apache-arrow@18.1.0)
       apache-arrow:
         specifier: 18.1.0
         version: 18.1.0
       openai:
-        specifier: ^6.37.0
+        specifier: 6.37.0
         version: 6.37.0(ws@8.20.0)(zod@4.4.3)
       typebox:
         specifier: 1.1.38
@@ -1036,10 +1036,10 @@ importers:
         specifier: 1.1.38
         version: 1.1.38
       yaml:
-        specifier: ^2.9.0
+        specifier: 2.9.0
         version: 2.9.0
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1052,7 +1052,7 @@ importers:
   extensions/microsoft:
     dependencies:
       node-edge-tts:
-        specifier: ^1.2.10
+        specifier: 1.2.10
         version: 1.2.10
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1077,7 +1077,7 @@ importers:
   extensions/migrate-hermes:
     dependencies:
       yaml:
-        specifier: ^2.9.0
+        specifier: 2.9.0
         version: 2.9.0
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1133,7 +1133,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       '@types/jsonwebtoken':
-        specifier: ^9.0.10
+        specifier: 9.0.10
         version: 9.0.10
       openclaw:
         specifier: workspace:*
@@ -1142,7 +1142,7 @@ importers:
   extensions/nextcloud-talk:
     dependencies:
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1155,10 +1155,10 @@ importers:
   extensions/nostr:
     dependencies:
       nostr-tools:
-        specifier: ^2.23.3
+        specifier: 2.23.3
         version: 2.23.3(typescript@6.0.3)
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1177,10 +1177,10 @@ importers:
   extensions/oc-path:
     dependencies:
       commander:
-        specifier: ^14.0.3
+        specifier: 14.0.3
         version: 14.0.3
       jsonc-parser:
-        specifier: ^3.3.1
+        specifier: 3.3.1
         version: 3.3.1
       markdown-it:
         specifier: 14.1.1
@@ -1218,7 +1218,7 @@ importers:
         specifier: 0.74.0
         version: 0.74.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)
       ws:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1249,7 +1249,7 @@ importers:
         specifier: 0.1.0
         version: 0.1.0
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1268,7 +1268,7 @@ importers:
         specifier: 1.1.38
         version: 1.1.38
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1290,10 +1290,10 @@ importers:
         specifier: 1.60.0
         version: 1.60.0
       yaml:
-        specifier: ^2.9.0
+        specifier: 2.9.0
         version: 2.9.0
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/discord':
@@ -1337,26 +1337,26 @@ importers:
   extensions/qqbot:
     dependencies:
       '@tencent-connect/qqbot-connector':
-        specifier: ^1.1.0
+        specifier: 1.1.0
         version: 1.1.0
       mpg123-decoder:
-        specifier: ^1.0.3
+        specifier: 1.0.3
         version: 1.0.3
       silk-wasm:
-        specifier: ^3.7.1
+        specifier: 3.7.1
         version: 3.7.1
       ws:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       '@types/ws':
-        specifier: ^8.18.1
+        specifier: 8.18.1
         version: 8.18.1
       openclaw:
         specifier: workspace:*
@@ -1395,7 +1395,7 @@ importers:
   extensions/signal:
     dependencies:
       ws:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1415,16 +1415,16 @@ importers:
   extensions/slack:
     dependencies:
       '@slack/bolt':
-        specifier: ^4.7.2
+        specifier: 4.7.2
         version: 4.7.2(@types/express@5.0.6)
       '@slack/types':
-        specifier: ^2.21.1
+        specifier: 2.21.1
         version: 2.21.1
       '@slack/web-api':
-        specifier: ^7.15.2
+        specifier: 7.15.2
         version: 7.15.2
       https-proxy-agent:
-        specifier: ^9.0.0
+        specifier: 9.0.0
         version: 9.0.0
       typebox:
         specifier: 1.1.38
@@ -1449,7 +1449,7 @@ importers:
   extensions/synology-chat:
     dependencies:
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1475,13 +1475,13 @@ importers:
   extensions/telegram:
     dependencies:
       '@grammyjs/runner':
-        specifier: ^2.0.3
+        specifier: 2.0.3
         version: 2.0.3(grammy@1.42.0)
       '@grammyjs/transformer-throttler':
-        specifier: ^1.2.1
+        specifier: 1.2.1
         version: 1.2.1(grammy@1.42.0)
       grammy:
-        specifier: ^1.42.0
+        specifier: 1.42.0
         version: 1.42.0
       typebox:
         specifier: 1.1.38
@@ -1512,10 +1512,10 @@ importers:
         specifier: 0.3.6
         version: 0.3.6
       '@urbit/aura':
-        specifier: ^3.0.0
+        specifier: 3.0.0
         version: 3.0.0
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1550,16 +1550,16 @@ importers:
   extensions/twitch:
     dependencies:
       '@twurple/api':
-        specifier: ^8.1.4
+        specifier: 8.1.4
         version: 8.1.4(@twurple/auth@8.1.4)
       '@twurple/auth':
-        specifier: ^8.1.4
+        specifier: 8.1.4
         version: 8.1.4
       '@twurple/chat':
-        specifier: ^8.1.4
+        specifier: 8.1.4
         version: 8.1.4(@twurple/auth@8.1.4)
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1593,16 +1593,16 @@ importers:
   extensions/voice-call:
     dependencies:
       commander:
-        specifier: ^14.0.3
+        specifier: 14.0.3
         version: 14.0.3
       typebox:
         specifier: 1.1.38
         version: 1.1.38
       ws:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1633,10 +1633,10 @@ importers:
   extensions/web-readability:
     dependencies:
       '@mozilla/readability':
-        specifier: ^0.6.0
+        specifier: 0.6.0
         version: 0.6.0
       linkedom:
-        specifier: ^0.18.12
+        specifier: 0.18.12
         version: 0.18.12
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1646,7 +1646,7 @@ importers:
   extensions/webhooks:
     dependencies:
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1659,10 +1659,10 @@ importers:
         specifier: 7.0.0-rc10
         version: 7.0.0-rc10(patch_hash=a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
       https-proxy-agent:
-        specifier: ^9.0.0
+        specifier: 9.0.0
         version: 9.0.0
       jimp:
-        specifier: ^1.6.1
+        specifier: 1.6.1
         version: 1.6.1
       typebox:
         specifier: 1.1.38
@@ -1691,7 +1691,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       ws:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
 
   extensions/xiaomi:
@@ -1709,7 +1709,7 @@ importers:
   extensions/zalo:
     dependencies:
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1728,7 +1728,7 @@ importers:
         specifier: 2.1.2
         version: 2.1.2
       zod:
-        specifier: ^4.4.3
+        specifier: 4.4.3
         version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1749,41 +1749,41 @@ importers:
   ui:
     dependencies:
       '@create-markdown/preview':
-        specifier: ^2.0.3
+        specifier: 2.0.3
         version: 2.0.3(shiki@3.23.0)
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0
       dompurify:
-        specifier: ^3.4.2
+        specifier: 3.4.2
         version: 3.4.2
       json5:
-        specifier: ^2.2.3
+        specifier: 2.2.3
         version: 2.2.3
       lit:
-        specifier: ^3.3.2
+        specifier: 3.3.2
         version: 3.3.2
       markdown-it:
-        specifier: ^14.1.1
+        specifier: 14.1.1
         version: 14.1.1
       markdown-it-task-lists:
-        specifier: ^2.1.1
+        specifier: 2.1.1
         version: 2.1.1
       marked:
-        specifier: ^18.0.3
+        specifier: 18.0.3
         version: 18.0.3
     devDependencies:
       '@types/markdown-it':
-        specifier: ^14.1.2
+        specifier: 14.1.2
         version: 14.1.2
       '@vitest/browser-playwright':
         specifier: 4.1.6
         version: 4.1.6(playwright@1.60.0)(vite@8.0.12(@types/node@25.7.0)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0))(vitest@4.1.6)
       jsdom:
-        specifier: ^29.1.1
+        specifier: 29.1.1
         version: 29.1.1(@noble/hashes@2.0.1)
       playwright:
-        specifier: ^1.60.0
+        specifier: 1.60.0
         version: 1.60.0
       vite:
         specifier: 8.0.12

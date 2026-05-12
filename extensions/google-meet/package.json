@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "commander": "^14.0.3",
+    "commander": "14.0.3",
     "typebox": "1.1.38"
   },
   "devDependencies": {

@@ -5,7 +5,7 @@
   "description": "OpenClaw Microsoft speech plugin",
   "type": "module",
   "dependencies": {
-    "node-edge-tts": "^1.2.10"
+    "node-edge-tts": "1.2.10"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

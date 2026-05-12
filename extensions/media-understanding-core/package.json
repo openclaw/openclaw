@@ -5,7 +5,7 @@
   "description": "OpenClaw media understanding runtime package",
   "type": "module",
   "dependencies": {
-    "sharp": "^0.34.5"
+    "sharp": "0.34.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

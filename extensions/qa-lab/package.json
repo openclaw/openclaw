@@ -8,8 +8,8 @@
     "@copilotkit/aimock": "1.22.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "playwright-core": "1.60.0",
-    "yaml": "^2.9.0",
-    "zod": "^4.4.3"
+    "yaml": "2.9.0",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/discord": "workspace:*",

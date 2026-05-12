@@ -6,11 +6,11 @@
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
-    "commander": "^14.0.3",
+    "commander": "14.0.3",
     "express": "5.2.1",
     "playwright-core": "1.60.0",
     "typebox": "1.1.38",
-    "ws": "^8.20.0"
+    "ws": "8.20.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
