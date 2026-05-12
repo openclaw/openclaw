@@ -131,9 +131,6 @@ describe("resolvePromptSessionContextForSystemEvent", () => {
         accountId: "acct-1",
         threadId: "thread-1",
       },
-      lastTo: "channel-1",
-      lastAccountId: "acct-1",
-      lastThreadId: "thread-1",
     } satisfies SessionEntry;
 
     const result = resolvePromptSessionContextForSystemEvent({
