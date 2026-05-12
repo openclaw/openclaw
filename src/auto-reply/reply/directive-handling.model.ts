@@ -48,6 +48,7 @@ async function resolveStatusAuthLabel(params: {
   provider: string;
   modelId: string;
   cfg: OpenClawConfig;
+  modelsPath: string;
   agentDir: string;
   activeAgentId: string;
   authMode: ModelAuthDetailMode;
@@ -57,6 +58,7 @@ async function resolveStatusAuthLabel(params: {
   const auth = await resolveAuthLabel(
     params.provider,
     params.cfg,
+    params.modelsPath,
     params.agentDir,
     params.authMode,
     params.workspaceDir,
@@ -90,6 +92,7 @@ async function resolveStatusAuthLabel(params: {
   const runtimeAuth = await resolveAuthLabel(
     effectiveAuthProvider,
     params.cfg,
+    params.modelsPath,
     params.agentDir,
     params.authMode,
     params.workspaceDir,
@@ -401,6 +404,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
     };
   }
 
+  const modelsPath = `SQLite model catalog for ${params.agentDir}`;
   const formatPath = (value: string) => shortenHomePath(value);
   const authMode: ModelAuthDetailMode = "verbose";
   if (pickerCatalog.length === 0) {
@@ -417,6 +421,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
       provider,
       modelId: entry.id,
       cfg: params.cfg,
+      modelsPath,
       agentDir: params.agentDir,
       activeAgentId: params.activeAgentId,
       authMode,

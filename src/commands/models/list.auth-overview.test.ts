@@ -89,6 +89,7 @@ function resolveOpenAiOverview(apiKey: string) {
       },
     } as never,
     store: { version: 1, profiles: {} } as never,
+    modelsPath: "SQLite model catalog for /tmp/openclaw-agent-main",
   });
 }
 
@@ -111,6 +112,7 @@ describe("resolveProviderAuthOverview", () => {
           },
         },
       } as never,
+      modelsPath: "SQLite model catalog for /tmp/openclaw-agent-main",
     });
 
     expect(overview.profiles.labels[0]).toContain("token:ref(env:GITHUB_TOKEN)");
@@ -137,6 +139,7 @@ describe("resolveProviderAuthOverview", () => {
           },
         },
       } as never,
+      modelsPath: "SQLite model catalog for /tmp/openclaw-agent-custom",
       agentDir: "/tmp/openclaw-agent-custom",
     });
 
@@ -167,6 +170,7 @@ describe("resolveProviderAuthOverview", () => {
           },
         },
       } as never,
+      modelsPath: "SQLite model catalog for /tmp/openclaw-agent-custom",
       agentDir: "/tmp/openclaw-agent-custom",
     });
 

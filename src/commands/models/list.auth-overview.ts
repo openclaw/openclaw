@@ -64,6 +64,7 @@ export function resolveProviderAuthOverview(params: {
   provider: string;
   cfg: OpenClawConfig;
   store: AuthProfileStore;
+  modelsPath: string;
   agentDir?: string;
   workspaceDir?: string;
   syntheticAuth?: { value: string; source: string };
@@ -189,7 +190,7 @@ export function resolveProviderAuthOverview(params: {
       ? {
           modelCatalog: {
             value: formatMarkerOrSecret(customKey),
-            source: "stored model catalog",
+            source: `stored model catalog: ${shortenHomePath(params.modelsPath)}`,
           },
         }
       : {}),

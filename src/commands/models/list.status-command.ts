@@ -237,6 +237,7 @@ export async function modelsStatusCommand(
   const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
 
   const store = ensureAuthProfileStore(agentDir);
+  const modelCatalogSource = `SQLite model catalog for ${agentDir}`;
 
   const providersFromStore = new Set(
     Object.values(store.profiles)
@@ -362,6 +363,7 @@ export async function modelsStatusCommand(
         provider,
         cfg,
         store,
+        modelsPath: modelCatalogSource,
         agentDir,
         workspaceDir,
         syntheticAuth: syntheticAuthByProvider.get(provider),
@@ -618,7 +620,7 @@ export async function modelsStatusCommand(
       aliases,
       allowed,
       auth: {
-        storeLocation: resolveAuthProfileStoreLocationForDisplay(agentDir),
+        store: resolveAuthProfileStoreLocationForDisplay(agentDir),
         shellEnvFallback: {
           enabled: shellFallbackEnabled,
           appliedKeys: applied,

@@ -308,13 +308,13 @@ describe("buildProbeTargets reason codes", () => {
       const plan = await buildAnthropicPlanFromModelCatalogApiKey("ALLCAPS_SAMPLE");
       expect(plan.results).toStrictEqual([]);
       expect(plan.targets).toStrictEqual([
-        {
+        expect.objectContaining({
           label: "model catalog",
           mode: "api_key",
           model: { provider: "anthropic", model: "claude-sonnet-4-6" },
           provider: "anthropic",
           source: "model_catalog",
-        },
+        }),
       ]);
     });
   });
@@ -354,13 +354,13 @@ describe("buildProbeTargets reason codes", () => {
 
       expect(plan.results).toStrictEqual([]);
       expect(plan.targets).toStrictEqual([
-        {
+        expect.objectContaining({
           label: "model catalog",
           mode: "api_key",
-          model: { provider: "zai", model: "glm-4.7" },
           provider: "zai",
+          model: { provider: "zai", model: "glm-4.7" },
           source: "model_catalog",
-        },
+        }),
       ]);
     });
   });

@@ -35,7 +35,9 @@ import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelCatalogDirs,
   listAuthProfileStoreAgentDirs,
+  listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
+  readJsonObjectIfExists,
 } from "./storage-scan.js";
 import { discoverConfigSecretTargets } from "./target-registry.js";
 
@@ -105,7 +107,7 @@ type AuditCollector = {
 };
 
 const REF_RESOLVE_FALLBACK_CONCURRENCY = 8;
-const MAX_AUDIT_MODEL_CATALOG_BYTES = 5 * 1024 * 1024;
+const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
 const ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES = new Set([
   "authorization",
   "proxy-authorization",
@@ -322,6 +324,42 @@ function collectAuthStoreSecrets(params: {
   }
 }
 
+function collectAuthJsonResidue(params: { stateDir: string; collector: AuditCollector }): void {
+  for (const authJsonPath of listLegacyAuthJsonPaths(params.stateDir)) {
+    params.collector.filesScanned.add(authJsonPath);
+    const parsedResult = readJsonObjectIfExists(authJsonPath);
+    if (parsedResult.error) {
+      addFinding(params.collector, {
+        code: "REF_UNRESOLVED",
+        severity: "error",
+        file: authJsonPath,
+        jsonPath: "<root>",
+        message: `Invalid JSON in legacy auth.json: ${parsedResult.error}`,
+      });
+      continue;
+    }
+    const parsed = parsedResult.value;
+    if (!parsed) {
+      continue;
+    }
+    for (const [providerId, value] of Object.entries(parsed)) {
+      if (!isRecord(value)) {
+        continue;
+      }
+      if (value.type === "api_key" && isNonEmptyString(value.key)) {
+        addFinding(params.collector, {
+          code: "LEGACY_RESIDUE",
+          severity: "warn",
+          file: authJsonPath,
+          jsonPath: providerId,
+          message: "Legacy auth.json contains static api_key credentials.",
+          provider: providerId,
+        });
+      }
+    }
+  }
+}
+
 function collectStoredModelCatalogSecrets(params: {
   agentDir: string;
   env: NodeJS.ProcessEnv;
@@ -333,7 +371,7 @@ function collectStoredModelCatalogSecrets(params: {
   }
   const sourceLabel = `stored model catalog: ${params.agentDir}`;
   params.collector.filesScanned.add(sourceLabel);
-  if (stored.raw.length > MAX_AUDIT_MODEL_CATALOG_BYTES) {
+  if (stored.raw.length > MAX_AUDIT_MODELS_JSON_BYTES) {
     addFinding(params.collector, {
       code: "REF_UNRESOLVED",
       severity: "error",
@@ -683,6 +721,11 @@ export async function runSecretsAudit(
     envPath,
     collector,
   });
+  collectAuthJsonResidue({
+    stateDir,
+    collector,
+  });
+
   const summary = summarizeFindings(collector.findings);
   const status: SecretsAuditStatus =
     summary.unresolvedRefCount > 0

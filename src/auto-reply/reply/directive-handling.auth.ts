@@ -54,6 +54,7 @@ function formatFlagsSuffix(flags: string[]) {
 export const resolveAuthLabel = async (
   provider: string,
   cfg: OpenClawConfig,
+  modelsPath: string,
   agentDir?: string,
   mode: ModelAuthDetailMode = "compact",
   workspaceDir?: string,
@@ -216,7 +217,7 @@ export const resolveAuthLabel = async (
   if (customKey) {
     return {
       label: maskApiKey(customKey),
-      source: mode === "verbose" ? "stored model catalog" : "",
+      source: mode === "verbose" ? `stored model catalog: ${formatPath(modelsPath)}` : "",
     };
   }
   return { label: "missing", source: "missing" };
