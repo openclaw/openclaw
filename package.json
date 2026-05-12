@@ -1390,6 +1390,7 @@
     "deps:root-ownership": "node scripts/root-dependency-ownership-audit.mjs",
     "deps:root-ownership:check": "node scripts/root-dependency-ownership-audit.mjs --check",
     "deps:pins:check": "node scripts/check-dependency-pins.mjs",
+    "deps:risk:report": "node scripts/dependency-risk-report.mjs",
     "deps:sbom-risk": "node scripts/sbom-risk-report.mjs",
     "deps:sbom-risk:check": "node scripts/sbom-risk-report.mjs --check",
     "deps:vuln:gate": "node scripts/dependency-vulnerability-gate.mjs",
