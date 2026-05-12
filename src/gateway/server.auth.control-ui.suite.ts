@@ -1131,6 +1131,7 @@ export function registerControlUiAndPairingSuite(): void {
         "operator.talk.secrets",
         "operator.write",
       ]);
+      expectArrayExcludes(operatorBootstrapScopes, ["operator.admin", "operator.pairing"]);
 
       const paired = await getPairedDevice(identity.deviceId);
       expectArrayIncludes(paired?.roles, ["node", "operator"]);
@@ -1166,6 +1167,89 @@ export function registerControlUiAndPairingSuite(): void {
       await expect(getDeviceBootstrapTokenProfile({ token: issued.token })).resolves.toBeNull();
       wsApproved.close();
     } finally {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
+  test("does not consume bootstrap token when node reconcile fails before hello-ok", async () => {
+    const { getDeviceBootstrapTokenProfile, issueDeviceBootstrapToken } =
+      await import("../infra/device-bootstrap.js");
+    const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
+    const reconcileModule = await import("./node-connect-reconcile.js");
+    const reconcileSpy = vi
+      .spyOn(reconcileModule, "reconcileNodePairingOnConnect")
+      .mockRejectedValueOnce(new Error("boom"));
+    const { server, port, prevToken } = await startControlUiServer("secret");
+
+    const { identityPath, identity, client } = await createOperatorIdentityFixture(
+      "openclaw-bootstrap-reconcile-fail-",
+    );
+    const nodeClient = {
+      ...client,
+      id: "openclaw-android",
+      mode: "node",
+    };
+
+    try {
+      const issued = await issueDeviceBootstrapToken({
+        profile: {
+          roles: ["node"],
+          scopes: [],
+        },
+      });
+      const wsPending = await openWs(port);
+      const pendingConnect = await connectReq(wsPending, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client: nodeClient,
+        deviceIdentityPath: identityPath,
+      });
+      expect(pendingConnect.ok).toBe(false);
+      const pending = (await listDevicePairing()).pending.filter(
+        (entry) => entry.deviceId === identity.deviceId,
+      );
+      expect(pending).toHaveLength(1);
+      await expect(
+        approveDevicePairing(pending[0]?.requestId ?? "", {
+          callerScopes: ["operator.pairing"],
+        }),
+      ).resolves.toMatchObject({ status: "approved" });
+      wsPending.close();
+
+      const wsFail = await openWs(port);
+      await expect(
+        connectReq(wsFail, {
+          skipDefaultAuth: true,
+          bootstrapToken: issued.token,
+          role: "node",
+          scopes: [],
+          client: nodeClient,
+          deviceIdentityPath: identityPath,
+          timeoutMs: 500,
+        }),
+      ).rejects.toThrow();
+      await expect(waitForWsClose(wsFail, 5_000)).resolves.toBe(true);
+      await expect(getDeviceBootstrapTokenProfile({ token: issued.token })).resolves.toEqual({
+        roles: ["node"],
+        scopes: [],
+      });
+
+      const wsRetry = await openWs(port);
+      const retry = await connectReq(wsRetry, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client: nodeClient,
+        deviceIdentityPath: identityPath,
+      });
+      expect(retry.ok).toBe(true);
+      wsRetry.close();
+    } finally {
+      reconcileSpy.mockRestore();
       await server.close();
       restoreGatewayToken(prevToken);
     }

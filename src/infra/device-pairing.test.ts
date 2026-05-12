@@ -1036,6 +1036,38 @@ describe("device pairing tokens", () => {
     );
   });
 
+  test("bootstrap-marked pairing requires pairing approval scope", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const request = await requestDevicePairing(
+      {
+        deviceId: "bootstrap-device-approval-scope",
+        publicKey: "bootstrap-public-key-approval-scope",
+        role: "node",
+        roles: ["node", "operator"],
+        scopes: PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes,
+        bootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir),
+    ).resolves.toEqual({
+      status: "forbidden",
+      reason: "caller-missing-scope",
+      scope: "operator.pairing",
+    });
+    await expect(getPairedDevice("bootstrap-device-approval-scope", baseDir)).resolves.toBeNull();
+
+    await expect(
+      approveDevicePairing(
+        request.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      ),
+    ).resolves.toEqual(expect.objectContaining({ status: "approved" }));
+  });
+
   test("bootstrap-issued operator tokens accept handoff scopes and reject admin or pairing", async () => {
     const baseDir = await makeDevicePairingDir();
     const request = await requestDevicePairing(

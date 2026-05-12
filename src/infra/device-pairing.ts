@@ -615,7 +615,14 @@ export async function approveDevicePairing(
     if (!pending) {
       return null;
     }
-    if (pending.bootstrapProfile && callerCanApproveBootstrapProfile(options?.callerScopes)) {
+    if (pending.bootstrapProfile) {
+      if (!callerCanApproveBootstrapProfile(options?.callerScopes)) {
+        return {
+          status: "forbidden",
+          reason: "caller-missing-scope",
+          scope: OPERATOR_PAIRING_SCOPE,
+        };
+      }
       const approved = approveBootstrapDevicePairingInState({
         state,
         requestId,

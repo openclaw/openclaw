@@ -342,12 +342,6 @@ export function resolveDeviceSignaturePayload(params: {
   return null;
 }
 
-export function resolveDeviceSignaturePayloadVersion(
-  params: Parameters<typeof resolveDeviceSignaturePayload>[0],
-): "v3" | "v2" | null {
-  return resolveDeviceSignaturePayload(params)?.version ?? null;
-}
-
 function resolveAuthProvidedKind(
   connectAuth: HandshakeConnectAuth | null | undefined,
 ): AuthProvidedKind {
