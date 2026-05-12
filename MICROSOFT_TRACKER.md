@@ -9,7 +9,7 @@
 > - Priority guide: **P0** = crash/blocker/security, **P1** = significant bug/regression, **P2** = minor bug/enhancement, **P3** = nice-to-have/stale
 > - Items marked _(stale)_ have been flagged by the stale bot due to inactivity
 >
-> **Last updated:** 2026-05-11 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
+> **Last updated:** 2026-05-12 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
 
 ---
 
@@ -17,12 +17,12 @@
 
 | Category                  | Issues | PRs    | Total   | Closed | Remaining |
 | ------------------------- | ------ | ------ | ------- | ------ | --------- |
-| MS Teams (channel plugin) | 5      | 40     | 45      | 0      | 45        |
+| MS Teams (channel plugin) | 5      | 41     | 46      | 0      | 46        |
 | Windows platform          | 65     | 34     | 99      | 0      | 99        |
-| WSL                       | 11     | 4      | 15      | 0      | 15        |
-| Azure                     | 5      | 6      | 11      | 0      | 11        |
+| WSL                       | 10     | 4      | 14      | 0      | 14        |
+| Azure                     | 6      | 6      | 12      | 0      | 12        |
 | SharePoint / M365         | 0      | 0      | 0       | 0      | 0         |
-| **Total**                 | **86** | **84** | **170** | **0**  | **170**   |
+| **Total**                 | **86** | **85** | **171** | **0**  | **171**   |
 
 ---
 
@@ -56,11 +56,13 @@
 | [ ]       | P0       | #78595 | Refactor runtime state into SQLite                                                                   | XL   |             |
 | [ ]       | P0       | #63827 | fix(security): preserve dmPolicy settings during wizard runs                                         | XL   |             |
 | [ ]       | P1       | #77784 | Add Teams delegated auth for plugin tools                                                            | XL   |             |
+| [ ]       | P2       | #80923 | fix(cron): beta blocker - pre-model watchdog kills isolated jobs >60s (#80888)                       | L    |             |
+| [ ]       | P2       | #80645 | feat(wizard): add CLI onboarding i18n                                                                | XL   |             |
+| [ ]       | P2       | #80323 | [qa-lab] Complete Codex vs Pi runtime parity harness phases 2-5                                      | XL   |             |
 | [ ]       | P2       | #79609 | Show session cleanup dry-run counts by label                                                         | L    |             |
 | [ ]       | P2       | #79510 | fix(gateway): cancel deferred channel reloads during restart                                         | L    |             |
 | [ ]       | P2       | #79185 | fix(tts/xiaomi): support Token Plan TTS endpoint                                                     | S    |             |
 | [ ]       | P2       | #78839 | [codex] Add Teams member-info action gate                                                            | S    |             |
-| [ ]       | P2       | #78687 | feat(wake): expose typed sessionKey on wake protocol + system event CLI (refs #52305)                | L    |             |
 | [ ]       | P2       | #77921 | feat(inworld): default to inworld-tts-2 (Realtime TTS-2)                                             | XS   |             |
 | [ ]       | P2       | #76560 | feat(plugins): allow community plugins to use openKeyedStore with man…                               | L    | @vincentkoc |
 | [ ]       | P2       | #76262 | fix(msteams): rebase TeamsSDK patterns to simplify Teams Integration                                 | XL   | @BradGroux  |
@@ -78,7 +80,6 @@
 | [ ]       | P2       | #60643 | feat(agents): cognitive processing scaffolding and structured memory prompt                          | S    |             |
 | [ ]       | P2       | #60630 | fix(ci): Windows task tests and Telegram setup promotion surface                                     | L    |             |
 | [ ]       | P2       | #59986 | refactor(plugins): add lane-oriented channel interface                                               | XL   |             |
-| [ ]       | P2       | #59485 | fix: preserve paperclip runtime env in exec tool defaults                                            | M    |             |
 | [ ]       | P2       | #59314 | fix(msteams): preserve channel thread isolation during proactive fallback                            | M    |             |
 | [ ]       | P2       | #59294 | fix(msteams): isolate thread sessions, outbound targeting, and attachment resolution                 | L    |             |
 | [ ]       | P2       | #57511 | feat(msteams): Teams live voice support with .NET media worker                                       | XL   |             |
@@ -118,6 +119,7 @@
 | [ ]       | P1       | #59362 | [Bug]: Windows: exec tool causes console window flash when spawning commands                                                                              | `bug` `regression`   |             |
 | [ ]       | P1       | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently                                                        |                      |             |
 | [ ]       | P1       | #46378 | [Bug]: 安装配置界面windows会卡死                                                                                                                          | `bug` `regression`   |             |
+| [ ]       | P2       | #80650 | [Bug]: [Bug] openclaw backup create 在Windows上失败（退出代码255）                                                                                        | `bug`                |             |
 | [ ]       | P2       | #80416 | [Bug] core-plugin-tools ~3.5s overhead on every embedded run persists after #75520 fix — Windows + Node 24 + isolated cron jobs                           |                      |             |
 | [ ]       | P2       | #79899 | DefaultResourceLoader.reload() blocks event loop for 12-15s on Windows due to synchronous filesystem scanning                                             |                      |             |
 | [ ]       | P2       | #79099 | Windows gateway probe still reports unreachable while gateway health is OK on 2026.5.6                                                                    |                      |             |
@@ -140,7 +142,6 @@
 | [ ]       | P2       | #70451 | [Bug]: CLI hooks enable times out / SIGKILL on Windows                                                                                                    |                      |             |
 | [ ]       | P2       | #66746 | [Bug] Windows memory indexing falls back to FTS-only in 2026.4.14 even though direct node:sqlite + sqlite-vec works                                       |                      |             |
 | [ ]       | P2       | #66479 | Windows: skill not discovered due to UTF-8 BOM injected by PowerShell WriteAllText                                                                        |                      |             |
-| [ ]       | P2       | #65164 | All outbound HTTP fails inside gateway process on Windows 10 + Node 22 (WebSocket works)                                                                  |                      |             |
 | [ ]       | P2       | #64443 | OpenClaw chat interface causes very high WindowServer CPU on Intel Retina iMac                                                                            |                      |             |
 | [ ]       | P2       | #64253 | Gateway becomes unresponsive under subagent load on Windows - completion announcements timeout                                                            |                      |             |
 | [ ]       | P2       | #63491 | [Bug]: Windows Scheduled Task gateway restart/health becomes inconsistent after ready                                                                     |                      |             |
@@ -176,8 +177,9 @@
 | Resolved? | Priority | #      | Title                                                                                | Size | Assignee    |
 | --------- | -------- | ------ | ------------------------------------------------------------------------------------ | ---- | ----------- |
 | [ ]       | P0       | #74383 | fix(security): classify broad Windows SIDs as world principals                       | S    |             |
-| [ ]       | P0       | #63074 | fix(security): classify dangerous Windows sandbox binds first                        | M    |             |
+| [ ]       | P0       | #63074 | fix(security): classify dangerous Windows sandbox binds first                        | XS   |             |
 | [ ]       | P0       | #38846 | security(windows): enhance command argument validation                               | S    |             |
+| [ ]       | P2       | #80683 | fix(memory-lancedb): add retry mechanism for Windows Docker bind mount sync delays   | S    |             |
 | [ ]       | P2       | #79694 | fix(update): hide post-core update and completion cache child windows on Windows     | XS   |             |
 | [ ]       | P2       | #76245 | [codex] Fallback when Windows gateway task exits early                               | S    |             |
 | [ ]       | P2       | #75649 | fix(windows): preserve staged update handoff                                         | XL   |             |
@@ -196,7 +198,6 @@
 | [ ]       | P2       | #63651 | fix: remove duplicate restart message on Windows (schtasks)                          | S    |             |
 | [ ]       | P2       | #59705 | [codex] improve parallels windows smoke logging                                      | M    |             |
 | [ ]       | P2       | #59013 | fix: tolerate EPERM in session write-lock on Windows                                 | S    |             |
-| [ ]       | P2       | #53965 | fix: atomic file writes on Windows-mounted Docker volumes                            | XS   |             |
 | [ ]       | P2       | #51486 | fix(daemon): query Windows task runtime directly                                     | S    |             |
 | [ ]       | P2       | #50136 | fix(windows): stabilize gateway restart and avoid false stale cleanup [AI-assisted]  | M    |             |
 | [ ]       | P2       | #50116 | fix: handle Windows-style session paths when running on POSIX                        | XS   |             |
@@ -218,7 +219,7 @@
 
 | Resolved? | Priority | #      | Title                                                                                                                                        | Labels               | Assignee |
 | --------- | -------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | -------- |
-| [ ]       | P1       | #80580 | [Bug]: ./docker_setup.sh fails on WSL due to Dockerfile syntax comment being misinterpreted as command                                       | `bug` `regression`   |          |
+| [ ]       | P1       | #80914 | [Bug]: Heartbeat functionality broken in 5.7. wsl2                                                                                           | `bug` `regression`   |          |
 | [ ]       | P1       | #74251 | [Bug]: [Bug]: npm install -g openclaw@latest crashes with V8 Fatal error in WSL2 Ubuntu 24.04                                                | `bug`                |          |
 | [ ]       | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                                                  | `bug` `bug:crash`    |          |
 | [ ]       | P1       | #59209 | Misleading CDP "Empty reply from server" in WSL2 caused by portproxy self-loop (svchost/iphlpsvc), not Chrome                                | `bug` `regression`   |          |
@@ -231,9 +232,7 @@
 
 ### Feature Requests
 
-| Resolved? | Priority | #      | Title                                                                                                        | Labels        | Assignee |
-| --------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------ | ------------- | -------- |
-| [ ]       | P1       | #67060 | [Feature]: Provider requests ignore env proxy by default → causes silent timeout in WSL / proxy environments | `enhancement` |          |
+_No currently open items found._
 
 ---
 
@@ -252,12 +251,13 @@
 
 ### Bugs / Crashes
 
-| Resolved? | Priority | #      | Title                                                                                                                                | Labels | Assignee |
-| --------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------ | ------ | -------- |
-| [ ]       | P2       | #79570 | openai-responses adapter is unusable against Azure OpenAI: every turn returns a synthetic 0-token refusal (openai-completions works) |        |          |
-| [ ]       | P2       | #60546 | [Bug]: microsoft-foundry provider selects Claude deployments but routes them through OpenAI Foundry endpoints                        |        |          |
-| [ ]       | P2       | #48793 | feat: centralized PluginResourceManager interface for consistent async cleanup across all channel plugins                            |        |          |
-| [ ]       | P2       | #48788 | feat: centralized filename encoding utility for multi-encoding Content-Disposition handling                                          |        |          |
+| Resolved? | Priority | #      | Title                                                                                                                                | Labels       | Assignee |
+| --------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------ | ------------ | -------- |
+| [ ]       | P2       | #80926 | Azure OpenAI Responses stalls before first event when memory tools are exposed                                                       | `maintainer` |          |
+| [ ]       | P2       | #79570 | openai-responses adapter is unusable against Azure OpenAI: every turn returns a synthetic 0-token refusal (openai-completions works) |              |          |
+| [ ]       | P2       | #60546 | [Bug]: microsoft-foundry provider selects Claude deployments but routes them through OpenAI Foundry endpoints                        |              |          |
+| [ ]       | P2       | #48793 | feat: centralized PluginResourceManager interface for consistent async cleanup across all channel plugins                            |              |          |
+| [ ]       | P2       | #48788 | feat: centralized filename encoding utility for multi-encoding Content-Disposition handling                                          |              |          |
 
 ### Feature Requests
 
@@ -340,10 +340,9 @@ _No currently open items found._
 | Windows platform          | issue | P1       | #59362 | [Bug]: Windows: exec tool causes console window flash when spawning commands                                                                            |
 | Windows platform          | issue | P1       | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently                                                      |
 | Windows platform          | issue | P1       | #46378 | [Bug]: 安装配置界面windows会卡死                                                                                                                        |
-| WSL                       | issue | P1       | #80580 | [Bug]: ./docker_setup.sh fails on WSL due to Dockerfile syntax comment being misinterpreted as command                                                  |
+| WSL                       | issue | P1       | #80914 | [Bug]: Heartbeat functionality broken in 5.7. wsl2                                                                                                      |
 | WSL                       | issue | P1       | #74251 | [Bug]: [Bug]: npm install -g openclaw@latest crashes with V8 Fatal error in WSL2 Ubuntu 24.04                                                           |
 | WSL                       | issue | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                                                             |
-| WSL                       | issue | P1       | #67060 | [Feature]: Provider requests ignore env proxy by default → causes silent timeout in WSL / proxy environments                                            |
 | WSL                       | issue | P1       | #59209 | Misleading CDP "Empty reply from server" in WSL2 caused by portproxy self-loop (svchost/iphlpsvc), not Chrome                                           |
 | WSL                       | issue | P1       | #44051 | [Bug]: [skills] Skipping skill path error triggered on officially installed skills via clawhub (WSL Environment)                                        |
 | WSL                       | pr    | P1       | #46698 | fix(auth): fix GitHub device flow polling and add --wait flag for WSL…                                                                                  |
