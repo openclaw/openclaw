@@ -553,6 +553,31 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("rejects ACP spawns when inherited deny groups include command tools", async () => {
+    registerAcpBackendForTest();
+    const cases = [
+      { inheritedToolDenylist: ["group:fs"], expected: "requester denies read" },
+      { inheritedToolDenylist: ["group:runtime"], expected: "requester denies exec" },
+    ];
+
+    for (const testCase of cases) {
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        inheritedToolDenylist: testCase.inheritedToolDenylist,
+      });
+
+      const result = await tool.execute("call-acp-inherited-command-group-deny", {
+        runtime: "acp",
+        task: "investigate",
+        agentId: "codex",
+      });
+
+      expectDetailFields(result.details, { status: "forbidden", role: "codex" });
+      expect(JSON.stringify(result.details)).toContain(testCase.expected);
+    }
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
   it("forwards model override to ACP runtime spawns", async () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({

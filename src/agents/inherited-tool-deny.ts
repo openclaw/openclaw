@@ -1,4 +1,4 @@
-import { normalizeToolName } from "./tool-policy-shared.js";
+import { expandToolGroups, normalizeToolName } from "./tool-policy-shared.js";
 
 const ACP_UNSUPPORTED_INHERITED_TOOL_DENY = new Set([
   "apply_patch",
@@ -40,7 +40,7 @@ export function inheritedToolDenyPatch(value: unknown): { inheritedToolDeny?: st
 }
 
 export function findAcpUnsupportedInheritedToolDeny(value: unknown): string | undefined {
-  return normalizeInheritedToolDenylist(value).find((tool) =>
+  return expandToolGroups(normalizeInheritedToolDenylist(value)).find((tool) =>
     ACP_UNSUPPORTED_INHERITED_TOOL_DENY.has(tool),
   );
 }
