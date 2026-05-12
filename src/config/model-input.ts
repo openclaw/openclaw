@@ -46,8 +46,7 @@ export function resolveAgentModelFallbackValues(model?: AgentModelConfig): strin
     if (typeof model === "string" && model.length > 0 && !warnedStringModels.has(model)) {
       warnedStringModels.add(model);
       log.debug(
-        'Model config is a string ("%s"); fallbacks are not available. Use { primary, fallbacks } format for fallback support.',
-        model,
+        `Model config is a string ("${model}"); fallbacks are not available. Use { primary, fallbacks } format for fallback support.`,
       );
     }
     return [];
