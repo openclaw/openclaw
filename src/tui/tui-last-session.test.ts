@@ -20,6 +20,10 @@ async function makeTempStateDir() {
   return dir;
 }
 
+function legacyTuiLastSessionStatePath(stateDir: string): string {
+  return path.join(stateDir, "tui", "last-session.json");
+}
+
 afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -41,6 +45,9 @@ describe("tui last session state", () => {
     });
 
     await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe("agent:main:tui-123");
+    await expect(fs.access(resolveLegacyTuiLastSessionStatePath(stateDir))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("restores from SQLite", async () => {
@@ -55,6 +62,9 @@ describe("tui last session state", () => {
       scopeKey,
       sessionKey: "agent:main:tui-sqlite",
       stateDir,
+    });
+    await expect(fs.access(resolveLegacyTuiLastSessionStatePath(stateDir))).rejects.toMatchObject({
+      code: "ENOENT",
     });
 
     await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe(
@@ -96,6 +106,90 @@ describe("tui last session state", () => {
     await expect(readTuiLastSessionKey({ scopeKey: liveScope, stateDir })).resolves.toBe(
       "agent:main:tui-live",
     );
+  });
+
+  it("restores from SQLite when the compatibility JSON file is missing", async () => {
+    const stateDir = await makeTempStateDir();
+    const scopeKey = buildTuiLastSessionScopeKey({
+      connectionUrl: "local",
+      agentId: "main",
+      sessionScope: "per-sender",
+    });
+
+    await writeTuiLastSessionKey({
+      scopeKey,
+      sessionKey: "agent:main:tui-sqlite",
+      stateDir,
+    });
+    await fs.rm(resolveTuiLastSessionStatePath(stateDir), { force: true });
+
+    await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe(
+      "agent:main:tui-sqlite",
+    );
+  });
+
+  it("imports legacy compatibility JSON into SQLite on read", async () => {
+    const stateDir = await makeTempStateDir();
+    const scopeKey = buildTuiLastSessionScopeKey({
+      connectionUrl: "legacy",
+      agentId: "main",
+      sessionScope: "per-sender",
+    });
+    const statePath = resolveTuiLastSessionStatePath(stateDir);
+    await fs.mkdir(path.dirname(statePath), { recursive: true });
+    await fs.writeFile(
+      statePath,
+      JSON.stringify({ [scopeKey]: { sessionKey: "agent:main:legacy-json", updatedAt: 1000 } }),
+    );
+
+    await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe(
+      "agent:main:legacy-json",
+    );
+    await fs.rm(statePath, { force: true });
+    await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe(
+      "agent:main:legacy-json",
+    );
+  });
+
+  it("clears stale pointers from SQLite and compatibility JSON", async () => {
+    const stateDir = await makeTempStateDir();
+    const staleScope = buildTuiLastSessionScopeKey({
+      connectionUrl: "stale",
+      agentId: "main",
+      sessionScope: "per-sender",
+    });
+    const liveScope = buildTuiLastSessionScopeKey({
+      connectionUrl: "live",
+      agentId: "main",
+      sessionScope: "per-sender",
+    });
+    await writeTuiLastSessionKey({
+      scopeKey: staleScope,
+      sessionKey: "agent:main:main",
+      stateDir,
+    });
+    await writeTuiLastSessionKey({
+      scopeKey: liveScope,
+      sessionKey: "agent:main:tui-live",
+      stateDir,
+    });
+
+    await expect(
+      clearTuiLastSessionPointers({
+        stateDir,
+        sessionKeys: new Set(["agent:main:main"]),
+      }),
+    ).resolves.toBe(1);
+
+    await expect(readTuiLastSessionKey({ scopeKey: staleScope, stateDir })).resolves.toBeNull();
+    await expect(readTuiLastSessionKey({ scopeKey: liveScope, stateDir })).resolves.toBe(
+      "agent:main:tui-live",
+    );
+    const raw = JSON.parse(
+      await fs.readFile(resolveTuiLastSessionStatePath(stateDir), "utf8"),
+    ) as Record<string, { sessionKey?: string }>;
+    expect(raw[staleScope]).toBeUndefined();
+    expect(raw[liveScope]?.sessionKey).toBe("agent:main:tui-live");
   });
 
   it("restores only a remembered session that still belongs to the current agent", () => {
@@ -156,7 +250,7 @@ describe("tui last session state", () => {
     const sessions = [
       {
         key: "agent:main:main",
-        lastChannel: "heartbeat",
+        deliveryContext: { channel: "heartbeat", to: "main" },
       },
       { key: "agent:main:tui-123" },
     ];
