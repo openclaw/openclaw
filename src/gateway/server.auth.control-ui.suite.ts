@@ -1362,7 +1362,11 @@ export function registerControlUiAndPairingSuite(): void {
         status: "approved",
       });
       const pairedBefore = await getPairedDevice(identity.deviceId);
-      expect(pairedBefore?.tokens?.operator?.scopes).toEqual(["operator.admin"]);
+      expect(pairedBefore?.tokens?.operator?.scopes).toEqual([
+        "operator.admin",
+        "operator.read",
+        "operator.write",
+      ]);
 
       const issued = await issueDeviceBootstrapToken();
       const wsBootstrap = await openWs(port);
@@ -1390,7 +1394,7 @@ export function registerControlUiAndPairingSuite(): void {
       );
       const pairedAfter = await getPairedDevice(identity.deviceId);
       expect(pairedAfter?.tokens?.operator?.token).toBe(pairedBefore?.tokens?.operator?.token);
-      expect(pairedAfter?.tokens?.operator?.scopes).toEqual(["operator.admin"]);
+      expect(pairedAfter?.tokens?.operator?.scopes).toEqual(pairedBefore?.tokens?.operator?.scopes);
       wsBootstrap.close();
     } finally {
       await server.close();
