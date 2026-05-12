@@ -311,12 +311,28 @@ export function defaultGatewayBindMode(tailscaleMode?: string): GatewayBindMode 
 async function canBindToHost(host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const testServer = net.createServer();
+    let resolved = false;
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        testServer.close();
+        resolve(false);
+      }
+    }, 2000);
     testServer.once("error", () => {
-      resolve(false);
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        resolve(false);
+      }
     });
     testServer.once("listening", () => {
-      testServer.close();
-      resolve(true);
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        testServer.close();
+        resolve(true);
+      }
     });
     // Use port 0 to let OS pick an available port for testing
     testServer.listen(0, host);
