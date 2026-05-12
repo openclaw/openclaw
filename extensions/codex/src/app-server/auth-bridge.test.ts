@@ -157,20 +157,6 @@ function expectOAuthProfile(
   return profile;
 }
 
-async function writeCodexCliAuthFile(codexHome: string): Promise<void> {
-  await fs.mkdir(codexHome, { recursive: true });
-  await fs.writeFile(
-    path.join(codexHome, "auth.json"),
-    `${JSON.stringify({
-      tokens: {
-        access_token: "cli-access-token",
-        refresh_token: "cli-refresh-token",
-        account_id: "account-cli",
-      },
-    })}\n`,
-  );
-}
-
 describe("bridgeCodexAppServerStartOptions", () => {
   it("sets agent-owned CODEX_HOME and HOME for local app-server launches", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
@@ -1158,12 +1144,13 @@ describe("bridgeCodexAppServerStartOptions", () => {
       });
 
       expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("main-refresh-token");
-      expect(loadAuthProfileStoreForSecretsRuntime().profiles["openai-codex:work"]).toMatchObject({
-        type: "oauth",
-        provider: "openai-codex",
-        access: "main-refreshed-access-token",
-        refresh: "main-refreshed-refresh-token",
-      });
+      await expectPathMissing(childAuthPath);
+      const mainProfile = expectOAuthProfile(
+        loadAuthProfileStoreForSecretsRuntime().profiles["openai-codex:work"],
+      );
+      expect(mainProfile?.provider).toBe("openai-codex");
+      expect(mainProfile?.access).toBe("main-refreshed-access-token");
+      expect(mainProfile?.refresh).toBe("main-refreshed-refresh-token");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -1220,12 +1207,17 @@ describe("bridgeCodexAppServerStartOptions", () => {
       });
 
       expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("main-owner-refresh-token");
-      expect(loadAuthProfileStoreForSecretsRuntime().profiles["openai-codex:work"]).toMatchObject({
-        type: "oauth",
-        provider: "openai-codex",
-        access: "main-refreshed-access-token",
-        refresh: "main-refreshed-refresh-token",
-      });
+      const mainProfile = expectOAuthProfile(
+        loadAuthProfileStoreForSecretsRuntime().profiles["openai-codex:work"],
+      );
+      expect(mainProfile?.provider).toBe("openai-codex");
+      expect(mainProfile?.access).toBe("main-refreshed-access-token");
+      expect(mainProfile?.refresh).toBe("main-refreshed-refresh-token");
+      const childProfile = expectOAuthProfile(
+        loadAuthProfileStoreForSecretsRuntime(childAgentDir).profiles["openai-codex:work"],
+      );
+      expect(childProfile?.access).toBe("child-stale-access-token");
+      expect(childProfile?.refresh).toBe("child-stale-refresh-token");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
