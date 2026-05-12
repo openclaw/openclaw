@@ -71,10 +71,6 @@ export type SessionListRow = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   sendPolicy?: string;
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
   messages?: unknown[];
 };
 
@@ -123,7 +119,7 @@ export function deriveChannel(params: {
   key: string;
   kind: SessionKind;
   channel?: string | null;
-  lastChannel?: string | null;
+  deliveryChannel?: string | null;
 }): string {
   if (params.kind === "cron" || params.kind === "hook" || params.kind === "node") {
     return "internal";
@@ -132,9 +128,9 @@ export function deriveChannel(params: {
   if (channel) {
     return channel;
   }
-  const lastChannel = normalizeOptionalString(params.lastChannel ?? undefined);
-  if (lastChannel) {
-    return lastChannel;
+  const deliveryChannel = normalizeOptionalString(params.deliveryChannel ?? undefined);
+  if (deliveryChannel) {
+    return deliveryChannel;
   }
   return "unknown";
 }

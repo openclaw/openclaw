@@ -703,11 +703,7 @@ export function createSessionStatusTool(opts?: {
         sessionKey: resolved.key,
         parentSessionKey: statusSessionEntry.parentSessionKey,
         sessionScope: cfg.session?.scope,
-        statusChannel:
-          statusSessionEntry.channel ??
-          statusSessionEntry.lastChannel ??
-          statusSessionEntry.origin?.provider ??
-          "unknown",
+        statusChannel: statusSessionEntry.channel ?? "unknown",
         workspaceDir: statusSessionEntry.spawnedWorkspaceDir,
         provider: providerForCard,
         model: defaultModelForCard,
