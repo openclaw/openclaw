@@ -66,6 +66,7 @@ export class NodeRegistry {
   private nodesById = new Map<string, NodeSession>();
   private nodesByConn = new Map<string, string>();
   private pendingInvokes = new Map<string, PendingInvoke>();
+  defaultInvokeTimeoutMs = 30_000;
 
   register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
     const connect = client.connect;
@@ -167,7 +168,8 @@ export class NodeRegistry {
         error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
       };
     }
-    const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 30_000;
+    const timeoutMs =
+      typeof params.timeoutMs === "number" ? params.timeoutMs : this.defaultInvokeTimeoutMs;
     return await new Promise<NodeInvokeResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingInvokes.delete(requestId);
