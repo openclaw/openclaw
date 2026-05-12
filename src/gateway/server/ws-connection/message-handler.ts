@@ -1012,13 +1012,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 publicKey: devicePublicKey,
               });
             }
-            const allowSilentExistingRoleRefresh = !(
-              existingPairedDevice &&
-              role !== "operator" &&
-              reason === "role-upgrade"
+            const allowSilentExistingNonOperatorPairing = !(
+              existingPairedDevice && role !== "operator"
             );
             const allowSilentLocalPairing =
-              allowSilentExistingRoleRefresh &&
+              allowSilentExistingNonOperatorPairing &&
               shouldAllowSilentLocalPairing({
                 locality: pairingLocality,
                 hasBrowserOriginHeader,

@@ -157,6 +157,7 @@ async function issueMixedRolePairingScopedDevice(name: string): Promise<{
     role: "operator",
     roles: ["operator", "node"],
     scopes: ["operator.pairing"],
+    platform: "linux",
     clientId: GATEWAY_CLIENT_NAMES.TEST,
     clientMode: GATEWAY_CLIENT_MODES.TEST,
   });
@@ -391,6 +392,51 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
       );
 
       const pairedAfterReconnect = await getPairedDevice(device.deviceId);
+      expect(pairedAfterReconnect?.tokens?.node?.token).toBe(revokedNodeToken?.token);
+      expect(pairedAfterReconnect?.tokens?.node?.revokedAtMs).toBe(revokedNodeToken?.revokedAtMs);
+    } finally {
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("rejects local node reconnect with metadata mismatch after node token revocation", async () => {
+    const started = await startServerWithClient("secret");
+    const device = await issueMixedRolePairingScopedDevice("same-device-node-metadata-reconnect");
+
+    try {
+      await connectOk(started.ws);
+
+      const revoke = await rpcReq<{ revokedAtMs?: number }>(started.ws, "device.token.revoke", {
+        deviceId: device.deviceId,
+        role: "node",
+      });
+      expect(revoke.ok).toBe(true);
+      const pairedAfterRevoke = await getPairedDevice(device.deviceId);
+      const revokedNodeToken = pairedAfterRevoke?.tokens?.node;
+      expect(pairedAfterRevoke?.platform).toBe("linux");
+      expect(revokedNodeToken?.revokedAtMs).toBeTypeOf("number");
+
+      await expect(
+        connectGatewayClient({
+          url: `ws://127.0.0.1:${started.port}`,
+          token: "secret",
+          role: "node",
+          clientName: GATEWAY_CLIENT_NAMES.MACOS_APP,
+          clientDisplayName: "node-token-metadata-mismatch",
+          clientVersion: "1.0.0",
+          platform: "darwin",
+          mode: GATEWAY_CLIENT_MODES.UI,
+          scopes: [],
+          commands: ["system.run"],
+          deviceIdentity: device.identity,
+          timeoutMessage: "timeout waiting for metadata mismatch node reconnect",
+        }),
+      ).rejects.toThrow("device metadata change pending approval");
+
+      const pairedAfterReconnect = await getPairedDevice(device.deviceId);
+      expect(pairedAfterReconnect?.platform).toBe("linux");
       expect(pairedAfterReconnect?.tokens?.node?.token).toBe(revokedNodeToken?.token);
       expect(pairedAfterReconnect?.tokens?.node?.revokedAtMs).toBe(revokedNodeToken?.revokedAtMs);
     } finally {
