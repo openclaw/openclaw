@@ -1,4 +1,3 @@
-/* eslint-disable no-console */
 /**
  * Real-runtime behavior proof for #78589 (perf/manifest-model-id-lazy-publish).
  *
