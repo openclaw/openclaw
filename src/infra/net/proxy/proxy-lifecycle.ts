@@ -304,16 +304,6 @@ export function registerManagedProxyGatewayLoopbackBypass(url: string): (() => v
   };
 }
 
-export function withManagedProxyGatewayLoopbackRouting<T>(url: string, run: () => T): T {
-  let unregisterBypass: (() => void) | undefined;
-  try {
-    unregisterBypass = registerManagedProxyGatewayLoopbackBypass(url);
-    return run();
-  } finally {
-    unregisterBypass?.();
-  }
-}
-
 function isGatewayControlPlaneLoopbackHost(hostname: string): boolean {
   const normalizedHost = hostname.trim().toLowerCase().replace(/\.+$/, "");
   return normalizedHost === "localhost" || isLoopbackIpAddress(hostname);

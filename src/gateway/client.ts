@@ -13,7 +13,7 @@ import {
 } from "../infra/device-identity.js";
 import {
   ensureInheritedManagedProxyRoutingActive,
-  withManagedProxyGatewayLoopbackRouting,
+  registerManagedProxyGatewayLoopbackBypass,
 } from "../infra/net/proxy/proxy-lifecycle.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -317,15 +317,22 @@ export class GatewayClient {
         return undefined;
       };
     }
-    const ws = withManagedProxyGatewayLoopbackRouting(
-      url,
-      () => new WebSocket(url, wsOptions as ClientOptions),
-    );
+    const unregisterGatewayLoopbackBypass = registerManagedProxyGatewayLoopbackBypass(url);
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(url, wsOptions as ClientOptions);
+    } catch (err) {
+      unregisterGatewayLoopbackBypass?.();
+      throw err;
+    }
     this.ws = ws;
     this.socketOpened = false;
     this.connectNonce = null;
     this.connectSent = false;
     this.clearConnectChallengeTimeout();
+    ws.on("open", () => unregisterGatewayLoopbackBypass?.());
+    ws.on("error", () => unregisterGatewayLoopbackBypass?.());
+    ws.on("close", () => unregisterGatewayLoopbackBypass?.());
 
     ws.on("open", () => {
       this.socketOpened = true;

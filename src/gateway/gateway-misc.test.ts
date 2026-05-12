@@ -146,7 +146,7 @@ describe("GatewayClient", () => {
     expect(last?.opts.agent).toBeUndefined();
   });
 
-  test("scopes Gateway loopback bypass to WebSocket construction without mutating NO_PROXY", () => {
+  test("scopes Gateway loopback bypass to WebSocket connection setup without mutating NO_PROXY", () => {
     process.env["NO_PROXY"] = "corp.example.com";
     process.env["no_proxy"] = "corp.example.com";
     const registration = registerActiveManagedProxyUrl(
@@ -167,7 +167,7 @@ describe("GatewayClient", () => {
     }
   });
 
-  test("scopes IPv6 loopback bypass during Gateway-only proxy mode construction", () => {
+  test("scopes IPv6 loopback bypass during Gateway-only proxy mode connection setup", () => {
     process.env["NO_PROXY"] = "corp.example.com";
     process.env["no_proxy"] = "corp.example.com";
     process.env["HTTP_PROXY"] = "http://127.0.0.1:3128";
