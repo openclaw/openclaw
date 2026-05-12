@@ -61,6 +61,10 @@ function buildRuntime(
         formatInboundEnvelope: vi.fn(() => ""),
         resolveEnvelopeFormatOptions: vi.fn(() => ({})),
       },
+      session: {
+        recordInboundSession: vi.fn(async () => undefined),
+      },
+      turn: { run: vi.fn(async () => undefined) },
       text: { chunkMarkdownText: vi.fn(() => []) },
     },
     tts: { textToSpeech: vi.fn() },

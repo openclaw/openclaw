@@ -2,6 +2,7 @@
 
 export { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 export { resolveSessionRowEntry } from "../config/sessions/store-entry.js";
+export { resolveAndPersistSessionTranscriptScope } from "../config/sessions/session-scope.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";

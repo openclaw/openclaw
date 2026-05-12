@@ -468,7 +468,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
   resolveIdentityNamePrefix: resolveIdentityNamePrefixMock,
   resolveInboundLastRouteSessionKey: (params: { sessionKey: string }) => params.sessionKey,
   resolveInboundSessionEnvelopeContext: (params: {
-    cfg: { session?: { store?: string } } & Parameters<typeof resolveEnvelopeOptionsMock>[0];
+    cfg: Parameters<typeof resolveEnvelopeOptionsMock>[0];
     agentId: string;
   }) => ({
     agentId: params.agentId,
