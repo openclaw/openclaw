@@ -78,6 +78,16 @@ function requireString(value: string | undefined, label: string): string {
   return value;
 }
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
 describe("gateway session utils", () => {
   afterEach(() => {
     resetConfigRuntimeState();
