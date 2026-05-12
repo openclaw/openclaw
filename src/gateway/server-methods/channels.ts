@@ -393,6 +393,20 @@ export const channelsHandlers: GatewayRequestHandlers = {
     ) => {
       const account = plugin.config.resolveAccount(cfg, accountId);
       const enabled = isAccountEnabled(plugin, account);
+      // Per-invocation memo: `isConfigured` is asked once for the probe path
+      // and again for the audit path within the same channels.status call.
+      // Memoize the promise so both callers share one resolution. Per-call
+      // only — does not bleed across requests.
+      let isConfiguredPromise: Promise<boolean> | undefined;
+      const resolveIsConfigured = (): Promise<boolean> => {
+        if (!plugin.config.isConfigured) {
+          return Promise.resolve(true);
+        }
+        if (!isConfiguredPromise) {
+          isConfiguredPromise = Promise.resolve(plugin.config.isConfigured(account, cfg));
+        }
+        return isConfiguredPromise;
+      };
       let probeResult: unknown;
       let lastProbeAt: number | null = null;
       // Cached probe/audit short-circuit: watchdog + agent-view hit
@@ -409,10 +423,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
         lastProbeAt = cached.lastProbeAt;
       }
       if (!cached && probe && enabled && plugin.status?.probeAccount) {
-        let configured = true;
-        if (plugin.config.isConfigured) {
-          configured = await plugin.config.isConfigured(account, cfg);
-        }
+        const configured = await resolveIsConfigured();
         if (configured) {
           probeResult = await runChannelStatusHook({
             channelId,
@@ -432,10 +443,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       }
       let auditResult: unknown = auditResultEarly;
       if (!cached && probe && enabled && plugin.status?.auditAccount) {
-        let configured = true;
-        if (plugin.config.isConfigured) {
-          configured = await plugin.config.isConfigured(account, cfg);
-        }
+        const configured = await resolveIsConfigured();
         if (configured) {
           auditResult = await runChannelStatusHook({
             channelId,
