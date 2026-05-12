@@ -18,6 +18,7 @@ import {
 } from "./skills.js";
 import { resolveEffectiveAgentSkillFilter } from "./skills/agent-filter.js";
 import { resolveBundledSkillsContext } from "./skills/bundled-context.js";
+import { resolveSkillKey } from "./skills/frontmatter.js";
 import { resolveSkillSource } from "./skills/source.js";
 
 export type SkillStatusConfigCheck = RequirementConfigCheck;
@@ -61,10 +62,6 @@ export type SkillStatusReport = {
   agentSkillFilter?: string[];
   skills: SkillStatusEntry[];
 };
-
-function resolveSkillKey(entry: SkillEntry): string {
-  return entry.metadata?.skillKey ?? entry.skill.name;
-}
 
 function selectPreferredInstallSpec(
   install: SkillInstallSpec[],
@@ -205,7 +202,7 @@ function buildSkillStatus(
   bundledNames?: Set<string>,
   agentSkillFilter?: string[],
 ): SkillStatusEntry {
-  const skillKey = resolveSkillKey(entry);
+  const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
   const disabled = skillConfig?.enabled === false;
   const allowBundled = resolveBundledAllowlist(config);

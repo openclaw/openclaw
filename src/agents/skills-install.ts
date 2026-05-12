@@ -23,7 +23,13 @@ import {
   type SkillInstallSpec,
   type SkillsInstallPreferences,
 } from "./skills.js";
+import {
+  resolveBundledSkillsContext as defaultResolveBundledSkillsContext,
+  type BundledSkillsContext,
+} from "./skills/bundled-context.js";
+import { resolveSkillKey } from "./skills/frontmatter.js";
 import { resolveSkillSource } from "./skills/source.js";
+import { resolveSkillToolsRootDir } from "./skills/tools-dir.js";
 
 export type SkillInstallRequest = InstallSafetyOverrides & {
   workspaceDir: string;
@@ -41,6 +47,7 @@ type SkillsInstallDeps = {
   resolveBrewExecutable: () => string | undefined;
   isContainerEnvironment: () => boolean;
   resolveSkillsInstallPreferences: typeof defaultResolveSkillsInstallPreferences;
+  resolveBundledSkillsContext: () => BundledSkillsContext;
 };
 
 const defaultSkillsInstallDeps: SkillsInstallDeps = {
@@ -50,6 +57,7 @@ const defaultSkillsInstallDeps: SkillsInstallDeps = {
   resolveBrewExecutable: defaultResolveBrewExecutable,
   isContainerEnvironment: defaultIsContainerEnvironment,
   resolveSkillsInstallPreferences: defaultResolveSkillsInstallPreferences,
+  resolveBundledSkillsContext: defaultResolveBundledSkillsContext,
 };
 
 let skillsInstallDeps = defaultSkillsInstallDeps;
@@ -78,6 +86,45 @@ function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec
     if (resolveInstallId(spec, index) === installId) {
       return spec;
     }
+  }
+  return undefined;
+}
+
+function sameSkillInstallSource(left: SkillEntry, right: SkillEntry): boolean {
+  return (
+    path.resolve(left.skill.baseDir) === path.resolve(right.skill.baseDir) &&
+    path.resolve(left.skill.filePath) === path.resolve(right.skill.filePath)
+  );
+}
+
+function formatSkillInstallSource(entry: SkillEntry): string {
+  return `${entry.skill.name} (${resolveSkillSource(entry.skill)})`;
+}
+
+function resolveSkillToolsRootCollision(params: {
+  entry: SkillEntry;
+  entries: readonly SkillEntry[];
+  bundledContext: BundledSkillsContext;
+}): string | undefined {
+  const source = resolveSkillSource(params.entry.skill);
+  if (source === "openclaw-bundled") {
+    return undefined;
+  }
+
+  const skillKey = resolveSkillKey(params.entry.skill, params.entry);
+  if (params.bundledContext.skillKeys.has(skillKey) || params.bundledContext.names.has(skillKey)) {
+    return `Skill "${params.entry.skill.name}" install blocked: non-bundled source "${source}" claims bundled skill key "${skillKey}".`;
+  }
+
+  const toolsRoot = path.resolve(resolveSkillToolsRootDir(params.entry));
+  for (const other of params.entries) {
+    if (sameSkillInstallSource(params.entry, other)) {
+      continue;
+    }
+    if (path.resolve(resolveSkillToolsRootDir(other)) !== toolsRoot) {
+      continue;
+    }
+    return `Skill "${params.entry.skill.name}" install blocked: tools directory collides with ${formatSkillInstallSource(other)}.`;
   }
   return undefined;
 }
@@ -500,6 +547,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
       warnings,
     );
   }
+
   // Warn when install is triggered from a non-bundled source.
   // Workspace/project/personal agent skills can contain attacker-controlled metadata.
   const trustedInstallSources = new Set(["openclaw-bundled", "openclaw-managed", "openclaw-extra"]);
@@ -520,6 +568,25 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
       warnings,
     );
   }
+
+  const toolsRootCollision = resolveSkillToolsRootCollision({
+    entry,
+    entries,
+    bundledContext: deps.resolveBundledSkillsContext(),
+  });
+  if (toolsRootCollision) {
+    return withWarnings(
+      {
+        ok: false,
+        message: toolsRootCollision,
+        stdout: "",
+        stderr: toolsRootCollision,
+        code: null,
+      },
+      warnings,
+    );
+  }
+
   if (spec.kind === "download") {
     const downloadResult = await installDownloadSpec({ entry, spec, timeoutMs });
     return withWarnings(downloadResult, warnings);

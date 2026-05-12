@@ -219,5 +219,9 @@ export function resolveSkillInvocationPolicy(
 }
 
 export function resolveSkillKey(skill: Skill, entry?: SkillEntry): string {
-  return entry?.metadata?.skillKey ?? skill.name;
+  const metadataKey = entry?.metadata?.skillKey?.trim();
+  if (metadataKey) {
+    return metadataKey;
+  }
+  return skill.name.trim() || skill.name;
 }
