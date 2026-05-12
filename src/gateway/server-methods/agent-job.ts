@@ -140,12 +140,20 @@ function createSnapshotFromLifecycleEvent(params: {
   const error = typeof data?.error === "string" ? data.error : undefined;
   const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
   const livenessState = typeof data?.livenessState === "string" ? data.livenessState : undefined;
+  const status =
+    phase === "error"
+      ? "error"
+      : livenessState?.trim().toLowerCase() === "blocked"
+        ? "error"
+        : data?.aborted
+          ? "timeout"
+          : "ok";
   return {
     runId,
-    status: phase === "error" ? "error" : data?.aborted ? "timeout" : "ok",
+    status,
     startedAt,
     endedAt,
-    error,
+    error: status === "error" ? error || "Agent run ended blocked." : error,
     stopReason,
     livenessState,
     ...(data?.yielded === true ? { yielded: true } : {}),

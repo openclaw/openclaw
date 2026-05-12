@@ -8,7 +8,11 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
-import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
+import {
+  resolveBlockedSubagentOutcome,
+  type SubagentRunOutcome,
+  withSubagentOutcomeTiming,
+} from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -213,11 +217,12 @@ export function createSubagentRunManager(params: {
       }
       const waitError = typeof wait.error === "string" ? wait.error : undefined;
       const baseOutcome: SubagentRunOutcome =
-        wait.status === "error"
+        resolveBlockedSubagentOutcome({ livenessState: wait.livenessState, error: waitError }) ??
+        (wait.status === "error"
           ? { status: "error", error: waitError }
           : wait.status === "timeout"
             ? { status: "timeout" }
-            : { status: "ok" };
+            : { status: "ok" });
       const outcome = withSubagentOutcomeTiming(baseOutcome, {
         startedAt: entry.startedAt,
         endedAt: entry.endedAt,
@@ -234,7 +239,7 @@ export function createSubagentRunManager(params: {
         endedAt: entry.endedAt,
         outcome,
         reason:
-          wait.status === "error" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
+          outcome.status === "error" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
         sendFarewell: true,
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,

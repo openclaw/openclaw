@@ -186,6 +186,17 @@ describe("subagent wait outcome timing", () => {
       wait: { status: "error", error: "boom" },
       expected: { status: "error", error: "boom" },
     },
+    {
+      wait: {
+        status: "ok",
+        livenessState: "blocked",
+        error: "Context overflow: estimated context size exceeds safe threshold.",
+      },
+      expected: {
+        status: "error",
+        error: "Context overflow: estimated context size exceeds safe threshold.",
+      },
+    },
   ] as const)("adds timing to $wait.status outcomes", ({ wait, expected }) => {
     const result = applySubagentWaitOutcome({
       wait,

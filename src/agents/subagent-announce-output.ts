@@ -69,6 +69,24 @@ export type SubagentRunOutcome = {
   elapsedMs?: number;
 };
 
+const BLOCKED_SUBAGENT_ERROR = "Subagent run ended blocked.";
+
+function normalizeLivenessState(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+export function resolveBlockedSubagentOutcome(params: {
+  livenessState?: string;
+  error?: string;
+}): SubagentRunOutcome | undefined {
+  if (normalizeLivenessState(params.livenessState) !== "blocked") {
+    return undefined;
+  }
+  const error = params.error?.trim() || BLOCKED_SUBAGENT_ERROR;
+  return { status: "error", error };
+}
+
 function readFiniteNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -381,7 +399,10 @@ export function applySubagentWaitOutcome(params: {
   } else if (params.wait?.status === "error") {
     outcome = { status: "error", error: waitError };
   } else if (params.wait?.status === "ok") {
-    outcome = { status: "ok" };
+    outcome = resolveBlockedSubagentOutcome({
+      livenessState: params.wait.livenessState,
+      error: waitError,
+    }) ?? { status: "ok" };
   }
   next.outcome = outcome ? withSubagentOutcomeTiming(outcome, next) : undefined;
   return next;

@@ -135,6 +135,37 @@ describe("waitForAgentJob", () => {
     });
   });
 
+  it("maps blocked lifecycle end events to error snapshots", async () => {
+    const runId = `run-blocked-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 425 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 425,
+        endedAt: 475,
+        livenessState: "blocked",
+        error: "Context overflow: estimated context size exceeds safe threshold.",
+      },
+    });
+
+    const snapshot = await waitPromise;
+    expectRecordFields(snapshot, {
+      status: "error",
+      startedAt: 425,
+      endedAt: 475,
+      livenessState: "blocked",
+      error: "Context overflow: estimated context size exceeds safe threshold.",
+    });
+  });
+
   it("ignores transient aborted end events when the same run later succeeds", async () => {
     const runId = `run-timeout-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });

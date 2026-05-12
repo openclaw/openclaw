@@ -310,6 +310,50 @@ describe("subagent registry seam flow", () => {
     expect(replacement?.endedAt).toBeUndefined();
   });
 
+  it("announces blocked wait snapshots as errors instead of successful completions", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return {
+          status: "ok",
+          startedAt: 111,
+          endedAt: 222,
+          livenessState: "blocked",
+          error: "Context overflow: estimated context size exceeds safe threshold.",
+        };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-blocked-wait",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "report blocked wait state",
+      cleanup: "keep",
+    });
+
+    await waitForFast(() => {
+      const announceParams = findRecordCallArg(
+        mocks.runSubagentAnnounceFlow,
+        0,
+        "blocked wait announce",
+        (record) => record.childRunId === "run-blocked-wait",
+      );
+      expectRecordFields(
+        announceParams.outcome,
+        {
+          status: "error",
+          error: "Context overflow: estimated context size exceeds safe threshold.",
+          startedAt: 111,
+          endedAt: 222,
+          elapsedMs: 111,
+        },
+        "blocked wait announce outcome",
+      );
+    });
+  });
+
   it("reconciles stale active runs from persisted terminal session state during sweep", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
@@ -557,6 +601,63 @@ describe("subagent registry seam flow", () => {
 
     await vi.advanceTimersByTimeAsync(20_000);
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("announces blocked lifecycle end events as errors instead of successful completions", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-blocked-lifecycle",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "report blocked lifecycle state",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-blocked-lifecycle",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 1_000,
+        endedAt: 1_250,
+        livenessState: "blocked",
+        error: "Context overflow: estimated context size exceeds safe threshold.",
+      },
+    });
+
+    await waitForFast(() => {
+      const announceParams = findRecordCallArg(
+        mocks.runSubagentAnnounceFlow,
+        0,
+        "blocked lifecycle announce",
+        (record) => record.childRunId === "run-blocked-lifecycle",
+      );
+      expectRecordFields(
+        announceParams.outcome,
+        {
+          status: "error",
+          error: "Context overflow: estimated context size exceeds safe threshold.",
+          endedAt: 1_250,
+        },
+        "blocked lifecycle announce outcome",
+      );
+    });
   });
 
   it("deletes delete-mode completion runs when announce cleanup gives up after retry limit", async () => {
