@@ -3,10 +3,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBrowserOpenCommand } from "./browser-open.js";
 import { _resetWindowsInstallRootsForTests } from "./windows-install-roots.js";
 
+const mocks = vi.hoisted(() => ({
+  detectBinary: vi.fn(),
+}));
+
+vi.mock("./detect-binary.js", () => ({
+  detectBinary: mocks.detectBinary,
+}));
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   _resetWindowsInstallRootsForTests();
+  mocks.detectBinary.mockReset();
 });
 
 describe("resolveBrowserOpenCommand", () => {
@@ -43,5 +52,29 @@ describe("resolveBrowserOpenCommand", () => {
     const rundll32 = path.win32.join("D:\\Windows", "System32", "rundll32.exe");
     expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
     expect(resolved.command).toBe(rundll32);
+  });
+
+  it("uses the macOS open command even when stale SSH variables are present", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.stubEnv("SSH_CLIENT", "100.64.0.1 12345 22");
+    vi.stubEnv("DISPLAY", "");
+    vi.stubEnv("WAYLAND_DISPLAY", "");
+    mocks.detectBinary.mockImplementation(async (name: string) => name === "open");
+
+    const resolved = await resolveBrowserOpenCommand();
+
+    expect(resolved).toEqual({ argv: ["open"], command: "open" });
+  });
+
+  it("keeps Linux SSH sessions without display on the no-display fallback path", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.stubEnv("SSH_CONNECTION", "100.64.0.1 12345 100.64.0.2 22");
+    vi.stubEnv("DISPLAY", "");
+    vi.stubEnv("WAYLAND_DISPLAY", "");
+
+    const resolved = await resolveBrowserOpenCommand();
+
+    expect(resolved).toEqual({ argv: null, reason: "ssh-no-display" });
+    expect(mocks.detectBinary).not.toHaveBeenCalled();
   });
 });
