@@ -43,6 +43,36 @@ function getForeignAcpRuntimeError(value: unknown): {
   };
 }
 
+function readForeignErrorDetails(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const data = (value as { data?: unknown }).data;
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  const details = (data as { details?: unknown }).details;
+  if (typeof details === "string") {
+    return details.trim() || undefined;
+  }
+  if (details instanceof Error) {
+    return details.message.trim() || details.name.trim() || undefined;
+  }
+  if (details === undefined || details === null) {
+    return undefined;
+  }
+  return stringifyNonErrorCause(details).trim() || undefined;
+}
+
+function appendForeignErrorDetails(message: string, error: unknown): string {
+  const normalizedMessage = message.trim() || "ACP runtime error";
+  const details = readForeignErrorDetails(error);
+  if (!details || normalizedMessage.includes(details)) {
+    return normalizedMessage;
+  }
+  return redactSensitiveText(`${normalizedMessage}: ${details}`);
+}
+
 export function isAcpRuntimeError(value: unknown): value is AcpRuntimeError {
   return value instanceof AcpRuntimeError || getForeignAcpRuntimeError(value) !== null;
 }
@@ -57,14 +87,22 @@ export function toAcpRuntimeError(params: {
   }
   const foreignAcpRuntimeError = getForeignAcpRuntimeError(params.error);
   if (foreignAcpRuntimeError) {
-    return new AcpRuntimeError(foreignAcpRuntimeError.code, foreignAcpRuntimeError.message, {
-      cause: params.error,
-    });
+    return new AcpRuntimeError(
+      foreignAcpRuntimeError.code,
+      appendForeignErrorDetails(foreignAcpRuntimeError.message, params.error),
+      {
+        cause: params.error,
+      },
+    );
   }
   if (params.error instanceof Error) {
-    return new AcpRuntimeError(params.fallbackCode, params.error.message, {
-      cause: params.error,
-    });
+    return new AcpRuntimeError(
+      params.fallbackCode,
+      appendForeignErrorDetails(params.error.message, params.error),
+      {
+        cause: params.error,
+      },
+    );
   }
   return new AcpRuntimeError(params.fallbackCode, params.fallbackMessage, {
     cause: params.error,
