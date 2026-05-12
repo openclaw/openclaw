@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
 import {
@@ -401,7 +402,7 @@ function expectBundleCandidateMatch(params: {
 async function expectRejectedPackageExtensionEntry(params: {
   stateDir: string;
   setup: (stateDir: string) => boolean | void;
-  expectedDiagnostic?: "escapes" | "none" | "runtime";
+  expectedDiagnostic?: "escapes" | "none" | "not_found" | "runtime";
   expectedId?: string;
   expectedDiagnosticPluginId?: string;
 }) {
@@ -430,6 +431,14 @@ async function expectRejectedPackageExtensionEntry(params: {
     expect(
       result.diagnostics.some(
         (entry) => entry.level === "warn" && entry.message.includes("compiled runtime output"),
+      ),
+    ).toBe(true);
+    return;
+  }
+  if (params.expectedDiagnostic === "not_found") {
+    expect(
+      result.diagnostics.some(
+        (entry) => entry.level === "error" && entry.message.includes("extension entry not found"),
       ),
     ).toBe(true);
     return;
@@ -838,7 +847,34 @@ describe("discoverOpenClawPlugins", () => {
     expectCandidateIds(candidates, { includes: ["pack/one", "pack/two"] });
   });
 
-  it("skips source-only TypeScript entries for installed package plugins", async () => {
+  it("discovers untracked global package plugins that point at TypeScript source", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "local-source-pack");
+    mkdirSafe(pluginDir);
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/local-source-pack",
+      extensions: ["./index.ts"],
+    });
+    writePluginManifest({ pluginDir, id: "local-source-pack" });
+    writePluginEntry(path.join(pluginDir, "index.ts"));
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expectCandidateSource(
+      result.candidates,
+      "local-source-pack",
+      fs.realpathSync(path.join(pluginDir, "index.ts")),
+    );
+    expectNoDiagnostic({
+      diagnostics: result.diagnostics,
+      pluginId: "local-source-pack",
+      messageIncludes: "requires compiled runtime output",
+    });
+  });
+
+  it("still requires compiled runtime output for tracked installed package plugins", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "source-only-pack");
     mkdirSafe(path.join(pluginDir, "src"));
@@ -850,7 +886,13 @@ describe("discoverOpenClawPlugins", () => {
     });
     writePluginEntry(path.join(pluginDir, "src", "index.ts"));
 
-    const result = await discoverWithStateDir(stateDir, {});
+    const installRecords = {
+      "source-only-pack": {
+        source: "path",
+        installPath: pluginDir,
+      },
+    } satisfies Record<string, PluginInstallRecord>;
+    const result = await discoverWithStateDir(stateDir, { installRecords });
 
     expectCandidateIds(result.candidates, { excludes: ["source-only-pack"] });
     expect(
@@ -864,6 +906,128 @@ describe("discoverOpenClawPlugins", () => {
           entry.message.includes("disable/uninstall the plugin"),
       ),
     ).toBe(true);
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("treats install record sourcePath dirs as managed during global scans", async () => {
+    const stateDir = makeTempDir();
+    const sourceDir = path.join(stateDir, "extensions", "source-path-pack");
+    const installDir = path.join(stateDir, "installed", "source-path-pack");
+    mkdirSafe(path.join(sourceDir, "src"));
+    mkdirSafe(installDir);
+
+    writePluginPackageManifest({
+      packageDir: sourceDir,
+      packageName: "@openclaw/source-path-pack",
+      extensions: ["./src/index.ts"],
+    });
+    writePluginEntry(path.join(sourceDir, "src", "index.ts"));
+
+    const installRecords = {
+      "source-path-pack": {
+        source: "path",
+        installPath: installDir,
+        sourcePath: sourceDir,
+      },
+    } satisfies Record<string, PluginInstallRecord>;
+    const result = await discoverWithStateDir(stateDir, { installRecords });
+
+    expectCandidateIds(result.candidates, { excludes: ["source-path-pack"] });
+    expectDiagnostic({
+      diagnostics: result.diagnostics,
+      level: "warn",
+      pluginId: "source-path-pack",
+      messageIncludes: "requires compiled runtime output",
+      source: sourceDir,
+    });
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it.skipIf(!canCreateDirectorySymlinks)(
+    "treats symlinked install record sourcePath dirs as managed during global scans",
+    async () => {
+      const stateDir = makeTempDir();
+      const globalExt = path.join(stateDir, "extensions");
+      const actualSourceDir = path.join(stateDir, "source-checkouts", "source-path-symlink-pack");
+      const linkedSourceDir = path.join(globalExt, "source-path-symlink-pack");
+      const installDir = path.join(stateDir, "installed", "source-path-symlink-pack");
+      mkdirSafe(globalExt);
+      mkdirSafe(path.join(actualSourceDir, "src"));
+      mkdirSafe(installDir);
+
+      writePluginPackageManifest({
+        packageDir: actualSourceDir,
+        packageName: "@openclaw/source-path-symlink-pack",
+        extensions: ["./src/index.ts"],
+      });
+      writePluginEntry(path.join(actualSourceDir, "src", "index.ts"));
+      symlinkDirectory(actualSourceDir, linkedSourceDir);
+
+      const installRecords = {
+        "source-path-symlink-pack": {
+          source: "path",
+          installPath: installDir,
+          sourcePath: linkedSourceDir,
+        },
+      } satisfies Record<string, PluginInstallRecord>;
+      const result = await discoverWithStateDir(stateDir, { installRecords });
+
+      expectCandidateIds(result.candidates, { excludes: ["source-path-symlink-pack"] });
+      expectDiagnostic({
+        diagnostics: result.diagnostics,
+        level: "warn",
+        pluginId: "source-path-symlink-pack",
+        messageIncludes: "requires compiled runtime output",
+        source: linkedSourceDir,
+      });
+      expect(result.diagnostics).toHaveLength(1);
+    },
+  );
+
+  it("discovers global plugin directories with package metadata but no package entries", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "metadata-only-pack");
+    mkdirSafe(pluginDir);
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/metadata-only-pack", version: "0.0.1" }),
+      "utf-8",
+    );
+    writePluginManifest({ pluginDir, id: "metadata-only-pack" });
+    writePluginEntry(path.join(pluginDir, "index.ts"));
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expectCandidateSource(
+      result.candidates,
+      "metadata-only-pack",
+      fs.realpathSync(path.join(pluginDir, "index.ts")),
+    );
+  });
+
+  it("keeps explicit runtime extension entries strict for untracked global packages", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "missing-runtime-pack");
+    mkdirSafe(pluginDir);
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/missing-runtime-pack",
+      extensions: ["./index.ts"],
+      runtimeExtensions: ["./dist/index.js"],
+    });
+    writePluginManifest({ pluginDir, id: "missing-runtime-pack" });
+    writePluginEntry(path.join(pluginDir, "index.ts"));
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expectCandidateIds(result.candidates, { excludes: ["missing-runtime-pack"] });
+    expectDiagnostic({
+      diagnostics: result.diagnostics,
+      level: "error",
+      source: pluginDir,
+      messageIncludes: "runtime extension entry not found: ./dist/index.js",
+    });
   });
 
   it("lets a valid bundled plugin win when a managed package is source-only TypeScript", () => {
@@ -894,6 +1058,12 @@ describe("discoverOpenClawPlugins", () => {
       env: buildDiscoveryEnvWithOverrides(stateDir, {
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
       }),
+      installRecords: {
+        discord: {
+          source: "path",
+          installPath: installedPluginDir,
+        },
+      },
     });
 
     const discordCandidates = result.candidates.filter(
@@ -1036,6 +1206,31 @@ describe("discoverOpenClawPlugins", () => {
           entry.message.includes("./dist/setup-entry.js"),
       ),
     ).toBe(true);
+  });
+
+  it("reports missing declared setup entries for package plugins", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "missing-setup-pack");
+    mkdirSafe(path.join(pluginDir, "dist"));
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/missing-setup-pack",
+      extensions: ["./dist/index.js"],
+      setupEntry: "./src/setup-entry.ts",
+    });
+    writePluginEntry(path.join(pluginDir, "dist", "index.js"));
+
+    const result = await discoverWithStateDir(stateDir, {});
+    const candidate = requireCandidateById(result.candidates, "missing-setup-pack");
+
+    expect(candidate.setupSource).toBeUndefined();
+    expectDiagnostic({
+      diagnostics: result.diagnostics,
+      level: "error",
+      source: pluginDir,
+      messageIncludes: "setup entry not found: src/setup-entry.ts",
+    });
   });
 
   it("rejects package runtimeExtensions that do not match extension entries", async () => {
@@ -1194,6 +1389,38 @@ describe("discoverOpenClawPlugins", () => {
     });
 
     expectCandidateIds(candidates, { includes: ["downloadable"] });
+  });
+
+  it("keeps trusted bundled package fallback from missing TypeScript metadata to JavaScript", () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    const pluginDir = path.join(bundledDir, "downloadable");
+    mkdirSafe(pluginDir);
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/downloadable",
+        openclaw: {
+          extensions: ["./index.ts"],
+        },
+      }),
+      "utf-8",
+    );
+    writePluginManifest({ pluginDir, id: "downloadable" });
+    writePluginEntry(path.join(pluginDir, "index.js"));
+
+    const { candidates, diagnostics } = discoverOpenClawPlugins({
+      env: buildDiscoveryEnvWithOverrides(stateDir, {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      }),
+    });
+
+    expectCandidateSource(
+      candidates,
+      "downloadable",
+      fs.realpathSync(path.join(pluginDir, "index.js")),
+    );
+    expect(diagnostics).toStrictEqual([]);
   });
 
   it("discovers source-checkout-only bundled plugins alongside built bundled plugins", () => {
@@ -1545,7 +1772,7 @@ describe("discoverOpenClawPlugins", () => {
     },
     {
       name: "rejects missing TypeScript package runtime entries without escape diagnostics",
-      expectedDiagnostic: "runtime" as const,
+      expectedDiagnostic: "not_found" as const,
       setup: (stateDir: string) => {
         const globalExt = path.join(stateDir, "extensions", "missing-entry-pack");
         mkdirSafe(globalExt);

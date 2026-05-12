@@ -450,7 +450,7 @@ describe("createOpenClawCodingTools", () => {
 
       expect(createOpenClawToolsMock).not.toHaveBeenCalled();
       expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
-      const pluginToolOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
+      const pluginToolOptions = resolvePluginToolsSpy.mock.calls.at(0)?.[0].options;
       expect(pluginToolOptions?.modelProvider).toBe("openrouter");
       expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
     } finally {

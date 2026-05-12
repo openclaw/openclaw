@@ -940,7 +940,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
       error: "UNAVAILABLE: gateway lost final output",
     });
-    expect(callGateway).toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(4);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1067,7 +1067,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
       error: "completion agent did not produce a visible reply",
     });
-    expect(callGateway).toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1146,7 +1146,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: true,
       path: "direct",
     });
-    expect(callGateway).toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1404,7 +1404,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: true,
       path: "direct",
     });
-    expect(callGateway).toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1443,7 +1443,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
       error: "completion agent did not produce a visible reply",
     });
-    expect(callGateway).toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 

@@ -508,9 +508,14 @@ timeout, and releases the OpenClaw session lane so follow-up chat messages are
 not queued behind a stale native turn. Any non-terminal notification for the
 same turn, including `rawResponseItem/completed`, disarms that short watchdog
 because Codex has proven the turn is still alive; the longer terminal watchdog
-continues to protect genuinely stuck turns. Timeout diagnostics include the
-last app-server notification method and, for raw assistant response items, the
-item type, role, id, and a bounded assistant text preview.
+continues to protect genuinely stuck turns. Global app-server notifications,
+such as rate-limit updates, do not reset turn-idle progress. When Codex emits a
+completed `agentMessage` item and then goes quiet without `turn/completed`,
+OpenClaw treats the assistant output as effectively complete, best-effort
+interrupts the native Codex turn, and releases the session lane. Timeout
+diagnostics include the last app-server notification method and, for raw
+assistant response items, the item type, role, id, and a bounded assistant text
+preview.
 
 Environment overrides remain available for local testing:
 

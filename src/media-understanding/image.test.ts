@@ -48,12 +48,23 @@ type AuthRequestCall = {
   store?: unknown;
 };
 
-function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const [call] = mock.mock.calls;
+function requireMockCallAt<const Calls extends readonly unknown[][]>(
+  mock: { mock: { calls: Calls } },
+  index: number,
+  label: string,
+): Calls[number] {
+  const call = mock.mock.calls.at(index);
   if (!call) {
-    throw new Error(`Expected ${label} call`);
+    throw new Error(`Expected ${label} call ${index}`);
   }
-  return call;
+  return call as Calls[number];
+}
+
+function requireFirstMockCall<const Calls extends readonly unknown[][]>(
+  mock: { mock: { calls: Calls } },
+  label: string,
+): Calls[number] {
+  return requireMockCallAt(mock, 0, label);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -163,7 +174,7 @@ describe("describeImageWithModel", () => {
   });
 
   function getApiKeyForModelCall(index = 0): AuthRequestCall {
-    const call = (getApiKeyForModelMock.mock.calls as unknown[][])[index];
+    const call = (getApiKeyForModelMock.mock.calls as unknown[][]).at(index);
     if (!call) {
       throw new Error(`Expected getApiKeyForModel call ${index}`);
     }
@@ -415,10 +426,7 @@ describe("describeImageWithModel", () => {
       model: "gpt-5.4",
     });
     expect(completeMock).toHaveBeenCalledOnce();
-    const firstCall = completeMock.mock.calls[0];
-    if (!firstCall) {
-      throw new Error("Expected image completion call");
-    }
+    const firstCall = requireFirstMockCall(completeMock, "image completion");
     const [completionModel, context, options] = firstCall;
     expect(completionModel).toEqual({
       provider: "openai-codex",
@@ -483,10 +491,7 @@ describe("describeImageWithModel", () => {
       text: "openrouter ok",
       model: "google/gemini-2.5-flash",
     });
-    const firstCall = completeMock.mock.calls[0];
-    if (!firstCall) {
-      throw new Error("Expected OpenRouter image completion call");
-    }
+    const firstCall = requireFirstMockCall(completeMock, "OpenRouter image completion");
     const [, context] = firstCall;
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages[0];
@@ -606,10 +611,7 @@ describe("describeImageWithModel", () => {
         model: model.id,
       });
       expect(completeMock).toHaveBeenCalledTimes(2);
-      const retryCall = completeMock.mock.calls[1];
-      if (!retryCall) {
-        throw new Error("Expected retry image completion call");
-      }
+      const retryCall = requireMockCallAt(completeMock, 1, "retry image completion");
       const [retryModel, , retryOptions] = retryCall;
       if (!retryOptions?.onPayload) {
         throw new Error("expected retry payload mapper");
@@ -654,10 +656,7 @@ describe("describeImageWithModel", () => {
     const assertion = expect(result).rejects.toThrow("image description timed out after 25ms");
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
-    const firstCall = completeMock.mock.calls[0];
-    if (!firstCall) {
-      throw new Error("Expected timed image completion call");
-    }
+    const firstCall = requireFirstMockCall(completeMock, "timed image completion");
     const [, , options] = firstCall;
     if (!options?.signal) {
       throw new Error("Expected image completion abort signal");

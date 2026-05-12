@@ -300,7 +300,7 @@ describe("google prompt cache", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+    expect(String(fetchMock.mock.calls.at(0)?.[0])).toBe(
       "https://generativelanguage.googleapis.com/v1beta/cachedContents/system-cache-3?updateMask=ttl",
     );
     expect(fetchInit(fetchMock).method).toBe("PATCH");

@@ -299,7 +299,7 @@ describe("secrets CLI", () => {
     runSecretsApply.mockResolvedValue(createSecretsApplyResult({ mode: "write", changed: true }));
 
     await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
-    expect(runSecretsConfigureInteractive).toHaveBeenCalled();
+    expect(runSecretsConfigureInteractive).toHaveBeenCalledTimes(1);
     const applyArgs = mockFirstObjectArg(runSecretsApply);
     expect(applyArgs.write).toBe(true);
     if (!applyArgs.plan || typeof applyArgs.plan !== "object") {

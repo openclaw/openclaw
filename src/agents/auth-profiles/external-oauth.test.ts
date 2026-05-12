@@ -96,7 +96,7 @@ describe("auth external oauth helpers", () => {
     });
 
     const resolveParams = requireRecord(
-      resolveExternalAuthProfilesWithPluginsMock.mock.calls[0]?.[0],
+      resolveExternalAuthProfilesWithPluginsMock.mock.calls.at(0)?.[0],
       "resolve external auth params",
     );
     expect(resolveParams.config).toBe(cfg);

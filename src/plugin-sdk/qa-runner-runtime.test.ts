@@ -81,7 +81,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
     const module = await import("./qa-runner-runtime.js");
 
     expect(module.loadQaRunnerBundledPluginTestApi("matrix")).toBe(testApi);
-    const testApiCall = loadBundledPluginPublicSurfaceModuleSync.mock.calls[0]?.[0] as
+    const testApiCall = loadBundledPluginPublicSurfaceModuleSync.mock.calls.at(0)?.[0] as
       | { artifactBasename?: string; dirName?: string; env?: NodeJS.ProcessEnv }
       | undefined;
     expect(testApiCall?.dirName).toBe("matrix");
@@ -202,7 +202,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
         },
       },
     ]);
-    const manifestCall = loadPluginManifestRegistry.mock.calls[0]?.[0] as
+    const manifestCall = loadPluginManifestRegistry.mock.calls.at(0)?.[0] as
       | { env?: NodeJS.ProcessEnv }
       | undefined;
     expect(manifestCall?.env?.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
@@ -210,7 +210,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
       path.join(sourceRoot, "extensions"),
     );
 
-    const publicSurfaceCall = loadBundledPluginPublicSurfaceModuleSync.mock.calls[0]?.[0] as
+    const publicSurfaceCall = loadBundledPluginPublicSurfaceModuleSync.mock.calls.at(0)?.[0] as
       | { dirName?: string; artifactBasename?: string; env?: NodeJS.ProcessEnv }
       | undefined;
     expect(publicSurfaceCall?.dirName).toBe("qa-matrix");

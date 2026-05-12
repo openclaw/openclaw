@@ -863,8 +863,7 @@ describe("Discord media SSRF policy", () => {
       1024,
     );
 
-    const policy = fetchRemoteMedia.mock.calls[0]?.[0]?.ssrfPolicy;
-    expectDiscordCdnSsrFPolicy(policy);
+    expectDiscordCdnSsrFPolicy(fetchParams().ssrfPolicy);
   });
 
   it("merges provided ssrfPolicy with Discord CDN defaults", async () => {

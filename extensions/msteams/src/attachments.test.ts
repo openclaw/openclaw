@@ -245,6 +245,14 @@ const expectMockCallState = (mockFn: unknown, shouldCall: boolean) => {
   }
 };
 
+const firstMockCall = (mock: ReturnType<typeof vi.fn>, label: string): unknown[] => {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+};
+
 const expectAttachmentMediaLength = (media: DownloadedMedia, expectedLength: number) => {
   expect(media).toHaveLength(expectedLength);
 };
@@ -661,7 +669,7 @@ describe("msteams attachments", () => {
 
         expectAttachmentMediaLength(media, 0);
         expect(logger.warn).toHaveBeenCalledTimes(1);
-        expect(logger.warn.mock.calls[0]).toStrictEqual([
+        expect(firstMockCall(logger.warn, "logger.warn")).toStrictEqual([
           "msteams attachment download failed",
           {
             error: "HTTP 500",

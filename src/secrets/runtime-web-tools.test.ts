@@ -347,7 +347,11 @@ function expectNoDiagnosticCode(value: unknown, code: string) {
 }
 
 function firstMockArg(source: { mock: { calls: Array<Array<unknown>> } }) {
-  return requireRecord(source.mock.calls[0]?.[0], "mock call options");
+  const call = source.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected mock call options");
+  }
+  return requireRecord(call[0], "mock call options");
 }
 
 describe("runtime web tools resolution", () => {

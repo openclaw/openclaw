@@ -118,11 +118,16 @@ function requireActionPayload(
 }
 
 function requireLoadWebMediaOptions(): Record<string, unknown> {
-  const call = vi.mocked(loadWebMedia).mock.calls[0];
+  const call = requireLoadWebMediaCall();
+  return requireRecord(call[1]);
+}
+
+function requireLoadWebMediaCall(): readonly unknown[] {
+  const call = vi.mocked(loadWebMedia).mock.calls.at(0);
   if (!call) {
     throw new Error("Expected loadWebMedia to be called");
   }
-  return requireRecord(call[1]);
+  return call;
 }
 
 async function expectSandboxMediaRewrite(params: {
@@ -525,9 +530,9 @@ describe("runMessageAction media behavior", () => {
             sandboxRoot: sandboxDir,
           });
 
-          const call = vi.mocked(loadWebMedia).mock.calls[0];
-          expect(call?.[0], testCase.name).toBe(path.join(sandboxDir, testCase.expectedPath));
-          expect(requireRecord(call?.[1]).sandboxValidated, testCase.name).toBe(true);
+          const call = requireLoadWebMediaCall();
+          expect(call[0], testCase.name).toBe(path.join(sandboxDir, testCase.expectedPath));
+          expect(requireRecord(call[1]).sandboxValidated, testCase.name).toBe(true);
         });
       }
 

@@ -286,7 +286,7 @@ describe("requestExecApprovalDecision", () => {
       ask: "always",
     });
 
-    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
+    const payload = vi.mocked(callGatewayTool).mock.calls.at(0)?.[2] as
       | ApprovalRequestPayload
       | undefined;
     expect(payload?.commandSpans).toStrictEqual([
@@ -311,7 +311,7 @@ describe("requestExecApprovalDecision", () => {
 
     expect(commandExplainerMock.explainShellCommand).not.toHaveBeenCalled();
     expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
-    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
+    const payload = vi.mocked(callGatewayTool).mock.calls.at(0)?.[2] as
       | { commandSpans?: unknown }
       | undefined;
     expect(payload?.commandSpans).toBeUndefined();
@@ -332,7 +332,7 @@ describe("requestExecApprovalDecision", () => {
 
     expect(commandExplainerMock.explainShellCommand).not.toHaveBeenCalled();
     expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
-    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
+    const payload = vi.mocked(callGatewayTool).mock.calls.at(0)?.[2] as
       | { commandSpans?: unknown }
       | undefined;
     expect(payload?.commandSpans).toBeUndefined();
@@ -357,7 +357,7 @@ describe("requestExecApprovalDecision", () => {
       ask: "always",
     });
 
-    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
+    const payload = vi.mocked(callGatewayTool).mock.calls.at(0)?.[2] as
       | ApprovalRequestPayload
       | undefined;
     expect(payload?.commandSpans).toStrictEqual([{ startIndex: 0, endIndex: 4 }]);
@@ -444,7 +444,7 @@ describe("requestExecApprovalDecision", () => {
       ask: "always",
     });
 
-    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
+    const payload = vi.mocked(callGatewayTool).mock.calls.at(0)?.[2] as
       | ApprovalRequestPayload
       | undefined;
     expect(payload?.commandSpans).toEqual([{ startIndex: 0, endIndex: 4 }]);

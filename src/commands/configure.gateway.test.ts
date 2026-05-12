@@ -83,7 +83,11 @@ async function runGatewayPrompt(params: {
   );
 
   const result = await promptGatewayConfig(params.baseConfig ?? {}, makeRuntime());
-  const [call] = mocks.buildGatewayAuthConfig.mock.calls[0] ?? [];
+  const authConfigCall = mocks.buildGatewayAuthConfig.mock.calls.at(0);
+  if (!authConfigCall) {
+    throw new Error("expected gateway auth config call");
+  }
+  const [call] = authConfigCall;
   if (!call) {
     throw new Error("expected gateway auth config input");
   }
