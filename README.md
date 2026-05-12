@@ -168,6 +168,27 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 - Skills registry: [ClawHub](https://clawhub.ai)
 - Architecture overview: [Architecture](https://docs.openclaw.ai/concepts/architecture)
 
+## gog OAuth autoheal workflow
+
+Use `scripts/gog_auth_autoheal.sh` to keep `gog` OAuth healthy without forcing keyring backend changes.
+
+- Default behavior: check existing tokens first; only trigger `gog login` when tokens are missing.
+- Check-only mode (safe for heartbeat/cron): returns status and does not trigger interactive login.
+- Optional backend pinning: set `GOG_AUTH_KEYRING_BACKEND=keychain` (or another backend) only when you explicitly want backend switching.
+
+Examples:
+
+```bash
+GOG_AUTH_KEYRING_BACKEND=keychain bash scripts/gog_auth_autoheal.sh <email> user --check-only
+GOG_AUTH_KEYRING_BACKEND=keychain bash scripts/gog_auth_autoheal.sh <email> user
+```
+
+Expected status output:
+
+- `status=OK`: token exists and no action needed.
+- `status=MISSING_TOKEN`: token missing (`--check-only` exits non-zero so monitors can alert).
+- `status=LOCKED_KEYRING`: backend is locked/password-gated in non-interactive contexts.
+
 ## Docs by goal
 
 - New here: [Getting started](https://docs.openclaw.ai/start/getting-started), [Onboarding](https://docs.openclaw.ai/start/wizard), [Updating](https://docs.openclaw.ai/install/updating)

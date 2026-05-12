@@ -1,16 +1,17 @@
 #!/bin/bash
 
-# gog Google 授权自动修复脚本
+# gog Google 授权自动修复脚本（简化版）
 # - 有 token: 直接退出 0
 # - 无 token: 自动触发 gog login（仍需用户完成 OAuth 同意）
+# - 默认不强制切换 keyring backend，避免无 TTY 场景的密码提示/卡顿
 #
 # 用法:
 #   bash scripts/gog_auth_autoheal.sh <email> [services]
 #   bash scripts/gog_auth_autoheal.sh <email> [services] --check-only
 #
-# 示例:
-#   bash scripts/gog_auth_autoheal.sh kyle@chancecon.co.nz user
-#   bash scripts/gog_auth_autoheal.sh kyle@chancecon.co.nz all --check-only
+# 可选环境变量:
+#   GOG_TIMEOUT_SECONDS=<秒>               默认 20
+#   GOG_AUTH_KEYRING_BACKEND=<backend>    仅在显式设置时切换 backend（如 keychain/file/auto）
 
 set -u
 
@@ -18,6 +19,7 @@ EMAIL="${1:-}"
 SERVICES="${2:-user}"
 MODE="${3:-}"
 GOG_TIMEOUT_SECONDS="${GOG_TIMEOUT_SECONDS:-20}"
+GOG_AUTH_KEYRING_BACKEND="${GOG_AUTH_KEYRING_BACKEND:-}"
 
 if [[ -z "$EMAIL" ]]; then
   echo "Usage: bash scripts/gog_auth_autoheal.sh <email> [services] [--check-only]"
@@ -28,6 +30,7 @@ if ! command -v gog >/dev/null 2>&1; then
   echo "ERROR: gog command not found"
   exit 2
 fi
+
 run_with_timeout() {
   local timeout="$1"
   shift
@@ -57,19 +60,21 @@ run_with_timeout() {
   return "$rc"
 }
 
-# 统一 keyring backend 为 file，避免系统钥匙串交互/解锁导致的持久化不稳定
-KEYRING_OUTPUT="$(run_with_timeout "$GOG_TIMEOUT_SECONDS" gog auth keyring file --plain)"
-KEYRING_RC=$?
-if [[ "$KEYRING_RC" -eq 124 ]]; then
-  echo "status=ERROR"
-  echo "reason=KEYRING_TIMEOUT"
-  exit 3
-fi
-if [[ "$KEYRING_RC" -ne 0 ]]; then
-  echo "status=ERROR"
-  echo "reason=KEYRING_FAILED"
-  echo "detail=$(echo "$KEYRING_OUTPUT" | tr '\n' ' ' | sed 's/  */ /g')"
-  exit 3
+# 仅在显式指定时切换 keyring backend
+if [[ -n "$GOG_AUTH_KEYRING_BACKEND" ]]; then
+  KEYRING_OUTPUT="$(run_with_timeout "$GOG_TIMEOUT_SECONDS" gog auth keyring "$GOG_AUTH_KEYRING_BACKEND" --plain)"
+  KEYRING_RC=$?
+  if [[ "$KEYRING_RC" -eq 124 ]]; then
+    echo "status=ERROR"
+    echo "reason=KEYRING_TIMEOUT"
+    exit 3
+  fi
+  if [[ "$KEYRING_RC" -ne 0 ]]; then
+    echo "status=ERROR"
+    echo "reason=KEYRING_FAILED"
+    echo "detail=$(echo "$KEYRING_OUTPUT" | tr '\n' ' ' | sed 's/  */ /g')"
+    exit 3
+  fi
 fi
 
 AUTH_LIST="$(run_with_timeout "$GOG_TIMEOUT_SECONDS" gog auth list --plain)"
@@ -80,7 +85,7 @@ if [[ "$AUTH_LIST_RC" -eq 124 ]]; then
   exit 3
 fi
 if [[ "$AUTH_LIST_RC" -ne 0 ]]; then
-  if echo "$AUTH_LIST" | grep -q "no TTY available for keyring file backend password prompt"; then
+  if echo "$AUTH_LIST" | grep -q "no TTY available for keyring .* password prompt"; then
     echo "status=LOCKED_KEYRING"
     echo "reason=PASSWORD_REQUIRED"
     if [[ "$MODE" == "--check-only" ]]; then
@@ -95,6 +100,7 @@ if [[ "$AUTH_LIST_RC" -ne 0 ]]; then
   echo "detail=$(echo "$AUTH_LIST" | tr '\n' ' ' | sed 's/  */ /g')"
   exit 3
 fi
+
 if [[ -z "$AUTH_LIST" ]] || echo "$AUTH_LIST" | grep -q "No tokens stored"; then
   echo "status=MISSING_TOKEN"
   echo "email=$EMAIL"
