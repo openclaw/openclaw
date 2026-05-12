@@ -20,6 +20,7 @@ import type {
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import { recordCodexUsage } from "../logging/codex-metrics.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
@@ -719,6 +720,42 @@ function createOpenAIResponsesClient(
   });
 }
 
+// Emits per-request token usage to the Prometheus counters and the
+// subsystem logger so operators can attribute ChatGPT Plus rate-limit
+// pressure to specific commands. Scoped to the openai-codex provider —
+// other OpenAI Responses providers (e.g. Azure) don't share the same
+// account-level quota so don't get counted here.
+function emitCodexUsageObservability(
+  model: Model<Api>,
+  context: Context,
+  usage: MutableAssistantOutput["usage"],
+): void {
+  if (model.provider !== "openai-codex") return;
+  const prompt = (usage?.input ?? 0) + (usage?.cacheRead ?? 0);
+  const completion = usage?.output ?? 0;
+  const cached = usage?.cacheRead ?? 0;
+  recordCodexUsage({ prompt, completion, cached });
+  const messages = (context as { messages?: ReadonlyArray<{ role: string; content: unknown }> })
+    .messages;
+  const lastUser = messages?.findLast?.((m) => m.role === "user");
+  const rawContent = lastUser?.content;
+  const commandSnippet =
+    typeof rawContent === "string"
+      ? rawContent.slice(0, 80).replace(/\s+/g, " ").trim() || "n/a"
+      : "n/a";
+  log.info(
+    `codex_usage model=${model.id} prompt=${prompt} completion=${completion} cached=${cached}`,
+    {
+      event: "codex_usage",
+      model: model.id,
+      prompt_tokens: prompt,
+      completion_tokens: completion,
+      cached_tokens: cached,
+      command: commandSnippet,
+    },
+  );
+}
+
 export function createOpenAIResponsesTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const eventStream = createAssistantMessageEventStream();
@@ -788,6 +825,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error("An unknown error occurred");
         }
+        emitCodexUsageObservability(model, context, output.usage);
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
       } catch (error) {
@@ -1107,6 +1145,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error("An unknown error occurred");
         }
+        emitCodexUsageObservability(model, context, output.usage);
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
       } catch (error) {

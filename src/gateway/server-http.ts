@@ -21,6 +21,7 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { formatCodexMetricsPrometheus } from "../logging/codex-metrics.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
@@ -743,6 +744,17 @@ export function createGatewayHttpServer(opts: {
           rateLimiter,
         }),
       );
+
+      requestStages.push({
+        name: "metrics",
+        run: () => {
+          if (req.method !== "GET" || (req.url ?? "") !== "/metrics") return false;
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+          res.end(formatCodexMetricsPrometheus());
+          return true;
+        },
+      });
 
       requestStages.push({
         name: "chat-managed-image-media",
