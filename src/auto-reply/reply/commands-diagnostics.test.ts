@@ -395,19 +395,13 @@ describe("diagnostics command", () => {
     expect(calls[0]?.args).toBe("diagnostics flaky tool call");
     expect(calls[0]?.diagnosticsPreviewOnly).toBe(true);
     expect(calls[0]?.senderIsOwner).toBe(true);
-    expect(calls[0]?.diagnosticsSessions).toEqual([
-      expect.objectContaining({
-        agentHarnessId: "codex",
-        sessionId: "session-1",
-        channel: "whatsapp",
-        accountId: "account-1",
-      }),
-    ]);
-    const defaults = execCalls[0]?.defaults as {
-      approvalWarningText?: string;
-      approvalFollowupText?: string;
-      approvalFollowup?: () => Promise<string | undefined>;
-    };
+    const diagnosticsSessions = requireDiagnosticsSessions(calls[0]);
+    expect(diagnosticsSessions).toHaveLength(1);
+    expect(diagnosticsSessions[0]?.agentHarnessId).toBe("codex");
+    expect(diagnosticsSessions[0]?.sessionId).toBe("session-1");
+    expect(diagnosticsSessions[0]?.channel).toBe("whatsapp");
+    expect(diagnosticsSessions[0]?.accountId).toBe("account-1");
+    const { defaults } = requireExecCall(execCalls);
     expect(defaults.approvalWarningText).toContain("OpenAI Codex harness:");
     expect(defaults.approvalWarningText).toContain(
       "Approving diagnostics will also send this thread's feedback bundle to OpenAI servers.",
@@ -451,21 +445,17 @@ describe("diagnostics command", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply).toBeUndefined();
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.diagnosticsSessions).toEqual([
-      expect.objectContaining({
-        sessionKey: "agent:main:telegram:direct:user-1",
-        sessionId: "telegram-session",
-        channel: "whatsapp",
-      }),
-      expect.objectContaining({
-        sessionKey: "agent:main:discord:channel:123",
-        sessionId: "discord-session",
-        channel: "discord",
-      }),
-    ]);
-    expect(
-      (execCalls[0]?.defaults as { approvalWarningText?: string }).approvalWarningText,
-    ).toContain("OpenAI Codex harness:");
+    const diagnosticsSessions = requireDiagnosticsSessions(calls[0]);
+    expect(diagnosticsSessions).toHaveLength(2);
+    expect(diagnosticsSessions[0]?.sessionKey).toBe("agent:main:telegram:direct:user-1");
+    expect(diagnosticsSessions[0]?.sessionId).toBe("telegram-session");
+    expect(diagnosticsSessions[0]?.channel).toBe("whatsapp");
+    expect(diagnosticsSessions[1]?.sessionKey).toBe("agent:main:discord:channel:123");
+    expect(diagnosticsSessions[1]?.sessionId).toBe("discord-session");
+    expect(diagnosticsSessions[1]?.channel).toBe("discord");
+    expect(requireExecCall(execCalls).defaults.approvalWarningText).toContain(
+      "OpenAI Codex harness:",
+    );
   });
 
   it("omits the Codex section for ordinary sessions without Codex targets", async () => {
