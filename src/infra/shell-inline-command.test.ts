@@ -38,6 +38,12 @@ describe("resolveInlineCommandMatch", () => {
       expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 2 },
     },
     {
+      name: "extracts the next token for PowerShell -EC",
+      argv: ["pwsh", "-EC", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
+      expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 2 },
+    },
+    {
       name: "supports combined -c forms when enabled",
       argv: ["sh", "-cecho hi"],
       flags: POSIX_INLINE_COMMAND_FLAGS,
