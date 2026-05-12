@@ -104,6 +104,43 @@ function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRun
   };
 }
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+function firstCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const [arg] = mock.mock.calls.at(0) ?? [];
+  if (!arg || typeof arg !== "object") {
+    throw new Error("expected first call argument object");
+  }
+  return arg as Record<string, unknown>;
+}
+
+function findCallArg(
+  mock: ReturnType<typeof vi.fn>,
+  predicate: (arg: Record<string, unknown>) => boolean,
+): Record<string, unknown> {
+  for (const [arg] of mock.mock.calls) {
+    if (arg && typeof arg === "object" && predicate(arg as Record<string, unknown>)) {
+      return arg as Record<string, unknown>;
+    }
+  }
+  throw new Error("expected matching mock call");
+}
+
+function hasDeliveredTaskStatusUpdate(runId: string): boolean {
+  return taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mock.calls.some(([arg]) => {
+    const record = arg as { runId?: unknown; deliveryStatus?: unknown } | undefined;
+    return record?.runId === runId && record.deliveryStatus === "delivered";
+  });
+}
+
 function createLifecycleController({
   entry,
   runs = new Map([[entry.runId, entry]]),
@@ -168,15 +205,14 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(warn).toHaveBeenCalledWith(
-      "failed to finalize subagent background task state",
-      expect.objectContaining({
-        error: { name: "Error", message: "task store boom" },
-        runId: "***",
-        childSessionKey: "agent:main:…",
-        outcomeStatus: "ok",
-      }),
-    );
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls.at(0)?.[0]).toBe("failed to finalize subagent background task state");
+    expectFields(warn.mock.calls.at(0)?.[1], {
+      error: { name: "Error", message: "task store boom" },
+      runId: "***",
+      childSessionKey: "agent:main:…",
+      outcomeStatus: "ok",
+    });
     expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledTimes(1);
     expect(lifecycleEventMocks.emitSessionLifecycleEvent).toHaveBeenCalledWith({
       sessionKey: "agent:main:subagent:child",
@@ -213,15 +249,16 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(warn).toHaveBeenCalledWith(
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls.at(0)?.[0]).toBe(
       "failed to update subagent background task delivery state",
-      expect.objectContaining({
-        error: { name: "Error", message: "delivery state boom" },
-        runId: "***",
-        childSessionKey: "agent:main:…",
-        deliveryStatus: "failed",
-      }),
     );
+    expectFields(warn.mock.calls.at(0)?.[1], {
+      error: { name: "Error", message: "delivery state boom" },
+      runId: "***",
+      childSessionKey: "agent:main:…",
+      deliveryStatus: "failed",
+    });
     expect(entry.cleanupCompletedAt).toBeTypeOf("number");
     expect(persist).toHaveBeenCalled();
   });
@@ -245,17 +282,14 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledWith(
-      {
-        sessionKeys: [entry.childSessionKey],
-        onWarn: expect.any(Function),
-      },
+    const browserCleanupArg = firstCallArg(
+      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
     );
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
-      expect.objectContaining({
-        childSessionKey: entry.childSessionKey,
-      }),
-    );
+    expectFields(browserCleanupArg, { sessionKeys: [entry.childSessionKey] });
+    expect(browserCleanupArg.onWarn).toBeTypeOf("function");
+    expectFields(firstCallArg(runSubagentAnnounceFlow), {
+      childSessionKey: entry.childSessionKey,
+    });
   });
 
   it("skips announce delivery when completion messages are disabled", async () => {
@@ -278,19 +312,13 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledWith(
-      {
-        sessionKeys: [entry.childSessionKey],
-        onWarn: expect.any(Function),
-      },
+    const browserCleanupArg = firstCallArg(
+      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
     );
+    expectFields(browserCleanupArg, { sessionKeys: [entry.childSessionKey] });
+    expect(browserCleanupArg.onWarn).toBeTypeOf("function");
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: entry.runId,
-        deliveryStatus: "delivered",
-      }),
-    );
+    expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
     await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
     expect(entry.completionAnnouncedAt).toBeUndefined();
   });
@@ -334,12 +362,7 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     );
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: entry.runId,
-        deliveryStatus: "delivered",
-      }),
-    );
+    expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
     await vi.waitFor(() => expect(runs.has(entry.runId)).toBe(false));
     expect(entry.completionAnnouncedAt).toBeUndefined();
   });
@@ -363,11 +386,15 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
+    const retireArg = findCallArg(
+      bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey,
+      (arg) => arg.reason === "subagent-run-cleanup",
+    );
+    expectFields(retireArg, {
       sessionKey: entry.childSessionKey,
       reason: "subagent-run-cleanup",
-      onError: expect.any(Function),
     });
+    expect(retireArg.onError).toBeTypeOf("function");
   });
 
   it("keeps bundle MCP runtimes warm for persistent session-mode cleanup", async () => {
@@ -419,18 +446,12 @@ describe("subagent registry lifecycle hardening", () => {
       elapsedMs: 2_250,
     };
     expect(entry.outcome).toEqual(enrichedOutcome);
-    expect(taskExecutorMocks.failTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: "timed_out",
-      }),
-    );
-    expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
-      expect.objectContaining({
-        startedAt: 2_000,
-        endedAt: 4_250,
-        outcome: enrichedOutcome,
-      }),
-    );
+    expectFields(firstCallArg(taskExecutorMocks.failTaskRunByRunId), { status: "timed_out" });
+    expectFields(firstCallArg(runSubagentAnnounceFlow), {
+      startedAt: 2_000,
+      endedAt: 4_250,
+      outcome: enrichedOutcome,
+    });
     expect(persist).toHaveBeenCalled();
   });
 
@@ -521,13 +542,11 @@ describe("subagent registry lifecycle hardening", () => {
 
     expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
     expect(entry.frozenResultText).toBeNull();
-    expect(taskExecutorMocks.failTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: "failed",
-        error: "All models failed (2): timeout",
-        progressSummary: undefined,
-      }),
-    );
+    expectFields(firstCallArg(taskExecutorMocks.failTaskRunByRunId), {
+      status: "failed",
+      error: "All models failed (2): timeout",
+      progressSummary: undefined,
+    });
     expect(persist).toHaveBeenCalled();
   });
 
@@ -559,7 +578,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(typeof entry.cleanupCompletedAt).toBe("number");
-    expect(entry.cleanupCompletedAt).toBeGreaterThan(0);
+    expect(entry.cleanupCompletedAt).toBeGreaterThanOrEqual(4_000);
     expect(notifyContextEngineSubagentEnded).toHaveBeenCalledWith({
       childSessionKey: entry.childSessionKey,
       reason: "completed",
@@ -657,13 +676,14 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(warn).toHaveBeenCalledWith(
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls.at(0)?.[0]).toBe(
       "failed to update subagent background task delivery state",
-      expect.objectContaining({
-        error: { name: "Error", message: "delivery status boom" },
-        deliveryStatus: "delivered",
-      }),
     );
+    expectFields(warn.mock.calls.at(0)?.[1], {
+      error: { name: "Error", message: "delivery status boom" },
+      deliveryStatus: "delivered",
+    });
     expect(emitSubagentEndedHookForRun).toHaveBeenCalledTimes(1);
     expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledTimes(1);
     expect(entry.cleanupCompletedAt).toBeTypeOf("number");
@@ -729,16 +749,14 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: entry.runId,
-        runtime: "subagent",
-        sessionKey: entry.childSessionKey,
-        deliveryStatus: "failed",
-        error:
-          "UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed",
-      }),
-    );
+    expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      deliveryStatus: "failed",
+      error:
+        "UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed",
+    });
     expect(entry.lastAnnounceDeliveryError).toBe(
       "UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed",
     );

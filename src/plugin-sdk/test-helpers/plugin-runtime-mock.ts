@@ -265,7 +265,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         OriginatingChannel: params.channel,
         OriginatingTo: params.reply.originatingTo,
         CommandAuthorized: params.access?.commands
-          ? params.access.commands.authorizers.some((entry) => entry.allowed)
+          ? (params.access.commands.authorized ??
+            params.access.commands.authorizers?.some((entry) => entry.allowed) ??
+            false)
           : false,
         ...params.extra,
       }) as ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>,
@@ -402,6 +404,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["describeImageFile"],
       describeImageFileWithModel:
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["describeImageFileWithModel"],
+      extractStructuredWithModel:
+        vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["extractStructuredWithModel"],
       describeVideoFile:
         vi.fn() as unknown as PluginRuntime["mediaUnderstanding"]["describeVideoFile"],
       transcribeAudioFile:
@@ -636,6 +640,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       },
       turn: {
         run: runChannelTurnMock,
+        runAssembled:
+          dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["runAssembled"],
         runResolved: vi.fn(
           async (params: Parameters<PluginRuntime["channel"]["turn"]["runResolved"]>[0]) =>
             await runChannelTurnMock({

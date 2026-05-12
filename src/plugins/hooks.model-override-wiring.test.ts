@@ -85,7 +85,7 @@ describe("model override pipeline wiring", () => {
 
   async function expectBeforeModelResolve(params: {
     event: PluginHookBeforeModelResolveEvent;
-    expected: Partial<PluginHookBeforeModelResolveResult>;
+    expected: PluginHookBeforeModelResolveResult;
     withBrokenHook?: boolean;
     catchErrors?: boolean;
   }) {
@@ -116,7 +116,7 @@ describe("model override pipeline wiring", () => {
 
     expect(handlerSpy).toHaveBeenCalledTimes(1);
     expect(handlerSpy).toHaveBeenCalledWith(params.event, stubCtx);
-    expect(result).toEqual(expect.objectContaining(params.expected));
+    expect(result).toEqual(params.expected);
     return result;
   }
 
@@ -258,9 +258,7 @@ describe("model override pipeline wiring", () => {
 
         await expect(resultPromise).resolves.toEqual({ prependContext: "fast" });
         expect(logger.error).toHaveBeenCalledWith(
-          expect.stringContaining(
-            "[hooks] before_prompt_build handler from slow-plugin failed: timed out after 5ms",
-          ),
+          "[hooks] before_prompt_build handler from slow-plugin failed: timed out after 5ms",
         );
       } finally {
         vi.useRealTimers();

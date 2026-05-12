@@ -24,6 +24,22 @@ vi.mock("./model-selection.runtime.js", () => ({
   resolveCommitmentDefaultModelRef: resolveDefaultModelMock,
 }));
 
+function requireFirstEmbeddedPiRequest(): {
+  provider?: string;
+  model?: string;
+  disableTools?: boolean;
+} {
+  const [call] = runEmbeddedPiAgentMock.mock.calls;
+  if (!call) {
+    throw new Error("expected embedded PI agent extraction request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected embedded PI agent extraction request");
+  }
+  return request as { provider?: string; model?: string; disableTools?: boolean };
+}
+
 describe("commitment extraction runtime", () => {
   const tmpDirs: string[] = [];
   const nowMs = Date.parse("2026-04-29T16:00:00.000Z");
@@ -145,12 +161,20 @@ describe("commitment extraction runtime", () => {
     const store = await loadCommitmentStore();
 
     expect(extractBatch).toHaveBeenCalledTimes(1);
-    const batchItems = extractBatch.mock.calls[0]?.[0].items;
+    const [extractCall] = extractBatch.mock.calls;
+    if (!extractCall) {
+      throw new Error("Expected commitment extraction batch call");
+    }
+    const batchItems = extractCall[0].items;
     expect(batchItems).toHaveLength(2);
-    expect(batchItems?.[0]?.itemId).not.toContain("main");
-    expect(batchItems?.[0]?.itemId).not.toContain("telegram");
-    expect(batchItems?.[0]?.itemId).not.toContain("15551234567");
-    expect(batchItems?.[0]?.itemId).not.toContain("m1");
+    const [firstBatchItem] = batchItems;
+    if (!firstBatchItem) {
+      throw new Error("Expected first commitment extraction batch item");
+    }
+    expect(firstBatchItem.itemId).not.toContain("main");
+    expect(firstBatchItem.itemId).not.toContain("telegram");
+    expect(firstBatchItem.itemId).not.toContain("15551234567");
+    expect(firstBatchItem.itemId).not.toContain("m1");
     expect(store.commitments.map((commitment) => commitment.dedupeKey)).toEqual([
       "event:1",
       "event:2",
@@ -195,13 +219,11 @@ describe("commitment extraction runtime", () => {
 
     await expect(drainCommitmentExtractionQueue()).resolves.toBe(1);
     expect(resolveDefaultModelMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai-codex",
-        model: "gpt-5.5",
-        disableTools: true,
-      }),
-    );
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const request = requireFirstEmbeddedPiRequest();
+    expect(request.provider).toBe("openai-codex");
+    expect(request.model).toBe("gpt-5.5");
+    expect(request.disableTools).toBe(true);
   });
 
   it("backs off hidden extraction after terminal model or auth failures", async () => {

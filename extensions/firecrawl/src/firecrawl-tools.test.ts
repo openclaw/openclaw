@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -82,7 +82,11 @@ describe("firecrawl tools", () => {
 
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webSearch.apiKey");
-    expect(applied.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.firecrawl;
+    if (!pluginEntry) {
+      throw new Error("expected Firecrawl plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("parses scrape payloads into wrapped external-content results", () => {
@@ -214,10 +218,10 @@ describe("firecrawl tools", () => {
     expect(authHeader).toBe("Bearer firecrawl-test-key");
   });
 
-  it("blocks private and non-http scrape targets before Firecrawl requests", async () => {
-    expect(() =>
+  it("blocks private and non-http scrape targets before Firecrawl requests", () => {
+    expect(
       firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("https://example.com/page"),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     for (const blockedUrl of [
       "http://localhost/admin",
@@ -348,7 +352,11 @@ describe("firecrawl tools", () => {
 
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webFetch.apiKey");
-    expect(applied.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.firecrawl;
+    if (!pluginEntry) {
+      throw new Error("expected Firecrawl fetch plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("passes proxy and storeInCache through the fetch provider tool", async () => {
@@ -405,19 +413,16 @@ describe("firecrawl tools", () => {
       categories: ["research"],
       scrapeResults: true,
     });
-    expect(result).toMatchObject({
-      details: {
-        ok: true,
-        params: {
-          cfg: { env: "test" },
-          query: "web search",
-          count: 6,
-          timeoutSeconds: 12,
-          sources: ["web", "news"],
-          categories: ["research"],
-          scrapeResults: true,
-        },
-      },
+    const details = result.details as { ok?: boolean; params?: unknown };
+    expect(details.ok).toBe(true);
+    expect(details.params).toEqual({
+      cfg: { env: "test" },
+      query: "web search",
+      count: 6,
+      timeoutSeconds: 12,
+      sources: ["web", "news"],
+      categories: ["research"],
+      scrapeResults: true,
     });
   });
 
@@ -447,21 +452,18 @@ describe("firecrawl tools", () => {
       storeInCache: false,
       timeoutSeconds: 22,
     });
-    expect(result).toMatchObject({
-      details: {
-        ok: true,
-        params: {
-          cfg: { env: "test" },
-          url: "https://docs.openclaw.ai",
-          extractMode: "markdown",
-          maxChars: 1500,
-          onlyMainContent: false,
-          maxAgeMs: 5000,
-          proxy: "stealth",
-          storeInCache: false,
-          timeoutSeconds: 22,
-        },
-      },
+    const details = result.details as { ok?: boolean; params?: unknown };
+    expect(details.ok).toBe(true);
+    expect(details.params).toEqual({
+      cfg: { env: "test" },
+      url: "https://docs.openclaw.ai",
+      extractMode: "markdown",
+      maxChars: 1500,
+      onlyMainContent: false,
+      maxAgeMs: 5000,
+      proxy: "stealth",
+      storeInCache: false,
+      timeoutSeconds: 22,
     });
   });
 
@@ -724,7 +726,7 @@ describe("firecrawl tools", () => {
     );
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ success: true });
+    expect(result.success).toBe(true);
   });
 
   it("respects positive numeric overrides for scrape and cache behavior", () => {

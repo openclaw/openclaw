@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Message, Usage } from "@mariozechner/pi-ai";
+import type { Message, Usage } from "@earendil-works/pi-ai";
 import { afterAll, describe, expect, it } from "vitest";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, resolveTrajectoryPointerFilePath } from "./paths.js";
@@ -61,6 +61,10 @@ function toolResultMessage(content: Extract<Message, { role: "toolResult" }>["co
     isError: false,
     timestamp: 3,
   };
+}
+
+function eventTypes(events: readonly Pick<TrajectoryEvent, "type">[]): string[] {
+  return events.map((event) => event.type);
 }
 
 function writeSimpleSessionFile(
@@ -185,7 +189,7 @@ afterAll(() => {
 });
 
 describe("exportTrajectoryBundle", () => {
-  it("sanitizes session ids in default export directory names", async () => {
+  it("sanitizes session ids in default export directory names", () => {
     const outputDir = resolveDefaultTrajectoryExportDir({
       workspaceDir: "/tmp/workspace",
       sessionId: "../evil/session",
@@ -209,14 +213,17 @@ describe("exportTrajectoryBundle", () => {
     writeSimpleSessionFile(sessionFile);
     fs.mkdirSync(outputDir);
 
-    await expect(
-      exportTrajectoryBundle({
+    try {
+      await exportTrajectoryBundle({
         outputDir,
         sessionFile,
         sessionId: "session-1",
         workspaceDir: tmpDir,
-      }),
-    ).rejects.toThrow();
+      });
+      throw new Error("expected trajectory export to reject an existing output directory");
+    } catch (error) {
+      expect((error as NodeJS.ErrnoException).code).toBe("EEXIST");
+    }
   });
 
   it("does not synthesize prompt files from export-time fallbacks", async () => {
@@ -332,7 +339,7 @@ describe("exportTrajectoryBundle", () => {
     });
 
     expect(bundle.manifest.runtimeEventCount).toBe(1);
-    expect(bundle.events.some((event) => event.type === "session.started")).toBe(true);
+    expect(eventTypes(bundle.events)).toContain("session.started");
   });
 
   it("uses the recorded runtime pointer before current environment overrides", async () => {
@@ -395,8 +402,8 @@ describe("exportTrajectoryBundle", () => {
       });
 
       expect(bundle.runtimeFile).toBe(recordedRuntimeFile);
-      expect(bundle.events.some((event) => event.type === "recorded-runtime")).toBe(true);
-      expect(bundle.events.some((event) => event.type === "env-runtime")).toBe(false);
+      expect(eventTypes(bundle.events)).toContain("recorded-runtime");
+      expect(eventTypes(bundle.events)).not.toContain("env-runtime");
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_TRAJECTORY_DIR;
@@ -446,7 +453,7 @@ describe("exportTrajectoryBundle", () => {
     });
 
     expect(bundle.runtimeFile).toBeUndefined();
-    expect(bundle.events.some((event) => event.type === "outside-runtime")).toBe(false);
+    expect(eventTypes(bundle.events)).not.toContain("outside-runtime");
   });
 
   it("does not fall back to runtime pointer targets that are not regular files", async () => {
@@ -492,7 +499,7 @@ describe("exportTrajectoryBundle", () => {
     });
 
     expect(bundle.runtimeFile).toBeUndefined();
-    expect(bundle.events.some((event) => event.type === "symlink-runtime")).toBe(false);
+    expect(eventTypes(bundle.events)).not.toContain("symlink-runtime");
   });
 
   it("counts expanded transcript events when enforcing the total event limit", async () => {
@@ -542,7 +549,7 @@ describe("exportTrajectoryBundle", () => {
     });
 
     expect(bundle.manifest.runtimeEventCount).toBe(0);
-    expect(bundle.events.some((event) => event.type === "other-runtime")).toBe(false);
+    expect(eventTypes(bundle.events)).not.toContain("other-runtime");
   });
 
   it("redacts non-workspace paths in strings that also contain workspace paths", async () => {
@@ -744,9 +751,10 @@ describe("exportTrajectoryBundle", () => {
       .trim()
       .split(/\r?\n/u)
       .map((line) => JSON.parse(line) as TrajectoryEvent);
-    expect(exportedEvents.some((event) => event.type === "tool.call")).toBe(true);
-    expect(exportedEvents.some((event) => event.type === "tool.result")).toBe(true);
-    expect(exportedEvents.some((event) => event.type === "context.compiled")).toBe(true);
+    const types = eventTypes(exportedEvents);
+    expect(types).toContain("tool.call");
+    expect(types).toContain("tool.result");
+    expect(types).toContain("context.compiled");
     expect(JSON.stringify(exportedEvents)).toContain("$WORKSPACE_DIR/inside.txt");
     expect(JSON.stringify(exportedEvents)).not.toContain("$WORKSPACE_DIR2");
 
@@ -767,15 +775,14 @@ describe("exportTrajectoryBundle", () => {
       "system-prompt.txt",
       "tools.json",
     ]);
-    expect(manifest.contents?.every((entry) => entry.bytes > 0)).toBe(true);
+    const emptyContents = (manifest.contents ?? []).filter((entry) => entry.bytes <= 0);
+    expect(emptyContents).toStrictEqual([]);
 
     const metadata = JSON.parse(fs.readFileSync(path.join(outputDir, "metadata.json"), "utf8")) as {
       skills?: { entries?: Array<{ id?: string; invoked?: boolean }> };
     };
-    expect(metadata.skills?.entries?.[0]).toMatchObject({
-      id: "weather",
-      invoked: true,
-    });
+    expect(metadata.skills?.entries?.[0]?.id).toBe("weather");
+    expect(metadata.skills?.entries?.[0]?.invoked).toBe(true);
     const prompts = fs.readFileSync(path.join(outputDir, "prompts.json"), "utf8");
     const artifacts = fs.readFileSync(path.join(outputDir, "artifacts.json"), "utf8");
     const systemPrompt = fs.readFileSync(path.join(outputDir, "system-prompt.txt"), "utf8");

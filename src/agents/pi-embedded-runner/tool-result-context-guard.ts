@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
@@ -240,6 +240,7 @@ export function installContextEngineLoopHook(params: {
   tokenBudget?: number;
   modelId: string;
   getPrePromptMessageCount?: () => number;
+  onAfterTurnCheckpoint?: (messageCount: number) => void;
   getRuntimeContext?: (params: {
     messages: AgentMessage[];
     prePromptMessageCount: number;
@@ -324,6 +325,7 @@ export function installContextEngineLoopHook(params: {
         }
       }
       lastSeenLength = sourceMessages.length;
+      params.onAfterTurnCheckpoint?.(lastSeenLength);
       lastSourceMessages = sourceMessages;
       const assembled = await contextEngine.assemble({
         sessionId,

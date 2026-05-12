@@ -1,22 +1,26 @@
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-types";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FILE_REF_EXTENSIONS_WITH_TLD,
   isAutoLinkedFileRef,
   markdownToIR,
-  normalizeLowercaseStringOrEmpty,
   type MarkdownLinkSpan,
   type MarkdownIR,
   renderMarkdownIRChunksWithinLimit,
-} from "openclaw/plugin-sdk/text-runtime";
-import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/text-chunking";
+import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-chunking";
 
-type TelegramFormattedChunk = {
+export type TelegramFormattedChunk = {
   html: string;
   text: string;
 };
 
-function escapeHtml(text: string): string {
+export function escapeTelegramHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function escapeHtml(text: string): string {
+  return escapeTelegramHtml(text);
 }
 
 function escapeHtmlAttr(text: string): string {
@@ -72,11 +76,63 @@ function renderTelegramHtml(ir: MarkdownIR): string {
   });
 }
 
+function leadingWhitespaceLength(line: string): number {
+  let length = 0;
+  while (line[length] === " " || line[length] === "\t") {
+    length++;
+  }
+  return length;
+}
+
+function isTelegramBulletLine(line: string): boolean {
+  return /^[ \t]*(?:[•*+-])[ \t]+\S/.test(line);
+}
+
+function isTelegramListBoundaryLine(line: string): boolean {
+  return /^[ \t]*(?:\d+\.|#{1,6})[ \t]+\S/.test(line);
+}
+
+function isMarkdownIndentedCodeLine(line: string): boolean {
+  return /^(?: {4}|\t)/.test(line);
+}
+
+function shouldPreserveTelegramListBoundarySpacing(previous: string, next: string): boolean {
+  return (
+    !isMarkdownIndentedCodeLine(previous) &&
+    !isMarkdownIndentedCodeLine(next) &&
+    isTelegramBulletLine(previous) &&
+    isTelegramListBoundaryLine(next) &&
+    leadingWhitespaceLength(next) <= leadingWhitespaceLength(previous)
+  );
+}
+
+function preserveTelegramListBoundarySpacing(markdown: string): string {
+  const lines = markdown.split("\n");
+  const out: string[] = [];
+  let inFence = false;
+  let previousLine = "";
+
+  for (const line of lines) {
+    const normalizedLine = line.replace(/\r$/, "");
+    const isFenceLine = /^[ \t]*(?:```|~~~)/.test(normalizedLine);
+    if (!inFence && shouldPreserveTelegramListBoundarySpacing(previousLine, normalizedLine)) {
+      out.push("");
+    }
+    out.push(line);
+    if (isFenceLine) {
+      inFence = !inFence;
+    }
+    previousLine = normalizedLine;
+  }
+
+  return out.join("\n");
+}
+
 export function markdownToTelegramHtml(
   markdown: string,
   options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
 ): string {
-  const ir = markdownToIR(markdown ?? "", {
+  const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
@@ -84,11 +140,12 @@ export function markdownToTelegramHtml(
     tableMode: options.tableMode,
   });
   const html = renderTelegramHtml(ir);
+  const telegramHtml = preserveSupportedTelegramHtmlTags(html);
   // Apply file reference wrapping if requested (for chunked rendering)
   if (options.wrapFileRefs !== false) {
-    return wrapFileReferencesInHtml(html);
+    return wrapFileReferencesInHtml(telegramHtml);
   }
-  return html;
+  return telegramHtml;
 }
 
 /**
@@ -106,8 +163,163 @@ function escapeRegex(str: string): string {
 
 const AUTO_LINKED_ANCHOR_PATTERN = /<a\s+href="https?:\/\/([^"]+)"[^>]*>\1<\/a>/gi;
 const HTML_TAG_PATTERN = /(<\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*?>/gi;
+const HTML_MODE_TAG_PATTERN = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^<>]*)>$/;
+const ESCAPED_HTML_TAG_PATTERN = /&lt;(\/?)([a-zA-Z][a-zA-Z0-9-]*)(.*?)&gt;/g;
+const TELEGRAM_SIMPLE_HTML_TAGS = new Set([
+  "b",
+  "strong",
+  "i",
+  "em",
+  "u",
+  "ins",
+  "s",
+  "strike",
+  "del",
+  "code",
+  "pre",
+  "tg-spoiler",
+  "blockquote",
+]);
+const TELEGRAM_ATTR_HTML_TAG_PATTERNS = new Map([
+  ["a", /^\s+href="[^"]+"\s*$/],
+  ["span", /^\s+class="tg-spoiler"\s*$/],
+  ["tg-emoji", /^\s+emoji-id="[^"]+"\s*$/],
+  ["tg-time", /^\s+datetime="[^"]+"\s*$/],
+]);
 let fileReferencePattern: RegExp | undefined;
 let orphanedTldPattern: RegExp | undefined;
+
+function popLastTagName(tags: string[], name: string): boolean {
+  for (let index = tags.length - 1; index >= 0; index -= 1) {
+    if (tags[index] === name) {
+      tags.splice(index, 1);
+      return true;
+    }
+  }
+  return false;
+}
+
+function isSupportedTelegramHtmlTag(rawTag: string): boolean {
+  const match = HTML_MODE_TAG_PATTERN.exec(rawTag);
+  if (!match) {
+    return false;
+  }
+  const closing = match[1] === "/";
+  const name = normalizeLowercaseStringOrEmpty(match[2]);
+  const attrs = match[3] ?? "";
+  if (TELEGRAM_SIMPLE_HTML_TAGS.has(name)) {
+    return attrs.trim() === "";
+  }
+  if (closing) {
+    return attrs.trim() === "";
+  }
+  return TELEGRAM_ATTR_HTML_TAG_PATTERNS.get(name)?.test(attrs) ?? false;
+}
+
+function preserveTelegramHtmlTag(
+  rawTag: string,
+  openTags: string[],
+  escapeTag: (rawTag: string) => string,
+): string {
+  const match = HTML_MODE_TAG_PATTERN.exec(rawTag);
+  if (!match || !isSupportedTelegramHtmlTag(rawTag)) {
+    return escapeTag(rawTag);
+  }
+  const closing = match[1] === "/";
+  const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+  if (closing) {
+    return popLastTagName(openTags, tagName) ? rawTag : escapeTag(rawTag);
+  }
+  openTags.push(tagName);
+  return rawTag;
+}
+
+function escapeUnsupportedTelegramHtml(text: string): string {
+  let result = "";
+  let index = 0;
+  const openTags: string[] = [];
+  while (index < text.length) {
+    const char = text[index];
+    if (char === "&") {
+      const entityEnd = findTelegramHtmlEntityEnd(text, index);
+      if (entityEnd !== -1) {
+        result += text.slice(index, entityEnd + 1);
+        index = entityEnd + 1;
+      } else {
+        result += "&amp;";
+        index += 1;
+      }
+      continue;
+    }
+    if (char === "<") {
+      const end = text.indexOf(">", index + 1);
+      if (end !== -1) {
+        const rawTag = text.slice(index, end + 1);
+        result += preserveTelegramHtmlTag(rawTag, openTags, escapeHtml);
+        index = end + 1;
+      } else {
+        result += "&lt;";
+        index += 1;
+      }
+      continue;
+    }
+    if (char === ">") {
+      result += "&gt;";
+      index += 1;
+      continue;
+    }
+    result += char;
+    index += 1;
+  }
+  return result;
+}
+
+function promoteEscapedSupportedTelegramTags(text: string, openTags: string[]): string {
+  ESCAPED_HTML_TAG_PATTERN.lastIndex = 0;
+  return text.replace(
+    ESCAPED_HTML_TAG_PATTERN,
+    (match, closing: string, name: string, attrs: string) =>
+      preserveTelegramHtmlTag(`<${closing}${name}${attrs}>`, openTags, () => match),
+  );
+}
+
+function preserveSupportedTelegramHtmlTags(html: string): string {
+  let codeDepth = 0;
+  let preDepth = 0;
+  let result = "";
+  let lastIndex = 0;
+  const openEscapedTags: string[] = [];
+
+  HTML_TAG_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
+    const tagStart = match.index;
+    const tagEnd = HTML_TAG_PATTERN.lastIndex;
+    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+    const isClosing = match[1] === "</";
+    const textBefore = html.slice(lastIndex, tagStart);
+    result +=
+      codeDepth > 0 || preDepth > 0
+        ? textBefore
+        : promoteEscapedSupportedTelegramTags(textBefore, openEscapedTags);
+
+    if (tagName === "code") {
+      codeDepth = isClosing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
+    } else if (tagName === "pre") {
+      preDepth = isClosing ? Math.max(0, preDepth - 1) : preDepth + 1;
+    }
+
+    result += html.slice(tagStart, tagEnd);
+    lastIndex = tagEnd;
+  }
+
+  const remainingText = html.slice(lastIndex);
+  result +=
+    codeDepth > 0 || preDepth > 0
+      ? remainingText
+      : promoteEscapedSupportedTelegramTags(remainingText, openEscapedTags);
+  return result;
+}
 
 function getFileReferencePattern(): RegExp {
   if (fileReferencePattern) {
@@ -216,8 +428,7 @@ export function renderTelegramHtmlText(
 ): string {
   const textMode = options.textMode ?? "markdown";
   if (textMode === "html") {
-    // For HTML mode, trust caller markup - don't modify
-    return text;
+    return escapeUnsupportedTelegramHtml(text);
   }
   // markdownToTelegramHtml already wraps file references by default
   return markdownToTelegramHtml(text, { tableMode: options.tableMode });
@@ -435,7 +646,7 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
 }
 
 function renderTelegramChunkHtml(ir: MarkdownIR): string {
-  return wrapFileReferencesInHtml(renderTelegramHtml(ir));
+  return wrapFileReferencesInHtml(preserveSupportedTelegramHtmlTags(renderTelegramHtml(ir)));
 }
 
 function renderTelegramChunksWithinHtmlLimit(
@@ -458,7 +669,7 @@ export function markdownToTelegramChunks(
   limit: number,
   options: { tableMode?: MarkdownTableMode } = {},
 ): TelegramFormattedChunk[] {
-  const ir = markdownToIR(markdown ?? "", {
+  const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",

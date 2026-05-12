@@ -18,6 +18,7 @@ import {
   resolveLocalAuthCliInvocation,
   resolveLocalAuthSpawnCwd,
   resolveLocalAuthSpawnOptions,
+  resolveTuiCtrlCAction,
   resolveTuiSessionKey,
   stopTuiSafely,
 } from "./tui.js";
@@ -71,13 +72,14 @@ describe("tui slash commands", () => {
 
   it("includes gateway text commands", () => {
     const commands = getSlashCommands({});
-    expect(commands.some((command) => command.name === "context")).toBe(true);
-    expect(commands.some((command) => command.name === "commands")).toBe(true);
+    const names = commands.map((command) => command.name);
+    expect(names).toContain("context");
+    expect(names).toContain("commands");
   });
 
   it("includes /auth in local embedded mode", () => {
     const commands = getSlashCommands({ local: true });
-    expect(commands.some((command) => command.name === "auth")).toBe(true);
+    expect(commands.map((command) => command.name)).toContain("auth");
   });
 });
 
@@ -263,6 +265,36 @@ describe("resolveCtrlCAction", () => {
   });
 });
 
+describe("resolveTuiCtrlCAction", () => {
+  it("exits immediately after a gateway disconnect", () => {
+    expect(
+      resolveTuiCtrlCAction({
+        hasInput: true,
+        now: 2000,
+        lastCtrlCAt: 0,
+        wasDisconnected: true,
+      }),
+    ).toEqual({
+      action: "exit",
+      nextLastCtrlCAt: 0,
+    });
+  });
+
+  it("forces exit when shutdown is already in progress", () => {
+    expect(
+      resolveTuiCtrlCAction({
+        hasInput: false,
+        now: 2000,
+        lastCtrlCAt: 1000,
+        exitRequested: true,
+      }),
+    ).toEqual({
+      action: "force-exit",
+      nextLastCtrlCAt: 1000,
+    });
+  });
+});
+
 describe("TUI shutdown safety", () => {
   it("drains terminal input before stopping the TUI", async () => {
     const calls: string[] = [];
@@ -279,6 +311,7 @@ describe("TUI shutdown safety", () => {
     });
 
     expect(drainInput).toHaveBeenCalledOnce();
+    expect(drainInput).toHaveBeenCalledWith(500, 100);
     expect(stop).toHaveBeenCalledOnce();
     expect(calls).toEqual(["drain", "stop"]);
   });
@@ -327,11 +360,11 @@ describe("TUI shutdown safety", () => {
   });
 
   it("swallows only ignorable stop errors", () => {
-    expect(() => {
+    expect(
       stopTuiSafely(() => {
         throw new Error("setRawMode EBADF");
-      });
-    }).not.toThrow();
+      }),
+    ).toBeUndefined();
   });
 
   it("rethrows non-ignorable stop errors", () => {
@@ -393,10 +426,12 @@ describe("resolveCodexCliBin", () => {
   });
 
   it("returns null or a valid path (never throws)", () => {
-    // The function should never throw regardless of environment
-    expect(() => resolveCodexCliBin()).not.toThrow();
     const result = resolveCodexCliBin();
-    expect(result === null || typeof result === "string").toBe(true);
+    if (result === null) {
+      expect(result).toBeNull();
+    } else {
+      expect(typeof result).toBe("string");
+    }
   });
 });
 
@@ -457,13 +492,13 @@ describe("resolveLocalAuthSpawnOptions", () => {
         command: "/usr/local/bin/codex",
         platform: "linux",
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
       resolveLocalAuthSpawnOptions({
         command: "C:\\tools\\codex.exe",
         platform: "win32",
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 });
 

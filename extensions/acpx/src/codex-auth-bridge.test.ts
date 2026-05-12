@@ -69,7 +69,22 @@ function expectWrapperToContainPathSuffix(wrapper: string, pathSuffix: string[])
   const nativeSuffix = pathSuffix.join(path.sep);
   const escapedNativeSuffix = JSON.stringify(nativeSuffix).slice(1, -1);
   const posixSuffix = pathSuffix.join("/");
-  expect(wrapper.includes(escapedNativeSuffix) || wrapper.includes(posixSuffix)).toBe(true);
+  if (wrapper.includes(escapedNativeSuffix)) {
+    expect(wrapper).toContain(escapedNativeSuffix);
+  } else {
+    expect(wrapper).toContain(posixSuffix);
+  }
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let error: unknown;
+  try {
+    await fs.access(targetPath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 afterEach(async () => {
@@ -117,9 +132,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain(JSON.stringify(installedBinPath));
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
-    await expect(
-      fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(path.join(agentDir, "acp-auth", "codex", "auth.json"));
   });
 
   it("keeps generated wrappers usable when chmod is rejected by the state filesystem", async () => {
@@ -163,7 +176,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@zed-industries/codex-acp@0.13.0"');
+    expect(wrapper).toContain('"@zed-industries/codex-acp@0.14.0"');
     expect(wrapper).toContain('"--", "codex-acp"');
     expect(wrapper).not.toContain("@zed-industries/codex-acp@^0.11.1");
   });
@@ -184,7 +197,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.32.0"');
+    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.33.1"');
     expect(wrapper).toContain('"--", "claude-agent-acp"');
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@^0.31.0");
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.0");
@@ -293,7 +306,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
       },
     );
     const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexHome?: unknown };
-    expect(launched.argv).toEqual([]);
+    expect(launched.argv).toStrictEqual([]);
     const expectedCodexHome = await fs.realpath(path.join(stateDir, "acpx", "codex-home"));
     expect(path.resolve(String(launched.codexHome))).toBe(expectedCodexHome);
   });
@@ -369,12 +382,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain("CODEX_HOME: codexHome");
     expect(wrapper).not.toContain(sourceCodexHome);
-    await expect(
-      fs.access(path.join(agentDir, "acp-auth", "codex-source", "auth.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(path.join(agentDir, "acp-auth", "codex-source", "auth.json"));
+    await expectPathMissing(path.join(agentDir, "acp-auth", "codex", "auth.json"));
   });
 
   it("copies only trusted Codex project declarations into the isolated Codex home", async () => {

@@ -127,7 +127,7 @@ describe("channel doctor compatibility mutations", () => {
   it("skips plugin discovery when no channels are configured", () => {
     const result = collectChannelDoctorCompatibilityMutations({} as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
   });
 
@@ -140,7 +140,7 @@ describe("channel doctor compatibility mutations", () => {
       },
     } as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
     expect(mocks.getLoadedChannelPlugin).not.toHaveBeenCalled();
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalled();
@@ -156,7 +156,7 @@ describe("channel doctor compatibility mutations", () => {
       },
     } as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
     expect(mocks.getLoadedChannelPlugin).not.toHaveBeenCalled();
     expect(mocks.getBundledChannelSetupPlugin).not.toHaveBeenCalled();
@@ -267,7 +267,7 @@ describe("channel doctor compatibility mutations", () => {
       },
     } as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
     expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("discord");
     expect(mocks.getBundledChannelSetupPlugin).toHaveBeenCalledWith("discord");
     expect(mocks.getBundledChannelPlugin).toHaveBeenCalledWith("discord");
@@ -305,7 +305,7 @@ describe("channel doctor compatibility mutations", () => {
       cfg,
       READ_ONLY_CHANNEL_DOCTOR_OPTIONS,
     );
-    expect(collectEmptyAllowlistExtraWarnings.mock.calls[0]?.[0]).not.toHaveProperty("cfg");
+    expect(collectEmptyAllowlistExtraWarnings.mock.calls.at(0)?.[0]).not.toHaveProperty("cfg");
   });
 
   it("reuses empty allowlist doctor entries across per-account hooks", () => {

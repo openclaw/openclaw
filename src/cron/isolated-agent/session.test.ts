@@ -489,9 +489,9 @@ describe("resolveCronSession", () => {
         },
       });
 
-      expect(result.sessionEntry.sessionId).toBeDefined();
       expect(result.isNewSession).toBe(true);
-      // Should still preserve other fields from entry
+      expect(typeof result.sessionEntry.sessionId).toBe("string");
+      expect(result.sessionEntry.sessionId).not.toHaveLength(0);
       expect(result.sessionEntry.modelOverride).toBe("some-model");
     });
   });

@@ -77,31 +77,20 @@ describe("buildChannelsTable", () => {
       },
     );
 
-    expect(table.rows).toContainEqual(
-      expect.objectContaining({
-        id: "discord",
-        state: "ok",
-        detail: expect.not.stringContaining("unavailable"),
-      }),
-    );
-    expect(table.details[0]?.rows[0]).toEqual(
-      expect.objectContaining({
-        Status: "OK",
-        Notes: expect.stringContaining("credential available in gateway runtime"),
-      }),
-    );
+    const row = table.rows.find((entry) => entry.id === "discord");
+    expect(row?.state).toBe("ok");
+    expect(row?.detail).not.toContain("unavailable");
+    const detailRow = table.details[0]?.rows[0];
+    expect(detailRow?.Status).toBe("OK");
+    expect(detailRow?.Notes).toContain("credential available in gateway runtime");
   });
 
   it("warns when a configured token is unavailable and there is no live account proof", async () => {
     const table = await buildChannelsTable({ channels: { discord: { enabled: true } } });
 
-    expect(table.rows).toContainEqual(
-      expect.objectContaining({
-        id: "discord",
-        state: "warn",
-        detail: expect.stringContaining("unavailable"),
-      }),
-    );
+    const row = table.rows.find((entry) => entry.id === "discord");
+    expect(row?.state).toBe("warn");
+    expect(row?.detail).toContain("unavailable");
   });
 
   it("shows configured official external channels when the plugin is missing", async () => {
@@ -110,13 +99,18 @@ describe("buildChannelsTable", () => {
 
     const table = await buildChannelsTable({ channels: { feishu: { appId: "cli_xxx" } } });
 
-    expect(table.rows).toContainEqual({
-      id: "feishu",
-      label: "Feishu",
-      enabled: true,
-      state: "warn",
-      detail:
-        "plugin not installed - run openclaw plugins install @openclaw/feishu or openclaw doctor --fix",
+    expect(table).toStrictEqual({
+      rows: [
+        {
+          id: "feishu",
+          label: "Feishu",
+          enabled: true,
+          state: "warn",
+          detail:
+            "plugin not installed - run openclaw plugins install @openclaw/feishu or openclaw doctor --fix",
+        },
+      ],
+      details: [],
     });
     expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
   });
@@ -126,7 +120,7 @@ describe("buildChannelsTable", () => {
 
     const table = await buildChannelsTable({ channels: { feishu: { appId: "cli_xxx" } } });
 
-    expect(table.rows).toEqual([]);
+    expect(table.rows).toStrictEqual([]);
     expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
   });
 });

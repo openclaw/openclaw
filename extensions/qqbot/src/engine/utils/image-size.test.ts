@@ -50,13 +50,13 @@ describe("getImageSizeFromUrl", () => {
       await getImageSizeFromUrl("https://cdn.example.com/photo.png");
 
       expect(adapterMocks.fetchMedia).toHaveBeenCalledOnce();
-      const opts = adapterMocks.fetchMedia.mock.calls[0][0];
+      const opts = adapterMocks.fetchMedia.mock.calls.at(0)?.[0];
 
       expect(opts.url).toBe("https://cdn.example.com/photo.png");
       expect(opts.maxBytes).toBe(65_536);
       expect(opts.maxRedirects).toBe(0);
       // Generic public-network-only policy: no hostname allowlist
-      expect(opts.ssrfPolicy).toEqual({});
+      expect(opts.ssrfPolicy).toStrictEqual({});
       expect(opts.requestInit.headers).toEqual({
         Range: "bytes=0-65535",
         "User-Agent": "QQBot-Image-Size-Detector/1.0",
@@ -70,7 +70,7 @@ describe("getImageSizeFromUrl", () => {
 
       await getImageSizeFromUrl("https://cdn.example.com/img.png", 3000);
 
-      const opts = adapterMocks.fetchMedia.mock.calls[0][0];
+      const opts = adapterMocks.fetchMedia.mock.calls.at(0)?.[0];
       expect(opts.requestInit.signal).toBeInstanceOf(AbortSignal);
     });
   });

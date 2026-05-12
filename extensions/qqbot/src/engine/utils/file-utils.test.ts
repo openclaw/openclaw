@@ -64,9 +64,11 @@ describe("qqbot file-utils downloadFile", () => {
       "photo.png",
     );
 
-    expect(savedPath).toBeTruthy();
+    if (!savedPath) {
+      throw new Error("expected QQBot media file path");
+    }
     expect(savedPath).toMatch(/photo_\d+_[0-9a-f]{6}\.png$/);
-    expect(await fs.promises.readFile(savedPath!, "utf8")).toBe("image-bytes");
+    expect(await fs.promises.readFile(savedPath, "utf8")).toBe("image-bytes");
     expect(adapterMocks.fetchMedia).toHaveBeenCalledWith({
       url: "https://media.qq.com/assets/photo.png",
       filePathHint: "photo.png",
@@ -101,7 +103,7 @@ describe("qqbot file-utils downloadFile", () => {
     await fs.promises.symlink(targetPath, linkPath);
 
     expect(checkFileSize(linkPath).ok).toBe(false);
-    await expect(readFileAsync(linkPath)).rejects.toThrow();
+    await expect(readFileAsync(linkPath)).rejects.toThrow(/symbolic link|symlink|regular file/i);
     await expect(fileExistsAsync(linkPath)).resolves.toBe(false);
   });
 });

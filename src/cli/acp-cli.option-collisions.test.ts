@@ -4,9 +4,18 @@ import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { withTempSecretFiles } from "../test-utils/secret-file-fixture.js";
 import { registerAcpCli } from "./acp-cli.js";
 
+type AcpClientOptions = {
+  verbose?: boolean;
+};
+
+type AcpGatewayOptions = {
+  gatewayPassword?: string;
+  gatewayToken?: string;
+};
+
 const mocks = vi.hoisted(() => ({
-  runAcpClientInteractive: vi.fn(async (_opts: unknown) => {}),
-  serveAcpGateway: vi.fn(async (_opts: unknown) => {}),
+  runAcpClientInteractive: vi.fn(async (_opts: AcpClientOptions) => {}),
+  serveAcpGateway: vi.fn(async (_opts: AcpGatewayOptions) => {}),
   defaultRuntime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -21,11 +30,11 @@ const { runAcpClientInteractive, serveAcpGateway, defaultRuntime } = mocks;
 const passwordKey = () => ["pass", "word"].join("");
 
 vi.mock("../acp/client.js", () => ({
-  runAcpClientInteractive: (opts: unknown) => mocks.runAcpClientInteractive(opts),
+  runAcpClientInteractive: (opts: AcpClientOptions) => mocks.runAcpClientInteractive(opts),
 }));
 
 vi.mock("../acp/server.js", () => ({
-  serveAcpGateway: (opts: unknown) => mocks.serveAcpGateway(opts),
+  serveAcpGateway: (opts: AcpGatewayOptions) => mocks.serveAcpGateway(opts),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -46,7 +55,8 @@ describe("acp cli option collisions", () => {
 
   function expectCliError(pattern: RegExp) {
     expect(serveAcpGateway).not.toHaveBeenCalled();
-    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringMatching(pattern));
+    const errors = defaultRuntime.error.mock.calls.map(([message]) => String(message));
+    expect(errors.some((message) => pattern.test(message))).toBe(true);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   }
 
@@ -66,11 +76,11 @@ describe("acp cli option collisions", () => {
       argv: ["acp", "client", "--verbose"],
     });
 
-    expect(runAcpClientInteractive).toHaveBeenCalledWith(
-      expect.objectContaining({
-        verbose: true,
-      }),
-    );
+    expect(runAcpClientInteractive).toHaveBeenCalledTimes(1);
+    const clientOptions = runAcpClientInteractive.mock.calls.at(0)?.[0] as
+      | { verbose?: boolean }
+      | undefined;
+    expect(clientOptions?.verbose).toBe(true);
   });
 
   it("loads gateway token/password from files", async () => {
@@ -88,12 +98,12 @@ describe("acp cli option collisions", () => {
       },
     );
 
-    expect(serveAcpGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gatewayToken: "tok_file",
-        gatewayPassword: "pw_file", // pragma: allowlist secret
-      }),
-    );
+    expect(serveAcpGateway).toHaveBeenCalledTimes(1);
+    const gatewayOptions = serveAcpGateway.mock.calls.at(0)?.[0] as
+      | { gatewayPassword?: string; gatewayToken?: string }
+      | undefined;
+    expect(gatewayOptions?.gatewayToken).toBe("tok_file");
+    expect(gatewayOptions?.gatewayPassword).toBe("pw_file"); // pragma: allowlist secret
   });
 
   it.each([
@@ -101,7 +111,7 @@ describe("acp cli option collisions", () => {
       name: "rejects mixed secret flags and file flags",
       files: { token: "tok_file\n" },
       args: (tokenFile: string) => ["--token", "tok_inline", "--token-file", tokenFile],
-      expected: /Use either --token or --token-file/,
+      expected: /Use either --token .*--token-file for Gateway token\./,
     },
     {
       name: "rejects mixed password flags and file flags",
@@ -112,7 +122,7 @@ describe("acp cli option collisions", () => {
         "--password-file",
         passwordFile,
       ],
-      expected: /Use either --password or --password-file/,
+      expected: /Use either --passw.*d .*--password-file for Gateway password\./,
     },
   ])("$name", async ({ files, args, expected }) => {
     await withTempSecretFiles("openclaw-acp-cli-", files, async ({ tokenFile, passwordFile }) => {
@@ -125,11 +135,12 @@ describe("acp cli option collisions", () => {
   it("warns when inline secret flags are used", async () => {
     await parseAcp(["--token", "tok_inline", "--password", "pw_inline"]);
 
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/--token can be exposed via process listings/),
+    const errors = defaultRuntime.error.mock.calls.map(([message]) => String(message));
+    expect(errors).toContain(
+      "Warning: --token can be exposed via process listings. Prefer --token-file or environment variables.",
     );
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/--password can be exposed via process listings/),
+    expect(errors).toContain(
+      "Warning: --password can be exposed via process listings. Prefer --password-file or environment variables.",
     );
   });
 
@@ -138,11 +149,11 @@ describe("acp cli option collisions", () => {
       await parseAcp(["--token-file", `  ${files.tokenFile ?? ""}  `]);
     });
 
-    expect(serveAcpGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gatewayToken: "tok_file",
-      }),
-    );
+    expect(serveAcpGateway).toHaveBeenCalledTimes(1);
+    const gatewayOptions = serveAcpGateway.mock.calls.at(0)?.[0] as
+      | { gatewayToken?: string }
+      | undefined;
+    expect(gatewayOptions?.gatewayToken).toBe("tok_file");
   });
 
   it("reports missing token-file read errors", async () => {

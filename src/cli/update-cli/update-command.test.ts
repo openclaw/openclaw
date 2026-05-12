@@ -7,13 +7,16 @@ import {
   resolveGatewayInstallEntrypoint,
 } from "../../daemon/gateway-entrypoint.js";
 import {
+  buildInvalidConfigPostCoreUpdateResult,
   collectMissingPluginInstallPayloads,
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
+  resolvePostCoreUpdateChildStdio,
   resolvePostInstallDoctorEnv,
   shouldPrepareUpdatedInstallRestart,
   resolveUpdatedGatewayRestartPort,
   shouldUseLegacyProcessRestartAfterUpdate,
+  updatePluginsAfterCoreUpdate,
 } from "./update-command.js";
 
 describe("resolveGatewayInstallEntrypointCandidates", () => {
@@ -248,7 +251,7 @@ describe("collectMissingPluginInstallPayloads", () => {
             },
           },
         }),
-      ).resolves.toEqual([]);
+      ).resolves.toStrictEqual([]);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
@@ -530,17 +533,94 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
     }));
     const waitForHealthy = vi.fn(async () => stillUnhealthy);
 
-    await expect(
-      recoverLaunchAgentAndRecheckGatewayHealth({
-        health: unhealthy,
-        service,
-        port: 18790,
-        expectedVersion: "2026.5.3",
-        deps: { recoverLaunchAgent, waitForHealthy },
-      }),
-    ).resolves.toMatchObject({
-      health: { healthy: false, waitOutcome: "timeout" },
-      launchAgentRecovery: { attempted: true, recovered: true },
+    const result = await recoverLaunchAgentAndRecheckGatewayHealth({
+      health: unhealthy,
+      service,
+      port: 18790,
+      expectedVersion: "2026.5.3",
+      deps: { recoverLaunchAgent, waitForHealthy },
     });
+    expect(result.health.healthy).toBe(false);
+    expect(result.health.waitOutcome).toBe("timeout");
+    expect(result.launchAgentRecovery?.attempted).toBe(true);
+    expect(result.launchAgentRecovery?.recovered).toBe(true);
+  });
+});
+
+describe("resolvePostCoreUpdateChildStdio", () => {
+  it('returns "pipe" on Windows so the child never inherits the parent console handles', () => {
+    // On Windows, stdio:"inherit" passes the parent's console HANDLE to the child process.
+    // PowerShell/CMD will not return the prompt until every holder of those handles exits,
+    // causing the terminal to hang after `openclaw update` completes (#78445).
+    expect(resolvePostCoreUpdateChildStdio("win32")).toBe("pipe");
+  });
+
+  it('returns "inherit" on non-Windows platforms', () => {
+    expect(resolvePostCoreUpdateChildStdio("linux")).toBe("inherit");
+    expect(resolvePostCoreUpdateChildStdio("darwin")).toBe("inherit");
+  });
+});
+
+describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
+  it("returns status:error (not skipped) when configSnapshot is invalid, so the pre-restart gate fires", async () => {
+    // The pre-restart gate in `updateCommand` is literally
+    //   if (postCorePluginUpdate?.status === "error") { exit(1) }
+    // so asserting that this function returns status:"error" on invalid
+    // config is sufficient to prove the gate fires end-to-end. We pass
+    // `json: true` to suppress logging side-effects without mocking.
+    const result = await updatePluginsAfterCoreUpdate({
+      root: "/tmp/openclaw-test",
+      channel: "stable",
+      configSnapshot: {
+        valid: false,
+        issues: [],
+        legacyIssues: [],
+      } as unknown as Awaited<
+        ReturnType<typeof import("../../config/io.js").readConfigFileSnapshot>
+      >,
+      opts: { json: true } as never,
+      timeoutMs: 1000,
+    });
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("invalid-config");
+    expect(result.changed).toBe(false);
+    expect(result.warnings).toStrictEqual([
+      {
+        reason: "invalid-config",
+        message:
+          "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.",
+        guidance: [
+          "Run `openclaw doctor` to inspect the config validation errors.",
+          "Once the config parses, rerun `openclaw update`.",
+        ],
+      },
+    ]);
+  });
+});
+
+describe("buildInvalidConfigPostCoreUpdateResult", () => {
+  it("returns status:error so the existing pre-restart gate exits 1 instead of restarting on invalid config", () => {
+    const built = buildInvalidConfigPostCoreUpdateResult();
+    expect(built.result.status).toBe("error");
+    expect(built.result.reason).toBe("invalid-config");
+    expect(built.result.changed).toBe(false);
+  });
+
+  it("surfaces actionable repair guidance in both the structural warnings and the message string", () => {
+    const built = buildInvalidConfigPostCoreUpdateResult();
+    expect(built.guidance).toStrictEqual([
+      "Run `openclaw doctor` to inspect the config validation errors.",
+      "Once the config parses, rerun `openclaw update`.",
+    ]);
+    expect(built.result.warnings).toStrictEqual([
+      {
+        reason: "invalid-config",
+        message: built.message,
+        guidance: built.guidance,
+      },
+    ]);
+    expect(built.message).toBe(
+      "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.",
+    );
   });
 });

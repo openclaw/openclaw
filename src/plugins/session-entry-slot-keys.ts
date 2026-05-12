@@ -54,6 +54,8 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "modelOverride",
   "agentRuntimeOverride",
   "modelOverrideSource",
+  "modelOverrideFallbackOriginProvider",
+  "modelOverrideFallbackOriginModel",
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
@@ -121,7 +123,8 @@ type ReservedSessionEntrySlotKey = Extract<
 >;
 type MissingSessionEntryReservedSlotKeys = Exclude<keyof SessionEntry, ReservedSessionEntrySlotKey>;
 type AssertNever<T extends never> = T;
-type _AssertAllSessionEntryKeysAreReserved = AssertNever<MissingSessionEntryReservedSlotKeys>;
+export type _AssertAllSessionEntryKeysAreReserved =
+  AssertNever<MissingSessionEntryReservedSlotKeys>;
 
 const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<string>(SESSION_ENTRY_RESERVED_SLOT_KEY_LIST);
 const OBJECT_PROTOTYPE_RESERVED_SLOT_KEYS = new Set<string>([

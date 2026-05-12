@@ -34,12 +34,12 @@ describe("handshake auth helpers", () => {
       browserRateLimiter,
     });
 
-    expect(resolved).toMatchObject({
-      hasBrowserOriginHeader: true,
-      enforceOriginCheckForAnyClient: true,
-      rateLimitClientIp: `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}https://app.example`,
-      authRateLimiter: browserRateLimiter,
-    });
+    expect(resolved.hasBrowserOriginHeader).toBe(true);
+    expect(resolved.enforceOriginCheckForAnyClient).toBe(true);
+    expect(resolved.rateLimitClientIp).toBe(
+      `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}https://app.example`,
+    );
+    expect(resolved.authRateLimiter).toBe(browserRateLimiter);
   });
 
   it("falls back to the legacy synthetic ip when the browser origin is invalid", () => {
@@ -76,6 +76,20 @@ describe("handshake auth helpers", () => {
       authProvided: "device-token",
       canRetryWithDeviceToken: false,
       recommendedNextStep: "update_auth_credentials",
+    });
+  });
+
+  it("treats device-token scope mismatch as configuration review guidance", () => {
+    const resolved = resolveUnauthorizedHandshakeContext({
+      connectAuth: { deviceToken: "device-token" },
+      failedAuth: { ok: false, reason: "scope_mismatch" },
+      hasDeviceIdentity: true,
+    });
+
+    expect(resolved).toEqual({
+      authProvided: "device-token",
+      canRetryWithDeviceToken: false,
+      recommendedNextStep: "review_auth_configuration",
     });
   });
 
@@ -447,6 +461,64 @@ describe("handshake auth helpers", () => {
         hasBrowserOriginHeader: true,
         sharedAuthOk: true,
         authMethod: "token",
+      }),
+    ).toBe(false);
+  });
+
+  it("skips backend self-pairing when auth mode is none (scoped, sharedAuthOk-independent)", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+    } as ConnectParams;
+    // auth:none on local backend skips regardless of sharedAuthOk
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "none",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "shared_secret_loopback_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "none",
+      }),
+    ).toBe(true);
+    // sharedAuthOk=false is fine for auth:none on local backend
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "none",
+      }),
+    ).toBe(true);
+    // Remote connections with auth:none should NOT skip
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "none",
+      }),
+    ).toBe(false);
+    // Browser origin with auth:none should NOT skip
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "direct_local",
+        hasBrowserOriginHeader: true,
+        sharedAuthOk: false,
+        authMethod: "none",
       }),
     ).toBe(false);
   });

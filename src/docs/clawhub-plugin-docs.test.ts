@@ -40,9 +40,14 @@ describe("ClawHub plugin docs", () => {
       ),
     ) as { id?: unknown; configSchema?: unknown };
 
-    expect(validateExternalCodePluginPackageJson(packageJson).issues).toEqual([]);
+    expect(validateExternalCodePluginPackageJson(packageJson).issues).toStrictEqual([]);
     expect(typeof pluginManifest.id).toBe("string");
-    expect(pluginManifest.configSchema).toBeTruthy();
+    const { configSchema } = pluginManifest;
+    if (configSchema === null) {
+      throw new Error("expected minimal plugin config schema");
+    }
+    expect(typeof configSchema).toBe("object");
+    expect(Array.isArray(configSchema)).toBe(false);
   });
 
   it("does not tell plugin authors to use bare clawhub publish", async () => {

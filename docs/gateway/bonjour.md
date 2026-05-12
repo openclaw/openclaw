@@ -100,8 +100,8 @@ The Gateway advertises small non-secret hints to make UI flows convenient:
 - `canvasPort=<port>` (only when the canvas host is enabled; currently the same as `gatewayPort`)
 - `transport=gateway`
 - `tailnetDns=<magicdns>` (mDNS full mode only, optional hint when Tailnet is available)
-- `sshPort=<port>` (mDNS full mode only; wide-area DNS-SD may omit it)
-- `cliPath=<path>` (mDNS full mode only; wide-area DNS-SD still writes it as a remote-install hint)
+- `sshPort=<port>` (full mode only; omitted in minimal and off modes)
+- `cliPath=<path>` (full mode only; omitted in minimal and off modes)
 
 Security notes:
 
@@ -141,6 +141,11 @@ The Gateway writes a rolling log file (printed on startup as
 - `bonjour: watchdog detected non-announced service ...`
 - `bonjour: disabling advertiser after ... failed restarts ...`
 
+The watchdog treats active `probing`, `announcing`, and fresh conflict-renames as
+in-progress states. If the service never reaches `announced`, OpenClaw eventually
+recreates the advertiser and, after repeated failures, disables Bonjour for that
+Gateway process instead of re-advertising forever.
+
 Bonjour uses the system hostname for the advertised `.local` host when it is a
 valid DNS label. If the system hostname contains spaces, underscores, or another
 invalid DNS-label character, OpenClaw falls back to `openclaw.local`. Set
@@ -171,9 +176,11 @@ openclaw plugins enable bonjour
 ```
 
 When enabled, Bonjour uses `discovery.mdns.mode` to decide how much TXT metadata
-to publish. The default mode is `minimal`; use `full` only when local clients need
-`cliPath` or `sshPort` hints, and use `off` to suppress LAN multicast without
-changing plugin enablement.
+to publish. The same mode controls optional TXT hints in wide-area DNS-SD records.
+The default mode is `minimal`; use `full` only when clients need `cliPath` or
+`sshPort` hints. Use `off` to suppress LAN multicast without changing plugin
+enablement; wide-area DNS-SD can still publish the minimal Gateway beacon when
+`discovery.wideArea.enabled` is true.
 
 ## When to disable Bonjour
 

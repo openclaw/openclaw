@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeCompatibilityConfigValues } from "../commands/doctor-legacy-config.js";
+import { VERSION } from "../version.js";
 import { createConfigIO } from "./io.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -104,12 +105,14 @@ describe("config io paths", () => {
       });
       io.loadConfig();
 
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/^Config warnings:\n- /));
-      expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("Config warnings:\\n"));
+      expect(logger.warn).toHaveBeenCalledWith(
+        "Config warnings:\n- plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+      );
+      expect(logger.warn).not.toHaveBeenCalledWith("Config warnings:\\n");
     });
   });
 
-  it("hints at stale wrappers when config was written by a newer OpenClaw", async () => {
+  it("explains what to check when config was written by a newer OpenClaw", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -138,17 +141,16 @@ describe("config io paths", () => {
       io.loadConfig();
 
       expect(logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining("stale PATH or global wrappers"),
-      );
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("command -v openclaw"));
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw --version"));
-      expect(logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining("openclaw gateway status --deep"),
+        [
+          `Your OpenClaw config was written by version 9999.1.1, but this command is running ${VERSION}.`,
+          "Check: `openclaw --version`, `which openclaw`, and `openclaw gateway status --deep`.",
+          "If unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
+        ].join("\n"),
       );
     });
   });
 
-  it("normalizes safe-bin config entries at config load time", async () => {
+  it("normalizes safe-bin config entries at config load time", () => {
     const cfg = {
       tools: {
         exec: {
@@ -211,7 +213,7 @@ describe("config io paths", () => {
         },
       },
     } as OpenClawConfig);
-    expect(migrated.config.channels?.whatsapp?.accounts?.default).toMatchObject({
+    expect(migrated.config.channels?.whatsapp?.accounts?.default).toEqual({
       dmPolicy: "allowlist",
       allowFrom: ["+15550001111"],
       groupPolicy: "open",

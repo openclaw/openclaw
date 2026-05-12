@@ -1,15 +1,31 @@
 ---
-summary: "Switch from the BlueBubbles plugin to the bundled iMessage plugin without losing pairing, allowlists, or group bindings."
+summary: "Migrate old BlueBubbles configs to the bundled iMessage plugin without losing pairing, allowlists, or group bindings."
 read_when:
   - Planning a move from BlueBubbles to the bundled iMessage plugin
   - Translating BlueBubbles config keys to iMessage equivalents
-  - Rolling back a partial iMessage cutover
+  - Verifying imsg before enabling the iMessage plugin
 title: "Coming from BlueBubbles"
 ---
 
 The bundled `imessage` plugin now reaches the same private API surface as BlueBubbles (`react`, `edit`, `unsend`, `reply`, `sendWithEffect`, group management, attachments) by driving [`steipete/imsg`](https://github.com/steipete/imsg) over JSON-RPC. If you already run a Mac with `imsg` installed, you can drop the BlueBubbles server and let the plugin talk to Messages.app directly.
 
-This guide is opt-in. BlueBubbles still works and remains the right choice if you cannot run `imsg` on the host where the Mac signs into iMessage (for example, if the Mac is unreachable from the gateway).
+BlueBubbles support was removed. OpenClaw supports iMessage through `imsg` only. This guide is for migrating old `channels.bluebubbles` configs to `channels.imessage`; there is no other supported migration path.
+
+<Note>
+For the short announcement and operator summary, see [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage).
+</Note>
+
+## Migration checklist
+
+Use this checklist when you already know your old BlueBubbles config and want the shortest safe path:
+
+1. Verify `imsg` directly on the Mac that runs Messages.app (`imsg chats`, `imsg history`, `imsg send`, and `imsg rpc --help`).
+2. Copy behavior keys from `channels.bluebubbles` to `channels.imessage`: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `includeAttachments`, `attachmentRoots`, `mediaMaxMb`, `textChunkLimit`, `coalesceSameSenderDms`, and `actions`.
+3. Drop transport keys that no longer exist: `serverUrl`, `password`, webhook URLs, and BlueBubbles server setup.
+4. If the Gateway is not running on the Messages Mac, set `channels.imessage.cliPath` to an SSH wrapper and set `remoteHost` for remote attachment fetches.
+5. With the Gateway stopped, enable `channels.imessage`, then run `openclaw channels status --probe --channel imessage`.
+6. Test one DM, one allowed group, attachments if enabled, and every private API action you expect the agent to use.
+7. Delete the BlueBubbles server and old `channels.bluebubbles` config after the iMessage path is verified.
 
 ## When this migration makes sense
 
@@ -17,11 +33,15 @@ This guide is opt-in. BlueBubbles still works and remains the right choice if yo
 - You want one fewer moving part — no separate BlueBubbles server, no REST endpoint to authenticate, no webhook plumbing. Single CLI binary instead of a server + client app + helper.
 - You are on a [supported macOS / `imsg` build](/channels/imessage#requirements-and-permissions-macos) where the private API probe reports `available: true`.
 
-## When to stay on BlueBubbles
+## What imsg does
 
-- The Mac with Messages.app is on a network the gateway cannot reach via SSH.
-- You depend on BlueBubbles features the bundled plugin does not yet cover (rich text formatting attributes beyond bold/italic/underline/strikethrough, BlueBubbles-specific webhook integrations).
-- Your current setup hard-codes BlueBubbles webhook URLs into other systems that you cannot rewire.
+`imsg` is a local macOS CLI for Messages. OpenClaw starts `imsg rpc` as a child process and talks JSON-RPC over stdin/stdout. There is no HTTP server, webhook URL, background daemon, launch agent, or port to expose.
+
+- Reads come from `~/Library/Messages/chat.db` using a read-only SQLite handle.
+- Live inbound messages come from `imsg watch` / `watch.subscribe`, which follows `chat.db` filesystem events with a polling fallback.
+- Sends use Messages.app automation for normal text and file sends.
+- Advanced actions use `imsg launch` to inject the `imsg` helper into Messages.app. That is what unlocks read receipts, typing indicators, rich sends, edit, unsend, threaded reply, tapbacks, and group management.
+- Linux builds can inspect a copied `chat.db`, but cannot send, watch the live Mac database, or drive Messages.app. For OpenClaw iMessage, run `imsg` on the signed-in Mac or through an SSH wrapper to that Mac.
 
 ## Before you start
 
@@ -29,19 +49,42 @@ This guide is opt-in. BlueBubbles still works and remains the right choice if yo
 
    ```bash
    brew install steipete/tap/imsg
-   imsg launch
+   imsg --version
+   imsg chats --limit 3
+   ```
+
+   If `imsg chats` fails with `unable to open database file`, empty output, or `authorization denied`, grant Full Disk Access to the terminal, editor, Node process, Gateway service, or SSH parent process that launches `imsg`, then reopen that parent process.
+
+2. Verify the read, watch, send, and RPC surfaces before changing OpenClaw config:
+
+   ```bash
+   imsg chats --limit 10 --json | jq -s
+   imsg history --chat-id 42 --limit 10 --attachments --json | jq -s
+   imsg watch --chat-id 42 --reactions --json
+   imsg send --chat-id 42 --text "OpenClaw imsg test"
    imsg rpc --help
    ```
 
-2. Verify the private API bridge:
+   Replace `42` with a real chat id from `imsg chats`. Sending requires Automation permission for Messages.app. If OpenClaw will run through SSH, run these commands through the same SSH wrapper or user context that OpenClaw will use.
+
+3. Enable the private API bridge when you need advanced actions:
+
+   ```bash
+   imsg launch
+   imsg status --json
+   ```
+
+   `imsg launch` requires SIP to be disabled. Basic send, history, and watch work without `imsg launch`; advanced actions do not.
+
+4. After you add an enabled `channels.imessage` config, verify the bridge through OpenClaw:
 
    ```bash
    openclaw channels status --probe
    ```
 
-   You want `imessage.privateApi.available: true`. If it reports `false`, fix that first — see [Capability detection](/channels/imessage#private-api-actions).
+   You want `imessage.privateApi.available: true`. If it reports `false`, fix that first — see [Capability detection](/channels/imessage#private-api-actions). `channels status --probe` only probes configured, enabled accounts.
 
-3. Snapshot your config so you can roll back:
+5. Snapshot your config:
 
    ```bash
    cp ~/.openclaw/openclaw.json5 ~/.openclaw/openclaw.json5.bak
@@ -65,7 +108,7 @@ iMessage and BlueBubbles share a lot of channel-level config. The keys that chan
 | `channels.bluebubbles.groupAllowFrom`                      | `channels.imessage.groupAllowFrom`        | Same.                                                                                                                                                                                                                                                                                                                                        |
 | `channels.bluebubbles.groups`                              | `channels.imessage.groups`                | **Copy this verbatim, including any `groups: { "*": { ... } }` wildcard entry.** Per-group `requireMention`, `tools`, `toolsBySender` carry over. With `groupPolicy: "allowlist"`, an empty or missing `groups` block silently drops every group message — see "Group registry footgun" below.                                               |
 | `channels.bluebubbles.sendReadReceipts`                    | `channels.imessage.sendReadReceipts`      | Default `true`. With the bundled plugin this only fires when the private API probe is up.                                                                                                                                                                                                                                                    |
-| `channels.bluebubbles.includeAttachments`                  | `channels.imessage.includeAttachments`    | Same.                                                                                                                                                                                                                                                                                                                                        |
+| `channels.bluebubbles.includeAttachments`                  | `channels.imessage.includeAttachments`    | Same shape, **same off-by-default**. If you had attachments flowing on BlueBubbles you must re-set this explicitly on the iMessage block — it does not carry over implicitly, and inbound photos/media will be silently dropped with no `Inbound message` log line until you do.                                                             |
 | `channels.bluebubbles.attachmentRoots`                     | `channels.imessage.attachmentRoots`       | Local roots; same wildcard rules.                                                                                                                                                                                                                                                                                                            |
 | _(N/A)_                                                    | `channels.imessage.remoteAttachmentRoots` | Only used when `remoteHost` is set for SCP fetches.                                                                                                                                                                                                                                                                                          |
 | `channels.bluebubbles.mediaMaxMb`                          | `channels.imessage.mediaMaxMb`            | Default 16 MB on iMessage (BlueBubbles default was 8 MB). Set explicitly if you want to keep the lower cap.                                                                                                                                                                                                                                  |
@@ -116,7 +159,7 @@ If the gateway logs `imessage: dropping group message from chat_id=<id>` or the 
 
 ## Step-by-step
 
-1. Add an iMessage block alongside the existing BlueBubbles block. Do not delete BlueBubbles yet:
+1. Add an iMessage block alongside the existing BlueBubbles block. Keep it disabled while the Gateway is still routing BlueBubbles traffic:
 
    ```json5
    {
@@ -126,7 +169,7 @@ If the gateway logs `imessage: dropping group message from chat_id=<id>` or the 
          // ... existing config ...
        },
        imessage: {
-         enabled: false, // turn on after the dry run below
+         enabled: false,
          cliPath: "/opt/homebrew/bin/imsg",
          dmPolicy: "pairing",
          allowFrom: ["+15555550123"], // copy from bluebubbles.allowFrom
@@ -146,22 +189,21 @@ If the gateway logs `imessage: dropping group message from chat_id=<id>` or the 
    }
    ```
 
-2. **Dry-run probe** — start the gateway and confirm both channels report healthy:
+2. **Probe before traffic matters** — stop the Gateway, temporarily enable the iMessage block, and confirm iMessage reports healthy from the CLI:
 
    ```bash
-   openclaw gateway
-   openclaw channels status
-   openclaw channels status --probe   # expect imessage.privateApi.available: true
+   openclaw gateway stop
+   # edit config: channels.imessage.enabled = true
+   openclaw channels status --probe --channel imessage   # expect imessage.privateApi.available: true
    ```
 
-   Because `imessage.enabled` is still `false`, no inbound iMessage traffic is routed yet — but `--probe` exercises the bridge so you catch permission/install issues before the cutover.
+   `channels status --probe` only probes configured, enabled accounts. Do not restart the Gateway with both BlueBubbles and iMessage enabled unless you intentionally want both channel monitors running. If you are not cutting over immediately, set `channels.imessage.enabled` back to `false` before restarting the Gateway. Use the direct `imsg` commands in [Before you start](#before-you-start) to validate the Mac before enabling OpenClaw traffic.
 
-3. **Cut over.** Disable BlueBubbles and enable iMessage in one config edit:
+3. **Cut over.** Once the enabled iMessage account reports healthy, remove the BlueBubbles config and keep iMessage enabled:
 
    ```json5
    {
      channels: {
-       bluebubbles: { enabled: false }, // keep the rest of the block for rollback
        imessage: { enabled: true /* ... */ },
      },
    }
@@ -175,26 +217,26 @@ If the gateway logs `imessage: dropping group message from chat_id=<id>` or the 
 
 6. **Verify the action surface** — from a paired DM, ask the agent to react, edit, unsend, reply, send a photo, and (in a group) rename the group / add or remove a participant. Each action should land natively in Messages.app. If any throws "iMessage `<action>` requires the imsg private API bridge", run `imsg launch` again and refresh `channels status --probe`.
 
-7. **Stop the BlueBubbles server** once you have run on iMessage for at least a few hours of normal traffic. Remove the BlueBubbles block from config and restart the gateway.
+7. **Remove the BlueBubbles server and config** once iMessage DMs, groups, and actions are verified. OpenClaw will not use `channels.bluebubbles`.
 
 ## Action parity at a glance
 
-| Action                                                     | BlueBubbles                         | bundled iMessage                                                                     |
-| ---------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
-| Send text / SMS fallback                                   | ✅                                  | ✅                                                                                   |
-| Send media (photo, video, file, voice)                     | ✅                                  | ✅                                                                                   |
-| Threaded reply (`reply_to_guid`)                           | ✅                                  | ✅ (closes [#51892](https://github.com/openclaw/openclaw/issues/51892))              |
-| Tapback (`react`)                                          | ✅                                  | ✅                                                                                   |
-| Edit / unsend (macOS 13+ recipients)                       | ✅                                  | ✅                                                                                   |
-| Send with screen effect                                    | ✅                                  | ✅ (closes part of [#9394](https://github.com/openclaw/openclaw/issues/9394))        |
-| Rich text bold / italic / underline / strikethrough        | ✅                                  | ✅ (typed-run formatting via attributedBody)                                         |
-| Rename group / set group icon                              | ✅                                  | ✅                                                                                   |
-| Add / remove participant, leave group                      | ✅                                  | ✅                                                                                   |
-| Read receipts and typing indicator                         | ✅                                  | ✅ (gated on private API probe)                                                      |
-| Same-sender DM coalescing                                  | ✅                                  | ✅ (DM-only; opt-in via `channels.imessage.coalesceSameSenderDms`)                   |
-| Catchup of inbound messages received while gateway is down | ✅ (webhook replay + history fetch) | _(not yet — tracked at [#78649](https://github.com/openclaw/openclaw/issues/78649))_ |
+| Action                                                     | legacy BlueBubbles                  | bundled iMessage                                                                                                        |
+| ---------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Send text / SMS fallback                                   | ✅                                  | ✅                                                                                                                      |
+| Send media (photo, video, file, voice)                     | ✅                                  | ✅                                                                                                                      |
+| Threaded reply (`reply_to_guid`)                           | ✅                                  | ✅ (closes [#51892](https://github.com/openclaw/openclaw/issues/51892))                                                 |
+| Tapback (`react`)                                          | ✅                                  | ✅                                                                                                                      |
+| Edit / unsend (macOS 13+ recipients)                       | ✅                                  | ✅                                                                                                                      |
+| Send with screen effect                                    | ✅                                  | ✅ (closes part of [#9394](https://github.com/openclaw/openclaw/issues/9394))                                           |
+| Rich text bold / italic / underline / strikethrough        | ✅                                  | ✅ (typed-run formatting via attributedBody)                                                                            |
+| Rename group / set group icon                              | ✅                                  | ✅                                                                                                                      |
+| Add / remove participant, leave group                      | ✅                                  | ✅                                                                                                                      |
+| Read receipts and typing indicator                         | ✅                                  | ✅ (gated on private API probe)                                                                                         |
+| Same-sender DM coalescing                                  | ✅                                  | ✅ (DM-only; opt-in via `channels.imessage.coalesceSameSenderDms`)                                                      |
+| Catchup of inbound messages received while gateway is down | ✅ (webhook replay + history fetch) | ✅ (opt-in via `channels.imessage.catchup.enabled`; closes [#78649](https://github.com/openclaw/openclaw/issues/78649)) |
 
-The catchup gap is the most operationally significant one for production deployments: planned restarts, mac sleep, or an unexpected gateway crash that takes more than a few seconds will silently drop any inbound iMessage traffic that arrives during the gap when running on bundled iMessage. BlueBubbles' webhook + history-fetch flow recovers those messages on reconnect. If your deployment is sensitive to that, stay on BlueBubbles until [#78649](https://github.com/openclaw/openclaw/issues/78649) lands.
+iMessage catchup is now available as an opt-in feature on the bundled plugin. On gateway startup, if `channels.imessage.catchup.enabled` is `true`, the gateway runs one `chats.list` + per-chat `messages.history` pass against the same JSON-RPC client used by `imsg watch`, replays each missed inbound row through the live dispatch path (allowlists, group policy, debouncer, echo cache), and persists a per-account cursor so subsequent startups pick up where they left off. See [Catching up after gateway downtime](/channels/imessage#catching-up-after-gateway-downtime) for tuning.
 
 ## Pairing, sessions, and ACP bindings
 
@@ -202,25 +244,16 @@ The catchup gap is the most operationally significant one for production deploym
 - **Sessions** stay scoped per agent + chat. DMs collapse into the agent main session under default `session.dmScope=main`; group sessions stay isolated per `chat_id`. The session keys differ (`agent:<id>:imessage:group:<chat_id>` vs the BlueBubbles equivalent) — old conversation history under BlueBubbles session keys does not carry into iMessage sessions.
 - **ACP bindings** referencing `match.channel: "bluebubbles"` need to be updated to `"imessage"`. The `match.peer.id` shapes (`chat_id:`, `chat_guid:`, `chat_identifier:`, bare handle) are identical.
 
-## Running both at once
+## No rollback channel
 
-You can keep both `bluebubbles` and `imessage` enabled during cutover testing. BlueBubbles' manifest still declares `preferOver: ["imessage"]`, so the auto-enable resolver continues to prefer BlueBubbles when both channels are configured — the bundled iMessage plugin will not pick up traffic until BlueBubbles is disabled (`channels.bluebubbles.enabled: false`) or removed from config.
-
-If you want both channels to run simultaneously instead of in cutover mode, that is not currently supported through plugin auto-enable; use one channel at a time.
-
-## Rollback
-
-Because you kept the BlueBubbles config block:
-
-1. Set `channels.bluebubbles.enabled: true` and `channels.imessage.enabled: false`.
-2. Restart the gateway.
-3. Inbound traffic returns to BlueBubbles. Reply caches and ACP bindings on the iMessage side stay on disk under `~/.openclaw/state/imessage/` and resume cleanly if you re-enable later.
+There is no supported BlueBubbles runtime to switch back to. If iMessage verification fails, set `channels.imessage.enabled: false`, restart the Gateway, fix the `imsg` blocker, and retry the cutover.
 
 The reply cache lives at `~/.openclaw/state/imessage/reply-cache.jsonl` (mode `0600`, parent dir `0700`). It is safe to delete if you want a clean slate.
 
 ## Related
 
+- [BlueBubbles removal and the imsg iMessage path](/announcements/bluebubbles-imessage) — short announcement and operator summary.
 - [iMessage](/channels/imessage) — full iMessage channel reference, including `imsg launch` setup and capability detection.
-- [BlueBubbles](/channels/bluebubbles) — full BlueBubbles channel reference for the legacy path.
+- `/channels/bluebubbles` — legacy URL that redirects to this migration guide.
 - [Pairing](/channels/pairing) — DM authentication and pairing flow.
 - [Channel Routing](/channels/channel-routing) — how the gateway picks a channel for outbound replies.

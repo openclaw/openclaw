@@ -442,18 +442,16 @@ describe("toSanitizedMarkdownHtml", () => {
   });
 
   describe("ReDoS protection", () => {
-    it("does not throw on deeply nested emphasis markers (#36213)", () => {
+    it("renders deeply nested emphasis markers without dropping text (#36213)", () => {
       const nested = "*".repeat(500) + "text" + "*".repeat(500);
-      let html = "";
-      expect(() => {
-        html = toSanitizedMarkdownHtml(nested);
-      }).not.toThrow();
+      const html = toSanitizedMarkdownHtml(nested);
       expect(html).toContain("text");
     });
 
-    it("does not throw on deeply nested brackets (#36213)", () => {
+    it("renders deeply nested brackets without dropping text (#36213)", () => {
       const nested = "[".repeat(200) + "link" + "]".repeat(200) + "(" + "x".repeat(200) + ")";
-      expect(() => toSanitizedMarkdownHtml(nested)).not.toThrow();
+      const html = toSanitizedMarkdownHtml(nested);
+      expect(html).toContain("link");
     });
 
     it("does not hang on backtick + bracket ReDoS pattern", { timeout: 2_000 }, () => {
@@ -545,8 +543,13 @@ describe("renderMarkdownSidebar", () => {
       container,
     );
 
+    expect(container.querySelector(".sidebar-title")?.textContent?.trim()).toBe("Markdown Preview");
+    expect(container.querySelector(".sidebar-markdown-shell__eyebrow span")?.textContent).toBe(
+      "Rendered Markdown",
+    );
     expect(container.querySelector(".sidebar-markdown strong")?.textContent).toBe("world");
-    expect(container.textContent).toContain("Rendered Markdown");
-    expect(container.textContent).toContain("View Raw Text");
+    expect(
+      Array.from(container.querySelectorAll("button")).map((button) => button.textContent?.trim()),
+    ).toEqual(["", "View Raw Text"]);
   });
 });

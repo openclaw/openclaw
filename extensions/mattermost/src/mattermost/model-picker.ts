@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
-import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
-import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth";
+import {
+  resolveStoredModelOverride,
+  type ModelsProviderData,
+} from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MattermostInteractiveButtonInput } from "./interactions.js";
 
 const MATTERMOST_MODEL_PICKER_CONTEXT_KEY = "oc_model_picker";

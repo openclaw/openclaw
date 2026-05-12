@@ -43,17 +43,19 @@ function expectRegisteredRouteShape(
     handler?: unknown;
     auth: "plugin" | "gateway";
     match?: "exact" | "prefix";
+    pluginId?: string;
+    source?: string;
   },
 ) {
   expect(registry.httpRoutes).toHaveLength(1);
-  expect(registry.httpRoutes[0]).toEqual(
-    expect.objectContaining({
-      path: params.path,
-      auth: params.auth,
-      ...(params.match ? { match: params.match } : {}),
-      ...(params.handler ? { handler: params.handler } : {}),
-    }),
-  );
+  expect(registry.httpRoutes[0]).toEqual({
+    path: params.path,
+    handler: params.handler ?? registry.httpRoutes[0]?.handler,
+    auth: params.auth,
+    match: params.match ?? "exact",
+    pluginId: params.pluginId,
+    source: params.source,
+  });
 }
 
 function createLoggedRouteHarness() {
@@ -121,7 +123,7 @@ describe("registerPluginHttpRoute", () => {
 
     expect(registry.httpRoutes).toHaveLength(0);
     expect(logs).toEqual(['plugin: webhook path missing for account "default"']);
-    expect(() => unregister()).not.toThrow();
+    unregister();
   });
 
   it("replaces stale route on same path when replaceExisting=true", () => {

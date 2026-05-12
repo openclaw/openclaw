@@ -228,7 +228,7 @@ describe("Matrix auth/config live surfaces", () => {
     ).toThrow(/not allowlisted in secrets\.providers\.matrix-env\.allowlist/i);
   });
 
-  it("does not throw when accessToken uses a non-env SecretRef", () => {
+  it("leaves non-env SecretRef access tokens unresolved", () => {
     const cfg = {
       channels: {
         matrix: {
@@ -307,12 +307,18 @@ describe("Matrix auth/config live surfaces", () => {
 
     const resolved = resolveMatrixAuthContext({ cfg, env });
     expect(resolved.accountId).toBe("default");
-    expect(resolved.resolved).toMatchObject({
+    expect(resolved.resolved).toEqual({
       homeserver: "https://matrix.gumadeiras.com",
       userId: "@pinguini:matrix.gumadeiras.com",
+      accessToken: undefined,
       password: "cfg-pass",
+      deviceId: undefined,
       deviceName: "OpenClaw Gateway Pinguini",
+      initialSyncLimit: undefined,
       encryption: true,
+      allowPrivateNetwork: undefined,
+      ssrfPolicy: undefined,
+      dispatcherPolicy: undefined,
     });
   });
 

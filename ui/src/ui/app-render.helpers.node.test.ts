@@ -17,6 +17,8 @@ const {
 }));
 
 vi.mock("./app-chat.ts", () => ({
+  CHAT_SESSIONS_ACTIVE_MINUTES: 120,
+  CHAT_SESSIONS_REFRESH_LIMIT: 100,
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
 }));
@@ -236,7 +238,7 @@ describe("parseSessionKey", () => {
     });
   });
 
-  it("returns raw key for unknown patterns", () => {
+  it("returns raw key for unknown parse patterns", () => {
     expect(parseSessionKey("something-unknown")).toEqual({
       prefix: "",
       fallbackName: "something-unknown",
@@ -319,7 +321,7 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("discord:123:456")).toBe("Discord Session");
   });
 
-  it("returns raw key for unknown patterns", () => {
+  it("returns raw key for unknown display-name patterns", () => {
     expect(resolveSessionDisplayName("something-custom")).toBe("something-custom");
   });
 
@@ -539,7 +541,7 @@ describe("resolveSessionOptionGroups", () => {
   it("does not synthesize active grouped sessions without a listed row", () => {
     const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
 
-    expect(labelsForSessionOptions({ sessionKey })).toEqual([]);
+    expect(labelsForSessionOptions({ sessionKey })).toStrictEqual([]);
     expect(
       labelsForSessionOptions({
         sessionKey,
@@ -646,6 +648,52 @@ describe("resolveSessionOptionGroups", () => {
 
     expect(labels).toEqual(["Beta main"]);
   });
+
+  it("nests subagent sessions under their parent with visual prefix", () => {
+    const parentKey = "agent:main:main";
+    const subagentKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
+    const labels = labelsForSessionOptions({
+      sessionKey: parentKey,
+      sessions: [
+        row({ key: parentKey, label: "Spock" }),
+        row({ key: subagentKey, label: "PLC Coder", spawnedBy: parentKey }),
+      ],
+    });
+
+    expect(labels).toContain("Spock");
+    expect(labels).toContain("└─ PLC Coder");
+  });
+
+  it("uses raw key fallback for subagent without label when nested", () => {
+    const parentKey = "agent:main:main";
+    const subagentKey = "agent:main:subagent:f4ac7ef1-1234-5678-9abc-def012345678";
+    const labels = labelsForSessionOptions({
+      sessionKey: parentKey,
+      sessions: [
+        row({ key: parentKey, label: "Spock" }),
+        row({ key: subagentKey, spawnedBy: parentKey }),
+      ],
+    });
+
+    expect(labels).toContain("Spock");
+    expect(labels).toContain("└─ f4ac7ef1-1234-5678-9abc-def012345678");
+  });
+
+  it("preserves sibling row order when nesting subagent sessions", () => {
+    const parentKey = "agent:main:main";
+    const newerSubagentKey = "agent:main:subagent:newer";
+    const olderSubagentKey = "agent:main:subagent:older";
+    const labels = labelsForSessionOptions({
+      sessionKey: parentKey,
+      sessions: [
+        row({ key: newerSubagentKey, label: "Newer", spawnedBy: parentKey }),
+        row({ key: olderSubagentKey, label: "Older", spawnedBy: parentKey }),
+        row({ key: parentKey, label: "Spock" }),
+      ],
+    });
+
+    expect(labels).toEqual(["Spock", "└─ Newer", "└─ Older"]);
+  });
 });
 
 describe("handleChatManualRefresh", () => {
@@ -654,13 +702,14 @@ describe("handleChatManualRefresh", () => {
     const previousRequestAnimationFrame = globalThis.requestAnimationFrame;
     Object.defineProperty(globalThis, "requestAnimationFrame", {
       configurable: true,
+      writable: true,
       value: vi.fn((callback: FrameRequestCallback) => {
         animationFrame.callback = callback;
         return 1;
       }),
     });
     try {
-      let resolveRefresh!: () => void;
+      let resolveRefresh: (() => void) | undefined;
       refreshChatMock.mockReturnValueOnce(
         new Promise<void>((resolve) => {
           resolveRefresh = resolve;
@@ -678,6 +727,9 @@ describe("handleChatManualRefresh", () => {
       await Promise.resolve();
 
       expect(state.scrollToBottom).not.toHaveBeenCalled();
+      if (!resolveRefresh) {
+        throw new Error("Expected chat refresh resolver to be initialized");
+      }
       resolveRefresh();
       await run;
 
@@ -698,10 +750,15 @@ describe("handleChatManualRefresh", () => {
       expect(state.chatManualRefreshInFlight).toBe(false);
       expect(state.chatNewMessagesBelow).toBe(false);
     } finally {
-      Object.defineProperty(globalThis, "requestAnimationFrame", {
-        configurable: true,
-        value: previousRequestAnimationFrame,
-      });
+      if (previousRequestAnimationFrame === undefined) {
+        Reflect.deleteProperty(globalThis, "requestAnimationFrame");
+      } else {
+        Object.defineProperty(globalThis, "requestAnimationFrame", {
+          configurable: true,
+          writable: true,
+          value: previousRequestAnimationFrame,
+        });
+      }
     }
   });
 });
@@ -725,11 +782,12 @@ describe("createChatSession", () => {
         emitCommandHooks: true,
       },
       {
-        activeMinutes: 0,
-        limit: 0,
+        activeMinutes: 120,
+        limit: 100,
         includeGlobal: true,
         includeUnknown: true,
         showArchived: false,
+        agentId: "ops",
       },
     );
     expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
@@ -738,7 +796,7 @@ describe("createChatSession", () => {
     expect(state.chatAttachments).toEqual([
       { id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" },
     ]);
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
   });
 
@@ -909,7 +967,7 @@ describe("switchChatSession", () => {
     switchChatSession(state, "agent:main:test-b");
     await Promise.resolve();
 
-    expect(state.chatQueue).toEqual([]);
+    expect(state.chatQueue).toStrictEqual([]);
     expect(state.chatQueueBySession.main).toEqual([
       { id: "queued", text: "message B", createdAt: 1 },
     ]);
@@ -926,11 +984,12 @@ describe("switchChatSession", () => {
     });
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
     expect(loadSessionsMock).toHaveBeenCalledWith(state, {
-      activeMinutes: 0,
-      limit: 0,
+      activeMinutes: 120,
+      limit: 100,
       includeGlobal: true,
       includeUnknown: true,
       showArchived: false,
+      agentId: "main",
     });
     expect(
       (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })
@@ -938,7 +997,7 @@ describe("switchChatSession", () => {
     ).toHaveBeenCalledWith("agent:main:test-b", "Review Session");
   });
 
-  it("restores queued messages when switching back to their session", async () => {
+  it("restores queued messages when switching back to their session", () => {
     const settings = createSettings();
     const state = {
       sessionKey: "main",
@@ -977,7 +1036,7 @@ describe("switchChatSession", () => {
     loadSessionsMock.mockResolvedValue(undefined);
 
     switchChatSession(state, "agent:main:other");
-    expect(state.chatQueue).toEqual([]);
+    expect(state.chatQueue).toStrictEqual([]);
 
     switchChatSession(state, "main");
 

@@ -52,7 +52,7 @@ import {
 import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
 
@@ -67,7 +67,6 @@ const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
-const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
 const QMD_EMBED_LOCK_MIN_WAIT_MS = 15 * 60 * 1000;
 const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
   factor: 1.2,
@@ -146,10 +145,6 @@ function getQmdUpdateQueueState(): QmdUpdateQueueState {
   return resolveGlobalSingleton<QmdUpdateQueueState>(QMD_UPDATE_QUEUE_KEY, () => ({
     tails: new Map<string, Promise<void>>(),
   }));
-}
-
-function _hasHanScript(value: string): boolean {
-  return HAN_SCRIPT_RE.test(value);
 }
 
 function normalizeHanBm25Query(query: string): string {
@@ -643,6 +638,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     return null;
   }
 
+  private parseConflictingCollectionNameFromAddError(message: string): string | null {
+    if (
+      !normalizeLowercaseStringOrEmpty(message).includes(
+        "a collection already exists for this path and pattern",
+      )
+    ) {
+      return null;
+    }
+    const match = /^\s*Name:\s*([a-z0-9._-]+)\s*\(qmd:\/\/[^)\s]+\/?\)\s*$/im.exec(message);
+    return match?.[1] ?? null;
+  }
+
   private async tryRebindConflictingCollection(params: {
     collection: ManagedCollection;
     existing: Map<string, ListedCollection>;
@@ -660,6 +667,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     if (!conflictName) {
+      const parsedConflictName = this.parseConflictingCollectionNameFromAddError(addErrorMessage);
+      if (parsedConflictName) {
+        log.warn(
+          `qmd collection add conflict for ${collection.name}: qmd reported existing collection ${parsedConflictName}, but list output did not include verifiable path/pattern metadata; refusing automatic rebind. If ${parsedConflictName} is stale, remove it manually with 'qmd collection remove ${parsedConflictName}'`,
+        );
+      }
       return false;
     }
     if (conflictName === collection.name) {
@@ -2545,15 +2558,6 @@ export class QmdMemoryManager implements MemorySearchManager {
       "-",
     );
     return `${normalizedName || fallbackName || "file"}${normalizedExt}`;
-  }
-
-  private extractSnippetLines(snippet: string): { startLine: number; endLine: number } {
-    const headerLines = this.parseSnippetHeaderLines(snippet);
-    if (headerLines) {
-      return headerLines;
-    }
-    const lines = snippet.split("\n").length;
-    return { startLine: 1, endLine: lines };
   }
 
   private resolveSnippetLines(

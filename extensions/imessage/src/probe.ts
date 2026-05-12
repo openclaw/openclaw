@@ -4,22 +4,26 @@ import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { detectBinary } from "openclaw/plugin-sdk/setup";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createIMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
+import {
+  clearCachedIMessagePrivateApiStatus,
+  getCachedIMessagePrivateApiStatus,
+  setCachedIMessagePrivateApiStatus,
+  type IMessagePrivateApiStatus,
+} from "./private-api-status.js";
 
 // Re-export for backwards compatibility
 export { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
+export {
+  getCachedIMessagePrivateApiStatus,
+  imessageRpcSupportsMethod,
+} from "./private-api-status.js";
 
 export type IMessageProbe = BaseProbeResult & {
   fatal?: boolean;
-  privateApi?: {
-    available: boolean;
-    v2Ready: boolean;
-    selectors: Record<string, boolean>;
-    rpcMethods: string[];
-    error?: string;
-  };
+  privateApi?: IMessagePrivateApiStatus;
 };
 
 export type IMessageProbeOptions = {
@@ -43,13 +47,8 @@ const RPC_SUPPORT_CACHE_TTL_MS = 5 * 60 * 1000;
 const PRIVATE_API_NEGATIVE_TTL_MS = 10 * 1000;
 
 type RpcSupportCacheEntry = { result: RpcSupportResult; expiresAt: number };
-type PrivateApiCacheEntry = {
-  status: NonNullable<IMessageProbe["privateApi"]>;
-  expiresAt: number;
-};
 
 const rpcSupportCache = new Map<string, RpcSupportCacheEntry>();
-const bridgeStatusCache = new Map<string, PrivateApiCacheEntry>();
 
 function isDefaultLocalIMessageCliPath(cliPath: string): boolean {
   const trimmed = cliPath.trim();
@@ -151,60 +150,35 @@ function rpcMethodsFromPayload(payload: Record<string, unknown>): string[] {
   return raw.filter((entry): entry is string => typeof entry === "string");
 }
 
-// Methods that have always existed on imsg's rpc surface, before the
-// `rpc_methods` capability list was added. An older imsg build that
-// reports `available: true` but ships no rpc_methods array is assumed to
-// support these — gating them off would silently break the integration
-// for everyone who hasn't upgraded yet.
-const FOUNDATIONAL_RPC_METHODS = new Set<string>([
-  "chats.list",
-  "messages.history",
-  "watch.subscribe",
-  "watch.unsubscribe",
-  "send",
-]);
-
-export function imessageRpcSupportsMethod(
-  status: IMessageProbe["privateApi"] | undefined,
-  method: string,
-): boolean {
-  if (!status?.available) {
+// Probe whether the installed imsg CLI accepts `--file` on the `send-rich`
+// subcommand (added by openclaw/imsg#114, which lets a single bridge call
+// combine `--reply-to` and an attachment). We grep the help output rather
+// than trying a real send so the probe is side-effect-free, and we resolve
+// to `false` on any failure (timeout, non-zero exit, missing binary) so
+// callers fall back to the legacy throw rather than silently dropping.
+async function probeSendRichSupportsAttachment(
+  cliPath: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  try {
+    const result = await runCommandWithTimeout([cliPath, "send-rich", "--help"], { timeoutMs });
+    if (result.code !== 0) {
+      return false;
+    }
+    const combined = `${result.stdout}\n${result.stderr}`;
+    return /(?:^|\s)--file\b/m.test(combined);
+  } catch {
     return false;
   }
-  if (status.rpcMethods.length === 0) {
-    // Older imsg builds (pre-rpc_methods): assume the foundational set,
-    // gate every newer method off until the user upgrades. This keeps
-    // chats.list/send/watch working while making typing/read/group.* etc.
-    // explicit-upgrade-required.
-    return FOUNDATIONAL_RPC_METHODS.has(method);
-  }
-  return status.rpcMethods.includes(method);
-}
-
-export function getCachedIMessagePrivateApiStatus(
-  cliPath?: string | null,
-): IMessageProbe["privateApi"] | undefined {
-  const key = cliPath?.trim() || "imsg";
-  const entry = bridgeStatusCache.get(key);
-  if (!entry) {
-    return undefined;
-  }
-  // Negative cache entries expire so a flurry of agent actions during a
-  // bridge outage don't all serialize on a re-probe.
-  if (entry.expiresAt > 0 && entry.expiresAt < Date.now()) {
-    bridgeStatusCache.delete(key);
-    return undefined;
-  }
-  return entry.status;
 }
 
 export function clearIMessagePrivateApiCache(cliPath?: string): void {
   if (cliPath) {
     const key = cliPath.trim() || "imsg";
-    bridgeStatusCache.delete(key);
+    clearCachedIMessagePrivateApiStatus(key);
     rpcSupportCache.delete(key);
   } else {
-    bridgeStatusCache.clear();
+    clearCachedIMessagePrivateApiStatus();
     rpcSupportCache.clear();
   }
 }
@@ -216,14 +190,9 @@ export async function probeIMessagePrivateApi(
 ): Promise<NonNullable<IMessageProbe["privateApi"]>> {
   const key = cliPath.trim() || "imsg";
   if (!options.forceRefresh) {
-    const entry = bridgeStatusCache.get(key);
-    if (entry) {
-      if (entry.status.available) {
-        return entry.status;
-      }
-      if (entry.expiresAt > Date.now()) {
-        return entry.status;
-      }
+    const cached = getCachedIMessagePrivateApiStatus(key);
+    if (cached) {
+      return cached;
     }
   }
   try {
@@ -234,11 +203,19 @@ export async function probeIMessagePrivateApi(
     const rpcMethods = payload ? rpcMethodsFromPayload(payload) : [];
     const advancedFeatures = payload?.advanced_features === true;
     const v2Ready = payload?.v2_ready === true;
+    // Probe `imsg send-rich --help` for the `--file` flag added by
+    // openclaw/imsg#114. We do this even when the bridge is unavailable
+    // because the help output ships with the CLI binary itself, and the
+    // result is what gates whether reply-with-attachment can route through
+    // the threaded send path. Treat any failure as "not supported" so
+    // callers fall back to the legacy throw rather than silently dropping.
+    const sendRichSupportsAttachment = await probeSendRichSupportsAttachment(key, timeoutMs);
     const status: NonNullable<IMessageProbe["privateApi"]> = {
       available: result.code === 0 && advancedFeatures && v2Ready,
       v2Ready,
       selectors,
       rpcMethods,
+      cliCapabilities: { sendRichSupportsAttachment },
       ...(result.code === 0
         ? !payload && firstLineSnippet
           ? {
@@ -249,10 +226,11 @@ export async function probeIMessagePrivateApi(
           : {}
         : { error: combined || `imsg status --json failed (code ${String(result.code)})` }),
     };
-    bridgeStatusCache.set(key, {
+    setCachedIMessagePrivateApiStatus(
+      key,
       status,
-      expiresAt: status.available ? 0 : Date.now() + PRIVATE_API_NEGATIVE_TTL_MS,
-    });
+      status.available ? 0 : Date.now() + PRIVATE_API_NEGATIVE_TTL_MS,
+    );
     return status;
   } catch (err) {
     const status: NonNullable<IMessageProbe["privateApi"]> = {
@@ -260,12 +238,10 @@ export async function probeIMessagePrivateApi(
       v2Ready: false,
       selectors: {},
       rpcMethods: [],
+      cliCapabilities: { sendRichSupportsAttachment: false },
       error: String(err),
     };
-    bridgeStatusCache.set(key, {
-      status,
-      expiresAt: Date.now() + PRIVATE_API_NEGATIVE_TTL_MS,
-    });
+    setCachedIMessagePrivateApiStatus(key, status, Date.now() + PRIVATE_API_NEGATIVE_TTL_MS);
     return status;
   }
 }

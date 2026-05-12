@@ -31,7 +31,15 @@ const resolveGatewayAuthMock = vi.hoisted(() =>
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 const createInstallPlanFixture = vi.hoisted(() => {
-  return async (params?: { wrapperPath?: string; env?: Record<string, string | undefined> }) => {
+  return async (params?: {
+    wrapperPath?: string;
+    env?: Record<string, string | undefined>;
+  }): Promise<{
+    programArguments: string[];
+    workingDirectory: string;
+    environment: Record<string, string | undefined>;
+    environmentValueSources?: Record<string, string | undefined>;
+  }> => {
     const environment: Record<string, string | undefined> = {};
     if (params?.wrapperPath || params?.env?.OPENCLAW_WRAPPER) {
       environment.OPENCLAW_WRAPPER = params.wrapperPath ?? params.env?.OPENCLAW_WRAPPER;
@@ -48,7 +56,7 @@ const createInstallPlanFixture = vi.hoisted(() => {
 const buildGatewayInstallPlanMock = vi.hoisted(() => vi.fn(createInstallPlanFixture));
 const parsePortMock = vi.hoisted(() => vi.fn(() => null));
 const isGatewayDaemonRuntimeMock = vi.hoisted(() => vi.fn(() => true));
-const installDaemonServiceAndEmitMock = vi.hoisted(() => vi.fn(async () => {}));
+const installDaemonServiceAndEmitMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
 
 const actionState = vi.hoisted(() => ({
   warnings: [] as string[],
@@ -168,8 +176,33 @@ vi.mock("../../runtime.js", () => ({
 function expectFirstInstallPlanCallOmitsToken() {
   const [firstArg] =
     (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
-  expect(firstArg).toBeDefined();
-  expect(firstArg && "token" in firstArg).toBe(false);
+  if (firstArg === undefined) {
+    throw new Error("expected first install-plan call");
+  }
+  expect("token" in firstArg).toBe(false);
+}
+
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+function readFirstInstallPlanArg(): Record<string, unknown> {
+  const [firstArg] =
+    (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ?? [];
+  if (!firstArg) {
+    throw new Error("Expected gateway install plan arg");
+  }
+  return firstArg;
+}
+
+function expectLastEmittedResult(result: string): void {
+  expectFields(actionState.emitted.at(-1), { result });
 }
 
 function mockResolvedGatewayTokenSecretRef() {
@@ -202,6 +235,7 @@ describe("runDaemonInstall", () => {
     installDaemonServiceAndEmitMock.mockReset();
     service.isLoaded.mockReset();
     service.stage.mockReset();
+    service.install.mockReset();
     service.readCommand.mockReset();
     resetRuntimeCapture();
     actionState.warnings.length = 0;
@@ -232,6 +266,7 @@ describe("runDaemonInstall", () => {
     installDaemonServiceAndEmitMock.mockResolvedValue(undefined);
     service.isLoaded.mockResolvedValue(false);
     service.stage.mockResolvedValue(undefined);
+    service.install.mockResolvedValue(undefined);
     service.readCommand.mockResolvedValue(null);
     resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
       NODE_EXTRA_CA_CERTS: undefined,
@@ -263,7 +298,7 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    expect(actionState.failed).toEqual([]);
+    expect(actionState.failed).toStrictEqual([]);
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
     expectFirstInstallPlanCallOmitsToken();
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
@@ -274,6 +309,45 @@ describe("runDaemonInstall", () => {
     ).toBe(true);
   });
 
+  it("passes service environment value sources through to service install", async () => {
+    buildGatewayInstallPlanMock.mockResolvedValueOnce({
+      programArguments: ["openclaw", "gateway", "run"],
+      workingDirectory: "/tmp",
+      environment: {
+        OPENROUTER_API_KEY: "or-operator-key",
+      },
+      environmentValueSources: {
+        OPENROUTER_API_KEY: "file",
+      },
+    });
+    installDaemonServiceAndEmitMock.mockImplementationOnce(async (params?: unknown) => {
+      await (params as { install: () => Promise<void> }).install();
+    });
+
+    await runDaemonInstall({ json: true });
+
+    const installCalls = service.install.mock.calls as unknown as Array<
+      [
+        {
+          environment?: Record<string, string>;
+          environmentValueSources?: Record<string, string>;
+        },
+      ]
+    >;
+    const installOptions = installCalls[0]?.[0] as
+      | {
+          environment?: Record<string, string>;
+          environmentValueSources?: Record<string, string>;
+        }
+      | undefined;
+    expect(installOptions?.environment).toEqual({
+      OPENROUTER_API_KEY: "or-operator-key",
+    });
+    expect(installOptions?.environmentValueSources).toEqual({
+      OPENROUTER_API_KEY: "file",
+    });
+  });
+
   it("does not treat env-template gateway.auth.token as plaintext during install", async () => {
     loadConfigMock.mockReturnValue({
       gateway: { auth: { mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" } },
@@ -282,7 +356,7 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    expect(actionState.failed).toEqual([]);
+    expect(actionState.failed).toStrictEqual([]);
     expect(resolveSecretRefValuesMock).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
     expectFirstInstallPlanCallOmitsToken();
@@ -299,15 +373,13 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    expect(actionState.failed).toEqual([]);
+    expect(actionState.failed).toStrictEqual([]);
     expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
-    const writeParams = replaceConfigFileMock.mock.calls[0]?.[0] as {
+    const writeParams = replaceConfigFileMock.mock.calls.at(0)?.[0] as {
       nextConfig?: { gateway?: { auth?: { token?: string } } };
     };
     expect(writeParams.nextConfig?.gateway?.auth?.token).toBe("minted-token");
-    expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
-      expect.objectContaining({ port: 18789 }),
-    );
+    expectFields(readFirstInstallPlanArg(), { port: 18789 });
     expectFirstInstallPlanCallOmitsToken();
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
     expect(actionState.warnings.some((warning) => warning.includes("Auto-generated"))).toBe(true);
@@ -320,7 +392,7 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    expect(actionState.failed).toEqual([]);
+    expect(actionState.failed).toStrictEqual([]);
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
   });
 
@@ -369,7 +441,7 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true });
 
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
-    expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
+    expectLastEmittedResult("already-installed");
   });
 
   it("reinstalls when the loaded service still embeds OPENCLAW_GATEWAY_TOKEN", async () => {
@@ -410,7 +482,7 @@ describe("runDaemonInstall", () => {
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
-    expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
+    expectLastEmittedResult("already-installed");
   });
 
   it("preserves wrapper env from an installed but unloaded service during forced reinstall", async () => {
@@ -425,17 +497,14 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true, force: true });
 
     expect(service.readCommand).toHaveBeenCalledTimes(1);
-    expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        wrapperPath: "/usr/local/bin/openclaw-doppler",
-        existingEnvironment: expect.objectContaining({
-          OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
-        }),
-        env: expect.objectContaining({
-          OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
-        }),
-      }),
-    );
+    const installPlanArg = readFirstInstallPlanArg();
+    expectFields(installPlanArg, { wrapperPath: "/usr/local/bin/openclaw-doppler" });
+    expectFields(installPlanArg.existingEnvironment, {
+      OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
+    });
+    expectFields(installPlanArg.env, {
+      OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
+    });
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
   });
 
@@ -496,7 +565,7 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true });
 
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
-    expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
+    expectLastEmittedResult("already-installed");
   });
 
   it("reinstalls when an existing service is missing the nvm TLS CA bundle", async () => {
@@ -532,11 +601,9 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true });
 
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-    expect(resolveNodeStartupTlsEnvironmentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        execPath: "/home/test/.nvm/versions/node/v22.18.0/bin/node",
-      }),
-    );
+    expectFields(resolveNodeStartupTlsEnvironmentMock.mock.calls.at(0)?.[0], {
+      execPath: "/home/test/.nvm/versions/node/v22.18.0/bin/node",
+    });
   });
 
   it("reuses env-backed service secrets during forced reinstall when the current shell is missing them", async () => {
@@ -552,13 +619,9 @@ describe("runDaemonInstall", () => {
     try {
       await runDaemonInstall({ json: true, force: true });
 
-      expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: expect.objectContaining({
-            OPENAI_API_KEY: "service-openai-key",
-          }),
-        }),
-      );
+      expectFields(readFirstInstallPlanArg().env, {
+        OPENAI_API_KEY: "service-openai-key",
+      });
       expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
     } finally {
       if (previous === undefined) {
@@ -588,17 +651,10 @@ describe("runDaemonInstall", () => {
     try {
       await runDaemonInstall({ json: true, force: true });
 
-      expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: expect.objectContaining({
-            OPENAI_API_KEY: "service-openai-key",
-          }),
-        }),
-      );
-      const [firstArg] =
-        (buildGatewayInstallPlanMock.mock.calls.at(0) as [Record<string, unknown>] | undefined) ??
-        [];
-      const env = firstArg?.env as Record<string, string | undefined>;
+      expectFields(readFirstInstallPlanArg().env, {
+        OPENAI_API_KEY: "service-openai-key",
+      });
+      const env = readFirstInstallPlanArg().env as Record<string, string | undefined>;
       expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
       expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
       expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();

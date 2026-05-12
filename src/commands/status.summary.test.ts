@@ -160,7 +160,7 @@ describe("getStatusSummary", () => {
 
     const summary = await getStatusSummary();
 
-    expect(summary.channelSummary).toEqual([]);
+    expect(summary.channelSummary).toStrictEqual([]);
     expect(summary.linkChannel).toBeUndefined();
     expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).toHaveBeenCalledWith({
       config: {},
@@ -172,7 +172,7 @@ describe("getStatusSummary", () => {
   it("skips channel summary imports when explicitly disabled", async () => {
     const summary = await getStatusSummary({ includeChannelSummary: false });
 
-    expect(summary.channelSummary).toEqual([]);
+    expect(summary.channelSummary).toStrictEqual([]);
     expect(summary.linkChannel).toBeUndefined();
     expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(buildChannelSummary).not.toHaveBeenCalled();
@@ -182,9 +182,9 @@ describe("getStatusSummary", () => {
   it("does not trigger async context warmup while building status summaries", async () => {
     await getStatusSummary();
 
-    expect(vi.mocked(statusSummaryRuntime.resolveContextTokensForModel)).toHaveBeenCalledWith(
-      expect.objectContaining({ allowAsyncLoad: false }),
-    );
+    const contextCall = vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock
+      .calls[0]?.[0];
+    expect(contextCall?.allowAsyncLoad).toBe(false);
   });
 
   it("includes the selected agent runtime on recent sessions", async () => {

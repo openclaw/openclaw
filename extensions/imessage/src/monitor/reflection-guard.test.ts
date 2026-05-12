@@ -9,7 +9,7 @@ describe("detectReflectedContent", () => {
   it("returns false for normal user text", () => {
     const result = detectReflectedContent("Hey, what's the weather today?");
     expect(result.isReflection).toBe(false);
-    expect(result.matchedLabels).toEqual([]);
+    expect(result.matchedLabels).toStrictEqual([]);
   });
 
   it("detects +#+#+#+# separator pattern", () => {
@@ -60,7 +60,7 @@ describe("detectReflectedContent", () => {
       "Please keep `<thinking>debug trace</thinking>` in the example output",
     );
     expect(result.isReflection).toBe(false);
-    expect(result.matchedLabels).toEqual([]);
+    expect(result.matchedLabels).toStrictEqual([]);
   });
 
   it("ignores reflection markers inside fenced code blocks", () => {
@@ -74,7 +74,7 @@ describe("detectReflectedContent", () => {
       ].join("\n"),
     );
     expect(result.isReflection).toBe(false);
-    expect(result.matchedLabels).toEqual([]);
+    expect(result.matchedLabels).toStrictEqual([]);
   });
 
   it("still flags markers that appear outside code blocks", () => {
@@ -115,7 +115,7 @@ describe("detectReflectedContent", () => {
 
   it("detects reflected gateway auth failure replies", () => {
     const result = detectReflectedContent(
-      "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.5`, or set `OPENAI_API_KEY`, then try again.",
+      "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
     );
     expect(result.isReflection).toBe(true);
     expect(result.matchedLabels).toContain("gateway-missing-api-key");
