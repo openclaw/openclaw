@@ -97,66 +97,74 @@ describe("resolveCopilotApiToken", () => {
   });
 
   it("caches exchanged tokens in SQLite state", async () => {
-    await withCopilotState(async ({ env, stateDir }) => {
-      const fetchImpl = vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
+    try {
+      await withCopilotState(async ({ env, stateDir }) => {
+        const fetchImpl = vi.fn(async () => ({
+          ok: true,
+          json: async () => ({
+            token: "copilot-token;proxy-ep=proxy.example.com;",
+            expires_at: Math.floor(Date.now() / 1000) + 3600,
+          }),
+        }));
+
+        const first = await resolveCopilotApiToken({
+          githubToken: "github-token",
+          env,
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+        });
+        const second = await resolveCopilotApiToken({
+          githubToken: "github-token",
+          env,
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+        });
+
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        expect(first.source).toBe("fetched:https://api.github.com/copilot_internal/v2/token");
+        expect(second.source).toBe(
+          "cache:sqlite:plugin_state_entries/github-copilot/token-cache/default",
+        );
+        expect(second.baseUrl).toBe("https://api.example.com");
+        const stateDatabase = openOpenClawStateDatabase({ env });
+        const stateDb = getNodeSqliteKysely<
+          Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">
+        >(stateDatabase.db);
+        const cacheRow = executeSqliteQueryTakeFirstSync(
+          stateDatabase.db,
+          stateDb
+            .selectFrom("plugin_state_entries")
+            .select(["plugin_id", "namespace", "entry_key", "value_json"])
+            .where("plugin_id", "=", "github-copilot")
+            .where("namespace", "=", "token-cache")
+            .where("entry_key", "=", "default"),
+        );
+        expect(cacheRow).toMatchObject({
+          plugin_id: "github-copilot",
+          namespace: "token-cache",
+          entry_key: "default",
+        });
+        expect(JSON.parse(cacheRow?.value_json ?? "{}")).toMatchObject({
           token: "copilot-token;proxy-ep=proxy.example.com;",
-          expires_at: Math.floor(Date.now() / 1000) + 3600,
-        }),
-      }));
-
-      const first = await resolveCopilotApiToken({
-        githubToken: "github-token",
-        env,
-        fetchImpl: fetchImpl as unknown as typeof fetch,
+          expiresAt: 1_767_326_645_000,
+          updatedAt: 1_767_323_045_000,
+          integrationId: COPILOT_INTEGRATION_ID,
+        });
+        expect(
+          stateDatabase.db
+            .prepare(
+              `SELECT name FROM sqlite_master
+               WHERE type = 'table'
+                 AND name = 'github_copilot_token_cache'`,
+            )
+            .get(),
+        ).toBeUndefined();
+        expect(fs.existsSync(path.join(stateDir, "credentials", "github-copilot.token.json"))).toBe(
+          false,
+        );
       });
-      const second = await resolveCopilotApiToken({
-        githubToken: "github-token",
-        env,
-        fetchImpl: fetchImpl as unknown as typeof fetch,
-      });
-
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect(first.source).toBe("fetched:https://api.github.com/copilot_internal/v2/token");
-      expect(second.source).toBe(
-        "cache:sqlite:plugin_state_entries/github-copilot/token-cache/default",
-      );
-      expect(second.baseUrl).toBe("https://api.example.com");
-      const stateDatabase = openOpenClawStateDatabase({ env });
-      const stateDb = getNodeSqliteKysely<
-        Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">
-      >(stateDatabase.db);
-      const cacheRow = executeSqliteQueryTakeFirstSync(
-        stateDatabase.db,
-        stateDb
-          .selectFrom("plugin_state_entries")
-          .select(["plugin_id", "namespace", "entry_key", "value_json"])
-          .where("plugin_id", "=", "github-copilot")
-          .where("namespace", "=", "token-cache")
-          .where("entry_key", "=", "default"),
-      );
-      expect(cacheRow).toMatchObject({
-        plugin_id: "github-copilot",
-        namespace: "token-cache",
-        entry_key: "default",
-      });
-      expect(JSON.parse(cacheRow?.value_json ?? "{}")).toMatchObject({
-        token: "copilot-token;proxy-ep=proxy.example.com;",
-        integrationId: COPILOT_INTEGRATION_ID,
-      });
-      expect(
-        stateDatabase.db
-          .prepare(
-            `SELECT name FROM sqlite_master
-             WHERE type = 'table'
-               AND name = 'github_copilot_token_cache'`,
-          )
-          .get(),
-      ).toBeUndefined();
-      expect(fs.existsSync(path.join(stateDir, "credentials", "github-copilot.token.json"))).toBe(
-        false,
-      );
-    });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
