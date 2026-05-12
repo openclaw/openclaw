@@ -111,9 +111,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
       },
     });
 
-    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ store }),
-    );
+    expect(hoisted.listSessionsFromStoreMock).not.toHaveBeenCalled();
   });
 
   it("rejects sessions belonging to a deleted agent (key-based lookup)", async () => {
