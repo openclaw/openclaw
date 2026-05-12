@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Fixes
+
+- Agents/compaction: skip timeout-triggered compaction when the run was aborted by the user (Stop button). Previously, user-initiated aborts would still fire timeout compaction if context usage exceeded 65%, causing unnecessary compaction at an inappropriate time. Uses `externalAbort` (set only for user-initiated stops) rather than `aborted` (also set for internal timeouts) to correctly distinguish user aborts from provider timeouts.
+
 ## 2026.5.9
 
 ### Changes

@@ -308,6 +308,7 @@ describe("timeout-triggered compaction", () => {
       makeAttemptResult({
         timedOut: true,
         aborted: true,
+        externalAbort: false,
         lastAssistant: {
           usage: { input: 180000 },
         } as never,
@@ -327,6 +328,26 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.meta.error).toBeUndefined();
+  });
+
+  it("does not attempt compaction when user aborted (externalAbort=true)", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        timedOut: true,
+        aborted: true,
+        externalAbort: true,
+        lastAssistant: {
+          usage: { input: 180000 },
+        } as never,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    // User-initiated abort should skip timeout compaction entirely
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
   it("does not attempt compaction when timedOutDuringCompaction is true", async () => {
