@@ -187,7 +187,7 @@ export function listSqliteRunArtifacts(
   const { agentId, runId } = normalizeScope(options);
   const database = openOpenClawAgentDatabase(options);
   const db = getNodeSqliteKysely<RunArtifactDatabase>(database.db);
-  const rows = executeSqliteQuerySync<RunArtifactRow>(
+  const rows = executeSqliteQuerySync(
     database.db,
     db
       .selectFrom("run_artifacts")
@@ -208,7 +208,7 @@ export function readSqliteRunArtifact(
   const database = openOpenClawAgentDatabase(toDatabaseOptions(options));
   const db = getNodeSqliteKysely<RunArtifactDatabase>(database.db);
   const row =
-    executeSqliteQueryTakeFirstSync<RunArtifactRow>(
+    executeSqliteQueryTakeFirstSync(
       database.db,
       db
         .selectFrom("run_artifacts")
@@ -225,7 +225,7 @@ export function exportSqliteRunArtifacts(
   const { agentId, runId } = normalizeScope(options);
   const database = openOpenClawAgentDatabase(options);
   const db = getNodeSqliteKysely<RunArtifactDatabase>(database.db);
-  const rows = executeSqliteQuerySync<RunArtifactRow>(
+  const rows = executeSqliteQuerySync(
     database.db,
     db
       .selectFrom("run_artifacts")

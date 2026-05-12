@@ -65,7 +65,7 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
 export function readQueuedEntry(tmpDir: string, id: string): Record<string, unknown> {
   const stateDatabase = openOpenClawStateDatabase(databaseOptions(tmpDir));
   const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
-  const row = executeSqliteQueryTakeFirstSync<DeliveryQueueEntryRow>(
+  const row = executeSqliteQueryTakeFirstSync(
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")
@@ -107,7 +107,7 @@ export function readQueuedEntryStorageFields(
 export function readFailedQueuedEntry(tmpDir: string, id: string): Record<string, unknown> | null {
   const stateDatabase = openOpenClawStateDatabase(databaseOptions(tmpDir));
   const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
-  const row = executeSqliteQueryTakeFirstSync<DeliveryQueueEntryRow>(
+  const row = executeSqliteQueryTakeFirstSync(
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")
@@ -122,7 +122,7 @@ export function readFailedQueuedEntry(tmpDir: string, id: string): Record<string
 export function readPendingQueuedEntries(tmpDir: string): Record<string, unknown>[] {
   const stateDatabase = openOpenClawStateDatabase(databaseOptions(tmpDir));
   const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
-  return executeSqliteQuerySync<DeliveryQueueEntryRow>(
+  return executeSqliteQuerySync(
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")

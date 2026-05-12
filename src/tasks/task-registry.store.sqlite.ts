@@ -208,7 +208,7 @@ function selectTaskDeliveryStateRows(db: DatabaseSync): TaskDeliveryStateRow[] {
     .selectFrom("task_delivery_state")
     .select(["task_id", "requester_origin_json", "last_notified_event_at"])
     .orderBy("task_id", "asc");
-  return executeSqliteQuerySync<TaskDeliveryStateRow>(db, query).rows;
+  return executeSqliteQuerySync(db, query).rows;
 }
 
 function upsertTaskRow(db: DatabaseSync, row: Insertable<TaskRunsTable>): void {

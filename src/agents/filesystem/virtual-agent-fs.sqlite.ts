@@ -118,7 +118,7 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
     const database = openOpenClawAgentDatabase(this.#options);
     const db = getNodeSqliteKysely<VirtualAgentFsDatabase>(database.db);
     return (
-      executeSqliteQueryTakeFirstSync<VirtualAgentFsRow>(
+      executeSqliteQueryTakeFirstSync(
         database.db,
         db
           .selectFrom("vfs_entries")
@@ -133,7 +133,7 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
   #allRows(): VirtualAgentFsRow[] {
     const database = openOpenClawAgentDatabase(this.#options);
     const db = getNodeSqliteKysely<VirtualAgentFsDatabase>(database.db);
-    return executeSqliteQuerySync<VirtualAgentFsRow>(
+    return executeSqliteQuerySync(
       database.db,
       db
         .selectFrom("vfs_entries")

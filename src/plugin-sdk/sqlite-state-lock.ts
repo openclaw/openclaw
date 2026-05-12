@@ -98,7 +98,7 @@ function tryAcquireOpenClawStateLock(params: {
   const expiresAt = now + params.staleMs;
   return runOpenClawStateWriteTransaction((database) => {
     const db = getNodeSqliteKysely<LockDatabase>(database.db);
-    const row = executeSqliteQueryTakeFirstSync<LockRow>(
+    const row = executeSqliteQueryTakeFirstSync(
       database.db,
       db
         .selectFrom("kv")
@@ -139,7 +139,7 @@ function releaseOpenClawStateLock(params: {
 }): void {
   runOpenClawStateWriteTransaction((database) => {
     const db = getNodeSqliteKysely<LockDatabase>(database.db);
-    const row = executeSqliteQueryTakeFirstSync<LockRow>(
+    const row = executeSqliteQueryTakeFirstSync(
       database.db,
       db
         .selectFrom("kv")

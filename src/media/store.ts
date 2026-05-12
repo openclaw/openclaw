@@ -111,7 +111,7 @@ function getMediaKysely(db: DatabaseSync) {
 
 function getMediaBlobRow(params: { subdir: string; id: string }): MediaBlobRow | undefined {
   const database = openOpenClawStateDatabase();
-  return executeSqliteQueryTakeFirstSync<MediaBlobRow>(
+  return executeSqliteQueryTakeFirstSync(
     database.db,
     getMediaKysely(database.db)
       .selectFrom("media_blobs")
