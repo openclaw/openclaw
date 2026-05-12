@@ -878,6 +878,9 @@ export async function runCodexAppServerAttempt(
   let turnCompletionLastActivityAt = Date.now();
   let turnCompletionLastActivityReason = "startup";
   let turnCompletionLastActivityDetails: Record<string, unknown> | undefined;
+  let turnAttemptLastProgressAt = Date.now();
+  let turnAttemptLastProgressReason = "startup";
+  let turnAttemptLastProgressDetails: Record<string, unknown> | undefined;
   let activeAppServerTurnRequests = 0;
   const activeTurnItemIds = new Set<string>();
 
@@ -962,7 +965,7 @@ export async function runCodexAppServerAttempt(
     ) {
       return;
     }
-    const idleMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
+    const idleMs = Math.max(0, Date.now() - turnAttemptLastProgressAt);
     if (idleMs < turnAttemptIdleTimeoutMs) {
       scheduleTurnAttemptIdleWatch();
       return;
@@ -977,16 +980,16 @@ export async function runCodexAppServerAttempt(
       turnId,
       idleMs,
       timeoutMs: turnAttemptIdleTimeoutMs,
-      lastActivityReason: turnCompletionLastActivityReason,
-      ...turnCompletionLastActivityDetails,
+      lastActivityReason: turnAttemptLastProgressReason,
+      ...turnAttemptLastProgressDetails,
     });
     embeddedAgentLog.warn("codex app-server turn idle timed out waiting for progress", {
       threadId: thread.threadId,
       turnId,
       idleMs,
       timeoutMs: turnAttemptIdleTimeoutMs,
-      lastActivityReason: turnCompletionLastActivityReason,
-      ...turnCompletionLastActivityDetails,
+      lastActivityReason: turnAttemptLastProgressReason,
+      ...turnAttemptLastProgressDetails,
     });
     runAbortController.abort("turn_progress_idle_timeout");
   };
@@ -1104,7 +1107,7 @@ export async function runCodexAppServerAttempt(
     ) {
       return;
     }
-    const elapsedMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
+    const elapsedMs = Math.max(0, Date.now() - turnAttemptLastProgressAt);
     const delayMs = Math.max(1, turnAttemptIdleTimeoutMs - elapsedMs);
     turnAttemptIdleTimer = setTimeout(fireTurnAttemptIdleTimeout, delayMs);
     turnAttemptIdleTimer.unref?.();
@@ -1126,13 +1129,24 @@ export async function runCodexAppServerAttempt(
     turnTerminalIdleTimer.unref?.();
   }
 
+  function scheduleTurnProgressWatches() {
+    scheduleTurnAttemptIdleWatch();
+    scheduleTurnCompletionIdleWatch();
+    scheduleTurnTerminalIdleWatch();
+  }
+
   const touchTurnCompletionActivity = (
     reason: string,
-    options?: { arm?: boolean; details?: Record<string, unknown> },
+    options?: { arm?: boolean; details?: Record<string, unknown>; attemptProgress?: boolean },
   ) => {
     turnCompletionLastActivityAt = Date.now();
     turnCompletionLastActivityReason = reason;
     turnCompletionLastActivityDetails = options?.details;
+    if (options?.attemptProgress) {
+      turnAttemptLastProgressAt = turnCompletionLastActivityAt;
+      turnAttemptLastProgressReason = reason;
+      turnAttemptLastProgressDetails = options.details;
+    }
     emitTrustedDiagnosticEvent({
       type: "run.progress",
       runId: params.runId,
@@ -1144,9 +1158,7 @@ export async function runCodexAppServerAttempt(
       turnCompletionIdleWatchArmed = true;
       turnCompletionIdleWatchPinnedByTerminalError = false;
     }
-    scheduleTurnAttemptIdleWatch();
-    scheduleTurnCompletionIdleWatch();
-    scheduleTurnTerminalIdleWatch();
+    scheduleTurnProgressWatches();
   };
 
   const disarmTurnCompletionIdleWatch = () => {
@@ -1252,6 +1264,7 @@ export async function runCodexAppServerAttempt(
     if (isCurrentTurnNotification) {
       touchTurnCompletionActivity(`notification:${notification.method}`, {
         details: describeNotificationActivity(notification),
+        attemptProgress: true,
       });
       reportCodexExecutionNotification(notification);
     }
@@ -1337,8 +1350,8 @@ export async function runCodexAppServerAttempt(
     activeAppServerTurnRequests += 1;
     clearTurnCompletionIdleTimer();
     disarmTurnAssistantCompletionIdleWatch();
-    touchTurnCompletionActivity(`request:${request.method}`);
     let armCompletionWatchOnResponse = false;
+    let requestCountsAsTurnActivity = false;
     try {
       if (request.method === "account/chatgptAuthTokens/refresh") {
         return refreshCodexAppServerAuthTokens({
@@ -1352,6 +1365,7 @@ export async function runCodexAppServerAttempt(
       }
       if (request.method === "mcpServer/elicitation/request") {
         armCompletionWatchOnResponse = true;
+        requestCountsAsTurnActivity = true;
         return handleCodexAppServerElicitationRequest({
           requestParams: request.params,
           paramsForRun: params,
@@ -1363,6 +1377,7 @@ export async function runCodexAppServerAttempt(
       }
       if (request.method === "item/tool/requestUserInput") {
         armCompletionWatchOnResponse = true;
+        requestCountsAsTurnActivity = true;
         return userInputBridge?.handleRequest({
           id: request.id,
           params: request.params,
@@ -1371,6 +1386,7 @@ export async function runCodexAppServerAttempt(
       if (request.method !== "item/tool/call") {
         if (isCodexAppServerApprovalRequest(request.method)) {
           armCompletionWatchOnResponse = true;
+          requestCountsAsTurnActivity = true;
           return handleApprovalRequest({
             method: request.method,
             params: request.params,
@@ -1387,6 +1403,7 @@ export async function runCodexAppServerAttempt(
         return undefined;
       }
       armCompletionWatchOnResponse = true;
+      requestCountsAsTurnActivity = true;
       trajectoryRecorder?.recordEvent("tool.call", {
         threadId: call.threadId,
         turnId: call.turnId,
@@ -1464,9 +1481,14 @@ export async function runCodexAppServerAttempt(
       return response as JsonValue;
     } finally {
       activeAppServerTurnRequests = Math.max(0, activeAppServerTurnRequests - 1);
-      touchTurnCompletionActivity(`request:${request.method}:response`, {
-        arm: armCompletionWatchOnResponse,
-      });
+      if (requestCountsAsTurnActivity) {
+        touchTurnCompletionActivity(`request:${request.method}:response`, {
+          arm: armCompletionWatchOnResponse,
+          attemptProgress: true,
+        });
+      } else {
+        scheduleTurnProgressWatches();
+      }
     }
   });
 
@@ -1639,7 +1661,7 @@ export async function runCodexAppServerAttempt(
   setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   turnAttemptIdleWatchArmed = true;
   turnTerminalIdleWatchArmed = true;
-  touchTurnCompletionActivity("turn:start");
+  touchTurnCompletionActivity("turn:start", { attemptProgress: true });
 
   const abortListener = () => {
     const shouldRetireClient = timedOut;
