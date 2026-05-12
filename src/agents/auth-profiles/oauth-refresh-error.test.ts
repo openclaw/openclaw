@@ -140,6 +140,11 @@ describe("shouldCacheOAuthRefreshFailure", () => {
   it("matches terminal refresh failures without caching transient ones", () => {
     expect(shouldCacheOAuthRefreshFailure(new Error("invalid_grant"))).toBe(true);
     expect(shouldCacheOAuthRefreshFailure(new Error("expired or revoked"))).toBe(true);
+    expect(
+      shouldCacheOAuthRefreshFailure(
+        new Error("Your refresh token has already been used to generate a new access token."),
+      ),
+    ).toBe(true);
     expect(shouldCacheOAuthRefreshFailure(new Error("network timeout"))).toBe(false);
     expect(shouldCacheOAuthRefreshFailure(new Error("HTTP 500 Internal Server Error"))).toBe(false);
   });

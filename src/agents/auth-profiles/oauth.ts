@@ -130,7 +130,10 @@ export function isRefreshTokenReusedError(error: unknown): boolean {
 }
 
 export function shouldCacheOAuthRefreshFailure(error: unknown): boolean {
-  return classifyOAuthRefreshFailureReason(extractErrorMessage(error)) !== null;
+  return (
+    isRefreshTokenReusedError(error) ||
+    classifyOAuthRefreshFailureReason(extractErrorMessage(error)) !== null
+  );
 }
 
 type ResolveApiKeyForProfileParams = {
