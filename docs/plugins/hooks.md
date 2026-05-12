@@ -125,6 +125,7 @@ observation-only.
 
 **Messages and delivery**
 
+- **`inbound_activity`** - observe raw channel inbound activity before a pending inbound debounce flush and optionally extend or cancel the pending debounce window
 - **`inbound_claim`** - claim an inbound message before agent routing (synthetic replies)
 - `message_received` - observe inbound content, sender, thread, and metadata
 - **`message_sending`** - rewrite outbound content or cancel delivery
@@ -147,6 +148,34 @@ observation-only.
 - `gateway_start` / `gateway_stop` - start or stop plugin-owned services with the Gateway
 - `cron_changed` - observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
 - **`before_install`** - inspect skill or plugin install scans and optionally block
+
+## Inbound activity
+
+`inbound_activity` fires before debounced inbound channel messages flush into
+the normal `inbound_claim` / `message_received` flow. Discord emits it for
+`MESSAGE_CREATE`, `TYPING_START`, and `MESSAGE_DELETE` activity, using the
+same per-channel debounce key as the pending message buffer when Discord can
+resolve one.
+
+The event shape is:
+
+```ts
+{
+  source: "message" | "typing" | "delete" | "update";
+  key: string;
+  authorId?: string;
+  messageId?: string;
+  channelId: string;
+  timestamp: number;
+  raw?: unknown;
+}
+```
+
+The context includes runtime metadata (`config`, `logger`, `runId`,
+`sessionKey`) plus `ctx.extend(ms)` and `ctx.cancel()`. `extend(ms)` moves the
+pending fire time for the activity key to `max(currentFireAt, Date.now() + ms)`.
+Plugins that need a max window should clamp `ms` before calling `extend()`.
+`cancel()` drops the pending debounce buffer for the activity key.
 
 ## Tool call policy
 

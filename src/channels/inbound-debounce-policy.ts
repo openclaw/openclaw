@@ -28,15 +28,15 @@ export function shouldDebounceTextInbound(params: {
   return !hasControlCommand(text, params.cfg, params.commandOptions);
 }
 
-export function createChannelInboundDebouncer<T>(
-  params: Omit<InboundDebounceCreateParams<T>, "debounceMs"> & {
+export function createChannelInboundDebouncer<T, TActivity = never>(
+  params: Omit<InboundDebounceCreateParams<T, TActivity>, "debounceMs"> & {
     cfg: OpenClawConfig;
     channel: string;
     debounceMsOverride?: number;
   },
 ): {
   debounceMs: number;
-  debouncer: ReturnType<typeof createInboundDebouncer<T>>;
+  debouncer: ReturnType<typeof createInboundDebouncer<T, TActivity>>;
 } {
   const debounceMs = resolveInboundDebounceMs({
     cfg: params.cfg,
@@ -44,7 +44,7 @@ export function createChannelInboundDebouncer<T>(
     overrideMs: params.debounceMsOverride,
   });
   const { cfg: _cfg, channel: _channel, debounceMsOverride: _override, ...rest } = params;
-  const debouncer = createInboundDebouncer<T>({
+  const debouncer = createInboundDebouncer<T, TActivity>({
     debounceMs,
     ...rest,
   });

@@ -80,6 +80,7 @@ export type PluginHookName =
   | "before_compaction"
   | "after_compaction"
   | "before_reset"
+  | "inbound_activity"
   | "inbound_claim"
   | "message_received"
   | "message_sending"
@@ -118,6 +119,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_compaction",
   "after_compaction",
   "before_reset",
+  "inbound_activity",
   "inbound_claim",
   "message_received",
   "message_sending",
@@ -197,6 +199,40 @@ export type PluginHookAgentContext = {
   trigger?: string;
   channelId?: string;
 };
+
+export type PluginHookLogger = {
+  debug?: (message: string) => void;
+  info?: (message: string) => void;
+  warn?: (message: string) => void;
+  error?: (message: string) => void;
+};
+
+export type PluginHookInboundActivitySource = "message" | "typing" | "delete" | "update";
+
+export type PluginHookInboundActivityEvent = {
+  source: PluginHookInboundActivitySource;
+  key: string;
+  authorId?: string;
+  messageId?: string;
+  channelId: string;
+  timestamp: number;
+  raw?: unknown;
+};
+
+export type PluginHookInboundActivityContext = {
+  config?: OpenClawConfig;
+  logger?: PluginHookLogger;
+  runId?: string;
+  sessionKey?: string;
+  channelId: string;
+  accountId?: string;
+  senderId?: string;
+  messageId?: string;
+  extend: (ms: number) => void;
+  cancel: () => void;
+};
+
+export type PluginHookInboundActivityResult = Record<never, never> | void;
 
 export type PluginHookBeforeAgentReplyEvent = {
   cleanedBody: string;
@@ -902,6 +938,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeResetEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
+  inbound_activity: (
+    event: PluginHookInboundActivityEvent,
+    ctx: PluginHookInboundActivityContext,
+  ) => Promise<PluginHookInboundActivityResult> | PluginHookInboundActivityResult;
   inbound_claim: (
     event: PluginHookInboundClaimEvent,
     ctx: PluginHookInboundClaimContext,
