@@ -173,6 +173,57 @@ describe("googlechat monitor webhook", () => {
     );
   });
 
+  it("uses the unknown rate-limit bucket when a trusted proxy omits client headers", async () => {
+    const rateLimiter: FixedWindowRateLimiter = {
+      isRateLimited: vi.fn(() => false),
+      size: vi.fn(() => 0),
+      clear: vi.fn(),
+    };
+    const webhookTargets = new Map<string, WebhookTarget[]>([
+      [
+        "/googlechat",
+        [
+          {
+            account: {
+              accountId: "default",
+              config: { appPrincipal: "chat-app" },
+            },
+            config: {
+              gateway: {
+                trustedProxies: ["10.0.0.0/24"],
+              },
+            },
+            runtime: {},
+            core: {} as never,
+            path: "/googlechat",
+            mediaMaxMb: 20,
+          } as WebhookTarget,
+        ],
+      ],
+    ]);
+    const handler = createGoogleChatWebhookRequestHandler({
+      webhookTargets,
+      webhookRateLimiter: rateLimiter,
+      webhookInFlightLimiter: {} as never,
+      processEvent: vi.fn(async () => {}),
+    });
+    const req = {
+      ...createRequest(),
+      socket: { remoteAddress: "10.0.0.1" },
+    } as IncomingMessage;
+    const res = createResponse();
+    withResolvedWebhookRequestPipeline.mockResolvedValue(true);
+
+    await expect(handler(req, res)).resolves.toBe(true);
+
+    expect(withResolvedWebhookRequestPipeline).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rateLimiter,
+        rateLimitKey: "/googlechat:unknown",
+      }),
+    );
+  });
+
   it("accepts add-on payloads that carry systemIdToken in the body", async () => {
     const target = {
       account: {

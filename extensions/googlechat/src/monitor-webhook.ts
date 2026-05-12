@@ -194,15 +194,14 @@ export function createGoogleChatWebhookRequestHandler(params: {
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const path = normalizeWebhookPath(new URL(req.url ?? "/", "http://localhost").pathname);
+    // Shared-path registrations use the same gateway proxy settings in normal runtime setup.
     const config = params.webhookTargets.get(path)?.[0]?.config;
     const clientIp =
       resolveRequestClientIp(
         req,
         config?.gateway?.trustedProxies,
         config?.gateway?.allowRealIpFallback === true,
-      ) ??
-      req.socket.remoteAddress ??
-      "unknown";
+      ) ?? "unknown";
 
     return await withResolvedWebhookRequestPipeline({
       req,
