@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Reject truncated exec approval commands [AI]. (#81001) Thanks @pgondhi987.
 - Enforce inline shell wrapper payload matching [AI]. (#80978) Thanks @pgondhi987.
 - fix(node-pairing): replace changed pending requests [AI]. (#80894) Thanks @pgondhi987.
 - Rate limit Google Chat webhook requests [AI]. (#80974) Thanks @pgondhi987.
