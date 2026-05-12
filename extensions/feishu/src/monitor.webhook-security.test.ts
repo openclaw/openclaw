@@ -44,7 +44,7 @@ import {
   monitorFeishuProvider,
   stopFeishuMonitor,
 } from "./monitor.js";
-import { monitorWebhook } from "./monitor.transport.js";
+import { buildFeishuWebhookRateLimitKeyForTest, monitorWebhook } from "./monitor.transport.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 async function waitForSlowBodyTimeoutResponse(
@@ -312,6 +312,25 @@ describe("Feishu webhook security hardening", () => {
         expect(saw429).toBe(true);
       },
     );
+  });
+
+  it("uses one webhook rate-limit key for loopback address-family variants", () => {
+    const base = {
+      accountId: "rate-limit-key",
+      path: "/hook-rate-limit-key",
+    };
+
+    expect([
+      buildFeishuWebhookRateLimitKeyForTest({ ...base, remoteAddress: "127.0.0.1" }),
+      buildFeishuWebhookRateLimitKeyForTest({ ...base, remoteAddress: "127.0.0.42" }),
+      buildFeishuWebhookRateLimitKeyForTest({ ...base, remoteAddress: "::ffff:127.0.0.1" }),
+      buildFeishuWebhookRateLimitKeyForTest({ ...base, remoteAddress: "::1" }),
+    ]).toEqual([
+      "rate-limit-key:/hook-rate-limit-key:loopback",
+      "rate-limit-key:/hook-rate-limit-key:loopback",
+      "rate-limit-key:/hook-rate-limit-key:loopback",
+      "rate-limit-key:/hook-rate-limit-key:loopback",
+    ]);
   });
 
   it("caps tracked webhook rate-limit keys to prevent unbounded growth", () => {

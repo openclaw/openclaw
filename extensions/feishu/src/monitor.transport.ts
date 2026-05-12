@@ -5,10 +5,11 @@ import { waitForAbortableDelay } from "./async.js";
 import { createFeishuWSClient } from "./client.js";
 import {
   applyBasicWebhookRequestGuards,
-  type RuntimeEnv,
   installRequestBodyLimitGuard,
   readWebhookBodyOrReject,
+  resolveRequestClientIp,
   safeEqualSecret,
+  type RuntimeEnv,
 } from "./monitor-transport-runtime-api.js";
 import {
   botNames,
@@ -88,6 +89,30 @@ function respondText(res: http.ServerResponse, statusCode: number, body: string)
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.end(body);
+}
+
+function normalizeFeishuWebhookRateLimitClient(remoteAddress: string | undefined): string {
+  const clientIp = resolveRequestClientIp({
+    headers: {},
+    socket: { remoteAddress },
+  } as http.IncomingMessage);
+  if (!clientIp) {
+    return "unknown";
+  }
+  if (clientIp === "::1" || clientIp.startsWith("127.")) {
+    return "loopback";
+  }
+  return clientIp;
+}
+
+export function buildFeishuWebhookRateLimitKeyForTest(params: {
+  accountId: string;
+  path: string;
+  remoteAddress?: string;
+}): string {
+  return `${params.accountId}:${params.path}:${normalizeFeishuWebhookRateLimitClient(
+    params.remoteAddress,
+  )}`;
 }
 
 function getFeishuWsReconnectDelayMs(attempt: number): number {
@@ -300,7 +325,11 @@ export async function monitorWebhook({
       recordWebhookStatus(runtime, accountId, path, res.statusCode);
     });
 
-    const rateLimitKey = `${accountId}:${path}:${req.socket.remoteAddress ?? "unknown"}`;
+    const rateLimitKey = buildFeishuWebhookRateLimitKeyForTest({
+      accountId,
+      path,
+      remoteAddress: req.socket.remoteAddress,
+    });
     if (
       !applyBasicWebhookRequestGuards({
         req,
