@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
@@ -186,7 +186,10 @@ import {
   type ToolSearchCatalogToolExecutor,
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
-import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
+import {
+  shouldAllowProviderOwnedThinkingReplay,
+  type TranscriptPolicy,
+} from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -238,7 +241,11 @@ import {
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
 import { applySystemPromptOverrideToSession } from "../system-prompt.js";
-import { dropReasoningFromHistory, dropThinkingBlocks } from "../thinking.js";
+import {
+  dropReasoningFromHistory,
+  dropThinkingBlocks,
+  wrapAnthropicStreamWithRecovery,
+} from "../thinking.js";
 import {
   collectAllowedToolNames,
   collectCoreBuiltinToolNames,
@@ -409,6 +416,28 @@ const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_CALL_RAW_TOOL_NAME,
 ];
+
+type AnthropicThinkingRecoveryPolicy = Pick<
+  TranscriptPolicy,
+  "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
+>;
+
+export function shouldRecoverAnthropicThinkingReplay(
+  policy: AnthropicThinkingRecoveryPolicy,
+): boolean {
+  return policy.validateAnthropicTurns && policy.preserveSignatures && !policy.dropThinkingBlocks;
+}
+
+export function wrapStreamFnRecoverAnthropicThinkingBlocks(
+  streamFn: StreamFn,
+  policy: AnthropicThinkingRecoveryPolicy,
+  sessionId: string,
+): StreamFn {
+  if (!shouldRecoverAnthropicThinkingReplay(policy)) {
+    return streamFn;
+  }
+  return wrapAnthropicStreamWithRecovery(streamFn, { id: sessionId });
+}
 
 export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
   effectiveToolNames: string[];
@@ -2311,6 +2340,12 @@ export async function runEmbeddedAttempt(
           return inner(model, nextContext as typeof context, options);
         };
       }
+
+      activeSession.agent.streamFn = wrapStreamFnRecoverAnthropicThinkingBlocks(
+        activeSession.agent.streamFn,
+        transcriptPolicy,
+        activeSession.sessionId ?? params.sessionId ?? params.runId,
+      );
 
       const innerStreamFn = activeSession.agent.streamFn;
       activeSession.agent.streamFn = (model, context, options) => {

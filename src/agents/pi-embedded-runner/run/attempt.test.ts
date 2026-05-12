@@ -34,7 +34,9 @@ import {
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   shouldWarnOnOrphanedUserRepair,
+  shouldRecoverAnthropicThinkingReplay,
   wrapStreamFnRepairMalformedToolCallArguments,
+  wrapStreamFnRecoverAnthropicThinkingBlocks,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
@@ -106,6 +108,87 @@ function expectSingleToolCallContent(
   expect(item.type).toBe("toolCall");
   expect(item.name).toBe(name);
 }
+
+describe("wrapStreamFnRecoverAnthropicThinkingBlocks", () => {
+  const preservedAnthropicPolicy = {
+    validateAnthropicTurns: true,
+    preserveSignatures: true,
+    dropThinkingBlocks: false,
+  };
+
+  it("enables retry only when preserved Anthropic thinking replay can be rejected", () => {
+    expect(shouldRecoverAnthropicThinkingReplay(preservedAnthropicPolicy)).toBe(true);
+    expect(
+      shouldRecoverAnthropicThinkingReplay({
+        ...preservedAnthropicPolicy,
+        dropThinkingBlocks: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRecoverAnthropicThinkingReplay({
+        ...preservedAnthropicPolicy,
+        validateAnthropicTurns: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("retries once with thinking blocks stripped after the exact Anthropic rejection", async () => {
+    const thinkingError = new Error(
+      "messages.1.content.12: thinking or redacted_thinking blocks in the latest assistant message cannot be modified",
+    );
+    const contexts: Array<{ messages?: Array<{ role?: string; content?: unknown[] }> }> = [];
+    let callCount = 0;
+    const baseFn = vi.fn((_model, context) => {
+      callCount += 1;
+      contexts.push(context as { messages?: Array<{ role?: string; content?: unknown[] }> });
+      if (callCount === 1) {
+        return Promise.reject(thinkingError);
+      }
+      return Promise.resolve({ ok: true });
+    }) as unknown as Parameters<typeof wrapStreamFnRecoverAnthropicThinkingBlocks>[0];
+
+    const wrapped = wrapStreamFnRecoverAnthropicThinkingBlocks(
+      baseFn,
+      preservedAnthropicPolicy,
+      "session-1",
+    );
+    const result = await Promise.resolve(
+      wrapped(
+        {} as never,
+        {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "private", thinkingSignature: "sig_1" },
+                { type: "text", text: "visible answer" },
+              ],
+            },
+          ],
+        } as never,
+        {} as never,
+      ),
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(baseFn).toHaveBeenCalledTimes(2);
+    expect(contexts[1]?.messages?.[0]?.content).toEqual([{ type: "text", text: "visible answer" }]);
+  });
+
+  it("leaves the stream function unchanged when thinking is already stripped", () => {
+    const baseFn = vi.fn() as unknown as Parameters<
+      typeof wrapStreamFnRecoverAnthropicThinkingBlocks
+    >[0];
+
+    expect(
+      wrapStreamFnRecoverAnthropicThinkingBlocks(
+        baseFn,
+        { ...preservedAnthropicPolicy, dropThinkingBlocks: true },
+        "session-1",
+      ),
+    ).toBe(baseFn);
+  });
+});
 
 describe("buildEmbeddedAttemptToolRunContext", () => {
   it("carries runtime toolsAllow into coding tool construction", () => {
