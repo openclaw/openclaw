@@ -158,6 +158,12 @@ export class TelegramPollingSession {
   #transportState: TelegramPollingTransportState;
   #status: ReturnType<typeof createTelegramPollingStatusPublisher>;
   #stallThresholdMs: number;
+  // Tracks the in-flight runner+bot teardown so we cannot start a new
+  // `#createPollingBot` cycle until the previous transport is closed and the
+  // runner promise has settled. Without this, a 409-conflict path can re-enter
+  // `#createPollingBot` while the old keep-alive socket is still being held
+  // open by Telegram, producing the tight 409 retry loop seen in #69787.
+  #stoppingCycle: Promise<void> | undefined;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
     this.#transportState = new TelegramPollingTransportState({
@@ -245,6 +251,21 @@ export class TelegramPollingSession {
   }
 
   async #createPollingBot(): Promise<TelegramBot | undefined> {
+    // Wait for the prior runner+bot to finish settling before we attempt to
+    // spin up a new bot. Otherwise a 409-conflict tight loop can re-enter
+    // this method while Telegram still treats the previous keep-alive socket
+    // as the live session, immediately returning 409 again. (#69787)
+    if (this.#stoppingCycle) {
+      try {
+        await this.#stoppingCycle;
+      } catch {
+        // Stopping errors are already logged at their source; never block
+        // restart attempts on cleanup failure.
+      }
+    }
+    if (this.opts.abortSignal?.aborted) {
+      return undefined;
+    }
     // Per-process TLS handshake throttle. createTelegramBot performs the
     // getMe handshake to api.telegram.org synchronously; uncapped fleet
     // restarts produce 7s+ event-loop freezes (see freeze dumps 2026-05-12).
@@ -469,11 +490,25 @@ export class TelegramPollingSession {
       }
       this.opts.abortSignal?.removeEventListener("abort", abortFetch);
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
-      await waitForGracefulStop(stopRunner);
-      await waitForGracefulStop(stopBot);
-      this.#activeRunner = undefined;
-      if (this.#activeFetchAbort === fetchAbortController) {
-        this.#activeFetchAbort = undefined;
+      // Capture the teardown as a single promise so the next #createPollingBot
+      // can await it. Refusing to start a new bot until the prior runner has
+      // settled prevents the 409 conflict tight loop where the new session is
+      // requested before Telegram has released the previous one. (#69787)
+      const teardown = (async () => {
+        await waitForGracefulStop(stopRunner);
+        await waitForGracefulStop(stopBot);
+      })();
+      this.#stoppingCycle = teardown;
+      try {
+        await teardown;
+      } finally {
+        if (this.#stoppingCycle === teardown) {
+          this.#stoppingCycle = undefined;
+        }
+        this.#activeRunner = undefined;
+        if (this.#activeFetchAbort === fetchAbortController) {
+          this.#activeFetchAbort = undefined;
+        }
       }
     }
   }
