@@ -138,6 +138,11 @@ describe("resolveClaudeCliExecutionArgs", () => {
 });
 
 describe("normalizeClaudeBackendConfig", () => {
+  it("opts in to raw transcript reseed for safe session invalidations", () => {
+    const backend = buildAnthropicCliBackend();
+    expect(backend.config.reseedFromRawTranscriptWhenUncompacted).toBe(true);
+  });
+
   it("normalizes both args and resumeArgs for custom overrides", () => {
     const normalized = normalizeClaudeBackendConfig({
       command: "claude",
