@@ -1258,7 +1258,10 @@ export async function runCodexAppServerAttempt(
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
     } else if (unblockedAssistantCompletionRelease) {
       armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
-    } else if (isCurrentTurnNotification) {
+    } else if (
+      isCurrentTurnNotification &&
+      shouldDisarmAssistantCompletionIdleWatch(notification)
+    ) {
       disarmTurnAssistantCompletionIdleWatch();
     }
     if (
@@ -2635,7 +2638,20 @@ function isCompletedAssistantNotification(notification: CodexServerNotification)
     return false;
   }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
-  return Boolean(item && readString(item, "type") === "agentMessage" && readString(item, "text"));
+  return Boolean(item && readString(item, "type") === "agentMessage");
+}
+
+function shouldDisarmAssistantCompletionIdleWatch(notification: CodexServerNotification): boolean {
+  if (!isJsonObject(notification.params)) {
+    return false;
+  }
+  if (notification.method === "item/started") {
+    return true;
+  }
+  if (notification.method === "item/agentMessage/delta") {
+    return true;
+  }
+  return false;
 }
 
 function readNotificationItemId(notification: CodexServerNotification): string | undefined {
