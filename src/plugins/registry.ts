@@ -1745,6 +1745,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     "tool",
     "run",
     "settings",
+    "chat-message",
+    "chat-input-bar",
+    "chat-header-chip",
+  ]);
+  const chatStreamSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
+    "chat-message",
+    "chat-input-bar",
+    "chat-header-chip",
   ]);
 
   const registerSessionExtension = (
@@ -2004,6 +2012,69 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    // Validate the optional `priority` field. Reject NaN / non-finite numbers
+    // so projection ordering remains deterministic. Non-numeric and out-of-band
+    // values from untyped (JS) plugins are dropped with a diagnostic so the
+    // descriptor never lands in the registry with a meaningless sort key.
+    let normalizedPriority: number | undefined;
+    if (descriptor.priority !== undefined) {
+      if (typeof descriptor.priority !== "number" || !Number.isFinite(descriptor.priority)) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `control UI descriptor priority must be a finite number: ${id}`,
+        });
+        return;
+      }
+      normalizedPriority = descriptor.priority;
+    }
+    // Validate the optional `activeWhen` predicate. Only meaningful for the
+    // `chat-*` stream surfaces; reject on the static surfaces so plugins do
+    // not project metadata that the static-slot clients cannot interpret.
+    let normalizedActiveWhen: PluginControlUiDescriptor["activeWhen"];
+    if (descriptor.activeWhen !== undefined) {
+      const isChatStream = chatStreamSurfaces.has(surface as PluginControlUiDescriptor["surface"]);
+      if (!isChatStream) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `control UI descriptor activeWhen only applies to chat-* surfaces: ${id}`,
+        });
+        return;
+      }
+      const namespace = normalizeHostHookString(descriptor.activeWhen.sessionExtensionNamespace);
+      const valuePath = normalizeOptionalHostHookString(descriptor.activeWhen.valuePath);
+      if (!namespace || valuePath === "") {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `control UI descriptor activeWhen requires non-empty sessionExtensionNamespace: ${id}`,
+        });
+        return;
+      }
+      if (
+        descriptor.activeWhen.equals !== undefined &&
+        !isPluginJsonValue(descriptor.activeWhen.equals)
+      ) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `control UI descriptor activeWhen.equals must be JSON-compatible: ${id}`,
+        });
+        return;
+      }
+      normalizedActiveWhen = {
+        sessionExtensionNamespace: namespace,
+        ...(valuePath !== undefined ? { valuePath } : {}),
+        ...(descriptor.activeWhen.equals !== undefined
+          ? { equals: descriptor.activeWhen.equals }
+          : {}),
+      };
+    }
     const existing = (registry.controlUiDescriptors ?? []).find(
       (entry) => entry.pluginId === record.id && entry.descriptor.id === id,
     );
@@ -2029,6 +2100,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ...(requiredScopes !== undefined
           ? { requiredScopes: requiredScopes as OperatorScope[] }
           : {}),
+        ...(normalizedPriority !== undefined ? { priority: normalizedPriority } : {}),
+        ...(normalizedActiveWhen !== undefined ? { activeWhen: normalizedActiveWhen } : {}),
       },
       source: record.source,
       rootDir: record.rootDir,

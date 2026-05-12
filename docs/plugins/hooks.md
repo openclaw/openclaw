@@ -345,6 +345,69 @@ durable session state while cleanup callbacks let plugins release scheduler
 jobs, run context, and other out-of-band resources for the old runtime
 generation.
 
+### Chat-stream Control UI
+
+Plugins that want inline UI in the chat-stream view — plan cards rendered
+between agent messages, an input-bar contribution that owns the composer while
+an approval is pending, or a header chip showing the active execution mode —
+register Control UI descriptors with one of the chat-stream surfaces in
+addition to the existing static slots:
+
+- `chat-message`: rendered inline between agent messages.
+- `chat-input-bar`: rendered above (and suppressing) the chat composer.
+- `chat-header-chip`: rendered into the chat header strip.
+
+The host carries the descriptor metadata across the wire; the client owns the
+actual rendering. To decide when a chat-stream descriptor mounts, attach an
+optional `activeWhen` predicate keyed by a plugin-owned session-extension
+namespace. Clients evaluate the predicate against the plugin's projected
+extension state (already projected through `pluginExtensions` on session
+rows):
+
+```ts
+api.session.state.registerSessionExtension({
+  namespace: "planMode",
+  description: "Plan-mode session state",
+});
+
+api.session.controls.registerControlUiDescriptor({
+  id: "plan-card",
+  surface: "chat-message",
+  label: "Plan card",
+  priority: 10,
+  activeWhen: {
+    sessionExtensionNamespace: "planMode",
+    valuePath: "lastPlan",
+  },
+});
+
+api.session.controls.registerControlUiDescriptor({
+  id: "plan-approval-card",
+  surface: "chat-input-bar",
+  label: "Plan approval",
+  priority: 0,
+  activeWhen: {
+    sessionExtensionNamespace: "planMode",
+    valuePath: "approval.pending",
+    equals: true,
+  },
+});
+```
+
+Rules:
+
+- `activeWhen` is rejected on the static surfaces (`session` / `tool` / `run` /
+  `settings`); existing static-slot clients do not interpret it.
+- `priority` is a stable sort key when multiple plugins contribute to the same
+  surface. Lower values render first. Non-finite priorities are rejected.
+- The host stays agnostic about how the predicate body is interpreted — it
+  carries the metadata and the projected extension value. Clients walk
+  `valuePath` against the extension value and compare against `equals` (when
+  present) or check for a truthy non-empty value (when `equals` is omitted).
+- All chat-stream contributions are additive on top of the existing descriptor
+  shape. Plugins that only need the static `session` / `tool` / `run` /
+  `settings` slots register descriptors exactly as before.
+
 ## Message hooks
 
 Use message hooks for channel-level routing and delivery policy:

@@ -100,14 +100,79 @@ export type PluginCommandContinuation = {
   continueAgent?: boolean;
 };
 
+/**
+ * Predicate keyed by a plugin-owned session-extension namespace that tells
+ * clients when a chat-stream descriptor should mount.
+ *
+ * The host has no policy on the predicate body; it is opaque to the host and
+ * evaluated client-side against the projected session-extension state. This
+ * keeps the seam additive: the host only carries the metadata across the wire,
+ * and the existing `pluginExtensions` projection feeds the data the predicate
+ * checks. See `docs/plugins/hooks.md#chat-stream-control-ui` for client-side
+ * evaluation semantics.
+ */
+export type PluginControlUiActiveWhen = {
+  /** Session-extension namespace owned by this plugin (must match a registered extension). */
+  sessionExtensionNamespace: string;
+  /**
+   * Optional path into the extension value, dot-separated. When omitted, the
+   * extension value itself drives the predicate. Example: `"plan.status"`.
+   */
+  valuePath?: string;
+  /**
+   * Optional equality match against the value at `valuePath`. When omitted, a
+   * truthy value (non-null, non-empty) is enough to mount.
+   */
+  equals?: PluginJsonValue;
+};
+
 export type PluginControlUiDescriptor = {
   id: string;
-  surface: "session" | "tool" | "run" | "settings";
+  /**
+   * Surface vocabulary for plugin-contributed Control UI.
+   *
+   * - `session` | `tool` | `run` | `settings`: original static descriptor slots
+   *   used by the Control UI for sidebar/control-panel contributions.
+   * - `chat-message`: an inline card rendered between agent messages in the
+   *   chat-stream view. Mounted when `activeWhen` evaluates truthy against the
+   *   plugin's projected session-extension state. Used by plan-mode-style
+   *   plugins to surface plan cards, approval prompts, and similar inline UI.
+   * - `chat-input-bar`: a contribution that replaces or suppresses the chat
+   *   composer for the active session — e.g. a plan-approval card that owns
+   *   the input row while the user accepts or revises the plan.
+   * - `chat-header-chip`: a compact contribution rendered into the chat header
+   *   strip — typically a mode-switcher chip showing the active execution
+   *   mode (Plan / Ask / Bypass / etc.).
+   */
+  surface:
+    | "session"
+    | "tool"
+    | "run"
+    | "settings"
+    | "chat-message"
+    | "chat-input-bar"
+    | "chat-header-chip";
   label: string;
   description?: string;
   placement?: string;
   schema?: PluginJsonValue;
   requiredScopes?: OperatorScope[];
+  /**
+   * Stable sort order when multiple plugins contribute to the same surface.
+   *
+   * Lower values render first. When two descriptors share the same priority
+   * (or both omit it), the host falls back to projection-order by `pluginId`
+   * and then descriptor `id` so ordering remains deterministic across runs.
+   * Optional; only meaningful for stream surfaces (`chat-*`).
+   */
+  priority?: number;
+  /**
+   * Predicate that drives mounting on a `chat-*` surface. The predicate is
+   * evaluated client-side against the plugin's projected session-extension
+   * state (see `registerSessionExtension`). Ignored for the static surfaces
+   * (`session` | `tool` | `run` | `settings`).
+   */
+  activeWhen?: PluginControlUiActiveWhen;
 };
 
 export type PluginSessionActionContext = {

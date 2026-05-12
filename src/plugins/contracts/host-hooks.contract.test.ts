@@ -687,6 +687,169 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
+  it("accepts chat-stream Control UI surfaces with priority and activeWhen predicates", () => {
+    // Smarter-Claw / plan-mode use case: a third-party plugin registers
+    // inline chat-stream UI contributions (plan card, mode chip, input-bar
+    // suppression) gated by its own session-extension state. The host accepts
+    // the new surfaces, normalizes the optional fields, and projects them so
+    // a thin client can mount the renderers it owns.
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "plan-mode",
+        name: "Plan Mode",
+      }),
+      register(api) {
+        api.session.state.registerSessionExtension({
+          namespace: "planMode",
+          description: "Plan-mode session state",
+        });
+        api.session.controls.registerControlUiDescriptor({
+          id: "plan-card",
+          surface: "chat-message",
+          label: "Plan card",
+          description: "Inline plan-step checklist rendered between agent messages",
+          priority: 10,
+          activeWhen: {
+            sessionExtensionNamespace: "planMode",
+            valuePath: "lastPlan",
+          },
+        });
+        api.session.controls.registerControlUiDescriptor({
+          id: "plan-approval-card",
+          surface: "chat-input-bar",
+          label: "Plan approval",
+          description: "Inline approval card; suppresses the composer while pending",
+          priority: 0,
+          activeWhen: {
+            sessionExtensionNamespace: "planMode",
+            valuePath: "approval.pending",
+            equals: true,
+          },
+        });
+        api.session.controls.registerControlUiDescriptor({
+          id: "plan-mode-chip",
+          surface: "chat-header-chip",
+          label: "Plan mode chip",
+          description: "Header chip indicating the active execution mode",
+          priority: 100,
+          activeWhen: {
+            sessionExtensionNamespace: "planMode",
+          },
+        });
+      },
+    });
+
+    const descriptors = registry.registry.controlUiDescriptors ?? [];
+    expect(descriptors.map((entry) => entry.descriptor.id)).toEqual([
+      "plan-card",
+      "plan-approval-card",
+      "plan-mode-chip",
+    ]);
+    expect(descriptors.map((entry) => entry.descriptor.surface)).toEqual([
+      "chat-message",
+      "chat-input-bar",
+      "chat-header-chip",
+    ]);
+    expect(descriptors[0]?.descriptor.priority).toBe(10);
+    expect(descriptors[0]?.descriptor.activeWhen).toEqual({
+      sessionExtensionNamespace: "planMode",
+      valuePath: "lastPlan",
+    });
+    expect(descriptors[1]?.descriptor.activeWhen).toEqual({
+      sessionExtensionNamespace: "planMode",
+      valuePath: "approval.pending",
+      equals: true,
+    });
+    expect(descriptors[2]?.descriptor.activeWhen).toEqual({
+      sessionExtensionNamespace: "planMode",
+    });
+    // Diagnostics are flat: registering chat-stream descriptors must not push
+    // any diagnostic about unknown surfaces, mis-shaped activeWhen, etc.
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([]);
+  });
+
+  it("rejects activeWhen on the static (non-chat-*) Control UI surfaces", () => {
+    // activeWhen is a chat-stream-only contract; the static descriptor slots
+    // (session/tool/run/settings) are projection-time discovery surfaces that
+    // existing Control UI clients fetch unconditionally. Letting plugins
+    // attach activeWhen there would leak metadata the static slots cannot
+    // act on and create silent rendering surprises.
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "bad-active-when",
+        name: "Bad ActiveWhen",
+      }),
+      register(api) {
+        api.session.controls.registerControlUiDescriptor({
+          id: "static-with-active-when",
+          surface: "session",
+          label: "Static slot",
+          activeWhen: {
+            sessionExtensionNamespace: "anything",
+          },
+        });
+      },
+    });
+
+    expect(registry.registry.controlUiDescriptors ?? []).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "bad-active-when",
+        message:
+          "control UI descriptor activeWhen only applies to chat-* surfaces: static-with-active-when",
+      },
+    ]);
+  });
+
+  it("rejects malformed priority and activeWhen payloads before projection", () => {
+    // NaN/Infinity priority and missing sessionExtensionNamespace are common
+    // shapes from untyped (JS) plugins. Reject them with a diagnostic so the
+    // registry never lands a descriptor whose metadata clients cannot
+    // interpret deterministically.
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "bad-priority",
+        name: "Bad Priority",
+      }),
+      register(api) {
+        api.session.controls.registerControlUiDescriptor({
+          id: "nan-priority",
+          surface: "chat-message",
+          label: "Bad priority",
+          priority: Number.NaN,
+        });
+        api.session.controls.registerControlUiDescriptor({
+          id: "empty-namespace",
+          surface: "chat-message",
+          label: "Empty namespace",
+          activeWhen: {
+            // oxlint-disable-next-line typescript/no-explicit-any -- exercise untyped-plugin shape
+            sessionExtensionNamespace: "" as any,
+          },
+        });
+      },
+    });
+
+    expect(registry.registry.controlUiDescriptors ?? []).toHaveLength(0);
+    const diagnostics = diagnosticSummaries(registry.registry.diagnostics);
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics[0]?.message).toContain(
+      "control UI descriptor priority must be a finite number: nan-priority",
+    );
+    expect(diagnostics[1]?.message).toContain(
+      "control UI descriptor activeWhen requires non-empty sessionExtensionNamespace: empty-namespace",
+    );
+  });
+
   it("projects registered session extensions into gateway session rows", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({

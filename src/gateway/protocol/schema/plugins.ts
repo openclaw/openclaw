@@ -3,6 +3,15 @@ import { NonEmptyString } from "./primitives.js";
 
 export const PluginJsonValueSchema = Type.Unknown();
 
+export const PluginControlUiActiveWhenSchema = Type.Object(
+  {
+    sessionExtensionNamespace: NonEmptyString,
+    valuePath: Type.Optional(NonEmptyString),
+    equals: Type.Optional(PluginJsonValueSchema),
+  },
+  { additionalProperties: false },
+);
+
 export const PluginControlUiDescriptorSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -13,12 +22,17 @@ export const PluginControlUiDescriptorSchema = Type.Object(
       Type.Literal("tool"),
       Type.Literal("run"),
       Type.Literal("settings"),
+      Type.Literal("chat-message"),
+      Type.Literal("chat-input-bar"),
+      Type.Literal("chat-header-chip"),
     ]),
     label: NonEmptyString,
     description: Type.Optional(Type.String()),
     placement: Type.Optional(Type.String()),
     schema: Type.Optional(PluginJsonValueSchema),
     requiredScopes: Type.Optional(Type.Array(NonEmptyString)),
+    priority: Type.Optional(Type.Number()),
+    activeWhen: Type.Optional(PluginControlUiActiveWhenSchema),
   },
   { additionalProperties: false },
 );
