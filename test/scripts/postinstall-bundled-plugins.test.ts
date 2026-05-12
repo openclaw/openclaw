@@ -254,9 +254,10 @@ describe("bundled plugin postinstall", () => {
       ].join("\n"),
     );
 
-    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toMatchObject({
+    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toEqual({
       applied: true,
       reason: "patched",
+      targetPath: mediaFile,
     });
     const patchedText = await fs.readFile(mediaFile, "utf8");
     expect(patchedText).toContain(
@@ -292,7 +293,7 @@ describe("bundled plugin postinstall", () => {
       ].join("\n"),
     );
 
-    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toMatchObject({
+    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toEqual({
       applied: false,
       reason: "already_patched",
     });

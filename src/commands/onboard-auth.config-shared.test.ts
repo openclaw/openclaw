@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
+  applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModelPreset,
   applyProviderConfigWithModelCatalogPreset,
   applyProviderConfigWithDefaultModel,
@@ -155,6 +156,63 @@ describe("onboard auth provider config merges", () => {
       "model-a",
       "model-c",
     ]);
+  });
+
+  it("normalizes retired Google model ids before emitting provider catalog config", () => {
+    const next = applyProviderConfigWithModelCatalog(
+      {
+        models: {
+          providers: {
+            kilocode: {
+              api: "openai-completions",
+              baseUrl: "https://example.com/v1",
+              models: [makeModel("google/gemini-3-pro-preview")],
+            },
+          },
+        },
+      },
+      {
+        agentModels,
+        providerId: "kilocode",
+        api: "openai-completions",
+        baseUrl: "https://example.com/v1",
+        catalogModels: [makeModel("google/gemini-3.1-pro-preview")],
+      },
+    );
+
+    expect(next.models?.providers?.kilocode?.models?.map((m) => m.id)).toEqual([
+      "google/gemini-3.1-pro-preview",
+    ]);
+  });
+
+  it("normalizes retired Google provider catalog ids when applying only an agent default", () => {
+    const next = applyAgentDefaultModelPrimary(
+      {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              models: [makeModel("google/gemini-3-pro-preview")],
+            },
+            kilocode: {
+              api: "openai-completions",
+              baseUrl: "https://kilocode.example.com/v1",
+              models: [makeModel("google/gemini-3-pro-preview")],
+            },
+          },
+        },
+      },
+      "google/gemini-3.1-pro-preview",
+    );
+
+    expect(next.models?.providers?.google?.models?.map((m) => m.id)).toEqual([
+      "google/gemini-3.1-pro-preview",
+    ]);
+    expect(next.models?.providers?.kilocode?.models?.map((m) => m.id)).toEqual([
+      "google/gemini-3.1-pro-preview",
+    ]);
+    expect(next.agents?.defaults?.model).toEqual({ primary: "google/gemini-3.1-pro-preview" });
   });
 
   it("supports single default model convenience wrapper", () => {

@@ -1475,8 +1475,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
 
     expect(routeReplyMock).not.toHaveBeenCalled();
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses JSON NO_REPLY followups without origin or dispatcher delivery", async () => {
@@ -1494,8 +1494,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
 
     expect(routeReplyMock).not.toHaveBeenCalled();
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
   it("keeps NO_REPLY followups with media deliverable", async () => {
@@ -1602,8 +1602,8 @@ describe("createFollowupRunner typing cleanup", () => {
   }
 
   function expectTypingCleanup(typing: ReturnType<typeof createMockTypingController>) {
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   }
 
   it("calls both markRunComplete and markDispatchIdle on NO_REPLY", async () => {

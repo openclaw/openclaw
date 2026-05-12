@@ -200,6 +200,17 @@ async function makeTempDir(prefix: string) {
   return dir;
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let error: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -276,9 +287,7 @@ describe("openshell fs bridges", () => {
         mkdir: true,
       }),
     ).rejects.toThrow("Sandbox path escapes allowed mounts");
-    await expect(fs.stat(path.join(outsideDir, "escape.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(outsideDir, "escape.txt"));
     await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
     expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
   });

@@ -36,6 +36,14 @@ const cfg = {
   },
 } as OpenClawConfig;
 
+function lastMatrixSendOptions() {
+  const options = mocks.sendMessageMatrix.mock.lastCall?.[2];
+  if (!options || typeof options !== "object") {
+    throw new Error("Expected Matrix send options");
+  }
+  return options as Record<string, unknown>;
+}
+
 describe("matrix channel message adapter", () => {
   beforeEach(() => {
     mocks.sendMessageMatrix.mockReset();
@@ -44,7 +52,6 @@ describe("matrix channel message adapter", () => {
 
   it("backs declared durable-final capabilities with runtime outbound proofs", async () => {
     const adapter = matrixPlugin.message;
-    expect(adapter).toBeDefined();
     if (!adapter?.send?.text || !adapter.send.media) {
       throw new Error("Expected Matrix message adapter send capabilities.");
     }
@@ -59,11 +66,12 @@ describe("matrix channel message adapter", () => {
         text: "hello",
         accountId: "default",
       });
-      expect(mocks.sendMessageMatrix).toHaveBeenLastCalledWith(
-        "room:!room:example",
-        "hello",
-        expect.objectContaining({ cfg, accountId: "default" }),
-      );
+      expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(1);
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe("room:!room:example");
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[1]).toBe("hello");
+      const options = lastMatrixSendOptions();
+      expect(options.cfg).toBe(cfg);
+      expect(options.accountId).toBe("default");
       expect(result.receipt.platformMessageIds).toEqual(["$event-1"]);
       expect(result.receipt.parts[0]?.kind).toBe("text");
     };
@@ -79,16 +87,14 @@ describe("matrix channel message adapter", () => {
         accountId: "default",
         audioAsVoice: true,
       });
-      expect(mocks.sendMessageMatrix).toHaveBeenLastCalledWith(
-        "room:!room:example",
-        "caption",
-        expect.objectContaining({
-          cfg,
-          mediaUrl: "file:///tmp/cat.png",
-          mediaLocalRoots: ["/tmp/openclaw"],
-          audioAsVoice: true,
-        }),
-      );
+      expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(1);
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe("room:!room:example");
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[1]).toBe("caption");
+      const options = lastMatrixSendOptions();
+      expect(options.cfg).toBe(cfg);
+      expect(options.mediaUrl).toBe("file:///tmp/cat.png");
+      expect(options.mediaLocalRoots).toEqual(["/tmp/openclaw"]);
+      expect(options.audioAsVoice).toBe(true);
       expect(result.receipt.parts[0]?.kind).toBe("voice");
     };
 
@@ -102,15 +108,13 @@ describe("matrix channel message adapter", () => {
         replyToId: "$reply",
         threadId: "$thread",
       });
-      expect(mocks.sendMessageMatrix).toHaveBeenLastCalledWith(
-        "room:!room:example",
-        "threaded",
-        expect.objectContaining({
-          cfg,
-          replyToId: "$reply",
-          threadId: "$thread",
-        }),
-      );
+      expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(1);
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe("room:!room:example");
+      expect(mocks.sendMessageMatrix.mock.lastCall?.[1]).toBe("threaded");
+      const options = lastMatrixSendOptions();
+      expect(options.cfg).toBe(cfg);
+      expect(options.replyToId).toBe("$reply");
+      expect(options.threadId).toBe("$thread");
       expect(result.receipt.replyToId).toBe("$reply");
       expect(result.receipt.threadId).toBe("$thread");
     };
@@ -132,13 +136,11 @@ describe("matrix channel message adapter", () => {
 
   it("forwards presentation payload hooks through the registered outbound adapter", async () => {
     const outbound = matrixPlugin.outbound;
-    expect(outbound?.presentationCapabilities).toMatchObject({
-      supported: true,
-      buttons: true,
-      selects: true,
-      context: true,
-      divider: true,
-    });
+    expect(outbound?.presentationCapabilities?.supported).toBe(true);
+    expect(outbound?.presentationCapabilities?.buttons).toBe(true);
+    expect(outbound?.presentationCapabilities?.selects).toBe(true);
+    expect(outbound?.presentationCapabilities?.context).toBe(true);
+    expect(outbound?.presentationCapabilities?.divider).toBe(true);
     if (!outbound?.renderPresentation || !outbound.sendPayload) {
       throw new Error("Expected Matrix outbound presentation payload hooks.");
     }
@@ -159,13 +161,14 @@ describe("matrix channel message adapter", () => {
       ctx: {} as never,
     });
 
-    expect(rendered?.channelData?.matrix).toMatchObject({
-      extraContent: {
-        "com.openclaw.presentation": {
-          ...presentation,
-          version: 1,
-          type: "message.presentation",
-        },
+    const matrixChannelData = rendered?.channelData?.matrix as
+      | { extraContent?: Record<string, unknown> }
+      | undefined;
+    expect(matrixChannelData?.extraContent).toEqual({
+      "com.openclaw.presentation": {
+        ...presentation,
+        version: 1,
+        type: "message.presentation",
       },
     });
 
@@ -178,22 +181,20 @@ describe("matrix channel message adapter", () => {
       threadId: "$thread",
     });
 
-    expect(mocks.sendMessageMatrix).toHaveBeenLastCalledWith(
-      "room:!room:example",
-      rendered?.text,
-      expect.objectContaining({
-        cfg,
-        accountId: "default",
-        threadId: "$thread",
-        extraContent: {
-          "com.openclaw.presentation": {
-            ...presentation,
-            version: 1,
-            type: "message.presentation",
-          },
-        },
-      }),
-    );
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessageMatrix.mock.lastCall?.[0]).toBe("room:!room:example");
+    expect(mocks.sendMessageMatrix.mock.lastCall?.[1]).toBe(rendered?.text);
+    const options = lastMatrixSendOptions();
+    expect(options.cfg).toBe(cfg);
+    expect(options.accountId).toBe("default");
+    expect(options.threadId).toBe("$thread");
+    expect(options.extraContent).toEqual({
+      "com.openclaw.presentation": {
+        ...presentation,
+        version: 1,
+        type: "message.presentation",
+      },
+    });
   });
 
   it("backs declared live preview finalizer capabilities with adapter proofs", async () => {

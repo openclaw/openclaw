@@ -50,16 +50,19 @@ function requireTimestamp(value: number | undefined, label: string): number {
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
   return value as Record<string, unknown>;
 }
 
 function firstMockArg(mock: unknown): unknown {
   const calls = (mock as { mock: { calls: readonly (readonly unknown[])[] } }).mock.calls;
-  expect(calls[0]).toBeTruthy();
-  return calls[0]?.[0];
+  const call = calls[0];
+  if (!call) {
+    throw new Error("Expected mock to have at least one call");
+  }
+  return call[0];
 }
 
 describe("cron service timer regressions", () => {
@@ -114,7 +117,9 @@ describe("cron service timer regressions", () => {
     await onTimer(state);
 
     expect(timeoutSpy).toHaveBeenCalled();
-    expect(state.timer).toBeTruthy();
+    if (state.timer == null) {
+      throw new Error("Expected cron timer to be re-armed");
+    }
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
       .filter((d): d is number => typeof d === "number");
@@ -1151,12 +1156,14 @@ describe("cron service timer regressions", () => {
     const event = events.find(
       (candidate) => candidate.jobId === selfRemovingJob.id && candidate.action === "finished",
     );
-    expect(event).toBeTruthy();
-    expect(event?.action).toBe("finished");
-    expect(event?.status).toBe("ok");
-    expect(event?.summary).toBe(`finished ${selfRemovingJob.id}`);
-    expect(event?.delivered).toBe(true);
-    expect(event?.deliveryStatus).toBe("delivered");
+    if (!event) {
+      throw new Error(`Expected finished event for ${selfRemovingJob.id}`);
+    }
+    expect(event.action).toBe("finished");
+    expect(event.status).toBe("ok");
+    expect(event.summary).toBe(`finished ${selfRemovingJob.id}`);
+    expect(event.delivered).toBe(true);
+    expect(event.deliveryStatus).toBe("delivered");
   });
 
   it("keeps missing-job discard semantics for failed isolated outcomes", async () => {
@@ -1429,7 +1436,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("times out isolated agent runs that stall before the first model call (#74803)", async () => {
+  it("times out isolated agent runs that stall before execution starts (#74803)", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -1503,7 +1510,7 @@ describe("cron service timer regressions", () => {
       const job = requireJob(state, "isolated-pre-model-timeout-74803");
       expect(abortObserved).toBe(true);
       expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("stalled before first model call");
+      expect(job.state.lastError).toContain("stalled before execution start");
       expect(job.state.lastError).toContain("context-engine");
       expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
       const cleanupArgs = requireRecord(firstMockArg(cleanupTimedOutAgentRun));
@@ -1512,6 +1519,88 @@ describe("cron service timer regressions", () => {
       const execution = requireRecord(cleanupArgs.execution);
       expect(execution.jobId).toBe("isolated-pre-model-timeout-74803");
       expect(execution.phase).toBe("context_engine");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the pre-execution watchdog on explicit execution milestones (#80283)", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-05-10T09:10:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "isolated-turn-accepted-80283",
+        name: "turn accepted regression",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1_200 },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      await writeCronJobs(store.storePath, [cronJob]);
+
+      vi.setSystemTime(scheduledAt);
+      let now = scheduledAt;
+      const started = createDeferred<void>();
+      let abortObserved = false;
+      const cleanupTimedOutAgentRun = vi.fn(async () => {});
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        cleanupTimedOutAgentRun,
+        runIsolatedAgentJob: vi.fn(
+          async ({
+            abortSignal,
+            onExecutionStarted,
+            onExecutionPhase,
+          }: {
+            abortSignal?: AbortSignal;
+            onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+            onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
+          }) => {
+            onExecutionStarted?.({
+              jobId: "isolated-turn-accepted-80283",
+              phase: "runner_entered",
+            });
+            onExecutionPhase?.({
+              jobId: "isolated-turn-accepted-80283",
+              phase: "turn_accepted",
+              backend: "codex-app-server",
+            });
+            started.resolve();
+            abortSignal?.addEventListener(
+              "abort",
+              () => {
+                abortObserved = true;
+              },
+              { once: true },
+            );
+            return await new Promise<never>(() => {});
+          },
+        ),
+      });
+
+      const timerPromise = onTimer(state);
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(60_100);
+      now += 60_100;
+      expect(abortObserved).toBe(false);
+      expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_140_000);
+      now += 1_140_000;
+      await timerPromise;
+
+      const job = requireJob(state, "isolated-turn-accepted-80283");
+      expect(abortObserved).toBe(true);
+      expect(job.state.lastStatus).toBe("error");
+      expect(job.state.lastError).toContain("job execution timed out");
+      expect(job.state.lastError).toContain("turn-accepted");
+      expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

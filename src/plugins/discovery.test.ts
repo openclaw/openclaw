@@ -278,6 +278,17 @@ function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>)
   );
 }
 
+function expectEscapesPackageDiagnosticForPlugin(
+  diagnostics: Array<{ message: string; pluginId?: string }>,
+  pluginId: string,
+) {
+  expect(
+    diagnostics.some(
+      (entry) => entry.pluginId === pluginId && entry.message.includes("escapes package directory"),
+    ),
+  ).toBe(true);
+}
+
 function expectDiagnostic(params: {
   diagnostics: Array<{
     level?: string;
@@ -332,7 +343,6 @@ function expectCandidateFields(
     | undefined,
   expected: Record<string, unknown>,
 ) {
-  expect(candidate).toBeDefined();
   if (!candidate) {
     throw new Error("Expected plugin candidate");
   }
@@ -393,6 +403,7 @@ async function expectRejectedPackageExtensionEntry(params: {
   setup: (stateDir: string) => boolean | void;
   expectedDiagnostic?: "escapes" | "none" | "runtime";
   expectedId?: string;
+  expectedDiagnosticPluginId?: string;
 }) {
   if (params.setup(params.stateDir) === false) {
     return;
@@ -405,7 +416,14 @@ async function expectRejectedPackageExtensionEntry(params: {
     expect(result.candidates).toHaveLength(0);
   }
   if (params.expectedDiagnostic === "escapes") {
-    expectEscapesPackageDiagnostic(result.diagnostics);
+    if (params.expectedDiagnosticPluginId) {
+      expectEscapesPackageDiagnosticForPlugin(
+        result.diagnostics,
+        params.expectedDiagnosticPluginId,
+      );
+    } else {
+      expectEscapesPackageDiagnostic(result.diagnostics);
+    }
     return;
   }
   if (params.expectedDiagnostic === "runtime") {
@@ -607,9 +625,7 @@ describe("discoverOpenClawPlugins", () => {
       discoverOpenClawPlugins({ env: buildDiscoveryEnv(stateDir) }),
     );
 
-    expect(result.diagnostics.map((entry) => entry.message)).not.toContainEqual(
-      expect.stringContaining("pnpm install"),
-    );
+    expect(result.diagnostics.some((entry) => entry.message.includes("pnpm install"))).toBe(false);
   });
 
   it("does not treat repo-level live or test files as plugin entrypoints", () => {
@@ -1569,6 +1585,7 @@ describe("discoverOpenClawPlugins", () => {
       name: "rejects package extension entries that are hardlinked aliases",
       expectedDiagnostic: "escapes" as const,
       expectedId: "pack",
+      expectedDiagnosticPluginId: "pack",
       setup: (stateDir: string) => {
         if (process.platform === "win32") {
           return false;
@@ -1851,7 +1868,9 @@ describe("discoverOpenClawPlugins", () => {
             (entry.source ?? "").endsWith("alias-dir") &&
             entry.message.includes("blocked plugin candidate: world-writable path"),
         );
-        expect(diagnostic).toBeDefined();
+        if (!diagnostic) {
+          throw new Error("Expected world-writable plugin candidate diagnostic");
+        }
       } finally {
         fs.chmodSync(pluginDir, 0o755);
       }

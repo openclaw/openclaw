@@ -124,6 +124,19 @@ describe("channel registry pinning", () => {
     expect(isPluginRegistryRetired(startup)).toBe(true);
   });
 
+  it("falls back to the active channel registry when the pinned registry is empty", () => {
+    const startup = createEmptyPluginRegistry();
+    const { registry: replacement } = createRegistryWithChannel("replacement-channel");
+    setActivePluginRegistry(startup);
+    pinActivePluginChannelRegistry(startup);
+
+    const channelVersionBeforeSwap = getActivePluginChannelRegistryVersion();
+    setActivePluginRegistry(replacement);
+
+    expectActiveChannelRegistry(replacement);
+    expect(getActivePluginChannelRegistryVersion()).not.toBe(channelVersionBeforeSwap);
+  });
+
   it("re-pin invalidates cached channel lookups", () => {
     const { first, second } = createChannelRegistryPair();
     const { registry: setup, plugin: setupPlugin } = first;
@@ -183,7 +196,7 @@ describe("channel registry pinning", () => {
   it("requireActivePluginChannelRegistry creates a registry when none exists", () => {
     resetPluginRuntimeStateForTest();
     const registry = requireActivePluginChannelRegistry();
-    expect(registry).toMatchObject({ channels: [] });
+    expect(registry).toEqual(createEmptyPluginRegistry());
   });
 
   it("resetPluginRuntimeStateForTest clears channel pin", () => {

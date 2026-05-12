@@ -257,7 +257,6 @@ describe("config plugin validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expectPathMessage(res.issues, "plugins.deny", "plugin not found: missing-deny");
       expectPathMessage(res.issues, "plugins.slots.memory", "plugin not found: missing-slot");
       expect(res.warnings).toContainEqual({
         path: "plugins.allow",
@@ -265,9 +264,32 @@ describe("config plugin validation", () => {
           "plugin not found: missing-allow (stale config entry ignored; remove it from plugins config)",
       });
       expect(res.warnings).toContainEqual({
+        path: "plugins.deny",
+        message:
+          "plugin not found: missing-deny (stale config entry ignored; remove it from plugins config)",
+      });
+      expect(res.warnings).toContainEqual({
         path: "plugins.entries.missing-plugin",
         message:
           "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
+      });
+    }
+  });
+
+  it("warns instead of failing for stale plugins.deny entries", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        deny: ["missing-deny"],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toContainEqual({
+        path: "plugins.deny",
+        message:
+          "plugin not found: missing-deny (stale config entry ignored; remove it from plugins config)",
       });
     }
   });

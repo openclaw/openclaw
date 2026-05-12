@@ -79,8 +79,9 @@ vi.mock("../commands/channel-setup/plugin-install.js", () => ({
 }));
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -89,8 +90,9 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 
 function readFirstCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const [arg] = mock.mock.calls[0] ?? [];
-  expect(arg).toBeTypeOf("object");
-  expect(arg).not.toBeNull();
+  if (!arg || typeof arg !== "object") {
+    throw new Error("expected first call argument object");
+  }
   return arg as Record<string, unknown>;
 }
 
@@ -306,7 +308,7 @@ describe("channel-auth", () => {
     await runChannelLogin({}, runtime);
 
     expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
-    expect(mocks.login).toHaveBeenCalled();
+    expect(mocks.login).toHaveBeenCalledTimes(1);
   });
 
   it("propagates auth-channel ambiguity when multiple configured channels support login", async () => {
@@ -351,7 +353,7 @@ describe("channel-auth", () => {
     await runChannelLogin({}, runtime);
 
     expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
-    expect(mocks.login).toHaveBeenCalled();
+    expect(mocks.login).toHaveBeenCalledTimes(1);
   });
 
   it("throws for unsupported channel aliases", async () => {
@@ -424,7 +426,7 @@ describe("channel-auth", () => {
       nextConfig: { channels: { whatsapp: {} } },
       baseHash: "config-1",
     });
-    expect(mocks.login).toHaveBeenCalled();
+    expect(mocks.login).toHaveBeenCalledTimes(1);
   });
 
   it("strips pending install records before persisting install-on-demand login config", async () => {

@@ -251,18 +251,15 @@ describe("doctor repair sequencing", () => {
 
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.candidate.channels?.discord?.allowFrom).toEqual(["123"]);
-    expect(result.changeNotes.join("\n")).toContain(
+    expect(result.changeNotes).toStrictEqual([
       "channels.discord.allowFrom: converted 1 numeric ID to strings",
-    );
-    expect(result.changeNotes.join("\n")).toContain(
-      "channels.tools.exec.toolsBySender: migrated 1 legacy key to typed id: entries",
-    );
-    expect(result.changeNotes.join("\n")).toContain("bad-keynext -> id:bad-keynext");
+      "channels.tools.exec.toolsBySender: migrated 1 legacy key to typed id: entries (bad-keynext -> id:bad-keynext)",
+    ]);
     expect(result.changeNotes.join("\n")).not.toContain("\u001B");
     expect(result.changeNotes.join("\n")).not.toContain("\r");
-    expect(result.warningNotes.join("\n")).toContain(
-      "channels.signal.accounts.ops-teamnext.dmPolicy",
-    );
+    expect(result.warningNotes).toStrictEqual([
+      "channels.signal.accounts.ops-teamnext.dmPolicy warning",
+    ]);
     expect(result.warningNotes.join("\n")).not.toContain("\u001B");
     expect(result.warningNotes.join("\n")).not.toContain("\r");
   });
@@ -331,9 +328,9 @@ describe("doctor repair sequencing", () => {
     });
 
     expect(result.changeNotes).toStrictEqual([]);
-    expect(result.warningNotes).toHaveLength(1);
-    expect(result.warningNotes[0]).toContain("cannot be auto-repaired");
-    expect(result.warningNotes[0]).toContain("channels.discord.allowFrom[0]");
+    expect(result.warningNotes).toStrictEqual([
+      "channels.discord.allowFrom[0] cannot be auto-repaired because it is not a safe integer",
+    ]);
     expect(result.state.pendingChanges).toBe(false);
     expect(result.state.candidate.channels?.discord?.allowFrom).toEqual([106232522769186816]);
   });
@@ -377,12 +374,10 @@ describe("doctor repair sequencing", () => {
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.candidate.plugins?.allow).toEqual(["telegram", "brave"]);
     expect(result.state.candidate.plugins?.entries?.brave?.enabled).toBe(true);
-    expect(result.changeNotes).toContain(
+    expect(result.changeNotes).toStrictEqual([
       'Installed missing configured plugin "brave" from @openclaw/brave-plugin.',
-    );
-    expect(result.changeNotes).toContain(
       "brave web search provider selected, enabled automatically.",
-    );
+    ]);
   });
 
   it("moves legacy Codex routes to canonical OpenAI before missing plugin install repair", async () => {
@@ -423,10 +418,9 @@ describe("doctor repair sequencing", () => {
     expect(result.state.pendingChanges).toBe(true);
     expect(result.state.candidate.agents?.defaults?.model).toBe("openai/gpt-5.5");
     expect(result.state.candidate.agents?.defaults?.agentRuntime).toBeUndefined();
-    expect(result.changeNotes.join("\n")).toContain(
-      "agents.defaults.model: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
-    );
-    expect(result.changeNotes.join("\n")).not.toContain("Installed missing configured plugin");
+    expect(result.changeNotes).toStrictEqual([
+      'Repaired Codex model routes:- agents.defaults.model: openai-codex/gpt-5.5 -> openai/gpt-5.5.\nSet agents.defaults.models.openai/gpt-5.5.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.',
+    ]);
   });
 
   it("does not remove deferred configured plugins during the package update doctor pass", async () => {
@@ -500,9 +494,9 @@ describe("doctor repair sequencing", () => {
     expect(mocks.maybeRepairStalePluginConfig).not.toHaveBeenCalled();
     expect(result.state.candidate.plugins?.allow).toEqual(["brave"]);
     expect(result.state.candidate.plugins?.entries?.brave?.enabled).toBe(true);
-    expect(result.changeNotes).toContain(
+    expect(result.changeNotes).toStrictEqual([
       'Skipped package-manager repair for configured plugin "brave" during package update; rerun "openclaw doctor --fix" after the update completes.',
-    );
+    ]);
   });
 
   it("preserves configured plugins when their install repair fails", async () => {
@@ -574,8 +568,8 @@ describe("doctor repair sequencing", () => {
     expect(result.state.candidate.plugins?.allow).toEqual(["brave"]);
     expect(result.state.candidate.plugins?.entries?.brave?.enabled).toBe(true);
     expect(result.state.pendingChanges).toBe(false);
-    expect(result.warningNotes).toContain(
+    expect(result.warningNotes).toStrictEqual([
       'Failed to install missing configured plugin "brave" from @openclaw/brave-plugin: package install failed',
-    );
+    ]);
   });
 });

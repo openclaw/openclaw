@@ -55,12 +55,12 @@ describe("official external plugin catalog", () => {
 
     expect(ids.has("matrix")).toBe(true);
     expect(ids.has("mattermost")).toBe(false);
-    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("matrix"))).toEqual(
-      expect.objectContaining({
-        clawhubSpec: "clawhub:@openclaw/matrix",
-        npmSpec: "@openclaw/matrix",
-        defaultChoice: "clawhub",
-      }),
-    );
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("matrix"))).toEqual({
+      clawhubSpec: "clawhub:@openclaw/matrix",
+      npmSpec: "@openclaw/matrix",
+      defaultChoice: "clawhub",
+      minHostVersion: ">=2026.4.10",
+      allowInvalidConfigRecovery: true,
+    });
   });
 });

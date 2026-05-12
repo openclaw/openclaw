@@ -80,6 +80,18 @@ function buildTokenProvider(): MSTeamsAccessTokenProvider {
   };
 }
 
+function firstMockCall(mock: ReturnType<typeof vi.fn>, label: string): unknown[] {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+async function resolvePublicHost(): Promise<{ address: string }> {
+  return { address: "93.184.216.34" };
+}
+
 describe("isBotFrameworkPersonalChatId", () => {
   it("detects a: prefix personal chat IDs", () => {
     expect(isBotFrameworkPersonalChatId("a:1dRsHCobZ1AxURzY05Dc")).toBe(true);
@@ -140,6 +152,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000_000,
       fetchFn,
+      resolveFn: resolvePublicHost,
     });
 
     expect(media?.path).toBe(runtime.savePath);
@@ -162,6 +175,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000_000,
       fetchFn,
+      resolveFn: resolvePublicHost,
     });
 
     expect(media).toBeUndefined();
@@ -187,6 +201,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000_000,
       fetchFn,
+      resolveFn: resolvePublicHost,
     });
 
     expect(media).toBeUndefined();
@@ -208,6 +223,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000_000,
       fetchFn,
+      resolveFn: resolvePublicHost,
     });
 
     expect(media).toBeUndefined();
@@ -266,6 +282,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        resolveFn: resolvePublicHost,
       });
 
       expect(media?.path).toBe(runtime.savePath);
@@ -296,12 +313,13 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        resolveFn: resolvePublicHost,
         logger,
       });
 
       expect(media).toBeUndefined();
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]).toStrictEqual([
+      expect(firstMockCall(warn, "logger.warn")).toStrictEqual([
         "msteams botFramework attachmentInfo fetch failed",
         { error: "fetch failed | invalid onRequestStart method" },
       ]);
@@ -332,12 +350,13 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        resolveFn: resolvePublicHost,
         logger,
       });
 
       expect(media).toBeUndefined();
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]).toStrictEqual([
+      expect(firstMockCall(warn, "logger.warn")).toStrictEqual([
         "msteams botFramework attachmentView fetch failed",
         { error: "fetch failed" },
       ]);
@@ -358,12 +377,13 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        resolveFn: resolvePublicHost,
         logger: { warn },
       });
 
       expect(media).toBeUndefined();
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]).toStrictEqual([
+      expect(firstMockCall(warn, "logger.warn")).toStrictEqual([
         "msteams botFramework attachmentInfo non-ok",
         { status: 500 },
       ]);
@@ -407,6 +427,7 @@ describe("downloadMSTeamsBotFrameworkAttachments", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000,
       fetchFn,
+      resolveFn: resolvePublicHost,
     });
 
     expect(result.media).toHaveLength(2);
@@ -453,6 +474,7 @@ describe("downloadMSTeamsBotFrameworkAttachments", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000,
       fetchFn,
+      resolveFn: resolvePublicHost,
     });
 
     expect(result.media).toHaveLength(1);

@@ -30,6 +30,7 @@ export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "o
 
 export type CurrentTurnPromptContext = {
   text: string;
+  promptJoiner?: "\n\n" | "\n" | " ";
 };
 
 export type RunEmbeddedPiAgentParams = {
@@ -161,9 +162,18 @@ export type RunEmbeddedPiAgentParams = {
       | "context_engine"
       | "attempt_dispatch"
       | "context_assembled"
+      | "turn_accepted"
+      | "process_spawned"
+      | "tool_execution_started"
+      | "assistant_output_started"
       | "model_call_started";
     provider?: string;
     model?: string;
+    backend?: string;
+    source?: string;
+    tool?: string;
+    toolCallId?: string;
+    itemId?: string;
     firstModelCallStarted?: boolean;
   }) => void;
   replyOperation?: ReplyOperation;

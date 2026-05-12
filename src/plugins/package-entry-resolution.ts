@@ -318,6 +318,7 @@ function resolvePackageEntrySource(params: {
   packageDir: string;
   packageRootRealPath?: string;
   entryPath: string;
+  pluginIdHint?: string;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
@@ -341,6 +342,7 @@ function resolvePackageEntrySource(params: {
         io: () => {
           params.diagnostics.push({
             level: "warn",
+            ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
             message: `extension entry unreadable (I/O error): ${params.entryPath}`,
             source: params.sourceLabel,
           });
@@ -349,6 +351,7 @@ function resolvePackageEntrySource(params: {
         fallback: () => {
           params.diagnostics.push({
             level: "error",
+            ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
             message: `extension entry escapes package directory: ${params.entryPath}`,
             source: params.sourceLabel,
           });
@@ -389,6 +392,7 @@ function resolveSafePackageEntry(params: {
   packageDir: string;
   packageRootRealPath?: string;
   entryPath: string;
+  pluginIdHint?: string;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
@@ -401,6 +405,7 @@ function resolveSafePackageEntry(params: {
         ? { packageRootRealPath: params.packageRootRealPath }
         : {}),
       entryPath: params.entryPath,
+      pluginIdHint: params.pluginIdHint,
       sourceLabel: params.sourceLabel,
       diagnostics: params.diagnostics,
       rejectHardlinks: params.rejectHardlinks,
@@ -426,6 +431,7 @@ function resolveSafePackageEntry(params: {
   } catch {
     params.diagnostics.push({
       level: "error",
+      ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
       message: `extension entry escapes package directory: ${params.entryPath}`,
       source: params.sourceLabel,
     });
@@ -438,6 +444,7 @@ function resolveOptionalExistingPackageEntrySource(params: {
   packageDir: string;
   packageRootRealPath?: string;
   entryPath: string;
+  pluginIdHint?: string;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
@@ -468,6 +475,7 @@ function resolvePackageRuntimeEntrySource(params: {
       ? { packageRootRealPath: params.packageRootRealPath }
       : {}),
     entryPath: params.entryPath,
+    pluginIdHint: params.pluginIdHint,
     sourceLabel: params.sourceLabel,
     diagnostics: params.diagnostics,
     rejectHardlinks: params.rejectHardlinks,
@@ -483,6 +491,7 @@ function resolvePackageRuntimeEntrySource(params: {
         ? { packageRootRealPath: params.packageRootRealPath }
         : {}),
       entryPath: params.runtimeEntryPath,
+      pluginIdHint: params.pluginIdHint,
       sourceLabel: params.sourceLabel,
       diagnostics: params.diagnostics,
       rejectHardlinks: params.rejectHardlinks,
@@ -492,6 +501,7 @@ function resolvePackageRuntimeEntrySource(params: {
     }
     params.diagnostics.push({
       level: "error",
+      ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
       message: `${params.runtimeEntryLabel ?? "runtime entry"} not found: ${params.runtimeEntryPath}`,
       source: params.sourceLabel,
     });
@@ -507,6 +517,7 @@ function resolvePackageRuntimeEntrySource(params: {
           ? { packageRootRealPath: params.packageRootRealPath }
           : {}),
         entryPath: candidate,
+        pluginIdHint: params.pluginIdHint,
         sourceLabel: params.sourceLabel,
         diagnostics: params.diagnostics,
         rejectHardlinks: params.rejectHardlinks,
@@ -546,6 +557,7 @@ function resolvePackageRuntimeEntrySource(params: {
       ? { packageRootRealPath: params.packageRootRealPath }
       : {}),
     entryPath: params.entryPath,
+    pluginIdHint: params.pluginIdHint,
     sourceLabel: params.sourceLabel,
     diagnostics: params.diagnostics,
     rejectHardlinks: params.rejectHardlinks,
@@ -600,6 +612,7 @@ export function resolvePackageRuntimeExtensionSources(params: {
   if (!runtimeResolution.ok) {
     params.diagnostics.push({
       level: "error",
+      ...(params.pluginIdHint ? { pluginId: params.pluginIdHint } : {}),
       message: runtimeResolution.error,
       source: params.sourceLabel,
     });

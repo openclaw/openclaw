@@ -20,10 +20,10 @@
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
-    "@vitest/browser-playwright": "4.1.5",
+    "@vitest/browser-playwright": "4.1.6",
     "jsdom": "^29.1.1",
-    "playwright": "^1.59.1",
-    "vite": "8.0.11",
-    "vitest": "4.1.5"
+    "playwright": "^1.60.0",
+    "vite": "8.0.12",
+    "vitest": "4.1.6"
   }
 }

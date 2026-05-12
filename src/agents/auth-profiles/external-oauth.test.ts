@@ -5,6 +5,7 @@ import {
   overlayExternalOAuthProfiles,
   shouldPersistExternalOAuthProfile,
 } from "./external-auth.js";
+import { readManagedExternalCliCredential } from "./external-cli-sync.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
@@ -158,7 +159,7 @@ describe("auth external oauth helpers", () => {
     expect(shouldPersist).toBe(true);
   });
 
-  it("does not use Codex CLI OAuth as a runtime overlay source", () => {
+  it("keeps Codex CLI OAuth from replacing stored inline token material", () => {
     readCodexCliCredentialsCachedMock.mockReturnValue(
       createCredential({
         access: "fresh-cli-access-token",
@@ -183,6 +184,44 @@ describe("auth external oauth helpers", () => {
     expect(profile.access).toBe("stale-store-access-token");
     expect(profile.refresh).toBe("stale-store-refresh-token");
     expect(profile.accountId).toBe("acct-cli");
+  });
+
+  it("uses Codex CLI OAuth when the stored Codex profile has no inline token material", () => {
+    const cliCredential = createCredential({
+      access: "fresh-cli-access-token",
+      refresh: "fresh-cli-refresh-token",
+      expires: createUsableOAuthExpiry(),
+      accountId: "acct-cli",
+    });
+    const tokenlessCredential = {
+      type: "oauth",
+      provider: "openai-codex",
+      expires: Date.now() - 60_000,
+      accountId: "acct-cli",
+    } as OAuthCredential;
+    readCodexCliCredentialsCachedMock.mockReturnValue(cliCredential);
+
+    const overlaid = overlayExternalOAuthProfiles(
+      createStore({
+        "openai-codex:default": tokenlessCredential,
+      }),
+    );
+
+    const overlaidProfile = overlaid.profiles["openai-codex:default"];
+    expect(overlaidProfile?.type).toBe("oauth");
+    if (!overlaidProfile || overlaidProfile.type !== "oauth") {
+      throw new Error("expected overlaid OAuth profile");
+    }
+    expect(overlaidProfile.access).toBe("fresh-cli-access-token");
+    expect(overlaidProfile.refresh).toBe("fresh-cli-refresh-token");
+    expect(overlaidProfile.accountId).toBe("acct-cli");
+    const managedCredential = readManagedExternalCliCredential({
+      profileId: "openai-codex:default",
+      credential: tokenlessCredential,
+    });
+    expect(managedCredential?.access).toBe("fresh-cli-access-token");
+    expect(managedCredential?.refresh).toBe("fresh-cli-refresh-token");
+    expect(managedCredential?.accountId).toBe("acct-cli");
   });
 
   it("keeps healthy local oauth even when external cli has a fresher token", () => {

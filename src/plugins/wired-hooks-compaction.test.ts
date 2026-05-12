@@ -55,7 +55,7 @@ describe("compaction hook wiring", () => {
         },
       },
       state: { compactionInFlight: true },
-      log: { debug: vi.fn(), warn: vi.fn() },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
       maybeResolveCompactionWait: vi.fn(),
       incrementCompactionCount: vi.fn(),
       getCompactionCount: () => params.compactionCount ?? 0,
@@ -136,12 +136,12 @@ describe("compaction hook wiring", () => {
         onAgentEvent: vi.fn(),
       },
       state: { compactionInFlight: false },
-      log: { debug: vi.fn(), warn: vi.fn() },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
       incrementCompactionCount: vi.fn(),
       ensureCompactionPromise: vi.fn(),
     };
 
-    handleCompactionStart(ctx as never);
+    handleCompactionStart(ctx as never, { type: "compaction_start", reason: "threshold" });
 
     expect(hookMocks.runner.runBeforeCompaction).toHaveBeenCalledTimes(1);
     expectCompactionEvent({
@@ -253,7 +253,7 @@ describe("compaction hook wiring", () => {
     const ctx = {
       params: { runId: "r4", session: { messages } },
       state: { compactionInFlight: true },
-      log: { debug: vi.fn(), warn: vi.fn() },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
       maybeResolveCompactionWait: vi.fn(),
       getCompactionCount: () => 1,
       incrementCompactionCount: vi.fn(),
@@ -281,7 +281,7 @@ describe("compaction hook wiring", () => {
     const ctx = {
       params: { runId: "r5", session: { messages } },
       state: { compactionInFlight: true },
-      log: { debug: vi.fn(), warn: vi.fn() },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
       noteCompactionRetry: vi.fn(),
       resetForCompactionRetry: vi.fn(),
       getCompactionCount: () => 0,

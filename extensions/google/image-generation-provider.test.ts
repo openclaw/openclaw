@@ -1,8 +1,11 @@
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleImageGenerationProvider } from "./image-generation-provider.js";
 import { __testing as geminiWebSearchTesting } from "./src/gemini-web-search-provider.js";
+
+let ssrfMock: { mockRestore: () => void } | undefined;
 
 function mockGoogleApiKeyAuth() {
   vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
@@ -51,11 +54,13 @@ function fetchRequest(fetchMock: ReturnType<typeof vi.fn>): {
 } {
   const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
   expect(typeof url).toBe("string");
-  expect(init).toBeDefined();
+  if (!init) {
+    throw new Error("Expected fetch init");
+  }
   return {
-    body: typeof init?.body === "string" ? init.body : undefined,
-    headers: init?.headers,
-    method: init?.method,
+    body: typeof init.body === "string" ? init.body : undefined,
+    headers: init.headers,
+    method: init.method,
     url,
   };
 }
@@ -66,7 +71,9 @@ function postJsonRequestOptions(spy: unknown): {
   ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean };
 } {
   const options = (spy as { mock?: { calls?: Array<[unknown]> } }).mock?.calls?.[0]?.[0];
-  expect(options).toBeDefined();
+  if (!options) {
+    throw new Error("Expected postJsonRequest options");
+  }
   return options as {
     allowPrivateNetwork?: boolean;
     pinDns?: boolean;
@@ -75,7 +82,13 @@ function postJsonRequestOptions(spy: unknown): {
 }
 
 describe("Google image-generation provider", () => {
+  beforeEach(() => {
+    ssrfMock = mockPinnedHostnameResolution();
+  });
+
   afterEach(() => {
+    ssrfMock?.mockRestore();
+    ssrfMock = undefined;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
