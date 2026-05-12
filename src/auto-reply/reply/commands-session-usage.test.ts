@@ -106,28 +106,12 @@ function buildCostTotals(overrides: Partial<CostUsageTotals> = {}): CostUsageTot
 
 function expectSessionCostArgs(): Record<string, unknown> {
   expect(loadSessionCostSummaryMock).toHaveBeenCalledTimes(1);
-  const call = loadSessionCostSummaryMock.mock.calls[0] as unknown[] | undefined;
-  if (!call) {
-    throw new Error("expected loadSessionCostSummary call");
-  }
-  const args = call[0];
-  if (!args || typeof args !== "object") {
-    throw new Error("expected loadSessionCostSummary args");
-  }
-  return args as Record<string, unknown>;
+  return (loadSessionCostSummaryMock.mock.calls[0] as unknown as [Record<string, unknown>])[0];
 }
 
 function expectFastModeArgs(): Record<string, unknown> {
   expect(resolveFastModeStateMock).toHaveBeenCalledTimes(1);
-  const call = resolveFastModeStateMock.mock.calls[0] as unknown[] | undefined;
-  if (!call) {
-    throw new Error("expected resolveFastModeState call");
-  }
-  const args = call[0];
-  if (!args || typeof args !== "object") {
-    throw new Error("expected resolveFastModeState args");
-  }
-  return args as Record<string, unknown>;
+  return (resolveFastModeStateMock.mock.calls[0] as unknown as [Record<string, unknown>])[0];
 }
 
 describe("handleUsageCommand", () => {
@@ -176,12 +160,9 @@ describe("handleUsageCommand", () => {
 
     await handleUsageCommand(params, true);
 
-    expect(loadSessionCostSummaryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "target",
-        sessionId: "target-session",
-      }),
-    );
+    const args = expectSessionCostArgs();
+    expect(args.agentId).toBe("target");
+    expect(args.sessionId).toBe("target-session");
   });
 
   it("prefers the target session entry from sessionStore for /usage footer mode", async () => {
