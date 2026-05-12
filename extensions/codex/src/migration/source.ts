@@ -1,7 +1,23 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  defaultCodexAppInventoryCache,
+  type CodexAppInventoryRequest,
+} from "../app-server/app-inventory-cache.js";
+import {
+  resolveCodexAppServerAuthAccountCacheKey,
+  resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerEnvApiKeyCacheKey,
+} from "../app-server/auth-bridge.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
+import type { CodexAppServerStartOptions } from "../app-server/config.js";
+import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
+import {
+  pluginReadParams,
+  type CodexPluginMarketplaceRef,
+} from "../app-server/plugin-inventory.js";
 import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
@@ -32,7 +48,51 @@ export type CodexPluginSource = {
   pluginName?: string;
   installed?: boolean;
   enabled?: boolean;
+  appReadiness?: CodexPluginAppReadiness;
   message?: string;
+};
+
+export type CodexPluginAppReadinessStatus =
+  | "not_app_backed"
+  | "ready"
+  | "inaccessible"
+  | "missing"
+  | "disabled"
+  | "plugin_disabled"
+  | "auth_required"
+  | "unknown";
+
+export type CodexPluginAppReadinessCode =
+  | "plugin_disabled"
+  | "app_inaccessible"
+  | "app_disabled"
+  | "app_missing"
+  | "app_auth_required"
+  | "app_readiness_unknown"
+  | "plugin_read_unavailable"
+  | "app_inventory_unavailable";
+
+export type CodexPluginAppReadinessAppStatus =
+  | "ready"
+  | "inaccessible"
+  | "missing"
+  | "disabled"
+  | "auth_required"
+  | "unknown";
+
+export type CodexPluginAppReadinessApp = {
+  id: string;
+  name: string;
+  status: CodexPluginAppReadinessAppStatus;
+  isAccessible?: boolean;
+  isEnabled?: boolean;
+  needsAuth?: boolean;
+};
+
+export type CodexPluginAppReadiness = {
+  status: CodexPluginAppReadinessStatus;
+  reason?: CodexPluginAppReadinessCode;
+  apps: CodexPluginAppReadinessApp[];
 };
 
 type CodexArchiveSource = {
@@ -55,6 +115,29 @@ type CodexSource = {
   pluginDiscoveryError?: string;
   archivePaths: CodexArchiveSource[];
 };
+
+type CodexSourceDiscoveryOptions = {
+  input?: string;
+  config?: MigrationProviderContext["config"];
+  agentDir?: string;
+  evaluatePluginAppReadiness?: boolean;
+};
+
+type SourceAppServerRequestOptions = {
+  startOptions: CodexAppServerStartOptions;
+  config?: MigrationProviderContext["config"];
+  agentDir?: string;
+};
+
+type PluginReadResult =
+  | {
+      ok: true;
+      detail: v2.PluginDetail;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
 
 function defaultCodexHome(): string {
   return resolveHomePath(process.env.CODEX_HOME?.trim() || "~/.codex");
@@ -137,27 +220,19 @@ async function discoverPluginDirs(codexHome: string): Promise<CodexPluginSource[
   return [...discovered.values()].toSorted((a, b) => a.source.localeCompare(b.source));
 }
 
-async function discoverInstalledCuratedPlugins(codexHome: string): Promise<{
+async function discoverInstalledCuratedPlugins(
+  codexHome: string,
+  options: CodexSourceDiscoveryOptions = {},
+): Promise<{
   plugins: CodexPluginSource[];
   error?: string;
 }> {
+  const startOptions = sourceCodexAppServerStartOptions(codexHome);
+  const requestOptions = { startOptions, config: options.config, agentDir: options.agentDir };
   try {
-    const response = await requestCodexAppServerJson<v2.PluginListResponse>({
+    const response = await requestSourceCodexAppServerJson<v2.PluginListResponse>(requestOptions, {
       method: "plugin/list",
       requestParams: { cwds: [] } satisfies v2.PluginListParams,
-      timeoutMs: 60_000,
-      isolated: true,
-      startOptions: {
-        transport: "stdio",
-        command: "codex",
-        commandSource: "config",
-        args: ["app-server", "--listen", "stdio://"],
-        headers: {},
-        env: {
-          CODEX_HOME: codexHome,
-          HOME: path.dirname(codexHome),
-        },
-      },
     });
     const marketplace = response.marketplaces.find(
       (entry) => entry.name === CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -170,31 +245,327 @@ async function discoverInstalledCuratedPlugins(codexHome: string): Promise<{
     }
     const plugins = marketplace.plugins
       .filter((plugin) => plugin.installed)
-      .map((plugin): CodexPluginSource | undefined => {
-        const pluginName = pluginNameFromSummary(plugin);
-        if (!pluginName) {
-          return undefined;
-        }
-        return {
-          name: plugin.name,
-          pluginName,
-          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-          source: `${CODEX_PLUGINS_MARKETPLACE_NAME}/${pluginName}`,
-          sourceKind: "app-server",
-          migratable: true,
-          installed: plugin.installed,
-          enabled: plugin.enabled,
-        };
-      })
-      .filter((plugin): plugin is CodexPluginSource => plugin !== undefined)
-      .toSorted((a, b) => (a.pluginName ?? a.name).localeCompare(b.pluginName ?? b.name));
-    return { plugins };
+      .map((plugin) => buildInstalledPluginSource(plugin))
+      .filter((plugin): plugin is CodexPluginSource => plugin !== undefined);
+    const withReadiness =
+      options.evaluatePluginAppReadiness === true
+        ? await withPluginAppReadiness({
+            plugins,
+            marketplace: marketplaceRef(marketplace),
+            requestOptions,
+          })
+        : plugins;
+    const sorted = withReadiness.toSorted((a, b) =>
+      (a.pluginName ?? a.name).localeCompare(b.pluginName ?? b.name),
+    );
+    return { plugins: sorted };
   } catch (error) {
     return {
       plugins: [],
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+function sourceCodexAppServerStartOptions(codexHome: string): CodexAppServerStartOptions {
+  return {
+    transport: "stdio",
+    command: "codex",
+    commandSource: "config",
+    args: ["app-server", "--listen", "stdio://"],
+    headers: {},
+    env: {
+      CODEX_HOME: codexHome,
+      HOME: path.dirname(codexHome),
+    },
+  };
+}
+
+async function requestSourceCodexAppServerJson<T>(
+  options: SourceAppServerRequestOptions,
+  params: {
+    method: string;
+    requestParams?: unknown;
+  },
+): Promise<T> {
+  return await requestCodexAppServerJson<T>({
+    method: params.method,
+    requestParams: params.requestParams,
+    timeoutMs: 60_000,
+    startOptions: options.startOptions,
+    agentDir: options.agentDir,
+    config: options.config,
+  });
+}
+
+function buildInstalledPluginSource(plugin: v2.PluginSummary): CodexPluginSource | undefined {
+  const pluginName = pluginNameFromSummary(plugin);
+  if (!pluginName) {
+    return undefined;
+  }
+  return {
+    name: plugin.name,
+    pluginName,
+    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+    source: `${CODEX_PLUGINS_MARKETPLACE_NAME}/${pluginName}`,
+    sourceKind: "app-server",
+    migratable: true,
+    installed: plugin.installed,
+    enabled: plugin.enabled,
+  };
+}
+
+function marketplaceRef(marketplace: v2.PluginMarketplaceEntry): CodexPluginMarketplaceRef {
+  return {
+    name: CODEX_PLUGINS_MARKETPLACE_NAME,
+    ...(marketplace.path ? { path: marketplace.path } : {}),
+    ...(!marketplace.path ? { remoteMarketplaceName: marketplace.name } : {}),
+  };
+}
+
+async function withPluginAppReadiness(params: {
+  plugins: CodexPluginSource[];
+  marketplace: CodexPluginMarketplaceRef;
+  requestOptions: SourceAppServerRequestOptions;
+}): Promise<CodexPluginSource[]> {
+  const pending: Array<{ plugin: CodexPluginSource; detail: v2.PluginDetail }> = [];
+  const evaluated: CodexPluginSource[] = [];
+
+  for (const plugin of params.plugins) {
+    if (plugin.enabled !== true) {
+      evaluated.push({
+        ...plugin,
+        migratable: false,
+        appReadiness: {
+          status: "plugin_disabled",
+          reason: "plugin_disabled",
+          apps: [],
+        },
+        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" is installed in Codex but disabled; enable it in Codex before migrating it to OpenClaw.`,
+      });
+      continue;
+    }
+
+    const detail = await readPluginDetail(params.requestOptions, params.marketplace, plugin);
+    if (!detail.ok) {
+      evaluated.push({
+        ...plugin,
+        migratable: false,
+        appReadiness: {
+          status: "unknown",
+          reason: "plugin_read_unavailable",
+          apps: [],
+        },
+        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" detail could not be read: ${detail.error}`,
+      });
+      continue;
+    }
+
+    if (detail.detail.apps.length === 0) {
+      evaluated.push({
+        ...plugin,
+        migratable: true,
+        appReadiness: {
+          status: "not_app_backed",
+          apps: [],
+        },
+      });
+      continue;
+    }
+
+    const appBackedPlugin: CodexPluginSource = {
+      ...plugin,
+      migratable: false,
+      appReadiness: {
+        status: "unknown",
+        reason: "app_readiness_unknown",
+        apps: detail.detail.apps.map((app) => ({
+          id: app.id,
+          name: app.name,
+          status: "unknown" as const,
+          needsAuth: app.needsAuth,
+        })),
+      },
+    };
+    evaluated.push(appBackedPlugin);
+    pending.push({ plugin: appBackedPlugin, detail: detail.detail });
+  }
+
+  if (pending.length === 0) {
+    return evaluated;
+  }
+
+  const snapshot = await refreshSourceAppInventory(params.requestOptions).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    for (const { plugin } of pending) {
+      plugin.appReadiness = {
+        status: "unknown",
+        reason: "app_inventory_unavailable",
+        apps:
+          plugin.appReadiness?.apps.map((app) => ({
+            ...app,
+            status: "unknown",
+          })) ?? [],
+      };
+      plugin.message = `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but source app inventory could not be read: ${message}`;
+    }
+    return undefined;
+  });
+  if (!snapshot) {
+    return evaluated;
+  }
+
+  const appInfoById = new Map(snapshot.apps.map((app) => [app.id, app] as const));
+  for (const { plugin, detail } of pending) {
+    const apps = detail.apps
+      .map((app) => sourceAppReadiness(app, appInfoById.get(app.id)))
+      .toSorted((left, right) => left.id.localeCompare(right.id));
+    const status = summarizeAppReadiness(apps);
+    const ready = status === "ready";
+    plugin.migratable = ready;
+    plugin.appReadiness = {
+      status,
+      ...(ready ? {} : { reason: readinessCode(status) }),
+      apps,
+    };
+    if (!ready) {
+      plugin.message = appReadinessMessage(plugin, apps, status);
+    }
+  }
+
+  return evaluated;
+}
+
+async function readPluginDetail(
+  options: SourceAppServerRequestOptions,
+  marketplace: CodexPluginMarketplaceRef,
+  plugin: CodexPluginSource,
+): Promise<PluginReadResult> {
+  try {
+    const response = await requestSourceCodexAppServerJson<v2.PluginReadResponse>(options, {
+      method: "plugin/read",
+      requestParams: pluginReadParams(marketplace, plugin.pluginName ?? plugin.name),
+    });
+    return { ok: true, detail: response.plugin };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function refreshSourceAppInventory(
+  options: SourceAppServerRequestOptions,
+): Promise<Awaited<ReturnType<typeof defaultCodexAppInventoryCache.refreshNow>>> {
+  const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
+    agentDir: options.agentDir,
+    config: options.config,
+  });
+  const accountId = await resolveCodexAppServerAuthAccountCacheKey({
+    authProfileId,
+    agentDir: options.agentDir,
+    config: options.config,
+  });
+  const envApiKeyFingerprint = authProfileId
+    ? undefined
+    : resolveCodexAppServerEnvApiKeyCacheKey({
+        startOptions: options.startOptions,
+      });
+  const key = buildCodexPluginAppCacheKey({
+    appServer: { start: options.startOptions },
+    agentDir: options.agentDir,
+    authProfileId,
+    accountId,
+    envApiKeyFingerprint,
+  });
+  const request: CodexAppInventoryRequest = async (method, requestParams) =>
+    await requestSourceCodexAppServerJson<v2.AppsListResponse>(options, {
+      method,
+      requestParams,
+    });
+  return await defaultCodexAppInventoryCache.refreshNow({
+    key,
+    request,
+    forceRefetch: true,
+  });
+}
+
+function sourceAppReadiness(
+  app: v2.AppSummary,
+  info: v2.AppInfo | undefined,
+): CodexPluginAppReadinessApp {
+  if (!info) {
+    return {
+      id: app.id,
+      name: app.name,
+      status: "missing",
+      needsAuth: app.needsAuth,
+    };
+  }
+  const status: CodexPluginAppReadinessAppStatus = !info.isAccessible
+    ? "inaccessible"
+    : !info.isEnabled
+      ? "disabled"
+      : app.needsAuth
+        ? "auth_required"
+        : "ready";
+  return {
+    id: app.id,
+    name: app.name,
+    status,
+    isAccessible: info.isAccessible,
+    isEnabled: info.isEnabled,
+    needsAuth: app.needsAuth,
+  };
+}
+
+function summarizeAppReadiness(
+  apps: readonly CodexPluginAppReadinessApp[],
+): CodexPluginAppReadinessStatus {
+  if (apps.some((app) => app.status === "inaccessible")) {
+    return "inaccessible";
+  }
+  if (apps.some((app) => app.status === "disabled")) {
+    return "disabled";
+  }
+  if (apps.some((app) => app.status === "missing")) {
+    return "missing";
+  }
+  if (apps.some((app) => app.status === "auth_required")) {
+    return "auth_required";
+  }
+  if (apps.some((app) => app.status === "unknown")) {
+    return "unknown";
+  }
+  return "ready";
+}
+
+function readinessCode(status: CodexPluginAppReadinessStatus): CodexPluginAppReadinessCode {
+  switch (status) {
+    case "inaccessible":
+      return "app_inaccessible";
+    case "disabled":
+      return "app_disabled";
+    case "missing":
+      return "app_missing";
+    case "auth_required":
+      return "app_auth_required";
+    case "plugin_disabled":
+      return "plugin_disabled";
+    default:
+      return "app_readiness_unknown";
+  }
+}
+
+function appReadinessMessage(
+  plugin: CodexPluginSource,
+  apps: readonly CodexPluginAppReadinessApp[],
+  status: CodexPluginAppReadinessStatus,
+): string {
+  const blocking =
+    apps.find((app) => app.status === status) ??
+    apps.find((app) => app.status !== "ready") ??
+    apps[0];
+  const appLabel = blocking ? ` app "${blocking.name}"` : " an owned app";
+  return `Codex plugin "${plugin.pluginName ?? plugin.name}" owns${appLabel} but the source app inventory reports it is ${blocking?.status ?? "unknown"}; authenticate or enable the app in Codex before migrating it to OpenClaw.`;
 }
 
 function pluginNameFromSummary(summary: v2.PluginSummary): string | undefined {
@@ -216,8 +587,14 @@ function pluginNameFromSummary(summary: v2.PluginSummary): string | undefined {
   return undefined;
 }
 
-export async function discoverCodexSource(input?: string): Promise<CodexSource> {
-  const codexHome = resolveHomePath(input?.trim() || defaultCodexHome());
+export async function discoverCodexSource(
+  inputOrOptions?: string | CodexSourceDiscoveryOptions,
+): Promise<CodexSource> {
+  const options =
+    typeof inputOrOptions === "string" || inputOrOptions === undefined
+      ? { input: inputOrOptions }
+      : inputOrOptions;
+  const codexHome = resolveHomePath(options.input?.trim() || defaultCodexHome());
   const codexSkillsDir = path.join(codexHome, "skills");
   const agentsSkillsDir = personalAgentsSkillsDir();
   const configPath = path.join(codexHome, "config.toml");
@@ -231,7 +608,7 @@ export async function discoverCodexSource(input?: string): Promise<CodexSource> 
     root: agentsSkillsDir,
     sourceLabel: "personal AgentSkill",
   });
-  const sourcePluginDiscovery = await discoverInstalledCuratedPlugins(codexHome);
+  const sourcePluginDiscovery = await discoverInstalledCuratedPlugins(codexHome, options);
   const sourcePluginNames = new Set(
     sourcePluginDiscovery.plugins.flatMap((plugin) =>
       plugin.pluginName ? [plugin.pluginName] : [],

@@ -6,6 +6,7 @@ import type {
 import { applyCodexMigrationPlan } from "./apply.js";
 import { buildCodexMigrationPlan } from "./plan.js";
 import { discoverCodexSource, hasCodexSource } from "./source.js";
+import { resolveCodexMigrationTargets } from "./targets.js";
 
 export function buildCodexMigrationProvider(
   params: {
@@ -18,7 +19,12 @@ export function buildCodexMigrationProvider(
     description:
       "Inventory and promote Codex CLI skills while keeping Codex native plugins and hooks explicit.",
     async detect(ctx) {
-      const source = await discoverCodexSource(ctx.source);
+      const targets = resolveCodexMigrationTargets(ctx);
+      const source = await discoverCodexSource({
+        input: ctx.source,
+        config: ctx.config,
+        agentDir: targets.agentDir,
+      });
       const found = hasCodexSource(source);
       return {
         found,

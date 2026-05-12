@@ -87,9 +87,13 @@ The integration has three separate states:
 - Accessible: Codex app-server confirms the plugin's app entries are available
   for the active account and can be mapped to the migrated plugin identity.
 
-Migration is the durable install/eligibility step. Runtime app inventory is the
-accessibility check. Codex harness session setup then computes a restrictive
-thread app config for the enabled and accessible plugin apps.
+Migration is the durable install/eligibility step. During planning, OpenClaw
+reads source Codex `plugin/read` details and takes a fresh source `app/list`
+snapshot. App-backed source plugins are eligible only when every owned app is
+present, enabled, accessible, and not auth-required in that fresh source
+snapshot. Runtime app inventory is the target-session accessibility check after
+migration. Codex harness session setup then computes a restrictive thread app
+config for the enabled and accessible plugin apps.
 
 Thread app config is computed when OpenClaw establishes a Codex harness session
 or replaces a stale Codex thread binding. It is not recomputed on every turn.
@@ -100,6 +104,10 @@ V1 is intentionally narrow:
 
 - Only `openai-curated` plugins that were already installed in the source Codex
   app-server inventory are migration-eligible.
+- App-backed source plugins must pass the migration-time app-readiness gate.
+  Inaccessible, disabled, missing, auth-required, unreadable, or stale source
+  app state is reported as a skipped manual item instead of an enabled config
+  entry.
 - Migration writes explicit plugin identities with `marketplaceName` and
   `pluginName`; it does not write local `marketplacePath` cache paths.
 - `codexPlugins.enabled` is the global enablement switch.
@@ -160,6 +168,11 @@ plugins, while unsafe schemas and ambiguous ownership still fail closed:
 **`auth_required`:** migration installed the plugin, but one of its apps still
 needs authentication. The explicit plugin entry is written disabled until you
 reauthorize and enable it.
+
+**`app_inaccessible`, `app_disabled`, `app_missing`, or `app_auth_required`:**
+migration did not install the plugin because the source Codex app inventory did
+not show all owned apps as ready. Reauthorize or enable the app in Codex, then
+rerun migration.
 
 **`marketplace_missing` or `plugin_missing`:** the target Codex app-server
 cannot see the expected `openai-curated` marketplace or plugin. Rerun migration

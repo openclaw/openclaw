@@ -17,6 +17,7 @@ import { exists, sanitizeName } from "./helpers.js";
 import {
   discoverCodexSource,
   hasCodexSource,
+  type CodexPluginAppReadinessCode,
   type CodexPluginSource,
   type CodexSkillSource,
 } from "./source.js";
@@ -38,6 +39,13 @@ export type CodexPluginMigrationConfigEntry = {
   configKey: string;
   pluginName: string;
   enabled: boolean;
+};
+
+type CodexPluginAppReadinessSkipDetails = {
+  code: CodexPluginAppReadinessCode;
+  pluginName: string;
+  marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
+  apps: NonNullable<CodexPluginSource["appReadiness"]>["apps"];
 };
 
 function uniqueSkillName(skill: CodexSkillSource, counts: Map<string, number>): string {
@@ -180,6 +188,29 @@ function buildPluginItems(
     }
 
     manualIndex += 1;
+    if (plugin.appReadiness?.reason && plugin.pluginName) {
+      const details: CodexPluginAppReadinessSkipDetails = {
+        code: plugin.appReadiness.reason,
+        pluginName: plugin.pluginName,
+        marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+        apps: plugin.appReadiness.apps,
+      };
+      items.push(
+        createMigrationItem({
+          id: `plugin:${sanitizeName(plugin.name) || sanitizeName(path.basename(plugin.source))}:${manualIndex}`,
+          kind: "manual",
+          action: "manual",
+          source: plugin.source,
+          status: "skipped",
+          reason: details.code,
+          message:
+            plugin.message ??
+            `Codex native plugin "${plugin.name}" was found but not activated automatically.`,
+          details: { ...details },
+        }),
+      );
+      continue;
+    }
     items.push(
       createMigrationManualItem({
         id: `plugin:${sanitizeName(plugin.name) || sanitizeName(path.basename(plugin.source))}:${manualIndex}`,
@@ -345,13 +376,18 @@ function buildPluginConfigItem(
 export async function buildCodexMigrationPlan(
   ctx: MigrationProviderContext,
 ): Promise<MigrationPlan> {
-  const source = await discoverCodexSource(ctx.source);
+  const targets = resolveCodexMigrationTargets(ctx);
+  const source = await discoverCodexSource({
+    input: ctx.source,
+    config: ctx.config,
+    agentDir: targets.agentDir,
+    evaluatePluginAppReadiness: true,
+  });
   if (!hasCodexSource(source)) {
     throw new Error(
       `Codex state was not found at ${source.root}. Pass --from <path> if it lives elsewhere.`,
     );
   }
-  const targets = resolveCodexMigrationTargets(ctx);
   const items: MigrationItem[] = [];
   items.push(
     ...(await buildSkillItems({

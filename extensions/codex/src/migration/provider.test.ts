@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
+import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import type { v2 } from "../app-server/protocol.js";
 import { buildCodexMigrationProvider } from "./provider.js";
 
@@ -69,6 +71,14 @@ function findItem(items: readonly { id?: string }[], id: string) {
   return item as Record<string, unknown>;
 }
 
+function findItemByReason(items: readonly { reason?: string }[], reason: string) {
+  const item = items.find((entry) => entry.reason === reason);
+  if (!item) {
+    throw new Error(`Expected migration item reason ${reason}`);
+  }
+  return item as Record<string, unknown>;
+}
+
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   if (!record || typeof record !== "object") {
     throw new Error("Expected record");
@@ -122,9 +132,28 @@ async function createCodexFixture(): Promise<{
   return { root, homeDir, codexHome, stateDir, workspaceDir };
 }
 
+function sourceAppCacheKey(fixture: { codexHome: string }): string {
+  return buildCodexPluginAppCacheKey({
+    appServer: {
+      start: {
+        transport: "stdio",
+        command: "codex",
+        commandSource: "config",
+        args: ["app-server", "--listen", "stdio://"],
+        headers: {},
+        env: {
+          CODEX_HOME: fixture.codexHome,
+          HOME: path.dirname(fixture.codexHome),
+        },
+      },
+    },
+  });
+}
+
 afterEach(async () => {
   vi.unstubAllEnvs();
   appServerRequest.mockReset();
+  defaultCodexAppInventoryCache.clear();
   for (const root of tempRoots) {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -185,9 +214,15 @@ describe("buildCodexMigrationProvider", () => {
 
   it("plans source-installed curated plugins without installing during dry-run", async () => {
     const fixture = await createCodexFixture();
-    appServerRequest.mockResolvedValueOnce(
-      pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]),
-    );
+    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginRead("google-calendar");
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
     const provider = buildCodexMigrationProvider();
 
     const plan = await provider.plan(
@@ -198,7 +233,7 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    expect(appServerRequest).toHaveBeenCalledTimes(1);
+    expect(appServerRequest).toHaveBeenCalledTimes(2);
     expectRecordFields(mockCallArg(appServerRequest), {
       method: "plugin/list",
       requestParams: { cwds: [] },
@@ -224,6 +259,302 @@ describe("buildCodexMigrationProvider", () => {
       action: "merge",
       status: "planned",
     });
+  });
+
+  it("skips source-installed plugins whose owned apps are inaccessible", async () => {
+    const fixture = await createCodexFixture();
+    appServerRequest.mockImplementation(
+      async ({ method, requestParams }: { method: string; requestParams?: unknown }) => {
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("readwise", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read") {
+          return pluginRead("readwise", [
+            pluginApp("asdk_app_readwise", { name: "Readwise", needsAuth: false }),
+          ]);
+        }
+        if (method === "app/list") {
+          expectRecordFields(requestParams, { forceRefetch: true });
+          return appsList([
+            appInfo("asdk_app_readwise", {
+              name: "Readwise",
+              isAccessible: false,
+              isEnabled: true,
+            }),
+          ]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    );
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+      }),
+    );
+
+    expect(plan.items.some((item) => item.id === "plugin:readwise")).toBe(false);
+    expect(plan.items.some((item) => item.id === "config:codex-plugins")).toBe(false);
+    const manualItem = findItemByReason(plan.items, "app_inaccessible");
+    expectRecordFields(manualItem, {
+      kind: "manual",
+      action: "manual",
+      status: "skipped",
+      reason: "app_inaccessible",
+    });
+    const details = expectRecordFields(manualItem.details, {
+      code: "app_inaccessible",
+      pluginName: "readwise",
+      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+    });
+    expect(details.apps).toEqual([
+      {
+        id: "asdk_app_readwise",
+        name: "Readwise",
+        status: "inaccessible",
+        isAccessible: false,
+        isEnabled: true,
+        needsAuth: false,
+      },
+    ]);
+    expect(appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/list")).toHaveLength(
+      1,
+    );
+  });
+
+  it("reports inaccessible before missing when multiple owned apps are blocked", async () => {
+    const fixture = await createCodexFixture();
+    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("readwise", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginRead("readwise", [
+          pluginApp("asdk_app_readwise", { name: "Readwise", needsAuth: false }),
+          pluginApp("asdk_app_reader", { name: "Reader", needsAuth: false }),
+        ]);
+      }
+      if (method === "app/list") {
+        return appsList([
+          appInfo("asdk_app_readwise", {
+            name: "Readwise",
+            isAccessible: false,
+            isEnabled: true,
+          }),
+        ]);
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+      }),
+    );
+
+    const manualItem = findItemByReason(plan.items, "app_inaccessible");
+    expectRecordFields(manualItem, {
+      reason: "app_inaccessible",
+      status: "skipped",
+    });
+    const details = expectRecordFields(manualItem.details, {
+      code: "app_inaccessible",
+      pluginName: "readwise",
+      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+    });
+    expect(details.apps).toEqual([
+      {
+        id: "asdk_app_reader",
+        name: "Reader",
+        status: "missing",
+        needsAuth: false,
+      },
+      {
+        id: "asdk_app_readwise",
+        name: "Readwise",
+        status: "inaccessible",
+        isAccessible: false,
+        isEnabled: true,
+        needsAuth: false,
+      },
+    ]);
+  });
+
+  it("force-refreshes source app inventory once for app-backed plugins sharing a cache key", async () => {
+    const fixture = await createCodexFixture();
+    await defaultCodexAppInventoryCache.refreshNow({
+      key: sourceAppCacheKey(fixture),
+      request: async () => appsList([appInfo("app-google-calendar", { isAccessible: false })]),
+    });
+    appServerRequest.mockImplementation(
+      async ({ method, requestParams }: { method: string; requestParams?: unknown }) => {
+        if (method === "plugin/list") {
+          return pluginList([
+            pluginSummary("google-calendar", { installed: true, enabled: true }),
+            pluginSummary("gmail", { installed: true, enabled: true }),
+          ]);
+        }
+        if (method === "plugin/read") {
+          const pluginName = (requestParams as v2.PluginReadParams).pluginName;
+          return pluginRead(pluginName, [pluginApp(`app-${pluginName}`)]);
+        }
+        if (method === "app/list") {
+          expectRecordFields(requestParams, { forceRefetch: true });
+          return appsList([appInfo("app-google-calendar"), appInfo("app-gmail")]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    );
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+      }),
+    );
+
+    expectRecordFields(findItem(plan.items, "plugin:google-calendar"), { status: "planned" });
+    expectRecordFields(findItem(plan.items, "plugin:gmail"), { status: "planned" });
+    expect(appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/list")).toHaveLength(
+      1,
+    );
+  });
+
+  it("fails closed for disabled plugins and plugin/read failures", async () => {
+    const fixture = await createCodexFixture();
+    appServerRequest.mockImplementation(
+      async ({ method, requestParams }: { method: string; requestParams?: unknown }) => {
+        if (method === "plugin/list") {
+          return pluginList([
+            pluginSummary("readwise", { installed: true, enabled: false }),
+            pluginSummary("gmail", { installed: true, enabled: true }),
+          ]);
+        }
+        if (method === "plugin/read") {
+          expectRecordFields(requestParams, { pluginName: "gmail" });
+          throw new Error("detail unavailable");
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    );
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+      }),
+    );
+
+    expectRecordFields(findItemByReason(plan.items, "plugin_disabled"), {
+      reason: "plugin_disabled",
+      status: "skipped",
+    });
+    expectRecordFields(findItemByReason(plan.items, "plugin_read_unavailable"), {
+      reason: "plugin_read_unavailable",
+      status: "skipped",
+    });
+    expect(plan.items.some((item) => item.id === "config:codex-plugins")).toBe(false);
+    expect(appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/list")).toHaveLength(
+      0,
+    );
+  });
+
+  it("fails closed when app inventory refresh fails for app-backed plugins", async () => {
+    const fixture = await createCodexFixture();
+    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("readwise", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginRead("readwise", [pluginApp("asdk_app_readwise", { name: "Readwise" })]);
+      }
+      if (method === "app/list") {
+        throw new Error("app inventory unavailable");
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+      }),
+    );
+
+    expectRecordFields(findItemByReason(plan.items, "app_inventory_unavailable"), {
+      reason: "app_inventory_unavailable",
+      status: "skipped",
+    });
+    expect(plan.items.some((item) => item.id === "plugin:readwise")).toBe(false);
+  });
+
+  it("blocks auth-required and mixed multi-app readiness while preserving per-app details", async () => {
+    const fixture = await createCodexFixture();
+    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("reader", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginRead("reader", [
+          pluginApp("ready-app", { name: "Ready App", needsAuth: false }),
+          pluginApp("auth-app", { name: "Auth App", needsAuth: true }),
+        ]);
+      }
+      if (method === "app/list") {
+        return appsList([appInfo("ready-app"), appInfo("auth-app")]);
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+      }),
+    );
+
+    const manualItem = findItemByReason(plan.items, "app_auth_required");
+    expectRecordFields(manualItem, {
+      reason: "app_auth_required",
+      status: "skipped",
+    });
+    const details = expectRecordFields(manualItem.details, {
+      code: "app_auth_required",
+      pluginName: "reader",
+      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+    });
+    expect(details.apps).toEqual([
+      {
+        id: "auth-app",
+        name: "Auth App",
+        status: "auth_required",
+        isAccessible: true,
+        isEnabled: true,
+        needsAuth: true,
+      },
+      {
+        id: "ready-app",
+        name: "Ready App",
+        status: "ready",
+        isAccessible: true,
+        isEnabled: true,
+        needsAuth: false,
+      },
+    ]);
   });
 
   it("copies planned skills and archives native config during apply", async () => {
@@ -275,6 +606,9 @@ describe("buildCodexMigrationProvider", () => {
       if (method === "plugin/list") {
         return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
       }
+      if (method === "plugin/read") {
+        return pluginRead("google-calendar");
+      }
       if (method === "plugin/install") {
         return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
       }
@@ -286,6 +620,9 @@ describe("buildCodexMigrationProvider", () => {
       }
       if (method === "config/mcpServer/reload") {
         return {};
+      }
+      if (method === "app/list") {
+        return appsList([]);
       }
       throw new Error(`unexpected request ${method}`);
     });
@@ -375,6 +712,9 @@ describe("buildCodexMigrationProvider", () => {
           pluginSummary("gmail", { installed: true, enabled: true }),
         ]);
       }
+      if (method === "plugin/read") {
+        return pluginRead("google-calendar");
+      }
       throw new Error(`unexpected request ${method}`);
     });
     const provider = buildCodexMigrationProvider();
@@ -415,6 +755,9 @@ describe("buildCodexMigrationProvider", () => {
       if (method === "plugin/list") {
         return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
       }
+      if (method === "plugin/read") {
+        return pluginRead("google-calendar");
+      }
       if (method === "plugin/install") {
         return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
       }
@@ -426,6 +769,9 @@ describe("buildCodexMigrationProvider", () => {
       }
       if (method === "config/mcpServer/reload") {
         return {};
+      }
+      if (method === "app/list") {
+        return appsList([]);
       }
       throw new Error(`unexpected request ${method}`);
     });
@@ -449,6 +795,11 @@ describe("buildCodexMigrationProvider", () => {
 
   it("merges migrated plugin config with existing Codex plugins when entries do not conflict", async () => {
     const fixture = await createCodexFixture();
+    const sourceKey = sourceAppCacheKey(fixture);
+    await defaultCodexAppInventoryCache.refreshNow({
+      key: sourceKey,
+      request: async () => appsList([appInfo("source-only-app")]),
+    });
     const configState: MigrationProviderContext["config"] = {
       plugins: {
         entries: {
@@ -476,6 +827,9 @@ describe("buildCodexMigrationProvider", () => {
       if (method === "plugin/list") {
         return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
       }
+      if (method === "plugin/read") {
+        return pluginRead("google-calendar");
+      }
       if (method === "plugin/install") {
         return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
       }
@@ -487,6 +841,9 @@ describe("buildCodexMigrationProvider", () => {
       }
       if (method === "config/mcpServer/reload") {
         return {};
+      }
+      if (method === "app/list") {
+        return appsList([]);
       }
       throw new Error(`unexpected request ${method}`);
     });
@@ -504,6 +861,14 @@ describe("buildCodexMigrationProvider", () => {
     );
 
     expectRecordFields(findItem(result.items, "config:codex-plugins"), { status: "migrated" });
+    const sourceCacheRead = defaultCodexAppInventoryCache.read({
+      key: sourceKey,
+      request: async () => {
+        throw new Error("source app cache was cleared");
+      },
+    });
+    expect(sourceCacheRead.state).toBe("fresh");
+    expect(sourceCacheRead.snapshot?.apps.map((app) => app.id)).toEqual(["source-only-app"]);
     expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({
       allow_destructive_actions: true,
       plugins: {
@@ -545,6 +910,9 @@ describe("buildCodexMigrationProvider", () => {
       if (method === "plugin/list") {
         return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
       }
+      if (method === "plugin/read") {
+        return pluginRead("google-calendar");
+      }
       if (method === "plugin/install") {
         return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
       }
@@ -556,6 +924,9 @@ describe("buildCodexMigrationProvider", () => {
       }
       if (method === "config/mcpServer/reload") {
         return {};
+      }
+      if (method === "app/list") {
+        return appsList([]);
       }
       throw new Error(`unexpected request ${method}`);
     });
@@ -596,6 +967,9 @@ describe("buildCodexMigrationProvider", () => {
       if (method === "plugin/list") {
         return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
       }
+      if (method === "plugin/read") {
+        return pluginRead("google-calendar");
+      }
       if (method === "plugin/install") {
         return {
           authPolicy: "ON_USE",
@@ -618,6 +992,9 @@ describe("buildCodexMigrationProvider", () => {
       }
       if (method === "config/mcpServer/reload") {
         return {};
+      }
+      if (method === "app/list") {
+        return appsList([]);
       }
       throw new Error(`unexpected request ${method}`);
     });
@@ -670,6 +1047,9 @@ describe("buildCodexMigrationProvider", () => {
     appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
       if (method === "plugin/list") {
         return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginRead("google-calendar");
       }
       if (method === "plugin/install") {
         throw new Error("install failed");
@@ -775,6 +1155,54 @@ function pluginList(plugins: v2.PluginSummary[]): v2.PluginListResponse {
     marketplaceLoadErrors: [],
     featuredPluginIds: [],
   };
+}
+
+function pluginRead(pluginName: string, apps: v2.AppSummary[] = []): v2.PluginReadResponse {
+  return {
+    plugin: {
+      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+      marketplacePath: "/marketplaces/openai-curated",
+      summary: pluginSummary(pluginName, { installed: true, enabled: true }),
+      description: null,
+      skills: [],
+      apps,
+      mcpServers: [],
+    },
+  };
+}
+
+function pluginApp(id: string, overrides: Partial<v2.AppSummary> = {}): v2.AppSummary {
+  return {
+    id,
+    name: id,
+    description: null,
+    installUrl: null,
+    needsAuth: false,
+    ...overrides,
+  };
+}
+
+function appInfo(id: string, overrides: Partial<v2.AppInfo> = {}): v2.AppInfo {
+  return {
+    id,
+    name: id,
+    description: null,
+    logoUrl: null,
+    logoUrlDark: null,
+    distributionChannel: null,
+    branding: null,
+    appMetadata: null,
+    labels: null,
+    installUrl: null,
+    isAccessible: true,
+    isEnabled: true,
+    pluginDisplayNames: [],
+    ...overrides,
+  };
+}
+
+function appsList(apps: v2.AppInfo[]): v2.AppsListResponse {
+  return { data: apps, nextCursor: null };
 }
 
 function pluginSummary(id: string, overrides: Partial<v2.PluginSummary> = {}): v2.PluginSummary {

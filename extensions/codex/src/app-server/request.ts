@@ -18,6 +18,7 @@ export async function requestCodexAppServerJson<M extends CodexAppServerRequestM
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string;
+  agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   isolated?: boolean;
 }): Promise<CodexAppServerRequestResult<M>>;
@@ -27,6 +28,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string;
+  agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   isolated?: boolean;
 }): Promise<T>;
@@ -36,6 +38,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string;
+  agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   isolated?: boolean;
 }): Promise<T> {
@@ -48,6 +51,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
         startOptions: params.startOptions,
         timeoutMs,
         authProfileId: params.authProfileId,
+        agentDir: params.agentDir,
         config: params.config,
       });
       try {

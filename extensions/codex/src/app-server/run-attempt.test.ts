@@ -25,20 +25,18 @@ function queueActiveRunMessageForTest(
   return queueAgentHarnessMessage(...args);
 }
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
-import {
-  buildCodexAppInventoryCacheKey,
-  defaultCodexAppInventoryCache,
-} from "./app-inventory-cache.js";
-import {
-  resolveCodexAppServerEnvApiKeyCacheKey,
-  resolveCodexAppServerHomeDir,
-} from "./auth-bridge.js";
+import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
+import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
   createCodexDynamicToolBridge,
 } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
+import {
+  buildCodexPluginAppCacheKey,
+  resolveCodexPluginAppCacheEndpoint,
+} from "./plugin-app-cache-key.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
@@ -3210,9 +3208,9 @@ describe("runCodexAppServerAttempt", () => {
     });
     defaultCodexAppInventoryCache.clear();
     await defaultCodexAppInventoryCache.refreshNow({
-      key: buildCodexAppInventoryCacheKey({
-        codexHome: resolveCodexAppServerHomeDir(agentDir),
-        endpoint: __testing.resolveCodexPluginAppCacheEndpoint(appServer),
+      key: buildCodexPluginAppCacheKey({
+        appServer,
+        agentDir,
       }),
       request: async () => ({
         data: [
@@ -3412,9 +3410,9 @@ describe("runCodexAppServerAttempt", () => {
     });
     defaultCodexAppInventoryCache.clear();
     await defaultCodexAppInventoryCache.refreshNow({
-      key: buildCodexAppInventoryCacheKey({
-        codexHome: resolveCodexAppServerHomeDir(agentDir),
-        endpoint: __testing.resolveCodexPluginAppCacheEndpoint(appServer),
+      key: buildCodexPluginAppCacheKey({
+        appServer,
+        agentDir,
         authProfileId,
         accountId: "account-work",
       }),
@@ -3553,9 +3551,9 @@ describe("runCodexAppServerAttempt", () => {
     });
     defaultCodexAppInventoryCache.clear();
     await defaultCodexAppInventoryCache.refreshNow({
-      key: buildCodexAppInventoryCacheKey({
-        codexHome: resolveCodexAppServerHomeDir(agentDir),
-        endpoint: __testing.resolveCodexPluginAppCacheEndpoint(appServer),
+      key: buildCodexPluginAppCacheKey({
+        appServer,
+        agentDir,
         envApiKeyFingerprint: resolveCodexAppServerEnvApiKeyCacheKey({
           startOptions: appServer.start,
           baseEnv: { CODEX_API_KEY: "old-codex-env-key" },
@@ -4723,7 +4721,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("keys plugin app inventory by websocket credentials without exposing them", () => {
-    const first = __testing.resolveCodexPluginAppCacheEndpoint({
+    const first = resolveCodexPluginAppCacheEndpoint({
       start: {
         transport: "websocket",
         command: "codex",
@@ -4732,13 +4730,8 @@ describe("runCodexAppServerAttempt", () => {
         authToken: "token-first",
         headers: { Authorization: "Bearer first" },
       },
-      requestTimeoutMs: 60_000,
-      turnCompletionIdleTimeoutMs: 5,
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
-      sandbox: "workspace-write",
     });
-    const second = __testing.resolveCodexPluginAppCacheEndpoint({
+    const second = resolveCodexPluginAppCacheEndpoint({
       start: {
         transport: "websocket",
         command: "codex",
@@ -4747,11 +4740,6 @@ describe("runCodexAppServerAttempt", () => {
         authToken: "token-second",
         headers: { Authorization: "Bearer second" },
       },
-      requestTimeoutMs: 60_000,
-      turnCompletionIdleTimeoutMs: 5,
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
-      sandbox: "workspace-write",
     });
 
     expect(first).not.toEqual(second);
