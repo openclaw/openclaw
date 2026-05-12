@@ -229,10 +229,26 @@ export type PluginHookLlmInputEvent = {
   provider: string;
   model: string;
   systemPrompt?: string;
+  /**
+   * Authoritative final prompt text handed to the model. Tracing plugins
+   * should display or record this field as the canonical prompt; the
+   * hook-attributed slots below are hints only and MAY NOT reconstruct
+   * `prompt` verbatim.
+   */
   prompt: string;
-  /** Raw user turn before bootstrap-warning wrapping and hook prepend. */
+  /**
+   * Input prompt as received by this runner invocation (pre hook-prepend).
+   * May itself already carry upstream wrapping such as bootstrap truncation
+   * warnings or inter-session provenance annotations — this is NOT guaranteed
+   * to be the raw user turn bytes.
+   */
   userPrompt?: string;
-  /** Bootstrap warnings + hook-prepended context merged (joined with `\n\n`). */
+  /**
+   * Hook-prepended context only (from prompt_build / before_agent_start
+   * `prependContext`). Does NOT include the runtime `currentTurnContext`
+   * prefix, hook `appendContext` suffix, or other prompt-assembly additions
+   * that appear in `prompt`. Use `prompt` for full text.
+   */
   prependedContext?: string;
   historyMessages: unknown[];
   imagesCount: number;

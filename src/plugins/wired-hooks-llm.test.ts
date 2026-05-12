@@ -197,7 +197,7 @@ describe("llm hook runner methods", () => {
 });
 
 describe("llm_input userPrompt/prependedContext plumbing", () => {
-  it("passes userPrompt and prependedContext through to registered handlers and preserves invariant", async () => {
+  it("passes userPrompt and prependedContext through to registered handlers alongside authoritative prompt", async () => {
     const events: Array<{
       prompt: string;
       userPrompt?: string;
@@ -208,13 +208,16 @@ describe("llm_input userPrompt/prependedContext plumbing", () => {
     });
     const { runner } = createHookRunnerWithRegistry([{ hookName: "llm_input", handler }]);
 
+    // prompt includes a runtime currentTurnContext prefix + hook-append suffix
+    // that are NOT part of prependedContext/userPrompt. The hook-attributed
+    // slots are hints only; `prompt` is the authoritative final text.
     await runner.runLlmInput(
       {
         runId: "run-1",
         sessionId: "session-1",
         provider: "anthropic",
         model: "sonnet-4.6",
-        prompt: "CTX\n\nRAW",
+        prompt: "TURN\n\nCTX\n\nRAW\n\nAPPEND",
         userPrompt: "RAW",
         prependedContext: "CTX",
         historyMessages: [],
@@ -225,9 +228,12 @@ describe("llm_input userPrompt/prependedContext plumbing", () => {
 
     expect(events[0]?.userPrompt).toBe("RAW");
     expect(events[0]?.prependedContext).toBe("CTX");
-    expect([events[0]?.prependedContext, events[0]?.userPrompt].filter(Boolean).join("\n\n")).toBe(
-      events[0]?.prompt,
-    );
+    expect(events[0]?.prompt).toBe("TURN\n\nCTX\n\nRAW\n\nAPPEND");
+    // Hook-attributed slots are substrings of prompt, but their concatenation
+    // is NOT required to equal prompt (runtime prefixes / hook append suffixes
+    // are intentionally not part of the split).
+    expect(events[0]?.prompt.includes(events[0]?.prependedContext ?? "")).toBe(true);
+    expect(events[0]?.prompt.includes(events[0]?.userPrompt ?? "")).toBe(true);
   });
 
   it("passes undefined prependedContext through when hook did not prepend", async () => {
