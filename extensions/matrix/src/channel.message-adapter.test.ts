@@ -238,4 +238,8 @@ describe("matrix channel message adapter", () => {
       },
     });
   });
+
+  it("declares bullets as defaultMarkdownTableMode to avoid code-block fallthrough (#78990)", () => {
+    expect(matrixPlugin.messaging?.defaultMarkdownTableMode).toBe("bullets");
+  });
 });
