@@ -124,4 +124,75 @@ describe("updateSessionStoreAfterAgentRun", () => {
       "once",
     );
   });
+
+  it("persists and clears latest embedded runner rebuild diagnostics", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = `agent:codex:diagnostics:${randomUUID()}`;
+    const sessionId = randomUUID();
+
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+    await updateSessionStoreAfterAgentRun({
+      cfg: {} as never,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+      result: {
+        payloads: [],
+        meta: {
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-5.4",
+            rebuildReason: "compaction_failure",
+            rebuildCompactionReason: "summarization_failed",
+            refreshReason: "context_overflow",
+          },
+        },
+      } as never,
+    });
+
+    let persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted?.rebuildReason).toBe("compaction_failure");
+    expect(persisted?.rebuildCompactionReason).toBe("summarization_failed");
+    expect(persisted?.refreshReason).toBe("context_overflow");
+
+    await updateSessionStoreAfterAgentRun({
+      cfg: {} as never,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore: {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      },
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+      result: {
+        payloads: [],
+        meta: {
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-5.4",
+          },
+        },
+      } as never,
+    });
+
+    persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted?.rebuildReason).toBeUndefined();
+    expect(persisted?.rebuildCompactionReason).toBeUndefined();
+    expect(persisted?.refreshReason).toBeUndefined();
+  });
 });

@@ -33,7 +33,7 @@ export function classifyCompactionReason(reason?: string): string {
   if (text.includes("guard")) {
     return "guard_blocked";
   }
-  if (text.includes("summary")) {
+  if (text.includes("summary") || text.includes("summariz")) {
     return "summary_failed";
   }
   if (text.includes("timed out") || text.includes("timeout")) {

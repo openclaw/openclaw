@@ -79,6 +79,10 @@ function formatTransportErrorCopy(raw: string): string | undefined {
     return "LLM request failed: connection refused by the provider endpoint.";
   }
 
+  if (lower === "terminated") {
+    return "LLM request was interrupted before completion. Please try again.";
+  }
+
   if (
     /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i.test(raw) ||
     lower.includes("socket hang up") ||

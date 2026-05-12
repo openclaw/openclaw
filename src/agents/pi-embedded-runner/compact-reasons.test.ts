@@ -30,6 +30,14 @@ describe("classifyCompactionReason", () => {
     );
   });
 
+  it("classifies summarization failures as summary_failed", () => {
+    expect(
+      classifyCompactionReason(
+        "request_too_large: summarization failed - Request size exceeds model context window",
+      ),
+    ).toBe("summary_failed");
+  });
+
   it("classifies safeguard messages as guard-blocked", () => {
     expect(
       classifyCompactionReason(

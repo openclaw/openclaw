@@ -7,6 +7,9 @@ export type EmbeddedPiAgentMeta = {
   model: string;
   compactionCount?: number;
   promptTokens?: number;
+  rebuildReason?: string;
+  rebuildCompactionReason?: string;
+  refreshReason?: string;
   usage?: {
     input?: number;
     output?: number;

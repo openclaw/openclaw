@@ -161,6 +161,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
       }),
     );
     expect(result.meta.error).toBeUndefined();
+    expect(result.meta.agentMeta?.rebuildReason).toBe("context_overflow");
+    expect(result.meta.agentMeta?.rebuildCompactionReason).toBeUndefined();
+    expect(result.meta.agentMeta?.refreshReason).toBeUndefined();
   });
 
   it("does not reset compaction attempt budget after successful tool-result truncation", async () => {

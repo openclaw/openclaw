@@ -162,6 +162,9 @@ export type SessionEntry = {
   fallbackNoticeReason?: string;
   contextTokens?: number;
   compactionCount?: number;
+  rebuildReason?: string;
+  rebuildCompactionReason?: string;
+  refreshReason?: string;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   memoryFlushContextHash?: string;

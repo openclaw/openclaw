@@ -68,6 +68,7 @@ import { isLikelyMutatingToolName } from "../tool-mutation.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compact.js";
+import { classifyCompactionReason } from "./compact-reasons.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
@@ -192,6 +193,9 @@ function buildErrorAgentMeta(params: {
   lastAssistant?: { usage?: unknown } | null;
   /** API-reported total from the most recent call, mirroring the success path correction. */
   lastTurnTotal?: number;
+  rebuildReason?: EmbeddedPiAgentMeta["rebuildReason"];
+  rebuildCompactionReason?: EmbeddedPiAgentMeta["rebuildCompactionReason"];
+  refreshReason?: EmbeddedPiAgentMeta["refreshReason"];
 }): EmbeddedPiAgentMeta {
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: params.usageAccumulator,
@@ -207,6 +211,11 @@ function buildErrorAgentMeta(params: {
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),
+    ...(params.rebuildReason ? { rebuildReason: params.rebuildReason } : {}),
+    ...(params.rebuildCompactionReason
+      ? { rebuildCompactionReason: params.rebuildCompactionReason }
+      : {}),
+    ...(params.refreshReason ? { refreshReason: params.refreshReason } : {}),
   };
 }
 
@@ -421,6 +430,7 @@ export async function runEmbeddedPiAgent(
         clearRuntimeAuthRefreshTimer();
       };
 
+      let refreshReason: EmbeddedPiAgentMeta["refreshReason"];
       const refreshRuntimeAuth = async (reason: string): Promise<void> => {
         if (!runtimeAuthState) {
           return;
@@ -470,6 +480,7 @@ export async function runEmbeddedPiAgent(
             ...runtimeAuthState,
             expiresAt: preparedAuth.expiresAt,
           };
+          refreshReason = reason;
           if (preparedAuth.expiresAt) {
             const remaining = preparedAuth.expiresAt - Date.now();
             log.debug(
@@ -885,6 +896,8 @@ export async function runEmbeddedPiAgent(
         let authRetryPending = false;
         // Hoisted so the retry-limit error path can use the most recent API total.
         let lastTurnTotal: number | undefined;
+        let rebuildReason: EmbeddedPiAgentMeta["rebuildReason"];
+        let rebuildCompactionReason: EmbeddedPiAgentMeta["rebuildCompactionReason"];
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
             const message =
@@ -913,6 +926,9 @@ export async function runEmbeddedPiAgent(
                   usageAccumulator,
                   lastRunPromptUsage,
                   lastTurnTotal,
+                  rebuildReason,
+                  rebuildCompactionReason,
+                  refreshReason,
                 }),
                 error: { kind: "retry_limit", message },
               },
@@ -1061,6 +1077,9 @@ export async function runEmbeddedPiAgent(
                 lastRunPromptUsage,
                 lastAssistant,
                 lastTurnTotal,
+                rebuildReason,
+                rebuildCompactionReason,
+                refreshReason,
               });
             const hadMutatingTools = attempt.toolMetas.some((t) =>
               isLikelyMutatingToolName(t.toolName),
@@ -1124,6 +1143,8 @@ export async function runEmbeddedPiAgent(
             } else if (tokenUsedRatio > 0.65) {
               const timeoutDiagId = createCompactionDiagId();
               timeoutCompactionAttempts++;
+              rebuildReason = "timeout_recovery";
+              rebuildCompactionReason = undefined;
               log.warn(
                 `[timeout-compaction] LLM timed out with high prompt token usage (${Math.round(tokenUsedRatio * 100)}%); ` +
                   `attempting compaction before retry (attempt ${timeoutCompactionAttempts}/${MAX_TIMEOUT_COMPACTION_ATTEMPTS}) diagId=${timeoutDiagId}`,
@@ -1182,6 +1203,7 @@ export async function runEmbeddedPiAgent(
               }
               await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
               if (timeoutCompactResult.compacted) {
+                rebuildCompactionReason = undefined;
                 autoCompactionCount += 1;
                 if (contextEngine.info.ownsCompaction === true) {
                   await runPostCompactionSideEffects({
@@ -1195,6 +1217,7 @@ export async function runEmbeddedPiAgent(
                 );
                 continue;
               } else {
+                rebuildCompactionReason = classifyCompactionReason(timeoutCompactResult.reason);
                 log.warn(
                   `[timeout-compaction] compaction did not reduce context for ${provider}/${modelId}; falling through to normal handling`,
                 );
@@ -1238,6 +1261,10 @@ export async function runEmbeddedPiAgent(
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
             const hadAttemptLevelCompaction = attemptCompactionCount > 0;
+            rebuildReason = isCompactionFailure ? "compaction_failure" : "context_overflow";
+            if (isCompactionFailure) {
+              rebuildCompactionReason = classifyCompactionReason(errorText);
+            }
             // If this attempt already compacted (SDK auto-compaction), avoid immediately
             // running another explicit compaction for the same overflow trigger.
             if (
@@ -1266,6 +1293,8 @@ export async function runEmbeddedPiAgent(
                 );
               }
               overflowCompactionAttempts++;
+              rebuildReason = "context_overflow";
+              rebuildCompactionReason = undefined;
               log.warn(
                 `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
               );
@@ -1339,10 +1368,12 @@ export async function runEmbeddedPiAgent(
               }
               await runOwnsCompactionAfterHook("overflow recovery", compactResult);
               if (compactResult.compacted) {
+                rebuildCompactionReason = undefined;
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 continue;
               }
+              rebuildCompactionReason = classifyCompactionReason(compactResult.reason);
               log.warn(
                 `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
               );
@@ -1429,6 +1460,9 @@ export async function runEmbeddedPiAgent(
                   lastRunPromptUsage,
                   lastAssistant,
                   lastTurnTotal,
+                  rebuildReason,
+                  rebuildCompactionReason,
+                  refreshReason,
                 }),
                 systemPromptReport: attempt.systemPromptReport,
                 error: { kind, message: errorText },
@@ -1473,6 +1507,9 @@ export async function runEmbeddedPiAgent(
                     lastRunPromptUsage,
                     lastAssistant,
                     lastTurnTotal,
+                    rebuildReason,
+                    rebuildCompactionReason,
+                    refreshReason,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
                   error: { kind: "role_ordering", message: errorText },
@@ -1505,6 +1542,9 @@ export async function runEmbeddedPiAgent(
                     lastRunPromptUsage,
                     lastAssistant,
                     lastTurnTotal,
+                    rebuildReason,
+                    rebuildCompactionReason,
+                    refreshReason,
                   }),
                   systemPromptReport: attempt.systemPromptReport,
                   error: { kind: "image_size", message: errorText },
@@ -1742,6 +1782,9 @@ export async function runEmbeddedPiAgent(
             lastCallUsage: usageMeta.lastCallUsage,
             promptTokens: usageMeta.promptTokens,
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
+            rebuildReason,
+            rebuildCompactionReason,
+            refreshReason,
           };
 
           const payloads = buildEmbeddedRunPayloads({

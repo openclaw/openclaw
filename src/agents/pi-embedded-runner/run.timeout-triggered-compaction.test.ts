@@ -150,6 +150,9 @@ describe("timeout-triggered compaction", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(mockedRunPostCompactionSideEffects).not.toHaveBeenCalled();
     expect(result.meta.error).toBeUndefined();
+    expect(result.meta.agentMeta?.rebuildReason).toBe("timeout_recovery");
+    expect(result.meta.agentMeta?.rebuildCompactionReason).toBeUndefined();
+    expect(result.meta.agentMeta?.refreshReason).toBeUndefined();
   });
 
   it("passes channel, thread, message, and sender context into timeout compaction", async () => {
@@ -221,6 +224,8 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
+    expect(result.meta.agentMeta?.rebuildReason).toBe("timeout_recovery");
+    expect(result.meta.agentMeta?.rebuildCompactionReason).toBe("no_compactable_entries");
   });
 
   it("does not attempt compaction when prompt token usage is low", async () => {
@@ -384,6 +389,8 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("timed out");
+    expect(result.meta.agentMeta?.rebuildReason).toBe("timeout_recovery");
+    expect(result.meta.agentMeta?.rebuildCompactionReason).toBe("unknown");
   });
 
   it("fires compaction hooks during timeout recovery for ownsCompaction engines", async () => {

@@ -47,6 +47,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
+  const rebuildReason = result.meta.agentMeta?.rebuildReason;
+  const rebuildCompactionReason = result.meta.agentMeta?.rebuildCompactionReason;
+  const refreshReason = result.meta.agentMeta?.refreshReason;
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const contextTokens =
@@ -120,8 +123,32 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (compactionsThisRun > 0) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
+  if (rebuildReason) {
+    next.rebuildReason = rebuildReason;
+  } else {
+    delete next.rebuildReason;
+  }
+  if (rebuildCompactionReason) {
+    next.rebuildCompactionReason = rebuildCompactionReason;
+  } else {
+    delete next.rebuildCompactionReason;
+  }
+  if (refreshReason) {
+    next.refreshReason = refreshReason;
+  } else {
+    delete next.refreshReason;
+  }
   const persisted = await updateSessionStore(storePath, (store) => {
     const merged = mergeSessionEntry(store[sessionKey], next);
+    if (!rebuildReason) {
+      delete merged.rebuildReason;
+    }
+    if (!rebuildCompactionReason) {
+      delete merged.rebuildCompactionReason;
+    }
+    if (!refreshReason) {
+      delete merged.refreshReason;
+    }
     store[sessionKey] = merged;
     return merged;
   });

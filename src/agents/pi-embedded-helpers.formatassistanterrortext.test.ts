@@ -153,6 +153,13 @@ describe("formatAssistantErrorText", () => {
       "LLM request failed: network connection was interrupted.",
     );
   });
+
+  it("returns a generic interruption message for bare terminated errors", () => {
+    const msg = makeAssistantError("terminated");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request was interrupted before completion. Please try again.",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {

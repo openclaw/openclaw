@@ -137,6 +137,8 @@ describe("overflow compaction in run loop", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.meta.error?.kind).toBe("context_overflow");
+    expect(result.meta.agentMeta?.rebuildReason).toBe("context_overflow");
+    expect(result.meta.agentMeta?.rebuildCompactionReason).toBe("no_compactable_entries");
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("auto-compaction failed"));
   });
@@ -260,6 +262,8 @@ describe("overflow compaction in run loop", () => {
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.meta.error?.kind).toBe("compaction_failure");
+    expect(result.meta.agentMeta?.rebuildReason).toBe("compaction_failure");
+    expect(result.meta.agentMeta?.rebuildCompactionReason).toBe("summary_failed");
   });
 
   it("retries after successful compaction on assistant context overflow errors", async () => {
