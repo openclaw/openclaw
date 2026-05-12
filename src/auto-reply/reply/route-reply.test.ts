@@ -112,9 +112,8 @@ function lastDelivery() {
     throw new Error("Expected outbound delivery call");
   }
   const delivery = call[0];
-  if (!delivery || typeof delivery !== "object") {
-    throw new Error("expected outbound delivery");
-  }
+  expect(typeof delivery).toBe("object");
+  expect(delivery).not.toBeNull();
   return delivery as Record<string, unknown>;
 }
 
