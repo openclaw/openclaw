@@ -128,10 +128,6 @@ export function resolveSubagentToolPolicyForSession(
     cfg,
     store,
   });
-  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(cfg, sessionKey, {
-    store,
-  });
-  const inheritedToolDeny = inheritedToolPolicy?.deny ?? [];
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
   const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
   const explicitAllow = new Set(
@@ -141,7 +137,6 @@ export function resolveSubagentToolPolicyForSession(
     ...resolveSubagentDenyListForRole(capabilities.role).filter(
       (toolName) => !explicitAllow.has(normalizeToolName(toolName)),
     ),
-    ...inheritedToolDeny,
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
   const mergedAllow = mergeConfiguredSubagentAllow(allow, alsoAllow);

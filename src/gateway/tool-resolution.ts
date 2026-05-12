@@ -17,9 +17,9 @@ import {
 import {
   collectExplicitAllowlist,
   collectExplicitDenylist,
-  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
-  normalizeToolName,
+  replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -29,33 +29,6 @@ import { getPluginToolMeta } from "../plugins/tools.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
-
-function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolean {
-  return (
-    Array.isArray(policy?.allow) &&
-    policy.allow.some((entry) => {
-      const normalized = normalizeToolName(entry);
-      return (
-        Boolean(normalized) &&
-        normalized !== "*" &&
-        normalized !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY
-      );
-    })
-  );
-}
-
-function replaceWithEffectiveToolAllowlist(target: string[], tools: Array<{ name: string }>): void {
-  target.length = 0;
-  const seen = new Set<string>();
-  for (const tool of tools) {
-    const normalized = normalizeToolName(tool.name);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    target.push(normalized);
-  }
-}
 
 export function resolveGatewayScopedTools(params: {
   cfg: OpenClawConfig;
@@ -140,6 +113,8 @@ export function resolveGatewayScopedTools(params: {
     excludedToolNames.length > 0 ? { deny: excludedToolNames } : undefined,
   ]);
   const inheritedToolDenylist = [...explicitDenylist];
+  // Passed by reference to sessions_spawn and populated after the final policy
+  // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
   const shouldInheritEffectiveToolAllowlist = [
     profilePolicy,

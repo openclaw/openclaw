@@ -371,7 +371,7 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
   });
 
-  it("applies inherited tool denies from stored subagent sessions", () => {
+  it("resolves inherited tool denies from stored subagent sessions", () => {
     const storePath = path.join(
       os.tmpdir(),
       `openclaw-subagent-inherited-deny-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
@@ -387,7 +387,7 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
             spawnDepth: 1,
             subagentRole: "orchestrator",
             subagentControlScope: "children",
-            inheritedToolDeny: ["bash", "read"],
+            inheritedToolDeny: ["bash", "memory_get"],
           },
         },
         null,
@@ -402,9 +402,9 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:limited");
+    const policy = resolveInheritedToolPolicyForSession(cfg, "agent:main:subagent:limited");
     expect(isToolAllowedByPolicyName("exec", policy)).toBe(false);
-    expect(isToolAllowedByPolicyName("read", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
   });
 

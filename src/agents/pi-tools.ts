@@ -78,9 +78,10 @@ import {
   applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
   collectExplicitDenylist,
-  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
   normalizeToolName,
+  replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
 import {
@@ -202,33 +203,6 @@ export function resolveProcessToolScopeKey(params: {
   }
   const agentId = params.agentId?.trim();
   return agentId ? `agent:${agentId}` : undefined;
-}
-
-function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolean {
-  return (
-    Array.isArray(policy?.allow) &&
-    policy.allow.some((entry) => {
-      const normalized = normalizeToolName(entry);
-      return (
-        Boolean(normalized) &&
-        normalized !== "*" &&
-        normalized !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY
-      );
-    })
-  );
-}
-
-function replaceWithEffectiveToolAllowlist(target: string[], tools: Array<{ name: string }>): void {
-  target.length = 0;
-  const seen = new Set<string>();
-  for (const tool of tools) {
-    const normalized = normalizeToolName(tool.name);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    target.push(normalized);
-  }
 }
 
 function applyModelProviderToolPolicy(
@@ -799,6 +773,8 @@ export function createOpenClawCodingTools(options?: {
     inheritedToolPolicy,
   ]);
   const inheritedToolDenylist = [...pluginToolDenylist];
+  // Passed by reference to sessions_spawn and populated after the final policy
+  // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
   const shouldInheritEffectiveToolAllowlist = [
     profilePolicy,
