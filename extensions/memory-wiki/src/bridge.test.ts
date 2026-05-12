@@ -149,6 +149,66 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(logLines).toHaveLength(2);
   });
 
+  it("repairs an imported page when sync state is current but source content is malformed", async () => {
+    const workspaceDir = await createBridgeWorkspace("repair-workspace");
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("repair-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: true,
+        },
+      },
+    });
+
+    const sourcePath = path.join(workspaceDir, "MEMORY.md");
+    await fs.writeFile(sourcePath, "# Durable Memory\n", "utf8");
+    registerBridgeArtifacts([
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath: sourcePath,
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+
+    const first = await syncMemoryWikiBridgeSources({ config, appConfig });
+    const pagePath = first.pagePaths[0] ?? "";
+    await fs.writeFile(
+      path.join(vaultDir, pagePath),
+      [
+        "## Related",
+        "<!-- openclaw:wiki:related:start -->",
+        "- No related pages yet.",
+        "<!-- openclaw:wiki:related:end -->",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const second = await syncMemoryWikiBridgeSources({ config, appConfig });
+
+    expect(second.importedCount).toBe(0);
+    expect(second.updatedCount).toBe(1);
+    expect(second.skippedCount).toBe(0);
+
+    const repairedPage = await fs.readFile(path.join(vaultDir, pagePath), "utf8");
+    expect(repairedPage).toContain("pageType: source");
+    expect(repairedPage).toContain("sourceType: memory-bridge");
+    expect(repairedPage).toContain("## Content");
+    expect(repairedPage).toContain("# Durable Memory");
+  });
+
   it("returns a no-op result outside bridge mode", async () => {
     const { config } = await createVault({ rootDir: nextCaseRoot("isolated") });
 
