@@ -228,7 +228,22 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(compacted.payload?.key).toBe("agent:main:main");
   expect(compacted.payload?.compacted).toBe(true);
   expect(embeddedRunMock.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
-  const compactionCall = embeddedRunMock.compactEmbeddedPiSession.mock.calls[0]?.[0];
+  const compactionCall = embeddedRunMock.compactEmbeddedPiSession.mock.calls[0]?.[0] as
+    | {
+        agentHarnessId?: string;
+        allowGatewaySubagentBinding?: boolean;
+        bashElevated?: unknown;
+        config?: unknown;
+        model?: string;
+        provider?: string;
+        reasoningLevel?: string;
+        sessionId?: string;
+        sessionKey?: string;
+        thinkLevel?: string;
+        trigger?: string;
+        workspaceDir?: string;
+      }
+    | undefined;
   if (!compactionCall) {
     throw new Error("expected embedded compaction call");
   }
