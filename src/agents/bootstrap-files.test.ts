@@ -118,9 +118,15 @@ describe("resolveBootstrapFilesForRun", () => {
       warn: (message) => warnings.push(message),
     });
 
-    expect(
-      files.every((file) => typeof file.path === "string" && file.path.trim().length > 0),
-    ).toBe(true);
+    expect(files.map((file) => path.relative(workspaceDir, file.path))).toEqual([
+      "AGENTS.md",
+      "SOUL.md",
+      "TOOLS.md",
+      "IDENTITY.md",
+      "USER.md",
+      "HEARTBEAT.md",
+      "BOOTSTRAP.md",
+    ]);
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
   });

@@ -58,6 +58,18 @@ function readFirstPolicyScope(payload: Record<string, unknown>): Record<string, 
   return scope as Record<string, unknown>;
 }
 
+function readFirstReplaceConfigArg(): Record<string, unknown> {
+  const call = mocks.replaceConfigFile.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected replaceConfigFile call");
+  }
+  const arg = call.at(0);
+  if (!arg || typeof arg !== "object") {
+    throw new Error("expected replaceConfigFile argument");
+  }
+  return arg as Record<string, unknown>;
+}
+
 const mocks = vi.hoisted(() => {
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
@@ -338,7 +350,7 @@ describe("exec-policy CLI", () => {
       ask: "off",
       askFallback: "full",
     });
-    const [replaceConfigArg] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    const replaceConfigArg = readFirstReplaceConfigArg();
     expectFields(replaceConfigArg, { baseHash: "config-hash-1" });
     expect(mocks.saveExecApprovals).toHaveBeenCalledTimes(1);
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);

@@ -22,7 +22,7 @@ const {
 } = await import("./music-generate-background.js");
 
 function getDeliveredInternalEvents(): Array<Record<string, unknown>> {
-  const params = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0]?.[0] as
+  const params = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls.at(0)?.[0] as
     | { internalEvents?: unknown }
     | undefined;
   if (!Array.isArray(params?.internalEvents)) {

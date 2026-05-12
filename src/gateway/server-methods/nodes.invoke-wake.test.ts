@@ -129,7 +129,12 @@ function isUuidV4(value: string): boolean {
   if (part2[0] !== "4" || !part3[0] || !"89ab".includes(part3[0])) {
     return false;
   }
-  return parts.every(isLowerHex);
+  for (const part of parts) {
+    if (!isLowerHex(part)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function requireRespondPayload(call: RespondCall | undefined, label: string) {

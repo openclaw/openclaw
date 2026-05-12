@@ -158,7 +158,11 @@ function requireRecord(value: unknown): Record<string, unknown> {
 }
 
 function firstCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  return requireRecord(mock.mock.calls[0]?.[0]);
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("expected mock call");
+  }
+  return requireRecord(call[0]);
 }
 
 function requestPermissionPayload(mock: ReturnType<typeof vi.fn>): {
