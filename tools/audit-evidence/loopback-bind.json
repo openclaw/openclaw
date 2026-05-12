@@ -1,0 +1,31 @@
+{
+  "ts": 1778601127806,
+  "summary": {
+    "critical": 1,
+    "warn": 0,
+    "info": 2
+  },
+  "findings": [
+    {
+      "checkId": "summary.attack_surface",
+      "severity": "info",
+      "title": "Attack surface summary",
+      "detail": "groups: open=0, allowlist=0\ntools.elevated: enabled\nhooks.webhooks: disabled\nhooks.internal: disabled\nbrowser control: enabled\ntrust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway"
+    },
+    {
+      "checkId": "gateway.trusted_proxies_missing",
+      "severity": "info",
+      "title": "Trusted proxies not configured on loopback bind",
+      "detail": "gateway.bind=\"loopback\" is loopback-equivalent and gateway.trustedProxies is empty. X-Forwarded-For spoofing is not reachable off-host on a loopback-only bind. If a same-host reverse proxy (nginx, Caddy, systemd socket activation) fronts the Control UI, set gateway.trustedProxies so client-IP and local-client checks stay correct.",
+      "remediation": "If the Control UI is fronted by a same-host reverse proxy, set gateway.trustedProxies to that proxy's IP (often 127.0.0.1/::1). No action required if the Control UI is only reached directly via loopback."
+    },
+    {
+      "checkId": "gateway.loopback_no_auth",
+      "severity": "critical",
+      "title": "Gateway auth missing on loopback",
+      "detail": "gateway.bind=\"loopback\" is loopback-equivalent but no gateway auth secret is configured. If the Control UI is exposed through a reverse proxy, unauthenticated access is possible.",
+      "remediation": "Set gateway.auth (token recommended) or keep the Control UI local-only."
+    }
+  ],
+  "secretDiagnostics": []
+}

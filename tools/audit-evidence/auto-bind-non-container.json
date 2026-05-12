@@ -1,0 +1,38 @@
+{
+  "ts": 1778601129350,
+  "summary": {
+    "critical": 1,
+    "warn": 2,
+    "info": 1
+  },
+  "findings": [
+    {
+      "checkId": "summary.attack_surface",
+      "severity": "info",
+      "title": "Attack surface summary",
+      "detail": "groups: open=0, allowlist=0\ntools.elevated: enabled\nhooks.webhooks: disabled\nhooks.internal: disabled\nbrowser control: enabled\ntrust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway"
+    },
+    {
+      "checkId": "gateway.bind_no_auth",
+      "severity": "critical",
+      "title": "Gateway binds beyond loopback without auth",
+      "detail": "gateway.bind=\"auto\" resolves to a non-loopback listener but no gateway.auth token/password is configured.",
+      "remediation": "Set gateway.auth (token recommended) or bind to loopback."
+    },
+    {
+      "checkId": "gateway.trusted_proxies_missing",
+      "severity": "warn",
+      "title": "Trusted proxies not configured",
+      "detail": "gateway.bind=\"auto\" is not loopback-equivalent and gateway.trustedProxies is empty. A reverse proxy in front of the Control UI can spoof X-Forwarded-For without explicit trusted proxies.",
+      "remediation": "Set gateway.trustedProxies to your reverse proxy IP/CIDR(s) or bind to loopback."
+    },
+    {
+      "checkId": "gateway.auth_no_rate_limit",
+      "severity": "warn",
+      "title": "No auth rate limiting configured",
+      "detail": "gateway.bind is not loopback but no gateway.auth.rateLimit is configured. Without rate limiting, brute-force auth attacks are not mitigated.",
+      "remediation": "Set gateway.auth.rateLimit (e.g. { maxAttempts: 10, windowMs: 60000, lockoutMs: 300000 })."
+    }
+  ],
+  "secretDiagnostics": []
+}
