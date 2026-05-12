@@ -16,6 +16,7 @@ import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { writeJson } from "./json-files.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { assertSqliteIntegrityOk } from "./sqlite-integrity.js";
 
 type TarRuntime = typeof import("tar");
 
@@ -431,12 +432,10 @@ async function snapshotSqliteDatabase(params: {
   }
   const integrityDb = new sqlite.DatabaseSync(params.snapshotPath, { readOnly: true });
   try {
-    const row = integrityDb.prepare("PRAGMA integrity_check").get() as
-      | { integrity_check?: string }
-      | undefined;
-    if (row?.integrity_check !== "ok") {
-      throw new Error(`SQLite integrity check failed for backup snapshot: ${params.sourcePath}`);
-    }
+    assertSqliteIntegrityOk(
+      integrityDb,
+      `SQLite integrity check failed for backup snapshot: ${params.sourcePath}`,
+    );
   } finally {
     integrityDb.close();
   }
