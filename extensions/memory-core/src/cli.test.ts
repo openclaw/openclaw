@@ -3,12 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import {
-  MEMORY_CORE_SHORT_TERM_META_NAMESPACE,
-  MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE,
-  writeDreamingWorkspaceMap,
-  writeDreamingWorkspaceValue,
-} from "openclaw/plugin-sdk/memory-core-host-status";
-import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
   spyRuntimeJson,
@@ -577,35 +571,20 @@ describe("memory cli", () => {
 
   it("normalizes recall metadata with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      const key = "memory:memory/2026-04-03.md:1:2";
-      await writeDreamingWorkspaceMap(MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE, workspaceDir, {
-        [key]: {
-          key,
-          path: "memory/2026-04-03.md",
-          startLine: 1,
-          endLine: 2,
-          source: "memory",
-          snippet: "QMD router cache note",
-          recallCount: 1,
-          dailyCount: 0,
-          groundedCount: 0,
-          totalScore: 0.8,
-          maxScore: 0.8,
-          firstRecalledAt: "2026-05-09T00:00:00.000Z",
-          lastRecalledAt: "2026-05-09T00:00:00.000Z",
-          queryHashes: [],
-          recallDays: ["2026-05-09"],
-          conceptTags: [],
-        },
-      });
-      await writeDreamingWorkspaceValue(
-        MEMORY_CORE_SHORT_TERM_META_NAMESPACE,
+      await recordShortTermRecalls({
         workspaceDir,
-        "recall",
-        {
-          updatedAt: "2026-05-09T00:00:00.000Z",
-        },
-      );
+        query: "router cache",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.8,
+            snippet: "QMD router cache note",
+            source: "memory",
+          },
+        ],
+      });
 
       const close = vi.fn(async () => {});
       mockManager({
@@ -617,7 +596,7 @@ describe("memory cli", () => {
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status", "--fix"]);
 
-      expectLogged(log, "Repair: rewrote recall database");
+      expectLogged(log, "Repair: no changes");
       const entries = await readShortTermRecallEntries({ workspaceDir });
       expect(entries[0]?.conceptTags).toContain("router");
       expect(close).toHaveBeenCalled();
