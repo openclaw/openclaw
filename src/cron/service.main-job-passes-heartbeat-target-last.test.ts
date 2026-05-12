@@ -136,11 +136,11 @@ describe("cron main job passes heartbeat target=last", () => {
     await runSingleTick(cron);
 
     expect(runHeartbeatOnce).toHaveBeenCalled();
-    const heartbeatRequest = requireRequestHeartbeatCall(requestHeartbeat);
-    expect(heartbeatRequest.source).toBe("cron");
-    expect(heartbeatRequest.intent).toBe("immediate");
-    expect(heartbeatRequest.reason).toBe("cron:test-main-delivery-busy");
-    expect(heartbeatRequest.heartbeat).toEqual({ target: "last" });
+    const heartbeatRequest = requestHeartbeat.mock.calls[0]?.[0];
+    expect(heartbeatRequest?.source).toBe("cron");
+    expect(heartbeatRequest?.intent).toBe("immediate");
+    expect(heartbeatRequest?.reason).toBe("cron:test-main-delivery-busy");
+    expect(heartbeatRequest?.heartbeat).toEqual({ target: "last" });
   });
 
   it("should preserve heartbeat.target=last for wakeMode=next-heartbeat main jobs", async () => {
@@ -168,11 +168,11 @@ describe("cron main job passes heartbeat target=last", () => {
     await runSingleTick(cron);
 
     expect(requestHeartbeat).toHaveBeenCalled();
-    const heartbeatRequest = requireRequestHeartbeatCall(requestHeartbeat);
-    expect(heartbeatRequest.source).toBe("cron");
-    expect(heartbeatRequest.intent).toBe("event");
-    expect(heartbeatRequest.reason).toBe("cron:test-next-heartbeat");
-    expect(heartbeatRequest.heartbeat).toEqual({ target: "last" });
+    const heartbeatRequest = requestHeartbeat.mock.calls[0]?.[0];
+    expect(heartbeatRequest?.source).toBe("cron");
+    expect(heartbeatRequest?.intent).toBe("event");
+    expect(heartbeatRequest?.reason).toBe("cron:test-next-heartbeat");
+    expect(heartbeatRequest?.heartbeat).toEqual({ target: "last" });
     expect(runHeartbeatOnce).not.toHaveBeenCalled();
   });
 });

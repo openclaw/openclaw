@@ -33,7 +33,8 @@ function makeRuntime() {
 }
 
 function plainErrorCalls(runtime: ReturnType<typeof makeRuntime>): string[] {
-  return runtime.error.mock.calls.map((call) => String(call[0]).replace(/\u001b\[[0-9;]*m/g, ""));
+  const ansiPattern = new RegExp(String.raw`\u001b\[[0-9;]*m`, "g");
+  return runtime.error.mock.calls.map((call) => String(call[0]).replace(ansiPattern, ""));
 }
 
 async function withCapturedStdout(run: () => Promise<void>): Promise<string> {

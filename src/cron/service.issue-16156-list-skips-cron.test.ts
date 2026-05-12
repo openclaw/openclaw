@@ -83,9 +83,9 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
     const updated = jobs.find((j) => j.id === job.id);
 
     // Job must have actually executed.
-    const [text, options] = requireEnqueueSystemEventCall(enqueueSystemEvent);
-    expect(text).toBe("cron-tick");
-    expect(options?.agentId).toBeUndefined();
+    const enqueueCall = enqueueSystemEvent.mock.calls[0];
+    expect(enqueueCall?.[0]).toBe("cron-tick");
+    expect(enqueueCall?.[1]?.agentId).toBeUndefined();
     expect(updated?.state.lastStatus).toBe("ok");
     // nextRunAtMs must advance to a future minute boundary after execution.
     expect(updated?.state.nextRunAtMs).toBeGreaterThan(firstDueAt);
@@ -128,9 +128,9 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
     const jobs = await cron.list({ includeDisabled: true });
     const updated = jobs.find((j) => j.id === job.id);
 
-    const [text, options] = requireEnqueueSystemEventCall(enqueueSystemEvent);
-    expect(text).toBe("tick-5");
-    expect(options?.agentId).toBeUndefined();
+    const enqueueCall = enqueueSystemEvent.mock.calls[0];
+    expect(enqueueCall?.[0]).toBe("tick-5");
+    expect(enqueueCall?.[1]?.agentId).toBeUndefined();
     expect(updated?.state.lastStatus).toBe("ok");
 
     cron.stop();
