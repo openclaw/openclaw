@@ -149,7 +149,7 @@ export async function getStatusSummary(
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
   taskMaintenanceModule.configureTaskRegistryMaintenance({
-    cronStoreKey: resolveCronStoreKey(),
+    cronStoreKey: resolveCronStoreKey(cfg.cron?.store),
   });
   const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
   const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary();
@@ -179,12 +179,7 @@ export async function getStatusSummary(
     if (cached) {
       return cached;
     }
-    let rows: Array<{ sessionKey: string; entry: SessionEntry }>;
-    try {
-      rows = listSessionEntries({ agentId });
-    } catch {
-      rows = [];
-    }
+    const rows = listSessionEntries({ agentId });
     sessionCache.set(agentId, rows);
     return rows;
   };

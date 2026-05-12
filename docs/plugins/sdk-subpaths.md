@@ -21,16 +21,16 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
 
 ## Plugin entry
 
-| Subpath                                   | Key exports                                                                                                                                                                  |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `plugin-sdk/plugin-entry`                 | `definePluginEntry`                                                                                                                                                          |
-| `plugin-sdk/core`                         | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema`, `buildJsonChannelConfigSchema`       |
-| `plugin-sdk/config-schema`                | `OpenClawSchema`                                                                                                                                                             |
-| `plugin-sdk/provider-entry`               | `defineSingleProviderPluginEntry`                                                                                                                                            |
-| `plugin-sdk/provider-ai`                  | OpenClaw-owned provider stream/model/message types plus simple streaming helpers used by bundled provider plugins                                                            |
-| `plugin-sdk/provider-ai-oauth`            | OpenClaw-owned OAuth helper facade for provider runtime code                                                                                                                 |
-| `plugin-sdk/migration`                    | Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems`                       |
-| `plugin-sdk/migration-runtime`            | Runtime migration helpers such as `copyMigrationFileItem`, `withCachedMigrationConfigRuntime`, and `writeMigrationReport`                                                    |
+| Subpath                        | Key exports                                                                                                                                                            |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk/plugin-entry`      | `definePluginEntry`                                                                                                                                                    |
+| `plugin-sdk/core`              | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema`, `buildJsonChannelConfigSchema` |
+| `plugin-sdk/config-schema`     | `OpenClawSchema`                                                                                                                                                       |
+| `plugin-sdk/provider-entry`    | `defineSingleProviderPluginEntry`                                                                                                                                      |
+| `plugin-sdk/provider-ai`       | OpenClaw-owned provider stream/model/message types plus simple streaming helpers used by bundled provider plugins                                                      |
+| `plugin-sdk/provider-ai-oauth` | OpenClaw-owned OAuth helper facade for provider runtime code                                                                                                           |
+| `plugin-sdk/migration`         | Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems`                 |
+| `plugin-sdk/migration-runtime` | Runtime migration helpers such as `copyMigrationFileItem`, `withCachedMigrationConfigRuntime`, and `writeMigrationReport`                                              |
 
 ### Deprecated compatibility and test helpers
 
@@ -239,9 +239,10 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/reply-history` | Shared short-window reply-history helpers and markers such as `buildHistoryContext`, `HISTORY_CONTEXT_MARKER`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
-    | `plugin-sdk/session-store-runtime` | SQLite-backed session row, session-key, updated-at, and transcript path helpers |
-    | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
-    | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
+    | `plugin-sdk/session-store-runtime` | SQLite-backed session row, session-key, updated-at, and transcript row helpers |
+    | `plugin-sdk/sqlite-runtime` | Focused SQLite database open/path helpers for first-party runtime and migration tests |
+    | `plugin-sdk/cron-store-runtime` | SQLite cron store load/save helpers |
+    | `plugin-sdk/state-paths` | Config, credentials, migration, and explicit operator-file path helpers; runtime state and caches belong in SQLite stores |
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Shared target resolver helpers |
@@ -256,8 +257,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/markdown-table-runtime` | Markdown table mode and conversion helpers |
     | `plugin-sdk/model-session-runtime` | Model/session override helpers such as `applyModelOverrideToSessionEntry` and `resolveAgentMaxConcurrent` |
     | `plugin-sdk/talk-config-runtime` | Talk provider config resolution helpers |
-    | `plugin-sdk/json-store` | Small JSON state read/write helpers |
-    | `plugin-sdk/file-lock` | Re-entrant file-lock helpers |
+    | `plugin-sdk/json-store` | External JSON config/import helpers; runtime state and caches belong in SQLite stores |
     | `plugin-sdk/persistent-dedupe` | SQLite-backed dedupe cache helpers |
     | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |
     | `plugin-sdk/acp-runtime-backend` | Lightweight ACP backend registration and reply-dispatch helpers for startup-loaded plugins |
@@ -272,7 +272,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/native-command-registry` | Native command registry/build/serialize helpers |
     | `plugin-sdk/agent-harness` | Experimental trusted-plugin surface for low-level agent harnesses: harness types, active-run steer/abort helpers, OpenClaw tool bridge helpers, runtime-plan tool policy helpers, terminal outcome classification, tool progress formatting/detail helpers, and attempt result utilities |
     | `plugin-sdk/provider-zai-endpoint` | Deprecated Z.AI provider-owned endpoint detection facade; use the Z.AI plugin public API |
-    | `plugin-sdk/async-lock-runtime` | Process-local async lock helper for small runtime state files |
+    | `plugin-sdk/async-lock-runtime` | Process-local async lock helper for small runtime critical sections |
     | `plugin-sdk/channel-activity-runtime` | Channel activity telemetry helper |
     | `plugin-sdk/concurrency-runtime` | Bounded async task concurrency helper |
     | `plugin-sdk/dedupe-runtime` | In-memory dedupe cache helpers |
@@ -291,7 +291,8 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/runtime-fetch` | Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
     | `plugin-sdk/response-limit-runtime` | Bounded response-body reader without the broad media runtime surface |
     | `plugin-sdk/session-binding-runtime` | Current conversation binding state without configured binding routing or pairing stores |
-    | `plugin-sdk/session-store-runtime` | SQLite session row helpers without broad config writes/maintenance imports |
+    | `plugin-sdk/session-store-runtime` | SQLite session row helpers without broad config writes, maintenance imports, or raw database openers |
+    | `plugin-sdk/sqlite-runtime` | Focused SQLite database helpers without session-row helper imports |
     | `plugin-sdk/context-visibility-runtime` | Context visibility resolution and supplemental context filtering without broad config/security imports |
     | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
     | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |
@@ -345,7 +346,8 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/memory-core-engine-runtime` | Memory index/search runtime facade |
     | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine exports |
     | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding contracts, registry access, local provider, and generic batch/remote helpers |
-    | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine exports |
+    | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine exports; use `memory-core-host-engine-session-transcripts` for SQLite transcript indexing helpers |
+    | `plugin-sdk/memory-core-host-engine-session-transcripts` | Memory host SQLite session transcript indexing exports |
     | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine exports |
     | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers |
     | `plugin-sdk/memory-core-host-query` | Memory host query helpers |

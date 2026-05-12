@@ -49,12 +49,13 @@ async function createTestStateDir(prefix: string): Promise<string> {
 
 type TestSessionRowsTarget = {
   agentId: string;
+  transcriptDir: string;
 };
 
 function resolveTestSessionRowsTarget(root: string, agentId = "main"): TestSessionRowsTarget {
-  void root;
   return {
     agentId,
+    transcriptDir: path.join(root, "transcript-fixtures", agentId),
   };
 }
 

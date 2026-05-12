@@ -62,9 +62,9 @@ async function loadTaskCancelConfig() {
 }
 
 function configureTaskMaintenanceFromConfig(): void {
-  getRuntimeConfig();
+  const cfg = getRuntimeConfig();
   configureTaskRegistryMaintenance({
-    cronStoreKey: resolveCronStoreKey(),
+    cronStoreKey: resolveCronStoreKey(cfg.cron?.store),
   });
 }
 
