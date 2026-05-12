@@ -30,7 +30,7 @@ overrides:
   yauzl: 3.2.1
   protobufjs: 7.5.6
   uuid: 14.0.0
-  undici: 6.25.0
+  undici@<6.24.0: 6.25.0
 
 packageExtensionsChecksum: sha256-oc/FAHkBR844HBfph1RZWyRMHHBpIFya25tyv5SGf6s=
 
@@ -211,8 +211,8 @@ importers:
         specifier: 1.1.38
         version: 1.1.38
       undici:
-        specifier: 6.25.0
-        version: 6.25.0
+        specifier: 8.2.0
+        version: 8.2.0
       web-push:
         specifier: 3.6.7
         version: 3.6.7
@@ -448,8 +448,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       undici:
-        specifier: 6.25.0
-        version: 6.25.0
+        specifier: 8.2.0
+        version: 8.2.0
 
   extensions/byteplus:
     devDependencies:
@@ -664,8 +664,8 @@ importers:
         specifier: 1.1.38
         version: 1.1.38
       undici:
-        specifier: 6.25.0
-        version: 6.25.0
+        specifier: 8.2.0
+        version: 8.2.0
       ws:
         specifier: 8.20.0
         version: 8.20.0
@@ -1326,8 +1326,8 @@ importers:
   extensions/qa-matrix:
     dependencies:
       undici:
-        specifier: 6.25.0
-        version: 6.25.0
+        specifier: 8.2.0
+        version: 8.2.0
     devDependencies:
       '@openclaw/matrix':
         specifier: workspace:*
@@ -1498,8 +1498,8 @@ importers:
         specifier: 1.1.38
         version: 1.1.38
       undici:
-        specifier: 6.25.0
-        version: 6.25.0
+        specifier: 8.2.0
+        version: 8.2.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1679,8 +1679,8 @@ importers:
         specifier: 1.1.38
         version: 1.1.38
       undici:
-        specifier: 6.25.0
-        version: 6.25.0
+        specifier: 8.2.0
+        version: 8.2.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -7938,6 +7938,14 @@ packages:
     resolution: {integrity: sha512-ZgpWDC5gmNiuY9CnLVXEH8rl50xhRCuLNA97fAUnKi8RRuV4E6KG31pDTsLVUKnohJE0I3XDrTeEydAXRw47xg==}
     engines: {node: '>=18.17'}
 
+  undici@7.25.0:
+    resolution: {integrity: sha512-xXnp4kTyor2Zq+J1FfPI6Eq3ew5h6Vl0F/8d9XU5zZQf1tX9s2Su1/3PiMmUANFULpmksxkClamIZcaUqryHsQ==}
+    engines: {node: '>=20.18.1'}
+
+  undici@8.2.0:
+    resolution: {integrity: sha512-Z+4Hx9GE26Lh9Upwfnc8C7SsrpBPGaM/Gm6kMFtiG7c+5IvQKlXi/t+9x9DrrCh29cww5TSP9YdVaBcnLDs5fQ==}
+    engines: {node: '>=22.19.0'}
+
   unhomoglyph@1.0.6:
     resolution: {integrity: sha512-7uvcWI3hWshSADBu4JpnyYbTVc7YlhF5GDW/oPD5AxIxl34k4wXR3WDkPnzLxkN32LiTCTKMQLtKVZiwki3zGg==}
 
@@ -9429,7 +9437,7 @@ snapshots:
       partial-json: 0.1.7
       proxy-agent: 6.5.0
       typebox: 1.1.38
-      undici: 6.25.0
+      undici: 7.25.0
       zod-to-json-schema: 3.25.2(zod@4.4.3)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
@@ -9460,7 +9468,7 @@ snapshots:
       proper-lockfile: 4.1.2
       strip-ansi: 7.2.0
       typebox: 1.1.38
-      undici: 6.25.0
+      undici: 7.25.0
       uuid: 14.0.0
       yaml: 2.9.0
     optionalDependencies:
@@ -13409,7 +13417,7 @@ snapshots:
       saxes: 6.0.0
       symbol-tree: 3.2.4
       tough-cookie: 4.1.3
-      undici: 6.25.0
+      undici: 7.25.0
       w3c-xmlserializer: 5.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -15571,6 +15579,10 @@ snapshots:
   undici-types@7.21.0: {}
 
   undici@6.25.0: {}
+
+  undici@7.25.0: {}
+
+  undici@8.2.0: {}
 
   unhomoglyph@1.0.6: {}
 
