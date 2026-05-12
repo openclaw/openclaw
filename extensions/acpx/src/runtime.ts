@@ -390,6 +390,34 @@ function isCodexAcpCommand(command: string | undefined): boolean {
   return /^codex-acp(?:-wrapper)?(?:\.[cm]?js)?$/i.test(scriptName);
 }
 
+function isClaudeAcpPackageSpec(value: string): boolean {
+  return /^@agentclientprotocol\/claude-agent-acp(?:@.+)?$/i.test(value.trim());
+}
+
+function isClaudeAcpCommand(command: string | undefined): boolean {
+  if (!command) {
+    return false;
+  }
+  const parts = unwrapEnvCommand(splitCommandParts(command.trim()));
+  if (!parts.length) {
+    return false;
+  }
+  if (parts.some(isClaudeAcpPackageSpec)) {
+    return true;
+  }
+  const commandName = basename(parts[0] ?? "");
+  if (/^claude-agent-acp(?:\.exe)?$/i.test(commandName)) {
+    return true;
+  }
+  // Generated wrappers are launched via `process.execPath`, which is
+  // `node.exe` on Windows.
+  if (!/^node(?:\.exe)?$/i.test(commandName)) {
+    return false;
+  }
+  const scriptName = basename(parts[1] ?? "");
+  return /^claude-agent-acp(?:-wrapper)?(?:\.[cm]?js)?$/i.test(scriptName);
+}
+
 function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never {
   throw new AcpRuntimeError(
     "ACP_INVALID_RUNTIME_OPTION",
@@ -889,10 +917,17 @@ export class AcpxRuntime implements AcpRuntime {
     const delegate = await this.resolveDelegateForHandle(input.handle);
     const command = await this.resolveCommandForHandle(input.handle);
     const key = input.key.trim().toLowerCase();
+    // Neither @zed-industries/codex-acp nor @agentclientprotocol/claude-agent-acp
+    // advertises a `timeout` config option; forwarding one triggers a JSON-RPC
+    // rejection that surfaces as ACP_TURN_FAILED. OpenClaw still enforces the
+    // per-turn timeout in-process via runTimeoutSeconds.
+    if (
+      (key === "timeout" || key === "timeout_seconds") &&
+      (isCodexAcpCommand(command) || isClaudeAcpCommand(command))
+    ) {
+      return;
+    }
     if (isCodexAcpCommand(command)) {
-      if (key === "timeout" || key === "timeout_seconds") {
-        return;
-      }
       if (
         key === "model" ||
         key === "thinking" ||
@@ -974,6 +1009,7 @@ export const __testing = {
   appendCodexAcpConfigOverrides,
   assertSupportedRuntimeSessionMode,
   codexAcpSessionModelId,
+  isClaudeAcpCommand,
   isCodexAcpCommand,
   normalizeCodexAcpModelOverride,
 };

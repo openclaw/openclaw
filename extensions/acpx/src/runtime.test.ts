@@ -475,7 +475,14 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(setConfigOption).not.toHaveBeenCalled();
   });
 
-  it("forwards timeout config controls for non-Codex ACP agents", async () => {
+  it("ignores unsupported claude-agent-acp timeout config controls", async () => {
+    // Regression for openclaw/openclaw#81127: claude-agent-acp rejects any
+    // `session/set_config_option` whose configId it does not advertise
+    // (`Unknown config option: timeout`), which previously surfaced to callers
+    // as ACP_TURN_FAILED whenever `sessions_spawn` was invoked with
+    // `timeoutSeconds`. OpenClaw still enforces the per-turn timeout
+    // in-process via runTimeoutSeconds; the wire option just must not leave
+    // the wrapper.
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         acpxRecordId: "agent:claude:acp:test",
@@ -497,13 +504,74 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       key: "timeout",
       value: "60",
     });
+    await runtime.setConfigOption({
+      handle,
+      key: "Timeout_Seconds",
+      value: "60",
+    });
+
+    expect(setConfigOption).not.toHaveBeenCalled();
+  });
+
+  it("still forwards non-timeout config controls for claude-agent-acp", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:claude:acp:test",
+        agentCommand: "npx @agentclientprotocol/claude-agent-acp",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:claude:acp:test",
+      acpxRecordId: "agent:claude:acp:test",
+    };
+
+    await runtime.setConfigOption({
+      handle,
+      key: "model",
+      value: "claude-sonnet-4.6",
+    });
 
     expect(setConfigOption).toHaveBeenCalledOnce();
     expect(setConfigOption).toHaveBeenCalledWith({
       handle,
-      key: "timeout",
-      value: "60",
+      key: "model",
+      value: "claude-sonnet-4.6",
     });
+  });
+
+  it("recognizes claude-agent-acp commands", () => {
+    expect(__testing.isClaudeAcpCommand("npx @agentclientprotocol/claude-agent-acp")).toBe(true);
+    expect(
+      __testing.isClaudeAcpCommand("npx -y @agentclientprotocol/claude-agent-acp@0.33.1"),
+    ).toBe(true);
+    expect(__testing.isClaudeAcpCommand("claude-agent-acp")).toBe(true);
+    expect(__testing.isClaudeAcpCommand("claude-agent-acp.exe")).toBe(true);
+    expect(
+      __testing.isClaudeAcpCommand(`node "/tmp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`),
+    ).toBe(true);
+    // Generated ACP wrapper commands are built from `process.execPath`, which
+    // is `node.exe` on Windows. The detector must accept that launcher so the
+    // bundled Claude ACP wrapper path does not slip past the timeout
+    // suppression on Windows hosts. Generated commands use forward-slash
+    // paths (Node accepts those on Windows) — matching the same pattern as
+    // the existing CODEX_ACP_WRAPPER_COMMAND fixture.
+    expect(
+      __testing.isClaudeAcpCommand(
+        `node.exe "C:/Users/runner/AppData/Local/Temp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`,
+      ),
+    ).toBe(true);
+    expect(
+      __testing.isClaudeAcpCommand(
+        `Node.EXE "C:/Users/runner/AppData/Local/Temp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`,
+      ),
+    ).toBe(true);
+    expect(__testing.isClaudeAcpCommand("openclaw acp")).toBe(false);
+    expect(__testing.isClaudeAcpCommand("npx @zed-industries/codex-acp")).toBe(false);
   });
 
   it("keeps stale persistent loads hidden until a fresh record is saved", async () => {
