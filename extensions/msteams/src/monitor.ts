@@ -13,6 +13,7 @@ import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { registerMSTeamsHandlers, type MSTeamsActivityHandler } from "./monitor-handler.js";
+import * as http from "node:http";
 import { createMSTeamsPollStoreFs, type MSTeamsPollStore } from "./polls.js";
 import {
   resolveMSTeamsChannelAllowlist,
@@ -242,6 +243,8 @@ export async function monitorMSTeamsProvider(
 
   log.info(`starting provider (port ${port})`);
 
+  // Wrap server startup in try-catch to log errors that prevent the server from starting
+  try {
   // Dynamic import to avoid loading SDK when provider is disabled
   const express = await import("express");
 
@@ -352,7 +355,9 @@ export async function monitorMSTeamsProvider(
   const configuredPath = msteamsCfg.webhook?.path ?? "/api/messages";
   const messageHandler = (req: Request, res: Response) => {
     void adapter
-      .process(req, res, (context: unknown) => handler.run!(context))
+      .process(req, res, (context: unknown) => {
+        return handler.run!(context);
+      })
       .catch((err: unknown) => {
         log.error("msteams webhook failed", { error: formatUnknownError(err) });
       });
@@ -370,20 +375,22 @@ export async function monitorMSTeamsProvider(
   });
 
   // Start listening and fail fast if bind/listen fails.
-  const httpServer = expressApp.listen(port);
+  const httpServer = http.createServer(expressApp);
+
   await new Promise<void>((resolve, reject) => {
     const onListening = () => {
-      httpServer.off("error", onError);
-      log.info(`msteams provider started on port ${port}`);
+      log.info(`msteams server listening on port ${port}`);
       resolve();
     };
-    const onError = (err: unknown) => {
-      httpServer.off("listening", onListening);
-      log.error("msteams server error", { error: formatUnknownError(err) });
+    const onError = (err: Error) => {
+      log.error(`msteams server failed to listen on port ${port}`, {
+        error: formatUnknownError(err),
+      });
       reject(err);
     };
     httpServer.once("listening", onListening);
     httpServer.once("error", onError);
+    httpServer.listen(port, "0.0.0.0");
   });
   applyMSTeamsWebhookTimeouts(httpServer);
 
@@ -411,6 +418,10 @@ export async function monitorMSTeamsProvider(
   });
 
   return { app: expressApp, shutdown };
+  } catch (err) {
+    runtime?.error(`msteams server startup failed: ${formatUnknownError(err)}`);
+    return { app: null, shutdown: async () => {} };
+  }
 }
 
 /**

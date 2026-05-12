@@ -457,7 +457,8 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
 
   handler.onMessage(async (context, next) => {
     try {
-      await handleTeamsMessage(context as MSTeamsTurnContext);
+      const ctx = context as MSTeamsTurnContext;
+      await handleTeamsMessage(ctx);
     } catch (err) {
       deps.runtime.error(`msteams handler failed: ${formatUnknownError(err)}`);
     }
