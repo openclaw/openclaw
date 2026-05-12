@@ -14,6 +14,7 @@ import {
   pairDeviceIdentity,
   resolveDeviceIdentityPath,
 } from "./device-authz.test-helpers.js";
+import { connectGatewayClient } from "./test-helpers.e2e.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -145,6 +146,7 @@ async function issuePairingScopedTokenForAdminApprovedDevice(name: string): Prom
 async function issueMixedRolePairingScopedDevice(name: string): Promise<{
   deviceId: string;
   identityPath: string;
+  identity: ReturnType<typeof loadDeviceIdentity>["identity"];
   pairingToken: string;
   publicKey: string;
 }> {
@@ -173,6 +175,7 @@ async function issueMixedRolePairingScopedDevice(name: string): Promise<{
   return {
     deviceId: loaded.identity.deviceId,
     identityPath: loaded.identityPath,
+    identity: loaded.identity,
     pairingToken,
     publicKey: loaded.publicKey,
   };
@@ -346,6 +349,51 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
       expect(pairedAfterApprove?.tokens?.node?.revokedAtMs).toBe(revokedNodeToken?.revokedAtMs);
     } finally {
       pairingWs?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("rejects local node reconnect after node token revocation", async () => {
+    const started = await startServerWithClient("secret");
+    const device = await issueMixedRolePairingScopedDevice("same-device-node-reconnect");
+
+    try {
+      await connectOk(started.ws);
+
+      const revoke = await rpcReq<{ revokedAtMs?: number }>(started.ws, "device.token.revoke", {
+        deviceId: device.deviceId,
+        role: "node",
+      });
+      expect(revoke.ok).toBe(true);
+      const pairedAfterRevoke = await getPairedDevice(device.deviceId);
+      const revokedNodeToken = pairedAfterRevoke?.tokens?.node;
+      expect(revokedNodeToken?.revokedAtMs).toBeTypeOf("number");
+
+      await expect(
+        connectGatewayClient({
+          url: `ws://127.0.0.1:${started.port}`,
+          token: "secret",
+          role: "node",
+          clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+          clientDisplayName: "node-token-revoked",
+          clientVersion: "1.0.0",
+          platform: "linux",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+          scopes: [],
+          commands: ["system.run"],
+          deviceIdentity: device.identity,
+          timeoutMessage: "timeout waiting for revoked node reconnect",
+        }),
+      ).rejects.toThrow(
+        "pairing required: device is asking for a higher role than currently approved",
+      );
+
+      const pairedAfterReconnect = await getPairedDevice(device.deviceId);
+      expect(pairedAfterReconnect?.tokens?.node?.token).toBe(revokedNodeToken?.token);
+      expect(pairedAfterReconnect?.tokens?.node?.revokedAtMs).toBe(revokedNodeToken?.revokedAtMs);
+    } finally {
       started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();
