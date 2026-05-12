@@ -302,12 +302,11 @@ describe("forkSessionFromParentRuntime", () => {
     }
     expect(fork.sessionId).not.toBe(parentSessionId);
     const forkedEntries = readTranscript("main", fork.sessionId) as Array<Record<string, unknown>>;
-    expect(forkedEntries[0]).toMatchObject({
-      type: "session",
-      id: fork.sessionId,
-      cwd,
-      parentTranscriptScope,
-    });
+    const forkedHeader = forkedEntries[0];
+    expect(forkedHeader?.type).toBe("session");
+    expect(forkedHeader?.id).toBe(fork.sessionId);
+    expect(forkedHeader?.cwd).toBe(cwd);
+    expect(forkedHeader?.parentTranscriptScope).toEqual(parentTranscriptScope);
     expect(forkedEntries.map((entry) => entry.type)).toEqual([
       "session",
       "message",
@@ -354,10 +353,9 @@ describe("forkSessionFromParentRuntime", () => {
     }
     const entries = readTranscript("main", fork.sessionId) as Array<Record<string, unknown>>;
     expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
-      type: "session",
-      id: fork.sessionId,
-      parentTranscriptScope,
-    });
+    const header = entries[0];
+    expect(header.type).toBe("session");
+    expect(header.id).toBe(fork.sessionId);
+    expect(header.parentTranscriptScope).toEqual(parentTranscriptScope);
   });
 });
