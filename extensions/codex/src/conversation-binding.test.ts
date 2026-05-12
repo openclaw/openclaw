@@ -369,19 +369,15 @@ describe("codex conversation binding", () => {
     expect(requests[1]?.params.sandbox).toBe("workspace-write");
     expect(requests[1]?.params.serviceTier).toBe("priority");
     expect(requests[1]?.params).not.toHaveProperty("modelProvider");
-    expect(requests[2]?.params).toMatchObject({
-      threadId: "thread-new",
-      approvalPolicy: "on-request",
-      serviceTier: "priority",
-    });
+    expect(requests[2]?.params.threadId).toBe("thread-new");
+    expect(requests[2]?.params.approvalPolicy).toBe("on-request");
+    expect(requests[2]?.params.serviceTier).toBe("priority");
     const savedBinding = await readCodexAppServerBinding(sessionId);
-    expect(savedBinding).toMatchObject({
-      threadId: "thread-new",
-      authProfileId: "work",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      serviceTier: "priority",
-    });
+    expect(savedBinding?.threadId).toBe("thread-new");
+    expect(savedBinding?.authProfileId).toBe("work");
+    expect(savedBinding?.approvalPolicy).toBe("on-request");
+    expect(savedBinding?.sandbox).toBe("workspace-write");
+    expect(savedBinding?.serviceTier).toBe("priority");
     expect(savedBinding?.modelProvider).toBeUndefined();
   });
 
