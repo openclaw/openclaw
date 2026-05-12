@@ -180,6 +180,7 @@ export function buildEmbeddedRunPayloads(params: {
   sessionKey: string;
   provider?: string;
   model?: string;
+  authMode?: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
@@ -228,6 +229,7 @@ export function buildEmbeddedRunPayloads(params: {
             sessionKey: params.sessionKey,
             provider: params.provider,
             model: params.model,
+            authMode: params.authMode,
           })
       : undefined;
   const rawErrorMessage = lastAssistantErrored

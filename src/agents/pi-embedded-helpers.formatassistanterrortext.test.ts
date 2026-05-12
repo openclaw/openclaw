@@ -146,6 +146,17 @@ describe("formatAssistantErrorText", () => {
     });
     expect(result).toBe(formatBillingErrorMessage("google", "gemini-3.1-pro-preview"));
   });
+  it("uses OAuth-specific billing message when authMode is oauth", () => {
+    const msg = makeAssistantError("insufficient credits");
+    const result = formatAssistantErrorText(msg, {
+      provider: "Anthropic",
+      model: "claude-3-5-sonnet",
+      authMode: "oauth",
+    });
+    expect(result).toBe(formatBillingErrorMessage("Anthropic", "claude-3-5-sonnet", "oauth"));
+    expect(result).toContain("account limit");
+    expect(result).not.toContain("API key");
+  });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");

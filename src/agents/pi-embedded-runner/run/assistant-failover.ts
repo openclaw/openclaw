@@ -53,6 +53,7 @@ export async function handleAssistantFailover(params: {
   config: OpenClawConfig | undefined;
   sessionKey?: string;
   authFailure: boolean;
+  authMode?: string;
   rateLimitFailure: boolean;
   billingFailure: boolean;
   cloudCodeAssistFormatError: boolean;
@@ -290,6 +291,7 @@ function resolveAssistantFailoverErrorMessage(params: {
           sessionKey: params.sessionKey,
           provider: params.activeErrorContext.provider,
           model: params.activeErrorContext.model,
+          authMode: params.authMode,
         })
       : undefined) ||
     params.lastAssistant?.errorMessage?.trim() ||
@@ -301,6 +303,7 @@ function resolveAssistantFailoverErrorMessage(params: {
           ? formatBillingErrorMessage(
               params.activeErrorContext.provider,
               params.activeErrorContext.model,
+              params.authMode,
             )
           : params.authFailure
             ? "LLM request unauthorized."

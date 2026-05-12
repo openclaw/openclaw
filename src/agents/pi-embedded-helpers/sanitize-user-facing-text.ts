@@ -27,11 +27,21 @@ import {
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
-export function formatBillingErrorMessage(provider?: string, model?: string): string {
+export function formatBillingErrorMessage(
+  provider?: string,
+  model?: string,
+  authMode?: string,
+): string {
   const providerName = provider?.trim();
   const modelName = model?.trim();
   const providerLabel =
     providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
+  if (authMode === "oauth") {
+    if (providerLabel) {
+      return `⚠️ ${providerLabel} returned a billing error — your ${providerName} account limit has been reached. Check your ${providerName} billing dashboard or switch to a different account.`;
+    }
+    return "⚠️ API provider returned a billing error — your account limit has been reached. Check your provider's billing dashboard or switch to a different account.";
+  }
   if (providerLabel) {
     return `⚠️ ${providerLabel} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
   }
