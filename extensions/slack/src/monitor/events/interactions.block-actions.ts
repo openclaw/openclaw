@@ -556,6 +556,7 @@ async function handleSlackExecApprovalInteraction(params: {
   const authorized = isPluginApproval
     ? pluginApprovalAuthorizedSender
     : execApprovalAuthorizedSender;
+  const allowPluginFallback = !isPluginApproval && pluginApprovalAuthorizedSender;
   if (!authorized) {
     params.ctx.runtime.log?.(
       `slack:interaction drop exec approval user=${params.parsed.userId} (not authorized)`,
@@ -570,7 +571,7 @@ async function handleSlackExecApprovalInteraction(params: {
       approvalId: approval.approvalId,
       decision: approval.decision,
       senderId: params.parsed.userId,
-      allowPluginFallback: pluginApprovalAuthorizedSender,
+      allowPluginFallback,
       clientDisplayName: `Slack approval (${params.parsed.userId.trim() || "unknown"})`,
     });
   } catch (error) {

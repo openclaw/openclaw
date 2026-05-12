@@ -972,11 +972,15 @@ describe("registerSlackInteractionEvents", () => {
       cfg: {
         channels: {
           slack: {
-            allowFrom: ["U123OWNER"],
-            execApprovals: {
-              enabled: true,
-              approvers: ["U999EXEC"],
-              target: "both",
+            accounts: {
+              default: {
+                allowFrom: ["U123OWNER"],
+                execApprovals: {
+                  enabled: true,
+                  approvers: ["U999EXEC"],
+                  target: "both",
+                },
+              },
             },
           },
         },
@@ -1022,7 +1026,7 @@ describe("registerSlackInteractionEvents", () => {
       approvalId: "plugin:req-123",
       decision: "allow-always",
       senderId: "U123OWNER",
-      allowPluginFallback: true,
+      allowPluginFallback: false,
       clientDisplayName: "Slack approval (U123OWNER)",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
@@ -1042,11 +1046,15 @@ describe("registerSlackInteractionEvents", () => {
       cfg: {
         channels: {
           slack: {
-            allowFrom: ["U123OWNER"],
-            execApprovals: {
-              enabled: true,
-              approvers: ["U999EXEC"],
-              target: "both",
+            accounts: {
+              default: {
+                allowFrom: ["U123OWNER"],
+                execApprovals: {
+                  enabled: true,
+                  approvers: ["U999EXEC"],
+                  target: "both",
+                },
+              },
             },
           },
         },
