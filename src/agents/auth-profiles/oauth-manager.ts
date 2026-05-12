@@ -268,7 +268,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
 
   function refreshFailureCredentialFingerprint(credential: OAuthCredential): string {
     return JSON.stringify(
-      Object.entries(credential).sort(([left], [right]) => left.localeCompare(right)),
+      Object.entries(credential).toSorted(([left], [right]) => left.localeCompare(right)),
     );
   }
 
@@ -276,7 +276,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     provider: string;
     profileId: string;
     credential: OAuthCredential;
-  }): unknown | null {
+  }): { error: unknown } | null {
     const key = refreshQueueKey(params.provider, params.profileId);
     const cached = cachedRefreshFailures.get(key);
     if (!cached) {
@@ -286,7 +286,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       cachedRefreshFailures.delete(key);
       return null;
     }
-    return cached.error;
+    return { error: cached.error };
   }
 
   function rememberRefreshFailure(params: {
@@ -485,7 +485,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             credential: credentialToRefresh,
           });
           if (cachedFailure) {
-            throw cachedFailure;
+            throw cachedFailure.error;
           }
 
           let refreshedCredentials: OAuthCredential | null;
