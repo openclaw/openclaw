@@ -50,11 +50,10 @@ describe("registerBackupCommand", () => {
 
   function expectForwardedOptions(command: typeof backupCreateCommand): Record<string, unknown> {
     expect(command).toHaveBeenCalledTimes(1);
-    const call = command.mock.calls[0];
-    if (!call) {
-      throw new Error("expected backup command call");
-    }
-    const [runtimeArg, options] = call as unknown as [typeof runtime, Record<string, unknown>];
+    const [runtimeArg, options] = command.mock.calls[0] as unknown as [
+      typeof runtime,
+      Record<string, unknown>,
+    ];
     expect(runtimeArg).toBe(runtime);
     return options;
   }
@@ -62,17 +61,13 @@ describe("registerBackupCommand", () => {
   it("runs backup create with forwarded options", async () => {
     await runCli(["backup", "create", "--output", "/tmp/backups", "--json", "--dry-run"]);
 
-    expect(backupCreateCommand).toHaveBeenCalledWith(
-      runtime,
-      expect.objectContaining({
-        output: "/tmp/backups",
-        json: true,
-        dryRun: true,
-        verify: true,
-        onlyConfig: false,
-        includeWorkspace: true,
-      }),
-    );
+    const options = expectForwardedOptions(backupCreateCommand);
+    expect(options.output).toBe("/tmp/backups");
+    expect(options.json).toBe(true);
+    expect(options.dryRun).toBe(true);
+    expect(options.verify).toBe(true);
+    expect(options.onlyConfig).toBe(false);
+    expect(options.includeWorkspace).toBe(true);
   });
 
   it("honors --no-include-workspace", async () => {
@@ -85,12 +80,8 @@ describe("registerBackupCommand", () => {
   it("honors --no-verify", async () => {
     await runCli(["backup", "create", "--no-verify"]);
 
-    expect(backupCreateCommand).toHaveBeenCalledWith(
-      runtime,
-      expect.objectContaining({
-        verify: false,
-      }),
-    );
+    const options = expectForwardedOptions(backupCreateCommand);
+    expect(options.verify).toBe(false);
   });
 
   it("forwards --only-config to backup create", async () => {
