@@ -366,10 +366,6 @@ function emitSessionsChanged(
             abortedLastRun: sessionRow.abortedLastRun,
             inputTokens: sessionRow.inputTokens,
             outputTokens: sessionRow.outputTokens,
-            lastChannel: sessionRow.lastChannel,
-            lastTo: sessionRow.lastTo,
-            lastAccountId: sessionRow.lastAccountId,
-            lastThreadId: sessionRow.lastThreadId,
             totalTokens: sessionRow.totalTokens,
             totalTokensFresh: sessionRow.totalTokensFresh,
             contextTokens: sessionRow.contextTokens,
@@ -983,7 +979,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         }),
         resetOverride: resolveChannelResetConfig({
           sessionCfg: cfg.session,
-          channel: routingInfo?.channel ?? entry?.lastChannel ?? entry?.channel ?? request.channel,
+          channel: routingInfo?.channel ?? entry?.channel ?? request.channel,
         }),
       });
       const freshness = entry
@@ -1064,12 +1060,14 @@ export const agentHandlers: GatewayRequestHandlers = {
           trustedGroup.groupSpace ??
           (trustRequestSelectors ? normalizedSpawned.groupSpace : undefined);
       }
-      const deliveryFields = normalizeSessionDeliveryFields(entry);
+      const deliveryFields = normalizeSessionDeliveryFields({
+        deliveryContext: entry?.deliveryContext,
+      });
       // When the session has no delivery context yet (e.g. a freshly-spawned subagent
       // with deliver: false), seed it from the request's channel/to/threadId params.
       // Without this, subagent sessions end up with a channel-only deliveryContext
       // and no `to`/`threadId`, which causes announce delivery to either target the
-      // wrong channel (when the parent's lastTo drifts) or fail entirely.
+      // wrong inherited route or fail entirely.
       const requestDeliveryHint = normalizeDeliveryContext({
         channel: request.channel?.trim(),
         to: request.to?.trim(),
@@ -1105,17 +1103,16 @@ export const agentHandlers: GatewayRequestHandlers = {
         sendPolicy: entry?.sendPolicy,
         skillsSnapshot: entry?.skillsSnapshot,
         deliveryContext: effectiveDeliveryFields.deliveryContext,
-        lastChannel: effectiveDeliveryFields.lastChannel ?? entry?.lastChannel,
-        lastTo: effectiveDeliveryFields.lastTo ?? entry?.lastTo,
-        lastAccountId: effectiveDeliveryFields.lastAccountId ?? entry?.lastAccountId,
-        lastThreadId: effectiveDeliveryFields.lastThreadId ?? entry?.lastThreadId,
         modelOverride: entry?.modelOverride,
         providerOverride: entry?.providerOverride,
         label: labelValue,
         spawnedBy: spawnedByValue,
         spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
         spawnDepth: entry?.spawnDepth,
-        channel: entry?.channel ?? request.channel?.trim(),
+        channel:
+          effectiveDeliveryFields.deliveryContext?.channel ??
+          entry?.channel ??
+          request.channel?.trim(),
         groupId: resolvedGroupId,
         groupChannel: resolvedGroupChannel,
         space: resolvedGroupSpace,

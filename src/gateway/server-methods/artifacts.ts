@@ -315,8 +315,10 @@ async function loadArtifacts(
   }
   const artifacts: ArtifactRecord[] = [];
   await visitSessionMessagesAsync(
-    sessionId,
-    entry?.sessionFile,
+    {
+      agentId: resolveAgentIdFromSessionKey(sessionKey),
+      sessionId,
+    },
     (message, seq) => {
       collectArtifactsFromMessage({
         message,
