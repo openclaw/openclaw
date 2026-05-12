@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import type { PluginCliBackendEntry } from "../plugins/cli-backends.runtime.js";
 import { __testing as setupRegistryRuntimeTesting } from "../plugins/setup-registry.runtime.js";
 import { isCliProvider } from "./model-selection-cli.js";
 
-const resolveRuntimeCliBackendsMock = vi.hoisted(() => vi.fn(() => []));
+const resolveRuntimeCliBackendsMock = vi.hoisted(() =>
+  vi.fn<() => PluginCliBackendEntry[]>(() => []),
+);
 vi.mock("../plugins/cli-backends.runtime.js", () => ({
   resolveRuntimeCliBackends: resolveRuntimeCliBackendsMock,
 }));
