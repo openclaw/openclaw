@@ -178,6 +178,12 @@ export const AgentDefaultsSchema = z
         reserveTokens: z.number().int().nonnegative().optional(),
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
+        // Context-window-relative variants — value in (0, 1]. Resolved
+        // against the active model's context budget at runtime; ignored
+        // when the absolute sibling field is also set. See #72790.
+        reserveTokensShare: z.number().gt(0).max(1).optional(),
+        keepRecentTokensShare: z.number().gt(0).max(1).optional(),
+        reserveTokensFloorShare: z.number().gt(0).max(1).optional(),
         maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
         customInstructions: z.string().optional(),
         identifierPolicy: z

@@ -329,6 +329,90 @@ describe("applyPiCompactionSettingsFromConfig", () => {
 
     expect(result.compaction.reserveTokens).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
   });
+
+  it("resolves reserveTokensShare against the active context budget (#72790)", () => {
+    const settingsManager = {
+      getCompactionReserveTokens: () => 4_000,
+      getCompactionKeepRecentTokens: () => 8_000,
+      applyOverrides: vi.fn(),
+    };
+    // 10% of a 200 000-token context = 20 000.
+    const cfg = {
+      agents: { defaults: { compaction: { reserveTokensShare: 0.1 } } },
+    } as const;
+
+    const result = applyPiCompactionSettingsFromConfig({
+      settingsManager,
+      cfg,
+      contextTokenBudget: 200_000,
+    });
+
+    expect(result.compaction.reserveTokens).toBe(20_000);
+  });
+
+  it("absolute reserveTokens wins over reserveTokensShare when both are set (#72790)", () => {
+    const settingsManager = {
+      getCompactionReserveTokens: () => 4_000,
+      getCompactionKeepRecentTokens: () => 8_000,
+      applyOverrides: vi.fn(),
+    };
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: { reserveTokens: 7_500, reserveTokensShare: 0.1 },
+        },
+      },
+    } as const;
+
+    const result = applyPiCompactionSettingsFromConfig({
+      settingsManager,
+      cfg,
+      contextTokenBudget: 200_000,
+    });
+
+    // Absolute 7 500 wins over share-derived 20 000; the floor of 20 000
+    // still applies and bumps the actual override up.
+    expect(result.compaction.reserveTokens).toBeGreaterThanOrEqual(
+      DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
+    );
+  });
+
+  it("ignores reserveTokensShare when contextTokenBudget is unknown (#72790)", () => {
+    const settingsManager = {
+      getCompactionReserveTokens: () => 4_000,
+      getCompactionKeepRecentTokens: () => 8_000,
+      applyOverrides: vi.fn(),
+    };
+    const cfg = {
+      agents: { defaults: { compaction: { reserveTokensShare: 0.5 } } },
+    } as const;
+
+    const result = applyPiCompactionSettingsFromConfig({ settingsManager, cfg });
+
+    // Share cannot be resolved without a context budget, so the floor
+    // default takes effect instead.
+    expect(result.compaction.reserveTokens).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
+  });
+
+  it("resolves keepRecentTokensShare and respects positive-int constraint (#72790)", () => {
+    const settingsManager = {
+      getCompactionReserveTokens: () => 30_000,
+      getCompactionKeepRecentTokens: () => 8_000,
+      applyOverrides: vi.fn(),
+    };
+    const cfg = {
+      agents: { defaults: { compaction: { keepRecentTokensShare: 0.15 } } },
+    } as const;
+
+    const result = applyPiCompactionSettingsFromConfig({
+      settingsManager,
+      cfg,
+      contextTokenBudget: 200_000,
+    });
+
+    // 15% of 200 000 = 30 000 keepRecentTokens.
+    expect(result.compaction.keepRecentTokens).toBe(30_000);
+  });
 });
 
 describe("resolveCompactionReserveTokensFloor", () => {
@@ -347,6 +431,40 @@ describe("resolveCompactionReserveTokensFloor", () => {
         agents: { defaults: { compaction: { reserveTokensFloor: 0 } } },
       }),
     ).toBe(0);
+  });
+
+  it("resolves reserveTokensFloorShare against the active context budget (#72790)", () => {
+    expect(
+      resolveCompactionReserveTokensFloor(
+        {
+          agents: { defaults: { compaction: { reserveTokensFloorShare: 0.1 } } },
+        },
+        200_000,
+      ),
+    ).toBe(20_000);
+  });
+
+  it("absolute reserveTokensFloor wins over reserveTokensFloorShare (#72790)", () => {
+    expect(
+      resolveCompactionReserveTokensFloor(
+        {
+          agents: {
+            defaults: {
+              compaction: { reserveTokensFloor: 15_000, reserveTokensFloorShare: 0.1 },
+            },
+          },
+        },
+        200_000,
+      ),
+    ).toBe(15_000);
+  });
+
+  it("falls back to the default when reserveTokensFloorShare is set but context budget is unknown (#72790)", () => {
+    expect(
+      resolveCompactionReserveTokensFloor({
+        agents: { defaults: { compaction: { reserveTokensFloorShare: 0.1 } } },
+      }),
+    ).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
   });
 });
 describe("resolveEffectiveCompactionMode", () => {

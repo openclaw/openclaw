@@ -490,6 +490,27 @@ export type AgentCompactionConfig = {
   keepRecentTokens?: number;
   /** Minimum reserve tokens enforced for Pi compaction (0 disables the floor). */
   reserveTokensFloor?: number;
+  /**
+   * Context-window-relative variant of `reserveTokens`. Resolved at runtime
+   * against the active model's context budget when known, and ignored when
+   * the absolute `reserveTokens` is also set. Value must be in (0, 1].
+   * See #72790.
+   */
+  reserveTokensShare?: number;
+  /**
+   * Context-window-relative variant of `keepRecentTokens`. Resolved at
+   * runtime against the active model's context budget when known, and
+   * ignored when the absolute `keepRecentTokens` is also set. Value must
+   * be in (0, 1]. See #72790.
+   */
+  keepRecentTokensShare?: number;
+  /**
+   * Context-window-relative variant of `reserveTokensFloor`. Resolved at
+   * runtime against the active model's context budget when known, and
+   * ignored when the absolute `reserveTokensFloor` is also set. Value
+   * must be in (0, 1]. See #72790.
+   */
+  reserveTokensFloorShare?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
   maxHistoryShare?: number;
   /** Additional compaction-summary instructions that can preserve language or persona continuity. */
