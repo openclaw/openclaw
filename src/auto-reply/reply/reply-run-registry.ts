@@ -1,3 +1,7 @@
+import {
+  markDiagnosticEmbeddedRunEnded,
+  markDiagnosticEmbeddedRunStarted,
+} from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
@@ -180,6 +184,10 @@ function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | und
 }
 
 function clearReplyRunState(params: { sessionKey: string; sessionId: string }): void {
+  markDiagnosticEmbeddedRunEnded({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+  });
   replyRunState.activeRunsByKey.delete(params.sessionKey);
   if (replyRunState.activeSessionIdsByKey.get(params.sessionKey) === params.sessionId) {
     replyRunState.activeSessionIdsByKey.delete(params.sessionKey);
@@ -303,11 +311,13 @@ export function createReplyOperation(params: {
         );
       }
       replyRunState.activeKeysBySessionId.delete(currentSessionId);
+      markDiagnosticEmbeddedRunEnded({ sessionId: currentSessionId, sessionKey });
       registerWaitSessionId(sessionKey, currentSessionId);
       currentSessionId = normalizedNextSessionId;
       replyRunState.activeSessionIdsByKey.set(sessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
       registerWaitSessionId(sessionKey, currentSessionId);
+      markDiagnosticEmbeddedRunStarted({ sessionId: currentSessionId, sessionKey });
     },
     attachBackend(handle) {
       if (result) {
@@ -372,6 +382,7 @@ export function createReplyOperation(params: {
   replyRunState.activeSessionIdsByKey.set(sessionKey, currentSessionId);
   replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
   registerWaitSessionId(sessionKey, currentSessionId);
+  markDiagnosticEmbeddedRunStarted({ sessionId: currentSessionId, sessionKey });
 
   return operation;
 }
