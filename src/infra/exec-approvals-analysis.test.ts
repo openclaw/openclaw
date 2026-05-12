@@ -825,6 +825,38 @@ describe("exec approvals shell analysis", () => {
       }
     });
 
+    it("preserves PowerShell file arguments during inline fallback", () => {
+      const dir = makeTempDir();
+      const pwshPath = path.join(dir, "pwsh");
+      const scriptPath = path.join(dir, "script.ps1");
+      for (const file of [pwshPath, scriptPath]) {
+        fs.writeFileSync(file, "");
+        fs.chmodSync(file, 0o755);
+      }
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({
+          argv: ["pwsh", "-File", scriptPath, "-ExtraArg"],
+          cwd: dir,
+          env,
+        });
+        expect(analysis.ok).toBe(true);
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: scriptPath, argPattern: "^\x00\x00$" }],
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it.each([
       { name: "slash encoded-command alias", argv: ["pwsh", "/ec", "ZQBjAGgAbwA="] },
       { name: "encoded-command prefix abbreviation", argv: ["pwsh", "-en", "ZQBjAGgAbwA="] },

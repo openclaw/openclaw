@@ -279,6 +279,11 @@ describe("resolvePowerShellInlineCommandMatch", () => {
       expected: { command: "Get-Date", valueTokenIndex: 4 },
     },
     {
+      name: "file script arguments",
+      argv: ["pwsh", "-File", "script.ps1", "-ExtraArg"],
+      expected: { command: "script.ps1 -ExtraArg", valueTokenIndex: 2 },
+    },
+    {
       name: "stops at the first positional argument",
       argv: ["pwsh", "script.ps1", "/ec", "ZQBjAGgAbwA="],
       expected: { command: null, valueTokenIndex: null },

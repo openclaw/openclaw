@@ -23,15 +23,19 @@ const POWERSHELL_COMMAND_FLAGS = [
   ...expandPowerShellSwitchPrefixForms("commandwithargs", "cwa"),
   ...expandPowerShellSwitchForms(["cwa"]),
 ];
+const POWERSHELL_FILE_FLAGS = expandPowerShellSwitchPrefixForms("file", "f");
 
 export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
   ...POWERSHELL_COMMAND_FLAGS,
-  ...expandPowerShellSwitchPrefixForms("file", "f"),
+  ...POWERSHELL_FILE_FLAGS,
   ...expandPowerShellSwitchPrefixForms("encodedcommand", "e"),
   ...expandPowerShellSwitchPrefixForms("ec", "e"),
 ]);
 
-const POWERSHELL_INLINE_REST_COMMAND_FLAGS = new Set(POWERSHELL_COMMAND_FLAGS);
+const POWERSHELL_INLINE_REST_COMMAND_FLAGS = new Set([
+  ...POWERSHELL_COMMAND_FLAGS,
+  ...POWERSHELL_FILE_FLAGS,
+]);
 
 const POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
   ...expandPowerShellSwitchPrefixForms("configurationfile", "conf"),
