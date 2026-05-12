@@ -11,7 +11,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
-import { extractDeliveryInfo } from "./delivery-info.js";
+import { extractDeliveryInfo, parseSessionThreadInfo } from "./delivery-info.js";
 import { upsertSessionEntry } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
@@ -59,6 +59,26 @@ function corruptStoredEntryJson(params: {
   );
 }
 
+function removeTypedConversationRows(params: {
+  agentId: string;
+  env: NodeJS.ProcessEnv;
+  sessionId: string;
+}): void {
+  const database = openOpenClawAgentDatabase({ agentId: params.agentId, env: params.env });
+  const db = getNodeSqliteKysely<DeliveryInfoTestDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .updateTable("sessions")
+      .set({ primary_conversation_id: null })
+      .where("session_id", "=", params.sessionId),
+  );
+  executeSqliteQuerySync(
+    database.db,
+    db.deleteFrom("session_conversations").where("session_id", "=", params.sessionId),
+  );
+}
+
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -74,6 +94,38 @@ beforeEach(() => {
 });
 
 describe("extractDeliveryInfo", () => {
+  it("parses base session and thread/topic ids", () => {
+    expect(parseSessionThreadInfo("agent:main:telegram:group:1:topic:55")).toEqual({
+      baseSessionKey: "agent:main:telegram:group:1",
+      threadId: "55",
+    });
+    expect(parseSessionThreadInfo("agent:main:slack:channel:C1:thread:123.456")).toEqual({
+      baseSessionKey: "agent:main:slack:channel:C1",
+      threadId: "123.456",
+    });
+    expect(
+      parseSessionThreadInfo(
+        "agent:main:matrix:channel:!room:example.org:thread:$AbC123:example.org",
+      ),
+    ).toEqual({
+      baseSessionKey: "agent:main:matrix:channel:!room:example.org",
+      threadId: "$AbC123:example.org",
+    });
+    expect(
+      parseSessionThreadInfo(
+        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      ),
+    ).toEqual({
+      baseSessionKey:
+        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      threadId: undefined,
+    });
+    expect(parseSessionThreadInfo(undefined)).toEqual({
+      baseSessionKey: undefined,
+      threadId: undefined,
+    });
+  });
+
   it("returns typed delivery context for direct session keys", () => {
     const { env } = useTempStateDir();
     const sessionKey = "agent:main:webchat:dm:user-123";
@@ -136,20 +188,8 @@ describe("extractDeliveryInfo", () => {
         accountId: "default",
       }),
     });
-
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const db = getNodeSqliteKysely<DeliveryInfoTestDatabase>(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("sessions")
-        .set({ primary_conversation_id: null })
-        .where("session_key", "=", sessionKey),
-    );
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("session_conversations").where("session_id", "=", "session-1"),
-    );
+    corruptStoredEntryJson({ agentId: "main", env, sessionKey });
+    removeTypedConversationRows({ agentId: "main", env, sessionId: "session-1" });
 
     expect(extractDeliveryInfo(sessionKey)).toEqual({
       deliveryContext: undefined,
@@ -157,7 +197,7 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("does not fall back to base sessions for :thread: keys", () => {
+  it("falls back to base sessions for thread keys", () => {
     const { env } = useTempStateDir();
     const baseKey = "agent:main:slack:channel:C0123ABC";
     const threadKey = `${baseKey}:thread:1234567890.123456`;
@@ -173,12 +213,16 @@ describe("extractDeliveryInfo", () => {
     });
 
     expect(extractDeliveryInfo(threadKey)).toEqual({
-      deliveryContext: undefined,
-      threadId: undefined,
+      deliveryContext: {
+        channel: "slack",
+        to: "slack:C0123ABC",
+        accountId: "workspace-1",
+      },
+      threadId: "1234567890.123456",
     });
   });
 
-  it("does not fall back to base sessions for :topic: keys", () => {
+  it("falls back to base sessions for topic keys", () => {
     const { env } = useTempStateDir();
     const baseKey = "agent:main:telegram:group:98765";
     const topicKey = `${baseKey}:topic:55`;
@@ -197,8 +241,13 @@ describe("extractDeliveryInfo", () => {
     });
 
     expect(extractDeliveryInfo(topicKey)).toEqual({
-      deliveryContext: undefined,
-      threadId: undefined,
+      deliveryContext: {
+        channel: "telegram",
+        to: "group:98765",
+        accountId: "main",
+        threadId: "55",
+      },
+      threadId: "55",
     });
   });
 
@@ -285,7 +334,7 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("does not fall back to the base session when a thread entry only has partial route metadata", () => {
+  it("falls back to the base session when a thread entry only has partial route metadata", () => {
     const { env } = useTempStateDir();
     const baseKey = "agent:main:matrix:channel:!MixedCase:example.org";
     const threadKey = `${baseKey}:thread:$thread-event`;
@@ -311,8 +360,12 @@ describe("extractDeliveryInfo", () => {
     });
 
     expect(extractDeliveryInfo(threadKey)).toEqual({
-      deliveryContext: undefined,
-      threadId: undefined,
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:example.org",
+        accountId: "default",
+      },
+      threadId: "$thread-event",
     });
   });
 });

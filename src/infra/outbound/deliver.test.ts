@@ -2221,9 +2221,12 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(chunker).toHaveBeenCalledWith("**bold**", 4000);
-    const sendTextParams = requireMockCallArg(sendText, "sendText");
-    expect(sendTextParams.text).toBe("<b>bold</b>");
-    expect(sendTextParams.formatting).toEqual({ parseMode: "HTML" });
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "<b>bold</b>",
+        formatting: { parseMode: "HTML" },
+      }),
+    );
   });
 
   it("passes config through for plugin media sends", async () => {
