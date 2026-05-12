@@ -1,12 +1,16 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { runWithModelFallback } from "./model-fallback.js";
-import { updateSessionStoreEntry, resolveStoredSessionKeyForSessionId } from "./command/session.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { updateSessionStoreEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
 import { FailoverError } from "./failover-error.js";
+import { runWithModelFallback } from "./model-fallback.js";
 
 vi.mock("./command/session.js", () => ({
-  updateSessionStoreEntry: vi.fn(),
   resolveStoredSessionKeyForSessionId: vi.fn(),
+}));
+
+vi.mock("../config/sessions.js", () => ({
+  updateSessionStoreEntry: vi.fn(),
 }));
 
 vi.mock("./auth-profiles/source-check.js", () => ({
@@ -65,7 +69,6 @@ describe("model exhaustion session persistence", () => {
     expect(result.result).toBe("ok");
     expect(result.provider).toBe("google");
     expect(result.model).toBe("gemini-1.5-pro");
-    // Should have skipped gpt-4o and claude-3-5-sonnet
     expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith("google", "gemini-1.5-pro");
   });
@@ -81,8 +84,15 @@ describe("model exhaustion session persistence", () => {
       storePath,
     });
 
-    const run = vi.fn()
-      .mockRejectedValueOnce(new FailoverError("rate limit", { reason: "rate_limit", provider: "openai", model: "gpt-4o" }))
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("rate limit", {
+          reason: "rate_limit",
+          provider: "openai",
+          model: "gpt-4o",
+        }),
+      )
       .mockResolvedValueOnce("ok");
 
     await runWithModelFallback({
@@ -96,8 +106,7 @@ describe("model exhaustion session persistence", () => {
     expect(updateSessionStoreEntry).toHaveBeenCalled();
     const updateCall = (updateSessionStoreEntry as any).mock.calls[0][0];
     expect(updateCall.sessionKey).toBe(sessionKey);
-    
-    // Test the update function
+
     const entry = { sessionId };
     const updateResult = await updateCall.update(entry);
     expect(updateResult.exhaustedModels).toBeDefined();
