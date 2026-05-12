@@ -728,16 +728,10 @@ describe("describeImageWithModel", () => {
     });
 
     await expect(result).rejects.toThrow(/image description deadline exceeded \(budget 100ms\)/);
-    // The completion task is constructed before the deadline check fires (so
-    // complete() may be observed once), but the controller is aborted before
-    // any retry can be issued — what we care about is the absence of the
-    // 1ms-loop error string, not the call count.
-    for (const call of completeMock.mock.calls) {
-      const [, , callOptions] = call;
-      if (callOptions?.signal) {
-        expect(callOptions.signal.aborted).toBe(true);
-      }
-    }
+    // The task argument is now passed lazily, so the exceeded-deadline
+    // branch must short-circuit before any provider-stream side effect runs
+    // (clawsweeper P2 finding on #80807).
+    expect(completeMock).not.toHaveBeenCalled();
     dateSpy.mockRestore();
   });
 

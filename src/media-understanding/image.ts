@@ -295,23 +295,30 @@ function resolveImageDescriptionTimeoutMs(
   return { kind: "ms", remainingMs: remaining };
 }
 
+function abortAndThrowImageDescriptionDeadlineExceeded(
+  controller: AbortController,
+  deadline: ImageDescriptionDeadline & { kind: "exceeded" },
+): never {
+  controller.abort();
+  throw new Error(`image description deadline exceeded (budget ${deadline.originalMs}ms)`);
+}
+
 async function withImageDescriptionTimeout<T>(params: {
-  task: Promise<T>;
+  task: () => Promise<T>;
   deadline: ImageDescriptionDeadline | undefined;
   controller: AbortController;
 }): Promise<T> {
   if (params.deadline === undefined) {
-    return await params.task;
+    return await params.task();
   }
   if (params.deadline.kind === "exceeded") {
-    params.controller.abort();
-    throw new Error(`image description deadline exceeded (budget ${params.deadline.originalMs}ms)`);
+    abortAndThrowImageDescriptionDeadlineExceeded(params.controller, params.deadline);
   }
   const remainingMs = params.deadline.remainingMs;
   let timeout: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
-      params.task,
+      params.task(),
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           params.controller.abort();
@@ -340,7 +347,7 @@ async function describeImagesWithModelInternal(
     const resolved = await withImageDescriptionTimeout({
       controller,
       deadline: resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs),
-      task: resolveImageRuntime(params),
+      task: () => resolveImageRuntime(params),
     });
     apiKey = resolved.apiKey;
     model = resolved.model;
@@ -388,13 +395,14 @@ async function describeImagesWithModelInternal(
     return await withImageDescriptionTimeout({
       controller,
       deadline,
-      task: complete(model, context, {
-        apiKey,
-        maxTokens,
-        signal: controller.signal,
-        ...(completeTimeoutMs !== undefined ? { timeoutMs: completeTimeoutMs } : {}),
-        ...(payloadHandler ? { onPayload: payloadHandler } : {}),
-      }),
+      task: () =>
+        complete(model, context, {
+          apiKey,
+          maxTokens,
+          signal: controller.signal,
+          ...(completeTimeoutMs !== undefined ? { timeoutMs: completeTimeoutMs } : {}),
+          ...(payloadHandler ? { onPayload: payloadHandler } : {}),
+        }),
     });
   };
 
