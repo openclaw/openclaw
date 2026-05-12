@@ -234,6 +234,70 @@ describe("gateway run option collisions", () => {
     );
   });
 
+  it("forwards --host literal as advanced bind override", async () => {
+    // Rockie multitenant runtime: Fly 6PN is IPv6-only so the gateway needs
+    // to bind to `::` (dual-stack). The CLI exposes this via --host which
+    // bypasses bind resolution and passes through to startGatewayServer.
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--token",
+      "tok_host",
+      "--bind",
+      "lan",
+      "--host",
+      "::",
+      "--allow-unconfigured",
+    ]);
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        bind: "lan",
+        host: "::",
+      }),
+    );
+  });
+
+  it("forwards --openai-chat-completions to startGatewayServer", async () => {
+    // Rockie BYOK mode requires `POST /v1/chat/completions` which is
+    // disabled-by-default upstream. The CLI flag wires through to
+    // startGatewayServer's openAiChatCompletionsEnabled option.
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--token",
+      "tok_chat",
+      "--openai-chat-completions",
+      "--allow-unconfigured",
+    ]);
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        openAiChatCompletionsEnabled: true,
+      }),
+    );
+  });
+
+  it("omits openAiChatCompletionsEnabled when --openai-chat-completions is absent", async () => {
+    // Default-off preserves upstream behavior for non-Rockie callers.
+    await runGatewayCli([
+      "gateway",
+      "run",
+      "--token",
+      "tok_default",
+      "--allow-unconfigured",
+    ]);
+
+    const calls = startGatewayServer.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    const lastCallOpts = calls[calls.length - 1]?.[1] as Record<string, unknown> | undefined;
+    expect(lastCallOpts).toBeDefined();
+    // Should NOT have the field set (so config-file default applies).
+    expect("openAiChatCompletionsEnabled" in (lastCallOpts ?? {})).toBe(false);
+  });
+
   it("blocks --force port cleanup from an older binary with newer config", async () => {
     configState.snapshot = {
       exists: true,

@@ -246,16 +246,21 @@ RUN chown -R runtime:runtime /app
 ENV HOME=/home/runtime
 ENV PATH=/home/runtime/.local/bin:/usr/local/bin:/usr/bin:/bin
 ENV MODE=byok
-ENV OPENCLAW_PORT=3000
-ENV OPENCLAW_BIND=lan
+# OPENCLAW_PORT / OPENCLAW_BIND / OPENCLAW_HOST defaults are managed by
+# overlay/multitenant/entrypoint.sh (port 18789, bind=lan, host=::). They
+# previously lived here as `ENV OPENCLAW_PORT=3000 OPENCLAW_BIND=lan`,
+# which silently overrode the entrypoint defaults and prevented
+# platform-context's OpenClawGatewayBackend from reaching the gateway
+# over Fly's IPv6-only 6PN. Leaving them unset means the entrypoint is
+# the single source of truth.
 
 USER runtime
 WORKDIR /home/runtime
 
-EXPOSE 3000
+EXPOSE 18789
 EXPOSE 7681
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.OPENCLAW_PORT||3000)+'/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" || exit 0
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.OPENCLAW_PORT||18789)+'/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" || exit 0
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD []

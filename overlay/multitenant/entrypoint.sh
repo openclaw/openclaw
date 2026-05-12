@@ -24,9 +24,18 @@ set -euo pipefail
 MODE="${MODE:-byok}"
 # OpenClaw gateway needs to listen on the Fly machine's external
 # interface so platform-context can HTTP-proxy to it through the
-# WireGuard tunnel. Default to 0.0.0.0; OPENCLAW_GATEWAY_TOKEN gates
-# the endpoint so this is safe (auth-required, not open).
-OPENCLAW_BIND="${OPENCLAW_BIND:-0.0.0.0}"
+# WireGuard tunnel. Fly's 6PN private network is IPv6-ONLY (addresses
+# in fdaa::/16), so we bind to `::` (the IPv6 unspecified address)
+# which on Linux dual-stack also accepts IPv4 connections — i.e. one
+# bind covers both host-local IPv4 healthchecks and the [fdaa::]:18789
+# inbound traffic from platform-context. Auth is gated by
+# OPENCLAW_GATEWAY_TOKEN, so wide-binding is safe.
+#
+# Use OPENCLAW_BIND=lan (a mode the gateway CLI recognizes) together
+# with --host so the CLI's bind-resolution stays out of the way; the
+# --host literal wins.
+OPENCLAW_BIND="${OPENCLAW_BIND:-lan}"
+OPENCLAW_HOST="${OPENCLAW_HOST:-::}"
 # Match the gateway's documented default (src/gateway/server.impl.ts:508)
 # so platform-context's OpenClawGatewayBackend can hit it without per-
 # tenant port config.
@@ -70,7 +79,7 @@ case "$MODE" in
     fi
     ;;
   byok|open-weights)
-    log "MODE=${MODE}; starting OpenClaw gateway on ${OPENCLAW_BIND}:${OPENCLAW_PORT}."
+    log "MODE=${MODE}; starting OpenClaw gateway on [${OPENCLAW_HOST}]:${OPENCLAW_PORT} (bind-mode=${OPENCLAW_BIND}, chat-completions=on)."
 
     # Gateway token: platform-context's OpenClawGatewayBackend sends
     # `Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN`. Reuse the broker
@@ -88,13 +97,20 @@ case "$MODE" in
     fi
 
     cd /app
-    GATEWAY_ARGS=(--port "$OPENCLAW_PORT" --bind "$OPENCLAW_BIND")
+    GATEWAY_ARGS=(--port "$OPENCLAW_PORT" --bind "$OPENCLAW_BIND" --host "$OPENCLAW_HOST")
     if [ -n "${OPENCLAW_GATEWAY_TOKEN:-}" ]; then
       GATEWAY_ARGS+=(--token "$OPENCLAW_GATEWAY_TOKEN")
     else
       GATEWAY_ARGS+=(--auth none)
     fi
     GATEWAY_ARGS+=(--allow-unconfigured)
+    # BYOK mode is fundamentally an OpenAI-compatible chat-completions
+    # proxy from platform-context's perspective (see
+    # platform-context/api/agent_backend.py:OpenClawGatewayBackend).
+    # Open-weights mode also targets the same endpoint. Upstream
+    # OpenClaw ships this route disabled-by-default, so we enable it
+    # here for both modes. Subscription mode never reaches this branch.
+    GATEWAY_ARGS+=(--openai-chat-completions)
     exec node /app/dist/index.js gateway "${GATEWAY_ARGS[@]}"
     ;;
   *)

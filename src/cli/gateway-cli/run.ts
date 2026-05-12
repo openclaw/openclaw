@@ -41,6 +41,19 @@ import { runGatewayLoop } from "./run-loop.js";
 type GatewayRunOpts = {
   port?: unknown;
   bind?: unknown;
+  /**
+   * Advanced bind-host override (bypasses `--bind` resolution). Used for IPv6
+   * literals like `::` on Fly machines whose 6PN private network is IPv6-only.
+   * Prefer `bind` unless you specifically need an explicit IP literal.
+   */
+  host?: unknown;
+  /**
+   * Toggle for the OpenAI-compatible `POST /v1/chat/completions` route.
+   * Off by default upstream. Required true for the Rockie BYOK runtime mode,
+   * where platform-context's OpenClawGatewayBackend proxies chat over this
+   * endpoint.
+   */
+  openaiChatCompletions?: boolean;
   token?: unknown;
   auth?: unknown;
   password?: unknown;
@@ -66,6 +79,7 @@ const gatewayLog = createSubsystemLogger("gateway");
 const GATEWAY_RUN_VALUE_KEYS = [
   "port",
   "bind",
+  "host",
   "token",
   "auth",
   "password",
@@ -86,6 +100,7 @@ const GATEWAY_RUN_BOOLEAN_KEYS = [
   "claudeCliLogs",
   "compact",
   "rawStream",
+  "openaiChatCompletions",
 ] as const;
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
@@ -780,7 +795,11 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
   gatewayLog.info("starting...");
   startupTrace.mark("cli.gateway-loop");
-  const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
+  // `--host <ip>` is an advanced override. When passed we use it as the
+  // health-probe host too, otherwise we resolve via the chosen bind mode.
+  const hostOverride = toOptionString(opts.host);
+  const healthHost = hostOverride ?? (await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost));
+  const openaiChatCompletionsOverride = opts.openaiChatCompletions ? true : undefined;
   const startLoop = async () =>
     await runGatewayLoop({
       runtime: defaultRuntime,
@@ -789,6 +808,10 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       start: async ({ startupStartedAt } = {}) =>
         await startGatewayServer(port, {
           bind,
+          ...(hostOverride ? { host: hostOverride } : {}),
+          ...(openaiChatCompletionsOverride !== undefined
+            ? { openAiChatCompletionsEnabled: openaiChatCompletionsOverride }
+            : {}),
           auth: authOverride,
           tailscale: tailscaleOverride,
           startupStartedAt,
@@ -846,6 +869,15 @@ export function addGatewayRunCommand(cmd: Command): Command {
     .option(
       "--bind <mode>",
       'Bind mode ("loopback"|"lan"|"tailnet"|"auto"|"custom"). Defaults to config gateway.bind (or loopback).',
+    )
+    .option(
+      "--host <ip>",
+      "Advanced: bypass bind resolution and listen on a specific IP literal (e.g. '::' for IPv6 dual-stack on Fly 6PN). Overrides --bind. Prefer --bind unless you know you need this.",
+    )
+    .option(
+      "--openai-chat-completions",
+      "Enable POST /v1/chat/completions (OpenAI-compatible). Off by default; required for BYOK mode where platform-context proxies chat via this endpoint.",
+      false,
     )
     .option(
       "--token <token>",
