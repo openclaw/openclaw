@@ -26,6 +26,12 @@ describe("resolveInlineCommandMatch", () => {
       expected: { command: "script.ps1", valueTokenIndex: 2 },
     },
     {
+      name: "extracts the next token for PowerShell -ec",
+      argv: ["pwsh", "-ec", "ZQBjAGgAbwA="],
+      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
+      expected: { command: "ZQBjAGgAbwA=", valueTokenIndex: 2 },
+    },
+    {
       name: "extracts the next token for PowerShell -f",
       argv: ["powershell", "-f", "script.ps1"],
       flags: POWERSHELL_INLINE_COMMAND_FLAGS,

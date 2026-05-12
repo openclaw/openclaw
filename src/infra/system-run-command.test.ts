@@ -46,6 +46,10 @@ describe("system run command helpers", () => {
     expect(extractShellCommandFromArgv(["cmd.exe", "/d", "/s", "/c", "echo hi"])).toBe("echo hi");
   });
 
+  test("extractShellCommandFromArgv extracts cmd.exe -c command", () => {
+    expect(extractShellCommandFromArgv(["cmd.exe", "/d", "/s", "-c", "echo hi"])).toBe("echo hi");
+  });
+
   test("extractShellCommandFromArgv unwraps /usr/bin/env shell wrappers", () => {
     expect(extractShellCommandFromArgv(["/usr/bin/env", "bash", "-c", "echo hi"])).toBe("echo hi");
     expect(extractShellCommandFromArgv(["/usr/bin/env", "FOO=bar", "zsh", "-c", "echo hi"])).toBe(
@@ -75,6 +79,7 @@ describe("system run command helpers", () => {
     { argv: ["pwsh", "-Command", "Get-Date"], expected: "Get-Date" },
     { argv: ["pwsh", "-File", "script.ps1"], expected: "script.ps1" },
     { argv: ["powershell", "-f", "script.ps1"], expected: "script.ps1" },
+    { argv: ["pwsh", "-ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
     { argv: ["pwsh", "-EncodedCommand", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
     { argv: ["powershell", "-enc", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
     { argv: ["busybox", "sh", "-c", "echo hi"], expected: "echo hi" },

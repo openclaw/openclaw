@@ -709,6 +709,56 @@ describe("exec approvals shell analysis", () => {
       expect(result.allowlistSatisfied).toBe(false);
     });
 
+    it("does not satisfy bare wrapper allowlist entries for inline cmd payloads", () => {
+      const dir = makeTempDir();
+      const cmdPath = path.join(dir, "cmd.exe");
+      fs.writeFileSync(cmdPath, "");
+      fs.chmodSync(cmdPath, 0o755);
+      try {
+        const result = evaluateShellAllowlist({
+          command: "cmd.exe -c echo sample",
+          allowlist: [{ pattern: cmdPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env: makePathEnv(dir),
+          platform: "win32",
+        });
+        expect(result.analysisOk).toBe(true);
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("evaluates inline cmd payloads against the inner executable", () => {
+      const dir = makeTempDir();
+      const cmdPath = path.join(dir, "cmd.exe");
+      const nodePath = path.join(dir, "node.exe");
+      for (const file of [cmdPath, nodePath]) {
+        fs.writeFileSync(file, "");
+        fs.chmodSync(file, 0o755);
+      }
+      try {
+        const result = evaluateShellAllowlist({
+          command: "cmd.exe -c node.exe app.js",
+          allowlist: [{ pattern: nodePath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env: makePathEnv(dir),
+          platform: "win32",
+        });
+        expect(result.analysisOk).toBe(true);
+        expect(result.allowlistSatisfied).toBe(true);
+        expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual([nodePath]);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it("satisfies allowlist when bare * wildcard is present", () => {
       const dir = makeTempDir();
       const binPath = path.join(dir, "mybin");
@@ -808,7 +858,7 @@ describe("exec approvals shell analysis", () => {
         });
       });
 
-      it("keeps single-command wrappers unchanged (no recursive allowlist lookup)", () => {
+      it("evaluates single-command wrappers against the inner payload", () => {
         if (process.platform === "win32") {
           return;
         }
@@ -823,7 +873,10 @@ describe("exec approvals shell analysis", () => {
             env,
           });
           expect(result.analysisOk).toBe(true);
-          expect(result.allowlistSatisfied).toBe(false);
+          expect(result.allowlistSatisfied).toBe(true);
+          expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual([gogPath]);
+          expect(result.segmentAllowlistEntries).toEqual([null]);
+          expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
         });
       });
     });

@@ -484,6 +484,21 @@ describe("extractShellWrapperCommand", () => {
       expectedCommand: { isWrapper: true, command: "Get-Date" },
     },
     {
+      argv: ["cmd.exe", "-c", "echo", "hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["cmd", "-k", "echo", "hi"],
+      expectedInline: "echo hi",
+      expectedCommand: { isWrapper: true, command: "echo hi" },
+    },
+    {
+      argv: ["pwsh", "-ec", "ZQBjAGgAbwA="],
+      expectedInline: "ZQBjAGgAbwA=",
+      expectedCommand: { isWrapper: true, command: "ZQBjAGgAbwA=" },
+    },
+    {
       argv: ["bash", "script.sh"],
       expectedInline: null,
       expectedCommand: { isWrapper: false, command: null },

@@ -16,7 +16,6 @@ import {
   resolveCommandResolutionFromArgv,
   resolvePolicyTargetCandidatePath,
   resolvePolicyTargetResolution,
-  splitCommandChain,
   splitCommandChainWithOperators,
   type ExecCommandAnalysis,
   type ExecCommandSegment,
@@ -383,6 +382,32 @@ type SegmentMatchEvaluation = {
   match: ExecAllowlistEntry | null;
 };
 
+function matchExecutableAllowlistForSegment(params: {
+  allowlist: ExecAllowlistEntry[];
+  candidateResolution: ExecutableResolution | null;
+  effectiveArgv: string[];
+  platform?: string | null;
+  inlineCommand: string | null;
+  isPositionalCarrierInvocation: boolean;
+}): ExecAllowlistEntry | null {
+  if (params.isPositionalCarrierInvocation) {
+    return null;
+  }
+  const match = matchAllowlist(
+    params.allowlist,
+    params.candidateResolution,
+    params.effectiveArgv,
+    params.platform,
+  );
+  if (
+    params.inlineCommand !== null &&
+    (typeof match?.argPattern !== "string" || match.argPattern.trim().length === 0)
+  ) {
+    return null;
+  }
+  return match;
+}
+
 function resolveShellWrapperScriptArgv(params: {
   shellScriptCandidatePath: string;
   effectiveArgv: string[];
@@ -429,14 +454,14 @@ function resolveSegmentAllowlistMatch(params: {
   const inlineCommand = extractBindableShellWrapperInlineCommand(allowlistSegment.argv);
   const isPositionalCarrierInvocation =
     inlineCommand !== null && isDirectShellPositionalCarrierInvocation(inlineCommand);
-  const executableMatch = isPositionalCarrierInvocation
-    ? null
-    : matchAllowlist(
-        params.context.allowlist,
-        candidateResolution,
-        effectiveArgv,
-        params.context.platform,
-      );
+  const executableMatch = matchExecutableAllowlistForSegment({
+    allowlist: params.context.allowlist,
+    candidateResolution,
+    effectiveArgv,
+    platform: params.context.platform,
+    inlineCommand,
+    isPositionalCarrierInvocation,
+  });
   const shellPositionalArgvCandidatePath =
     inlineCommand !== null
       ? resolveShellWrapperPositionalArgvCandidatePath({
@@ -521,7 +546,7 @@ function resolveSegmentSatisfaction(params: {
   return skillAllow ? "skills" : null;
 }
 
-function resolveInlineChainFallback(params: {
+function resolveInlineCommandFallback(params: {
   by: ExecSegmentSatisfiedBy;
   inlineCommand: string | null;
   context: ExecAllowlistContext;
@@ -530,47 +555,37 @@ function resolveInlineChainFallback(params: {
   if (params.by !== null || !params.inlineCommand) {
     return null;
   }
-  const inlineChainParts = splitCommandChain(params.inlineCommand);
-  if (!inlineChainParts || inlineChainParts.length <= 1) {
-    return null;
-  }
-  return evaluateShellWrapperInlineChain({
+  return evaluateShellWrapperInlineCommand({
     inlineCommand: params.inlineCommand,
     context: params.context,
     inlineDepth: params.inlineDepth + 1,
-    precomputedChainParts: inlineChainParts,
   });
 }
 
-function evaluateShellWrapperInlineChain(params: {
+function evaluateShellWrapperInlineCommand(params: {
   inlineCommand: string;
   context: ExecAllowlistContext;
   inlineDepth: number;
-  precomputedChainParts?: string[];
 }): InlineChainAllowlistEvaluation | null {
   if (params.inlineDepth >= MAX_SHELL_WRAPPER_INLINE_EVAL_DEPTH) {
     return null;
   }
-  if (isWindowsPlatform(params.context.platform)) {
+  if (hasShellLineContinuation(params.inlineCommand)) {
     return null;
   }
-  const chainParts = params.precomputedChainParts ?? splitCommandChain(params.inlineCommand);
-  if (!chainParts || chainParts.length <= 1) {
+  const analysis = analyzeShellCommand({
+    command: params.inlineCommand,
+    cwd: params.context.cwd,
+    env: params.context.env,
+    platform: params.context.platform,
+  });
+  if (!analysis.ok || analysis.segments.length === 0) {
     return null;
   }
 
   const matches: ExecAllowlistEntry[] = [];
-  for (const part of chainParts) {
-    const analysis = analyzeShellCommand({
-      command: part,
-      cwd: params.context.cwd,
-      env: params.context.env,
-      platform: params.context.platform,
-    });
-    if (!analysis.ok) {
-      return null;
-    }
-    const result = evaluateSegments(analysis.segments, params.context, params.inlineDepth);
+  for (const group of resolveAnalysisSegmentGroups(analysis)) {
+    const result = evaluateSegments(group, params.context, params.inlineDepth);
     if (!result.satisfied) {
       return null;
     }
@@ -616,7 +631,7 @@ function evaluateSegments(
       allowSkills,
       skillBinTrust,
     });
-    const inlineResult = resolveInlineChainFallback({
+    const inlineResult = resolveInlineCommandFallback({
       by,
       inlineCommand,
       context: params,

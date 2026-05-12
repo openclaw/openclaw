@@ -7,6 +7,7 @@ export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
   "--command",
   "-f",
   "-file",
+  "-ec",
   "-encodedcommand",
   "-enc",
   "-e",
