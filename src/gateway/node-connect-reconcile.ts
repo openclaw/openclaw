@@ -96,7 +96,7 @@ function intersectPermissionSurface(params: {
   const entries: Array<[string, boolean]> = [];
   for (const [key, declaredValue] of Object.entries(params.declared ?? {})) {
     const approvedValue = params.approved?.[key];
-    if (declaredValue === false) {
+    if (!declaredValue) {
       entries.push([key, false]);
       continue;
     }
