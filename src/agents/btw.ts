@@ -360,7 +360,6 @@ export async function runBtwSideQuestion(
       sessionEntry: params.sessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
-      storePath: params.storePath,
       isNewSession: params.isNewSession,
     });
     const result = await harness.runSideQuestion({
@@ -369,7 +368,6 @@ export async function runBtwSideQuestion(
       model: model.id,
       runtimeModel: model,
       sessionId,
-      sessionFile,
       agentId: sessionAgentId,
       workspaceDir,
       authProfileId,
