@@ -172,6 +172,28 @@ async function replaceSessionRowsForFixtureTarget(
   }
 }
 
+function requireMockCallArg(
+  mockFn: { mock: { calls: unknown[][] } },
+  label: string,
+  index = 0,
+): Record<string, unknown> {
+  const arg = mockFn.mock.calls[index]?.[0] as Record<string, unknown> | undefined;
+  if (!arg) {
+    throw new Error(`expected ${label} call #${index + 1}`);
+  }
+  return arg;
+}
+
+function expectEntryFields(
+  entry: SessionEntry,
+  expected: Record<string, unknown>,
+  label?: string,
+): void {
+  for (const [key, value] of Object.entries(expected)) {
+    expect((entry as Record<string, unknown>)[key], label ?? key).toEqual(value);
+  }
+}
+
 function readSessionRowsForFixtureTarget(
   target: TestSessionRowsTarget,
 ): Record<string, SessionEntry> {
@@ -610,13 +632,14 @@ describe("initSessionState thread forking", () => {
       commandAuthorized: true,
     });
 
-    expect(sessionForkMocks.resolveParentForkTokenCount).toHaveBeenCalledWith({
-      parentEntry: expect.objectContaining({
-        sessionId: parentSessionId,
-        totalTokensFresh: false,
-      }),
-      agentId: "main",
-    });
+    const tokenCountCall = requireMockCallArg(
+      sessionForkMocks.resolveParentForkTokenCount,
+      "resolveParentForkTokenCount",
+    );
+    const parentEntry = tokenCountCall.parentEntry as SessionEntry | undefined;
+    expect(parentEntry?.sessionId).toBe(parentSessionId);
+    expect(parentEntry?.totalTokensFresh).toBe(false);
+    expect(tokenCountCall.agentId).toBe("main");
     expect(result.sessionEntry.forkedFromParent).toBe(true);
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
     expect(sessionForkMocks.forkSessionFromParent).not.toHaveBeenCalled();
@@ -2217,13 +2240,18 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.isNewSession, testCase.name).toBe(true);
       expect(result.resetTriggered, testCase.name).toBe(true);
       expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
-      expect(result.sessionEntry, testCase.name).toMatchObject({
-        providerOverride: overrides.providerOverride,
-        modelOverride: overrides.modelOverride,
-        authProfileOverride: overrides.authProfileOverride,
-        authProfileOverrideSource: overrides.authProfileOverrideSource,
-        authProfileOverrideCompactionCount: overrides.authProfileOverrideCompactionCount,
-      });
+      expectEntryFields(
+        result.sessionEntry,
+        {
+          providerOverride: overrides.providerOverride,
+          modelOverride: overrides.modelOverride,
+          authProfileOverride: overrides.authProfileOverride,
+          authProfileOverrideSource: overrides.authProfileOverrideSource,
+          authProfileOverrideCompactionCount: overrides.authProfileOverrideCompactionCount,
+        },
+        testCase.name,
+      );
+      expect(result.sessionEntry.cliSessionIds).toBeUndefined();
       expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
 
       const stored = readSessionRowsForFixtureTarget(sessionRowsTarget);
