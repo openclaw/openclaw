@@ -229,10 +229,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     await harness.completeTurn();
     await run;
 
-    await expect(
-      readCodexAppServerBinding({ sessionKey: params.sessionKey, sessionId }),
-    ).resolves.toMatchObject({
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-    });
+    const binding = await readCodexAppServerBinding({ sessionKey: params.sessionKey, sessionId });
+    expect(binding?.authProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
   });
 });
