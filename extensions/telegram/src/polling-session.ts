@@ -493,10 +493,14 @@ export class TelegramPollingSession {
       // Capture the teardown as a single promise so the next #createPollingBot
       // can await it. Refusing to start a new bot until the prior runner has
       // settled prevents the 409 conflict tight loop where the new session is
-      // requested before Telegram has released the previous one. (#69787)
+      // requested before Telegram has released the previous one. We also close
+      // the dirty undici dispatcher synchronously here so the next cycle does
+      // not race a new TLS handshake against the slow close() of the prior
+      // keep-alive pool. (#69787)
       const teardown = (async () => {
         await waitForGracefulStop(stopRunner);
         await waitForGracefulStop(stopBot);
+        await this.#transportState.disposeIfDirty();
       })();
       this.#stoppingCycle = teardown;
       try {

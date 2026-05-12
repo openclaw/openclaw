@@ -19,6 +19,34 @@ export class TelegramPollingTransportState {
     this.#transportDirty = true;
   }
 
+  /**
+   * Close the current transport awaitedly if it has been marked dirty. Use at
+   * cycle teardown so the next `acquireForNextCycle()` does not race the slow
+   * undici `client.close()` against a new TLS handshake. Without this, the
+   * stale keep-alive dispatcher can survive a stall+restart and Telegram
+   * keeps returning 409 on the new session. (#69787 + freeze dumps 2026-05-12)
+   */
+  async disposeIfDirty(): Promise<void> {
+    if (this.#disposed || !this.#transportDirty) {
+      return;
+    }
+    const previous = this.#telegramTransport;
+    if (!previous) {
+      this.#transportDirty = false;
+      return;
+    }
+    this.#telegramTransport = undefined;
+    this.#transportDirty = false;
+    try {
+      await previous.close();
+      this.opts.log("[telegram][diag] closed dirty transport at cycle teardown");
+    } catch (err) {
+      this.opts.log(
+        `[telegram][diag] failed to close dirty transport at cycle teardown: ${formatCloseError(err)}`,
+      );
+    }
+  }
+
   acquireForNextCycle(): TelegramTransport | undefined {
     if (this.#disposed) {
       return undefined;
