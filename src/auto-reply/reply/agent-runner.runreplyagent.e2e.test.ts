@@ -1162,6 +1162,52 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("does not surface fallback silence when fallback already completed a cron side effect", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      successfulCronAdds: 1,
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+          messageProvider: "discord",
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C1",
+          AccountId: "primary",
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      await expect(run()).resolves.toBeUndefined();
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
   it("preserves intentional fallback silence when the turn permits silent replies", async () => {
     state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],

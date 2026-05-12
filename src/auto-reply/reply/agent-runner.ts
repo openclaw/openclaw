@@ -147,12 +147,14 @@ function hasSuccessfulSideEffectDelivery(params: {
   directlySentBlockKeys?: Set<string>;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
+  successfulCronAdds?: number;
 }): boolean {
   return Boolean(
     (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
-    hasNonEmptyStringArray(params.messagingToolSentMediaUrls),
+    hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
+    (params.successfulCronAdds ?? 0) > 0,
   );
 }
 
@@ -1590,6 +1592,7 @@ export async function runReplyAgent(params: {
           directlySentBlockKeys,
           messagingToolSentTexts: runResult.messagingToolSentTexts,
           messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+          successfulCronAdds: runResult.successfulCronAdds,
         }),
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
         silentExpected: followupRun.run.silentExpected,
