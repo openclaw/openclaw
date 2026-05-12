@@ -356,6 +356,7 @@ import {
 } from "./midturn-precheck.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+  estimatePrePromptTokens,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import {
@@ -2536,12 +2537,19 @@ export async function runEmbeddedAttempt(
             // history in place would otherwise leave the precheck reading
             // already-windowed messages instead of the true pre-assembly state.
             const preassemblyContextEngineMessagesForPrecheck = activeSession.messages.slice();
+            // Pre-assembly token estimate so engines can bound any systemPromptAddition against tokenBudget.
+            const preassemblyCurrentTokenCount = estimatePrePromptTokens({
+              messages: activeSession.messages,
+              systemPrompt: systemPromptText,
+              prompt: params.prompt ?? "",
+            });
             const assembled = await assembleAttemptContextEngine({
               contextEngine: activeContextEngine,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
               tokenBudget: params.contextTokenBudget,
+              currentTokenCount: preassemblyCurrentTokenCount,
               availableTools: new Set(effectiveTools.map((tool) => tool.name)),
               citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,

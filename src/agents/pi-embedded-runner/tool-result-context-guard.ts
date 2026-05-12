@@ -327,11 +327,18 @@ export function installContextEngineLoopHook(params: {
       lastSeenLength = sourceMessages.length;
       params.onAfterTurnCheckpoint?.(lastSeenLength);
       lastSourceMessages = sourceMessages;
+      const loopCurrentTokenCount = params.getRuntimeContext?.({
+        messages: sourceMessages,
+        prePromptMessageCount,
+      })?.currentTokenCount;
       const assembled = await contextEngine.assemble({
         sessionId,
         sessionKey,
         messages: sourceMessages,
         tokenBudget,
+        ...(typeof loopCurrentTokenCount === "number"
+          ? { currentTokenCount: loopCurrentTokenCount }
+          : {}),
         model: modelId,
       });
       if (assembled && Array.isArray(assembled.messages) && assembled.messages !== sourceMessages) {

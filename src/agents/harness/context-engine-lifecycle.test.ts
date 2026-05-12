@@ -113,6 +113,46 @@ describe("harness context engine lifecycle", () => {
     expect(afterTurnParams?.prePromptMessageCount).toBe(2);
   });
 
+  it("passes currentTokenCount through to the engine when provided", async () => {
+    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }));
+
+    await assembleHarnessContextEngine({
+      contextEngine: createContextEngine({ assemble }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: sessionParams.sessionKey,
+      messages: [textMessage("user", "ask", 1)],
+      tokenBudget: 200_000,
+      currentTokenCount: 42_000,
+      modelId: "gpt-test",
+    });
+
+    const assembleParams = assemble.mock.calls.at(0)?.[0];
+    expect(assembleParams?.currentTokenCount).toBe(42_000);
+    expect(assembleParams?.tokenBudget).toBe(200_000);
+  });
+
+  it("omits currentTokenCount when not provided so engines can detect older runtimes", async () => {
+    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }));
+
+    await assembleHarnessContextEngine({
+      contextEngine: createContextEngine({ assemble }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: sessionParams.sessionKey,
+      messages: [textMessage("user", "ask", 1)],
+      tokenBudget: 200_000,
+      modelId: "gpt-test",
+    });
+
+    const assembleParams = assemble.mock.calls.at(0)?.[0];
+    expect(assembleParams).not.toHaveProperty("currentTokenCount");
+  });
+
   it("keeps hidden runtime-context custom messages out of ingestBatch fallbacks", async () => {
     const beforePromptUser = textMessage("user", "old ask", 1);
     const beforePromptRuntimeContext = runtimeContextMessage("old hidden context", 2);
