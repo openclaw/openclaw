@@ -156,26 +156,10 @@ function getLocalCliCredentialFingerprint(provider: string): string | undefined 
         ttlMs: 5000,
         allowKeychainPrompt: false,
       });
-      // Null-safe identity fallback: when the keychain read fails entirely
-      // (transient parse failure, race with claude-cli's keychain rewrite),
-      // the parts-array shape would otherwise change between successful and
-      // null reads, which flips the resolved auth-epoch hash even after the
-      // identity-only encoder fix above. Encoding a synthetic identity-only
-      // credential keeps the `local:` part shape stable across these
-      // failures while a real account switch still produces a different
-      // identity hash. Empirically validated by the issue reporter on
-      // macOS over 5h of runtime. Refs #74312.
-      return hashCliAuthEpochPart(
-        encodeClaudeCredential(
-          credential ?? {
-            type: "oauth",
-            provider: "anthropic",
-            access: "",
-            refresh: "",
-            expires: 0,
-          },
-        ),
-      );
+      // Keep true credential absence absent so logout/removal invalidates
+      // reusable sessions. The 5s credential cache still masks transient
+      // null reads immediately after a successful read.
+      return credential ? hashCliAuthEpochPart(encodeClaudeCredential(credential)) : undefined;
     }
     case "codex-cli": {
       const credential = cliAuthEpochDeps.readCodexCliCredentialsCached({

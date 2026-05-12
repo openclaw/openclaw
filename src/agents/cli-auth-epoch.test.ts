@@ -19,7 +19,7 @@ describe("resolveCliAuthEpoch", () => {
     expect(epoch, label).toMatch(/^[a-f0-9]{64}$/);
   }
 
-  it("returns undefined for non-claude providers when no local or auth-profile credentials exist", async () => {
+  it("returns undefined when no local or auth-profile credentials exist", async () => {
     setCliAuthEpochTestDeps({
       readClaudeCliCredentialsCached: () => null,
       readCodexCliCredentialsCached: () => null,
@@ -30,9 +30,12 @@ describe("resolveCliAuthEpoch", () => {
       }),
     });
 
-    // Claude CLI uses a null-safe identity fallback (#74312) so the epoch
-    // stays stable across keychain parse failures; other providers return
-    // undefined when neither a local nor a profile credential is present.
+    await expect(
+      resolveCliAuthEpoch({
+        provider: "claude-cli",
+        authProfileId: "anthropic:work",
+      }),
+    ).resolves.toBeUndefined();
     await expect(
       resolveCliAuthEpoch({
         provider: "google-gemini-cli",
@@ -118,7 +121,7 @@ describe("resolveCliAuthEpoch", () => {
     expect(tokenEpoch).toBe(oauthEpoch);
   });
 
-  it("keeps claude cli epochs stable when the keychain read fails entirely", async () => {
+  it("drops the claude cli epoch when the credential read is absent", async () => {
     setCliAuthEpochTestDeps({
       readClaudeCliCredentialsCached: () => ({
         type: "oauth",
@@ -130,19 +133,16 @@ describe("resolveCliAuthEpoch", () => {
     });
     const successfulRead = await resolveCliAuthEpoch({ provider: "claude-cli" });
 
-    // Full parse failure: keychain entry corrupted/missing, the cached read
-    // returns null entirely (not just falls through to type:"token"). Without
-    // a null-safe identity fallback the parts-array would lose its `local:`
-    // entry, the parts-shape changes, and the hash flips even though the
-    // encoder is identity-only. Refs #74312.
+    // A null read can mean the credential was removed or logout left no
+    // readable auth state. Keep that absence visible so reusable sessions do
+    // not survive a true auth-state loss.
     setCliAuthEpochTestDeps({
       readClaudeCliCredentialsCached: () => null,
     });
     const nullRead = await resolveCliAuthEpoch({ provider: "claude-cli" });
 
     expectCliAuthEpoch(successfulRead);
-    expectCliAuthEpoch(nullRead);
-    expect(nullRead).toBe(successfulRead);
+    expect(nullRead).toBeUndefined();
   });
 
   it("keeps gemini cli oauth epochs stable through token rotation and flips on account change", async () => {
