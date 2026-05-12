@@ -1,7 +1,8 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
+import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
   formatContextLimitTruncationNotice,
@@ -26,6 +27,15 @@ function makeToolResult(id: string, text: string, toolName = "grep"): AgentMessa
     content: [{ type: "text", text }],
     isError: false,
     timestamp: Date.now(),
+  });
+}
+
+function makeAssistant(text: string, extras: Record<string, unknown> = {}): AgentMessage {
+  return castAgentMessage({
+    role: "assistant",
+    content: text,
+    timestamp: Date.now(),
+    ...extras,
   });
 }
 
@@ -95,12 +105,66 @@ async function applyGuardToContext(
   return await agent.transformContext?.(contextForNextCall, new AbortController().signal);
 }
 
+async function applyMidTurnPrecheckGuardToContext(
+  agent: { transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown },
+  contextForNextCall: AgentMessage[],
+  options: {
+    contextWindowTokens?: number;
+    contextTokenBudget?: number;
+    reserveTokens?: number;
+    toolResultMaxChars?: number;
+    prePromptMessageCount?: number;
+    systemPrompt?: string;
+  } = {},
+) {
+  const contextWindowTokens = options.contextWindowTokens ?? options.contextTokenBudget ?? 20_000;
+  installToolResultContextGuard({
+    agent,
+    contextWindowTokens,
+    midTurnPrecheck: {
+      enabled: true,
+      contextTokenBudget: options.contextTokenBudget ?? contextWindowTokens,
+      reserveTokens: () => options.reserveTokens ?? 10_000,
+      toolResultMaxChars: options.toolResultMaxChars,
+      getSystemPrompt: () => options.systemPrompt,
+      ...(options.prePromptMessageCount !== undefined
+        ? { getPrePromptMessageCount: () => options.prePromptMessageCount as number }
+        : {}),
+    },
+  });
+  return await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+}
+
 function expectPiStyleTruncation(text: string): void {
   expect(text).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
   expect(text).toMatch(/\[\.\.\. \d+ more characters truncated\]$/);
   expect(text).not.toContain("[compacted: tool output removed to free context]");
   expect(text).not.toContain("[compacted: tool output trimmed to free context]");
   expect(text).not.toContain("[truncated: output exceeded context limit]");
+}
+
+function mockCallArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex = 0,
+  argIndex = 0,
+): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex + 1}`);
+  }
+  return call[argIndex];
+}
+
+function recordMockArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex = 0,
+  argIndex = 0,
+): Record<string, unknown> {
+  const arg = mockCallArg(mock, callIndex, argIndex);
+  if (!arg || typeof arg !== "object") {
+    throw new Error("expected mock argument record");
+  }
+  return arg as Record<string, unknown>;
 }
 
 describe("formatContextLimitTruncationNotice", () => {
@@ -180,7 +244,13 @@ describe("installToolResultContextGuard", () => {
 
     expectPiStyleTruncation(newResultText);
     expect(result.details).toBeUndefined();
-    expect((contextForNextCall[0] as { details?: unknown }).details).toBeDefined();
+    const originalDetails = (contextForNextCall[0] as { details?: { truncation?: unknown } })
+      .details;
+    expect(originalDetails?.truncation).toEqual({
+      truncated: true,
+      outputLines: 100,
+      content: "d".repeat(8_000),
+    });
   });
 
   it("throws a preemptive overflow when total context still exceeds the high-water mark", async () => {
@@ -239,6 +309,67 @@ describe("installToolResultContextGuard", () => {
     )) as AgentMessage[];
 
     expectPiStyleTruncation(getToolResultText(transformed[0]));
+  });
+
+  it("raises a structured mid-turn precheck signal after a new tool result overflows", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeUser("prompt already in history"),
+      makeToolResult("call_big", "x".repeat(80_000)),
+    ];
+
+    try {
+      await applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
+        contextWindowTokens: 200_000,
+        contextTokenBudget: 20_000,
+        reserveTokens: 12_000,
+        toolResultMaxChars: 16_000,
+        prePromptMessageCount: 1,
+      });
+      throw new Error("expected mid-turn precheck signal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MidTurnPrecheckSignal);
+      const signal = err as MidTurnPrecheckSignal;
+      expect(signal.name).toBe("MidTurnPrecheckSignal");
+      expect(signal.request.route).toBe("compact_then_truncate");
+      expect(typeof signal.request.overflowTokens).toBe("number");
+      expect(typeof signal.request.toolResultReducibleChars).toBe("number");
+    }
+  });
+
+  it("does not run mid-turn precheck when no new tool result was appended", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [makeUser("u".repeat(80_000))];
+
+    const transformed = await applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
+      contextWindowTokens: 200_000,
+      contextTokenBudget: 20_000,
+      reserveTokens: 12_000,
+      prePromptMessageCount: 0,
+    });
+
+    expect(transformed).toBe(contextForNextCall);
+  });
+
+  it("uses compact_only route when mid-turn overflow is not reducible by tool truncation", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeUser("u".repeat(80_000)),
+      makeToolResult("call_small", "small output"),
+    ];
+
+    try {
+      await applyMidTurnPrecheckGuardToContext(agent, contextForNextCall, {
+        contextWindowTokens: 200_000,
+        contextTokenBudget: 20_000,
+        reserveTokens: 12_000,
+        prePromptMessageCount: 1,
+      });
+      throw new Error("expected mid-turn precheck signal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MidTurnPrecheckSignal);
+      expect((err as MidTurnPrecheckSignal).request.route).toBe("compact_only");
+    }
   });
 });
 
@@ -319,6 +450,11 @@ describe("installContextEngineLoopHook", () => {
     agent: ReturnType<typeof makeGuardableAgent>,
     engine: MockedEngine,
     prePromptCount?: number,
+    getRuntimeContext?: (params: {
+      messages: AgentMessage[];
+      prePromptMessageCount: number;
+    }) => Record<string, unknown> | undefined,
+    onAfterTurnCheckpoint?: (messageCount: number) => void,
   ): () => void {
     return installContextEngineLoopHook({
       agent,
@@ -329,7 +465,27 @@ describe("installContextEngineLoopHook", () => {
       tokenBudget,
       modelId,
       ...(prePromptCount !== undefined ? { getPrePromptMessageCount: () => prePromptCount } : {}),
+      ...(getRuntimeContext ? { getRuntimeContext } : {}),
+      ...(onAfterTurnCheckpoint ? { onAfterTurnCheckpoint } : {}),
     });
+  }
+
+  async function callAfterInitialToolResult(
+    agent: ReturnType<typeof makeGuardableAgent>,
+    options: { includeSecondUser?: boolean; firstResultText?: string } = {},
+  ): Promise<{ initial: AgentMessage[]; withNew: AgentMessage[]; transformed: unknown }> {
+    const initial = [
+      makeUser("first"),
+      makeToolResult("call_1", options.firstResultText ?? "result"),
+    ];
+    await callTransform(agent, initial);
+
+    const withNew =
+      options.includeSecondUser === false
+        ? [...initial, makeToolResult("call_2", "r2")]
+        : [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
+    const transformed = await callTransform(agent, withNew);
+    return { initial, withNew, transformed };
   }
 
   it("returns early when the current messages match the pre-prompt baseline", async () => {
@@ -354,11 +510,57 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, messages);
 
     expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    expect(engine.afterTurn.mock.calls[0]?.[0]).toMatchObject({
-      prePromptMessageCount: 1,
-      messages,
-    });
+    const afterTurnParams = recordMockArg(engine.afterTurn);
+    expect(afterTurnParams?.prePromptMessageCount).toBe(1);
+    expect(afterTurnParams?.messages).toBe(messages);
     expect(engine.assemble).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes runtimeContext through loop-hook afterTurn calls", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installHook(agent, engine, 1, () => ({
+      provider: "anthropic",
+      modelId: modelId,
+      promptCache: {
+        retention: "short",
+        lastCacheTouchAt: 123,
+      },
+    }));
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    expect(engine.afterTurn).toHaveBeenCalledTimes(1);
+    const afterTurnParams = recordMockArg(engine.afterTurn);
+    expect(afterTurnParams?.prePromptMessageCount).toBe(1);
+    expect(afterTurnParams?.runtimeContext).toEqual({
+      provider: "anthropic",
+      modelId,
+      promptCache: {
+        retention: "short",
+        lastCacheTouchAt: 123,
+      },
+    });
+  });
+
+  it("passes loop messages and the prompt fence into the runtimeContext callback", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    const getRuntimeContext = vi.fn(() => ({ provider: "anthropic" }));
+    installHook(agent, engine, 1, getRuntimeContext);
+
+    const messages = [
+      makeUser("first"),
+      makeAssistant("tool use", { usage: { cacheRead: 40, total: 50 }, timestamp: 456 }),
+      makeToolResult("call_1", "result"),
+    ];
+    await callTransform(agent, messages);
+
+    expect(getRuntimeContext).toHaveBeenCalledWith({
+      messages,
+      prePromptMessageCount: 1,
+    });
   });
 
   it("calls afterTurn and assemble when new messages are appended after the first call", async () => {
@@ -373,10 +575,9 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, withNew);
 
     expect(engine.afterTurn).toHaveBeenCalledTimes(1);
-    expect(engine.afterTurn.mock.calls[0]?.[0]).toMatchObject({
-      prePromptMessageCount: 2,
-      messages: withNew,
-    });
+    const afterTurnParams = recordMockArg(engine.afterTurn);
+    expect(afterTurnParams?.prePromptMessageCount).toBe(2);
+    expect(afterTurnParams?.messages).toBe(withNew);
     expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
 
@@ -395,8 +596,24 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, batch2);
 
     expect(engine.afterTurn).toHaveBeenCalledTimes(2);
-    expect(engine.afterTurn.mock.calls[0]?.[0]?.prePromptMessageCount).toBe(2);
-    expect(engine.afterTurn.mock.calls[1]?.[0]?.prePromptMessageCount).toBe(4);
+    expect(recordMockArg(engine.afterTurn).prePromptMessageCount).toBe(2);
+    expect(recordMockArg(engine.afterTurn, 1).prePromptMessageCount).toBe(4);
+  });
+
+  it("reports the latest delivered afterTurn checkpoint", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    const onAfterTurnCheckpoint = vi.fn();
+    installHook(agent, engine, undefined, undefined, onAfterTurnCheckpoint);
+
+    const batch0 = [makeUser("h1"), makeToolResult("c1", "r1")];
+    await callTransform(agent, batch0);
+
+    const batch1 = [...batch0, makeUser("h2"), makeToolResult("c2", "r2")];
+    await callTransform(agent, batch1);
+
+    expect(onAfterTurnCheckpoint).toHaveBeenCalledTimes(1);
+    expect(onAfterTurnCheckpoint).toHaveBeenCalledWith(batch1.length);
   });
 
   it("skips afterTurn and assemble when messages have not changed", async () => {
@@ -421,13 +638,91 @@ describe("installContextEngineLoopHook", () => {
     });
     installHook(agent, engine);
 
-    const initial = [makeUser("first"), makeToolResult("call_1", "r")];
-    await callTransform(agent, initial);
-
-    const withNew = [...initial, makeToolResult("call_2", "r2")];
-    const transformed = await callTransform(agent, withNew);
+    const { transformed } = await callAfterInitialToolResult(agent, {
+      includeSecondUser: false,
+      firstResultText: "r",
+    });
 
     expect(transformed).toBe(compactedView);
+  });
+
+  it("clears an assembled view when the engine fails on a later source", async () => {
+    const agent = makeGuardableAgent();
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
+    });
+    engine.assemble
+      .mockResolvedValueOnce({ messages: compactedView, estimatedTokens: 0 })
+      .mockRejectedValueOnce(new Error("assemble failed"))
+      .mockImplementation(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+        messages: params.messages,
+        estimatedTokens: 0,
+      }));
+    installHook(agent, engine, 1);
+
+    const firstSource = [makeUser("first"), makeToolResult("call_1", "r1")];
+    expect(await callTransform(agent, firstSource)).toBe(compactedView);
+
+    const secondSource = [...firstSource, makeToolResult("call_2", "r2")];
+    expect(await callTransform(agent, secondSource)).toBe(secondSource);
+
+    const retry = await callTransform(agent, secondSource);
+    expect(retry).toBe(secondSource);
+    expect(retry).not.toBe(compactedView);
+    expect(engine.assemble).toHaveBeenCalledTimes(3);
+  });
+
+  it("clears an assembled view when source history shrinks", async () => {
+    const agent = makeGuardableAgent();
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
+    });
+    engine.assemble.mockResolvedValueOnce({ messages: compactedView, estimatedTokens: 0 });
+    engine.assemble.mockImplementation(
+      async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+        messages: params.messages,
+        estimatedTokens: 0,
+      }),
+    );
+    installHook(agent, engine, 1);
+
+    const longSource = [
+      makeUser("first"),
+      makeToolResult("call_1", "r1"),
+      makeToolResult("call_2", "r2"),
+    ];
+    expect(await callTransform(agent, longSource)).toBe(compactedView);
+
+    const resetSource = [makeUser("reset")];
+    expect(await callTransform(agent, resetSource)).toBe(resetSource);
+  });
+
+  it("clears an assembled view when source history resets at the same length", async () => {
+    const agent = makeGuardableAgent();
+    const compactedView = [makeUser("compacted")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: compactedView, estimatedTokens: 0 }),
+    });
+    engine.assemble.mockResolvedValueOnce({ messages: compactedView, estimatedTokens: 0 });
+    engine.assemble.mockImplementation(
+      async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+        messages: params.messages,
+        estimatedTokens: 0,
+      }),
+    );
+    installHook(agent, engine, 1);
+
+    const source = [
+      makeUser("first"),
+      makeToolResult("call_1", "r1"),
+      makeToolResult("call_2", "r2"),
+    ];
+    expect(await callTransform(agent, source)).toBe(compactedView);
+
+    const resetSource = [makeUser("reset"), makeToolResult("call_3", "r3"), makeUser("fresh")];
+    expect(await callTransform(agent, resetSource)).toBe(resetSource);
   });
 
   it("returns the assembled view when the engine rewrites content without changing count", async () => {
@@ -438,11 +733,10 @@ describe("installContextEngineLoopHook", () => {
     });
     installHook(agent, engine);
 
-    const initial = [makeUser("first"), makeToolResult("call_1", "r")];
-    await callTransform(agent, initial);
-
-    const withNew = [...initial, makeToolResult("call_2", "r2")];
-    const transformed = await callTransform(agent, withNew);
+    const { transformed } = await callAfterInitialToolResult(agent, {
+      includeSecondUser: false,
+      firstResultText: "r",
+    });
 
     // Same count (2) but different array reference — engine's view should be used
     expect(transformed).toBe(rewrittenView);
@@ -453,11 +747,7 @@ describe("installContextEngineLoopHook", () => {
     const engine = makeMockEngine();
     installHook(agent, engine);
 
-    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
-    await callTransform(agent, initial);
-
-    const withNew = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
-    const transformed = await callTransform(agent, withNew);
+    const { transformed, withNew } = await callAfterInitialToolResult(agent);
 
     expect(transformed).toBe(withNew);
   });
@@ -495,8 +785,12 @@ describe("installContextEngineLoopHook", () => {
     await callTransform(agent, batch2);
 
     expect(engine.ingestBatch).toHaveBeenCalledTimes(2);
-    expect(engine.ingestBatch?.mock.calls[0]?.[0]?.messages).toEqual(batch1.slice(2));
-    expect(engine.ingestBatch?.mock.calls[1]?.[0]?.messages).toEqual(batch2.slice(4));
+    const ingestBatch = engine.ingestBatch;
+    if (!ingestBatch) {
+      throw new Error("expected ingestBatch mock");
+    }
+    expect(recordMockArg(ingestBatch).messages).toEqual(batch1.slice(2));
+    expect(recordMockArg(ingestBatch, 1).messages).toEqual(batch2.slice(4));
     expect(engine.assemble).toHaveBeenCalledTimes(2);
   });
 
@@ -505,15 +799,15 @@ describe("installContextEngineLoopHook", () => {
     const engine = makeMockEngine({ omitAfterTurn: true, omitIngestBatch: true });
     installHook(agent, engine, 1);
 
-    const messages = [makeUser("first"), makeToolResult("call_1", "r1")];
+    const toolResult = makeToolResult("call_1", "r1");
+    const messages = [makeUser("first"), toolResult];
     await callTransform(agent, messages);
 
     expect(engine.ingest).toHaveBeenCalledTimes(1);
-    expect(engine.ingest.mock.calls[0]?.[0]).toMatchObject({
-      sessionId,
-      sessionKey,
-      message: makeToolResult("call_1", "r1"),
-    });
+    const ingestParams = recordMockArg(engine.ingest);
+    expect(ingestParams?.sessionId).toBe(sessionId);
+    expect(ingestParams?.sessionKey).toBe(sessionKey);
+    expect(ingestParams?.message).toBe(toolResult);
     expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
 
@@ -526,11 +820,7 @@ describe("installContextEngineLoopHook", () => {
     });
     installHook(agent, engine);
 
-    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
-    await callTransform(agent, initial);
-
-    const withNew = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
-    const transformed = await callTransform(agent, withNew);
+    const { transformed, withNew } = await callAfterInitialToolResult(agent);
 
     expect(transformed).toBe(withNew);
   });
@@ -544,11 +834,7 @@ describe("installContextEngineLoopHook", () => {
     });
     installHook(agent, engine);
 
-    const initial = [makeUser("first"), makeToolResult("call_1", "result")];
-    await callTransform(agent, initial);
-
-    const withNew = [...initial, makeUser("second"), makeToolResult("call_2", "r2")];
-    const transformed = await callTransform(agent, withNew);
+    const { transformed, withNew } = await callAfterInitialToolResult(agent);
 
     expect(transformed).toBe(withNew);
   });
@@ -572,7 +858,7 @@ describe("installContextEngineLoopHook", () => {
     expect(transformed).toBe(compactedView);
   });
 
-  it("restores the previous transformContext when the returned dispose is called", async () => {
+  it("restores the previous transformContext when the returned dispose is called", () => {
     const upstream = vi.fn(async (messages: AgentMessage[]) => messages);
     const agent = makeGuardableAgent(upstream);
     const engine = makeMockEngine();
@@ -591,11 +877,10 @@ describe("installContextEngineLoopHook", () => {
     });
     installHook(agent, engine);
 
-    const initial = [makeUser("first"), makeToolResult("call_1", "r")];
-    await callTransform(agent, initial);
-
-    const withNew = [...initial, makeToolResult("call_2", "r2")];
-    const firstResult = await callTransform(agent, withNew);
+    const { withNew, transformed: firstResult } = await callAfterInitialToolResult(agent, {
+      includeSecondUser: false,
+      firstResultText: "r",
+    });
     expect(firstResult).toBe(compactedView);
 
     // Retry with same messages: should return cached assembled view, not raw

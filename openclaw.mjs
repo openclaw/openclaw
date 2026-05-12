@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MIN_NODE_MAJOR = 22;
@@ -38,10 +41,207 @@ const ensureSupportedNodeVersion = () => {
 
 ensureSupportedNodeVersion();
 
-// https://nodejs.org/api/module.html#module-compile-cache
-if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
+const isSourceCheckoutLauncher = () =>
+  existsSync(new URL("./.git", import.meta.url)) ||
+  existsSync(new URL("./src/entry.ts", import.meta.url));
+
+const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
+const isNodeCompileCacheRequested = () =>
+  Boolean(process.env.NODE_COMPILE_CACHE) && !isNodeCompileCacheDisabled();
+const sanitizeCompileCachePathSegment = (value) => {
+  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return normalized.length > 0 ? normalized : "unknown";
+};
+const readPackageVersion = () => {
   try {
-    module.enableCompileCache();
+    const parsed = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+    if (typeof parsed?.version === "string" && parsed.version.trim().length > 0) {
+      return parsed.version;
+    }
+  } catch {
+    // Fall through to an install-metadata-only cache key.
+  }
+  return "unknown";
+};
+const resolvePackagedCompileCacheDirectory = () => {
+  const packageJsonUrl = new URL("./package.json", import.meta.url);
+  const version = sanitizeCompileCachePathSegment(readPackageVersion());
+  let installMarker = "no-package-json";
+  try {
+    const stat = statSync(packageJsonUrl);
+    installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
+  } catch {
+    // Package archives should always have package.json, but keep startup best-effort.
+  }
+  const baseDirectory = isNodeCompileCacheRequested()
+    ? process.env.NODE_COMPILE_CACHE
+    : path.join(os.tmpdir(), "node-compile-cache");
+  return path.join(
+    baseDirectory,
+    "openclaw",
+    version,
+    sanitizeCompileCachePathSegment(installMarker),
+  );
+};
+
+const respawnSignals =
+  process.platform === "win32"
+    ? ["SIGTERM", "SIGINT", "SIGBREAK"]
+    : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
+const respawnSignalExitGraceMs = 1_000;
+const respawnSignalForceKillGraceMs = 1_000;
+
+const runRespawnedChild = (command, args, env) => {
+  const child = spawn(command, args, {
+    stdio: "inherit",
+    env,
+  });
+  const listeners = new Map();
+  // This intentionally overlaps with src/entry.compile-cache.ts; keep the
+  // respawn supervision behavior in sync until the launcher can share TS code.
+  // Give the child a moment to honor forwarded signals, then exit the wrapper so
+  // a child that ignores SIGTERM cannot keep the launcher alive indefinitely.
+  let signalExitTimer = null;
+  let signalForceKillTimer = null;
+  const detach = () => {
+    for (const [signal, listener] of listeners) {
+      process.off(signal, listener);
+    }
+    listeners.clear();
+    if (signalExitTimer) {
+      clearTimeout(signalExitTimer);
+      signalExitTimer = null;
+    }
+    if (signalForceKillTimer) {
+      clearTimeout(signalForceKillTimer);
+      signalForceKillTimer = null;
+    }
+  };
+  const forceKillChild = () => {
+    try {
+      child.kill(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+    } catch {
+      // Best-effort shutdown fallback.
+    }
+  };
+  const requestChildTermination = () => {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // Best-effort shutdown fallback.
+    }
+    signalForceKillTimer = setTimeout(() => {
+      forceKillChild();
+      process.exit(1);
+    }, respawnSignalForceKillGraceMs);
+    signalForceKillTimer.unref?.();
+  };
+  const scheduleParentExit = () => {
+    if (signalExitTimer) {
+      return;
+    }
+    signalExitTimer = setTimeout(() => {
+      requestChildTermination();
+    }, respawnSignalExitGraceMs);
+    signalExitTimer.unref?.();
+  };
+  for (const signal of respawnSignals) {
+    const listener = () => {
+      try {
+        child.kill(signal);
+      } catch {
+        // Best-effort signal forwarding.
+      }
+      scheduleParentExit();
+    };
+    try {
+      process.on(signal, listener);
+      listeners.set(signal, listener);
+    } catch {
+      // Unsupported signal on this platform.
+    }
+  }
+  child.once("exit", (code, signal) => {
+    detach();
+    if (signal) {
+      process.exit(1);
+    }
+    process.exit(code ?? 1);
+  });
+  child.once("error", (error) => {
+    detach();
+    process.stderr.write(
+      `[openclaw] Failed to respawn launcher: ${
+        error instanceof Error ? (error.stack ?? error.message) : String(error)
+      }\n`,
+    );
+    process.exit(1);
+  });
+  return true;
+};
+
+const respawnWithoutCompileCacheIfNeeded = () => {
+  if (!isSourceCheckoutLauncher()) {
+    return false;
+  }
+  if (process.env.OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED === "1") {
+    return false;
+  }
+  if (!module.getCompileCacheDir?.() && !isNodeCompileCacheRequested()) {
+    return false;
+  }
+  const env = {
+    ...process.env,
+    NODE_DISABLE_COMPILE_CACHE: "1",
+    OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED: "1",
+  };
+  delete env.NODE_COMPILE_CACHE;
+  return runRespawnedChild(
+    process.execPath,
+    [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    env,
+  );
+};
+
+const respawnWithPackagedCompileCacheIfNeeded = () => {
+  if (isSourceCheckoutLauncher() || isNodeCompileCacheDisabled()) {
+    return false;
+  }
+  if (process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1") {
+    return false;
+  }
+  const currentDirectory = module.getCompileCacheDir?.();
+  if (!currentDirectory) {
+    return false;
+  }
+  const desiredDirectory = resolvePackagedCompileCacheDirectory();
+  if (path.resolve(currentDirectory) === path.resolve(desiredDirectory)) {
+    return false;
+  }
+  const env = {
+    ...process.env,
+    NODE_COMPILE_CACHE: desiredDirectory,
+    OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
+  };
+  return runRespawnedChild(
+    process.execPath,
+    [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    env,
+  );
+};
+
+const waitingForCompileCacheRespawn =
+  respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded();
+
+// https://nodejs.org/api/module.html#module-compile-cache
+if (
+  !waitingForCompileCacheRespawn &&
+  module.enableCompileCache &&
+  !isNodeCompileCacheDisabled() &&
+  !isSourceCheckoutLauncher()
+) {
+  try {
+    module.enableCompileCache(resolvePackagedCompileCacheDirectory());
   } catch {
     // Ignore errors
   }
@@ -128,13 +328,18 @@ const buildMissingEntryErrorMessage = async () => {
 const isBareRootHelpInvocation = (argv) =>
   argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h");
 
-const loadPrecomputedRootHelpText = () => {
+const isBrowserHelpInvocation = (argv) =>
+  argv.length === 4 && argv[2] === "browser" && (argv[3] === "--help" || argv[3] === "-h");
+
+const isHelpFastPathDisabled = () =>
+  process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1";
+
+const loadPrecomputedHelpText = (key) => {
   try {
     const raw = readFileSync(new URL("./dist/cli-startup-metadata.json", import.meta.url), "utf8");
     const parsed = JSON.parse(raw);
-    return typeof parsed?.rootHelpText === "string" && parsed.rootHelpText.length > 0
-      ? parsed.rootHelpText
-      : null;
+    const value = parsed?.[key];
+    return typeof value === "string" && value.length > 0 ? value : null;
   } catch {
     return null;
   }
@@ -144,7 +349,7 @@ const tryOutputBareRootHelp = async () => {
   if (!isBareRootHelpInvocation(process.argv)) {
     return false;
   }
-  const precomputed = loadPrecomputedRootHelpText();
+  const precomputed = loadPrecomputedHelpText("rootHelpText");
   if (precomputed) {
     process.stdout.write(precomputed);
     return true;
@@ -166,15 +371,31 @@ const tryOutputBareRootHelp = async () => {
   return false;
 };
 
-if (await tryOutputBareRootHelp()) {
-  // OK
-} else {
-  await installProcessWarningFilter();
-  if (await tryImport("./dist/entry.js")) {
+const tryOutputBrowserHelp = () => {
+  if (!isBrowserHelpInvocation(process.argv)) {
+    return false;
+  }
+  const precomputed = loadPrecomputedHelpText("browserHelpText");
+  if (!precomputed) {
+    return false;
+  }
+  process.stdout.write(precomputed);
+  return true;
+};
+
+if (!waitingForCompileCacheRespawn) {
+  if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
     // OK
-  } else if (await tryImport("./dist/entry.mjs")) {
+  } else if (!isHelpFastPathDisabled() && tryOutputBrowserHelp()) {
     // OK
   } else {
-    throw new Error(await buildMissingEntryErrorMessage());
+    await installProcessWarningFilter();
+    if (await tryImport("./dist/entry.js")) {
+      // OK
+    } else if (await tryImport("./dist/entry.mjs")) {
+      // OK
+    } else {
+      throw new Error(await buildMissingEntryErrorMessage());
+    }
   }
 }

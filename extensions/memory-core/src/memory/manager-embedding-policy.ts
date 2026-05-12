@@ -81,7 +81,7 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
 }
 
 export function isRetryableMemoryEmbeddingError(message: string): boolean {
-  return /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day)/i.test(
+  return /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day|fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|network error|read ECONN|timed out)/i.test(
     message,
   );
 }
@@ -124,8 +124,6 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
   }
 }
 
-export function buildTextEmbeddingInputs<T extends MemoryEmbeddingChunk>(
-  chunks: T[],
-): MemoryEmbeddingInput[] {
+export function buildTextEmbeddingInputs(chunks: MemoryEmbeddingChunk[]): MemoryEmbeddingInput[] {
   return chunks.map((chunk) => chunk.embeddingInput ?? { text: chunk.text });
 }

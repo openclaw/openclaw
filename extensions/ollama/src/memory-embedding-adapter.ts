@@ -8,6 +8,7 @@ export const ollamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
   id: "ollama",
   defaultModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
   transport: "remote",
+  authProviderId: "ollama",
   create: async (options) => {
     const { provider, client } = await createOllamaEmbeddingProvider({
       ...options,
@@ -18,6 +19,7 @@ export const ollamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
       provider,
       runtime: {
         id: "ollama",
+        inlineBatchTimeoutMs: 10 * 60_000,
         cacheKeyData: {
           provider: "ollama",
           model: client.model,

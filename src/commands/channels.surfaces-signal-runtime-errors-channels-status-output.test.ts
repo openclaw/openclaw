@@ -33,6 +33,9 @@ describe("channels command", () => {
 
   it("surfaces Signal runtime errors in channels status output", () => {
     const lines = formatGatewayChannelsStatusLines({
+      channelLabels: {
+        signal: "Signal",
+      },
       channelAccounts: {
         signal: [
           {
@@ -61,6 +64,9 @@ describe("channels command", () => {
       ]),
     );
     const lines = formatGatewayChannelsStatusLines({
+      channelLabels: {
+        imessage: "iMessage",
+      },
       channelAccounts: {
         imessage: [
           {
@@ -76,5 +82,24 @@ describe("channels command", () => {
     expect(lines.join("\n")).toMatch(/Warnings:/);
     expect(lines.join("\n")).toMatch(/imessage/i);
     expect(lines.join("\n")).toMatch(/Channel error/i);
+  });
+
+  it("surfaces degraded gateway event-loop health in channels status output", () => {
+    const lines = formatGatewayChannelsStatusLines({
+      eventLoop: {
+        degraded: true,
+        reasons: ["event_loop_delay", "cpu"],
+        intervalMs: 62_000,
+        delayP99Ms: 61_000,
+        delayMaxMs: 62_000,
+        utilization: 1,
+        cpuCoreRatio: 1,
+      },
+      channelLabels: {},
+      channelAccounts: {},
+    });
+
+    expect(lines.join("\n")).toMatch(/Gateway event loop degraded/);
+    expect(lines.join("\n")).toMatch(/eventLoopDelayMaxMs=62000/);
   });
 });

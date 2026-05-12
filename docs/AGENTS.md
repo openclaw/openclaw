@@ -5,8 +5,8 @@ This directory owns docs authoring, Mintlify link rules, and docs i18n policy.
 ## Mintlify Rules
 
 - Docs are hosted on Mintlify (`https://docs.openclaw.ai`).
-- Internal doc links in `docs/**/*.md` must stay root-relative with no `.md` or `.mdx` suffix (example: `[Config](/configuration)`).
-- Section cross-references should use anchors on root-relative paths (example: `[Hooks](/configuration#hooks)`).
+- Internal doc links in `docs/**/*.md` must stay root-relative with no `.md` or `.mdx` suffix (example: `[Config](/gateway/configuration)`).
+- Section cross-references should use anchors on root-relative paths (example: `[Hooks](/gateway/configuration-reference#hooks)`).
 - Doc headings should avoid em dashes and apostrophes because Mintlify anchor generation is brittle there.
 - README and other GitHub-rendered docs should keep absolute docs URLs so links work outside Mintlify.
 - Docs content must stay generic: no personal device names, hostnames, or local paths; use placeholders like `user@gateway-host`.
@@ -15,6 +15,14 @@ This directory owns docs authoring, Mintlify link rules, and docs i18n policy.
 
 - For docs, UI copy, and picker lists, order services/providers alphabetically unless the section is explicitly describing runtime order or auto-detection order.
 - Keep bundled plugin naming consistent with the repo-wide plugin terminology rules in the root `AGENTS.md`.
+
+## Internal Docs
+
+- Long-lived private operator docs belong in `~/Projects/manager/docs/`.
+- Repo-local internal scratch/mirror docs may live under ignored `docs/internal/`.
+- Never add `docs/internal/**` pages to `docs/docs.json` navigation or link them from public docs.
+- `scripts/docs-sync-publish.mjs` excludes and prunes `docs/internal/**` from the public `openclaw/docs` publish repo if a page is force-added later.
+- Internal docs may mention repo paths, private app names, 1Password item names, and runbooks, but never include secret values.
 
 ## Docs i18n
 

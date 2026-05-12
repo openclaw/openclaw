@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvOverride } from "../config/test-helpers.js";
@@ -30,28 +33,9 @@ const gatewayStatusCommand = vi.fn<(opts: unknown) => Promise<void>>(async () =>
 const inspectPortUsage = vi.fn(async (_port: number) => ({ status: "free" as const }));
 const formatPortDiagnostics = vi.fn((_diagnostics: unknown) => [] as string[]);
 
-const mocks = vi.hoisted(() => {
-  const runtimeLogs: string[] = [];
-  const runtimeErrors: string[] = [];
-  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const defaultRuntime = {
-    log: vi.fn((...args: unknown[]) => {
-      runtimeLogs.push(stringifyArgs(args));
-    }),
-    error: vi.fn((...args: unknown[]) => {
-      runtimeErrors.push(stringifyArgs(args));
-    }),
-    writeStdout: vi.fn((value: string) => {
-      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-    }),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-  };
-  return { runtimeLogs, runtimeErrors, defaultRuntime };
+const mocks = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  return createCliRuntimeMock(vi);
 });
 
 const { runtimeLogs, runtimeErrors, defaultRuntime } = mocks;
@@ -138,6 +122,14 @@ async function expectGatewayExit(args: string[]) {
   await expect(runGatewayCommand(args)).rejects.toThrow("__exit__:1");
 }
 
+function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected mock to have at least one call");
+  }
+  return call[0];
+}
+
 describe("gateway-cli coverage", () => {
   beforeEach(() => {
     gatewayProgram = createGatewayProgram();
@@ -148,6 +140,7 @@ describe("gateway-cli coverage", () => {
     defaultRuntime.writeStdout.mockClear();
     defaultRuntime.writeJson.mockClear();
     defaultRuntime.exit.mockClear();
+    startGatewayServer.mockClear();
     inspectPortUsage.mockClear();
     formatPortDiagnostics.mockClear();
   });
@@ -167,6 +160,130 @@ describe("gateway-cli coverage", () => {
     await runGatewayCommand(["gateway", "probe", "--json"]);
 
     expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers gateway stability and routes to diagnostics RPC", async () => {
+    callGateway.mockClear();
+
+    await runGatewayCommand([
+      "gateway",
+      "stability",
+      "--limit",
+      "5",
+      "--type",
+      "payload.large",
+      "--json",
+    ]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const stabilityCall = firstMockArg(callGateway) as { method?: string; params?: unknown };
+    expect(stabilityCall?.method).toBe("diagnostics.stability");
+    expect(stabilityCall?.params).toEqual({
+      limit: 5,
+      type: "payload.large",
+    });
+  });
+
+  it("prints the latest stability bundle without calling Gateway", async () => {
+    callGateway.mockClear();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-cli-bundle-"));
+    try {
+      const bundleDir = path.join(tempDir, "logs", "stability");
+      const bundlePath = path.join(
+        bundleDir,
+        "openclaw-stability-2026-04-22T12-00-00-000Z-123-test.json",
+      );
+      const bundle = {
+        version: 1,
+        generatedAt: "2026-04-22T12:00:00.000Z",
+        reason: "gateway.restart_startup_failed",
+        process: {
+          pid: 123,
+          platform: process.platform,
+          arch: process.arch,
+          node: process.versions.node,
+          uptimeMs: 2000,
+        },
+        host: { hostname: "test-host" },
+        snapshot: {
+          generatedAt: "2026-04-22T12:00:00.000Z",
+          capacity: 1000,
+          count: 1,
+          dropped: 0,
+          firstSeq: 1,
+          lastSeq: 1,
+          events: [
+            {
+              seq: 1,
+              ts: Date.parse("2026-04-22T12:00:00.000Z"),
+              type: "payload.large",
+              surface: "gateway.http.json",
+              action: "rejected",
+              bytes: 2048,
+              limitBytes: 1024,
+            },
+          ],
+          summary: {
+            byType: { "payload.large": 1 },
+            payloadLarge: {
+              count: 1,
+              rejected: 1,
+              truncated: 0,
+              chunked: 0,
+              bySurface: { "gateway.http.json": 1 },
+            },
+          },
+        },
+      };
+      fs.mkdirSync(bundleDir, { recursive: true });
+      fs.writeFileSync(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
+
+      await withEnvOverride({ OPENCLAW_STATE_DIR: tempDir }, async () => {
+        await runGatewayCommand(["gateway", "stability", "--bundle", "latest"]);
+      });
+
+      const output = runtimeLogs.join("\n");
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(output).toContain("Stability bundle");
+      expect(output).toContain("gateway.restart_startup_failed");
+      expect(output).toContain("payload.large");
+      expect(output).toContain("gateway.http.json");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes gateway diagnostics export with a best-effort health snapshot", async () => {
+    callGateway.mockClear();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-cli-support-"));
+    try {
+      const outputPath = path.join(tempDir, "diagnostics.zip");
+      await withEnvOverride(
+        { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
+        async () => {
+          await runGatewayCommand([
+            "gateway",
+            "diagnostics",
+            "export",
+            "--output",
+            outputPath,
+            "--json",
+          ]);
+        },
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const healthCall = firstMockArg(callGateway) as { method?: string; timeoutMs?: number };
+      expect(healthCall?.method).toBe("health");
+      expect(healthCall?.timeoutMs).toBe(3000);
+      expect(fs.existsSync(outputPath)).toBe(true);
+      const output = runtimeLogs.join("\n");
+      expect(output).toContain('"path"');
+      expect(output).toContain("diagnostics.zip");
+      expect(output).toContain('"payloadFree": true');
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("registers gateway discover and prints json output", async () => {
@@ -275,7 +392,7 @@ describe("gateway-cli coverage", () => {
           runGatewayCommand(["gateway", "--token", "test-token", "--allow-unconfigured"]),
         ).rejects.toThrow("__exit__:0");
 
-        expect(startGatewayServer).toHaveBeenCalled();
+        expect(startGatewayServer).toHaveBeenCalledTimes(1);
         expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
         expect(runtimeErrors.join("\n")).toContain("gateway stop");
       },
@@ -317,7 +434,10 @@ describe("gateway-cli coverage", () => {
       startGatewayServer.mockRejectedValueOnce(new Error("nope"));
       await expectGatewayExit(["gateway", "--token", "test-token", "--allow-unconfigured"]);
 
-      expect(startGatewayServer).toHaveBeenCalledWith(19001, expect.anything());
+      expect(startGatewayServer).toHaveBeenCalledTimes(1);
+      const startCall = startGatewayServer.mock.calls[0];
+      expect(startCall?.[0]).toBe(19001);
+      expect(typeof startCall?.[1]).toBe("object");
     });
   });
 });

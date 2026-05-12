@@ -3,7 +3,13 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
-import { encodeQuery, extractReplyText, isRecord, readString } from "./comment-shared.js";
+import {
+  encodeQuery,
+  extractReplyText,
+  formatFeishuApiError,
+  isRecord,
+  readString,
+} from "./comment-shared.js";
 import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
 import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
@@ -266,28 +272,7 @@ function applyCommentFileTypeDefault<
 }
 
 function formatDriveApiError(error: unknown): string {
-  if (!isRecord(error)) {
-    return typeof error === "string" ? error : JSON.stringify(error);
-  }
-  const response = isRecord(error.response) ? error.response : undefined;
-  const responseData = isRecord(response?.data) ? response?.data : undefined;
-  return JSON.stringify({
-    message:
-      typeof error.message === "string"
-        ? error.message
-        : typeof error === "string"
-          ? error
-          : JSON.stringify(error),
-    code: readString(error.code),
-    method: readString(isRecord(error.config) ? error.config.method : undefined),
-    url: readString(isRecord(error.config) ? error.config.url : undefined),
-    params: isRecord(error.config) ? error.config.params : undefined,
-    http_status: typeof response?.status === "number" ? response.status : undefined,
-    feishu_code:
-      typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
-    feishu_msg: readString(responseData?.msg),
-    feishu_log_id: readString(responseData?.log_id),
-  });
+  return formatFeishuApiError(error, { includeConfigParams: true });
 }
 
 function extractDriveApiErrorMeta(error: unknown): {
@@ -748,19 +733,16 @@ export async function deliverCommentThreadText(
 
 export function registerFeishuDriveTools(api: OpenClawPluginApi) {
   if (!api.config) {
-    api.logger.debug?.("feishu_drive: No config available, skipping drive tools");
     return;
   }
 
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
-    api.logger.debug?.("feishu_drive: No Feishu accounts configured, skipping drive tools");
     return;
   }
 
   const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
   if (!toolsCfg.drive) {
-    api.logger.debug?.("feishu_drive: drive tool disabled in config");
     return;
   }
 
@@ -844,6 +826,4 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
     },
     { name: "feishu_drive" },
   );
-
-  api.logger.debug?.(`feishu_drive: Registered feishu_drive tool`);
 }

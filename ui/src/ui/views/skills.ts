@@ -24,6 +24,21 @@ function safeExternalHref(raw?: string): string | null {
   return resolveSafeExternalUrl(raw, window.location.href);
 }
 
+function showDialogWhenClosed(el?: Element) {
+  if (!(el instanceof HTMLDialogElement) || el.open) {
+    return;
+  }
+  if (el.isConnected) {
+    el.showModal();
+  } else {
+    queueMicrotask(() => {
+      if (el.isConnected && !el.open) {
+        el.showModal();
+      }
+    });
+  }
+}
+
 export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
 
 export type SkillsProps = {
@@ -290,17 +305,11 @@ function renderClawHubResults(props: SkillsProps) {
 
 function renderClawHubDetailDialog(props: SkillsProps) {
   const detail = props.clawhubDetail;
-  const ensureModalOpen = (el?: Element) => {
-    if (!(el instanceof HTMLDialogElement) || el.open) {
-      return;
-    }
-    el.showModal();
-  };
 
   return html`
     <dialog
       class="md-preview-dialog"
-      ${ref(ensureModalOpen)}
+      ${ref(showDialogWhenClosed)}
       @click=${(e: Event) => {
         const dialog = e.currentTarget as HTMLDialogElement;
         if (e.target === dialog) {
@@ -422,17 +431,11 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
   const showBundledBadge = Boolean(skill.bundled && skill.source !== "openclaw-bundled");
   const missing = computeSkillMissing(skill);
   const reasons = computeSkillReasons(skill);
-  const ensureModalOpen = (el?: Element) => {
-    if (!(el instanceof HTMLDialogElement) || el.open) {
-      return;
-    }
-    el.showModal();
-  };
 
   return html`
     <dialog
       class="md-preview-dialog"
-      ${ref(ensureModalOpen)}
+      ${ref(showDialogWhenClosed)}
       @click=${(e: Event) => {
         const dialog = e.currentTarget as HTMLDialogElement;
         if (e.target === dialog) {

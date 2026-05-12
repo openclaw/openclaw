@@ -3,6 +3,7 @@ import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { handleBashChatCommand } from "./bash-command.js";
+import { requireGatewayClientScope } from "./command-gates.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";
@@ -17,7 +18,7 @@ const validateConfigObjectWithPluginsMock = vi.hoisted(() =>
     issues: [],
   })),
 );
-const writeConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
+const replaceConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
 const getConfigOverridesMock = vi.hoisted(() => vi.fn(() => ({})));
 const getConfigValueAtPathMock = vi.hoisted(() => vi.fn());
 const parseConfigPathMock = vi.hoisted(() => vi.fn());
@@ -66,6 +67,7 @@ vi.mock("../../channels/plugins/config-writes.js", () => ({
 }));
 
 vi.mock("../../channels/registry.js", () => ({
+  normalizeAnyChannelId: vi.fn((value?: string) => value),
   normalizeChannelId: vi.fn((value?: string) => value),
 }));
 
@@ -79,7 +81,7 @@ vi.mock("../../config/config-paths.js", () => ({
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
-  writeConfigFile: writeConfigFileMock,
+  replaceConfigFile: replaceConfigFileMock,
 }));
 
 vi.mock("../../config/runtime-overrides.js", () => ({
@@ -418,11 +420,11 @@ describe("command gating", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const previousWriteCount = writeConfigFileMock.mock.calls.length;
+      const previousWriteCount = replaceConfigFileMock.mock.calls.length;
       const result = await handleConfigCommand(testCase.params, true);
       expect(result?.shouldContinue).toBe(false);
       expect(result?.reply?.text).toContain(testCase.expectedText);
-      expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+      expect(replaceConfigFileMock.mock.calls.length).toBe(previousWriteCount);
     }
   });
 
@@ -449,12 +451,82 @@ describe("command gating", () => {
     params.command.surface = "telegram";
     params.command.senderIsOwner = true;
 
-    const previousWriteCount = writeConfigFileMock.mock.calls.length;
+    const previousWriteCount = replaceConfigFileMock.mock.calls.length;
     const result = await handleConfigCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
-    expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+    expect(replaceConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+  });
+
+  it("enforces gateway client permissions when the command channel is external", () => {
+    const result = requireGatewayClientScope(
+      {
+        ctx: {
+          Provider: "internal",
+          OriginatingChannel: "telegram",
+          GatewayClientScopes: ["operator.write"],
+        },
+        command: {
+          channel: "telegram",
+        },
+      } as unknown as HandleCommandsParams,
+      {
+        label: "/config write",
+        allowedScopes: ["operator.admin"],
+        missingText: "/config set|unset requires operator.admin for gateway clients.",
+      },
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("requires operator.admin");
+    expect(isInternalMessageChannelMock).not.toHaveBeenCalled();
+  });
+
+  it("enforces gateway client permissions when the scope list is empty", () => {
+    const result = requireGatewayClientScope(
+      {
+        ctx: {
+          Provider: "internal",
+          OriginatingChannel: "telegram",
+          GatewayClientScopes: [],
+        },
+        command: {
+          channel: "telegram",
+        },
+      } as unknown as HandleCommandsParams,
+      {
+        label: "/config write",
+        allowedScopes: ["operator.admin"],
+        missingText: "/config set|unset requires operator.admin for gateway clients.",
+      },
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("requires operator.admin");
+    expect(isInternalMessageChannelMock).not.toHaveBeenCalled();
+  });
+
+  it("does not require gateway client permissions when scopes are absent", () => {
+    const result = requireGatewayClientScope(
+      {
+        ctx: {
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+        },
+        command: {
+          channel: "telegram",
+        },
+      } as unknown as HandleCommandsParams,
+      {
+        label: "/config write",
+        allowedScopes: ["operator.admin"],
+        missingText: "/config set|unset requires operator.admin for gateway clients.",
+      },
+    );
+
+    expect(result).toBeNull();
+    expect(isInternalMessageChannelMock).not.toHaveBeenCalled();
   });
 
   it("enforces gateway client permissions for /config commands", async () => {
@@ -468,7 +540,6 @@ describe("command gating", () => {
     blockedParams.command.channelId = "webchat";
     blockedParams.command.surface = "webchat";
     blockedParams.command.senderIsOwner = true;
-    isInternalMessageChannelMock.mockReturnValueOnce(true);
     const blockedResult = await handleConfigCommand(blockedParams, true);
     expect(blockedResult?.shouldContinue).toBe(false);
     expect(blockedResult?.reply?.text).toContain("requires operator.admin");
@@ -484,7 +555,7 @@ describe("command gating", () => {
     showParams.command.channel = "webchat";
     showParams.command.channelId = "webchat";
     showParams.command.surface = "webchat";
-    isInternalMessageChannelMock.mockReturnValueOnce(true);
+    showParams.command.senderIsOwner = true;
     const showResult = await handleConfigCommand(showParams, true);
     expect(showResult?.shouldContinue).toBe(false);
     expect(showResult?.reply?.text).toContain("Config messages.ackReaction");
@@ -501,10 +572,13 @@ describe("command gating", () => {
     setParams.command.channelId = "webchat";
     setParams.command.surface = "webchat";
     setParams.command.senderIsOwner = true;
-    isInternalMessageChannelMock.mockReturnValueOnce(true);
     const setResult = await handleConfigCommand(setParams, true);
     expect(setResult?.shouldContinue).toBe(false);
     expect(setResult?.reply?.text).toContain("Config updated");
-    expect(writeConfigFileMock).toHaveBeenCalled();
+    expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
+    expect(replaceConfigFileMock).toHaveBeenCalledWith({
+      nextConfig: {},
+      afterWrite: { mode: "auto" },
+    });
   });
 });

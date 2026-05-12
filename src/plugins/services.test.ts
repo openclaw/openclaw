@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
 
@@ -17,12 +18,19 @@ vi.mock("../logging/subsystem.js", () => ({
 import { STATE_DIR } from "../config/paths.js";
 import { startPluginServices } from "./services.js";
 
-function createRegistry(services: OpenClawPluginService[]) {
+function createRegistry(
+  services: OpenClawPluginService[],
+  pluginId = "plugin:test",
+  origin: PluginOrigin = "workspace",
+  trustedOfficialInstall = false,
+) {
   const registry = createEmptyPluginRegistry();
   registry.services = services.map((service) => ({
-    pluginId: "plugin:test",
+    pluginId,
     service,
     source: "test",
+    origin,
+    ...(trustedOfficialInstall ? { trustedOfficialInstall } : {}),
     rootDir: "/plugins/test-plugin",
   })) as typeof registry.services;
   return registry;
@@ -43,7 +51,6 @@ function expectServiceContext(
 }
 
 function expectServiceLogger(ctx: OpenClawPluginServiceContext) {
-  expect(ctx.logger).toBeDefined();
   expect(typeof ctx.logger.info).toBe("function");
   expect(typeof ctx.logger.warn).toBe("function");
   expect(typeof ctx.logger.error).toBe("function");
@@ -69,6 +76,14 @@ function expectServiceLifecycleState(params: {
   expect(params.stops).toEqual(["c", "a"]);
   expect(params.contexts).toHaveLength(3);
   expectServiceContexts(params.contexts, params.config);
+}
+
+function requireLoggerErrorMessage(index = 0): string {
+  const call = mockedLogger.error.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected logger error call ${index}`);
+  }
+  return call[0];
 }
 
 async function startTrackingServices(params: {
@@ -162,15 +177,74 @@ describe("startPluginServices", () => {
 
     await handle.stop();
 
-    expect(mockedLogger.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "plugin service failed (service-start-fail, plugin=plugin:test, root=/plugins/test-plugin):",
-      ),
-    );
-    expect(mockedLogger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("plugin service stop failed (service-stop-fail):"),
-    );
+    expect(mockedLogger.error.mock.calls).toEqual([
+      [
+        "plugin service failed (service-start-fail, plugin=plugin:test, root=/plugins/test-plugin): start failed",
+      ],
+    ]);
+    expect(requireLoggerErrorMessage()).not.toContain("\n");
+    expect(mockedLogger.warn.mock.calls).toEqual([
+      ["plugin service stop failed (service-stop-fail): Error: stop failed"],
+    ]);
     expect(stopOk).toHaveBeenCalledOnce();
     expect(stopThrows).toHaveBeenCalledOnce();
+  });
+
+  it("grants internal diagnostics only to trusted diagnostics exporter services", async () => {
+    const contexts: OpenClawPluginServiceContext[] = [];
+    const diagnosticsService = createTrackingService("diagnostics-otel", { contexts });
+    await startPluginServices({
+      registry: createRegistry([diagnosticsService], "diagnostics-otel", "bundled"),
+      config: createServiceConfig(),
+    });
+
+    expect(contexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
+    expect(contexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+
+    const prometheusContexts: OpenClawPluginServiceContext[] = [];
+    const prometheusService = createTrackingService("diagnostics-prometheus", {
+      contexts: prometheusContexts,
+    });
+    await startPluginServices({
+      registry: createRegistry([prometheusService], "diagnostics-prometheus", "bundled"),
+      config: createServiceConfig(),
+    });
+
+    expect(prometheusContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
+    expect(prometheusContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+
+    const officialInstallContexts: OpenClawPluginServiceContext[] = [];
+    const officialInstallService = createTrackingService("diagnostics-prometheus", {
+      contexts: officialInstallContexts,
+    });
+    await startPluginServices({
+      registry: createRegistry([officialInstallService], "diagnostics-prometheus", "global", true),
+      config: createServiceConfig(),
+    });
+
+    expect(officialInstallContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
+    expect(officialInstallContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+
+    const untrustedContexts: OpenClawPluginServiceContext[] = [];
+    const untrustedService = createTrackingService("diagnostics-otel", {
+      contexts: untrustedContexts,
+    });
+    await startPluginServices({
+      registry: createRegistry([untrustedService], "diagnostics-otel", "workspace"),
+      config: createServiceConfig(),
+    });
+
+    expect(untrustedContexts[0]?.internalDiagnostics).toBeUndefined();
+
+    const spoofedContexts: OpenClawPluginServiceContext[] = [];
+    const spoofedService = createTrackingService("diagnostics-prometheus", {
+      contexts: spoofedContexts,
+    });
+    await startPluginServices({
+      registry: createRegistry([spoofedService], "not-diagnostics-prometheus", "global", true),
+      config: createServiceConfig(),
+    });
+
+    expect(spoofedContexts[0]?.internalDiagnostics).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 ---
 name: github
-description: "GitHub operations via `gh` CLI: issues, PRs, CI runs, code review, API queries. Use when: (1) checking PR status or CI, (2) creating/commenting on issues, (3) listing/filtering PRs or issues, (4) viewing run logs. NOT for: complex web UI interactions requiring manual browser flows (use browser tooling when available), bulk operations across many repos (script with gh api), or when gh auth is not configured."
+description: "Use gh for GitHub issues, PR status, CI/logs, comments, reviews, releases, and API queries."
 metadata:
   {
     "openclaw":
@@ -62,6 +62,25 @@ gh auth login
 # Verify
 gh auth status
 ```
+
+### When the gateway HOME differs from the operator HOME
+
+OpenClaw agent shells often run with a different `HOME` than the user that ran
+`gh auth login` (per-agent codex homes, systemd `User=` services, sudo). `gh`
+looks up its config under `$GH_CONFIG_DIR`, then `$XDG_CONFIG_HOME/gh`, then
+`$HOME/.config/gh`, so the agent shell can report `not logged into any GitHub
+hosts` even when the operator login is intact.
+
+To point the gateway at the canonical `gh` config, set `GH_CONFIG_DIR` on the
+service environment, e.g.
+
+```bash
+# Gateway service env file (example: ~/.openclaw/gateway.systemd.env)
+GH_CONFIG_DIR=/path/to/operator/.config/gh
+```
+
+then restart the gateway. `openclaw doctor` warns when it detects an authenticated
+`hosts.yml` outside the agent process's effective `gh` config dir.
 
 ## Common Commands
 

@@ -49,14 +49,14 @@ describe("handleControlUiHttpRequest auto-detected root", () => {
       resolveControlUiRootSyncMock.mockReturnValue(tmp);
 
       const { res, end } = makeMockHttpResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/assets/app.hl.js", method: "GET" } as IncomingMessage,
         res,
       );
 
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
-      expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("console.log('hi');");
+      expect(String(end.mock.calls.at(0)?.[0] ?? "")).toBe("console.log('hi');");
     });
   });
 
@@ -70,14 +70,14 @@ describe("handleControlUiHttpRequest auto-detected root", () => {
       resolveControlUiRootSyncMock.mockReturnValue(tmp);
 
       const { res, end } = makeMockHttpResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/dashboard", method: "GET" } as IncomingMessage,
         res,
       );
 
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
-      expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("<html>fallback-hardlink</html>\n");
+      expect(String(end.mock.calls.at(0)?.[0] ?? "")).toBe("<html>fallback-hardlink</html>\n");
     });
   });
 
@@ -91,7 +91,7 @@ describe("handleControlUiHttpRequest auto-detected root", () => {
       resolveControlUiRootSyncMock.mockReturnValue(tmp);
 
       const { res } = makeMockHttpResponse();
-      const handled = handleControlUiHttpRequest(
+      const handled = await handleControlUiHttpRequest(
         { url: "/assets/app.hl.js", method: "GET" } as IncomingMessage,
         res,
       );

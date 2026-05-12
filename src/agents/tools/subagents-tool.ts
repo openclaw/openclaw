@@ -1,5 +1,5 @@
-import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
+import { Type } from "typebox";
+import { getRuntimeConfig } from "../../config/config.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import {
   DEFAULT_RECENT_MINUTES,
@@ -35,12 +35,12 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
     label: "Subagents",
     name: "subagents",
     description:
-      "List, kill, or steer spawned sub-agents for this requester session. Use this for sub-agent orchestration.",
+      "On-demand list, kill, or steer spawned sub-agents for this requester session. If sessions_yield is available, use it to wait for completion events; do not poll this tool in wait loops.",
     parameters: SubagentsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = (readStringParam(params, "action") ?? "list") as SubagentAction;
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       const controller = resolveSubagentController({
         cfg,
         agentSessionKey: opts?.agentSessionKey,

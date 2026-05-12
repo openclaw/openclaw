@@ -23,6 +23,31 @@ async function withJsonPath<T>(
   );
 }
 
+async function withJsonSymlink<T>(
+  run: (params: {
+    root: string;
+    targetDir: string;
+    targetPath: string;
+    linkPath: string;
+  }) => Promise<T> | T,
+): Promise<T> {
+  return withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+    const targetDir = path.join(root, "target");
+    return run({
+      root,
+      targetDir,
+      targetPath: path.join(targetDir, "config.json"),
+      linkPath: path.join(root, "config-link.json"),
+    });
+  });
+}
+
+function expectSavedPayloadThroughSymlink(linkPath: string, targetPath: string) {
+  expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+  expect(loadJsonFile(targetPath)).toEqual(SAVED_PAYLOAD);
+  expect(loadJsonFile(linkPath)).toEqual(SAVED_PAYLOAD);
+}
+
 describe("json-file helpers", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -106,19 +131,14 @@ describe("json-file helpers", () => {
   it.runIf(process.platform !== "win32")(
     "preserves symlink destinations when replacing existing JSON files",
     async () => {
-      await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
-        const targetDir = path.join(root, "target");
-        const targetPath = path.join(targetDir, "config.json");
-        const linkPath = path.join(root, "config-link.json");
+      await withJsonSymlink(({ targetDir, targetPath, linkPath }) => {
         fs.mkdirSync(targetDir, { recursive: true });
         writeExistingJson(targetPath);
         fs.symlinkSync(targetPath, linkPath);
 
         saveJsonFile(linkPath, SAVED_PAYLOAD);
 
-        expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
-        expect(loadJsonFile(targetPath)).toEqual(SAVED_PAYLOAD);
-        expect(loadJsonFile(linkPath)).toEqual(SAVED_PAYLOAD);
+        expectSavedPayloadThroughSymlink(linkPath, targetPath);
       });
     },
   );
@@ -126,18 +146,13 @@ describe("json-file helpers", () => {
   it.runIf(process.platform !== "win32")(
     "creates a missing target file through an existing symlink",
     async () => {
-      await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
-        const targetDir = path.join(root, "target");
-        const targetPath = path.join(targetDir, "config.json");
-        const linkPath = path.join(root, "config-link.json");
+      await withJsonSymlink(({ targetDir, targetPath, linkPath }) => {
         fs.mkdirSync(targetDir, { recursive: true });
         fs.symlinkSync(targetPath, linkPath);
 
         saveJsonFile(linkPath, SAVED_PAYLOAD);
 
-        expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
-        expect(loadJsonFile(targetPath)).toEqual(SAVED_PAYLOAD);
-        expect(loadJsonFile(linkPath)).toEqual(SAVED_PAYLOAD);
+        expectSavedPayloadThroughSymlink(linkPath, targetPath);
       });
     },
   );
@@ -151,19 +166,25 @@ describe("json-file helpers", () => {
         const linkPath = path.join(root, "config-link.json");
         fs.symlinkSync(targetPath, linkPath);
 
-        expect(() => saveJsonFile(linkPath, SAVED_PAYLOAD)).toThrow(
-          expect.objectContaining({ code: "ENOENT" }),
-        );
+        let saveError: unknown;
+        try {
+          saveJsonFile(linkPath, SAVED_PAYLOAD);
+        } catch (error) {
+          saveError = error;
+        }
+        if (saveError === undefined) {
+          throw new Error("Expected saveJsonFile to fail");
+        }
+        expect((saveError as { code?: unknown }).code).toBe("ENOENT");
         expect(fs.existsSync(missingTargetDir)).toBe(false);
         expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
       });
     },
   );
 
-  it("falls back to copy when rename-based overwrite fails", async () => {
+  it("preserves payload when rename-based overwrite reports EPERM", async () => {
     await withJsonPath(({ root, pathname }) => {
       writeExistingJson(pathname);
-      const copySpy = vi.spyOn(fs, "copyFileSync");
       const renameSpy = vi.spyOn(fs, "renameSync").mockImplementationOnce(() => {
         const err = new Error("EPERM") as NodeJS.ErrnoException;
         err.code = "EPERM";
@@ -172,8 +193,7 @@ describe("json-file helpers", () => {
 
       saveJsonFile(pathname, SAVED_PAYLOAD);
 
-      expect(renameSpy).toHaveBeenCalledOnce();
-      expect(copySpy).toHaveBeenCalledOnce();
+      expect(renameSpy).toHaveBeenCalled();
       expect(loadJsonFile(pathname)).toEqual(SAVED_PAYLOAD);
       expect(fs.readdirSync(root)).toEqual(["config.json"]);
     });

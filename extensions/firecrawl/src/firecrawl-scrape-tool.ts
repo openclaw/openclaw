@@ -1,24 +1,12 @@
-import { Type } from "@sinclair/typebox";
+import { optionalStringEnum } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   jsonResult,
   readNumberParam,
   readStringParam,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { Type } from "typebox";
 import { runFirecrawlScrape } from "./firecrawl-client.js";
-
-function optionalStringEnum<const T extends readonly string[]>(
-  values: T,
-  options: { description?: string } = {},
-) {
-  return Type.Optional(
-    Type.Unsafe<T[number]>({
-      type: "string",
-      enum: [...values],
-      ...options,
-    }),
-  );
-}
 
 const FirecrawlScrapeToolSchema = Type.Object(
   {

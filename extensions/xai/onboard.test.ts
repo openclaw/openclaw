@@ -2,21 +2,19 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "openclaw/plugin-sdk/provider-onboard";
-import { describe, expect, it } from "vitest";
 import {
   createConfigWithFallbacks,
   createLegacyProviderConfig,
   EXPECTED_FALLBACKS,
-} from "../../test/helpers/plugins/onboard-config.js";
+} from "openclaw/plugin-sdk/provider-test-contracts";
+import { describe, expect, it } from "vitest";
 import { applyXaiConfig, applyXaiProviderConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 
 describe("xai onboard", () => {
   it("adds xAI provider with correct settings", () => {
     const cfg = applyXaiConfig({});
-    expect(cfg.models?.providers?.xai).toMatchObject({
-      baseUrl: "https://api.x.ai/v1",
-      api: "openai-responses",
-    });
+    expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
+    expect(cfg.models?.providers?.xai?.api).toBe("openai-responses");
     expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(XAI_DEFAULT_MODEL_REF);
   });
 
@@ -33,15 +31,13 @@ describe("xai onboard", () => {
     expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
     expect(cfg.models?.providers?.xai?.api).toBe("openai-responses");
     expect(cfg.models?.providers?.xai?.apiKey).toBe("old-key");
-    expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual(
-      expect.arrayContaining([
-        "custom-model",
-        "grok-4",
-        "grok-4-1-fast",
-        "grok-4.20-beta-latest-reasoning",
-        "grok-code-fast-1",
-      ]),
-    );
+    const modelIds = cfg.models?.providers?.xai?.models.map((m) => m.id) ?? [];
+    expect(modelIds).toContain("custom-model");
+    expect(modelIds).toContain("grok-4.3");
+    expect(modelIds).toContain("grok-4");
+    expect(modelIds).toContain("grok-4-1-fast");
+    expect(modelIds).toContain("grok-4.20-beta-latest-reasoning");
+    expect(modelIds).toContain("grok-code-fast-1");
   });
 
   it("adds expected alias for the default model", () => {

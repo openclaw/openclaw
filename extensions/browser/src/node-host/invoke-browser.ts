@@ -1,8 +1,6 @@
 import fsPromises from "node:fs/promises";
-import { loadConfig } from "openclaw/plugin-sdk/browser-config-runtime";
-import { withTimeout } from "openclaw/plugin-sdk/browser-node-runtime";
-import { detectMime } from "openclaw/plugin-sdk/browser-setup-tools";
 import { redactCdpUrl } from "../browser/cdp.helpers.js";
+import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import {
   isPersistentBrowserProfileMutation,
@@ -14,6 +12,8 @@ import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
 } from "../control-service.js";
+import { withTimeout } from "../sdk-node-runtime.js";
+import { detectMime } from "../sdk-setup-tools.js";
 
 type BrowserProxyParams = {
   method?: string;
@@ -44,7 +44,7 @@ function normalizeProfileAllowlist(raw?: string[]): string[] {
 }
 
 function resolveBrowserProxyConfig() {
-  const cfg = loadConfig();
+  const cfg = loadBrowserConfigForRuntimeRefresh();
   const proxy = cfg.nodeHost?.browserProxy;
   const allowProfiles = normalizeProfileAllowlist(proxy?.allowProfiles);
   const enabled = proxy?.enabled !== false;
@@ -64,7 +64,7 @@ async function ensureBrowserControlService(): Promise<void> {
     return browserControlReady;
   }
   browserControlReady = (async () => {
-    const cfg = loadConfig();
+    const cfg = loadBrowserConfigForRuntimeRefresh();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);
     if (!resolved.enabled) {
       throw new Error("browser control disabled");
@@ -126,6 +126,7 @@ async function readBrowserProxyFile(filePath: string): Promise<BrowserProxyFile 
   return { path: filePath, base64: buffer.toString("base64"), mimeType };
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
 function decodeParams<T>(raw?: string | null): T {
   if (!raw) {
     throw new Error("INVALID_REQUEST: paramsJSON required");
@@ -230,7 +231,7 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   }
 
   await ensureBrowserControlService();
-  const cfg = loadConfig();
+  const cfg = loadBrowserConfigForRuntimeRefresh();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
   const path = normalizeBrowserRequestPath(pathValue);

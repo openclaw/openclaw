@@ -1,6 +1,5 @@
 import {
   buildModelAliasIndex,
-  parseModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
@@ -12,15 +11,19 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ConfiguredEntry } from "./list.types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, modelKey } from "./shared.js";
 
+const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
+
 export function resolveConfiguredEntries(cfg: OpenClawConfig) {
   const resolvedDefault = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    ...DISPLAY_MODEL_PARSE_OPTIONS,
   });
   const aliasIndex = buildModelAliasIndex({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
+    ...DISPLAY_MODEL_PARSE_OPTIONS,
   });
   const order: string[] = [];
   const tagsByKey = new Map<string, Set<string>>();
@@ -44,6 +47,7 @@ export function resolveConfiguredEntries(cfg: OpenClawConfig) {
       raw,
       defaultProvider: DEFAULT_PROVIDER,
       aliasIndex,
+      ...DISPLAY_MODEL_PARSE_OPTIONS,
     });
     if (resolved) {
       addEntry(resolved.ref, tag);
@@ -69,11 +73,17 @@ export function resolveConfiguredEntries(cfg: OpenClawConfig) {
   });
 
   for (const key of Object.keys(cfg.agents?.defaults?.models ?? {})) {
-    const parsed = parseModelRef(key, DEFAULT_PROVIDER);
-    if (!parsed) {
+    const resolved = resolveModelRefFromString({
+      cfg,
+      raw: key,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+      ...DISPLAY_MODEL_PARSE_OPTIONS,
+    });
+    if (!resolved) {
       continue;
     }
-    addEntry(parsed, "configured");
+    addEntry(resolved.ref, "configured");
   }
 
   const entries: ConfiguredEntry[] = order.map((key) => {

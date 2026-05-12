@@ -4,10 +4,8 @@ read_when:
   - Building or debugging node clients (iOS/Android/macOS node mode)
   - Investigating pairing or bridge auth failures
   - Auditing the node surface exposed by the gateway
-title: "Bridge Protocol"
+title: "Bridge protocol"
 ---
-
-# Bridge protocol (legacy node transport)
 
 <Warning>
 The TCP bridge has been **removed**. Current OpenClaw builds do not ship the bridge listener and `bridge.*` config keys are no longer in the schema. This page is kept for historical reference only. Use the [Gateway Protocol](/gateway/protocol) for all node/operator clients.
@@ -42,8 +40,10 @@ authoritative pin without explicit user intent or other out-of-band verification
 3. Client sends `pair-request`.
 4. Gateway waits for approval, then sends `pair-ok` and `hello-ok`.
 
-Historically, `hello-ok` returned `serverName` and could include
-`canvasHostUrl`.
+Historically, `hello-ok` returned `serverName`; hosted plugin surfaces are now
+advertised through `pluginSurfaceUrls`. Canvas/A2UI uses
+`pluginSurfaceUrls.canvas`; the deprecated `canvasHostUrl` alias is not part of
+the refactored protocol.
 
 ## Frames
 
@@ -79,7 +79,7 @@ Payload fields (all optional unless noted):
 - Bind the bridge to a tailnet IP: `bridge.bind: "tailnet"` in
   `~/.openclaw/openclaw.json` (historical only; `bridge.*` is no longer valid).
 - Clients connect via MagicDNS name or tailnet IP.
-- Bonjour does **not** cross networks; use manual host/port or wide-area DNS‑SD
+- Bonjour does **not** cross networks; use manual host/port or wide-area DNS-SD
   when needed.
 
 ## Versioning
@@ -87,3 +87,8 @@ Payload fields (all optional unless noted):
 The bridge was **implicit v1** (no min/max negotiation). This section is
 historical reference only; current node/operator clients use the WebSocket
 [Gateway Protocol](/gateway/protocol).
+
+## Related
+
+- [Gateway protocol](/gateway/protocol)
+- [Nodes](/nodes)

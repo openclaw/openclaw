@@ -1,13 +1,5 @@
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
-
-type DiscordSubagentHooksModule = typeof import("./subagent-hooks-api.js");
-
-let discordSubagentHooksPromise: Promise<DiscordSubagentHooksModule> | null = null;
-
-function loadDiscordSubagentHooksModule() {
-  discordSubagentHooksPromise ??= import("./subagent-hooks-api.js");
-  return discordSubagentHooksPromise;
-}
+import { registerDiscordSubagentHooks } from "./subagent-hooks-api.js";
 
 export default defineBundledChannelEntry({
   id: "discord",
@@ -19,21 +11,14 @@ export default defineBundledChannelEntry({
     exportName: "discordPlugin",
   },
   runtime: {
-    specifier: "./runtime-api.js",
+    specifier: "./runtime-setter-api.js",
     exportName: "setDiscordRuntime",
   },
+  accountInspect: {
+    specifier: "./account-inspect-api.js",
+    exportName: "inspectDiscordReadOnlyAccount",
+  },
   registerFull(api) {
-    api.on("subagent_spawning", async (event) => {
-      const { handleDiscordSubagentSpawning } = await loadDiscordSubagentHooksModule();
-      return await handleDiscordSubagentSpawning(api, event);
-    });
-    api.on("subagent_ended", async (event) => {
-      const { handleDiscordSubagentEnded } = await loadDiscordSubagentHooksModule();
-      handleDiscordSubagentEnded(event);
-    });
-    api.on("subagent_delivery_target", async (event) => {
-      const { handleDiscordSubagentDeliveryTarget } = await loadDiscordSubagentHooksModule();
-      return handleDiscordSubagentDeliveryTarget(event);
-    });
+    registerDiscordSubagentHooks(api);
   },
 });

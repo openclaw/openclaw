@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
 
 const SLACK_BUTTON_MAX_ITEMS = 5;
@@ -86,11 +86,12 @@ function buildButtonsBlock(
   }
   return {
     type: "buttons",
-    buttons: choices.map((choice) => ({
-      label: choice.label,
-      value: choice.value,
-      ...(choice.style ? { style: choice.style } : {}),
-    })),
+    buttons: choices.map((choice) =>
+      Object.assign(
+        { label: choice.label, value: choice.value },
+        choice.style ? { style: choice.style } : {},
+      ),
+    ),
   };
 }
 

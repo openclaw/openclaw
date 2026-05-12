@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MsgContext, TemplateContext } from "./templating.js";
 
@@ -7,7 +7,7 @@ export async function withSandboxMediaTempHome<T>(
   prefix: string,
   fn: (home: string) => Promise<T>,
 ): Promise<T> {
-  return withTempHomeBase(async (home) => await fn(home), { prefix });
+  return withTempHomeBase(async (home) => await fn(home), { prefix, skipSessionCleanup: true });
 }
 
 export function createSandboxMediaContexts(mediaPath: string): {

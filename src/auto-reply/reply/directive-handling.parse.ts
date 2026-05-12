@@ -1,5 +1,6 @@
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
 import { extractModelDirective } from "../model.js";
+import { isSessionDefaultDirectiveValue } from "../thinking.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -25,6 +26,7 @@ export type InlineDirectives = {
   hasThinkDirective: boolean;
   thinkLevel?: ThinkLevel;
   rawThinkLevel?: string;
+  clearThinkLevel: boolean;
   hasVerboseDirective: boolean;
   verboseLevel?: VerboseLevel;
   rawVerboseLevel?: string;
@@ -34,6 +36,7 @@ export type InlineDirectives = {
   hasFastDirective: boolean;
   fastMode?: boolean;
   rawFastMode?: string;
+  clearFastMode: boolean;
   hasReasoningDirective: boolean;
   reasoningLevel?: ReasoningLevel;
   rawReasoningLevel?: string;
@@ -58,6 +61,7 @@ export type InlineDirectives = {
   hasModelDirective: boolean;
   rawModelDirective?: string;
   rawModelProfile?: string;
+  rawModelRuntime?: string;
   hasQueueDirective: boolean;
   queueMode?: QueueMode;
   queueReset: boolean;
@@ -147,6 +151,7 @@ export function parseInlineDirectives(
     cleaned: modelCleaned,
     rawModel,
     rawProfile,
+    rawRuntime,
     hasDirective: hasModelDirective,
   } = extractModelDirective(statusCleaned, {
     aliases: options?.modelAliases,
@@ -171,6 +176,7 @@ export function parseInlineDirectives(
     hasThinkDirective,
     thinkLevel,
     rawThinkLevel,
+    clearThinkLevel: hasThinkDirective && isSessionDefaultDirectiveValue(rawThinkLevel),
     hasVerboseDirective,
     verboseLevel,
     rawVerboseLevel,
@@ -180,6 +186,7 @@ export function parseInlineDirectives(
     hasFastDirective,
     fastMode,
     rawFastMode,
+    clearFastMode: hasFastDirective && isSessionDefaultDirectiveValue(rawFastMode),
     hasReasoningDirective,
     reasoningLevel,
     rawReasoningLevel,
@@ -204,6 +211,7 @@ export function parseInlineDirectives(
     hasModelDirective,
     rawModelDirective: rawModel,
     rawModelProfile: rawProfile,
+    rawModelRuntime: rawRuntime,
     hasQueueDirective,
     queueMode,
     queueReset,

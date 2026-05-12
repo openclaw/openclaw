@@ -16,7 +16,8 @@ export type PluginInstallRequestKind =
   | "plugin-dir"
   | "plugin-archive"
   | "plugin-file"
-  | "plugin-npm";
+  | "plugin-npm"
+  | "plugin-git";
 
 export type SkillInstallSpecMetadata = {
   id?: string;
@@ -32,6 +33,12 @@ export type SkillInstallSpecMetadata = {
   extract?: boolean;
   stripComponents?: number;
   targetDir?: string;
+};
+
+export type PackageExecutableScanMetadata = {
+  runtimeExtensions?: readonly string[];
+  runtimeSetupEntry?: string;
+  setupEntry?: string;
 };
 
 async function loadInstallSecurityScanRuntime() {
@@ -58,6 +65,7 @@ export async function scanPackageInstallSource(
     extensions: string[];
     logger: InstallScanLogger;
     packageDir: string;
+    packageMetadata?: PackageExecutableScanMetadata;
     pluginId: string;
     requestKind?: PluginInstallRequestKind;
     requestedSpecifier?: string;
@@ -72,6 +80,7 @@ export async function scanPackageInstallSource(
 }
 
 export async function scanInstalledPackageDependencyTree(params: {
+  allowManagedNpmRootPackagePeerSymlinks?: boolean;
   logger: InstallScanLogger;
   packageDir: string;
   pluginId: string;

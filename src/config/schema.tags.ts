@@ -45,6 +45,7 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "gateway.push.apns.relay.baseUrl": ["network", "advanced"],
   "gateway.controlUi.embedSandbox": ["security", "access", "advanced"],
   "gateway.controlUi.allowExternalEmbedUrls": ["security", "access", "network", "advanced"],
+  "gateway.controlUi.chatMessageMaxWidth": ["advanced"],
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback": [
     "security",
     "access",
@@ -53,6 +54,7 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   ],
   "gateway.controlUi.dangerouslyDisableDeviceAuth": ["security", "access", "network", "advanced"],
   "gateway.controlUi.allowInsecureAuth": ["security", "access", "network", "advanced"],
+  "gateway.nodes.pairing.autoApproveCidrs": ["security", "access", "network", "advanced"],
   "tools.exec.applyPatch.workspaceOnly": ["tools", "security", "access", "advanced"],
 };
 

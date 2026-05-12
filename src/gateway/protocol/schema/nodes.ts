@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
 const NodePendingWorkTypeSchema = Type.String({
@@ -8,6 +8,41 @@ const NodePendingWorkTypeSchema = Type.String({
 const NodePendingWorkPrioritySchema = Type.String({
   enum: ["normal", "high"],
 });
+
+export const NodePresenceAliveReasonSchema = Type.String({
+  enum: [
+    "background",
+    "silent_push",
+    "bg_app_refresh",
+    "significant_location",
+    "manual",
+    "connect",
+  ],
+});
+
+export const NodePresenceAlivePayloadSchema = Type.Object(
+  {
+    trigger: NodePresenceAliveReasonSchema,
+    sentAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    displayName: Type.Optional(NonEmptyString),
+    version: Type.Optional(NonEmptyString),
+    platform: Type.Optional(NonEmptyString),
+    deviceFamily: Type.Optional(NonEmptyString),
+    modelIdentifier: Type.Optional(NonEmptyString),
+    pushTransport: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const NodeEventResultSchema = Type.Object(
+  {
+    ok: Type.Boolean(),
+    event: NonEmptyString,
+    handled: Type.Boolean(),
+    reason: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
 
 export const NodePairRequestParamsSchema = Type.Object(
   {
@@ -21,6 +56,7 @@ export const NodePairRequestParamsSchema = Type.Object(
     modelIdentifier: Type.Optional(NonEmptyString),
     caps: Type.Optional(Type.Array(NonEmptyString)),
     commands: Type.Optional(Type.Array(NonEmptyString)),
+    permissions: Type.Optional(Type.Record(NonEmptyString, Type.Boolean())),
     remoteIp: Type.Optional(NonEmptyString),
     silent: Type.Optional(Type.Boolean()),
   },
@@ -36,6 +72,11 @@ export const NodePairApproveParamsSchema = Type.Object(
 
 export const NodePairRejectParamsSchema = Type.Object(
   { requestId: NonEmptyString },
+  { additionalProperties: false },
+);
+
+export const NodePairRemoveParamsSchema = Type.Object(
+  { nodeId: NonEmptyString },
   { additionalProperties: false },
 );
 

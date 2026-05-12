@@ -8,8 +8,8 @@ import {
 } from "../../config/config-paths.js";
 import {
   readConfigFileSnapshot,
+  replaceConfigFile,
   validateConfigObjectWithPlugins,
-  writeConfigFile,
 } from "../../config/config.js";
 import {
   getConfigOverrides,
@@ -24,7 +24,7 @@ import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
-  requireGatewayClientScopeForInternalChannel,
+  requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
@@ -65,7 +65,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
 
   let parsedWritePath: string[] | undefined;
   if (configCommand.action === "set" || configCommand.action === "unset") {
-    const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
+    const missingAdminScope = requireGatewayClientScope(params, {
       label: "/config write",
       allowedScopes: ["operator.admin"],
       missingText: "❌ /config set|unset requires operator.admin for gateway clients.",
@@ -159,7 +159,10 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         },
       };
     }
-    await writeConfigFile(validated.config);
+    await replaceConfigFile({
+      nextConfig: validated.config,
+      afterWrite: { mode: "auto" },
+    });
     return {
       shouldContinue: false,
       reply: { text: `⚙️ Config updated: ${configCommand.path} removed.` },
@@ -178,7 +181,10 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         },
       };
     }
-    await writeConfigFile(validated.config);
+    await replaceConfigFile({
+      nextConfig: validated.config,
+      afterWrite: { mode: "auto" },
+    });
     const valueLabel =
       typeof configCommand.value === "string"
         ? `"${configCommand.value}"`

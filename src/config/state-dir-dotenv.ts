@@ -44,8 +44,8 @@ export function readStateDirDotEnvVarsFromStateDir(stateDir: string): Record<str
 
 /**
  * Read and parse `~/.openclaw/.env` (or `$OPENCLAW_STATE_DIR/.env`), returning
- * a filtered record of key-value pairs suitable for embedding in a service
- * environment (LaunchAgent plist, systemd unit, Scheduled Task).
+ * a filtered record of key-value pairs suitable for a managed service
+ * environment source.
  */
 export function readStateDirDotEnvVars(
   env: Record<string, string | undefined>,
@@ -54,9 +54,31 @@ export function readStateDirDotEnvVars(
   return readStateDirDotEnvVarsFromStateDir(stateDir);
 }
 
+export type DurableServiceEnvVarSources = {
+  stateDirDotEnvEnvironment: Record<string, string>;
+  configEnvironment: Record<string, string>;
+  durableEnvironment: Record<string, string>;
+};
+
+export function collectDurableServiceEnvVarSources(params: {
+  env: Record<string, string | undefined>;
+  config?: OpenClawConfig;
+}): DurableServiceEnvVarSources {
+  const stateDirDotEnvEnvironment = readStateDirDotEnvVars(params.env);
+  const configEnvironment = collectConfigServiceEnvVars(params.config);
+  return {
+    stateDirDotEnvEnvironment,
+    configEnvironment,
+    durableEnvironment: {
+      ...stateDirDotEnvEnvironment,
+      ...configEnvironment,
+    },
+  };
+}
+
 /**
  * Durable service env sources survive beyond the invoking shell and are safe to
- * persist into gateway install metadata.
+ * persist into owner-only gateway service environment sources.
  *
  * Precedence:
  * 1. state-dir `.env` file vars
@@ -66,8 +88,5 @@ export function collectDurableServiceEnvVars(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
 }): Record<string, string> {
-  return {
-    ...readStateDirDotEnvVars(params.env),
-    ...collectConfigServiceEnvVars(params.config),
-  };
+  return collectDurableServiceEnvVarSources(params).durableEnvironment;
 }

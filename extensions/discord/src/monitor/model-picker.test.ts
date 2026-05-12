@@ -1,7 +1,7 @@
-import { serializePayload } from "@buape/carbon";
 import { ComponentType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { serializePayload } from "../internal/discord.js";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
   DISCORD_CUSTOM_ID_MAX_CHARS,
   DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE,
@@ -29,7 +29,7 @@ vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
 type SerializedComponent = {
   type: number;
   custom_id?: string;
-  options?: Array<{ value: string; default?: boolean }>;
+  options?: Array<{ label?: string; value: string; default?: boolean }>;
   components?: SerializedComponent[];
 };
 
@@ -80,7 +80,7 @@ function requireValue<T>(value: T | null | undefined, message: string): T {
 describe("loadDiscordModelPickerData", () => {
   it("reuses buildModelsProviderData as source of truth with agent scope", async () => {
     const expected = createModelsProviderData({ openai: ["gpt-4o"] });
-    const cfg = {} as OpenClawConfig;
+    const cfg = EMPTY_DISCORD_TEST_CONFIG;
     buildModelsProviderDataMock.mockResolvedValue(expected);
 
     const result = await loadDiscordModelPickerData(cfg, "support");
@@ -163,6 +163,7 @@ describe("Discord model picker custom_id", () => {
       view: "models",
       u: "42",
       p: "openai",
+      r: "codex",
       pg: "1",
       mi: "7",
     });
@@ -173,6 +174,7 @@ describe("Discord model picker custom_id", () => {
       view: "models",
       userId: "42",
       provider: "openai",
+      runtime: "codex",
       page: 1,
       modelIndex: 7,
     });
@@ -390,9 +392,8 @@ describe("Discord model picker rendering", () => {
       return parsed?.action === "provider";
     });
     expect(providerButtons).toHaveLength(Object.keys(entries).length);
-    expect(allButtons.some((component) => (component.custom_id ?? "").includes(";a=nav;"))).toBe(
-      false,
-    );
+    const customIds = allButtons.map((component) => component.custom_id ?? "");
+    expect(customIds.filter((customId) => customId.includes(";a=nav;"))).toEqual([]);
   });
 
   it("does not render navigation buttons even when provider count exceeds one page", () => {
@@ -417,9 +418,8 @@ describe("Discord model picker rendering", () => {
     expect(rows.length).toBeGreaterThan(0);
 
     const allButtons = rows.flatMap((row) => row.components ?? []);
-    expect(allButtons.some((component) => (component.custom_id ?? "").includes(";a=nav;"))).toBe(
-      false,
-    );
+    const customIds = allButtons.map((component) => component.custom_id ?? "");
+    expect(customIds.filter((customId) => customId.includes(";a=nav;"))).toEqual([]);
   });
 
   it("supports classic fallback rendering with content + action rows", () => {
@@ -495,7 +495,10 @@ describe("Discord model picker rendering", () => {
       throw new Error("models view did not render a provider select");
     }
     expect(providerSelect.options?.length).toBe(2);
-    expect(providerSelect.options?.find((option) => option.value === "openai")?.default).toBe(true);
+    const openaiProviderOption = providerSelect.options?.find(
+      (option) => option.value === "openai",
+    );
+    expect(openaiProviderOption?.default).toBe(true);
     const parsedProviderState = parseDiscordModelPickerCustomId(providerSelect.custom_id ?? "");
     expect(parsedProviderState?.action).toBe("provider");
 
@@ -506,7 +509,8 @@ describe("Discord model picker rendering", () => {
       throw new Error("models view did not render a model select");
     }
     expect(modelSelect.options?.length).toBe(3);
-    expect(modelSelect.options?.find((option) => option.value === "o3")?.default).toBe(true);
+    const o3ModelOption = modelSelect.options?.find((option) => option.value === "o3");
+    expect(o3ModelOption?.default).toBe(true);
 
     const parsedModelSelectState = parseDiscordModelPickerCustomId(modelSelect.custom_id ?? "");
     expect(parsedModelSelectState?.action).toBe("model");

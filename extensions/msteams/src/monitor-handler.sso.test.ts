@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import {
   type MSTeamsActivityHandler,
   type MSTeamsMessageHandlerDeps,
@@ -8,8 +8,8 @@ import {
 import {
   createActivityHandler as baseCreateActivityHandler,
   createMSTeamsMessageHandlerDeps,
+  installMSTeamsTestRuntime,
 } from "./monitor-handler.test-helpers.js";
-import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { createMSTeamsSsoTokenStoreMemory } from "./sso-token-store.js";
 import {
@@ -19,46 +19,6 @@ import {
   parseSigninTokenExchangeValue,
   parseSigninVerifyStateValue,
 } from "./sso.js";
-
-function installTestRuntime(): void {
-  setMSTeamsRuntime({
-    logging: { shouldLogVerbose: () => false },
-    system: { enqueueSystemEvent: vi.fn() },
-    channel: {
-      debounce: {
-        resolveInboundDebounceMs: () => 0,
-        createInboundDebouncer: <T>(params: {
-          onFlush: (entries: T[]) => Promise<void>;
-        }): { enqueue: (entry: T) => Promise<void> } => ({
-          enqueue: async (entry: T) => {
-            await params.onFlush([entry]);
-          },
-        }),
-      },
-      pairing: {
-        readAllowFromStore: vi.fn(async () => []),
-        upsertPairingRequest: vi.fn(async () => null),
-      },
-      text: {
-        hasControlCommand: () => false,
-      },
-      routing: {
-        resolveAgentRoute: ({ peer }: { peer: { kind: string; id: string } }) => ({
-          sessionKey: `msteams:${peer.kind}:${peer.id}`,
-          agentId: "default",
-          accountId: "default",
-        }),
-      },
-      reply: {
-        formatAgentEnvelope: ({ body }: { body: string }) => body,
-        finalizeInboundContext: <T extends Record<string, unknown>>(ctx: T) => ctx,
-      },
-      session: {
-        recordInboundSession: vi.fn(async () => undefined),
-      },
-    },
-  } as unknown as PluginRuntime);
-}
 
 function createActivityHandler() {
   const run = vi.fn(async () => undefined);
@@ -88,6 +48,15 @@ function createSsoDeps(params: { fetchImpl: MSTeamsSsoFetch }) {
     tokenStore,
     tokenProvider,
   };
+}
+
+function createRegisteredSsoHandler(sso: MSTeamsMessageHandlerDeps["sso"]) {
+  const deps = createDepsWithoutSso({ sso });
+  const { handler } = createActivityHandler();
+  const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+    run: NonNullable<MSTeamsActivityHandler["run"]>;
+  };
+  return { deps, registered };
 }
 
 function createSigninInvokeContext(params: {
@@ -167,6 +136,41 @@ function createFakeFetch(handlers: Array<(url: string, init?: unknown) => unknow
     };
   };
   return { fetchImpl, calls };
+}
+
+function expectInvokeResponse(sendActivity: ReturnType<typeof vi.fn>, status?: number): void {
+  const activity = sendActivity.mock.calls.find(([arg]) => {
+    return (
+      typeof arg === "object" &&
+      arg !== null &&
+      (arg as { type?: unknown }).type === "invokeResponse"
+    );
+  })?.[0] as { value?: { status?: unknown } } | undefined;
+
+  if (!activity) {
+    throw new Error("Expected invokeResponse activity");
+  }
+  if (status !== undefined) {
+    expect(activity.value?.status).toBe(status);
+  }
+}
+
+function expectLogFields(logFn: unknown, message: string, fields: Record<string, unknown>): void {
+  const calls = (logFn as { mock?: { calls?: Array<[unknown, unknown?]> } }).mock?.calls;
+  if (!calls) {
+    throw new Error("Expected log mock calls");
+  }
+  const call = calls.find(([text]) => text === message);
+  if (!call) {
+    throw new Error(`Expected log message: ${message}`);
+  }
+  const meta = call[1] as Record<string, unknown> | undefined;
+  if (!meta) {
+    throw new Error(`Expected log metadata for: ${message}`);
+  }
+  for (const [key, value] of Object.entries(fields)) {
+    expect(meta[key]).toEqual(value);
+  }
 }
 
 function createBlockedSigninScenarios() {
@@ -400,7 +404,7 @@ describe("handleSigninVerifyStateInvoke", () => {
 
 describe("msteams signin invoke handler registration", () => {
   beforeAll(() => {
-    installTestRuntime();
+    installMSTeamsTestRuntime();
   });
 
   const blockedSigninScenarios = createBlockedSigninScenarios();
@@ -429,17 +433,11 @@ describe("msteams signin invoke handler registration", () => {
 
     await registered.run(ctx);
 
-    expect(ctx.sendActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "invokeResponse",
-        value: expect.objectContaining({ status: 200 }),
-      }),
-    );
+    expectInvokeResponse(ctx.sendActivity, 200);
     expect(run).not.toHaveBeenCalled();
-    expect(deps.log.debug).toHaveBeenCalledWith(
-      "signin invoke received but msteams.sso is not configured",
-      expect.objectContaining({ name: "signin/tokenExchange" }),
-    );
+    expectLogFields(deps.log.debug, "signin invoke received but msteams.sso is not configured", {
+      name: "signin/tokenExchange",
+    });
   });
 
   for (const invoke of invokeVariants) {
@@ -472,22 +470,14 @@ describe("msteams signin invoke handler registration", () => {
 
         await registered.run(ctx);
 
-        expect(ctx.sendActivity).toHaveBeenCalledWith(
-          expect.objectContaining({
-            type: "invokeResponse",
-            value: expect.objectContaining({ status: 200 }),
-          }),
-        );
+        expectInvokeResponse(ctx.sendActivity, 200);
         expect(calls).toHaveLength(0);
         const stored = await tokenStore.get({
           connectionName: "GraphConnection",
           userId: scenario.context.userAadId ?? "aad-user-guid",
         });
         expect(stored).toBeNull();
-        expect(deps.log.debug).toHaveBeenCalledWith(
-          scenario.expectedDropLog,
-          expect.objectContaining({ name: invoke.name }),
-        );
+        expectLogFields(deps.log.debug, scenario.expectedDropLog, { name: invoke.name });
       });
     }
   }
@@ -506,11 +496,7 @@ describe("msteams signin invoke handler registration", () => {
       }),
     ]);
     const { sso, tokenStore } = createSsoDeps({ fetchImpl });
-    const deps = createDepsWithoutSso({ sso });
-    const { handler } = createActivityHandler();
-    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
-      run: NonNullable<MSTeamsActivityHandler["run"]>;
-    };
+    const { deps, registered } = createRegisteredSsoHandler(sso);
 
     const ctx = createSigninInvokeContext({
       name: "signin/tokenExchange",
@@ -519,16 +505,11 @@ describe("msteams signin invoke handler registration", () => {
 
     await registered.run(ctx);
 
-    expect(ctx.sendActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "invokeResponse",
-        value: expect.objectContaining({ status: 200 }),
-      }),
-    );
-    expect(deps.log.info).toHaveBeenCalledWith(
-      "msteams sso token exchanged",
-      expect.objectContaining({ userId: "aad-user-guid", hasExpiry: true }),
-    );
+    expectInvokeResponse(ctx.sendActivity, 200);
+    expectLogFields(deps.log.info, "msteams sso token exchanged", {
+      userId: "aad-user-guid",
+      hasExpiry: true,
+    });
     const stored = await tokenStore.get({
       connectionName: "GraphConnection",
       userId: "aad-user-guid",
@@ -541,11 +522,7 @@ describe("msteams signin invoke handler registration", () => {
       () => ({ ok: false, status: 400, body: "bad request" }),
     ]);
     const { sso } = createSsoDeps({ fetchImpl });
-    const deps = createDepsWithoutSso({ sso });
-    const { handler } = createActivityHandler();
-    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
-      run: NonNullable<MSTeamsActivityHandler["run"]>;
-    };
+    const { deps, registered } = createRegisteredSsoHandler(sso);
 
     const ctx = createSigninInvokeContext({
       name: "signin/tokenExchange",
@@ -554,13 +531,11 @@ describe("msteams signin invoke handler registration", () => {
 
     await registered.run(ctx);
 
-    expect(ctx.sendActivity).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "invokeResponse" }),
-    );
-    expect(deps.log.error).toHaveBeenCalledWith(
-      "msteams sso token exchange failed",
-      expect.objectContaining({ code: "unexpected_response", status: 400 }),
-    );
+    expectInvokeResponse(ctx.sendActivity);
+    expectLogFields(deps.log.error, "msteams sso token exchange failed", {
+      code: "unexpected_response",
+      status: 400,
+    });
   });
 
   it("handles signin/verifyState via the magic-code flow", async () => {
@@ -589,10 +564,9 @@ describe("msteams signin invoke handler registration", () => {
 
     await registered.run(ctx);
 
-    expect(deps.log.info).toHaveBeenCalledWith(
-      "msteams sso verifyState succeeded",
-      expect.objectContaining({ userId: "aad-user-guid" }),
-    );
+    expectLogFields(deps.log.info, "msteams sso verifyState succeeded", {
+      userId: "aad-user-guid",
+    });
     const stored = await tokenStore.get({
       connectionName: "GraphConnection",
       userId: "aad-user-guid",

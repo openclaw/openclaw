@@ -14,6 +14,17 @@ function readStore(storePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(storePath, "utf-8"));
 }
 
+function requireStoreEntry(
+  store: Record<string, unknown>,
+  key: string,
+): { sessionId: string; updatedAt?: number } {
+  const entry = store[key] as { sessionId?: unknown; updatedAt?: number } | undefined;
+  if (!entry || typeof entry.sessionId !== "string") {
+    throw new Error(`expected session store entry ${key}`);
+  }
+  return { sessionId: entry.sessionId, updatedAt: entry.updatedAt };
+}
+
 async function withStateFixture(
   run: (params: { tmpDir: string; stateDir: string }) => Promise<void>,
 ): Promise<void> {
@@ -24,49 +35,55 @@ async function withStateFixture(
   });
 }
 
+const OPS_WORK_CONFIG = {
+  session: { mainKey: "work" },
+  agents: { list: [{ id: "ops", default: true }] },
+} as OpenClawConfig;
+
+function opsSessionStorePath(stateDir: string): string {
+  return path.join(stateDir, "agents", "ops", "sessions", "sessions.json");
+}
+
+function sharedMainOpsConfig(sharedStorePath: string): OpenClawConfig {
+  return {
+    session: { mainKey: "work", store: sharedStorePath },
+    agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
+  } as OpenClawConfig;
+}
+
+async function migrateFixtureState(stateDir: string, cfg: OpenClawConfig = OPS_WORK_CONFIG) {
+  return migrateOrphanedSessionKeys({
+    cfg,
+    env: { OPENCLAW_STATE_DIR: stateDir },
+  });
+}
+
 describe("migrateOrphanedSessionKeys", () => {
   it("renames orphaned raw key to canonical form", async () => {
     await withStateFixture(async ({ stateDir }) => {
-      const storePath = path.join(stateDir, "agents", "ops", "sessions", "sessions.json");
+      const storePath = opsSessionStorePath(stateDir);
       writeStore(storePath, {
         "agent:main:main": { sessionId: "abc-123", updatedAt: 1000 },
       });
 
-      const cfg = {
-        session: { mainKey: "work" },
-        agents: { list: [{ id: "ops", default: true }] },
-      } as OpenClawConfig;
-
-      const result = await migrateOrphanedSessionKeys({
-        cfg,
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
+      const result = await migrateFixtureState(stateDir);
 
       expect(result.changes.length).toBeGreaterThan(0);
       const store = readStore(storePath);
-      expect(store["agent:ops:work"]).toBeDefined();
-      expect((store["agent:ops:work"] as { sessionId: string }).sessionId).toBe("abc-123");
+      expect(requireStoreEntry(store, "agent:ops:work").sessionId).toBe("abc-123");
       expect(store["agent:main:main"]).toBeUndefined();
     });
   });
 
   it("keeps most recently updated entry when both orphan and canonical exist", async () => {
     await withStateFixture(async ({ stateDir }) => {
-      const storePath = path.join(stateDir, "agents", "ops", "sessions", "sessions.json");
+      const storePath = opsSessionStorePath(stateDir);
       writeStore(storePath, {
         "agent:main:main": { sessionId: "old-orphan", updatedAt: 500 },
         "agent:ops:work": { sessionId: "current", updatedAt: 2000 },
       });
 
-      const cfg = {
-        session: { mainKey: "work" },
-        agents: { list: [{ id: "ops", default: true }] },
-      } as OpenClawConfig;
-
-      await migrateOrphanedSessionKeys({
-        cfg,
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
+      await migrateFixtureState(stateDir);
 
       const store = readStore(storePath);
       expect((store["agent:ops:work"] as { sessionId: string }).sessionId).toBe("current");
@@ -76,20 +93,12 @@ describe("migrateOrphanedSessionKeys", () => {
 
   it("skips stores that are already fully canonical", async () => {
     await withStateFixture(async ({ stateDir }) => {
-      const storePath = path.join(stateDir, "agents", "ops", "sessions", "sessions.json");
+      const storePath = opsSessionStorePath(stateDir);
       writeStore(storePath, {
         "agent:ops:work": { sessionId: "abc-123", updatedAt: 1000 },
       });
 
-      const cfg = {
-        session: { mainKey: "work" },
-        agents: { list: [{ id: "ops", default: true }] },
-      } as OpenClawConfig;
-
-      const result = await migrateOrphanedSessionKeys({
-        cfg,
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
+      const result = await migrateFixtureState(stateDir);
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toHaveLength(0);
@@ -98,15 +107,7 @@ describe("migrateOrphanedSessionKeys", () => {
 
   it("handles missing store files gracefully", async () => {
     await withStateFixture(async ({ stateDir }) => {
-      const cfg = {
-        session: { mainKey: "work" },
-        agents: { list: [{ id: "ops", default: true }] },
-      } as OpenClawConfig;
-
-      const result = await migrateOrphanedSessionKeys({
-        cfg,
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
+      const result = await migrateFixtureState(stateDir);
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toHaveLength(0);
@@ -115,19 +116,14 @@ describe("migrateOrphanedSessionKeys", () => {
 
   it("is idempotent — running twice produces same result", async () => {
     await withStateFixture(async ({ stateDir }) => {
-      const storePath = path.join(stateDir, "agents", "ops", "sessions", "sessions.json");
+      const storePath = opsSessionStorePath(stateDir);
       writeStore(storePath, {
         "agent:main:main": { sessionId: "abc-123", updatedAt: 1000 },
       });
 
-      const cfg = {
-        session: { mainKey: "work" },
-        agents: { list: [{ id: "ops", default: true }] },
-      } as OpenClawConfig;
-
       const env = { OPENCLAW_STATE_DIR: stateDir };
-      await migrateOrphanedSessionKeys({ cfg, env });
-      const result2 = await migrateOrphanedSessionKeys({ cfg, env });
+      await migrateOrphanedSessionKeys({ cfg: OPS_WORK_CONFIG, env });
+      const result2 = await migrateOrphanedSessionKeys({ cfg: OPS_WORK_CONFIG, env });
 
       expect(result2.changes).toHaveLength(0);
       const store = readStore(storePath);
@@ -145,25 +141,17 @@ describe("migrateOrphanedSessionKeys", () => {
         "agent:ops:work": { sessionId: "ops-session", updatedAt: 1000 },
       });
 
-      const cfg = {
-        session: { mainKey: "work", store: sharedStorePath },
-        agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
-      } as OpenClawConfig;
-
-      await migrateOrphanedSessionKeys({
-        cfg,
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
+      await migrateFixtureState(stateDir, sharedMainOpsConfig(sharedStorePath));
 
       const store = readStore(sharedStorePath);
       // main agent's session is canonicalised to use configured mainKey ("work"),
       // but stays in the "main" agent namespace — NOT remapped into "ops".
-      expect(store["agent:main:work"]).toBeDefined();
-      expect((store["agent:main:work"] as { sessionId: string }).sessionId).toBe("main-session");
-      expect(store["agent:ops:work"]).toBeDefined();
-      expect((store["agent:ops:work"] as { sessionId: string }).sessionId).toBe("ops-session");
+      expect(requireStoreEntry(store, "agent:main:work").sessionId).toBe("main-session");
+      expect(requireStoreEntry(store, "agent:ops:work").sessionId).toBe("ops-session");
       // The key must NOT have been merged into ops namespace
-      expect(Object.keys(store).filter((k) => k.startsWith("agent:ops:")).length).toBe(1);
+      expect(
+        Object.keys(store).reduce((count, k) => count + (k.startsWith("agent:ops:") ? 1 : 0), 0),
+      ).toBe(1);
     });
   });
 
@@ -175,21 +163,12 @@ describe("migrateOrphanedSessionKeys", () => {
         "agent:ops:work": { sessionId: "ops-session", updatedAt: 1000 },
       });
 
-      const cfg = {
-        session: { mainKey: "work", store: sharedStorePath },
-        agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
-      } as OpenClawConfig;
-
-      await migrateOrphanedSessionKeys({
-        cfg,
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
+      await migrateFixtureState(stateDir, sharedMainOpsConfig(sharedStorePath));
 
       const store = readStore(sharedStorePath);
-      expect(store["agent:main:work"]).toBeDefined();
-      expect((store["agent:main:work"] as { sessionId: string }).sessionId).toBe("main-session");
+      expect(requireStoreEntry(store, "agent:main:work").sessionId).toBe("main-session");
       expect(store.main).toBeUndefined();
-      expect(store["agent:ops:work"]).toBeDefined();
+      expect(requireStoreEntry(store, "agent:ops:work").sessionId).toBe("ops-session");
     });
   });
 
@@ -209,7 +188,7 @@ describe("migrateOrphanedSessionKeys", () => {
 
       expect(result.changes).toHaveLength(0);
       const store = readStore(storePath);
-      expect(store["agent:main:main"]).toBeDefined();
+      expect(requireStoreEntry(store, "agent:main:main").sessionId).toBe("abc-123");
     });
   });
 });

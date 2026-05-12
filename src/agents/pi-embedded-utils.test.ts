@@ -1,7 +1,8 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
+  extractAssistantThinking,
   extractAssistantVisibleText,
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
@@ -562,7 +563,7 @@ File contents here`,
       {
         name: "unclosed think tag",
         text: "<think>Pensando sobre el problema...",
-        expected: "",
+        expected: "Pensando sobre el problema...",
       },
       {
         name: "thinking tag",
@@ -637,6 +638,27 @@ describe("formatReasoningMessage", () => {
   it("trims leading/trailing whitespace", () => {
     expect(formatReasoningMessage("  \n  Reasoning here  \n  ")).toBe(
       "Reasoning:\n_Reasoning here_",
+    );
+  });
+});
+
+describe("extractAssistantThinking", () => {
+  it("surfaces signed native reasoning even when the provider returns an empty summary", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "",
+          thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_live", summary: [] }),
+        },
+        { type: "text", text: "Done." },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantThinking(msg)).toBe(
+      "Native reasoning was produced; no summary text was returned.",
     );
   });
 });
@@ -772,25 +794,40 @@ describe("extractAssistantVisibleText", () => {
 });
 
 describe("promoteThinkingTagsToBlocks", () => {
-  it("does not crash on malformed null content entries", () => {
+  it("preserves malformed null content entries while promoting thinking tags", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [null as never, { type: "text", text: "<thinking>hello</thinking>ok" }],
       timestamp: Date.now(),
     });
-    expect(() => promoteThinkingTagsToBlocks(msg)).not.toThrow();
+    promoteThinkingTagsToBlocks(msg);
     const types = msg.content.map((b: { type?: string }) => b?.type);
     expect(types).toContain("thinking");
     expect(types).toContain("text");
   });
 
-  it("does not crash on undefined content entries", () => {
+  it("splits antml namespaced thinking tags into thinking blocks", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "<antml:thinking>hidden</antml:thinking>Visible" }],
+      timestamp: Date.now(),
+    });
+
+    promoteThinkingTagsToBlocks(msg);
+    expect(msg.content).toEqual([
+      { type: "thinking", thinking: "hidden" },
+      { type: "text", text: "Visible" },
+    ]);
+  });
+
+  it("preserves undefined content entries when there are no thinking tags", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [undefined as never, { type: "text", text: "no tags here" }],
       timestamp: Date.now(),
     });
-    expect(() => promoteThinkingTagsToBlocks(msg)).not.toThrow();
+    promoteThinkingTagsToBlocks(msg);
+    expect(msg.content).toEqual([undefined, { type: "text", text: "no tags here" }]);
   });
 
   it("passes through well-formed content unchanged when no thinking tags", () => {

@@ -2,7 +2,7 @@ import actualFs from "node:fs";
 import actualFsPromises from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type FakeFsEntry = { kind: "file"; content: string } | { kind: "dir" };
 
@@ -108,17 +108,21 @@ vi.mock("./openclaw-root.fs.runtime.js", () => ({
 describe("resolveOpenClawPackageRoot", () => {
   let resolveOpenClawPackageRoot: typeof import("./openclaw-root.js").resolveOpenClawPackageRoot;
   let resolveOpenClawPackageRootSync: typeof import("./openclaw-root.js").resolveOpenClawPackageRootSync;
+  let clearOpenClawPackageRootCaches: typeof import("./openclaw-root.js").__testing.clearOpenClawPackageRootCaches;
+
+  beforeAll(async () => {
+    ({
+      resolveOpenClawPackageRoot,
+      resolveOpenClawPackageRootSync,
+      __testing: { clearOpenClawPackageRootCaches },
+    } = await import("./openclaw-root.js"));
+  });
 
   beforeEach(() => {
+    clearOpenClawPackageRootCaches();
     state.entries.clear();
     state.realpaths.clear();
     state.realpathErrors.clear();
-  });
-
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } =
-      await import("./openclaw-root.js"));
   });
 
   it.each([

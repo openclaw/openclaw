@@ -14,17 +14,30 @@ export type ExecToolDefaults = {
   pathPrepend?: string[];
   safeBins?: string[];
   strictInlineEval?: boolean;
+  commandHighlighting?: boolean;
   safeBinTrustedDirs?: string[];
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   agentId?: string;
   backgroundMs?: number;
   timeoutSec?: number;
+  approvalWarningText?: string;
+  approvalFollowupText?: string;
+  approvalFollowup?: ExecApprovalFollowupFactory;
+  approvalFollowupMode?: "agent" | "direct";
   approvalRunningNoticeMs?: number;
   sandbox?: BashSandboxConfig;
   elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  /** `session.mainKey` from the runtime config; passed through into
+   *  runExecProcess so background-exit notifications can remap cron-run
+   *  session keys to the agent's main queue without an ambient config load. */
+  mainKey?: string;
+  /** `session.scope` from the runtime config; passed alongside `mainKey`
+   *  so the cron-run remap can route global-scope agents to the "global"
+   *  queue instead of agent-main. */
+  sessionScope?: "per-sender" | "global";
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -33,6 +46,25 @@ export type ExecToolDefaults = {
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
 };
+
+export type ExecApprovalFollowupOutcome = {
+  status: "completed" | "failed";
+  exitCode: number | null;
+  timedOut: boolean;
+  aggregated: string;
+  reason?: string;
+};
+
+type ExecApprovalFollowupContext = {
+  approvalId: string;
+  sessionId: string;
+  trigger?: string;
+  outcome: ExecApprovalFollowupOutcome;
+};
+
+export type ExecApprovalFollowupFactory = (
+  context: ExecApprovalFollowupContext,
+) => string | undefined | Promise<string | undefined>;
 
 export type ExecElevatedDefaults = {
   enabled: boolean;

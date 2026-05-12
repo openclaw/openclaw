@@ -1,21 +1,31 @@
-import fs from "node:fs";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as stickerCache from "./sticker-cache-store.js";
 
-const TEST_CACHE_DIR = "/tmp/openclaw-test-sticker-cache/telegram";
-const TEST_CACHE_FILE = path.join(TEST_CACHE_DIR, "sticker-cache.json");
+const jsonStoreMocks = vi.hoisted(() => {
+  const store: { value: unknown } = { value: null };
+  return {
+    store,
+    loadJsonFile: vi.fn(() => store.value),
+    saveJsonFile: vi.fn((_file: string, value: unknown) => {
+      store.value = structuredClone(value);
+    }),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/json-store", () => ({
+  loadJsonFile: jsonStoreMocks.loadJsonFile,
+  saveJsonFile: jsonStoreMocks.saveJsonFile,
+}));
+
+vi.mock("openclaw/plugin-sdk/state-paths", () => ({
+  resolveStateDir: () => "/tmp/openclaw-test-sticker-cache",
+}));
 
 describe("sticker-cache", () => {
   beforeEach(() => {
-    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-test-sticker-cache";
-    fs.rmSync("/tmp/openclaw-test-sticker-cache", { recursive: true, force: true });
-    fs.mkdirSync(TEST_CACHE_DIR, { recursive: true });
-  });
-
-  afterEach(() => {
-    fs.rmSync("/tmp/openclaw-test-sticker-cache", { recursive: true, force: true });
-    delete process.env.OPENCLAW_STATE_DIR;
+    jsonStoreMocks.store.value = null;
+    jsonStoreMocks.loadJsonFile.mockClear();
+    jsonStoreMocks.saveJsonFile.mockClear();
   });
 
   describe("getCachedSticker", () => {
@@ -40,7 +50,7 @@ describe("sticker-cache", () => {
       expect(result).toEqual(sticker);
     });
 
-    it("returns null after cache is cleared", () => {
+    it("returns null after backing store is cleared", () => {
       const sticker = {
         fileId: "file123",
         fileUniqueId: "unique123",
@@ -49,10 +59,13 @@ describe("sticker-cache", () => {
       };
 
       stickerCache.cacheSticker(sticker);
-      expect(stickerCache.getCachedSticker("unique123")).not.toBeNull();
+      const cachedSticker = stickerCache.getCachedSticker("unique123");
+      if (!cachedSticker) {
+        throw new Error("expected cached Telegram sticker");
+      }
+      expect(cachedSticker.fileUniqueId).toBe("unique123");
 
-      // Manually clear the cache file
-      fs.rmSync(TEST_CACHE_FILE, { force: true });
+      jsonStoreMocks.store.value = null;
 
       expect(stickerCache.getCachedSticker("unique123")).toBeNull();
     });
@@ -137,19 +150,28 @@ describe("sticker-cache", () => {
     it("finds stickers by description substring", () => {
       const results = stickerCache.searchStickers("fox");
       expect(results).toHaveLength(2);
-      expect(results.every((s) => s.description.toLowerCase().includes("fox"))).toBe(true);
+      expect(results.map((sticker) => sticker.fileUniqueId)).toEqual([
+        "fox-unique-1",
+        "fox-unique-2",
+      ]);
     });
 
     it("finds stickers by emoji", () => {
       const results = stickerCache.searchStickers("🦊");
       expect(results).toHaveLength(2);
-      expect(results.every((s) => s.emoji === "🦊")).toBe(true);
+      expect(results.map((sticker) => sticker.fileUniqueId)).toEqual([
+        "fox-unique-1",
+        "fox-unique-2",
+      ]);
     });
 
     it("finds stickers by set name", () => {
       const results = stickerCache.searchStickers("CuteFoxes");
       expect(results).toHaveLength(2);
-      expect(results.every((s) => s.setName === "CuteFoxes")).toBe(true);
+      expect(results.map((sticker) => sticker.fileUniqueId)).toEqual([
+        "fox-unique-1",
+        "fox-unique-2",
+      ]);
     });
 
     it("respects limit parameter", () => {
@@ -184,7 +206,7 @@ describe("sticker-cache", () => {
   describe("getAllCachedStickers", () => {
     it("returns empty array when cache is empty", () => {
       const result = stickerCache.getAllCachedStickers();
-      expect(result).toEqual([]);
+      expect(result).toStrictEqual([]);
     });
 
     it("returns all cached stickers", () => {

@@ -4,7 +4,7 @@ let listSandboxBrowsers: typeof import("./manage.js").listSandboxBrowsers;
 let removeSandboxBrowserContainer: typeof import("./manage.js").removeSandboxBrowserContainer;
 
 const configMocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(),
+  getRuntimeConfig: vi.fn(),
 }));
 
 const registryMocks = vi.hoisted(() => ({
@@ -20,7 +20,7 @@ const backendMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: configMocks.loadConfig,
+  getRuntimeConfig: configMocks.getRuntimeConfig,
 }));
 
 vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
@@ -52,7 +52,7 @@ beforeAll(async () => {
 
 describe("listSandboxBrowsers", () => {
   beforeEach(async () => {
-    configMocks.loadConfig.mockReset();
+    configMocks.getRuntimeConfig.mockReset();
     registryMocks.readBrowserRegistry.mockReset();
     registryMocks.readRegistry.mockReset();
     registryMocks.removeBrowserRegistryEntry.mockReset();
@@ -60,7 +60,7 @@ describe("listSandboxBrowsers", () => {
     backendMocks.describeRuntime.mockReset();
     backendMocks.removeRuntime.mockReset();
 
-    configMocks.loadConfig.mockReturnValue({
+    configMocks.getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           sandbox: {
@@ -101,35 +101,34 @@ describe("listSandboxBrowsers", () => {
   it("compares browser runtimes against sandbox.browser.image", async () => {
     const results = await listSandboxBrowsers();
 
-    expect(backendMocks.describeRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "coder",
-        entry: expect.objectContaining({
-          configLabelKind: "BrowserImage",
-        }),
-      }),
-    );
+    const describeInput = backendMocks.describeRuntime.mock.calls.at(0)?.[0] as
+      | { agentId?: string; entry?: { configLabelKind?: string } }
+      | undefined;
+    expect(describeInput?.agentId).toBe("coder");
+    expect(describeInput?.entry?.configLabelKind).toBe("BrowserImage");
     expect(results).toHaveLength(1);
-    expect(results[0]).toMatchObject({
-      image: "openclaw-sandbox-browser:bookworm-slim",
-      running: true,
-      imageMatch: true,
-    });
+    expect(results[0]?.image).toBe("openclaw-sandbox-browser:bookworm-slim");
+    expect(results[0]?.running).toBe(true);
+    expect(results[0]?.imageMatch).toBe(true);
   });
 
   it("removes browser runtimes with BrowserImage config label kind", async () => {
     await removeSandboxBrowserContainer("browser-1");
 
-    expect(backendMocks.removeRuntime).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: expect.objectContaining({
-          containerName: "browser-1",
-          configLabelKind: "BrowserImage",
-          runtimeLabel: "browser-1",
-          backendId: "docker",
-        }),
-      }),
-    );
+    const removeInput = backendMocks.removeRuntime.mock.calls.at(0)?.[0] as
+      | {
+          entry?: {
+            containerName?: string;
+            configLabelKind?: string;
+            runtimeLabel?: string;
+            backendId?: string;
+          };
+        }
+      | undefined;
+    expect(removeInput?.entry?.containerName).toBe("browser-1");
+    expect(removeInput?.entry?.configLabelKind).toBe("BrowserImage");
+    expect(removeInput?.entry?.runtimeLabel).toBe("browser-1");
+    expect(removeInput?.entry?.backendId).toBe("docker");
     expect(registryMocks.removeBrowserRegistryEntry).toHaveBeenCalledWith("browser-1");
   });
 });

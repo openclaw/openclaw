@@ -18,6 +18,7 @@ export type {
   TaskRunDetail,
   TaskRunView,
 } from "./task-domain-types.js";
+export type { DetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime-contract.js";
 
 export type BoundTaskRunsRuntime = {
   readonly sessionKey: string;
@@ -62,6 +63,7 @@ export type PluginRuntimeTaskFlows = {
 export type PluginRuntimeTasks = {
   runs: PluginRuntimeTaskRuns;
   flows: PluginRuntimeTaskFlows;
+  managedFlows: PluginRuntimeTaskFlow;
   /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
   flow: PluginRuntimeTaskFlow;
 };

@@ -1,8 +1,8 @@
 import {
   handleAgentEnd,
   handleAgentStart,
-  handleAutoCompactionEnd,
-  handleAutoCompactionStart,
+  handleCompactionEnd,
+  handleCompactionStart,
 } from "./pi-embedded-subscribe.handlers.lifecycle.js";
 import {
   handleMessageEnd,
@@ -113,14 +113,23 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
           handleAgentStart(ctx);
         });
         return;
-      case "auto_compaction_start":
+      case "compaction_start":
         scheduleEvent(evt, () => {
-          handleAutoCompactionStart(ctx);
+          handleCompactionStart(ctx, {
+            type: "compaction_start",
+            reason: evt.reason,
+          });
         });
         return;
-      case "auto_compaction_end":
+      case "compaction_end":
         scheduleEvent(evt, () => {
-          handleAutoCompactionEnd(ctx, evt as never);
+          handleCompactionEnd(ctx, {
+            type: "compaction_end",
+            reason: evt.reason,
+            willRetry: evt.willRetry,
+            result: evt.result,
+            aborted: evt.aborted,
+          });
         });
         return;
       case "agent_end":

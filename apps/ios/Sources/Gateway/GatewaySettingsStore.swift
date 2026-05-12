@@ -52,8 +52,7 @@ enum GatewaySettingsStore {
     static func loadPreferredGatewayStableID() -> String? {
         if let value = KeychainStore.loadString(
             service: self.gatewayService,
-            account: self.preferredGatewayStableIDAccount
-        )?.trimmingCharacters(in: .whitespacesAndNewlines),
+            account: self.preferredGatewayStableIDAccount)?.trimmingCharacters(in: .whitespacesAndNewlines),
             !value.isEmpty
         {
             return value
@@ -79,8 +78,7 @@ enum GatewaySettingsStore {
     static func loadLastDiscoveredGatewayStableID() -> String? {
         if let value = KeychainStore.loadString(
             service: self.gatewayService,
-            account: self.lastDiscoveredGatewayStableIDAccount
-        )?.trimmingCharacters(in: .whitespacesAndNewlines),
+            account: self.lastDiscoveredGatewayStableIDAccount)?.trimmingCharacters(in: .whitespacesAndNewlines),
             !value.isEmpty
         {
             return value
@@ -160,18 +158,18 @@ enum GatewaySettingsStore {
         var stableID: String {
             switch self {
             case let .manual(_, _, _, stableID):
-                return stableID
+                stableID
             case let .discovered(stableID, _):
-                return stableID
+                stableID
             }
         }
 
         var useTLS: Bool {
             switch self {
             case let .manual(_, _, useTLS, _):
-                return useTLS
+                useTLS
             case let .discovered(_, useTLS):
-                return useTLS
+                useTLS
             }
         }
     }
@@ -292,7 +290,9 @@ enum GatewaySettingsStore {
         let port = defaults.object(forKey: self.lastGatewayPortDefaultsKey) as? Int
 
         let payload = LastGatewayConnectionData(
-            kind: kind, stableID: stableID, useTLS: useTLS,
+            kind: kind,
+            stableID: stableID,
+            useTLS: useTLS,
             host: kind == .manual ? host : nil,
             port: kind == .manual ? port : nil)
         guard self.saveLastGatewayConnectionData(payload) else { return }
@@ -444,7 +444,6 @@ enum GatewaySettingsStore {
             defaults.set(stored, forKey: self.lastDiscoveredGatewayStableIDDefaultsKey)
         }
     }
-
 }
 
 enum GatewayDiagnostics {
@@ -516,7 +515,7 @@ enum GatewayDiagnostics {
 
     static func bootstrap() {
         guard let url = fileURL else { return }
-        queue.async {
+        self.queue.async {
             self.truncateLogIfNeeded(url: url)
             let timestamp = self.isoTimestamp()
             let line = "[\(timestamp)] gateway diagnostics started\n"
@@ -530,10 +529,10 @@ enum GatewayDiagnostics {
     static func log(_ message: String) {
         let timestamp = self.isoTimestamp()
         let line = "[\(timestamp)] \(message)"
-        logger.info("\(line, privacy: .public)")
+        self.logger.info("\(line, privacy: .public)")
 
         guard let url = fileURL else { return }
-        queue.async {
+        self.queue.async {
             let shouldTruncate = self.logWritesSinceCheck.withLock { count in
                 count += 1
                 if count >= self.logSizeCheckEveryWrites {
@@ -554,7 +553,7 @@ enum GatewayDiagnostics {
 
     static func reset() {
         guard let url = fileURL else { return }
-        queue.async {
+        self.queue.async {
             try? FileManager.default.removeItem(at: url)
         }
     }

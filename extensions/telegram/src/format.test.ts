@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { markdownToTelegramHtml, splitTelegramHtmlChunks } from "./format.js";
+import {
+  markdownToTelegramChunks,
+  markdownToTelegramHtml,
+  renderTelegramHtmlText,
+  splitTelegramHtmlChunks,
+} from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
   it("handles core markdown-to-telegram conversions", () => {
@@ -14,7 +19,12 @@ describe("markdownToTelegramHtml", () => {
         "see [docs](https://example.com)",
         'see <a href="https://example.com">docs</a>',
       ],
-      ["escapes raw HTML", "<b>nope</b>", "&lt;b&gt;nope&lt;/b&gt;"],
+      ["preserves Telegram HTML", "<b>yes</b>", "<b>yes</b>"],
+      [
+        "escapes unsupported raw HTML",
+        "<script>nope</script>",
+        "&lt;script&gt;nope&lt;/script&gt;",
+      ],
       ["escapes unsafe characters", "a & b < c", "a &amp; b &lt; c"],
       ["renders paragraphs with blank lines", "first\n\nsecond", "first\n\nsecond"],
       ["renders lists without block HTML", "- one\n- two", "• one\n• two"],
@@ -24,6 +34,39 @@ describe("markdownToTelegramHtml", () => {
     for (const [name, input, expected] of cases) {
       expect(markdownToTelegramHtml(input), name).toBe(expected);
     }
+  });
+
+  it("preserves supported Telegram HTML in stream markdown rendering", () => {
+    const input = [
+      "✉️ <b>Morning Email Rollup</b>",
+      "",
+      "<blockquote>✅ No important emails in the last 24 hours.</blockquote>",
+      "",
+      "<pre><code>oauth2: invalid_grant</code></pre>",
+    ].join("\n");
+
+    expect(markdownToTelegramHtml(input)).toBe(input);
+    expect(
+      markdownToTelegramChunks(input, 4096)
+        .map((chunk) => chunk.html)
+        .join(""),
+    ).toBe(input);
+  });
+
+  it("does not promote Telegram HTML tags inside code", () => {
+    expect(markdownToTelegramHtml("`<b>literal</b>`")).toBe(
+      "<code>&lt;b&gt;literal&lt;/b&gt;</code>",
+    );
+    expect(markdownToTelegramHtml("```\n<blockquote>literal</blockquote>\n```")).toBe(
+      "<pre><code>&lt;blockquote&gt;literal&lt;/blockquote&gt;\n</code></pre>",
+    );
+  });
+
+  it("keeps unsupported Telegram HTML variants escaped", () => {
+    expect(markdownToTelegramHtml('<b class="x">bad</b>')).toBe('&lt;b class="x"&gt;bad&lt;/b&gt;');
+    expect(renderTelegramHtmlText('<b class="x">bad</b>', { textMode: "html" })).toBe(
+      '&lt;b class="x"&gt;bad&lt;/b&gt;',
+    );
   });
 
   it("renders blockquotes as native Telegram blockquote tags", () => {
@@ -93,6 +136,61 @@ describe("markdownToTelegramHtml", () => {
   it("renders spoiler with nested formatting", () => {
     const res = markdownToTelegramHtml("||**secret** text||");
     expect(res).toBe("<tg-spoiler><b>secret</b> text</tg-spoiler>");
+  });
+
+  it("preserves spacing between Telegram bullet blocks and following numbered sections", () => {
+    const input = [
+      "2. Main invariants:",
+      "",
+      "  • Raw Log is source of truth.",
+      "  • Autonomy starts only with report/draft.",
+      "3. Cognee is a candidate:",
+      "",
+      "  • bake-off first;",
+      "  • decide keep/adopt/hybrid later.",
+      "4. Project Flow slices:",
+    ].join("\n");
+
+    const res = markdownToTelegramHtml(input, { wrapFileRefs: false });
+
+    expect(res).toContain("report/draft.\n\n3. Cognee");
+    expect(res).toContain("keep/adopt/hybrid later.\n\n4. Project");
+  });
+
+  it("preserves Telegram list boundary spacing in chunked rendering", () => {
+    const input = [
+      "2. Main invariants:",
+      "",
+      "  • Raw Log is source of truth.",
+      "  • Autonomy starts only with report/draft.",
+      "3. Cognee is a candidate:",
+    ].join("\n");
+
+    const res = markdownToTelegramChunks(input, 4096)
+      .map((chunk) => chunk.html)
+      .join("");
+
+    expect(res).toContain("report/draft.\n\n3. Cognee");
+  });
+
+  it("does not insert Telegram list boundary spacing inside fenced code", () => {
+    const input = ["```", "  • literal bullet", "3. literal number", "```"].join("\n");
+
+    const res = markdownToTelegramHtml(input, { wrapFileRefs: false });
+
+    expect(res).toBe("<pre><code>  • literal bullet\n3. literal number\n</code></pre>");
+  });
+
+  it("does not insert Telegram list boundary spacing inside indented code", () => {
+    const input = ["    • literal bullet", "    3. literal number"].join("\n");
+
+    const res = markdownToTelegramHtml(input, { wrapFileRefs: false });
+    const chunks = markdownToTelegramChunks(input, 4096)
+      .map((chunk) => chunk.html)
+      .join("");
+
+    expect(res).toBe("<pre><code>• literal bullet\n3. literal number\n</code></pre>");
+    expect(chunks).toBe(res);
   });
 
   it("does not treat single pipe as spoiler", () => {

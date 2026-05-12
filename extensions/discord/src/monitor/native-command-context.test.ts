@@ -50,6 +50,7 @@ describe("buildDiscordNativeCommandContext", () => {
       interactionId: "interaction-1",
       channelId: "chan-1",
       threadParentId: "parent-1",
+      memberRoleIds: ["admin"],
       guildName: "Ops",
       channelTopic: "Production alerts only",
       channelConfig: {
@@ -82,14 +83,18 @@ describe("buildDiscordNativeCommandContext", () => {
     expect(ctx.ChatType).toBe("channel");
     expect(ctx.ConversationLabel).toBe("chan-1");
     expect(ctx.GroupSubject).toBe("Ops");
+    expect(ctx.GroupSpace).toBe("guild-1");
+    expect(ctx.MemberRoleIds).toEqual(["admin"]);
     expect(ctx.GroupSystemPrompt).toBe("Use the runbook.");
     expect(ctx.OwnerAllowFrom).toEqual(["user-1"]);
     expect(ctx.MessageThreadId).toBe("chan-1");
     expect(ctx.ThreadParentId).toBe("parent-1");
     expect(ctx.OriginatingTo).toBe("channel:chan-1");
-    expect(ctx.UntrustedContext).toEqual([
-      expect.stringContaining("Discord channel topic:\nProduction alerts only"),
-    ]);
+    expect(ctx.UntrustedContext).toHaveLength(1);
+    const [untrustedContext] = ctx.UntrustedContext ?? [];
+    expect(untrustedContext).toContain("Source: Channel metadata");
+    expect(untrustedContext).toContain("UNTRUSTED channel metadata (discord)");
+    expect(untrustedContext).toContain("Discord channel topic:\nProduction alerts only");
     expect(ctx.Timestamp).toBe(456);
   });
 });

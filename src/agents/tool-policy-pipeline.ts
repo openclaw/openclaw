@@ -48,6 +48,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
   agentPolicy?: ToolPolicyLike;
   agentProviderPolicy?: ToolPolicyLike;
   groupPolicy?: ToolPolicyLike;
+  senderPolicy?: ToolPolicyLike;
   agentId?: string;
 }): ToolPolicyPipelineStep[] {
   const agentId = params.agentId?.trim();
@@ -86,6 +87,7 @@ export function buildDefaultToolPolicyPipelineSteps(params: {
       stripPluginOnlyAllowlist: true,
     },
     { policy: params.groupPolicy, label: "group tools.allow", stripPluginOnlyAllowlist: true },
+    { policy: params.senderPolicy, label: "tools.toolsBySender", stripPluginOnlyAllowlist: true },
   ];
 }
 
@@ -128,7 +130,9 @@ export function applyToolPolicyPipeline(params: {
         const warnableGatedCoreEntries = step.suppressUnavailableCoreToolWarning
           ? []
           : gatedCoreEntries.filter((entry) => !unavailableCoreWarningAllowlist.has(entry));
-        const otherEntries = resolved.unknownAllowlist.filter((entry) => !isKnownCoreToolId(entry));
+        const otherEntries = resolved.unknownAllowlist.filter(
+          (entry) => !isKnownCoreToolId(entry) && !unavailableCoreWarningAllowlist.has(entry),
+        );
         const warningEntries = [...warnableGatedCoreEntries, ...otherEntries];
         if (
           shouldWarnAboutUnknownAllowlist({

@@ -1,27 +1,15 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
 import { __testing as extraParamsTesting } from "./extra-params.js";
 import { runExtraParamsCase } from "./extra-params.test-support.js";
 
-vi.mock("../../plugins/provider-runtime.js", () => ({
-  prepareProviderExtraParams: ({
-    context,
-  }: {
-    context: { extraParams: Record<string, unknown> };
-  }) => context.extraParams,
-  wrapProviderStreamFn: () => undefined,
-}));
-
-vi.mock("@mariozechner/pi-ai", async () =>
-  createPiAiStreamSimpleMock(() =>
-    vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai"),
-  ),
-);
+vi.mock("@earendil-works/pi-ai", () => createPiAiStreamSimpleMock());
 
 beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: (params) => params.context.extraParams,
+    resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: () => undefined,
   });
 });

@@ -1,16 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-coding-agent";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import {
-  appendFileWithinRoot,
-  SafeOpenError,
-  openFileWithinRoot,
-  readFileWithinRoot,
-  writeFileWithinRoot,
-} from "../infra/fs-safe.js";
+import { root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
+import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
@@ -41,11 +36,11 @@ type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
 type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 
-const DEFAULT_READ_PAGE_MAX_BYTES = 50 * 1024;
-const MAX_ADAPTIVE_READ_MAX_BYTES = 512 * 1024;
-const ADAPTIVE_READ_CONTEXT_SHARE = 0.2;
+const DEFAULT_READ_PAGE_MAX_BYTES = 32 * 1024;
+const MAX_ADAPTIVE_READ_MAX_BYTES = 128 * 1024;
+const ADAPTIVE_READ_CONTEXT_SHARE = 0.1;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
-const MAX_ADAPTIVE_READ_PAGES = 8;
+const MAX_ADAPTIVE_READ_PAGES = 4;
 
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
@@ -58,6 +53,7 @@ type ReadTruncationDetails = {
   firstLineExceedsLimit: boolean;
 };
 
+const OFFSET_BEYOND_EOF_RE = /^Offset \d+ is beyond end of file \(\d+ lines total\)$/;
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
 
@@ -125,10 +121,7 @@ function withToolResultText(
       (block as { type?: unknown }).type === "text"
     ) {
       replaced = true;
-      return {
-        ...(block as TextContentBlock),
-        text,
-      };
+      return Object.assign({}, block as TextContentBlock, { text });
     }
     return block;
   });
@@ -205,6 +198,38 @@ function stripReadTruncationContentDetails(
   };
 }
 
+function isOffsetBeyondEof(error: unknown, args: Record<string, unknown>): boolean {
+  const offset = args.offset;
+  return (
+    typeof offset === "number" &&
+    Number.isFinite(offset) &&
+    offset > 0 &&
+    error instanceof Error &&
+    OFFSET_BEYOND_EOF_RE.test(error.message)
+  );
+}
+
+function emptyReadResult(): AgentToolResult<unknown> {
+  const textBlock = { type: "text", text: "" } satisfies TextContentBlock;
+  return { content: [textBlock], details: undefined };
+}
+
+async function executeReadPage(params: {
+  base: AnyAgentTool;
+  toolCallId: string;
+  args: Record<string, unknown>;
+  signal?: AbortSignal;
+}): Promise<AgentToolResult<unknown>> {
+  try {
+    return await params.base.execute(params.toolCallId, params.args, params.signal);
+  } catch (error) {
+    if (isOffsetBeyondEof(error, params.args)) {
+      return emptyReadResult();
+    }
+    throw error;
+  }
+}
+
 async function executeReadWithAdaptivePaging(params: {
   base: AnyAgentTool;
   toolCallId: string;
@@ -216,7 +241,7 @@ async function executeReadWithAdaptivePaging(params: {
   const hasExplicitLimit =
     typeof userLimit === "number" && Number.isFinite(userLimit) && userLimit > 0;
   if (hasExplicitLimit) {
-    return await params.base.execute(params.toolCallId, params.args, params.signal);
+    return await executeReadPage(params);
   }
 
   const offsetRaw = params.args.offset;
@@ -232,7 +257,12 @@ async function executeReadWithAdaptivePaging(params: {
 
   for (let page = 0; page < MAX_ADAPTIVE_READ_PAGES; page += 1) {
     const pageArgs = { ...params.args, offset: nextOffset };
-    const pageResult = await params.base.execute(params.toolCallId, pageArgs, params.signal);
+    const pageResult = await executeReadPage({
+      base: params.base,
+      toolCallId: params.toolCallId,
+      args: pageArgs,
+      signal: params.signal,
+    });
     firstResult ??= pageResult;
 
     const rawText = getToolResultText(pageResult);
@@ -247,7 +277,7 @@ async function executeReadWithAdaptivePaging(params: {
       (truncation?.outputLines ?? 0) > 0 &&
       page < MAX_ADAPTIVE_READ_PAGES - 1;
     const pageText = canContinue ? stripReadContinuationNotice(rawText) : rawText;
-    const delimiter = aggregatedText ? "\n\n" : "";
+    const delimiter = aggregatedText && pageText ? "\n\n" : "";
     const nextBytes = Buffer.byteLength(`${delimiter}${pageText}`, "utf-8");
 
     if (aggregatedText && aggregatedBytes + nextBytes > params.maxBytes) {
@@ -273,7 +303,7 @@ async function executeReadWithAdaptivePaging(params: {
   }
 
   if (!firstResult) {
-    return await params.base.execute(params.toolCallId, params.args, params.signal);
+    return await executeReadPage(params);
   }
 
   let finalText = aggregatedText;
@@ -331,7 +361,7 @@ async function normalizeReadImageResult(
   const nextContent = content.map((block) => {
     if (block && typeof block === "object" && (block as { type?: unknown }).type === "image") {
       const b = block as ImageContentBlock & { mimeType: string };
-      return { ...b, mimeType: sniffed } satisfies ImageContentBlock;
+      return Object.assign({}, b, { mimeType: sniffed }) satisfies ImageContentBlock;
     }
     if (
       block &&
@@ -340,10 +370,9 @@ async function normalizeReadImageResult(
       typeof (block as { text?: unknown }).text === "string"
     ) {
       const b = block as TextContentBlock & { text: string };
-      return {
-        ...b,
+      return Object.assign({}, b, {
         text: rewriteReadImageHeader(b.text, sniffed),
-      } satisfies TextContentBlock;
+      }) satisfies TextContentBlock;
     }
     return block;
   });
@@ -360,19 +389,15 @@ function mapContainerPathToWorkspaceRoot(params: {
   root: string;
   containerWorkdir?: string;
 }): string {
-  const containerWorkdir = params.containerWorkdir?.trim();
-  if (!containerWorkdir) {
-    return params.filePath;
-  }
-  const normalizedWorkdir = containerWorkdir.replace(/\\/g, "/").replace(/\/+$/, "");
-  if (!normalizedWorkdir.startsWith("/")) {
-    return params.filePath;
-  }
-  if (!normalizedWorkdir) {
-    return params.filePath;
-  }
+  return mapContainerPathToRoot({
+    filePath: params.filePath,
+    root: params.root,
+    containerRoot: params.containerWorkdir,
+  }).filePath;
+}
 
-  let candidate = params.filePath.startsWith("@") ? params.filePath.slice(1) : params.filePath;
+function resolveContainerPathCandidate(filePath: string): string | null {
+  let candidate = filePath.startsWith("@") ? filePath.slice(1) : filePath;
   if (/^file:\/\//i.test(candidate)) {
     const localFilePath = trySafeFileURLToPath(candidate);
     if (localFilePath) {
@@ -384,47 +409,65 @@ function mapContainerPathToWorkspaceRoot(params: {
       try {
         parsed = new URL(candidate);
       } catch {
-        return params.filePath;
+        return filePath;
       }
       if (parsed.protocol !== "file:") {
-        return params.filePath;
+        return filePath;
       }
       const host = parsed.hostname.trim().toLowerCase();
       if (host && host !== "localhost") {
-        return params.filePath;
+        return filePath;
       }
       if (hasEncodedFileUrlSeparator(parsed.pathname)) {
-        return params.filePath;
+        return filePath;
       }
       let normalizedPathname: string;
       try {
         normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
       } catch {
-        return params.filePath;
-      }
-      if (
-        normalizedPathname !== normalizedWorkdir &&
-        !normalizedPathname.startsWith(`${normalizedWorkdir}/`)
-      ) {
-        return params.filePath;
+        return filePath;
       }
       candidate = normalizedPathname;
     }
   }
+  return candidate;
+}
+
+function mapContainerPathToRoot(params: {
+  filePath: string;
+  root: string;
+  containerRoot?: string;
+}): { filePath: string; matched: boolean } {
+  const containerRoot = params.containerRoot?.trim();
+  if (!containerRoot) {
+    return { filePath: params.filePath, matched: false };
+  }
+  const normalizedRoot = containerRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!normalizedRoot.startsWith("/") || !normalizedRoot) {
+    return { filePath: params.filePath, matched: false };
+  }
+
+  const candidate = resolveContainerPathCandidate(params.filePath);
+  if (candidate === null) {
+    return { filePath: params.filePath, matched: false };
+  }
 
   const normalizedCandidate = candidate.replace(/\\/g, "/");
-  if (normalizedCandidate === normalizedWorkdir) {
-    return path.resolve(params.root);
+  if (normalizedCandidate === normalizedRoot) {
+    return { filePath: path.resolve(params.root), matched: true };
   }
-  const prefix = `${normalizedWorkdir}/`;
+  const prefix = `${normalizedRoot}/`;
   if (!normalizedCandidate.startsWith(prefix)) {
-    return candidate;
+    return { filePath: candidate, matched: false };
   }
   const relative = normalizedCandidate.slice(prefix.length);
   if (!relative) {
-    return path.resolve(params.root);
+    return { filePath: path.resolve(params.root), matched: true };
   }
-  return path.resolve(params.root, ...relative.split("/").filter(Boolean));
+  return {
+    filePath: path.resolve(params.root, ...relative.split("/").filter(Boolean)),
+    matched: true,
+  };
 }
 
 export function resolveToolPathAgainstWorkspaceRoot(params: {
@@ -494,10 +537,8 @@ async function appendMemoryFlushContent(params: {
   signal?: AbortSignal;
 }) {
   if (!params.sandbox) {
-    await appendFileWithinRoot({
-      rootDir: params.root,
-      relativePath: params.relativePath,
-      data: params.content,
+    const root = await fsRoot(params.root);
+    await root.append(params.relativePath, params.content, {
       mkdir: true,
       prependNewlineIfNeeded: true,
     });
@@ -587,6 +628,10 @@ export function wrapToolWorkspaceRootGuardWithOptions(
   tool: AnyAgentTool,
   root: string,
   options?: {
+    additionalContainerMounts?: readonly {
+      containerRoot: string;
+      hostRoot: string;
+    }[];
     containerWorkdir?: string;
     pathParamKeys?: readonly string[];
     normalizeGuardedPathParams?: boolean;
@@ -604,12 +649,32 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         if (typeof filePath !== "string" || !filePath.trim()) {
           continue;
         }
-        const sandboxPath = mapContainerPathToWorkspaceRoot({
+        let guardedRoot = root;
+        const workspaceMapping = mapContainerPathToRoot({
           filePath,
           root,
-          containerWorkdir: options?.containerWorkdir,
+          containerRoot: options?.containerWorkdir,
         });
-        const sandboxResult = await assertSandboxPath({ filePath: sandboxPath, cwd: root, root });
+        let sandboxPath = workspaceMapping.filePath;
+        if (!workspaceMapping.matched) {
+          for (const mount of options?.additionalContainerMounts ?? []) {
+            const mountMapping = mapContainerPathToRoot({
+              filePath,
+              root: mount.hostRoot,
+              containerRoot: mount.containerRoot,
+            });
+            if (mountMapping.matched) {
+              guardedRoot = path.resolve(mount.hostRoot);
+              sandboxPath = mountMapping.filePath;
+              break;
+            }
+          }
+        }
+        const sandboxResult = await assertSandboxPath({
+          filePath: sandboxPath,
+          cwd: guardedRoot,
+          root: guardedRoot,
+        });
         if (options?.normalizeGuardedPathParams && record) {
           normalizedRecord ??= { ...record };
           normalizedRecord[key] = sandboxResult.resolved;
@@ -746,8 +811,13 @@ function createSandboxEditOperations(params: SandboxToolParams) {
   } as const;
 }
 
+function expandTildeToOsHome(filePath: string): string {
+  const home = resolveOsHomeDir();
+  return home ? expandHomePrefix(filePath, { home }) : filePath;
+}
+
 async function writeHostFile(absolutePath: string, content: string) {
-  const resolved = path.resolve(absolutePath);
+  const resolved = path.resolve(expandTildeToOsHome(absolutePath));
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   await fs.writeFile(resolved, content, "utf-8");
 }
@@ -759,7 +829,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     // When workspaceOnly is false, allow writes anywhere on the host
     return {
       mkdir: async (dir: string) => {
-        const resolved = path.resolve(dir);
+        const resolved = path.resolve(expandTildeToOsHome(dir));
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: writeHostFile,
@@ -767,6 +837,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   }
 
   // When workspaceOnly is true, enforce workspace boundary
+  const rootPromise = fsRoot(root);
   return {
     mkdir: async (dir: string) => {
       const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
@@ -776,12 +847,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     },
     writeFile: async (absolutePath: string, content: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
-      await writeFileWithinRoot({
-        rootDir: root,
-        relativePath: relative,
-        data: content,
-        mkdir: true,
-      });
+      await (await rootPromise).write(relative, content, { mkdir: true });
     },
   } as const;
 }
@@ -793,35 +859,28 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     // When workspaceOnly is false, allow edits anywhere on the host
     return {
       readFile: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
         return await fs.readFile(resolved);
       },
       writeFile: writeHostFile,
       access: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
         await fs.access(resolved);
       },
     } as const;
   }
 
   // When workspaceOnly is true, enforce workspace boundary
+  const rootPromise = fsRoot(root);
   return {
     readFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
-      const safeRead = await readFileWithinRoot({
-        rootDir: root,
-        relativePath: relative,
-      });
+      const safeRead = await (await rootPromise).read(relative);
       return safeRead.buffer;
     },
     writeFile: async (absolutePath: string, content: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);
-      await writeFileWithinRoot({
-        rootDir: root,
-        relativePath: relative,
-        data: content,
-        mkdir: true,
-      });
+      await (await rootPromise).write(relative, content, { mkdir: true });
     },
     access: async (absolutePath: string) => {
       let relative: string;
@@ -836,16 +895,13 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         return;
       }
       try {
-        const opened = await openFileWithinRoot({
-          rootDir: root,
-          relativePath: relative,
-        });
+        const opened = await (await rootPromise).open(relative);
         await opened.handle.close().catch(() => {});
       } catch (error) {
-        if (error instanceof SafeOpenError && error.code === "not-found") {
+        if (error instanceof FsSafeError && error.code === "not-found") {
           throw createFsAccessError("ENOENT", absolutePath);
         }
-        if (error instanceof SafeOpenError && error.code === "outside-workspace") {
+        if (error instanceof FsSafeError && error.code === "outside-workspace") {
           // Don't throw here – see the comment above about the upstream
           // library swallowing access errors as "File not found".
           return;

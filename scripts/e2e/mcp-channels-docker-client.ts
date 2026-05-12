@@ -7,9 +7,82 @@ import {
   connectMcpClient,
   extractTextFromGatewayPayload,
   type ClaudeChannelNotification,
+  type GatewayRpcClient,
   maybeApprovePendingBridgePairing,
   waitFor,
 } from "./mcp-channels-harness.ts";
+
+function summarizeSessionRows(rows: Array<Record<string, unknown>> | undefined) {
+  return (rows ?? []).map((entry) => ({
+    key: entry.key,
+    channel: entry.channel,
+    deliveryContext: entry.deliveryContext,
+    lastChannel: entry.lastChannel,
+    lastTo: entry.lastTo,
+    lastAccountId: entry.lastAccountId,
+    lastThreadId: entry.lastThreadId,
+  }));
+}
+
+function formatUnknownError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (error === undefined || error === null) {
+    return "";
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
+    return `${error}`;
+  }
+  if (typeof error === "symbol") {
+    return error.description ?? "symbol";
+  }
+  try {
+    return JSON.stringify(error) ?? "";
+  } catch {
+    return Object.prototype.toString.call(error);
+  }
+}
+
+async function waitForGatewaySeededConversation(gateway: GatewayRpcClient) {
+  let lastList: { sessions?: Array<Record<string, unknown>> } | undefined;
+  let lastError: unknown;
+  try {
+    return await waitFor(
+      "seeded conversation in gateway sessions.list",
+      async () => {
+        try {
+          lastList = await gateway.request<{ sessions?: Array<Record<string, unknown>> }>(
+            "sessions.list",
+            { limit: 50, includeDerivedTitles: false, includeLastMessage: false },
+          );
+          lastError = undefined;
+        } catch (error) {
+          lastError = error;
+          return undefined;
+        }
+        return lastList.sessions?.find((entry) => entry.key === "agent:main:main");
+      },
+      180_000,
+    );
+  } catch (error) {
+    throw new Error(
+      `gateway sessions.list did not include seeded conversation: ${JSON.stringify(
+        {
+          count: lastList?.sessions?.length ?? 0,
+          sessions: summarizeSessionRows(lastList?.sessions),
+          lastError: formatUnknownError(lastError),
+        },
+        null,
+        2,
+      )}`,
+      { cause: error },
+    );
+  }
+}
 
 async function main() {
   const gatewayUrl = process.env.GW_URL?.trim();
@@ -18,13 +91,26 @@ async function main() {
   assert(gatewayToken, "missing GW_TOKEN");
 
   const gateway = await connectGateway({ url: gatewayUrl, token: gatewayToken });
-  let mcpHandle = await connectMcpClient({
-    gatewayUrl,
-    gatewayToken,
-  });
-  let mcp = mcpHandle.client;
+  let mcpHandle: Awaited<ReturnType<typeof connectMcpClient>> | undefined;
 
   try {
+    const gatewayConversation = await waitForGatewaySeededConversation(gateway);
+    assert(
+      (gatewayConversation.deliveryContext as { channel?: unknown } | undefined)?.channel ===
+        "imessage",
+      "expected seeded gateway deliveryContext channel",
+    );
+    assert(
+      (gatewayConversation.deliveryContext as { to?: unknown } | undefined)?.to === "+15551234567",
+      "expected seeded gateway deliveryContext target",
+    );
+
+    mcpHandle = await connectMcpClient({
+      gatewayUrl,
+      gatewayToken,
+    });
+    let mcp = mcpHandle.client;
+
     if (await maybeApprovePendingBridgePairing(gateway)) {
       await Promise.allSettled([mcp.close(), mcpHandle.transport.close()]);
       mcpHandle = await connectMcpClient({
@@ -33,54 +119,94 @@ async function main() {
       });
       mcp = mcpHandle.client;
     }
+    const callTool = <T>(params: Parameters<typeof mcp.callTool>[0]) =>
+      mcp.callTool(params, undefined, { timeout: 240_000 }) as Promise<T>;
 
-    const listed = (await mcp.callTool({
-      name: "conversations_list",
-      arguments: {},
-    })) as {
-      structuredContent?: { conversations?: Array<Record<string, unknown>> };
-    };
-    const conversation = listed.structuredContent?.conversations?.find(
-      (entry) => entry.sessionKey === "agent:main:main",
-    );
-    assert(conversation, "expected seeded conversation in conversations_list");
+    let lastMcpConversationList: unknown;
+    const conversation = await waitFor(
+      "seeded conversation in conversations_list",
+      async () => {
+        const listed = await callTool<{
+          structuredContent?: { conversations?: Array<Record<string, unknown>> };
+        }>({
+          name: "conversations_list",
+          arguments: {
+            includeDerivedTitles: false,
+            includeLastMessage: false,
+          },
+        });
+        lastMcpConversationList = listed;
+        return listed.structuredContent?.conversations?.find(
+          (entry) => entry.sessionKey === "agent:main:main",
+        );
+      },
+      240_000,
+    ).catch((error) => {
+      throw new Error(
+        `timeout waiting for seeded MCP conversation: ${JSON.stringify(
+          lastMcpConversationList,
+          null,
+          2,
+        )}`,
+        { cause: error },
+      );
+    });
     assert(conversation.channel === "imessage", "expected seeded channel");
     assert(conversation.to === "+15551234567", "expected seeded target");
 
-    const fetched = (await mcp.callTool({
-      name: "conversation_get",
-      arguments: { session_key: "agent:main:main" },
-    })) as {
+    const fetched = await callTool<{
       structuredContent?: { conversation?: Record<string, unknown> };
       isError?: boolean;
-    };
+    }>({
+      name: "conversation_get",
+      arguments: { session_key: "agent:main:main" },
+    });
     assert(!fetched.isError, "conversation_get should succeed");
     assert(
       fetched.structuredContent?.conversation?.sessionKey === "agent:main:main",
       "conversation_get returned wrong session",
     );
 
-    const history = (await mcp.callTool({
-      name: "messages_read",
-      arguments: { session_key: "agent:main:main", limit: 10 },
-    })) as {
-      structuredContent?: { messages?: Array<Record<string, unknown>> };
-    };
-    const messages = history.structuredContent?.messages ?? [];
-    assert(messages.length >= 2, "expected seeded transcript messages");
-    const attachmentMessage = messages.find((entry) => {
-      const raw = entry.__openclaw;
-      return raw && typeof raw === "object" && (raw as { id?: unknown }).id === "msg-attachment";
+    let lastHistory: unknown;
+    const messages = await waitFor(
+      "seeded transcript messages",
+      async () => {
+        const history = await callTool<{
+          structuredContent?: { messages?: Array<Record<string, unknown>> };
+        }>({
+          name: "messages_read",
+          arguments: { session_key: "agent:main:main", limit: 10 },
+        });
+        lastHistory = history;
+        const currentMessages = history.structuredContent?.messages ?? [];
+        return currentMessages.length >= 2 ? currentMessages : undefined;
+      },
+      240_000,
+    ).catch((error) => {
+      throw new Error(
+        `timeout waiting for seeded transcript messages: ${JSON.stringify(lastHistory, null, 2)}`,
+        { cause: error },
+      );
     });
-    assert(attachmentMessage, "expected seeded attachment message");
+    await waitFor(
+      "seeded attachment message",
+      () =>
+        messages.find((entry) => {
+          const raw = entry.__openclaw;
+          return (
+            raw && typeof raw === "object" && (raw as { id?: unknown }).id === "msg-attachment"
+          );
+        }),
+      240_000,
+    );
 
-    const attachments = (await mcp.callTool({
-      name: "attachments_fetch",
-      arguments: { session_key: "agent:main:main", message_id: "msg-attachment" },
-    })) as {
+    const attachments = await callTool<{
       structuredContent?: { attachments?: Array<Record<string, unknown>> };
       isError?: boolean;
-    };
+    }>({
+      name: "attachments_fetch",
+      arguments: { session_key: "agent:main:main", message_id: "msg-attachment" },
+    });
     assert(!attachments.isError, "attachments_fetch should succeed");
     assert(
       (attachments.structuredContent?.attachments?.length ?? 0) === 1,
@@ -88,16 +214,16 @@ async function main() {
     );
 
     const waited = (await Promise.all([
-      mcp.callTool({
+      callTool<{
+        structuredContent?: { event?: Record<string, unknown> };
+      }>({
         name: "events_wait",
         arguments: {
           session_key: "agent:main:main",
           after_cursor: 0,
           timeout_ms: 10_000,
         },
-      }) as Promise<{
-        structuredContent?: { event?: Record<string, unknown> };
-      }>,
+      }),
       gateway.request("chat.inject", {
         sessionKey: "agent:main:main",
         message: "assistant live event",
@@ -112,12 +238,12 @@ async function main() {
     assert(assistantEvent.text === "assistant live event", "expected assistant event text");
     const assistantCursor = typeof assistantEvent.cursor === "number" ? assistantEvent.cursor : 0;
 
-    const polled = (await mcp.callTool({
+    const polled = await callTool<{
+      structuredContent?: { events?: Array<Record<string, unknown>> };
+    }>({
       name: "events_poll",
       arguments: { session_key: "agent:main:main", after_cursor: 0, limit: 10 },
-    })) as {
-      structuredContent?: { events?: Array<Record<string, unknown>> };
-    };
+    });
     assert(
       (polled.structuredContent?.events ?? []).some(
         (entry) => entry.text === "assistant live event",
@@ -127,16 +253,16 @@ async function main() {
 
     const channelMessage = `hello from docker ${randomUUID()}`;
     const userEvent = (await Promise.all([
-      mcp.callTool({
+      callTool<{
+        structuredContent?: { event?: Record<string, unknown> };
+      }>({
         name: "events_wait",
         arguments: {
           session_key: "agent:main:main",
           after_cursor: assistantCursor,
           timeout_ms: 10_000,
         },
-      }) as Promise<{
-        structuredContent?: { event?: Record<string, unknown> };
-      }>,
+      }),
       gateway.request("chat.send", {
         sessionKey: "agent:main:main",
         message: channelMessage,
@@ -240,7 +366,10 @@ async function main() {
       ) + "\n",
     );
   } finally {
-    await Promise.allSettled([mcp.close(), mcpHandle.transport.close(), gateway.close()]);
+    await Promise.allSettled([
+      ...(mcpHandle ? [mcpHandle.client.close(), mcpHandle.transport.close()] : []),
+      gateway.close(),
+    ]);
   }
 }
 

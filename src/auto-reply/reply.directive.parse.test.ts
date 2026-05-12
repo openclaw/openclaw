@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
 import {
   extractElevatedDirective,
-  extractExecDirective,
-  extractQueueDirective,
   extractReasoningDirective,
-  extractReplyToTag,
   extractTraceDirective,
   extractThinkDirective,
   extractVerboseDirective,
-} from "./reply.js";
-import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
+} from "./reply/directives.js";
 import { extractFastDirective, extractStatusDirective } from "./reply/directives.js";
+import { extractExecDirective } from "./reply/exec/directive.js";
+import { extractQueueDirective } from "./reply/queue/directive.js";
+import { extractReplyToTag } from "./reply/reply-tags.js";
 
 describe("directive parsing", () => {
   it("ignores verbose directive inside URL", () => {
@@ -67,6 +67,20 @@ describe("directive parsing", () => {
     const res = extractFastDirective("/fast on please");
     expect(res.hasDirective).toBe(true);
     expect(res.fastMode).toBe(true);
+  });
+
+  it("parses default thinking and fast directives as override clears", () => {
+    const think = parseInlineDirectives("/think default");
+    expect(think.hasThinkDirective).toBe(true);
+    expect(think.thinkLevel).toBeUndefined();
+    expect(think.rawThinkLevel).toBe("default");
+    expect(think.clearThinkLevel).toBe(true);
+
+    const fast = parseInlineDirectives("/fast inherit");
+    expect(fast.hasFastDirective).toBe(true);
+    expect(fast.fastMode).toBeUndefined();
+    expect(fast.rawFastMode).toBe("inherit");
+    expect(fast.clearFastMode).toBe(true);
   });
 
   it("matches elevated with leading space", () => {
@@ -178,18 +192,23 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
-  it("strips inline /model and /think directives while keeping user text", () => {
-    expect(parseInlineDirectives("please sync /model openai/gpt-4.1-mini now")).toMatchObject({
-      cleaned: "please sync now",
-      hasModelDirective: true,
-      rawModelDirective: "openai/gpt-4.1-mini",
-    });
+  it("keeps legacy queue directive as queue mode", () => {
+    const res = extractQueueDirective("please /queue queue now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.queueMode).toBe("queue");
+    expect(res.cleaned).toBe("please now");
+  });
 
-    expect(parseInlineDirectives("please sync /think:high now")).toMatchObject({
-      cleaned: "please sync now",
-      hasThinkDirective: true,
-      thinkLevel: "high",
-    });
+  it("strips inline /model and /think directives while keeping user text", () => {
+    const model = parseInlineDirectives("please sync /model openai/gpt-4.1-mini now");
+    expect(model.cleaned).toBe("please sync now");
+    expect(model.hasModelDirective).toBe(true);
+    expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
+
+    const think = parseInlineDirectives("please sync /think:high now");
+    expect(think.cleaned).toBe("please sync now");
+    expect(think.hasThinkDirective).toBe(true);
+    expect(think.thinkLevel).toBe("high");
   });
 
   it("preserves spacing when stripping think directives before paths", () => {

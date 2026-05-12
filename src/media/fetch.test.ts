@@ -11,9 +11,11 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   }),
 }));
 
-type FetchRemoteMedia = typeof import("./fetch.js").fetchRemoteMedia;
+type FetchModule = typeof import("./fetch.js");
+type FetchRemoteMedia = FetchModule["fetchRemoteMedia"];
 type LookupFn = NonNullable<Parameters<FetchRemoteMedia>[0]["lookupFn"]>;
 let fetchRemoteMedia: FetchRemoteMedia;
+let defaultFetchMediaMaxBytes: number;
 
 function makeStream(chunks: Uint8Array[]) {
   return new ReadableStream<Uint8Array>({
@@ -43,6 +45,14 @@ function makeLookupFn(): LookupFn {
   return vi.fn(async () => ({ address: "149.154.167.220", family: 4 })) as unknown as LookupFn;
 }
 
+function requireFetchGuardRequest(): unknown {
+  const [call] = fetchWithSsrFGuardMock.mock.calls;
+  if (!call) {
+    throw new Error("expected fetchWithSsrFGuard call");
+  }
+  return call[0];
+}
+
 async function expectRemoteMediaMaxBytesError(params: {
   fetchImpl: Parameters<typeof fetchRemoteMedia>[0]["fetchImpl"];
   maxBytes: number;
@@ -57,27 +67,27 @@ async function expectRemoteMediaMaxBytesError(params: {
   ).rejects.toThrow("exceeds maxBytes");
 }
 
-async function expectRedactedTelegramFetchError(params: {
-  telegramFileUrl: string;
-  telegramToken: string;
-  redactedTelegramToken: string;
+async function expectRedactedBotTokenFetchError(params: {
+  botFileUrl: string;
+  botToken: string;
+  expectedErrorText: string;
   fetchImpl: Parameters<typeof fetchRemoteMedia>[0]["fetchImpl"];
 }) {
   const error = await fetchRemoteMedia({
-    url: params.telegramFileUrl,
+    url: params.botFileUrl,
     fetchImpl: params.fetchImpl,
     lookupFn: makeLookupFn(),
     maxBytes: 1024,
     ssrfPolicy: {
-      allowedHostnames: ["api.telegram.org"],
+      allowedHostnames: ["files.example.test"],
       allowRfc2544BenchmarkRange: true,
     },
   }).catch((err: unknown) => err as Error);
 
   expect(error).toBeInstanceOf(Error);
   const errorText = error instanceof Error ? String(error) : "";
-  expect(errorText).not.toContain(params.telegramToken);
-  expect(errorText).toContain(`bot${params.redactedTelegramToken}`);
+  expect(errorText).not.toContain(params.botToken);
+  expect(errorText).toBe(params.expectedErrorText);
 }
 
 async function expectFetchRemoteMediaRejected(params: {
@@ -88,20 +98,27 @@ async function expectFetchRemoteMediaRejected(params: {
   lookupFn?: LookupFn;
   expectedError: RegExp | string | Record<string, unknown>;
 }) {
-  const rejection = expect(
-    fetchRemoteMedia({
-      url: params.url,
-      fetchImpl: params.fetchImpl,
-      lookupFn: params.lookupFn ?? makeLookupFn(),
-      maxBytes: params.maxBytes ?? 1024,
-      ...(params.readIdleTimeoutMs ? { readIdleTimeoutMs: params.readIdleTimeoutMs } : {}),
-    }),
-  ).rejects;
+  const request = {
+    url: params.url,
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn ?? makeLookupFn(),
+    maxBytes: params.maxBytes ?? 1024,
+    ...(params.readIdleTimeoutMs ? { readIdleTimeoutMs: params.readIdleTimeoutMs } : {}),
+  };
   if (params.expectedError instanceof RegExp || typeof params.expectedError === "string") {
-    await rejection.toThrow(params.expectedError);
+    await expect(fetchRemoteMedia(request)).rejects.toThrow(params.expectedError);
     return;
   }
-  await rejection.toMatchObject(params.expectedError);
+  let fetchError: unknown;
+  try {
+    await fetchRemoteMedia(request);
+  } catch (error) {
+    fetchError = error;
+  }
+  expect(fetchError).toBeInstanceOf(Error);
+  for (const [key, value] of Object.entries(params.expectedError)) {
+    expect((fetchError as Record<string, unknown>)[key]).toStrictEqual(value);
+  }
 }
 
 async function expectFetchRemoteMediaResolvesToError(
@@ -172,12 +189,14 @@ function createFetchRemoteMediaParams(
 }
 
 describe("fetchRemoteMedia", () => {
-  const telegramToken = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
-  const redactedTelegramToken = `${telegramToken.slice(0, 6)}…${telegramToken.slice(-4)}`;
-  const telegramFileUrl = `https://api.telegram.org/file/bot${telegramToken}/photos/1.jpg`;
+  const botToken = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcd";
+  const redactedBotToken = `${botToken.slice(0, 6)}…${botToken.slice(-4)}`;
+  const botFileUrl = `https://files.example.test/file/bot${botToken}/photos/1.jpg`;
 
   beforeAll(async () => {
-    ({ fetchRemoteMedia } = await import("./fetch.js"));
+    const fetchModule = await import("./fetch.js");
+    fetchRemoteMedia = fetchModule.fetchRemoteMedia;
+    defaultFetchMediaMaxBytes = fetchModule.DEFAULT_FETCH_MEDIA_MAX_BYTES;
   });
 
   beforeEach(() => {
@@ -223,22 +242,42 @@ describe("fetchRemoteMedia", () => {
     await expectRemoteMediaMaxBytesError({ fetchImpl, maxBytes: 4 });
   });
 
+  it("applies a default stream limit when maxBytes is omitted", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(makeStream([new Uint8Array([1])]), {
+          status: 200,
+          headers: { "content-length": String(defaultFetchMediaMaxBytes + 1) },
+        }),
+    );
+
+    await expect(
+      fetchRemoteMedia({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+      }),
+    ).rejects.toThrow(`exceeds maxBytes ${defaultFetchMediaMaxBytes}`);
+  });
+
   it.each([
     {
-      name: "redacts Telegram bot tokens from fetch failure messages",
+      name: "redacts bot tokens from fetch failure messages",
       fetchImpl: vi.fn(async () => {
-        throw new Error(`dial failed for ${telegramFileUrl}`);
+        throw new Error(`dial failed for ${botFileUrl}`);
       }),
+      expectedErrorText: `MediaFetchError: Failed to fetch media from https://files.example.test/file/bot${redactedBotToken}/photos/1.jpg: dial failed for https://files.example.test/file/bot${redactedBotToken}/photos/1.jpg`,
     },
     {
-      name: "redacts Telegram bot tokens from HTTP error messages",
+      name: "redacts bot tokens from HTTP error messages",
       fetchImpl: vi.fn(async () => new Response("unauthorized", { status: 401 })),
+      expectedErrorText: `MediaFetchError: Failed to fetch media from https://files.example.test/file/bot${redactedBotToken}/photos/1.jpg: HTTP 401; body: unauthorized`,
     },
-  ] as const)("$name", async ({ fetchImpl }) => {
-    await expectRedactedTelegramFetchError({
-      telegramFileUrl,
-      telegramToken,
-      redactedTelegramToken,
+  ] as const)("$name", async ({ fetchImpl, expectedErrorText }) => {
+    await expectRedactedBotTokenFetchError({
+      botFileUrl,
+      botToken,
+      expectedErrorText,
       fetchImpl,
     });
   });
@@ -293,31 +332,35 @@ describe("fetchRemoteMedia", () => {
 
   it("uses trusted explicit-proxy mode when the caller opts in for proxy-side DNS", async () => {
     const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+    const lookupFn = makeLookupFn();
+    const dispatcherPolicy = {
+      mode: "explicit-proxy" as const,
+      proxyUrl: "http://localhost:8888",
+      allowPrivateProxy: true,
+    };
 
     await fetchRemoteMedia({
-      url: "https://api.telegram.org/file/bot123/photos/test.jpg",
+      url: "https://files.example.test/file/bot123/photos/test.jpg",
       fetchImpl,
-      lookupFn: makeLookupFn(),
+      lookupFn,
       trustExplicitProxyDns: true,
       dispatcherAttempts: [
         {
-          dispatcherPolicy: {
-            mode: "explicit-proxy",
-            proxyUrl: "http://localhost:8888",
-            allowPrivateProxy: true,
-          },
+          dispatcherPolicy,
         },
       ],
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "trusted_explicit_proxy",
-        dispatcherPolicy: expect.objectContaining({
-          mode: "explicit-proxy",
-          proxyUrl: "http://localhost:8888",
-        }),
-      }),
-    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(requireFetchGuardRequest()).toStrictEqual({
+      url: "https://files.example.test/file/bot123/photos/test.jpg",
+      fetchImpl,
+      init: undefined,
+      maxRedirects: undefined,
+      policy: undefined,
+      lookupFn,
+      dispatcherPolicy,
+      mode: "trusted_explicit_proxy",
+    });
   });
 });

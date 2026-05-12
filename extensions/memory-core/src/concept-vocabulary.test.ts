@@ -13,17 +13,15 @@ describe("concept vocabulary", () => {
         "Configuración de gateway, configuration du routeur, Sicherung und Überwachung Glacier.",
     });
 
-    expect(tags).toEqual(
-      expect.arrayContaining([
-        "gateway",
-        "configuración",
-        "configuration",
-        "routeur",
-        "sicherung",
-        "überwachung",
-        "glacier",
-      ]),
-    );
+    expect(tags).toStrictEqual([
+      "gateway",
+      "glacier",
+      "routeur",
+      "sicherung",
+      "überwachung",
+      "configuración",
+      "configuration",
+    ]);
     expect(tags).not.toContain("de");
     expect(tags).not.toContain("du");
     expect(tags).not.toContain("und");
@@ -37,18 +35,16 @@ describe("concept vocabulary", () => {
         "障害対応ルーター設定とバックアップ確認。路由器备份与网关同步。라우터 백업 페일오버 점검.",
     });
 
-    expect(tags).toEqual(
-      expect.arrayContaining([
-        "障害対応",
-        "ルーター",
-        "バックアップ",
-        "路由器",
-        "备份",
-        "网关",
-        "라우터",
-        "백업",
-      ]),
-    );
+    expect(tags).toStrictEqual([
+      "バックアップ",
+      "ルーター",
+      "障害対応",
+      "路由器",
+      "备份",
+      "网关",
+      "라우터",
+      "백업",
+    ]);
     expect(tags).not.toContain("ルー");
     expect(tags).not.toContain("ター");
   });
@@ -57,6 +53,22 @@ describe("concept vocabulary", () => {
     expect(classifyConceptTagScript("routeur")).toBe("latin");
     expect(classifyConceptTagScript("路由器")).toBe("cjk");
     expect(classifyConceptTagScript("qmd路由器")).toBe("mixed");
+  });
+
+  it("drops chat scaffolding stop words from derived concept tags", () => {
+    const tags = deriveConceptTags({
+      path: "memory/.dreams/session-corpus/2026-04-16.txt",
+      snippet:
+        "Assistant: the system should remind you about the Ollama provider setup in your workspace.",
+    });
+
+    expect(tags).toContain("ollama");
+    expect(tags).toContain("provider");
+    expect(tags).not.toContain("assistant");
+    expect(tags).not.toContain("system");
+    expect(tags).not.toContain("the");
+    expect(tags).not.toContain("you");
+    expect(tags).not.toContain("your");
   });
 
   it("summarizes entry coverage across latin, cjk, and mixed tags", () => {
