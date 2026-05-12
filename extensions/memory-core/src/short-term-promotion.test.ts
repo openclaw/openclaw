@@ -1110,12 +1110,65 @@ describe("short-term promotion", () => {
     ).toBe(false);
   });
 
+  it("treats empty rem candidate placeholders as contaminated", () => {
+    expect(
+      __testing.isEmptyDreamingCandidatePlaceholder("- No strong candidate truths surfaced."),
+    ).toBe(true);
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        "- Candidate: Possible Lasting Truths: No strong candidate truths surfaced.",
+      ),
+    ).toBe(true);
+  });
+
   it("treats transcript-style dreaming prompt echoes as contaminated", () => {
     expect(
       __testing.isContaminatedDreamingSnippet(
         "[main/dreaming-narrative-light.jsonl#L1] User: Write a dream diary entry from these memory fragments:",
       ),
     ).toBe(true);
+  });
+
+  it("skips empty rem candidate placeholders during apply", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        candidates: [
+          {
+            key: "memory:memory/2026-04-08.md:13:13",
+            path: "memory/2026-04-08.md",
+            startLine: 13,
+            endLine: 13,
+            source: "memory",
+            snippet: "- Candidate: Possible Lasting Truths: No strong candidate truths surfaced.",
+            recallCount: 3,
+            avgScore: 0.95,
+            maxScore: 0.95,
+            uniqueQueries: 2,
+            firstRecalledAt: "2026-04-08T00:00:00.000Z",
+            lastRecalledAt: "2026-04-09T00:00:00.000Z",
+            ageDays: 0,
+            score: 0.95,
+            recallDays: ["2026-04-08", "2026-04-09"],
+            conceptTags: ["candidate", "truths"],
+            components: {
+              frequency: 1,
+              relevance: 1,
+              diversity: 1,
+              recency: 1,
+              consolidation: 1,
+              conceptual: 1,
+            },
+          },
+        ],
+      });
+
+      expect(applied.applied).toBe(0);
+      await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
+    });
   });
 
   it("skips direct candidates that exceed maxAgeDays during apply", async () => {

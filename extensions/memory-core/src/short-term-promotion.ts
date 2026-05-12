@@ -287,6 +287,18 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   return /^Candidate:/i.test(withoutPrefix) || /^Reflections?:/i.test(withoutPrefix);
 }
 
+function isEmptyDreamingCandidatePlaceholder(raw: string): boolean {
+  const snippet = normalizeSnippet(raw);
+  if (!snippet) {
+    return false;
+  }
+  const withoutPrefix = consumeDreamingLeadPrefix(snippet)
+    .replace(/^Candidate:\s*/i, "")
+    .replace(/^Possible Lasting Truths:\s*/i, "")
+    .trim();
+  return /^No strong candidate truths surfaced\.?$/i.test(withoutPrefix);
+}
+
 function isContaminatedDreamingSnippet(raw: string): boolean {
   const snippet = normalizeSnippet(raw);
   if (!snippet) {
@@ -294,7 +306,8 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
   }
   if (
     /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
-    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet)
+    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet) ||
+    isEmptyDreamingCandidatePlaceholder(snippet)
   ) {
     return true;
   }
@@ -2018,4 +2031,5 @@ export const __testing = {
   buildClaimHash,
   totalSignalCountForEntry,
   isContaminatedDreamingSnippet,
+  isEmptyDreamingCandidatePlaceholder,
 };

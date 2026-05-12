@@ -1532,14 +1532,16 @@ export function previewRemDreaming(params: {
   const bodyLines = [
     "### Reflections",
     ...reflections,
-    "",
-    "### Possible Lasting Truths",
     ...(candidateTruths.length > 0
-      ? candidateTruths.map(
-          (entry) =>
-            `- ${entry.snippet} [confidence=${entry.confidence.toFixed(2)} evidence=${entry.evidence}]`,
-        )
-      : ["- No strong candidate truths surfaced."]),
+      ? [
+          "",
+          "### Possible Lasting Truths",
+          ...candidateTruths.map(
+            (entry) =>
+              `- ${entry.snippet} [confidence=${entry.confidence.toFixed(2)} evidence=${entry.evidence}]`,
+          ),
+        ]
+      : []),
   ];
   return {
     sourceEntryCount: params.entries.length,
