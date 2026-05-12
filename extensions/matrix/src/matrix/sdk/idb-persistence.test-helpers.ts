@@ -68,13 +68,12 @@ export async function readDatabaseRecords(params: {
         if (!keys || !values) {
           return;
         }
-        const resolvedKeys = keys;
-        const resolvedValues = values;
         tx.addEventListener(
           "complete",
           () => {
             db.close();
-            resolve(resolvedKeys.map((key, index) => ({ key, value: resolvedValues[index] })));
+            const resolvedValues = values;
+            resolve(keys.map((key, index) => ({ key, value: resolvedValues[index] })));
           },
           { once: true },
         );

@@ -12,7 +12,7 @@ import {
 import type { AgentCommandOpts } from "./types.js";
 
 export type PersistSessionEntryParams = {
-  sessionStore: Record<string, SessionEntry>;
+  sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
   entry: SessionEntry;
   clearedFields?: string[];
@@ -26,9 +26,9 @@ export async function persistSessionEntry(params: PersistSessionEntryParams): Pr
   const persisted = await patchSessionEntry({
     agentId,
     sessionKey: params.sessionKey,
-    fallbackEntry: params.sessionStore[params.sessionKey] ?? params.entry,
-    update: () => {
-      const merged = mergeSessionEntry(params.sessionStore[params.sessionKey], params.entry);
+    fallbackEntry: params.sessionStore?.[params.sessionKey] ?? params.entry,
+    update: (existing) => {
+      const merged = mergeSessionEntry(existing, params.entry);
       for (const field of params.clearedFields ?? []) {
         if (!Object.hasOwn(params.entry, field)) {
           (merged as Record<string, unknown>)[field] = undefined;
@@ -37,7 +37,7 @@ export async function persistSessionEntry(params: PersistSessionEntryParams): Pr
       return merged;
     },
   });
-  if (persisted) {
+  if (persisted && params.sessionStore) {
     params.sessionStore[params.sessionKey] = persisted;
   }
 }

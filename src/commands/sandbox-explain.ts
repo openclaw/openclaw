@@ -94,10 +94,7 @@ function resolveActiveChannel(params: {
 }): string | undefined {
   let entry:
     | {
-        lastChannel?: string;
         channel?: string;
-        // Legacy keys (pre-rename).
-        lastProvider?: string;
         provider?: string;
       }
     | undefined;
@@ -109,13 +106,7 @@ function resolveActiveChannel(params: {
   } catch {
     entry = undefined;
   }
-  const candidate = (
-    entry?.lastChannel ??
-    entry?.channel ??
-    entry?.lastProvider ??
-    entry?.provider ??
-    ""
-  ).trim();
+  const candidate = (entry?.channel ?? entry?.provider ?? "").trim();
   const normalizedCandidate = normalizeOptionalLowercaseString(candidate);
   if (!normalizedCandidate) {
     return inferProviderFromSessionKey({

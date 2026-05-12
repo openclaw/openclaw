@@ -99,6 +99,7 @@ import {
   ACPX_GATEWAY_INSTANCE_NAMESPACE,
   ACPX_GATEWAY_INSTANCE_PLUGIN_ID,
   createAcpxRuntimeService,
+  resolveAcpxWrapperRoot,
 } from "./service.js";
 
 type GatewayInstanceRecord = {
@@ -151,6 +152,7 @@ afterEach(async () => {
   restoreEnv("OPENCLAW_SKIP_ACPX_RUNTIME_PROBE");
   restoreEnv("OPENCLAW_STATE_DIR");
   resetPluginStateStoreForTests();
+  await fs.rm(resolveAcpxWrapperRoot(), { recursive: true, force: true });
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -186,11 +188,7 @@ function createMockRuntime(overrides: Record<string, unknown> = {}) {
 }
 
 function readFirstRuntimeFactoryInput(runtimeFactory: { mock: { calls: Array<Array<unknown>> } }) {
-  const [call] = runtimeFactory.mock.calls;
-  if (!call) {
-    throw new Error("Expected runtimeFactory to be called");
-  }
-  const [input] = call;
+  const input = runtimeFactory.mock.calls[0]?.[0];
   if (typeof input !== "object" || input === null) {
     throw new Error("Expected runtimeFactory to be called with an options object");
   }
@@ -231,24 +229,19 @@ describe("createAcpxRuntimeService", () => {
   it("skips the startup probe and defers acpx backend health reporting when explicitly opted out", async () => {
     process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
     const workspaceDir = await makeTempDir();
-    const stateDir = path.join(workspaceDir, "custom-state");
     const ctx = createServiceContext(workspaceDir);
-    const probeAvailability = vi.fn(async () => {
-      await fs.access(stateDir);
-    });
+    const probeAvailability = vi.fn(async () => {});
     const runtime = createMockRuntime({
       doctor: async () => ({ ok: true, message: "ok" }),
       isHealthy: () => true,
       probeAvailability,
     });
     const service = createAcpxRuntimeService({
-      pluginConfig: { stateDir },
       runtimeFactory: () => runtime as never,
     });
 
     await service.start(ctx);
 
-    await fs.access(stateDir);
     expect(probeAvailability).not.toHaveBeenCalled();
     expect(getAcpRuntimeBackend("acpx")?.healthy).toBeUndefined();
 
@@ -301,8 +294,8 @@ describe("createAcpxRuntimeService", () => {
     const ctx = createServiceContext(workspaceDir);
     const runtime = createMockRuntime();
     const processCleanupDeps = { sleep: vi.fn(async () => {}) };
-    const wrapperRoot = path.join(ctx.stateDir, "acpx");
-    const processLeaseStore = createAcpxProcessLeaseStore({ stateDir: ctx.stateDir });
+    const wrapperRoot = resolveAcpxWrapperRoot();
+    const processLeaseStore = createAcpxProcessLeaseStore();
     await fs.mkdir(wrapperRoot, { recursive: true });
     await writeGatewayInstanceIdFixture("gw-test");
     await processLeaseStore.save({
@@ -344,8 +337,8 @@ describe("createAcpxRuntimeService", () => {
     const ctx = createServiceContext(workspaceDir);
     const runtime = createMockRuntime();
     const processCleanupDeps = { sleep: vi.fn(async () => {}) };
-    const wrapperRoot = path.join(ctx.stateDir, "acpx");
-    const processLeaseStore = createAcpxProcessLeaseStore({ stateDir: ctx.stateDir });
+    const wrapperRoot = resolveAcpxWrapperRoot();
+    const processLeaseStore = createAcpxProcessLeaseStore();
     await fs.mkdir(wrapperRoot, { recursive: true });
     await writeGatewayInstanceIdFixture("gw-test");
     await processLeaseStore.save({

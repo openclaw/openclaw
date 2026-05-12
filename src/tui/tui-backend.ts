@@ -3,6 +3,7 @@ import type {
   SessionsPatchParams,
   SessionsPatchResult,
 } from "../gateway/protocol/index.js";
+import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 
 export type ChatSendOptions = {
@@ -62,14 +63,7 @@ export type TuiSessionList = {
       space?: string;
       subject?: string;
       chatType?: string;
-      origin?: {
-        label?: string;
-        provider?: string;
-        surface?: string;
-      };
-      lastChannel?: string;
-      lastTo?: string;
-      lastAccountId?: string;
+      deliveryContext?: DeliveryContext;
       derivedTitle?: string;
       lastMessagePreview?: string;
     }

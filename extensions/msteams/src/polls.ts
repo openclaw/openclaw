@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { toPluginJsonValue, withMSTeamsSqliteStateEnv } from "./sqlite-state.js";
 
 type MSTeamsPollVote = {

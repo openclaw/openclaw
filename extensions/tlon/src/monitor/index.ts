@@ -598,42 +598,30 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     };
 
     await core.channel.turn.runAssembled({
+      cfg,
       channel: "tlon",
       accountId: route.accountId,
-      raw: rawTurnMessage,
-      adapter: {
-        ingest: (raw) => ({
-          id: raw.messageId,
-          timestamp: raw.timestamp,
-          rawText: raw.messageText,
-          textForAgent: commandBody,
-          textForCommands: commandBody,
-          raw,
-        }),
-        resolveTurn: () => ({
-          cfg,
-          channel: "tlon",
-          accountId: route.accountId,
-          agentId: route.agentId,
-          routeSessionKey: route.sessionKey,
-          ctxPayload,
-          recordInboundSession: core.channel.session.recordInboundSession,
-          dispatchReplyWithBufferedBlockDispatcher:
-            core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-          delivery: {
-            preparePayload: prepareReplyPayload,
-            durable: deliveryTarget
-              ? () => ({
-                  to: deliveryTarget,
-                  replyToId: parentId ?? undefined,
-                  threadId: parentId ?? undefined,
-                })
-              : false,
-            deliver: async (payload: ReplyPayload) => {
-              const replyText = payload.text;
-              if (!replyText) {
-                return { visibleReplySent: false };
-              }
+      agentId: route.agentId,
+      routeSessionKey: route.sessionKey,
+      messageId: rawTurnMessage.messageId,
+      ctxPayload,
+      recordInboundSession: core.channel.session.recordInboundSession,
+      dispatchReplyWithBufferedBlockDispatcher:
+        core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+      delivery: {
+        preparePayload: prepareReplyPayload,
+        durable: deliveryTarget
+          ? () => ({
+              to: deliveryTarget,
+              replyToId: parentId ?? undefined,
+              threadId: parentId ?? undefined,
+            })
+          : false,
+        deliver: async (payload: ReplyPayload) => {
+          const replyText = payload.text;
+          if (!replyText) {
+            return { visibleReplySent: false };
+          }
 
           if (isGroup && groupChannel) {
             const parsed = parseChannelNest(groupChannel);

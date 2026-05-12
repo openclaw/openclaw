@@ -487,7 +487,7 @@ async function maybeQueueSubagentAnnounce(params: {
 
   const queueSettings = resolveQueueSettings({
     cfg,
-    channel: entry?.channel ?? entry?.lastChannel ?? entry?.origin?.provider,
+    channel: entry?.lastChannel ?? entry?.deliveryContext?.channel ?? entry?.origin?.provider,
     sessionEntry: entry,
   });
 
@@ -672,8 +672,7 @@ async function sendSubagentAnnounceDirectly(params: {
       cfg,
       channel:
         requesterEntry?.channel ??
-        requesterEntry?.lastChannel ??
-        requesterEntry?.origin?.provider ??
+        requesterEntry?.deliveryContext?.channel ??
         requesterSessionOrigin?.channel ??
         directOrigin?.channel,
       sessionEntry: requesterEntry,

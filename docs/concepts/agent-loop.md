@@ -56,8 +56,9 @@ wired end-to-end.
 - Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
 - Skills are loaded (or reused from a snapshot) and injected into env and prompt.
 - Bootstrap/context files are resolved and injected into the system prompt report.
-- `SessionManager` is opened and prepared before streaming. Later transcript
-  rewrite, compaction, or truncation paths mutate the SQLite transcript rows.
+- SQLite transcript state is opened by `{agentId, sessionId}` before streaming.
+  Later transcript rewrite, compaction, or truncation paths mutate those rows
+  directly.
 
 ## Prompt assembly + system prompt
 

@@ -14,7 +14,6 @@ function createDeps() {
     checkShellCompletionStatus: vi.fn(async (_binName: string) => ({
       shell: "zsh" as const,
       profileInstalled: false,
-      retiredCachePath: null,
       usesRetiredCache: false,
     })),
     installCompletion: vi.fn(async () => {}),

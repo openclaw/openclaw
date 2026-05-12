@@ -19,7 +19,6 @@ import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-ru
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
 
 export type UpdateCommandOptions = {

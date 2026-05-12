@@ -1,6 +1,6 @@
 import type { App } from "@slack/bolt";
 import { resolveEnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
@@ -165,7 +165,6 @@ describe("resolveSlackThreadContextData", () => {
   });
 
   it("injects bot-authored starter when fetched history omits the root", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi.fn().mockResolvedValue({
       messages: [
         { text: "assistant reply", bot_id: "B1", ts: "100.500" },
@@ -193,7 +192,6 @@ describe("resolveSlackThreadContextData", () => {
         ts: "100.000",
       },
       roomLabel: "#general",
-      storePath,
       sessionKey: "thread-session",
       allowFromLower: ["u1"],
       allowNameMatching: false,
@@ -212,7 +210,6 @@ describe("resolveSlackThreadContextData", () => {
   });
 
   it("injects bot-authored starter when initial history trimming drops the root", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi.fn().mockResolvedValue({
       messages: [
         { text: "bot starter", bot_id: "B1", ts: "100.000" },
@@ -239,7 +236,6 @@ describe("resolveSlackThreadContextData", () => {
         ts: "100.000",
       },
       roomLabel: "#general",
-      storePath,
       sessionKey: "thread-session",
       allowFromLower: ["u1"],
       allowNameMatching: false,
@@ -302,7 +298,6 @@ describe("resolveSlackThreadContextData", () => {
   });
 
   it("issue #79338: bot DM confirmation root is included so reply has parent context", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi.fn().mockResolvedValue({
       messages: [
         {
@@ -340,7 +335,6 @@ describe("resolveSlackThreadContextData", () => {
         ts: "100.000",
       },
       roomLabel: "DM",
-      storePath,
       sessionKey: "thread-session",
       allowFromLower: [],
       allowNameMatching: false,

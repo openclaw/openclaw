@@ -39,7 +39,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
 
   it("passes authProfileId to runEmbeddedPiAgent when auth profiles exist", async () => {
     await withTempCronHome(async (home) => {
-      await seedMainRouteSession(home, { lastProvider: "webchat", lastTo: "" });
+      await seedMainRouteSession(home, { lastChannel: "webchat", lastTo: "" });
 
       // 2. Write auth-profiles.json in the agent directory
       //    resolveAgentDir returns <stateDir>/agents/main/agent

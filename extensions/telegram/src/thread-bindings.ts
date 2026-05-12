@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readAcpSessionEntry } from "openclaw/plugin-sdk/acp-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   formatThreadBindingDurationLabel,
   registerSessionBindingAdapter,
@@ -15,7 +15,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId, isAcpSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTelegramToken } from "./token.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
@@ -468,7 +468,7 @@ export function createTelegramThreadBindingManager(params: {
   const staleSessionKeys = new Set<string>();
   for (const targetSessionKey of acpSessionKeys) {
     const sessionEntry = readAcpSessionEntry({ sessionKey: targetSessionKey });
-    if (!sessionEntry || sessionEntry.readFailed) {
+    if (!sessionEntry || sessionEntry.storeReadFailed) {
       continue;
     }
     const isStale =

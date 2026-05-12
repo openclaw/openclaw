@@ -304,7 +304,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     Doctor scans all installed plugin manifests for deprecated top-level capability keys (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders`). When found, it offers to move them into the `contracts` object and rewrite the manifest file in-place. This migration is idempotent; if the `contracts` key already has the same values, the legacy key is removed without duplicating the data.
   </Accordion>
   <Accordion title="3b. Legacy cron store migrations">
-    Doctor also checks for a legacy cron job store (`~/.openclaw/cron/jobs.json` by default, or `cron.store` when overridden), imports it into the shared SQLite state database, and normalizes old job shapes that the scheduler still accepts for compatibility.
+    Doctor also checks for a legacy cron job store (`~/.openclaw/cron/jobs.json` by default, or `cron.store` when overridden), normalizes old job shapes, and imports the canonical rows into the shared SQLite state database before the scheduler sees them.
 
     Current cron cleanups include:
 
@@ -443,11 +443,8 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="11c. Shell completion">
     Doctor checks whether tab completion is installed for the current shell (zsh, bash, fish, or PowerShell):
 
-    - If the shell profile uses a slow dynamic completion pattern (`source <(openclaw completion ...)`), doctor upgrades it to the faster cached file variant.
-    - If completion is configured in the profile but the cache file is missing, doctor regenerates the cache automatically.
+    - If the shell profile points at the retired completion cache under OpenClaw state, doctor rewrites the profile to generate completions from the CLI directly.
     - If no completion is configured at all, doctor prompts to install it (interactive mode only; skipped with `--non-interactive`).
-
-    Run `openclaw completion --write-state` to regenerate the cache manually.
 
   </Accordion>
   <Accordion title="12. Gateway auth checks (local token)">

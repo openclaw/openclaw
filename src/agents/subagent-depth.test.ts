@@ -90,7 +90,7 @@ describe("getSubagentDepthFromSessionEntries", () => {
     expect(depth).toBe(2);
   });
 
-  it("reads prefixed session metadata from sqlite without a store path", () => {
+  it("reads prefixed session metadata from sqlite", () => {
     const prefixedKey = "agent:main:subagent:flat";
     upsertSessionEntry({
       agentId: "main",

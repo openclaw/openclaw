@@ -1,5 +1,4 @@
 import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { WebSocket } from "ws";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import {

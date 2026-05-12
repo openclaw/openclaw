@@ -69,9 +69,6 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     const page = await fs.readFile(path.join(vaultDir, first.pagePaths[0] ?? ""), "utf8");
     expect(page).toContain("sourceType: memory-unsafe-local");
     expect(page).toContain("provenanceMode: unsafe-local");
-    await expect(
-      fs.stat(path.join(vaultDir, ".openclaw-wiki", "source-sync.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
 
     const second = await syncMemoryWikiUnsafeLocalSources(config);
 

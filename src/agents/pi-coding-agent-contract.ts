@@ -11,5 +11,5 @@ export {
   generateSummary,
   ModelRegistry,
   SettingsManager,
-} from "@mariozechner/pi-coding-agent";
-export type { CreateAgentSessionOptions, ToolDefinition } from "@mariozechner/pi-coding-agent";
+} from "@earendil-works/pi-coding-agent";
+export type { CreateAgentSessionOptions, ToolDefinition } from "@earendil-works/pi-coding-agent";

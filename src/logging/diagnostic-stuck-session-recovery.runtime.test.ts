@@ -4,7 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appendSqliteSessionTranscriptEvent } from "../config/sessions/transcript-store.sqlite.js";
 import { saveCronStore } from "../cron/store.js";
-import type { CronStoreFile } from "../cron/types.js";
+import type { CronStoreSnapshot } from "../cron/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
@@ -101,9 +101,9 @@ function warnLogMessages(): string[] {
   });
 }
 
-async function writeCronJob(id: string, name: string) {
+async function writeCronJob(stateDir: string, id: string, name: string) {
   const now = Date.now();
-  const store: CronStoreFile = {
+  const store: CronStoreSnapshot = {
     version: 1,
     jobs: [
       {
@@ -120,7 +120,7 @@ async function writeCronJob(id: string, name: string) {
       },
     ],
   };
-  await saveCronStore("default", store);
+  await saveCronStore(path.join(stateDir, "cron", "jobs.json"), store);
 }
 
 describe("stuck session recovery", () => {
@@ -171,7 +171,7 @@ describe("stuck session recovery", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-recovery-context-"));
     try {
       process.env.OPENCLAW_STATE_DIR = tempDir;
-      await writeCronJob("job-123", "Twitter Mention Moderation Agent");
+      await writeCronJob(tempDir, "job-123", "Twitter Mention Moderation Agent");
       appendSqliteSessionTranscriptEvent({
         agentId: "clawblocker",
         sessionId: "run-456",

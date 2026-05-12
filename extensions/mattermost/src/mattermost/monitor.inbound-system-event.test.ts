@@ -462,27 +462,7 @@ describe("mattermost inbound user posts", () => {
     await monitor;
 
     expect(runtimeCore.channel.session.recordInboundSession).toHaveBeenCalledTimes(1);
-    type RecordedInboundSessionCall = {
-      sessionKey?: string;
-      updateLastRoute?: {
-        sessionKey?: string;
-        channel?: string;
-        to?: string;
-        accountId?: string;
-        mainDmOwnerPin?: {
-          ownerRecipient?: string;
-          senderRecipient?: string;
-          onSkip?: unknown;
-        };
-      };
-      createIfMissing?: unknown;
-      groupResolution?: unknown;
-      onRecordError?: unknown;
-    };
-    const recordCalls = runtimeCore.channel.session.recordInboundSession.mock.calls as unknown as [
-      RecordedInboundSessionCall,
-    ][];
-    const recordCall = recordCalls[0]?.[0];
+    const [recordCall] = runtimeCore.channel.session.recordInboundSession.mock.calls[0] ?? [];
     expect(recordCall?.sessionKey).toBe("mattermost:default:channel:chan-1");
     const updateLastRoute = recordCall?.updateLastRoute;
     expect(updateLastRoute?.sessionKey).toBe("mattermost:default:channel:chan-1");

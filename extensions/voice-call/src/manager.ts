@@ -1,5 +1,3 @@
-import os from "node:os";
-import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoiceCallConfig } from "./config.js";
@@ -30,7 +28,6 @@ import {
   type NormalizedEvent,
   type OutboundCallOptions,
 } from "./types.js";
-import { resolveUserPath } from "./utils.js";
 
 function markRestoredCallSkipped(call: CallRecord, endReason: "completed" | "timeout"): void {
   call.endedAt = Date.now();
@@ -46,13 +43,8 @@ function incrementRestoreStatusCount(
   counts.set(key, (counts.get(key) ?? 0) + 1);
 }
 
-function resolveDefaultStoreKey(config: VoiceCallConfig, storeKey?: string): string {
-  const rawOverride = storeKey?.trim() || config.store?.trim();
-  if (rawOverride) {
-    return resolveUserPath(rawOverride);
-  }
-  const preferred = path.join(os.homedir(), ".openclaw", "voice-calls");
-  return resolveUserPath(preferred);
+function resolveDefaultStoreKey(_config: VoiceCallConfig, storeKey?: string): string {
+  return storeKey?.trim() || "voice-call";
 }
 
 type CallManagerStoreOptions = {
