@@ -1165,26 +1165,22 @@ describe("CodexAppServerEventProjector", () => {
       mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
       "after_tool_call event",
     );
-    expect(event).toMatchObject({
-      toolName: "bash",
-      params: { command: "pnpm test extensions/codex", cwd: "/workspace" },
-      runId: "run-1",
-      toolCallId: "cmd-observed",
-      result: { status: "completed", exitCode: 0, durationMs: 42 },
-    });
+    expect(event.toolName).toBe("bash");
+    expect(event.params).toEqual({ command: "pnpm test extensions/codex", cwd: "/workspace" });
+    expect(event.runId).toBe("run-1");
+    expect(event.toolCallId).toBe("cmd-observed");
+    expect(event.result).toEqual({ status: "completed", exitCode: 0, durationMs: 42 });
     expect(event.durationMs).toBeGreaterThanOrEqual(42);
     const context = requireRecord(
       mockCallArg(afterToolCall, 0, 1, "after_tool_call context"),
       "after_tool_call context",
     );
-    expect(context).toMatchObject({
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      runId: "run-1",
-      toolName: "bash",
-      toolCallId: "cmd-observed",
-    });
+    expect(context.agentId).toBe("main");
+    expect(context.sessionId).toBe("session-1");
+    expect(context.sessionKey).toBe("agent:main:session-1");
+    expect(context.runId).toBe("run-1");
+    expect(context.toolName).toBe("bash");
+    expect(context.toolCallId).toBe("cmd-observed");
   });
 
   it("does not duplicate native items already covered by PostToolUse relay", async () => {
@@ -1233,13 +1229,11 @@ describe("CodexAppServerEventProjector", () => {
       mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
       "after_tool_call event",
     );
-    expect(event).toMatchObject({
-      toolName: "web_search",
-      params: { query: "opik openclaw codex" },
-      runId: "run-1",
-      toolCallId: "search-observed",
-      result: { status: "completed" },
-    });
+    expect(event.toolName).toBe("web_search");
+    expect(event.params).toEqual({ query: "native tool observability" });
+    expect(event.runId).toBe("run-1");
+    expect(event.toolCallId).toBe("search-observed");
+    expect(event.result).toEqual({ status: "completed" });
   });
 
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {

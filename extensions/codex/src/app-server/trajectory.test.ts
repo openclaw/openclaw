@@ -123,9 +123,7 @@ describe("Codex trajectory recorder", () => {
     await trajectoryRecorder.flush();
 
     const [event] = listTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-1" });
-    expect(event?.data).toMatchObject({
-      truncated: true,
-      reason: "trajectory-event-size-limit",
-    });
+    expect(event?.data?.truncated).toBe(true);
+    expect(event?.data?.reason).toBe("trajectory-event-size-limit");
   });
 });
