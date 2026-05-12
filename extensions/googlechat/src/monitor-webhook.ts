@@ -50,26 +50,69 @@ function parseGoogleChatInboundPayload(
   let addOnBearerToken = "";
 
   // Transform Google Workspace Add-on format to standard Chat API format.
+  //
+  // The add-on framework wraps the chat event inside `rawObj.chat.<eventKind>Payload`
+  // (per https://developers.google.com/workspace/add-ons/chat/event-objects) and does
+  // NOT include a top-level `type` field. The event kind must be inferred from which
+  // `chat.*Payload` is populated. Prior to this fix, the code only handled
+  // `messagePayload` and hardcoded `type: "MESSAGE"`, which:
+  //   1) Dropped non-MESSAGE event kinds (ADDED_TO_SPACE, REMOVED_FROM_SPACE,
+  //      APP_COMMAND, etc.) — they hit the eventType-is-string guard below and 400'd.
+  //   2) For non-MESSAGE kinds that did slip through (because we still set
+  //      type=MESSAGE), the downstream `event.message` validation would 400 since
+  //      e.g. addedToSpacePayload has no `message` field.
+  // Reports: openclaw/openclaw#13856 (space events not received), #35095, #57386.
   const rawObj = raw as {
+    type?: string;
+    eventTime?: string;
     commonEventObject?: { hostApp?: string };
     chat?: {
       messagePayload?: { space?: GoogleChatSpace; message?: GoogleChatMessage };
+      addedToSpacePayload?: { space?: GoogleChatSpace };
+      removedFromSpacePayload?: { space?: GoogleChatSpace };
+      appCommandPayload?: { space?: GoogleChatSpace; message?: GoogleChatMessage };
+      buttonClickedPayload?: { space?: GoogleChatSpace; message?: GoogleChatMessage };
+      cardClickedPayload?: { space?: GoogleChatSpace; message?: GoogleChatMessage };
       user?: GoogleChatUser;
       eventTime?: string;
     };
     authorizationEventObject?: { systemIdToken?: string };
   };
 
-  if (rawObj.commonEventObject?.hostApp === "CHAT" && rawObj.chat?.messagePayload) {
+  if (rawObj.commonEventObject?.hostApp === "CHAT" && rawObj.chat) {
     const chat = rawObj.chat;
-    const messagePayload = chat.messagePayload;
-    eventPayload = {
-      type: "MESSAGE",
-      space: messagePayload?.space,
-      message: messagePayload?.message,
-      user: chat.user,
-      eventTime: chat.eventTime,
-    };
+    let payload:
+      | { space?: GoogleChatSpace; message?: GoogleChatMessage }
+      | undefined;
+    let derivedType: string | undefined;
+    if (chat.messagePayload) {
+      payload = chat.messagePayload;
+      derivedType = "MESSAGE";
+    } else if (chat.addedToSpacePayload) {
+      payload = chat.addedToSpacePayload;
+      derivedType = "ADDED_TO_SPACE";
+    } else if (chat.removedFromSpacePayload) {
+      payload = chat.removedFromSpacePayload;
+      derivedType = "REMOVED_FROM_SPACE";
+    } else if (chat.appCommandPayload) {
+      payload = chat.appCommandPayload;
+      derivedType = "APP_COMMAND";
+    } else if (chat.buttonClickedPayload) {
+      payload = chat.buttonClickedPayload;
+      derivedType = "CARD_CLICKED";
+    } else if (chat.cardClickedPayload) {
+      payload = chat.cardClickedPayload;
+      derivedType = "CARD_CLICKED";
+    }
+    if (payload) {
+      eventPayload = {
+        type: typeof rawObj.type === "string" ? rawObj.type : derivedType,
+        space: payload.space,
+        message: payload.message,
+        user: chat.user,
+        eventTime: chat.eventTime ?? rawObj.eventTime,
+      };
+    }
     addOnBearerToken =
       typeof rawObj.authorizationEventObject?.systemIdToken === "string"
         ? rawObj.authorizationEventObject.systemIdToken.trim()
@@ -79,12 +122,41 @@ function parseGoogleChatInboundPayload(
   const event = eventPayload as GoogleChatEvent;
   const eventType = event.type ?? (eventPayload as { eventType?: string }).eventType;
   if (typeof eventType !== "string") {
+    // Diagnostic — silent 400s are how this bug stayed in production unnoticed.
+    // Operators have to grep journalctl/stderr to discover why Google's framework
+    // got HTTP 400 from our endpoint; structured log makes that obvious.
+    try {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[googlechat] parseGoogleChatInboundPayload 400 eventType-missing ${JSON.stringify({
+          rootKeys: Object.keys(rawObj),
+          hasChat: Boolean(rawObj.chat),
+          chatKeys: rawObj.chat ? Object.keys(rawObj.chat) : null,
+          hostApp: rawObj.commonEventObject?.hostApp,
+        })}`,
+      );
+    } catch {
+      /* logging best-effort */
+    }
     res.statusCode = 400;
     res.end("invalid payload");
     return { ok: false };
   }
 
   if (!event.space || typeof event.space !== "object" || Array.isArray(event.space)) {
+    try {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[googlechat] parseGoogleChatInboundPayload 400 space-missing ${JSON.stringify({
+          eventType,
+          rootKeys: Object.keys(rawObj),
+          hasChat: Boolean(rawObj.chat),
+          chatKeys: rawObj.chat ? Object.keys(rawObj.chat) : null,
+        })}`,
+      );
+    } catch {
+      /* logging best-effort */
+    }
     res.statusCode = 400;
     res.end("invalid payload");
     return { ok: false };
@@ -92,6 +164,18 @@ function parseGoogleChatInboundPayload(
 
   if (eventType === "MESSAGE") {
     if (!event.message || typeof event.message !== "object" || Array.isArray(event.message)) {
+      try {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[googlechat] parseGoogleChatInboundPayload 400 message-missing ${JSON.stringify({
+            rootKeys: Object.keys(rawObj),
+            hasChat: Boolean(rawObj.chat),
+            chatKeys: rawObj.chat ? Object.keys(rawObj.chat) : null,
+          })}`,
+        );
+      } catch {
+        /* logging best-effort */
+      }
       res.statusCode = 400;
       res.end("invalid payload");
       return { ok: false };

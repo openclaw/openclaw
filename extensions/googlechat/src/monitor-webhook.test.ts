@@ -402,6 +402,96 @@ describe("googlechat monitor webhook", () => {
     expect(res.statusCode).toBe(401);
     expect(res.body).toBe("unauthorized");
   });
+
+  it("accepts add-on payloads with addedToSpacePayload (#13856)", async () => {
+    const target = {
+      account: {
+        accountId: "default",
+        config: { appPrincipal: "chat-app" },
+      },
+      runtime: { error: vi.fn() },
+      statusSink: vi.fn(),
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+    };
+    installSimplePipeline([target]);
+    readJsonWebhookBodyOrReject.mockResolvedValue({
+      ok: true,
+      value: {
+        commonEventObject: { hostApp: "CHAT" },
+        authorizationEventObject: { systemIdToken: "addon-token" },
+        chat: {
+          eventTime: "2026-03-22T00:00:00.000Z",
+          user: { name: "users/123" },
+          // No messagePayload — this is the variant that used to 400.
+          addedToSpacePayload: {
+            space: { name: "spaces/AAA", type: "ROOM" },
+          },
+        },
+      },
+    });
+    resolveWebhookTargetWithAuthOrReject.mockImplementation(async ({ isMatch, targets }) => {
+      for (const target of targets) {
+        if (await isMatch(target)) return target;
+      }
+      return null;
+    });
+    verifyGoogleChatRequest.mockResolvedValue({ ok: true });
+    const { processEvent, res } = await runWebhookHandler();
+
+    // Before the fix this would 400 because eventType was hardcoded to "MESSAGE"
+    // and addedToSpacePayload has no `message` field, failing the MESSAGE-shape guard.
+    expect(processEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "ADDED_TO_SPACE",
+        space: { name: "spaces/AAA", type: "ROOM" },
+      }),
+      target,
+    );
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("prefers explicit rawObj.type over derived type", async () => {
+    const target = {
+      account: {
+        accountId: "default",
+        config: { appPrincipal: "chat-app" },
+      },
+      runtime: { error: vi.fn() },
+      statusSink: vi.fn(),
+      audienceType: "app-url",
+      audience: "https://example.com/googlechat",
+    };
+    installSimplePipeline([target]);
+    readJsonWebhookBodyOrReject.mockResolvedValue({
+      ok: true,
+      value: {
+        type: "REMOVED_FROM_SPACE",
+        commonEventObject: { hostApp: "CHAT" },
+        authorizationEventObject: { systemIdToken: "addon-token" },
+        chat: {
+          eventTime: "2026-03-22T00:00:00.000Z",
+          user: { name: "users/123" },
+          removedFromSpacePayload: {
+            space: { name: "spaces/AAA", type: "ROOM" },
+          },
+        },
+      },
+    });
+    resolveWebhookTargetWithAuthOrReject.mockImplementation(async ({ isMatch, targets }) => {
+      for (const target of targets) {
+        if (await isMatch(target)) return target;
+      }
+      return null;
+    });
+    verifyGoogleChatRequest.mockResolvedValue({ ok: true });
+    const { processEvent, res } = await runWebhookHandler();
+    expect(processEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "REMOVED_FROM_SPACE" }),
+      target,
+    );
+    expect(res.statusCode).toBe(200);
+  });
 });
 
 describe("warnAppPrincipalMisconfiguration", () => {
