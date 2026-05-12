@@ -91,11 +91,7 @@ function respondText(res: http.ServerResponse, statusCode: number, body: string)
   res.end(body);
 }
 
-function normalizeFeishuWebhookRateLimitClient(remoteAddress: string | undefined): string {
-  const clientIp = resolveRequestClientIp({
-    headers: {},
-    socket: { remoteAddress },
-  } as http.IncomingMessage);
+function normalizeFeishuWebhookRateLimitClient(clientIp: string | undefined): string {
   if (!clientIp) {
     return "unknown";
   }
@@ -105,15 +101,17 @@ function normalizeFeishuWebhookRateLimitClient(remoteAddress: string | undefined
   return clientIp;
 }
 
-export function buildFeishuWebhookRateLimitKeyForTest(params: {
+function buildFeishuWebhookRateLimitKey(params: {
   accountId: string;
   path: string;
-  remoteAddress?: string;
+  clientIp?: string;
 }): string {
   return `${params.accountId}:${params.path}:${normalizeFeishuWebhookRateLimitClient(
-    params.remoteAddress,
+    params.clientIp,
   )}`;
 }
+
+export { buildFeishuWebhookRateLimitKey as buildFeishuWebhookRateLimitKeyForTest };
 
 function getFeishuWsReconnectDelayMs(attempt: number): number {
   return Math.min(
@@ -325,10 +323,10 @@ export async function monitorWebhook({
       recordWebhookStatus(runtime, accountId, path, res.statusCode);
     });
 
-    const rateLimitKey = buildFeishuWebhookRateLimitKeyForTest({
+    const rateLimitKey = buildFeishuWebhookRateLimitKey({
       accountId,
       path,
-      remoteAddress: req.socket.remoteAddress,
+      clientIp: resolveRequestClientIp(req),
     });
     if (
       !applyBasicWebhookRequestGuards({
