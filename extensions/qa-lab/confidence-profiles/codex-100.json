@@ -33,6 +33,7 @@
       "artifact": "tool-defaults-searchable/qa-suite-summary.json",
       "required": true,
       "failureVerdict": "mock-limitation",
+      "skipBackfillLane": "openclaw-dynamic-tools-searchable-live",
       "productImpact": "P4",
       "qaImpact": "P2",
       "issue": "https://github.com/openclaw/openclaw/issues/80319",
@@ -45,6 +46,7 @@
       "kind": "qa-suite-summary",
       "artifact": "first-hour-20-direct/qa-suite-summary.json",
       "required": true,
+      "skipBackfillLane": "codex-native-live",
       "productImpact": "P1",
       "qaImpact": "P0",
       "ownerAction": "Triage row-by-row; do not file product bugs unless live/native proof reproduces.",
@@ -68,6 +70,7 @@
       "kind": "qa-suite-summary",
       "artifact": "fault-injection-mock/qa-suite-summary.json",
       "required": true,
+      "skipBackfillLane": "codex-native-live",
       "productImpact": "P2",
       "qaImpact": "P0",
       "ownerAction": "Treat failures as retry/recovery regressions unless evidence shows fixture drift.",
@@ -120,6 +123,19 @@
       "qaImpact": "P1",
       "ownerAction": "Run with live-frontier OAuth before claiming live first-hour coverage.",
       "labels": ["qa-lab", "runtime-parity", "live-proof"]
+    },
+    {
+      "id": "openclaw-dynamic-tools-searchable-live",
+      "title": "Live OpenClaw dynamic tools searchable proof",
+      "kind": "qa-suite-summary",
+      "artifact": "openclaw-dynamic-tools-searchable-live/qa-suite-summary.json",
+      "required": true,
+      "missingVerdict": "environment-blocked",
+      "missingReason": "Live/OAuth runner or OpenAI credentials were unavailable for this proof bundle.",
+      "productImpact": "P1",
+      "qaImpact": "P1",
+      "ownerAction": "Run with live-frontier OAuth before claiming production-shaped searchable OpenClaw dynamic tool coverage.",
+      "labels": ["qa-lab", "runtime-parity", "searchable-tools", "live-proof"]
     },
     {
       "id": "live-token-efficiency",

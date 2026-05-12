@@ -23,6 +23,7 @@ function makeCell(
   runtime: RuntimeId,
   usage: RuntimeParityCell["usage"],
   toolCalls: RuntimeParityToolCall[] = [],
+  overrides: Partial<RuntimeParityCell> = {},
 ): RuntimeParityCell {
   return {
     runtime,
@@ -32,6 +33,7 @@ function makeCell(
     usage,
     wallClockMs: 10,
     bootStateLines: [],
+    ...overrides,
   };
 }
 
@@ -214,5 +216,93 @@ describe("token efficiency report", () => {
     expect(renderTokenEfficiencyMarkdownReport(report)).toContain(
       "Mock token totals are algorithmic estimates",
     );
+  });
+
+  it("fails live reports when a scenario lacks runtime parity evidence", () => {
+    const report = buildTokenEfficiencyReport({
+      generatedAt: "2026-05-10T00:00:00.000Z",
+      summary: {
+        scenarios: [{ name: "missing-runtime-parity", status: "pass" }],
+        run: {
+          providerMode: "live-frontier",
+          runtimePair: ["pi", "codex"],
+        },
+      },
+    });
+
+    expect(report.status).toBe("evaluated");
+    expect(report.pass).toBe(false);
+    expect(report.failures).toEqual(["missing-runtime-parity missing runtime parity result"]);
+  });
+
+  it("fails live reports when runtime cells failed or usage is zero", () => {
+    const report = buildTokenEfficiencyReport({
+      generatedAt: "2026-05-10T00:00:00.000Z",
+      summary: {
+        scenarios: [
+          {
+            name: "failed-live-row",
+            status: "fail",
+            runtimeParity: {
+              ...makeRuntimeParity(
+                "failed-live-row",
+                makeCell("pi", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, [], {
+                  runtimeErrorClass: "scenario-failure",
+                }),
+                makeCell("codex", { inputTokens: 12, outputTokens: 8, totalTokens: 20 }, [], {
+                  transportErrorClass: "codex-app-server",
+                }),
+              ),
+              drift: "failure-mode",
+            },
+          },
+        ],
+        run: {
+          providerMode: "live-frontier",
+          runtimePair: ["pi", "codex"],
+        },
+      },
+    });
+
+    expect(report.status).toBe("evaluated");
+    expect(report.pass).toBe(false);
+    expect(report.failures).toEqual([
+      "failed-live-row scenario status=fail",
+      "failed-live-row drift=failure-mode",
+      "failed-live-row pi runtimeErrorClass=scenario-failure",
+      "failed-live-row pi live usage totalTokens=0",
+      "failed-live-row codex transportErrorClass=codex-app-server",
+    ]);
+  });
+
+  it("keeps mock zero-usage cells as labeled estimates instead of live failures", () => {
+    const report = buildTokenEfficiencyReport({
+      generatedAt: "2026-05-10T00:00:00.000Z",
+      summary: {
+        scenarios: [
+          {
+            name: "mock-zero",
+            status: "fail",
+            runtimeParity: {
+              ...makeRuntimeParity(
+                "mock-zero",
+                makeCell("pi", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+                makeCell("codex", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+              ),
+              drift: "failure-mode",
+            },
+          },
+        ],
+        run: {
+          providerMode: "mock-openai",
+          runtimePair: ["pi", "codex"],
+        },
+      },
+    });
+
+    expect(report.status).toBe("estimated");
+    expect(report.pass).toBe(true);
+    expect(report.failures).toEqual([]);
+    expect(report.rows[0]?.usageSource).toBe("mock-estimate");
   });
 });

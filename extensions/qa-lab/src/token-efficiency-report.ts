@@ -60,6 +60,11 @@ export type BuildTokenEfficiencyReportParams = {
   thresholdPercent?: number;
 };
 
+type TokenEfficiencyFailure = {
+  scenarioId: string;
+  message: string;
+};
+
 const LIVE_PROVIDER_MODE = "live-frontier";
 const MOCK_ESTIMATE_PROVIDER_RE = /\bmock\b/i;
 const DEFAULT_THRESHOLD_PERCENT = 15;
@@ -202,6 +207,62 @@ function buildAggregate(rows: readonly TokenEfficiencyRow[]): TokenEfficiencyRep
   };
 }
 
+function liveCellFailures(
+  scenarioId: string,
+  runtime: RuntimeId,
+  cell: RuntimeParityCell,
+): TokenEfficiencyFailure[] {
+  const failures: TokenEfficiencyFailure[] = [];
+  if (cell.runtimeErrorClass) {
+    failures.push({
+      scenarioId,
+      message: `${scenarioId} ${runtime} runtimeErrorClass=${cell.runtimeErrorClass}`,
+    });
+  }
+  if (cell.transportErrorClass) {
+    failures.push({
+      scenarioId,
+      message: `${scenarioId} ${runtime} transportErrorClass=${cell.transportErrorClass}`,
+    });
+  }
+  if (!Number.isFinite(cell.usage.totalTokens) || cell.usage.totalTokens <= 0) {
+    failures.push({
+      scenarioId,
+      message: `${scenarioId} ${runtime} live usage totalTokens=${String(cell.usage.totalTokens)}`,
+    });
+  }
+  return failures;
+}
+
+function liveEvidenceFailures(summary: TokenEfficiencySuiteSummary): TokenEfficiencyFailure[] {
+  const failures: TokenEfficiencyFailure[] = [];
+  for (const scenario of summary.scenarios) {
+    const scenarioId = scenario.runtimeParity?.scenarioId ?? scenario.name;
+    if (!scenario.runtimeParity) {
+      failures.push({
+        scenarioId,
+        message: `${scenarioId} missing runtime parity result`,
+      });
+      continue;
+    }
+    if (scenario.status !== "pass") {
+      failures.push({
+        scenarioId,
+        message: `${scenarioId} scenario status=${scenario.status}`,
+      });
+    }
+    if (scenario.runtimeParity.drift === "failure-mode") {
+      failures.push({
+        scenarioId,
+        message: `${scenarioId} drift=failure-mode`,
+      });
+    }
+    failures.push(...liveCellFailures(scenarioId, "pi", scenario.runtimeParity.cells.pi));
+    failures.push(...liveCellFailures(scenarioId, "codex", scenario.runtimeParity.cells.codex));
+  }
+  return failures;
+}
+
 function skipReasonForProviderMode(providerMode: string | undefined): string {
   return `skipped - token efficiency is live-only; providerMode=${providerMode ?? "unknown"} is not live-frontier`;
 }
@@ -255,7 +316,8 @@ export function buildTokenEfficiencyReport(
       buildRow(result, thresholdPercent, isLiveUsage ? "live-usage" : "mock-estimate"),
     );
 
-  if (rows.length === 0) {
+  const liveEvidenceFailureEntries = isLiveUsage ? liveEvidenceFailures(params.summary) : [];
+  if (rows.length === 0 && liveEvidenceFailureEntries.length === 0) {
     return buildSkippedReport({
       summary: params.summary,
       generatedAt,
@@ -265,12 +327,20 @@ export function buildTokenEfficiencyReport(
   }
 
   const aggregate = buildAggregate(rows);
-  const liveFailures = aggregate.flaggedScenarios.map((scenarioId) => {
-    const row = rows.find((entry) => entry.scenarioId === scenarioId);
-    return `${scenarioId} delta=${formatPercent(row?.deltaPercent ?? 0)} exceeds ${thresholdPercent.toFixed(
-      1,
-    )}% threshold`;
-  });
+  const liveEvidenceFailureScenarioIds = new Set(
+    liveEvidenceFailureEntries.map((failure) => failure.scenarioId),
+  );
+  const liveFailures = [
+    ...liveEvidenceFailureEntries.map((failure) => failure.message),
+    ...aggregate.flaggedScenarios
+      .filter((scenarioId) => !liveEvidenceFailureScenarioIds.has(scenarioId))
+      .map((scenarioId) => {
+        const row = rows.find((entry) => entry.scenarioId === scenarioId);
+        return `${scenarioId} delta=${formatPercent(row?.deltaPercent ?? 0)} exceeds ${thresholdPercent.toFixed(
+          1,
+        )}% threshold`;
+      }),
+  ];
   const failures = isLiveUsage ? liveFailures : [];
 
   return {

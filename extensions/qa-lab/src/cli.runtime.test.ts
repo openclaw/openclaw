@@ -399,6 +399,7 @@ describe("qa cli runtime", () => {
         artifactRoot,
         outputDir,
         strictZeroUnknowns: true,
+        strictGlobalPass: true,
       });
 
       await expect(

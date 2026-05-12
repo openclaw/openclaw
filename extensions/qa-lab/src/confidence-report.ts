@@ -47,6 +47,7 @@ export type QaConfidenceManifestLane = {
   missingVerdict?: "environment-blocked" | "optional-gap";
   missingReason?: string;
   expectedTokenUsageSource?: "mock-estimate" | "live-usage";
+  skipBackfillLane?: string;
   productImpact?: string;
   qaImpact?: string;
   issue?: string;
@@ -77,14 +78,19 @@ export type QaConfidenceLaneResult = {
   issue?: string;
   ownerAction?: string;
   labels?: string[];
+  skippedCount?: number;
+  skipBackfillLane?: string;
+  skipBackfilled?: boolean;
 };
 
 export type QaConfidenceReport = {
   generatedAt: string;
   profile: string;
   strictZeroUnknowns: boolean;
+  strictGlobalPass: boolean;
   pass: boolean;
   zeroUnknowns: boolean;
+  globalPass: boolean;
   counts: {
     total: number;
     passed: number;
@@ -221,6 +227,9 @@ function normalizeManifestLane(value: unknown): QaConfidenceManifestLane {
     ...(missingVerdict ? { missingVerdict } : {}),
     ...(readString(value.missingReason) ? { missingReason: readString(value.missingReason) } : {}),
     ...(expectedTokenUsageSource ? { expectedTokenUsageSource } : {}),
+    ...(readString(value.skipBackfillLane)
+      ? { skipBackfillLane: readString(value.skipBackfillLane) }
+      : {}),
     ...(readString(value.productImpact) ? { productImpact: readString(value.productImpact) } : {}),
     ...(readString(value.qaImpact) ? { qaImpact: readString(value.qaImpact) } : {}),
     ...(readString(value.issue) ? { issue: readString(value.issue) } : {}),
@@ -287,7 +296,13 @@ function statusFromPassed(passed: boolean): Pick<QaConfidenceLaneResult, "status
   return passed ? { status: "pass", verdict: "pass" } : { status: "unknown" };
 }
 
-function evaluateQaSuiteSummary(payload: unknown): { passed: boolean; details: string } {
+type QaConfidenceLaneEvaluation = {
+  passed: boolean;
+  details: string;
+  skippedCount?: number;
+};
+
+function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
   if (!isRecord(payload)) {
     return { passed: false, details: "qa-suite-summary payload was not an object" };
   }
@@ -299,6 +314,9 @@ function evaluateQaSuiteSummary(payload: unknown): { passed: boolean; details: s
     return {
       passed: failedCount === 0,
       details: `qa-suite-summary counts.failed=${Math.max(0, Math.floor(failedCount))}${skippedDetails}`,
+      ...(skippedCount === undefined
+        ? {}
+        : { skippedCount: Math.max(0, Math.floor(skippedCount)) }),
     };
   }
   const scenarios = Array.isArray(payload.scenarios) ? payload.scenarios : [];
@@ -311,7 +329,7 @@ function evaluateQaSuiteSummary(payload: unknown): { passed: boolean; details: s
   };
 }
 
-function evaluatePassSummary(payload: unknown): { passed: boolean; details: string } {
+function evaluatePassSummary(payload: unknown): QaConfidenceLaneEvaluation {
   if (!isRecord(payload)) {
     return { passed: false, details: "summary payload was not an object" };
   }
@@ -336,7 +354,7 @@ function evaluatePassSummary(payload: unknown): { passed: boolean; details: stri
 function evaluateTokenEfficiencySummary(
   payload: unknown,
   expectedTokenUsageSource: QaConfidenceManifestLane["expectedTokenUsageSource"],
-): { passed: boolean; details: string } {
+): QaConfidenceLaneEvaluation {
   const base = evaluatePassSummary(payload);
   if (!base.passed || !expectedTokenUsageSource) {
     return base;
@@ -345,6 +363,12 @@ function evaluateTokenEfficiencySummary(
     return {
       passed: false,
       details: `token summary missing rows for expected usageSource=${expectedTokenUsageSource}`,
+    };
+  }
+  if (readString(payload.status) === "skipped" || payload.rows.length === 0) {
+    return {
+      passed: false,
+      details: `token summary has no ${expectedTokenUsageSource} rows`,
     };
   }
   const mismatched = payload.rows.filter(
@@ -359,7 +383,7 @@ function evaluateTokenEfficiencySummary(
   };
 }
 
-function evaluateJsonlReplaySummary(payload: unknown): { passed: boolean; details: string } {
+function evaluateJsonlReplaySummary(payload: unknown): QaConfidenceLaneEvaluation {
   if (!isRecord(payload) || !Array.isArray(payload.transcripts)) {
     return { passed: false, details: "jsonl replay summary missing transcripts array" };
   }
@@ -382,7 +406,7 @@ function evaluateJsonlReplaySummary(payload: unknown): { passed: boolean; detail
   };
 }
 
-function evaluateSelfTestSummary(payload: unknown): { passed: boolean; details: string } {
+function evaluateSelfTestSummary(payload: unknown): QaConfidenceLaneEvaluation {
   if (!isRecord(payload) || !Array.isArray(payload.canaries)) {
     return { passed: false, details: "confidence self-test summary missing canaries array" };
   }
@@ -397,7 +421,7 @@ function evaluateSelfTestSummary(payload: unknown): { passed: boolean; details: 
 function evaluateLaneArtifact(
   lane: QaConfidenceManifestLane,
   payload: unknown,
-): { passed: boolean; details: string } {
+): QaConfidenceLaneEvaluation {
   switch (lane.kind) {
     case "qa-suite-summary":
       return evaluateQaSuiteSummary(payload);
@@ -454,6 +478,7 @@ function baseLaneResult(
     ...(lane.issue ? { issue: lane.issue } : {}),
     ...(lane.ownerAction ? { ownerAction: lane.ownerAction } : {}),
     ...(lane.labels ? { labels: lane.labels } : {}),
+    ...(lane.skipBackfillLane ? { skipBackfillLane: lane.skipBackfillLane } : {}),
   };
 }
 
@@ -491,13 +516,37 @@ async function evaluateLane(
   }
   const evaluated = evaluateLaneArtifact(lane, payload);
   if (!evaluated.passed) {
-    return classifiedFailureResult(lane, artifactPath, evaluated.details);
+    return {
+      ...classifiedFailureResult(lane, artifactPath, evaluated.details),
+      ...(evaluated.skippedCount === undefined ? {} : { skippedCount: evaluated.skippedCount }),
+    };
   }
   return {
     ...baseLaneResult(lane, artifactPath),
     ...statusFromPassed(true),
     details: evaluated.details,
+    ...(evaluated.skippedCount === undefined ? {} : { skippedCount: evaluated.skippedCount }),
   };
+}
+
+function applySkipBackfillState(
+  lanes: readonly QaConfidenceLaneResult[],
+): QaConfidenceLaneResult[] {
+  const byId = new Map(lanes.map((lane) => [lane.id, lane]));
+  return lanes.map((lane) => {
+    if (!lane.skippedCount || lane.skippedCount <= 0 || !lane.skipBackfillLane) {
+      return lane;
+    }
+    const backfillLane = byId.get(lane.skipBackfillLane);
+    const skipBackfilled = backfillLane?.status === "pass";
+    return {
+      ...lane,
+      skipBackfilled,
+      details: `${lane.details}; skipped rows backfilled by ${lane.skipBackfillLane}: ${
+        skipBackfilled ? "yes" : "no"
+      }`,
+    };
+  });
 }
 
 function countLaneResults(lanes: readonly QaConfidenceLaneResult[]): QaConfidenceReport["counts"] {
@@ -517,28 +566,60 @@ function failuresForLaneResults(lanes: readonly QaConfidenceLaneResult[]): strin
     .map((lane) => `${lane.id} is unclassified: ${lane.details}`);
 }
 
+function globalFailuresForLaneResults(lanes: readonly QaConfidenceLaneResult[]): string[] {
+  return lanes.flatMap((lane) => {
+    if (lane.status === "blocked") {
+      return [`${lane.id} is blocked: ${lane.details}`];
+    }
+    if (lane.status === "missing") {
+      return [`${lane.id} is missing: ${lane.details}`];
+    }
+    if (lane.status === "unknown") {
+      return [`${lane.id} is unclassified: ${lane.details}`];
+    }
+    if (lane.status === "fail") {
+      return [`${lane.id} is classified ${lane.verdict ?? "unclassified"}: ${lane.details}`];
+    }
+    if ((lane.skippedCount ?? 0) > 0 && lane.skipBackfilled !== true) {
+      return [`${lane.id} has ${lane.skippedCount} skipped row(s) with no passing backfill lane`];
+    }
+    return [];
+  });
+}
+
 export async function buildQaConfidenceReport(params: {
   manifest: QaConfidenceManifest;
   artifactRoot: string;
   strictZeroUnknowns?: boolean;
+  strictGlobalPass?: boolean;
   generatedAt?: string;
 }): Promise<QaConfidenceReport> {
-  const lanes = [];
+  const evaluatedLanes = [];
   for (const lane of params.manifest.lanes) {
-    lanes.push(await evaluateLane(lane, params.artifactRoot));
+    evaluatedLanes.push(await evaluateLane(lane, params.artifactRoot));
   }
+  const lanes = applySkipBackfillState(evaluatedLanes);
   const counts = countLaneResults(lanes);
-  const failures = failuresForLaneResults(lanes);
+  const unclassifiedFailures = failuresForLaneResults(lanes);
+  const globalFailures = globalFailuresForLaneResults(lanes);
   const zeroUnknowns = counts.unknown === 0;
+  const globalPass = zeroUnknowns && globalFailures.length === 0;
   const strictZeroUnknowns = params.strictZeroUnknowns === true;
+  const strictGlobalPass = params.strictGlobalPass === true;
   return {
     generatedAt: params.generatedAt ?? new Date().toISOString(),
     profile: params.manifest.profile,
     strictZeroUnknowns,
-    pass: strictZeroUnknowns ? zeroUnknowns : failures.length === 0,
+    strictGlobalPass,
+    pass: strictGlobalPass
+      ? globalPass
+      : strictZeroUnknowns
+        ? zeroUnknowns
+        : unclassifiedFailures.length === 0,
     zeroUnknowns,
+    globalPass,
     counts,
-    failures,
+    failures: strictGlobalPass ? globalFailures : unclassifiedFailures,
     lanes,
   };
 }
@@ -558,7 +639,9 @@ export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): st
     `- Generated at: ${report.generatedAt}`,
     `- Verdict: ${report.pass ? "pass" : "fail"}`,
     `- Strict zero unknowns: ${report.strictZeroUnknowns ? "yes" : "no"}`,
+    `- Strict global pass: ${report.strictGlobalPass ? "yes" : "no"}`,
     `- Zero unknowns: ${report.zeroUnknowns ? "yes" : "no"}`,
+    `- Global pass: ${report.globalPass ? "yes" : "no"}`,
     `- Counts: ${report.counts.passed} pass, ${report.counts.failed} classified fail, ${report.counts.blocked} blocked, ${report.counts.unknown} unknown`,
     "",
     "| Lane | Status | Verdict | Product impact | QA impact | Details |",
@@ -570,7 +653,11 @@ export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): st
     );
   }
   if (report.failures.length > 0) {
-    lines.push("", "## Unclassified Failures", "");
+    lines.push(
+      "",
+      report.strictGlobalPass ? "## Global Gate Failures" : "## Unclassified Failures",
+      "",
+    );
     for (const failure of report.failures) {
       lines.push(`- ${failure}`);
     }

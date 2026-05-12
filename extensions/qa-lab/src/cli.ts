@@ -98,6 +98,7 @@ async function runQaConfidenceReport(opts: {
   artifactRoot?: string;
   outputDir?: string;
   strictZeroUnknowns?: boolean;
+  strictGlobalPass?: boolean;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaConfidenceReportCommand(opts);
@@ -507,6 +508,11 @@ export function registerQaLabCli(program: Command) {
       "Fail unless every lane passes or has an explicit non-unknown verdict",
       false,
     )
+    .option(
+      "--strict-global-pass",
+      "Fail unless every lane passes with no blocked, missing, unknown, classified-fail, or unbackfilled skipped rows",
+      false,
+    )
     .action(
       async (opts: {
         repoRoot?: string;
@@ -514,6 +520,7 @@ export function registerQaLabCli(program: Command) {
         artifactRoot?: string;
         outputDir?: string;
         strictZeroUnknowns?: boolean;
+        strictGlobalPass?: boolean;
       }) => {
         await runQaConfidenceReport(opts);
       },

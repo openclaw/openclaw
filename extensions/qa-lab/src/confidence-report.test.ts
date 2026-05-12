@@ -78,6 +78,7 @@ describe("qa confidence report", () => {
     });
 
     expect(report.pass).toBe(true);
+    expect(report.globalPass).toBe(false);
     expect(report.counts).toMatchObject({ passed: 2, blocked: 1, unknown: 0, failed: 0 });
     expect(report.lanes.map((lane) => lane.verdict)).toEqual([
       "pass",
@@ -86,6 +87,225 @@ describe("qa confidence report", () => {
     ]);
     expect(report.lanes[0]?.details).toContain("counts.skipped=2");
     expect(renderQaConfidenceMarkdownReport(report)).toContain("Zero unknowns: yes");
+    expect(renderQaConfidenceMarkdownReport(report)).toContain("Global pass: no");
+  });
+
+  it("fails strict global pass when any lane is blocked, missing, unknown, or classified failed", async () => {
+    await writeJson("classified/qa-suite-summary.json", {
+      counts: { total: 1, passed: 0, skipped: 0, failed: 1 },
+      scenarios: [{ name: "classified", status: "fail" }],
+    });
+    await writeJson("unknown/qa-suite-summary.json", {
+      counts: { total: 1, passed: 0, skipped: 0, failed: 1 },
+      scenarios: [{ name: "unknown", status: "fail" }],
+    });
+
+    const report = await buildQaConfidenceReport({
+      manifest: {
+        version: 1,
+        profile: "codex-100",
+        lanes: [
+          {
+            id: "blocked-live",
+            title: "Blocked live",
+            kind: "qa-suite-summary",
+            artifact: "live/qa-suite-summary.json",
+            required: true,
+            missingVerdict: "environment-blocked",
+            missingReason: "OPENAI_API_KEY missing.",
+          },
+          {
+            id: "missing-soak",
+            title: "Missing soak",
+            kind: "qa-suite-summary",
+            artifact: "soak/qa-suite-summary.json",
+            required: true,
+          },
+          {
+            id: "classified-fixture",
+            title: "Classified fixture",
+            kind: "qa-suite-summary",
+            artifact: "classified/qa-suite-summary.json",
+            required: true,
+            failureVerdict: "fixture-bug",
+          },
+          {
+            id: "unknown-failure",
+            title: "Unknown failure",
+            kind: "qa-suite-summary",
+            artifact: "unknown/qa-suite-summary.json",
+            required: true,
+          },
+        ],
+      },
+      artifactRoot: tempRoot,
+      strictZeroUnknowns: true,
+      strictGlobalPass: true,
+      generatedAt: "2026-05-12T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.zeroUnknowns).toBe(false);
+    expect(report.globalPass).toBe(false);
+    expect(report.counts).toMatchObject({
+      blocked: 1,
+      missing: 1,
+      failed: 1,
+      unknown: 2,
+    });
+    expect(report.failures).toEqual([
+      "blocked-live is blocked: OPENAI_API_KEY missing.",
+      "missing-soak is missing: artifact missing and no missingVerdict was configured",
+      "classified-fixture is classified fixture-bug: qa-suite-summary counts.failed=1 counts.skipped=0",
+      "unknown-failure is unclassified: qa-suite-summary counts.failed=1 counts.skipped=0",
+    ]);
+  });
+
+  it("fails strict global pass for skipped suite rows until a backfill lane passes", async () => {
+    await writeJson("report-only/qa-suite-summary.json", {
+      counts: { total: 3, passed: 2, skipped: 1, failed: 0 },
+      scenarios: [],
+    });
+
+    const report = await buildQaConfidenceReport({
+      manifest: {
+        version: 1,
+        profile: "codex-100",
+        lanes: [
+          {
+            id: "report-only",
+            title: "Report-only",
+            kind: "qa-suite-summary",
+            artifact: "report-only/qa-suite-summary.json",
+            required: true,
+          },
+        ],
+      },
+      artifactRoot: tempRoot,
+      strictZeroUnknowns: true,
+      strictGlobalPass: true,
+      generatedAt: "2026-05-12T00:00:00.000Z",
+    });
+
+    expect(report.zeroUnknowns).toBe(true);
+    expect(report.globalPass).toBe(false);
+    expect(report.failures).toEqual([
+      "report-only has 1 skipped row(s) with no passing backfill lane",
+    ]);
+  });
+
+  it("rejects skipped token reports when a live usage source is required", async () => {
+    await writeJson("live-token/qa-runtime-token-efficiency-summary.json", {
+      status: "skipped",
+      pass: true,
+      rows: [],
+    });
+
+    const report = await buildQaConfidenceReport({
+      manifest: {
+        version: 1,
+        profile: "codex-100",
+        lanes: [
+          {
+            id: "live-token-efficiency",
+            title: "Live token efficiency",
+            kind: "token-efficiency-summary",
+            artifact: "live-token/qa-runtime-token-efficiency-summary.json",
+            required: true,
+            expectedTokenUsageSource: "live-usage",
+          },
+        ],
+      },
+      artifactRoot: tempRoot,
+      strictZeroUnknowns: true,
+      generatedAt: "2026-05-12T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.lanes[0]).toMatchObject({
+      status: "unknown",
+      details: "token summary has no live-usage rows",
+    });
+  });
+
+  it("preserves partial zero-unknown mode for classified failing lanes", async () => {
+    await writeJson("classified/qa-suite-summary.json", {
+      counts: { total: 1, passed: 0, skipped: 0, failed: 1 },
+      scenarios: [{ name: "classified", status: "fail" }],
+    });
+
+    const report = await buildQaConfidenceReport({
+      manifest: {
+        version: 1,
+        profile: "codex-100",
+        lanes: [
+          {
+            id: "classified-fixture",
+            title: "Classified fixture",
+            kind: "qa-suite-summary",
+            artifact: "classified/qa-suite-summary.json",
+            required: true,
+            failureVerdict: "fixture-bug",
+          },
+        ],
+      },
+      artifactRoot: tempRoot,
+      strictZeroUnknowns: true,
+      generatedAt: "2026-05-12T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.zeroUnknowns).toBe(true);
+    expect(report.globalPass).toBe(false);
+    expect(report.counts.failed).toBe(1);
+  });
+
+  it("passes strict global pass when skipped suite rows are backfilled by a passing lane", async () => {
+    await writeJson("report-only/qa-suite-summary.json", {
+      counts: { total: 3, passed: 2, skipped: 1, failed: 0 },
+      scenarios: [],
+    });
+    await writeJson("live-backfill/qa-suite-summary.json", {
+      counts: { total: 1, passed: 1, skipped: 0, failed: 0 },
+      scenarios: [],
+    });
+
+    const report = await buildQaConfidenceReport({
+      manifest: {
+        version: 1,
+        profile: "codex-100",
+        lanes: [
+          {
+            id: "report-only",
+            title: "Report-only",
+            kind: "qa-suite-summary",
+            artifact: "report-only/qa-suite-summary.json",
+            required: true,
+            skipBackfillLane: "live-backfill",
+          },
+          {
+            id: "live-backfill",
+            title: "Live backfill",
+            kind: "qa-suite-summary",
+            artifact: "live-backfill/qa-suite-summary.json",
+            required: true,
+          },
+        ],
+      },
+      artifactRoot: tempRoot,
+      strictZeroUnknowns: true,
+      strictGlobalPass: true,
+      generatedAt: "2026-05-12T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.zeroUnknowns).toBe(true);
+    expect(report.globalPass).toBe(true);
+    expect(report.lanes[0]).toMatchObject({
+      skippedCount: 1,
+      skipBackfillLane: "live-backfill",
+      skipBackfilled: true,
+    });
   });
 
   it("fails strict zero-unknowns for an unclassified failing lane", async () => {
@@ -153,6 +373,7 @@ describe("qa confidence report", () => {
     });
 
     expect(report.pass).toBe(true);
+    expect(report.globalPass).toBe(false);
     expect(report.counts.failed).toBe(1);
     expect(report.counts.unknown).toBe(0);
     expect(report.lanes[0]).toMatchObject({

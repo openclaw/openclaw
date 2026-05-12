@@ -995,6 +995,7 @@ export async function runQaConfidenceReportCommand(opts: {
   artifactRoot?: string;
   outputDir?: string;
   strictZeroUnknowns?: boolean;
+  strictGlobalPass?: boolean;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const manifestPath = path.resolve(repoRoot, opts.manifest);
@@ -1008,6 +1009,7 @@ export async function runQaConfidenceReportCommand(opts: {
     manifest,
     artifactRoot,
     strictZeroUnknowns: opts.strictZeroUnknowns === true,
+    strictGlobalPass: opts.strictGlobalPass === true,
   });
   const report = renderQaConfidenceMarkdownReport(reportPayload);
   const reportPath = path.join(outputDir, "qa-confidence-report.md");
