@@ -66,7 +66,7 @@ describe("renderDebug", () => {
       throw new Error("expected debug security audit command");
     }
     const callout = container.querySelector(".callout");
-    expect(callout?.classList.contains("warn")).toBe(true);
+    expect(callout?.className).toBe("callout warn");
     expect(normalizedText(callout)).toBe(
       "安全审计: 1 个警告 · 2 条信息. 运行 openclaw security audit --deep 查看详情。",
     );

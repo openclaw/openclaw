@@ -130,7 +130,7 @@ describe("sessions view", () => {
       ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=showArchived]")
       ?.closest("label");
 
-    expect(activeField?.textContent).toContain("Updated within");
+    expect(activeField?.querySelector(".session-filter-label")?.textContent).toBe("Updated within");
     expect(activeField?.getAttribute("data-tooltip")).toBe(
       "Loads sessions updated in the last 120 minutes.",
     );
@@ -169,11 +169,18 @@ describe("sessions view", () => {
     expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
     expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(3);
     expect(
-      toggleGroup
-        ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeGlobal]")
-        ?.closest("label")
-        ?.classList.contains("session-filter-check--active"),
-    ).toBe(true);
+      Array.from(toggleGroup?.querySelectorAll(".session-filter-check") ?? []).map((toggle) => [
+        toggle.querySelector("input")?.getAttribute("name"),
+        [...toggle.classList],
+      ]),
+    ).toEqual([
+      [
+        "includeGlobal",
+        ["session-filter-check", "session-filter-toggle", "session-filter-check--active"],
+      ],
+      ["includeUnknown", ["session-filter-check", "session-filter-toggle"]],
+      ["showArchived", ["session-filter-check", "session-filter-toggle", "session-archive-toggle"]],
+    ]);
     expect(toggleGroup?.querySelector(".session-filter-check__box")).toBeNull();
   });
 
@@ -451,9 +458,16 @@ describe("sessions view", () => {
     ).toContain("Status");
     const badges = Array.from(container.querySelectorAll(".session-status-badge"));
     expect(badges.map((badge) => badge.textContent?.trim())).toEqual(["Live", "Idle", "Failed"]);
-    expect(badges[0]?.classList.contains("session-status-badge--live")).toBe(true);
-    expect(badges[0]?.getAttribute("aria-label")).toBe("Status: Live");
-    expect(badges[2]?.classList.contains("session-status-badge--failed")).toBe(true);
+    expect(badges.map((badge) => [...badge.classList])).toEqual([
+      ["session-status-badge", "session-status-badge--live"],
+      ["session-status-badge", "session-status-badge--idle"],
+      ["session-status-badge", "session-status-badge--failed"],
+    ]);
+    expect(badges.map((badge) => badge.getAttribute("aria-label"))).toEqual([
+      "Status: Live",
+      "Status: Idle",
+      "Status: Failed",
+    ]);
   });
 
   it("renders and filters the session runtime", async () => {
