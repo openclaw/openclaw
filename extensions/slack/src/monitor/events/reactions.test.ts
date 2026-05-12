@@ -224,6 +224,16 @@ describe("registerSlackReactionEvents", () => {
     expect(trackEvent).toHaveBeenCalledTimes(1);
   });
 
+  it("marks queued reaction events as untrusted external content", async () => {
+    await executeReactionCase();
+
+    expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
+      sessionKey: "agent:main:main",
+      contextKey: "slack:reaction:added:D1:123.456:U1:thumbsup",
+      trusted: false,
+    });
+  });
+
   it("drops off-mode reactions before resolving Slack context", async () => {
     reactionQueueMock.mockClear();
     const harness = createSlackSystemEventTestHarness({ reactionMode: "off" });
