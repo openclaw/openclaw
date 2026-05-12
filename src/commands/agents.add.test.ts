@@ -9,8 +9,8 @@ import {
   loadPersistedAuthProfileStore,
   savePersistedAuthProfileSecretsStore,
 } from "../agents/auth-profiles/persisted.js";
-import { readAuthProfileStorePayloadResult } from "../agents/auth-profiles/sqlite-storage.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { readAuthProfileStorePayloadResult } from "../agents/auth-profiles/sqlite-storage.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -42,8 +42,8 @@ import { agentsAddCommand } from "./agents.js";
 
 const runtime = createTestRuntime();
 
-function oauthProfileSecretId(storeKey: string, profileId: string): string {
-  return createHash("sha256").update(`${storeKey}\0${profileId}`).digest("hex").slice(0, 32);
+function oauthProfileSecretId(agentDir: string, profileId: string): string {
+  return createHash("sha256").update(`${agentDir}\0${profileId}`).digest("hex").slice(0, 32);
 }
 
 describe("agents add command", () => {
@@ -204,10 +204,7 @@ describe("agents add command", () => {
         oauthRef: {
           source: "openclaw-credentials",
           provider: "openai-codex",
-          id: oauthProfileSecretId(
-            resolveAuthProfileStoreKey(destAgentDir),
-            "openai-codex:default",
-          ),
+          id: oauthProfileSecretId(destAgentDir, "openai-codex:default"),
         },
       });
     } finally {
