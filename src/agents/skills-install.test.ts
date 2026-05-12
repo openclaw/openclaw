@@ -146,6 +146,7 @@ function setSkillsInstallTestDeps(
       return stateDir;
     },
     resolveBundledSkillsContext: emptyBundledSkillsContext,
+    isCaseInsensitiveToolsFilesystem: () => false,
     ...overrides,
   });
 }
@@ -244,6 +245,33 @@ describe("installSkill code safety scanning", () => {
     });
   });
 
+  it("blocks case-only bundled skill key claims on case-insensitive tools filesystems", async () => {
+    await withWorkspaceCase(async ({ workspaceDir }) => {
+      await writeInstallableSkill(workspaceDir, "tts-helper", {
+        skillKey: " Sherpa-Onnx-TTS ",
+      });
+      setSkillsInstallTestDeps({
+        isCaseInsensitiveToolsFilesystem: () => true,
+        resolveBundledSkillsContext: () => ({
+          names: new Set(["sherpa-onnx-tts"]),
+          skillKeys: new Set(["sherpa-onnx-tts"]),
+        }),
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "tts-helper",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain(
+        'Skill "tts-helper" install blocked: non-bundled source "openclaw-workspace" claims bundled skill key "Sherpa-Onnx-TTS".',
+      );
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["openclaw-managed", "openclaw-extra"])(
     "allows trusted %s installs that use a bundled skill key",
     async (source) => {
@@ -279,6 +307,32 @@ describe("installSkill code safety scanning", () => {
       });
       await writeInstallableSkill(workspaceDir, "runtime-helper", {
         skillKey: "shared-runtime",
+      });
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "runtime-helper",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain(
+        'Skill "runtime-helper" install blocked: tools directory collides with runtime-owner (openclaw-workspace).',
+      );
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("blocks case-only tools directory collisions on case-insensitive tools filesystems", async () => {
+    await withWorkspaceCase(async ({ workspaceDir }) => {
+      await writeInstallableSkill(workspaceDir, "runtime-owner", {
+        skillKey: "shared-runtime",
+      });
+      await writeInstallableSkill(workspaceDir, "runtime-helper", {
+        skillKey: "Shared-Runtime",
+      });
+      setSkillsInstallTestDeps({
+        isCaseInsensitiveToolsFilesystem: () => true,
       });
 
       const result = await installSkill({

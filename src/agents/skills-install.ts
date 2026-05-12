@@ -50,6 +50,7 @@ type SkillsInstallDeps = {
   isContainerEnvironment: () => boolean;
   resolveSkillsInstallPreferences: typeof defaultResolveSkillsInstallPreferences;
   resolveBundledSkillsContext: () => BundledSkillsContext;
+  isCaseInsensitiveToolsFilesystem: () => boolean;
 };
 
 const defaultSkillsInstallDeps: SkillsInstallDeps = {
@@ -61,11 +62,48 @@ const defaultSkillsInstallDeps: SkillsInstallDeps = {
   isContainerEnvironment: defaultIsContainerEnvironment,
   resolveSkillsInstallPreferences: defaultResolveSkillsInstallPreferences,
   resolveBundledSkillsContext: defaultResolveBundledSkillsContext,
+  isCaseInsensitiveToolsFilesystem: isCaseInsensitiveToolsFilesystemByDefault,
 };
 
 let skillsInstallDeps = defaultSkillsInstallDeps;
 
 const trustedInstallSources = new Set(["openclaw-bundled", "openclaw-managed", "openclaw-extra"]);
+
+function isCaseInsensitiveToolsFilesystemByDefault(): boolean {
+  return process.platform === "darwin" || process.platform === "win32";
+}
+
+function normalizeToolsCollisionValue(value: string, caseInsensitive: boolean): string {
+  const normalized = value.normalize("NFC");
+  return caseInsensitive ? normalized.toLowerCase() : normalized;
+}
+
+function hasCollisionValue(
+  values: ReadonlySet<string>,
+  candidate: string,
+  caseInsensitive: boolean,
+): boolean {
+  if (values.has(candidate)) {
+    return true;
+  }
+  if (!caseInsensitive) {
+    return false;
+  }
+  const normalizedCandidate = normalizeToolsCollisionValue(candidate, true);
+  for (const value of values) {
+    if (normalizeToolsCollisionValue(value, true) === normalizedCandidate) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveToolsRootCollisionValue(entry: SkillEntry, caseInsensitive: boolean): string {
+  return normalizeToolsCollisionValue(
+    path.resolve(resolveSkillToolsRootDir(entry)),
+    caseInsensitive,
+  );
+}
 
 function getSkillsInstallDeps(): SkillsInstallDeps {
   return skillsInstallDeps;
@@ -114,6 +152,7 @@ function resolveSkillToolsRootCollision(params: {
   entry: SkillEntry;
   entries: readonly SkillEntry[];
   bundledContext: BundledSkillsContext;
+  caseInsensitiveToolsFilesystem: boolean;
 }): string | undefined {
   const source = resolveSkillSource(params.entry.skill);
   if (isTrustedInstallSource(source)) {
@@ -121,16 +160,28 @@ function resolveSkillToolsRootCollision(params: {
   }
 
   const skillKey = resolveSkillKey(params.entry.skill, params.entry);
-  if (params.bundledContext.skillKeys.has(skillKey) || params.bundledContext.names.has(skillKey)) {
+  if (
+    hasCollisionValue(
+      params.bundledContext.skillKeys,
+      skillKey,
+      params.caseInsensitiveToolsFilesystem,
+    ) ||
+    hasCollisionValue(params.bundledContext.names, skillKey, params.caseInsensitiveToolsFilesystem)
+  ) {
     return `Skill "${params.entry.skill.name}" install blocked: non-bundled source "${source}" claims bundled skill key "${skillKey}".`;
   }
 
-  const toolsRoot = path.resolve(resolveSkillToolsRootDir(params.entry));
+  const toolsRoot = resolveToolsRootCollisionValue(
+    params.entry,
+    params.caseInsensitiveToolsFilesystem,
+  );
   for (const other of params.entries) {
     if (sameSkillInstallSource(params.entry, other)) {
       continue;
     }
-    if (path.resolve(resolveSkillToolsRootDir(other)) !== toolsRoot) {
+    if (
+      resolveToolsRootCollisionValue(other, params.caseInsensitiveToolsFilesystem) !== toolsRoot
+    ) {
       continue;
     }
     return `Skill "${params.entry.skill.name}" install blocked: tools directory collides with ${formatSkillInstallSource(other)}.`;
@@ -583,6 +634,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
       config: params.config,
     }),
     bundledContext: deps.resolveBundledSkillsContext(),
+    caseInsensitiveToolsFilesystem: deps.isCaseInsensitiveToolsFilesystem(),
   });
   if (toolsRootCollision) {
     return withWarnings(
