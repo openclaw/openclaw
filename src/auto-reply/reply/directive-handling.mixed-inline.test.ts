@@ -196,6 +196,80 @@ describe("mixed inline directives", () => {
     expect(sessionEntry.reasoningLevel).toBe("off");
   });
 
+  it("persists /progress off as a session override and emits the disabled ack", async () => {
+    const directives = parseInlineDirectives("please reply\n/progress off");
+    const cfg = createConfig();
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { "agent:main:telegram:user": sessionEntry };
+
+    const fastLane = await applyInlineDirectivesFastLane({
+      directives,
+      commandAuthorized: true,
+      senderIsOwner: false,
+      ctx: { Surface: "telegram" } as never,
+      cfg,
+      agentId: "main",
+      isGroup: false,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:telegram:user",
+      storePath: undefined,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      elevatedFailures: [],
+      messageProviderKey: "telegram",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      allowedModelKeys: new Set(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      initialModelLabel: "anthropic/claude-opus-4-6",
+      formatModelSwitchEvent: (label) => label,
+      agentCfg: cfg.agents?.defaults,
+      modelState: {
+        resolveDefaultThinkingLevel: async () => "off",
+        resolveThinkingCatalog: async () => [],
+        allowedModelKeys: new Set(),
+        allowedModelCatalog: [],
+        resetModelOverride: false,
+      },
+    });
+
+    expect(fastLane.directiveAck).toEqual({
+      text: "⚙️ Tool progress disabled for this session.",
+    });
+    expect(sessionEntry.previewToolProgress).toBe(false);
+
+    const cleared = parseInlineDirectives("please reply\n/progress default");
+    await persistInlineDirectives({
+      directives: cleared,
+      cfg,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:telegram:user",
+      storePath: undefined,
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      allowedModelKeys: new Set(),
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      initialModelLabel: "anthropic/claude-opus-4-6",
+      formatModelSwitchEvent: (label) => label,
+      agentCfg: cfg.agents?.defaults,
+      messageProvider: "telegram",
+      surface: "telegram",
+      gatewayClientScopes: [],
+    });
+
+    expect(sessionEntry.previewToolProgress).toBeUndefined();
+  });
+
   it("does not persist trace directives for unauthorized mixed messages", async () => {
     const directives = parseInlineDirectives("please reply\n/trace raw");
     const cfg = createConfig();

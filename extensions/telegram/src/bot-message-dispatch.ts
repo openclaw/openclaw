@@ -262,6 +262,29 @@ function resolveTelegramReasoningLevel(params: {
   return configDefault;
 }
 
+function resolveTelegramPreviewToolProgressOverride(params: {
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+  agentId: string;
+  telegramDeps: TelegramBotDeps;
+}): boolean | undefined {
+  const { cfg, sessionKey, agentId, telegramDeps } = params;
+  if (!sessionKey) {
+    return undefined;
+  }
+  try {
+    const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
+    const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
+      skipCache: true,
+    });
+    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+    const override = entry?.previewToolProgress;
+    return typeof override === "boolean" ? override : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveTelegramMirroredTranscriptText(
   payload: TelegramTranscriptMirrorPayload,
 ): string | null {
@@ -583,8 +606,17 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
+  const previewToolProgressSessionOverride = resolveTelegramPreviewToolProgressOverride({
+    cfg,
+    sessionKey: ctxPayload.SessionKey,
+    agentId: route.agentId,
+    telegramDeps,
+  });
   const streamToolProgressEnabled =
-    Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
+    Boolean(answerLane.stream) &&
+    resolveChannelStreamingPreviewToolProgress(telegramCfg, {
+      sessionOverride: previewToolProgressSessionOverride,
+    });
   let streamToolProgressSuppressed = false;
   let streamToolProgressLines: string[] = [];
   let lastAnswerPartialText = "";

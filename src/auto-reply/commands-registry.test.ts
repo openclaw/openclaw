@@ -224,6 +224,15 @@ describe("commands registry", () => {
     ]);
   });
 
+  it("registers /progress as a session-level tool progress toggle", () => {
+    const progress = requireChatCommand("progress");
+    expect(progress.nativeName).toBe("progress");
+    expect(progress.textAliases).toEqual(["/progress"]);
+    expect(progress.category).toBe("options");
+    expect(requireCommandArg(progress, "mode").choices).toEqual(["on", "off", "default"]);
+    expect(requireNativeCommand("progress").key).toBe("progress");
+  });
+
   it("exposes /side as a BTW text and native alias", () => {
     const btw = requireChatCommand("btw");
     expect(btw.nativeName).toBe("btw");

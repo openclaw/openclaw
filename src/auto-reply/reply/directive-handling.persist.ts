@@ -210,6 +210,16 @@ export async function persistInlineDirectives(params: {
           directives.reasoningLevel !== undefined);
       updated = true;
     }
+    if (directives.clearProgressMode) {
+      if (sessionEntry.previewToolProgress !== undefined) {
+        delete sessionEntry.previewToolProgress;
+        updated = true;
+      }
+    } else if (directives.hasProgressDirective && directives.progressMode !== undefined) {
+      // Persist explicit off so it overrides the configured channel default.
+      sessionEntry.previewToolProgress = directives.progressMode;
+      updated = true;
+    }
     if (
       directives.hasElevatedDirective &&
       directives.elevatedLevel &&

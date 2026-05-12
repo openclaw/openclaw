@@ -553,8 +553,17 @@ export function resolveChannelStreamingPreviewChunk(
 
 export function resolveChannelStreamingPreviewToolProgress(
   entry: StreamingCompatEntry | null | undefined,
-  defaultValue = true,
+  defaultValueOrOptions: boolean | { defaultValue?: boolean; sessionOverride?: boolean } = true,
 ): boolean {
+  const options =
+    typeof defaultValueOrOptions === "boolean"
+      ? { defaultValue: defaultValueOrOptions }
+      : defaultValueOrOptions;
+  // Session-level override (e.g. set via `/progress on|off`) wins over channel config.
+  if (typeof options.sessionOverride === "boolean") {
+    return options.sessionOverride;
+  }
+  const defaultValue = options.defaultValue ?? true;
   const config = getChannelStreamingConfigObject(entry);
   if (resolveChannelPreviewStreamMode(entry, "partial") === "progress") {
     return (

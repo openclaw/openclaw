@@ -225,6 +225,26 @@ export async function handleDirectiveOnly(
       text: `Unrecognized reasoning level "${directives.rawReasoningLevel}". Valid levels: on, off, stream.`,
     };
   }
+  if (
+    directives.hasProgressDirective &&
+    directives.progressMode === undefined &&
+    !directives.clearProgressMode
+  ) {
+    if (!directives.rawProgressMode) {
+      const sessionOverride = sessionEntry.previewToolProgress;
+      const sourceSuffix = sessionOverride === undefined ? " (config)" : "";
+      const state = sessionOverride === undefined ? "on" : sessionOverride ? "on" : "off";
+      return {
+        text: withOptions(
+          `Tool progress in streaming preview: ${state}${sourceSuffix}.`,
+          "on, off, default",
+        ),
+      };
+    }
+    return {
+      text: `Unrecognized progress mode "${directives.rawProgressMode}". Valid: on, off, default.`,
+    };
+  }
   if (directives.hasElevatedDirective && !directives.elevatedLevel) {
     if (!directives.rawElevatedLevel) {
       if (!elevatedEnabled || !elevatedAllowed) {
@@ -367,6 +387,8 @@ export async function handleDirectiveOnly(
       allowInternalVerbosePersistence) ||
     (directives.hasTraceDirective && Boolean(directives.traceLevel)) ||
     (directives.hasReasoningDirective && Boolean(directives.reasoningLevel)) ||
+    (directives.hasProgressDirective &&
+      (directives.progressMode !== undefined || directives.clearProgressMode)) ||
     (directives.hasElevatedDirective && Boolean(directives.elevatedLevel)) ||
     (directives.hasExecDirective && directives.hasExecOptions && allowInternalExecPersistence) ||
     Boolean(modelSelection) ||
@@ -416,6 +438,12 @@ export async function handleDirectiveOnly(
       }
       reasoningChanged =
         directives.reasoningLevel !== prevReasoningLevel && directives.reasoningLevel !== undefined;
+    }
+    if (directives.clearProgressMode) {
+      delete sessionEntry.previewToolProgress;
+    } else if (directives.hasProgressDirective && directives.progressMode !== undefined) {
+      // Persist explicit off so it overrides the configured channel default.
+      sessionEntry.previewToolProgress = directives.progressMode;
     }
     if (directives.hasElevatedDirective && directives.elevatedLevel) {
       // Unlike other toggles, elevated defaults can be "on".
@@ -568,6 +596,15 @@ export async function handleDirectiveOnly(
         : directives.reasoningLevel === "stream"
           ? formatDirectiveAck("Reasoning stream enabled (Telegram only).")
           : formatDirectiveAck("Reasoning visibility enabled."),
+    );
+  }
+  if (directives.clearProgressMode) {
+    parts.push(formatDirectiveAck("Tool progress reset to default."));
+  } else if (directives.hasProgressDirective && directives.progressMode !== undefined) {
+    parts.push(
+      directives.progressMode
+        ? formatDirectiveAck("Tool progress enabled for this session.")
+        : formatDirectiveAck("Tool progress disabled for this session."),
     );
   }
   if (directives.hasElevatedDirective && directives.elevatedLevel) {

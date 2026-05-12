@@ -306,6 +306,7 @@ export async function resolveReplyDirectives(params: {
     parsedDirectives.hasTraceDirective ||
     parsedDirectives.hasFastDirective ||
     parsedDirectives.hasReasoningDirective ||
+    parsedDirectives.hasProgressDirective ||
     parsedDirectives.hasElevatedDirective ||
     parsedDirectives.hasExecDirective ||
     parsedDirectives.hasModelDirective ||
@@ -345,6 +346,10 @@ export async function resolveReplyDirectives(params: {
         hasReasoningDirective: false,
         reasoningLevel: undefined,
         rawReasoningLevel: undefined,
+        hasProgressDirective: false,
+        progressMode: undefined,
+        rawProgressMode: undefined,
+        clearProgressMode: false,
         hasStatusDirective: false,
         hasModelDirective: false,
         hasQueueDirective: false,

@@ -18,6 +18,7 @@ export function isDirectiveOnly(params: {
     !directives.hasTraceDirective &&
     !directives.hasFastDirective &&
     !directives.hasReasoningDirective &&
+    !directives.hasProgressDirective &&
     !directives.hasElevatedDirective &&
     !directives.hasExecDirective &&
     !directives.hasModelDirective &&

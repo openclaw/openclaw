@@ -828,6 +828,23 @@ export function buildBuiltinChatCommands(
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "progress",
+      nativeName: "progress",
+      description: "Toggle tool-call progress in streaming preview.",
+      textAlias: "/progress",
+      category: "options",
+      tier: "standard",
+      args: [
+        {
+          name: "mode",
+          description: "on, off, or default",
+          type: "string",
+          choices: ["on", "off", "default"],
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "elevated",
       nativeName: "elevated",
       description: "Toggle elevated mode.",

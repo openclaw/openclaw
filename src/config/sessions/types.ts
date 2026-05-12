@@ -249,6 +249,11 @@ export type SessionEntry = {
   traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
+  /**
+   * Session-level override for streaming.preview.toolProgress. When set,
+   * overrides the configured channel value for this session only.
+   */
+  previewToolProgress?: boolean;
   ttsAuto?: TtsAutoMode;
   /** Hash of the latest assistant reply that was sent through `/tts latest`. */
   lastTtsReadLatestHash?: string;

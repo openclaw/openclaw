@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
 import {
   extractElevatedDirective,
+  extractProgressDirective,
   extractReasoningDirective,
   extractTraceDirective,
   extractThinkDirective,
@@ -81,6 +82,27 @@ describe("directive parsing", () => {
     expect(fast.fastMode).toBeUndefined();
     expect(fast.rawFastMode).toBe("inherit");
     expect(fast.clearFastMode).toBe(true);
+  });
+
+  it("matches progress directive on/off and treats default as a clear", () => {
+    const on = extractProgressDirective("/progress on please");
+    expect(on.hasDirective).toBe(true);
+    expect(on.progressMode).toBe(true);
+
+    const off = extractProgressDirective(" please /progress off now");
+    expect(off.hasDirective).toBe(true);
+    expect(off.progressMode).toBe(false);
+
+    const status = extractProgressDirective("/progress");
+    expect(status.hasDirective).toBe(true);
+    expect(status.progressMode).toBeUndefined();
+    expect(status.rawLevel).toBeUndefined();
+
+    const cleared = parseInlineDirectives("/progress default");
+    expect(cleared.hasProgressDirective).toBe(true);
+    expect(cleared.progressMode).toBeUndefined();
+    expect(cleared.rawProgressMode).toBe("default");
+    expect(cleared.clearProgressMode).toBe(true);
   });
 
   it("matches elevated with leading space", () => {

@@ -40,6 +40,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "traceLevel",
   "reasoningLevel",
   "elevatedLevel",
+  "previewToolProgress",
   "ttsAuto",
   "lastTtsReadLatestHash",
   "lastTtsReadLatestAt",

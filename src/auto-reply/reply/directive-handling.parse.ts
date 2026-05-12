@@ -12,6 +12,7 @@ import {
   extractElevatedDirective,
   extractExecDirective,
   extractFastDirective,
+  extractProgressDirective,
   extractReasoningDirective,
   extractStatusDirective,
   extractTraceDirective,
@@ -40,6 +41,10 @@ export type InlineDirectives = {
   hasReasoningDirective: boolean;
   reasoningLevel?: ReasoningLevel;
   rawReasoningLevel?: string;
+  hasProgressDirective: boolean;
+  progressMode?: boolean;
+  rawProgressMode?: string;
+  clearProgressMode: boolean;
   hasElevatedDirective: boolean;
   elevatedLevel?: ElevatedLevel;
   rawElevatedLevel?: string;
@@ -114,18 +119,24 @@ export function parseInlineDirectives(
     hasDirective: hasReasoningDirective,
   } = extractReasoningDirective(fastCleaned);
   const {
+    cleaned: progressCleaned,
+    progressMode,
+    rawLevel: rawProgressMode,
+    hasDirective: hasProgressDirective,
+  } = extractProgressDirective(reasoningCleaned);
+  const {
     cleaned: elevatedCleaned,
     elevatedLevel,
     rawLevel: rawElevatedLevel,
     hasDirective: hasElevatedDirective,
   } = options?.disableElevated
     ? {
-        cleaned: reasoningCleaned,
+        cleaned: progressCleaned,
         elevatedLevel: undefined,
         rawLevel: undefined,
         hasDirective: false,
       }
-    : extractElevatedDirective(reasoningCleaned);
+    : extractElevatedDirective(progressCleaned);
   const {
     cleaned: execCleaned,
     execHost,
@@ -190,6 +201,10 @@ export function parseInlineDirectives(
     hasReasoningDirective,
     reasoningLevel,
     rawReasoningLevel,
+    hasProgressDirective,
+    progressMode,
+    rawProgressMode,
+    clearProgressMode: hasProgressDirective && isSessionDefaultDirectiveValue(rawProgressMode),
     hasElevatedDirective,
     elevatedLevel,
     rawElevatedLevel,

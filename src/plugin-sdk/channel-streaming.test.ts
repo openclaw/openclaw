@@ -93,6 +93,25 @@ describe("channel-streaming", () => {
     ).toBe(false);
   });
 
+  it("lets a session-level override win over the configured tool progress value", () => {
+    const onlyConfig = {
+      streaming: { mode: "partial", preview: { toolProgress: true } },
+    } as const;
+    expect(
+      resolveChannelStreamingPreviewToolProgress(onlyConfig, { sessionOverride: false }),
+    ).toBe(false);
+    const disabledByConfig = {
+      streaming: { mode: "partial", preview: { toolProgress: false } },
+    } as const;
+    expect(
+      resolveChannelStreamingPreviewToolProgress(disabledByConfig, { sessionOverride: true }),
+    ).toBe(true);
+    // Undefined session override falls through to configured value.
+    expect(
+      resolveChannelStreamingPreviewToolProgress(disabledByConfig, { sessionOverride: undefined }),
+    ).toBe(false);
+  });
+
   it("falls back to legacy flat fields when the canonical object is absent", () => {
     const entry = {
       chunkMode: "newline",

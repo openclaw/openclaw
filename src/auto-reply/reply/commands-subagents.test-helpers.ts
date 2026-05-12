@@ -53,6 +53,8 @@ export function createEmptyInlineDirectives(): InlineDirectives {
     hasFastDirective: false,
     clearFastMode: false,
     hasReasoningDirective: false,
+    hasProgressDirective: false,
+    clearProgressMode: false,
     hasTraceDirective: false,
     hasElevatedDirective: false,
     hasExecDirective: false,
