@@ -4610,4 +4610,100 @@ describe("openai transport stream", () => {
       __testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
   });
+
+  it("strips openrouter/ prefix from completions model id for openrouter/PROVIDER/MODEL format", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "openrouter/openai/gpt-4o",
+        name: "GPT-4o",
+        api: "openai-completions",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 16384,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "You are a helpful assistant",
+        messages: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.model).toBe("openai/gpt-4o");
+  });
+
+  it("preserves openrouter/auto completions model id (built-in default model)", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "openrouter/auto",
+        name: "Auto Router",
+        api: "openai-completions",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.model).toBe("openrouter/auto");
+  });
+
+  it("does not alter non-openrouter provider model ids in completions params", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "kimi-k2.5",
+        name: "Kimi K2.5",
+        api: "openai-completions",
+        provider: "moonshot",
+        baseUrl: "",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.model).toBe("kimi-k2.5");
+  });
+
+  it("strips openrouter/ prefix from Responses model id for openrouter/PROVIDER/MODEL format", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "openrouter/openai/gpt-4o",
+        name: "GPT-4o",
+        api: "openai-responses",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 16384,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "You are a helpful assistant",
+        messages: [],
+      } as never,
+      undefined,
+    );
+
+    expect((params as Record<string, unknown>).model).toBe("openai/gpt-4o");
+  });
 });

@@ -1007,8 +1007,23 @@ export function buildOpenAIResponsesParams(
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
   });
+  const resolvedModelId =
+    model.provider === "openrouter" && model.id.startsWith("openrouter/")
+      ? model.id.slice("openrouter/".length)
+      : model.id;
+  // Only strip the openrouter/ prefix when the model also has a provider/
+  // sub-path (e.g., openrouter/openai/gpt-4o → openai/gpt-4o).  Keep it
+  // intact for built-in models where the prefix IS the model name (e.g.
+  // openrouter/auto → openrouter/auto).
+  const effectiveModelId =
+    model.provider === "openrouter" &&
+    resolvedModelId !== model.id &&
+    !resolvedModelId.includes("/")
+      ? model.id
+      : resolvedModelId;
   const params: OpenAIResponsesRequestParams = {
-    model: model.id,
+    model: effectiveModelId,
+    model: resolvedModelId,
     input: messages,
     stream: true,
     prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
@@ -1948,8 +1963,22 @@ export function buildOpenAICompletionsParams(
   const messages = convertMessages(model as never, completionsContext, compat as never);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
+  const resolvedModelId =
+    model.provider === "openrouter" && model.id.startsWith("openrouter/")
+      ? model.id.slice("openrouter/".length)
+      : model.id;
+  // Only strip the openrouter/ prefix when the model also has a provider/
+  // sub-path (e.g., openrouter/openai/gpt-4o → openai/gpt-4o).  Keep it
+  // intact for built-in models where the prefix IS the model name (e.g.
+  // openrouter/auto → openrouter/auto).
+  const effectiveModelId =
+    model.provider === "openrouter" &&
+    resolvedModelId !== model.id &&
+    !resolvedModelId.includes("/")
+      ? model.id
+      : resolvedModelId;
   const params: Record<string, unknown> = {
-    model: model.id,
+    model: effectiveModelId,
     messages: compat.requiresStringContent
       ? flattenCompletionMessagesToStringContent(messages)
       : messages,
