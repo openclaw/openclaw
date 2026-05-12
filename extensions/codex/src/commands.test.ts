@@ -291,7 +291,7 @@ describe("codex command", () => {
       text: "Codex models:\n- gpt-5.4",
     });
     expect(deps.requestOptions).toHaveBeenCalledWith(undefined, 100, config);
-    const modelsRequest = listCodexAppServerModels.mock.calls[0]?.[0];
+    const modelsRequest = listCodexAppServerModels.mock.calls.at(0)?.[0];
     expect(modelsRequest?.config).toBe(config);
   });
 
@@ -1636,14 +1636,14 @@ describe("codex command", () => {
       ].join("\n"),
     });
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
-    expect(safeCodexControlRequest.mock.calls[0]?.[0]).toBeUndefined();
-    expect(safeCodexControlRequest.mock.calls[0]?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
-    const firstFeedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls[0]);
+    expect(safeCodexControlRequest.mock.calls.at(0)?.[0]).toBeUndefined();
+    expect(safeCodexControlRequest.mock.calls.at(0)?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
+    const firstFeedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls.at(0));
     expect(firstFeedbackParams.threadId).toBe("thread-111");
     expect(firstFeedbackParams.includeLogs).toBe(true);
-    expect(safeCodexControlRequest.mock.calls[1]?.[0]).toBeUndefined();
-    expect(safeCodexControlRequest.mock.calls[1]?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
-    const secondFeedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls[1]);
+    expect(safeCodexControlRequest.mock.calls.at(1)?.[0]).toBeUndefined();
+    expect(safeCodexControlRequest.mock.calls.at(1)?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
+    const secondFeedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls.at(1));
     expect(secondFeedbackParams.threadId).toBe("thread-222");
     expect(secondFeedbackParams.includeLogs).toBe(true);
   });
@@ -1865,9 +1865,9 @@ describe("codex command", () => {
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
-    expect(safeCodexControlRequest.mock.calls[0]?.[0]).toBeUndefined();
-    expect(safeCodexControlRequest.mock.calls[0]?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
-    const feedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls[0]);
+    expect(safeCodexControlRequest.mock.calls.at(0)?.[0]).toBeUndefined();
+    expect(safeCodexControlRequest.mock.calls.at(0)?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
+    const feedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls.at(0));
     expect(feedbackParams.classification).toBe("bug");
     expect(feedbackParams.threadId).toBe("thread-private");
     expect(feedbackParams.includeLogs).toBe(true);
@@ -1940,9 +1940,9 @@ describe("codex command", () => {
     const token = readDiagnosticsConfirmationToken(request);
     await handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps });
 
-    expect(safeCodexControlRequest.mock.calls[0]?.[0]).toBeUndefined();
-    expect(safeCodexControlRequest.mock.calls[0]?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
-    const feedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls[0]);
+    expect(safeCodexControlRequest.mock.calls.at(0)?.[0]).toBeUndefined();
+    expect(safeCodexControlRequest.mock.calls.at(0)?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
+    const feedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls.at(0));
     expect(feedbackParams.reason).toBe("x".repeat(2048));
   });
 
@@ -2578,7 +2578,7 @@ describe("codex command", () => {
     expect(result.text).toContain("/repo \uff3btrusted\uff3d\uff08https://evil\uff09");
     expect(result.text).not.toContain("<@U123>");
     expect(result.text).not.toContain("[trusted](https://evil)");
-    const bindingRequest = requestConversationBinding.mock.calls[0]?.[0];
+    const bindingRequest = requestConversationBinding.mock.calls.at(0)?.[0];
     expect(bindingRequest?.summary).toBe(
       "Codex app-server thread thread-123 &lt;\uff20U123&gt; in /repo \uff3btrusted\uff3d\uff08https://evil\uff09",
     );

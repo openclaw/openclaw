@@ -206,6 +206,10 @@ function expectElement(container: Element, selector: string): Element {
   return element;
 }
 
+function compactText(node: Element | null): string | undefined {
+  return node?.textContent?.trim().replace(/\s+/g, " ");
+}
+
 describe("dreaming view", () => {
   it("renders the active dream scene chrome and status", () => {
     const container = renderInto(buildProps({ dreamingOf: "reindexing old chats\u2026" }));
@@ -225,7 +229,9 @@ describe("dreaming view", () => {
     );
     expect(phases).toEqual(["Light", "Deep", "Rem"]);
     expect(container.querySelectorAll(".dreams__phase").length).toBe(3);
-    expect(container.querySelector(".dreams__phase--off")?.textContent).toContain("off");
+    expect(container.querySelector(".dreams__phase--off .dreams__phase-next")?.textContent).toBe(
+      "off",
+    );
 
     const buttons = [...container.querySelectorAll("button")].map((node) =>
       node.textContent?.trim(),
@@ -239,12 +245,11 @@ describe("dreaming view", () => {
     const label = container.querySelector(".dreams__status-label");
     expect(label?.textContent).toBe("Dreaming Active");
     const detail = container.querySelector(".dreams__status-detail span");
-    expect(detail?.textContent).toContain("4:00 AM");
+    expect(detail?.textContent?.trim().replace(/\s+/g, " ")).toBe(
+      "12 promoted · next sweep 4:00 AM · America/Los_Angeles",
+    );
     const tabs = container.querySelectorAll(".dreams__tab");
-    expect(tabs.length).toBe(3);
-    expect(tabs[0]?.textContent).toContain("Scene");
-    expect(tabs[1]?.textContent).toContain("Diary");
-    expect(tabs[2]?.textContent).toContain("Advanced");
+    expect([...tabs].map((tab) => tab.textContent?.trim())).toEqual(["Scene", "Diary", "Advanced"]);
   });
 
   it("renders idle and unavailable scene states", () => {
@@ -261,7 +266,7 @@ describe("dreaming view", () => {
     expect(unknownPhaseContainer.querySelectorAll(".dreams__phase--off").length).toBe(0);
 
     const errorContainer = renderInto(buildProps({ statusError: "patch failed" }));
-    expect(errorContainer.querySelector(".dreams__controls-error")?.textContent).toContain(
+    expect(errorContainer.querySelector(".dreams__controls-error")?.textContent?.trim()).toBe(
       "patch failed",
     );
   });
@@ -271,15 +276,18 @@ describe("dreaming view", () => {
     setDreamDiarySubTab("insights");
     const container = renderInto(buildProps());
     expect(container.querySelectorAll(".dreams-diary__subtab").length).toBe(3);
-    expect(container.querySelector(".dreams-diary__date")?.textContent).toContain("Travel");
-    expect(container.querySelector(".dreams-diary__insight-card")?.textContent).toContain(
+    expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
+      "Travel · 1 chats · 1 signals",
+    );
+    const insight = container.querySelector(".dreams-diary__insight-card");
+    expect(insight?.querySelector(".dreams-diary__insight-title")?.textContent).toBe(
       "BA flight receipts process",
     );
-    expect(container.querySelector(".dreams-diary__insight-card")?.textContent).toContain(
+    expect(insight?.querySelector(".dreams-diary__insight-line")?.textContent).toBe(
       "Use the BA request-a-receipt flow first.",
     );
-    expect(container.querySelector(".dreams-diary__explainer")?.textContent).toContain(
-      "imported insights clustered from external history",
+    expect(compactText(container.querySelector(".dreams-diary__explainer"))).toBe(
+      "These are imported insights clustered from external history; use them to review what imports surfaced before any of it graduates into durable memory.",
     );
     setDreamDiarySubTab("dreams");
     setDreamSubTab("scene");
@@ -338,8 +346,8 @@ describe("dreaming view", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(container.querySelector(".dreams-diary__preview-hint")?.textContent).toContain(
-      "6001 total lines",
+    expect(compactText(container.querySelector(".dreams-diary__preview-hint"))).toBe(
+      "Showing the first chunk of this page (6001 total lines).",
     );
 
     const closePreviewButton = container.querySelector<HTMLButtonElement>(
@@ -355,13 +363,18 @@ describe("dreaming view", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("palace");
     const container = renderInto(buildProps());
-    expect(container.querySelector(".dreams-diary__date")?.textContent).toContain("Syntheses");
-    expect(container.querySelector(".dreams-diary__insight-card")?.textContent).toContain(
+    expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
+      "Syntheses · 1 pages · 2 claims · 1 questions · 1 contradictions",
+    );
+    const insight = container.querySelector(".dreams-diary__insight-card");
+    expect(insight?.querySelector(".dreams-diary__insight-title")?.textContent).toBe(
       "Travel system",
     );
-    expect(container.querySelector(".dreams-diary__insight-card")?.textContent).toContain("Claims");
-    expect(container.querySelector(".dreams-diary__explainer")?.textContent).toContain(
-      "compiled memory wiki surface",
+    expect(insight?.querySelector(".dreams-diary__insight-list strong")?.textContent).toBe(
+      "Claims",
+    );
+    expect(compactText(container.querySelector(".dreams-diary__explainer"))).toBe(
+      "This is the compiled memory wiki surface the system can search and reason over; use it to inspect actual memory pages, claims, open questions, and contradictions rather than raw imported source chats.",
     );
     setDreamDiarySubTab("dreams");
     setDreamSubTab("scene");
@@ -377,8 +390,15 @@ describe("dreaming view", () => {
         onOpenConfig,
       }),
     );
-    expect(container.textContent).toContain("Memory Wiki is not enabled");
-    expect(container.textContent).toContain("plugins.entries.memory-wiki.enabled = true");
+    expect(container.querySelector(".dreams-diary__empty-text")?.textContent).toBe(
+      "Memory Wiki is not enabled",
+    );
+    expect(
+      [...container.querySelectorAll(".dreams-diary__empty-hint")].map((node) => compactText(node)),
+    ).toEqual([
+      "Imported Insights and Memory Palace are provided by the bundled memory-wiki plugin.",
+      "Enable plugins.entries.memory-wiki.enabled = true, then reload this tab.",
+    ]);
 
     const configButton = container.querySelector<HTMLButtonElement>(
       ".dreams-diary__empty-actions .btn",
@@ -395,13 +415,15 @@ describe("dreaming view", () => {
     setDreamDiarySubTab("dreams");
     const container = renderInto(buildProps());
     const title = container.querySelector(".dreams-diary__title");
-    expect(title?.textContent).toContain("Dream Diary");
+    expect(title?.textContent).toBe("Dream Diary");
 
     expectElement(container, ".dreams-diary__entry");
     const date = container.querySelector(".dreams-diary__date");
-    expect(date?.textContent).toContain("April 5, 2026");
+    expect(date?.textContent).toBe("April 5, 2026, 3:00 AM");
     const body = container.querySelector(".dreams-diary__para");
-    expect(body?.textContent).toContain("forgotten endpoints");
+    expect(body?.textContent?.trim()).toBe(
+      "The repository whispered of forgotten endpoints tonight.",
+    );
     setDreamSubTab("scene");
   });
 
@@ -521,14 +543,15 @@ describe("dreaming view", () => {
     setDreamDiarySubTab("dreams");
     const emptyContainer = renderInto(buildProps({ dreamDiaryContent: null }));
     expect(emptyContainer.querySelectorAll(".dreams-diary__empty")).toHaveLength(1);
-    expect(emptyContainer.querySelector(".dreams-diary__empty-text")?.textContent).toContain(
+    expect(emptyContainer.querySelector(".dreams-diary__empty-text")?.textContent).toBe(
       "No dreams yet",
+    );
+    expect(emptyContainer.querySelector(".dreams-diary__empty-hint")?.textContent).toBe(
+      "Dreams will appear here after the first dreaming cycle runs.",
     );
 
     const errorContainer = renderInto(buildProps({ dreamDiaryError: "read failed" }));
-    expect(errorContainer.querySelector(".dreams-diary__error")?.textContent).toContain(
-      "read failed",
-    );
+    expect(errorContainer.querySelector(".dreams-diary__error")?.textContent).toBe("read failed");
 
     const container = renderInto(buildProps());
     expect(container.querySelector(".dreams-diary__page")).toBeNull();
@@ -540,17 +563,23 @@ describe("dreaming view", () => {
     setDreamSubTab("advanced");
     setDreamAdvancedWaitingSort("recent");
     const container = renderInto(buildProps());
-    expect(container.querySelector(".dreams-advanced__title")?.textContent).toContain(
+    expect(container.querySelector(".dreams-advanced__title")?.textContent).toBe(
       "Daily Log Review",
     );
-    const buttons = [...container.querySelectorAll("button")].map((node) =>
+    const actionButtons = [...container.querySelectorAll(".dreams-advanced__actions button")].map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(actionButtons).toEqual([
+      "Dedupe Diary",
+      "Repair Dream Cache",
+      "Backfill",
+      "Reset",
+      "Clear Replayed",
+    ]);
+    const sortButtons = [...container.querySelectorAll(".dreams-advanced__sort-btn")].map((node) =>
       node.textContent?.trim(),
     );
-    expect(buttons).toContain("Backfill");
-    expect(buttons).toContain("Reset");
-    expect(buttons).toContain("Clear Replayed");
-    expect(buttons).toContain("Most recent");
-    expect(buttons).toContain("Strongest support");
+    expect(sortButtons).toEqual(["Most recent", "Strongest support"]);
     const sectionTitles = [...container.querySelectorAll(".dreams-advanced__section-title")].map(
       (node) => node.textContent?.trim(),
     );
@@ -559,13 +588,12 @@ describe("dreaming view", () => {
       "Waiting for Promotion",
       "Recent Promotions",
     ]);
-    expect(container.querySelector(".dreams-advanced__summary")?.textContent).toContain(
-      "1 from daily log",
+    expect(compactText(container.querySelector(".dreams-advanced__summary"))).toBe(
+      "1 from daily log · 47 waiting · 12 promoted today",
     );
-    expect(container.querySelector(".dreams-advanced__item")?.textContent).toContain(
-      "Emma prefers shorter",
-    );
-    expect(container.textContent).not.toContain("Signal Hotspots");
+    expect(
+      container.querySelector(".dreams-advanced__item .dreams-advanced__snippet")?.textContent,
+    ).toBe("Emma prefers shorter, lower-pressure check-ins.");
     setDreamAdvancedWaitingSort("recent");
     setDreamSubTab("scene");
   });

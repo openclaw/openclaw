@@ -750,6 +750,115 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "denies safe-bin shell expansion carriers in allowlist mode",
+    async () => {
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        security: "allowlist",
+        ask: "off",
+        command: ["/bin/sh", "-lc", "head -c${IFS}16${IFS}${OPENCLAW_CONFIG_PATH}"],
+        rawCommand: "head -c${IFS}16${IFS}${OPENCLAW_CONFIG_PATH}",
+      });
+
+      expect(runCommand).not.toHaveBeenCalled();
+      expectInvokeErrorMessage(sendInvokeResult, { message: "allowlist miss" });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rewrites safe-bin shell payloads before execution in allowlist mode",
+    async () => {
+      const oldPath = process.env.PATH;
+      process.env.PATH = "/usr/bin:/bin";
+      try {
+        const expectedHeadPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/head") ? "/usr/bin/head" : "/bin/head",
+        );
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          security: "allowlist",
+          ask: "off",
+          command: ["/bin/sh", "-lc", "head -c 16"],
+          rawCommand: "head -c 16",
+        });
+
+        expect(requireFirstRunCommandArgs(runCommand)).toEqual([
+          "/bin/sh",
+          "-lc",
+          `'${expectedHeadPath}' '-c' '16'`,
+        ]);
+        expectInvokeOk(sendInvokeResult);
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rewrites nested safe-bin shell chains before execution in allowlist mode",
+    async () => {
+      const oldPath = process.env.PATH;
+      process.env.PATH = "/usr/bin:/bin";
+      try {
+        const expectedTrPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/tr") ? "/usr/bin/tr" : "/bin/tr",
+        );
+        const expectedHeadPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/head") ? "/usr/bin/head" : "/bin/head",
+        );
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          security: "allowlist",
+          ask: "off",
+          command: ["/bin/sh", "-lc", "sh -c 'tr a b && head -c 16'"],
+          rawCommand: "sh -c 'tr a b && head -c 16'",
+        });
+
+        const payload = requireFirstRunCommandArgs(runCommand)[2] ?? "";
+        expect(payload).not.toContain("tr a b && head -c 16");
+        expect(payload).toContain(expectedTrPath);
+        expect(payload).toContain(expectedHeadPath);
+        expectInvokeOk(sendInvokeResult);
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not apply POSIX safe-bin shell rewrites to PowerShell wrappers",
+    async () => {
+      const oldPath = process.env.PATH;
+      process.env.PATH = "/usr/bin:/bin";
+      try {
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          security: "allowlist",
+          ask: "off",
+          command: ["pwsh", "-Command", "head -c 16"],
+        });
+
+        expect(requireFirstRunCommandArgs(runCommand)).toEqual(["pwsh", "-Command", "head -c 16"]);
+        expectInvokeOk(sendInvokeResult);
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
+    },
+  );
+
   it("denies abbreviated PowerShell encoded payloads even when the wrapper is allowlisted", async () => {
     const binDir = createFixtureDir("openclaw-pwsh-allowlist-");
     const executablePath = createTempExecutable({ dir: binDir, name: "pwsh" });

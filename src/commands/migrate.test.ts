@@ -268,8 +268,8 @@ describe("migrateApplyCommand", () => {
     expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
     expect(mocks.promptYesNo).toHaveBeenCalledWith("Apply this migration now?", false);
     expect(mocks.backupCreateCommand).toHaveBeenCalled();
-    expect(typeof mocks.provider.apply.mock.calls[0]?.[0]).toBe("object");
-    expect(mocks.provider.apply.mock.calls[0]?.[1]).toBe(planned);
+    expect(typeof mocks.provider.apply.mock.calls.at(0)?.[0]).toBe("object");
+    expect(mocks.provider.apply.mock.calls.at(0)?.[1]).toBe(planned);
   });
 
   it("prompts for Codex skills before interactive default apply", async () => {
@@ -291,7 +291,7 @@ describe("migrateApplyCommand", () => {
 
     await migrateDefaultCommand(runtime, { provider: "codex" });
 
-    const selectionPrompt = mocks.multiselect.mock.calls[0]?.[0] as
+    const selectionPrompt = mocks.multiselect.mock.calls.at(0)?.[0] as
       | {
           initialValues?: unknown;
           message?: unknown;
@@ -310,7 +310,7 @@ describe("migrateApplyCommand", () => {
       { value: "skill:beta", label: "beta" },
     ]);
     expect(mocks.promptYesNo).toHaveBeenCalledWith("Apply this migration now?", false);
-    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    const appliedPlan = mocks.provider.apply.mock.calls.at(0)?.[1] as MigrationPlan;
     expect(appliedPlan.summary.planned).toBe(2);
     expect(appliedPlan.summary.skipped).toBe(1);
     expect(appliedPlan.summary.conflicts).toBe(0);
@@ -356,9 +356,11 @@ describe("migrateApplyCommand", () => {
     await migrateDefaultCommand(runtime, { provider: "codex" });
 
     expect(mocks.multiselect).toHaveBeenCalledTimes(2);
-    const skillPrompt = mocks.multiselect.mock.calls[0]?.[0] as { message?: unknown } | undefined;
+    const skillPrompt = mocks.multiselect.mock.calls.at(0)?.[0] as
+      | { message?: unknown }
+      | undefined;
     expect(String(skillPrompt?.message)).toContain("Select Codex skills");
-    const pluginPrompt = mocks.multiselect.mock.calls[1]?.[0] as
+    const pluginPrompt = mocks.multiselect.mock.calls.at(1)?.[0] as
       | {
           initialValues?: unknown;
           message?: unknown;
@@ -377,7 +379,7 @@ describe("migrateApplyCommand", () => {
       { value: "plugin:gmail", label: "gmail" },
     ]);
     expect(mocks.promptYesNo).toHaveBeenCalledWith("Apply this migration now?", false);
-    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    const appliedPlan = mocks.provider.apply.mock.calls.at(0)?.[1] as MigrationPlan;
     expect(appliedPlan.summary.planned).toBe(4);
     expect(appliedPlan.summary.skipped).toBe(2);
     expect(appliedPlan.summary.conflicts).toBe(0);
@@ -437,12 +439,12 @@ describe("migrateApplyCommand", () => {
 
     await migrateDefaultCommand(runtime, { provider: "codex" });
 
-    const pluginPrompt = mocks.multiselect.mock.calls[1]?.[0] as
+    const pluginPrompt = mocks.multiselect.mock.calls.at(1)?.[0] as
       | { initialValues?: unknown; message?: unknown }
       | undefined;
     expect(String(pluginPrompt?.message)).toContain("Select native Codex plugins");
     expect(pluginPrompt?.initialValues).toStrictEqual(["plugin:google-calendar", "plugin:gmail"]);
-    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    const appliedPlan = mocks.provider.apply.mock.calls.at(0)?.[1] as MigrationPlan;
     expect(appliedPlan.summary.planned).toBe(4);
     expect(appliedPlan.summary.skipped).toBe(2);
     expect(appliedPlan.summary.conflicts).toBe(0);
@@ -501,7 +503,7 @@ describe("migrateApplyCommand", () => {
 
     await migrateDefaultCommand(runtime, { provider: "codex" });
 
-    const pluginPrompt = mocks.multiselect.mock.calls[0]?.[0] as
+    const pluginPrompt = mocks.multiselect.mock.calls.at(0)?.[0] as
       | {
           initialValues?: unknown;
           message?: unknown;
@@ -516,7 +518,7 @@ describe("migrateApplyCommand", () => {
       "conflict: plugin exists",
     );
     expect(optionsByValue.get("plugin:gmail")?.label).toBe("gmail");
-    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    const appliedPlan = mocks.provider.apply.mock.calls.at(0)?.[1] as MigrationPlan;
     expect(appliedPlan.summary.planned).toBe(2);
     expect(appliedPlan.summary.skipped).toBe(1);
     expect(appliedPlan.summary.conflicts).toBe(0);
@@ -590,7 +592,9 @@ describe("migrateApplyCommand", () => {
 
     const result = await migrateDefaultCommand(runtime, { provider: "codex" });
 
-    const pluginPrompt = mocks.multiselect.mock.calls[0]?.[0] as { message?: unknown } | undefined;
+    const pluginPrompt = mocks.multiselect.mock.calls.at(0)?.[0] as
+      | { message?: unknown }
+      | undefined;
     expect(String(pluginPrompt?.message)).toContain("Select native Codex plugins");
     expect(mocks.promptYesNo).not.toHaveBeenCalled();
     expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
@@ -630,7 +634,7 @@ describe("migrateApplyCommand", () => {
 
     expect(mocks.multiselect).not.toHaveBeenCalled();
     expect(mocks.promptYesNo).toHaveBeenCalledWith("Apply this migration now?", false);
-    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    const appliedPlan = mocks.provider.apply.mock.calls.at(0)?.[1] as MigrationPlan;
     expect(appliedPlan.summary.planned).toBe(2);
     expect(appliedPlan.summary.skipped).toBe(1);
     expect(appliedPlan.summary.conflicts).toBe(0);
@@ -685,7 +689,7 @@ describe("migrateApplyCommand", () => {
 
     await migrateDefaultCommand(runtime, { provider: "codex" });
 
-    const skillPrompt = mocks.multiselect.mock.calls[0]?.[0] as
+    const skillPrompt = mocks.multiselect.mock.calls.at(0)?.[0] as
       | {
           initialValues?: unknown;
           options?: Array<{ label?: unknown; value?: unknown }>;
@@ -737,7 +741,7 @@ describe("migrateApplyCommand", () => {
     expect(mocks.multiselect).toHaveBeenCalledTimes(2);
     expect(runtime.log).toHaveBeenCalledWith("Codex skill migration skipped for now.");
     expect(mocks.promptYesNo).toHaveBeenCalledWith("Apply this migration now?", false);
-    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    const appliedPlan = mocks.provider.apply.mock.calls.at(0)?.[1] as MigrationPlan;
     expect(appliedPlan.summary.planned).toBe(3);
     expect(appliedPlan.summary.skipped).toBe(3);
     expect(appliedPlan.summary.conflicts).toBe(0);
@@ -798,7 +802,7 @@ describe("migrateApplyCommand", () => {
 
     await migrateDefaultCommand(runtime, { provider: "codex" });
 
-    let appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    let appliedPlan = mocks.provider.apply.mock.calls.at(0)?.[1] as MigrationPlan;
     expect(appliedPlan.summary.planned).toBe(3);
     expect(appliedPlan.summary.skipped).toBe(0);
     expect(appliedPlan.summary.conflicts).toBe(0);
@@ -979,7 +983,7 @@ describe("migrateApplyCommand", () => {
 
     await migrateApplyCommand(runtime, { provider: "codex", yes: true, skills: ["alpha"] });
 
-    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    const appliedPlan = mocks.provider.apply.mock.calls.at(0)?.[1] as MigrationPlan;
     expect(appliedPlan.summary.planned).toBe(2);
     expect(appliedPlan.summary.skipped).toBe(1);
     expect(appliedPlan.summary.conflicts).toBe(0);
@@ -1003,7 +1007,7 @@ describe("migrateApplyCommand", () => {
 
     await migrateApplyCommand(runtime, { provider: "codex", yes: true, plugins: ["gmail"] });
 
-    const appliedPlan = mocks.provider.apply.mock.calls[0]?.[1] as MigrationPlan;
+    const appliedPlan = mocks.provider.apply.mock.calls.at(0)?.[1] as MigrationPlan;
     expect(appliedPlan.summary.planned).toBe(2);
     expect(appliedPlan.summary.skipped).toBe(1);
     expect(appliedPlan.summary.conflicts).toBe(0);
@@ -1027,15 +1031,15 @@ describe("migrateApplyCommand", () => {
 
     const result = await migrateApplyCommand(runtime, { provider: "hermes", yes: true });
 
-    const backupCall = mocks.backupCreateCommand.mock.calls[0];
+    const backupCall = mocks.backupCreateCommand.mock.calls.at(0);
     expect(typeof (backupCall?.[0] as { log?: unknown } | undefined)?.log).toBe("function");
     expect(backupCall?.[1]).toStrictEqual({ output: undefined, verify: true });
-    const applyContext = mocks.provider.apply.mock.calls[0]?.[0] as
+    const applyContext = mocks.provider.apply.mock.calls.at(0)?.[0] as
       | { backupPath?: unknown; reportDir?: unknown }
       | undefined;
     expect(applyContext?.backupPath).toBe("/tmp/openclaw-backup.tgz");
     expect(String(applyContext?.reportDir)).toContain("/migration/hermes/");
-    expect(mocks.provider.apply.mock.calls[0]?.[1]).toBe(planned);
+    expect(mocks.provider.apply.mock.calls.at(0)?.[1]).toBe(planned);
     expect(result.backupPath).toBe("/tmp/openclaw-backup.tgz");
   });
 
@@ -1146,8 +1150,8 @@ describe("migrateApplyCommand", () => {
     await migrateDefaultCommand(runtime, { provider: "hermes", yes: true });
 
     expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
-    expect(typeof mocks.provider.apply.mock.calls[0]?.[0]).toBe("object");
-    expect(mocks.provider.apply.mock.calls[0]?.[1]).toBe(planned);
+    expect(typeof mocks.provider.apply.mock.calls.at(0)?.[0]).toBe("object");
+    expect(mocks.provider.apply.mock.calls.at(0)?.[1]).toBe(planned);
   });
 
   it("fails after writing JSON output when apply reports item errors", async () => {

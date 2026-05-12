@@ -31,7 +31,7 @@ describe("handleControlUiHttpRequest", () => {
   }
 
   function parseBootstrapPayload(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
-    return JSON.parse(String(end.mock.calls[0]?.[0] ?? "")) as {
+    return JSON.parse(String(end.mock.calls.at(0)?.[0] ?? "")) as {
       basePath: string;
       assistantName: string;
       assistantAvatar: string;
@@ -214,7 +214,7 @@ describe("handleControlUiHttpRequest", () => {
   }) {
     expect(params.handled).toBe(true);
     expect(params.res.statusCode).toBe(403);
-    expect(JSON.parse(String(params.end.mock.calls[0]?.[0] ?? ""))).toEqual({
+    expect(JSON.parse(String(params.end.mock.calls.at(0)?.[0] ?? ""))).toEqual({
       ok: false,
       error: {
         type: "forbidden",
@@ -372,7 +372,7 @@ describe("handleControlUiHttpRequest", () => {
       });
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
-      const payload = JSON.parse(String(end.mock.calls[0]?.[0] ?? "")) as {
+      const payload = JSON.parse(String(end.mock.calls.at(0)?.[0] ?? "")) as {
         available?: boolean;
         mediaTicket?: string;
         mediaTicketExpiresAt?: string;
@@ -414,7 +414,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
-        const payload = JSON.parse(String(end.mock.calls[0]?.[0] ?? "")) as {
+        const payload = JSON.parse(String(end.mock.calls.at(0)?.[0] ?? "")) as {
           available?: boolean;
           mediaTicket?: string;
           mediaTicketExpiresAt?: string;
@@ -440,7 +440,7 @@ describe("handleControlUiHttpRequest", () => {
             authorization: "Bearer test-token",
           },
         });
-        const payload = JSON.parse(String(meta.end.mock.calls[0]?.[0] ?? "")) as {
+        const payload = JSON.parse(String(meta.end.mock.calls.at(0)?.[0] ?? "")) as {
           mediaTicket?: string;
         };
         expect(meta.handled).toBe(true);
@@ -472,7 +472,7 @@ describe("handleControlUiHttpRequest", () => {
             authorization: "Bearer test-token",
           },
         });
-        const payload = JSON.parse(String(meta.end.mock.calls[0]?.[0] ?? "")) as {
+        const payload = JSON.parse(String(meta.end.mock.calls.at(0)?.[0] ?? "")) as {
           mediaTicket?: string;
         };
 
@@ -483,7 +483,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(refresh.handled).toBe(true);
         expect(refresh.res.statusCode).toBe(401);
-        expect(String(refresh.end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        expect(String(refresh.end.mock.calls.at(0)?.[0] ?? "")).toContain("Unauthorized");
       },
     });
   });
@@ -501,7 +501,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(401);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        expect(String(end.mock.calls.at(0)?.[0] ?? "")).toContain("Unauthorized");
       },
     });
   });
@@ -514,7 +514,7 @@ describe("handleControlUiHttpRequest", () => {
     });
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
+    expect(JSON.parse(String(end.mock.calls.at(0)?.[0] ?? ""))).toEqual({
       available: false,
       code: "outside-allowed-folders",
       reason: "Outside allowed folders",
@@ -534,7 +534,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(401);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        expect(String(end.mock.calls.at(0)?.[0] ?? "")).toContain("Unauthorized");
       },
     });
   });
@@ -598,7 +598,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(401);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        expect(String(end.mock.calls.at(0)?.[0] ?? "")).toContain("Unauthorized");
       },
     });
   });
@@ -719,7 +719,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(401);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        expect(String(end.mock.calls.at(0)?.[0] ?? "")).toContain("Unauthorized");
       },
     });
   });
@@ -805,7 +805,7 @@ describe("handleControlUiHttpRequest", () => {
 
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
-      expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("avatar-bytes\n");
+      expect(String(end.mock.calls.at(0)?.[0] ?? "")).toBe("avatar-bytes\n");
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
@@ -876,7 +876,7 @@ describe("handleControlUiHttpRequest", () => {
 
           expect(handled).toBe(true);
           expect(res.statusCode).toBe(200);
-          expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("avatar-bytes\n");
+          expect(String(end.mock.calls.at(0)?.[0] ?? "")).toBe("avatar-bytes\n");
         } finally {
           await fs.rm(tmp, { recursive: true, force: true });
         }
@@ -901,7 +901,7 @@ describe("handleControlUiHttpRequest", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
+    expect(JSON.parse(String(end.mock.calls.at(0)?.[0] ?? ""))).toEqual({
       avatarUrl: "https://example.com/avatar.png",
       avatarSource: "remote URL",
       avatarStatus: "remote",
@@ -922,7 +922,7 @@ describe("handleControlUiHttpRequest", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
+    expect(JSON.parse(String(end.mock.calls.at(0)?.[0] ?? ""))).toEqual({
       avatarUrl: null,
       avatarSource: null,
       avatarStatus: "none",
@@ -940,7 +940,7 @@ describe("handleControlUiHttpRequest", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(401);
-    expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+    expect(String(end.mock.calls.at(0)?.[0] ?? "")).toContain("Unauthorized");
   });
 
   it("rejects trusted-proxy avatar metadata requests without operator.read scope", async () => {
@@ -995,7 +995,7 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("inside-ok\n");
+        expect(String(end.mock.calls.at(0)?.[0] ?? "")).toBe("inside-ok\n");
       },
     });
   });
@@ -1013,7 +1013,7 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
-        expect(end.mock.calls[0]?.length ?? -1).toBe(0);
+        expect(end.mock.calls.at(0)?.length ?? -1).toBe(0);
       },
     });
   });
@@ -1096,7 +1096,7 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("console.log('hi');");
+        expect(String(end.mock.calls.at(0)?.[0] ?? "")).toBe("console.log('hi');");
       },
     });
   });

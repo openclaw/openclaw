@@ -223,9 +223,30 @@ describe("renderLoginGate", () => {
 
     const alert = container.querySelector<HTMLElement>('[role="alert"]');
     expect(alert?.dataset.kind).toBe("protocol-mismatch");
-    expect(alert?.textContent).toContain("Protocol mismatch");
-    expect(alert?.textContent).toContain("openclaw dashboard");
-    expect(alert?.querySelector("details")?.textContent).toContain("protocol mismatch");
-    expect(alert?.querySelector("a")?.getAttribute("href")).toContain("docs.openclaw.ai");
+    expect(alert?.querySelector(".login-gate__failure-title")?.textContent?.trim()).toBe(
+      "Protocol mismatch",
+    );
+    expect(alert?.querySelector(".login-gate__failure-summary")?.textContent?.trim()).toBe(
+      "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
+    );
+    expect(
+      Array.from(alert?.querySelectorAll(".login-gate__failure-steps li") ?? []).map((step) =>
+        step.textContent?.trim(),
+      ),
+    ).toEqual([
+      "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
+      "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
+      "Restart the Gateway after updating OpenClaw so it serves the current protocol.",
+    ]);
+    expect(alert?.querySelector("details summary")?.textContent?.trim()).toBe("Raw error");
+    expect(alert?.querySelector(".login-gate__failure-raw")?.textContent?.trim()).toBe(
+      "protocol mismatch",
+    );
+
+    const docsLink = alert?.querySelector<HTMLAnchorElement>(".login-gate__failure-docs");
+    expect(docsLink?.textContent?.trim()).toBe("Control UI auth docs");
+    expect(docsLink?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
+    );
   });
 });
