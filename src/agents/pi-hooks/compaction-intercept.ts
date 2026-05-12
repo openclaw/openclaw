@@ -37,7 +37,11 @@ export default function compactionInterceptExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const runtime = getCompactionInterceptRuntime(ctx.sessionManager);
     const engine = runtime?.contextEngine;
-    if (!engine?.interceptCompaction) {
+    const interceptFn = engine?.interceptCompaction;
+    // Bind all three locals separately so TypeScript narrows each one in
+    // isolation — chained optional access on the property `engine.interceptCompaction`
+    // doesn't propagate to subsequent independent property reads on `engine`.
+    if (!runtime || !engine || !interceptFn) {
       return undefined;
     }
 
@@ -62,6 +66,12 @@ export default function compactionInterceptExtension(api: ExtensionAPI): void {
     const currentTokenCount =
       typeof contextUsage?.tokens === "number" ? contextUsage.tokens : undefined;
 
+    // Resolve trigger from the SDK event when available. The pi-coding-agent
+    // event currently does not carry an explicit trigger field; engines may
+    // use the absence of trigger as "unknown source" and apply default policy.
+    // Reserved for forward compatibility with future SDK extensions.
+    const trigger = inferTriggerFromEvent(event);
+
     const request: CompactionInterceptRequest = {
       sessionId,
       sessionKey: runtime.sessionKey,
@@ -70,12 +80,13 @@ export default function compactionInterceptExtension(api: ExtensionAPI): void {
       currentTokenCount,
       firstKeptEntryId: event.preparation.firstKeptEntryId,
       tokensBefore: event.preparation.tokensBefore,
+      trigger,
       signal: event.signal,
     };
 
     let result: CompactionInterceptResult;
     try {
-      result = await engine.interceptCompaction(request);
+      result = await interceptFn.call(engine, request);
     } catch (error) {
       log.warn(
         `[compaction-intercept] engine.interceptCompaction threw — falling back to default compaction path. ${String(error)}`,
@@ -99,4 +110,19 @@ export default function compactionInterceptExtension(api: ExtensionAPI): void {
       },
     };
   });
+}
+
+/**
+ * Best-effort trigger inference from the SDK event. The current
+ * pi-coding-agent event surface does not carry an explicit trigger; the
+ * presence of a `previousSummary` indicates a redistill / re-compact while
+ * its absence indicates a fresh-compact. Engines may use this signal for
+ * cadence routing — overflow/in-attempt-auto/manual all collapse to
+ * `"in-attempt-auto"` from the openclaw side until the SDK surface grows.
+ */
+function inferTriggerFromEvent(
+  event: { preparation?: { previousSummary?: string } } | undefined,
+): "in-attempt-auto" | "overflow" | "timeout" | "manual" | undefined {
+  if (!event || !event.preparation) return undefined;
+  return "in-attempt-auto";
 }

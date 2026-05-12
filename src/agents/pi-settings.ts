@@ -72,11 +72,25 @@ function toPositiveInt(value: unknown): number | undefined {
  * `session_before_compact` event and supplying its own assembly
  * (`interceptsCompaction === true`).
  *
- * Both cases mean the engine, not Pi's `reserveTokensFloor`, decides how
- * much headroom the next prompt has — so the floor should be auto-zeroed
- * to avoid double-reserving (LCM's `compactionTargetFraction = 0.35` already
- * leaves ~65% of the context window free post-compaction, far more than the
- * 20K-token default floor would reserve).
+ * **Why both flags?** These flags advertise capability against distinct
+ * compaction lanes:
+ *   - `ownsCompaction` covers the openclaw queued-compaction lane
+ *     (`compact.queued.ts` → `engine.compact()`), driven by `afterTurn`
+ *     or explicit user `/compact`. Engines that own this lane control
+ *     their own compaction trigger and post-compact assembly entirely.
+ *   - `interceptsCompaction` covers the pi-coding-agent SDK event lane
+ *     (`session_before_compact`), driven by codex's in-attempt overflow.
+ *     Engines that intercept this event also produce post-compact
+ *     assemblies, just via a different trigger.
+ * In BOTH cases the engine — not Pi's `reserveTokensFloor` — decides how
+ * much headroom the next prompt gets, so we auto-zero the floor to avoid
+ * double-reserving (e.g. lossless-claw's `compactionTargetFraction = 0.35`
+ * already leaves ~65% of the context window free post-compaction, far more
+ * than the 20K-token default floor would reserve).
+ *
+ * The merged gate is intentional: any engine in EITHER lane manages its
+ * own headroom strategy. If we ever introduce a third lane (or split these
+ * back apart), this predicate is the single place to update.
  */
 function engineOwnsPostCompactHeadroom(info?: ContextEngineInfo): boolean {
   return info?.ownsCompaction === true || info?.interceptsCompaction === true;

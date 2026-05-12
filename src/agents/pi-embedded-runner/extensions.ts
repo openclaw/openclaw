@@ -192,15 +192,21 @@ export function buildEmbeddedExtensionFactories(params: {
     factories.push(compactionSafeguardExtension);
   }
   // Context-engine intercept: registered AFTER the safeguard so its result
-  // wins under last-truthy-wins semantics when both are active. Skipped when
-  // the engine fully owns compaction (those engines bypass the SDK event via
-  // `compact.queued.ts` and never see `session_before_compact`).
+  // wins under last-truthy-wins semantics when both are active.
+  //
+  // Gate is `interceptsCompaction === true` ONLY (no exclusion for
+  // `ownsCompaction === true`). The two flags advertise capability against
+  // distinct flows:
+  //   - `ownsCompaction` covers the openclaw queued-compaction lane
+  //     (`compact.queued.ts` → `engine.compact()`), driven by `afterTurn`
+  //     or explicit user `/compact`.
+  //   - `interceptsCompaction` covers the pi-coding-agent SDK event
+  //     (`session_before_compact`), driven by codex's in-attempt overflow
+  //     auto-compact at ~90% context.
+  // An engine can advertise BOTH (e.g. lossless-claw v4.1 owns the queued
+  // lane AND intercepts the SDK lane), so neither flag excludes the other.
   const engineInfo = params.activeContextEngine?.info;
-  if (
-    params.activeContextEngine &&
-    engineInfo?.interceptsCompaction === true &&
-    engineInfo.ownsCompaction !== true
-  ) {
+  if (params.activeContextEngine && engineInfo?.interceptsCompaction === true) {
     setCompactionInterceptRuntime(params.sessionManager, {
       contextEngine: params.activeContextEngine,
       sessionKey: params.sessionKey,

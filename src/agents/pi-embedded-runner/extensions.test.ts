@@ -206,13 +206,39 @@ describe("buildEmbeddedExtensionFactories — compactionInterceptExtension wirin
     expect(runtime?.contextEngine).toBe(engine);
   });
 
-  it("does NOT register intercept when engine ownsCompaction (engine bypasses SDK event)", () => {
+  it("DOES register intercept when engine has BOTH ownsCompaction and interceptsCompaction", () => {
+    // The two flags advertise distinct lanes: ownsCompaction covers
+    // openclaw's queued-compaction path (compact.queued.ts), and
+    // interceptsCompaction covers pi-coding-agent's SDK event lane
+    // (session_before_compact). An engine can declare both — codex still
+    // fires session_before_compact on in-attempt overflow even for engines
+    // that own the queued lane, so we DO want to intercept the SDK event.
     const sessionManager = {} as SessionManager;
     const engine = makeEngine({
-      id: "owns-compaction",
-      name: "Owns",
+      id: "owns-and-intercepts",
+      name: "Both",
       ownsCompaction: true,
       interceptsCompaction: true,
+    });
+    const factories = buildEmbeddedExtensionFactories({
+      ...baseParams,
+      sessionManager,
+      activeContextEngine: engine,
+    });
+    expect(factories).toContain(compactionInterceptExtension);
+    const runtime = getCompactionInterceptRuntime(sessionManager);
+    expect(runtime?.contextEngine).toBe(engine);
+  });
+
+  it("does NOT register intercept when only ownsCompaction is set (engine declines intercept)", () => {
+    // An engine that owns queued compaction but does NOT declare
+    // interceptsCompaction is signaling "I don't want to intercept the SDK
+    // event" — fall through to codex's native compaction.
+    const sessionManager = {} as SessionManager;
+    const engine = makeEngine({
+      id: "owns-only",
+      name: "Owns Only",
+      ownsCompaction: true,
     });
     const factories = buildEmbeddedExtensionFactories({
       ...baseParams,
