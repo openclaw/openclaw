@@ -1736,7 +1736,12 @@
 
   function decodeMarkdownHrefCodePoint(value, radix) {
     const codePoint = Number.parseInt(value, radix);
-    if (!Number.isFinite(codePoint) || codePoint < 0 || codePoint > 0x10ffff) {
+    if (
+      !Number.isFinite(codePoint) ||
+      codePoint < 0 ||
+      codePoint > 0x10ffff ||
+      (codePoint >= 0xd800 && codePoint <= 0xdfff)
+    ) {
       return "";
     }
     return String.fromCodePoint(codePoint);
@@ -1765,7 +1770,7 @@
 
   function getMarkdownHrefProtocol(href) {
     const normalized = decodeMarkdownHrefEntities(href)
-      .replace(/[\u0000-\u001f\u007f\s]+/g, "")
+      .replace(/[\u0000-\u001f\u007f\u200b-\u200f\u2028\u2029\ufeff\s]+/g, "")
       .trim();
     const match = /^([a-z][a-z0-9+.-]*):/i.exec(normalized);
     return match ? `${match[1].toLowerCase()}:` : null;
