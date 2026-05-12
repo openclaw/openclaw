@@ -334,6 +334,158 @@ export const RAIN_TOOLS: ToolDef[] = [
         walletAddress: asString(args.walletAddress),
       }),
   },
+  {
+    name: "rain_build_create_market",
+    description:
+      "Build a Rain market-creation transaction sequence. Returns a multi-tx response: " +
+      "prerequisiteTxs[] (typically an ERC-20 approval against the factory) plus a final walletRequest (the factory create-market call). " +
+      "Execute prerequisiteTxs in order via wallet sign-tx, then the walletRequest. " +
+      "baseToken defaults to the environment's USDT. barValues defaults to an equal probability split across marketOptions. " +
+      "The `defaults` field in the response echoes the values actually used.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        marketQuestion: {
+          type: "string",
+          minLength: 1,
+          maxLength: 500,
+          description: "The market resolution question (≤ 500 chars).",
+        },
+        marketDescription: {
+          type: "string",
+          minLength: 1,
+          maxLength: 5000,
+          description: "Long-form description and resolution criteria (≤ 5000 chars).",
+        },
+        marketOptions: {
+          type: "array",
+          items: { type: "string", minLength: 1 },
+          minItems: 2,
+          description: "Option labels (e.g. ['Yes', 'No']). At least 2.",
+        },
+        isPublic: {
+          type: "boolean",
+          description: "Whether the market is publicly listed.",
+        },
+        isPublicPoolResolverAi: {
+          type: "boolean",
+          description: "Whether resolution uses Rain's AI resolver.",
+        },
+        creator: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description: "Creator wallet address. Pays gas + initial liquidity.",
+        },
+        endTime: {
+          type: "string",
+          pattern: "^[1-9][0-9]*$",
+          description: "Unix timestamp (seconds) for resolution time. Must be in the future.",
+        },
+        inputAmountWei: {
+          type: "string",
+          pattern: "^[1-9][0-9]*$",
+          description:
+            "Initial seed liquidity in the base token's smallest unit (string-encoded integer > 0). USDT has 6 decimals — `100000000` = 100 USDT.",
+        },
+        disputeTimer: {
+          type: "integer",
+          minimum: 0,
+          description: "Dispute window in seconds after resolution.",
+        },
+        marketTags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional tags for categorisation. Defaults to [].",
+        },
+        startTime: {
+          type: "string",
+          pattern: "^[1-9][0-9]*$",
+          description:
+            "Optional unix timestamp (seconds) for market open. Defaults to now. Must be < endTime.",
+        },
+        no_of_options: {
+          type: "integer",
+          minimum: 2,
+          description:
+            "Optional. Must equal marketOptions.length when provided; derived from marketOptions otherwise.",
+        },
+        barValues: {
+          type: "array",
+          items: { type: "number", minimum: 0 },
+          description:
+            "Optional initial probability weights per option. Length must equal marketOptions.length. Defaults to equal split summing to 100.",
+        },
+        baseToken: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description: "Optional ERC-20 base token. Defaults to the environment's USDT.",
+        },
+        tokenDecimals: {
+          type: "integer",
+          minimum: 0,
+          maximum: 18,
+          description: "Optional base-token decimals override.",
+        },
+        factoryContractAddress: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description:
+            "Optional Rain market factory override. SDK uses environment default when omitted.",
+        },
+      },
+      required: [
+        "marketQuestion",
+        "marketDescription",
+        "marketOptions",
+        "isPublic",
+        "isPublicPoolResolverAi",
+        "creator",
+        "endTime",
+        "inputAmountWei",
+        "disputeTimer",
+      ],
+      additionalProperties: false,
+    },
+    handler: (client, args) => {
+      const optionalStringArray = (v: unknown): string[] | undefined => {
+        if (v === undefined || v === null) {
+          return undefined;
+        }
+        if (!Array.isArray(v)) {
+          throw new Error("expected array");
+        }
+        return v.map((e) => asString(e));
+      };
+      const optionalNumberArray = (v: unknown): number[] | undefined => {
+        if (v === undefined || v === null) {
+          return undefined;
+        }
+        if (!Array.isArray(v)) {
+          throw new Error("expected array");
+        }
+        return v.map((e) => asNumber(e));
+      };
+      return client.buildCreateMarket({
+        marketQuestion: asString(args.marketQuestion),
+        marketDescription: asString(args.marketDescription),
+        marketOptions: (args.marketOptions as unknown[]).map((e) => asString(e)),
+        isPublic: Boolean(args.isPublic),
+        isPublicPoolResolverAi: Boolean(args.isPublicPoolResolverAi),
+        creator: asString(args.creator),
+        endTime: asString(args.endTime),
+        inputAmountWei: asString(args.inputAmountWei),
+        disputeTimer: asNumber(args.disputeTimer),
+        marketTags: optionalStringArray(args.marketTags),
+        startTime: args.startTime != null ? asString(args.startTime) : undefined,
+        no_of_options: args.no_of_options != null ? asNumber(args.no_of_options) : undefined,
+        barValues: optionalNumberArray(args.barValues),
+        baseToken: args.baseToken != null ? asString(args.baseToken) : undefined,
+        tokenDecimals: args.tokenDecimals != null ? asNumber(args.tokenDecimals) : undefined,
+        factoryContractAddress:
+          args.factoryContractAddress != null ? asString(args.factoryContractAddress) : undefined,
+      });
+    },
+  },
 
   // ── V2 Phase A — Slice A.0 helpers + diagnostics ───────────────────────────
 

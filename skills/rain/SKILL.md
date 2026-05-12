@@ -28,7 +28,9 @@ Core trading tools:
 - `rain_build_sell` — build a sell-option (limit-order) transaction preview (returns `walletRequest`)
 - `rain_build_claim` — build a claim transaction preview (returns `walletRequest`)
 - `rain_build_add_liquidity` — build an add-liquidity transaction preview (returns `walletRequest` + `prerequisiteTxs[]`)
+- `rain_build_create_market` — build a market-creation transaction sequence (returns ordered `prerequisiteTxs[]` + final `walletRequest`)
 - `rain_get_price_history` — OHLCV candle data for one market option
+- `rain_get_capabilities` — list the current Rain MCP tool surface + capability version (use when asked "what can you do?" or to detect stale deploys)
 
 The MCP returns typed responses — call the tools directly. Do not construct
 HTTP requests, do not invent endpoint URLs, do not call any Rain SDK or RPC
@@ -151,6 +153,41 @@ LP shares are redeemable via `rain_build_claim` once the market finalises — th
 
 Use to surface price charts or inform limit-sell price selection. Returns OHLCV candles — `open`, `high`, `low`, `close`, `volume`, `trades` per candle. All numeric fields are serialized as strings (bigint). Available intervals: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`, `1w`.
 
+## Create-market flow (`rain_build_create_market` → wallet sign-tx)
+
+Creating a market is the heaviest Rain action — it deploys a new market contract, costs gas, and locks the creator's seed liquidity until the market resolves. **Always walk the user through every field and get explicit confirmation before calling the tool.**
+
+1. **Required inputs to confirm with the user (in plain language, not jargon):**
+   - **Question** — the exact resolution question, ≤ 500 chars. Should be unambiguous and time-bounded.
+   - **Description** — long-form resolution criteria, ≤ 5000 chars. Spell out the data source and edge cases.
+   - **Options** — at least 2 labels. Use simple `["Yes", "No"]` unless the user wants multi-outcome.
+   - **End time** — unix seconds, must be in the future. Convert from user-friendly date to unix yourself.
+   - **Creator wallet address** — the wallet that pays gas + seed liquidity.
+   - **Initial liquidity** — `inputAmountWei`. Compute from a human amount using the base-token decimals (USDT = 6).
+   - **Dispute window** — `disputeTimer` in seconds. 86400 (24h) is a common safe default.
+   - **isPublic** — list it publicly, yes/no.
+   - **isPublicPoolResolverAi** — use Rain's AI resolver, yes/no.
+
+2. **Optional fields** — only set if the user asks. Defaults are sensible:
+   - `marketTags` defaults to `[]`.
+   - `startTime` defaults to now.
+   - `baseToken` defaults to the environment's USDT.
+   - `barValues` defaults to an equal probability split across options summing to 100.
+   - `no_of_options` is derived from `marketOptions.length`.
+   - `tokenDecimals`, `factoryContractAddress` — leave unset unless the user has a specific reason.
+
+3. **Read back the full preview** before calling the tool — every field, in human-readable units. Get an explicit "yes".
+
+4. **Call `rain_build_create_market`.** The response has:
+   - `txCount` — total transactions in the sequence (usually 2: ERC-20 approve, then factory create)
+   - `prerequisiteTxs[]` — all-but-last txs in order, each with `action` and `walletRequest`
+   - `walletRequest` — the final tx (the factory create call)
+   - `defaults` — the values actually used (echoes auto-defaulted fields so the user can verify)
+
+5. **Show a final confirmation** including any defaults the tool filled in, then execute `prerequisiteTxs` in order via wallet `sign-tx`, then the final `walletRequest`. Report every tx hash. The new market's contract address is emitted in the final tx receipt's logs — surface it to the user when available.
+
+**Refuse** if the user is hesitant, hasn't named a clear resolution data source, or wants to bypass the read-back. Market creation is irreversible from the agent's side.
+
 ## Capability introspection (`rain_get_capabilities`)
 
 When the user asks "what Rain features do I have?" or "list everything you can do with Rain", call `rain_get_capabilities` and answer from its response. Do not answer from memory — the deployed tool surface is authoritative, and your training-time view may lag the current build.
@@ -163,10 +200,9 @@ Do not invent endpoints, do not claim these are "almost shipped" or
 "close to deployed". If the user asks, say plainly: "That isn't a Rain
 skill capability yet."
 
-- Creating markets — V2 Phase C (deferred)
-- Price quotes / slippage estimates — V2 Phase C
-- Real-time market events — V2 Phase C (polling)
-- Cancel orders — V2 Phase C
+- Price quotes / slippage estimates — not shipped
+- Real-time market events / push subscriptions — not shipped (use polling)
+- Cancel open buy/sell orders — not shipped
 
 ## Response format for previews
 
@@ -203,4 +239,3 @@ The MCP returns structured errors; surface them faithfully:
   documented in `openclaw-dashboard/docs/api/rain-runtime.md` for
   reference. You should not call those endpoints directly; the MCP is the
   agent-facing surface.
-- V2 Phase B will add add-liquidity, price-history, and real-time events.

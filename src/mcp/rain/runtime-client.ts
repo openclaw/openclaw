@@ -146,6 +146,27 @@ export class RainRuntimeClient {
     return this.post("/api/runtime/rain/build-claim", body);
   }
 
+  async buildCreateMarket(body: {
+    marketQuestion: string;
+    marketDescription: string;
+    marketOptions: string[];
+    isPublic: boolean;
+    isPublicPoolResolverAi: boolean;
+    creator: string;
+    endTime: string;
+    inputAmountWei: string;
+    disputeTimer: number;
+    marketTags?: string[];
+    startTime?: string;
+    no_of_options?: number;
+    barValues?: number[];
+    baseToken?: string;
+    tokenDecimals?: number;
+    factoryContractAddress?: string;
+  }): Promise<unknown> {
+    return this.post("/api/runtime/rain/build-create-market", body);
+  }
+
   async getMarketAddress(marketId: string): Promise<unknown> {
     return this.get(`/api/runtime/rain/markets/${encodeURIComponent(marketId)}/address`);
   }
