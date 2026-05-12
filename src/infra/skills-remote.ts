@@ -281,8 +281,14 @@ export function clearRemoteNodeApproval(nodeId: string) {
 
 export function removeRemoteNodeInfo(nodeId: string) {
   const existing = remoteNodes.get(nodeId);
-  remoteNodes.delete(nodeId);
-  if (existing && isEligibleRemoteMacNode(existing)) {
+  if (!existing) {
+    return;
+  }
+  const wasEligible = isEligibleRemoteMacNode(existing);
+  existing.connected = false;
+  existing.remoteIp = undefined;
+  existing.bins = new Set();
+  if (wasEligible) {
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   }
 }

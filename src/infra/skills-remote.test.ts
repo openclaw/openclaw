@@ -57,6 +57,33 @@ describe("skills-remote", () => {
     expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
   });
 
+  it("restores approved remote eligibility when a node reconnects without bin probes", () => {
+    const nodeId = `node-${randomUUID()}`;
+    try {
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Remote Mac",
+        platform: "darwin",
+        commands: ["system.run"],
+      });
+      recordRemoteNodeApproval({ nodeId, platform: "darwin", commands: ["system.run"] });
+      expect(getRemoteSkillEligibility()?.platforms).toEqual(["darwin"]);
+
+      removeRemoteNodeInfo(nodeId);
+      expect(getRemoteSkillEligibility()).toBeUndefined();
+
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Remote Mac",
+        platform: "darwin",
+        commands: ["system.run"],
+      });
+      expect(getRemoteSkillEligibility()?.platforms).toEqual(["darwin"]);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+    }
+  });
+
   it("supports idempotent remote node removal", () => {
     const nodeId = `node-${randomUUID()}`;
     expect(removeRemoteNodeInfo(nodeId)).toBeUndefined();
