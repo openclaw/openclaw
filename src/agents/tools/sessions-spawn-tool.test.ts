@@ -556,7 +556,7 @@ describe("sessions_spawn tool", () => {
   it("rejects ACP spawns when inherited deny groups or patterns include command tools", async () => {
     registerAcpBackendForTest();
     const cases = [
-      { inheritedToolDenylist: ["group:fs"], expected: "requester denies read" },
+      { inheritedToolDenylist: ["group:fs"], expected: "requester denies apply_patch" },
       { inheritedToolDenylist: ["group:runtime"], expected: "requester denies exec" },
       { inheritedToolDenylist: ["exec*"], expected: "requester denies exec" },
       { inheritedToolDenylist: ["*"], expected: "requester denies apply_patch" },
