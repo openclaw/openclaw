@@ -32,6 +32,73 @@ const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
 );
 
+// Per-process limit on simultaneous Telegram bot setup. createTelegramBot()
+// does an HTTPS getMe handshake to api.telegram.org; on fleets with many
+// accounts a restart burst stacks TLS handshakes on the event loop and
+// produces 7s+ event-loop freeze traces (see freeze dumps 2026-05-12). Two
+// concurrent handshakes is enough to keep throughput up without saturating
+// the loop. Inline semaphore — intentionally no new dependency.
+const TELEGRAM_BOT_SETUP_CONCURRENCY = 2;
+
+let telegramBotSetupInFlight = 0;
+const telegramBotSetupWaiters: Array<() => void> = [];
+
+async function acquireTelegramBotSetupSlot(abortSignal?: AbortSignal): Promise<void> {
+  if (telegramBotSetupInFlight < TELEGRAM_BOT_SETUP_CONCURRENCY) {
+    telegramBotSetupInFlight += 1;
+    return;
+  }
+  if (abortSignal?.aborted) {
+    throw new Error("aborted while waiting for telegram bot setup slot");
+  }
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const grant = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (abortSignal) {
+        abortSignal.removeEventListener("abort", onAbort);
+      }
+      // Caller (releaseTelegramBotSetupSlot) hands the slot to us without
+      // decrementing in-flight, so the count stays at the cap.
+      resolve();
+    };
+    const onAbort = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      const idx = telegramBotSetupWaiters.indexOf(grant);
+      if (idx >= 0) {
+        telegramBotSetupWaiters.splice(idx, 1);
+      }
+      reject(new Error("aborted while waiting for telegram bot setup slot"));
+    };
+    telegramBotSetupWaiters.push(grant);
+    if (abortSignal) {
+      abortSignal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+function releaseTelegramBotSetupSlot(): void {
+  const waiter = telegramBotSetupWaiters.shift();
+  if (waiter) {
+    // Hand the in-flight slot to the next waiter without decrementing.
+    waiter();
+    return;
+  }
+  telegramBotSetupInFlight = Math.max(0, telegramBotSetupInFlight - 1);
+}
+
+/** Test-only: reset the per-process semaphore between test cases. */
+export function __resetTelegramBotSetupSemaphoreForTests(): void {
+  telegramBotSetupInFlight = 0;
+  telegramBotSetupWaiters.length = 0;
+}
+
 type TelegramBot = ReturnType<typeof createTelegramBot>;
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
@@ -178,6 +245,16 @@ export class TelegramPollingSession {
   }
 
   async #createPollingBot(): Promise<TelegramBot | undefined> {
+    // Per-process TLS handshake throttle. createTelegramBot performs the
+    // getMe handshake to api.telegram.org synchronously; uncapped fleet
+    // restarts produce 7s+ event-loop freezes (see freeze dumps 2026-05-12).
+    let slotAcquired = false;
+    try {
+      await acquireTelegramBotSetupSlot(this.opts.abortSignal);
+      slotAcquired = true;
+    } catch {
+      return undefined;
+    }
     const fetchAbortController = new AbortController();
     this.#activeFetchAbort = fetchAbortController;
     const telegramTransport = this.#transportState.acquireForNextCycle();
@@ -203,6 +280,10 @@ export class TelegramPollingSession {
         this.#activeFetchAbort = undefined;
       }
       return undefined;
+    } finally {
+      if (slotAcquired) {
+        releaseTelegramBotSetupSlot();
+      }
     }
   }
 
