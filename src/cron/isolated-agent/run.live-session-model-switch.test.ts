@@ -178,10 +178,8 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(result.status).toBe("error");
     expect(String(result.error)).toContain("transient network error");
     expect(upsertSessionEntryMock).toHaveBeenCalled();
-    expect(cronSession.sessionEntry).toMatchObject({
-      model: "claude-sonnet-4-6",
-      modelProvider: "anthropic",
-    });
+    expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
 
   it("retries with switched auth profile state from LiveSessionModelSwitchError", async () => {
@@ -227,11 +225,11 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
 
     expect(result.status).toBe("ok");
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
-    const retryParams = requireEmbeddedAgentCall(1);
-    expect(retryParams.provider).toBe("anthropic");
-    expect(retryParams.model).toBe("claude-sonnet-4-6");
-    expect(retryParams.authProfileId).toBe("profile-b");
-    expect(retryParams.authProfileIdSource).toBe("user");
+    const retryParams = runEmbeddedPiAgentMock.mock.calls[1]?.[0];
+    expect(retryParams?.provider).toBe("anthropic");
+    expect(retryParams?.model).toBe("claude-sonnet-4-6");
+    expect(retryParams?.authProfileId).toBe("profile-b");
+    expect(retryParams?.authProfileIdSource).toBe("user");
     expect(cronSession.sessionEntry.authProfileOverride).toBe("profile-b");
     expect(cronSession.sessionEntry.authProfileOverrideSource).toBe("user");
   });
