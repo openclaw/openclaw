@@ -1,3 +1,5 @@
+import type { MemorySessionTranscriptScope } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+
 export function shouldSyncSessionsForReindex(params: {
   hasSessionSource: boolean;
   sessionsDirty: boolean;
@@ -5,18 +7,14 @@ export function shouldSyncSessionsForReindex(params: {
   sync?: {
     reason?: string;
     force?: boolean;
-    sessionTranscripts?: string[];
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
   };
   needsFullReindex?: boolean;
 }): boolean {
   if (!params.hasSessionSource) {
     return false;
   }
-  if (
-    params.sync?.sessionTranscripts?.some(
-      (sessionTranscript) => sessionTranscript.trim().length > 0,
-    )
-  ) {
+  if (params.sync?.sessionTranscriptScopes?.some((scope) => scope.sessionId.trim().length > 0)) {
     return true;
   }
   if (params.sync?.force) {

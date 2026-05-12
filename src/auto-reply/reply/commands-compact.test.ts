@@ -9,10 +9,6 @@ import type { HandleCommandsParams } from "./commands-types.js";
 vi.mock("./commands-compact.runtime.js", () => ({
   abortEmbeddedPiRun: vi.fn(),
   compactEmbeddedPiSession: vi.fn(),
-  createSqliteSessionTranscriptLocator: vi.fn(
-    ({ agentId, sessionId }: { agentId: string; sessionId: string }) =>
-      `sqlite-transcript://${agentId}/${sessionId}`,
-  ),
   enqueueSystemEvent: vi.fn(),
   formatContextUsageShort: vi.fn(() => "Context 12.1k"),
   formatTokenCount: vi.fn((value: number) => `${value}`),
@@ -194,19 +190,11 @@ describe("handleCompactCommand", () => {
       compacted: false,
     });
     resolveSessionAgentIdMock.mockReturnValue("target");
-    const cfg = {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: {},
-    } as OpenClawConfig;
+    const cfg = { commands: { text: true }, channels: { whatsapp: { allowFrom: ["*"] } } };
 
     await handleCompactCommand(
       {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          session: {},
-        } as OpenClawConfig),
+        ...buildCompactParams("/compact", cfg as OpenClawConfig),
         agentId: "main",
         sessionKey: "agent:target:whatsapp:direct:12345",
         sessionEntry: {
@@ -221,9 +209,9 @@ describe("handleCompactCommand", () => {
     const resolveCall = requireResolveSessionAgentIdCall();
     expect(resolveCall.sessionKey).toBe("agent:target:whatsapp:direct:12345");
     expect(resolveCall.config).toBe(cfg);
-    const compactCall = requireCompactEmbeddedPiSessionCall();
-    expect(compactCall.agentId).toBe("target");
-    expect(compactCall.sessionId).toBe("session-1");
+    const call = requireCompactEmbeddedPiSessionCall();
+    expect(call.agentId).toBe("target");
+    expect(call.sessionId).toBe("session-1");
   });
 
   it("uses the canonical session agent directory for compaction runtime inputs", async () => {

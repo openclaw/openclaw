@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
@@ -45,9 +45,14 @@ import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
 
 const MATRIX_IDB_SNAPSHOT_NAMESPACE = "idb-snapshots";
+const MATRIX_RECOVERY_KEY_NAMESPACE = "recovery-key";
 
 function resolveMatrixIdbSnapshotKey(storageKey: string): string {
   return createHash("sha256").update(path.resolve(storageKey), "utf8").digest("hex").slice(0, 32);
+}
+
+function resolveMatrixRecoveryKeyStateKey(storageKey: string): string {
+  return createHash("sha256").update(storageKey.trim(), "utf8").digest("hex").slice(0, 32);
 }
 
 type MatrixQaStorageMetadata = {
@@ -64,6 +69,11 @@ const matrixStorageMetaStore = createPluginStateKeyedStore<MatrixQaStorageMetada
 const matrixIdbSnapshotStore = createPluginBlobStore<Record<string, unknown>>("matrix", {
   namespace: MATRIX_IDB_SNAPSHOT_NAMESPACE,
   maxEntries: 1_000,
+});
+
+const matrixRecoveryKeyStore = createPluginStateKeyedStore<Record<string, unknown>>("matrix", {
+  namespace: MATRIX_RECOVERY_KEY_NAMESPACE,
+  maxEntries: 10_000,
 });
 
 async function withMatrixQaCliStateDir<T>(stateDir: string, action: () => Promise<T>): Promise<T> {
@@ -567,25 +577,15 @@ async function mutateMatrixQaCliStateLoss(params: {
   userId: string;
 }) {
   const accountRoot = await findMatrixQaCliAccountRoot(params);
-  const recoveryKeyPath = path.join(accountRoot, "recovery-key.json");
-  const preservedRecoveryKeyPath = path.join(
-    params.runtime.stateDir,
-    "preserved-recovery-key.json",
-  );
-  let recoveryKeyPreserved = false;
-  if (params.preserveRecoveryKey) {
-    await copyFile(recoveryKeyPath, preservedRecoveryKeyPath);
-    await chmod(preservedRecoveryKeyPath, 0o600).catch(() => undefined);
-    recoveryKeyPreserved = true;
-  }
   await rm(accountRoot, { force: true, recursive: true });
-  if (params.preserveRecoveryKey) {
-    await mkdir(accountRoot, { recursive: true });
-    await copyFile(preservedRecoveryKeyPath, recoveryKeyPath);
+  if (!params.preserveRecoveryKey) {
+    await withMatrixQaCliStateDir(params.runtime.stateDir, async () => {
+      await matrixRecoveryKeyStore.delete(resolveMatrixRecoveryKeyStateKey(accountRoot));
+    });
   }
   return {
     accountRoot,
-    recoveryKeyPreserved,
+    recoveryKeyPreserved: params.preserveRecoveryKey,
   };
 }
 
@@ -791,7 +791,7 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
       timeoutMs: context.timeoutMs,
     });
     if (status.payload.recoveryKeyStored !== true) {
-      throw new Error("stored recovery-key restore did not keep recovery-key.json usable on disk");
+      throw new Error("stored recovery-key restore did not keep SQLite recovery key usable");
     }
     return {
       artifacts: {
@@ -803,7 +803,7 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
         seededEventId: setup.seededEventId,
       },
       details: [
-        "Matrix crypto/runtime state was deleted while recovery-key.json survived",
+        "Matrix crypto/runtime state was deleted while the SQLite recovery key survived",
         `account root: ${mutation.accountRoot}`,
         `restore imported/total: ${restored.payload.imported ?? 0}/${restored.payload.total ?? 0}`,
         "restore command supplied recovery key: no",

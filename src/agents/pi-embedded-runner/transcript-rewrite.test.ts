@@ -1,16 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   CURRENT_SESSION_VERSION,
-  type SessionManager,
   type SessionEntry,
   type SessionHeader,
+  type SessionManager,
 } from "../transcript/session-transcript-contract.js";
 import {
   readTranscriptStateForSession,

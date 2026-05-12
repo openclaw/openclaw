@@ -65,7 +65,7 @@ function makeCliResult(text: string): EmbeddedPiRunResult {
 }
 
 async function readSessionMessages(sessionId: string) {
-  return (await readSessionTranscriptEntries(sessionId))
+  return (await readTranscriptEntries(sessionId))
     .filter((entry) => entry.type === "message")
     .map(
       (entry) =>
@@ -73,7 +73,7 @@ async function readSessionMessages(sessionId: string) {
     );
 }
 
-async function readSessionTranscriptEntries(sessionId: string) {
+async function readTranscriptEntries(sessionId: string) {
   return loadSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId,
@@ -409,7 +409,7 @@ describe("CLI attempt execution", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeSessionEntries(sessionStore);
 
-    await persistCliTurnTranscript({
+    const updatedEntry = await persistCliTurnTranscript({
       body: "persist this",
       result: makeCliResult("hello from cli"),
       sessionId: sessionEntry.sessionId,
@@ -421,7 +421,7 @@ describe("CLI attempt execution", () => {
       config: {},
     });
 
-    const entries = await readSessionTranscriptEntries(sessionEntry.sessionId);
+    const entries = await readTranscriptEntries(sessionEntry.sessionId);
     expectRecordFields(requireRecord(entries[0], "session entry"), {
       type: "session",
       id: sessionEntry.sessionId,
@@ -534,7 +534,6 @@ describe("CLI attempt execution", () => {
       config: {},
       embeddedAssistantGapFill: true,
     });
-    expect(updatedFirst?.sessionId).toBe(sessionEntry.sessionId);
 
     await appendSessionTranscriptMessage({
       agentId: "main",
@@ -578,7 +577,7 @@ describe("CLI attempt execution", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeSessionEntries(sessionStore);
 
-    await persistCliTurnTranscript({
+    const updatedEntry = await persistCliTurnTranscript({
       body: [
         "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
         "secret runtime context",

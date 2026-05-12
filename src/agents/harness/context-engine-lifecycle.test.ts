@@ -1,4 +1,4 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
@@ -43,6 +43,7 @@ const sessionParams = {
   sessionIdUsed: "session-1",
   sessionId: "session-1",
   sessionKey: "agent:main",
+  transcriptScope: { agentId: "main", sessionId: "session-1" },
 };
 
 describe("harness context engine lifecycle", () => {
@@ -83,7 +84,7 @@ describe("harness context engine lifecycle", () => {
       yieldAborted: false,
       sessionIdUsed: sessionParams.sessionIdUsed,
       sessionKey: sessionParams.sessionKey,
-      transcriptScope: { agentId: "main", sessionId: sessionParams.sessionId },
+      transcriptScope: sessionParams.transcriptScope,
       messagesSnapshot: [
         beforePromptUser,
         beforePromptRuntimeContext,
@@ -128,7 +129,7 @@ describe("harness context engine lifecycle", () => {
       yieldAborted: false,
       sessionIdUsed: sessionParams.sessionIdUsed,
       sessionKey: sessionParams.sessionKey,
-      transcriptScope: { agentId: "main", sessionId: sessionParams.sessionId },
+      transcriptScope: sessionParams.transcriptScope,
       messagesSnapshot: [
         beforePromptUser,
         beforePromptRuntimeContext,

@@ -32,5 +32,4 @@ export {
   listSessionEntries,
   patchSessionEntry,
   upsertSessionEntry,
-  resolveSessionFilePath,
 } from "./config/sessions.js";

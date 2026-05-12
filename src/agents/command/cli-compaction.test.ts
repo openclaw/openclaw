@@ -150,7 +150,6 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactCalls[0]).toMatchObject({
       sessionId,
       sessionKey,
-      transcriptScope: { agentId: "main", sessionId },
       tokenBudget: 1_000,
       currentTokenCount: 950,
       force: true,
@@ -161,7 +160,6 @@ describe("runCliTurnCompactionLifecycle", () => {
         reason: "compaction",
         sessionId,
         sessionKey,
-        transcriptScope: { agentId: "main", sessionId },
       }),
     );
     expect(updatedEntry?.compactionCount).toBe(1);

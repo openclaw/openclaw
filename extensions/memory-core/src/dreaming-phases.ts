@@ -725,7 +725,7 @@ async function collectSessionIngestionBatches(params: {
   const nextSeenMessages: Record<string, string[]> = { ...params.state.seenMessages };
   let changed = false;
 
-  const sessionTranscripts: Array<{
+  const sessionScopes: Array<{
     agentId: string;
     scope: { agentId: string; sessionId: string };
     transcriptKey: string;
@@ -733,7 +733,7 @@ async function collectSessionIngestionBatches(params: {
   for (const agentId of agentIds) {
     const scopes = await listSessionTranscriptScopesForAgent(agentId);
     for (const scope of scopes) {
-      sessionTranscripts.push({
+      sessionScopes.push({
         agentId,
         scope,
         transcriptKey: sessionTranscriptKeyForScope(scope),
@@ -741,7 +741,7 @@ async function collectSessionIngestionBatches(params: {
     }
   }
 
-  const sortedFiles = sessionTranscripts.toSorted((a, b) => {
+  const sortedScopes = sessionScopes.toSorted((a, b) => {
     if (a.agentId !== b.agentId) {
       return a.agentId.localeCompare(b.agentId);
     }
@@ -754,17 +754,17 @@ async function collectSessionIngestionBatches(params: {
     SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
     Math.max(
       SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
-      Math.ceil(totalCap / Math.max(1, sortedFiles.length)),
+      Math.ceil(totalCap / Math.max(1, sortedScopes.length)),
     ),
   );
 
-  for (const file of sortedFiles) {
+  for (const transcript of sortedScopes) {
     if (remaining <= 0) {
       break;
     }
-    const stateKey = buildSessionStateKey(file.agentId, file.transcriptKey);
+    const stateKey = buildSessionStateKey(transcript.agentId, transcript.transcriptKey);
     const previous = params.state.files[stateKey];
-    const entry = await buildSessionTranscriptEntry(file.scope);
+    const entry = await buildSessionTranscriptEntry(transcript.scope);
     if (!entry) {
       if (previous) {
         changed = true;
@@ -820,7 +820,7 @@ async function collectSessionIngestionBatches(params: {
       continue;
     }
 
-    const sessionScope = buildSessionScopeKey(file.agentId, file.transcriptKey);
+    const sessionScope = buildSessionScopeKey(transcript.agentId, transcript.transcriptKey);
     const previousSeen = nextSeenMessages[sessionScope] ?? [];
     let seenSet = new Set(previousSeen);
     const newSeenHashes: string[] = [];
@@ -865,8 +865,8 @@ async function collectSessionIngestionBatches(params: {
         continue;
       }
       const rendered = buildSessionRenderedLine({
-        agentId: file.agentId,
-        transcriptKey: file.transcriptKey,
+        agentId: transcript.agentId,
+        transcriptKey: transcript.transcriptKey,
         lineNumber,
         snippet,
       });

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   loadSqliteSessionTranscriptEvents,
@@ -120,7 +120,9 @@ function compactionEntry(params: {
   };
 }
 
-async function seedSession(entries: SessionEntry[]): Promise<{ sessionId: string }> {
+async function seedSession(entries: SessionEntry[]): Promise<{
+  sessionId: string;
+}> {
   const dir = await makeTmpDir();
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   const sessionId = `manual-compaction-${++sessionCounter}`;

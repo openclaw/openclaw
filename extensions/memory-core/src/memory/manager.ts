@@ -17,6 +17,7 @@ import {
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
   type MemorySearchResult,
+  type MemorySessionTranscriptScope,
   type MemorySource,
   type MemorySyncProgressUpdate,
   MEMORY_INDEX_TABLE_NAMES,
@@ -130,24 +131,24 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     available: boolean;
     loadError?: string;
   };
-  protected vectorReady: Promise<boolean> | null = null;
-  protected watcher: FSWatcher | null = null;
-  protected watchTimer: NodeJS.Timeout | null = null;
-  protected sessionWatchTimer: NodeJS.Timeout | null = null;
-  protected sessionUnsubscribe: (() => void) | null = null;
-  protected intervalTimer: NodeJS.Timeout | null = null;
-  protected closed = false;
-  protected dirty = false;
-  protected sessionsDirty = false;
-  protected dirtySessionTranscripts = new Set<string>();
-  protected pendingSessionTranscripts = new Set<string>();
-  protected sessionDeltas = new Map<
+  protected override vectorReady: Promise<boolean> | null = null;
+  protected override watcher: FSWatcher | null = null;
+  protected override watchTimer: NodeJS.Timeout | null = null;
+  protected override sessionWatchTimer: NodeJS.Timeout | null = null;
+  protected override sessionUnsubscribe: (() => void) | null = null;
+  protected override intervalTimer: NodeJS.Timeout | null = null;
+  protected override closed = false;
+  protected override dirty = false;
+  protected override sessionsDirty = false;
+  protected override dirtySessionTranscripts = new Set<string>();
+  protected override pendingSessionTranscripts = new Set<string>();
+  protected override sessionDeltas = new Map<
     string,
     { lastSize: number; lastMessages: number; pendingBytes: number; pendingMessages: number }
   >();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
-  private queuedSessionTranscripts = new Set<string>();
+  private queuedSessionTranscriptScopes = new Map<string, MemorySessionTranscriptScope>();
   private queuedSessionSync: Promise<void> | null = null;
   private readonlyRecoveryAttempts = 0;
   private readonlyRecoverySuccesses = 0;
@@ -633,7 +634,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   async sync(params?: {
     reason?: string;
     force?: boolean;
-    sessionTranscripts?: string[];
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     if (this.closed) {
@@ -641,10 +642,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     await this.ensureProviderInitialized();
     if (this.syncing) {
-      if (
-        params?.sessionTranscripts?.some((sessionTranscript) => sessionTranscript.trim().length > 0)
-      ) {
-        return this.enqueueTargetedSessionSync(params.sessionTranscripts);
+      if (params?.sessionTranscriptScopes?.some((scope) => scope.sessionId.trim().length > 0)) {
+        return this.enqueueTargetedSessionSync(params.sessionTranscriptScopes);
       }
       return this.syncing;
     }
@@ -654,26 +653,28 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return this.syncing ?? Promise.resolve();
   }
 
-  private enqueueTargetedSessionSync(sessionTranscripts?: string[]): Promise<void> {
+  private enqueueTargetedSessionSync(
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[],
+  ): Promise<void> {
     return enqueueMemoryTargetedSessionSync(
       {
         isClosed: () => this.closed,
         getSyncing: () => this.syncing,
-        getQueuedSessionTranscripts: () => this.queuedSessionTranscripts,
+        getQueuedSessionTranscriptScopes: () => this.queuedSessionTranscriptScopes,
         getQueuedSessionSync: () => this.queuedSessionSync,
         setQueuedSessionSync: (value) => {
           this.queuedSessionSync = value;
         },
         sync: async (params) => await this.sync(params),
       },
-      sessionTranscripts,
+      sessionTranscriptScopes,
     );
   }
 
   private async runSyncWithReadonlyRecovery(params?: {
     reason?: string;
     force?: boolean;
-    sessionTranscripts?: string[];
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     const getClosed = () => this.closed;

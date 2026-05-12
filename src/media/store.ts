@@ -721,7 +721,7 @@ export type ReadMediaBufferResult = {
 
 export async function readMediaBuffer(
   id: string,
-  subdir = "inbound",
+  subdir: string = "inbound",
   maxBytes = MAX_BYTES,
 ): Promise<ReadMediaBufferResult> {
   const safeSubdir = resolveMediaSubdir(subdir, "readMediaBuffer");

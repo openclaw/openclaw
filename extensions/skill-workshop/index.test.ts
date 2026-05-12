@@ -717,10 +717,6 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
-          session: {
-            resolveSessionFilePath: (sessionId: string) =>
-              path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`),
-          },
           runEmbeddedPiAgent,
         },
         state: {
@@ -781,10 +777,6 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
-          session: {
-            resolveSessionFilePath: (sessionId: string) =>
-              path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`),
-          },
           runEmbeddedPiAgent,
         },
         state: {
@@ -855,10 +847,6 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
-          session: {
-            resolveSessionFilePath: (sessionId: string) =>
-              path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`),
-          },
           runEmbeddedPiAgent,
         },
         state: {
@@ -918,10 +906,6 @@ describe("skill-workshop", () => {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentWorkspaceDir: () => workspaceDir,
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
-          session: {
-            resolveSessionFilePath: (sessionId: string) =>
-              path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`),
-          },
           runEmbeddedPiAgent,
         },
         state: {

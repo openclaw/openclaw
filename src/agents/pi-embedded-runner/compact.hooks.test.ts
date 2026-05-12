@@ -1,4 +1,4 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyExtraParamsToAgentMock,
@@ -34,6 +34,7 @@ let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.j
 
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
+const TEST_ROTATED_SESSION_ID = "rotated-session";
 const TEST_WORKSPACE_DIR = "/tmp/openclaw-compact-hooks-workspace";
 const TEST_CUSTOM_INSTRUCTIONS = "focus on decisions";
 type SessionHookEvent = {
@@ -765,7 +766,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     getMemorySearchManagerMock.mockResolvedValue({ manager: { sync } });
     rotateTranscriptAfterCompactionMock.mockResolvedValueOnce({
       rotated: true,
-      sessionId: "rotated-session",
+      sessionId: TEST_ROTATED_SESSION_ID,
       leafId: "rotated-leaf",
     });
 
@@ -779,6 +780,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
             defaults: {
               compaction: {
                 rotateAfterCompaction: true,
+                truncateAfterCompaction: true,
                 postIndexSync: "await",
               },
             },
@@ -790,13 +792,13 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       expect(listener).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({
         agentId: "main",
-        sessionId: "rotated-session",
+        sessionId: TEST_ROTATED_SESSION_ID,
         sessionKey: TEST_SESSION_KEY,
       });
       expect(sync).toHaveBeenCalledTimes(1);
       expect(sync).toHaveBeenCalledWith({
         reason: "post-compaction",
-        sessionTranscriptScopes: [{ agentId: "main", sessionId: "rotated-session" }],
+        sessionTranscriptScopes: [{ agentId: "main", sessionId: TEST_ROTATED_SESSION_ID }],
       });
     } finally {
       cleanup();
@@ -1219,7 +1221,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
 
   it("passes the rotated session id to engine-owned after_compaction hooks", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
-    const rotatedSessionId = "rotated-session";
+    const rotatedSessionId = TEST_ROTATED_SESSION_ID;
     contextEngineCompactMock.mockResolvedValue({
       ok: true,
       compacted: true,
@@ -1262,7 +1264,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       expect(listener).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({
         agentId: "main",
-        sessionId: "session-1",
+        sessionId: TEST_SESSION_ID,
         sessionKey: TEST_SESSION_KEY,
       });
       expect(sync).toHaveBeenCalledWith({
@@ -1291,6 +1293,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expect(maintain).toHaveBeenCalledWith(
       expect.objectContaining({
+        sessionId: TEST_SESSION_ID,
         sessionKey: TEST_SESSION_KEY,
         transcriptScope: { agentId: "main", sessionId: TEST_SESSION_ID },
         runtimeContext: expect.objectContaining({
@@ -1453,7 +1456,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
           agents: {
             defaults: {
               compaction: {
-                rotateAfterCompaction: true,
+                truncateAfterCompaction: true,
               },
             },
           },
@@ -1500,7 +1503,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
           agents: {
             defaults: {
               compaction: {
-                rotateAfterCompaction: true,
+                truncateAfterCompaction: true,
               },
             },
           },
