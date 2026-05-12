@@ -519,16 +519,28 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Codex side answer." });
     expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
-    expect(codexSideQuestionMock.mock.calls[0]?.[0]).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.5",
-      question: DEFAULT_QUESTION,
-      sessionId: "session-1",
-      sessionKey: DEFAULT_SESSION_KEY,
-      agentId: "main",
-      workspaceDir: "/tmp/workspace",
-      authProfileId: "openai-codex:work",
-    });
+    const [[sideQuestionParams]] = codexSideQuestionMock.mock.calls as unknown as Array<
+      [
+        {
+          provider?: string;
+          model?: string;
+          question?: string;
+          sessionId?: string;
+          sessionKey?: string;
+          agentId?: string;
+          workspaceDir?: string;
+          authProfileId?: string;
+        },
+      ]
+    >;
+    expect(sideQuestionParams.provider).toBe("openai");
+    expect(sideQuestionParams.model).toBe("gpt-5.5");
+    expect(sideQuestionParams.question).toBe(DEFAULT_QUESTION);
+    expect(sideQuestionParams.sessionId).toBe("session-1");
+    expect(sideQuestionParams.sessionKey).toBe(DEFAULT_SESSION_KEY);
+    expect(sideQuestionParams.agentId).toBe("main");
+    expect(sideQuestionParams.workspaceDir).toBe("/tmp/workspace");
+    expect(sideQuestionParams.authProfileId).toBe("openai-codex:work");
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
