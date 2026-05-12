@@ -253,7 +253,12 @@ export async function monitorWebChannel(
   process.once("SIGINT", handleSigint);
 
   const transportTimeoutMs = tuning.transportTimeoutMs ?? DEFAULT_TRANSPORT_TIMEOUT_MS;
-  const messageTimeoutMs = tuning.messageTimeoutMs ?? 30 * 60 * 1000;
+  // The watchdog forces a reconnect when no inbound message has arrived in
+  // this window. Once the connection layer sends a presence keepalive
+  // (session.ts), the WS itself stays healthy and the 30-min default fires
+  // spuriously on personal accounts that go hours without traffic. 4h keeps
+  // the safety net for genuinely dead connections without crying wolf.
+  const messageTimeoutMs = tuning.messageTimeoutMs ?? 4 * 60 * 60 * 1000;
   const watchdogCheckMs = tuning.watchdogCheckMs ?? 60 * 1000;
   const controller = new WhatsAppConnectionController({
     accountId: account.accountId,
