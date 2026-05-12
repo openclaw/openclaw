@@ -1743,15 +1743,24 @@
   }
 
   function decodeMarkdownHrefEntities(text) {
-    return text.replace(/&(?:#(\d+)|#x([\da-f]+)|colon);/gi, (_match, decimal, hex) => {
-      if (decimal) {
-        return decodeMarkdownHrefCodePoint(decimal, 10);
-      }
-      if (hex) {
-        return decodeMarkdownHrefCodePoint(hex, 16);
-      }
-      return ":";
-    });
+    return text.replace(
+      /&(?:#(\d+)|#x([\da-f]+)|(colon|tab|newline));/gi,
+      (_match, decimal, hex, named) => {
+        if (decimal) {
+          return decodeMarkdownHrefCodePoint(decimal, 10);
+        }
+        if (hex) {
+          return decodeMarkdownHrefCodePoint(hex, 16);
+        }
+        if (named?.toLowerCase() === "tab") {
+          return "\t";
+        }
+        if (named?.toLowerCase() === "newline") {
+          return "\n";
+        }
+        return ":";
+      },
+    );
   }
 
   function getMarkdownHrefProtocol(href) {

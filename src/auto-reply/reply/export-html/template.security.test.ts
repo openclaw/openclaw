@@ -428,6 +428,7 @@ describe("export html security hardening", () => {
             content: [
               "[script](javascript:alert(1))",
               "[encoded](java&#x73;cript&colon;alert(2))",
+              "[split](java&Tab;script&colon;alert(3))",
               '[safe](https://example.com/report "report")',
             ].join("\n"),
           },
@@ -482,6 +483,7 @@ describe("export html security hardening", () => {
     expect(messages.querySelector("a")?.getAttribute("title")).toBe("report");
     expect(messages.textContent).toContain("script");
     expect(messages.textContent).toContain("encoded");
+    expect(messages.textContent).toContain("split");
     expect(messages.textContent).toContain("data");
     expect(hrefs.some((href) => href?.startsWith("javascript:") || href?.startsWith("data:"))).toBe(
       false,
