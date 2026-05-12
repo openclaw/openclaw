@@ -6,7 +6,6 @@ import {
 } from "openclaw/plugin-sdk/channel-message";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
@@ -92,17 +91,6 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
     (typeof result.message_id === "number" ? String(result.message_id) : null) ||
     (typeof result.id === "number" ? String(result.id) : null);
   return raw ? raw.trim() : null;
-}
-
-function resolveDeliveredIMessageText(text: string, mediaContentType?: string): string {
-  if (text.trim()) {
-    return text;
-  }
-  const kind = kindFromMime(mediaContentType ?? undefined);
-  if (!kind) {
-    return text;
-  }
-  return kind === "image" ? "<media:image>" : `<media:${kind}>`;
 }
 
 function createIMessageSendReceipt(params: {
@@ -195,7 +183,6 @@ export async function sendMessageIMessage(
       readFile: opts.mediaReadFile,
     });
     filePath = resolved.path;
-    message = resolveDeliveredIMessageText(message, resolved.contentType ?? undefined);
   }
 
   if (!message.trim() && !filePath) {
