@@ -10,6 +10,7 @@ import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
 import {
   buildRuntimeTranscriptRecords,
   extractRuntimeFinalAssistantText,
+  isHeartbeatOnlyRuntimeTranscript,
   normalizeRuntimeTranscriptText,
   type RuntimeTranscriptRecord,
 } from "./runtime-transcript.js";
@@ -1142,7 +1143,7 @@ async function loadRuntimeParityTranscripts(params: {
     }
     try {
       const transcript = await fs.readFile(sessionFile, "utf8");
-      if (transcript.trim().length > 0) {
+      if (transcript.trim().length > 0 && !isHeartbeatOnlyRuntimeTranscript(transcript)) {
         transcripts.push(transcript.trimEnd());
       }
     } catch {

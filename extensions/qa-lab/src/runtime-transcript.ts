@@ -39,7 +39,7 @@ function normalizeToolCallId(value: unknown) {
   return readNonEmptyString(value);
 }
 
-function extractAssistantText(message: Record<string, unknown>) {
+function extractMessageText(message: Record<string, unknown>) {
   const rawContent = message.content;
   if (typeof rawContent === "string") {
     return rawContent.trim();
@@ -120,7 +120,7 @@ export function extractRuntimeFinalAssistantText(records: RuntimeTranscriptRecor
     if (record.role !== "assistant") {
       continue;
     }
-    const text = extractAssistantText(record.message);
+    const text = extractMessageText(record.message);
     if (text) {
       lastAssistantText = text;
     }
@@ -234,4 +234,23 @@ export function summarizeRuntimeTranscript(transcriptBytes: string): RuntimeTran
       toolCalls.some(isMessageSendCall) &&
       normalizeRuntimeTranscriptText(finalText).toLowerCase() === "sent.",
   };
+}
+
+export function isHeartbeatOnlyRuntimeTranscript(transcriptBytes: string) {
+  const records = buildRuntimeTranscriptRecords(transcriptBytes);
+  if (records.length === 0 || records.length > 2) {
+    return false;
+  }
+  if (extractRuntimeAssistantToolCalls(records).length > 0) {
+    return false;
+  }
+  const userText = records
+    .filter((record) => record.role === "user")
+    .map((record) => extractMessageText(record.message))
+    .join("\n");
+  if (!/\bHEARTBEAT\.md\b/iu.test(userText)) {
+    return false;
+  }
+  const finalText = normalizeRuntimeTranscriptText(extractRuntimeFinalAssistantText(records));
+  return !finalText || finalText === "HEARTBEAT_OK";
 }

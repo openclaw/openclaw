@@ -181,6 +181,72 @@ describe("runtime parity", () => {
     });
   });
 
+  it("ignores operational heartbeat-only sessions when capturing parity cells", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRootWithSessions({
+      sessions: {
+        "scenario-session": {
+          sessionId: "scenario-session",
+          sessionFile: "scenario-session.jsonl",
+          updatedAt: 1,
+        },
+        "heartbeat-session": {
+          sessionId: "heartbeat-session",
+          sessionFile: "heartbeat-session.jsonl",
+          updatedAt: 2,
+        },
+      },
+      transcripts: {
+        "scenario-session.jsonl": JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "SOAK-100-100" }],
+            usage: {
+              input: 10,
+              output: 5,
+              totalTokens: 15,
+            },
+          },
+        }),
+        "heartbeat-session.jsonl": [
+          JSON.stringify({ type: "session", id: "heartbeat-session" }),
+          JSON.stringify({
+            message: {
+              role: "user",
+              content:
+                "Read HEARTBEAT.md if it exists. If nothing needs attention, reply HEARTBEAT_OK.",
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "HEARTBEAT_OK" }],
+              usage: {
+                input: 100,
+                output: 100,
+                totalTokens: 200,
+              },
+            },
+          }),
+        ].join("\n"),
+      },
+    });
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: { tempRoot },
+      scenarioResult: { status: "pass" },
+      wallClockMs: 1,
+    });
+
+    expect(cell.finalText).toBe("SOAK-100-100");
+    expect(cell.usage).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+    });
+    expect(cell.transcriptBytes).not.toContain("HEARTBEAT_OK");
+  });
+
   it("classifies final-text-only differences as text-only", async () => {
     const result = await runRuntimeParityScenario({
       scenarioId: "text-only",

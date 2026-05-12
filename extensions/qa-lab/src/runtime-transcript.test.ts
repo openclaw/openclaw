@@ -3,6 +3,7 @@ import {
   buildRuntimeTranscriptRecords,
   extractRuntimeAssistantToolCalls,
   extractRuntimeFinalAssistantText,
+  isHeartbeatOnlyRuntimeTranscript,
   summarizeRuntimeTranscript,
 } from "./runtime-transcript.js";
 
@@ -62,5 +63,36 @@ describe("runtime transcript helper", () => {
     ].join("\n");
 
     expect(summarizeRuntimeTranscript(transcript).hasDirectReplySelfMessage).toBe(false);
+  });
+
+  it("identifies operational heartbeat-only transcripts", () => {
+    const transcript = [
+      JSON.stringify({ type: "session", id: "heartbeat-session" }),
+      JSON.stringify({
+        message: {
+          role: "user",
+          content:
+            "Read HEARTBEAT.md if it exists. If nothing needs attention, reply HEARTBEAT_OK.",
+        },
+      }),
+      JSON.stringify({
+        message: { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
+      }),
+    ].join("\n");
+
+    expect(isHeartbeatOnlyRuntimeTranscript(transcript)).toBe(true);
+  });
+
+  it("does not identify ordinary marker transcripts as heartbeat-only", () => {
+    const transcript = [
+      JSON.stringify({
+        message: { role: "user", content: "reply exactly `SOAK-100-100`" },
+      }),
+      JSON.stringify({
+        message: { role: "assistant", content: [{ type: "text", text: "SOAK-100-100" }] },
+      }),
+    ].join("\n");
+
+    expect(isHeartbeatOnlyRuntimeTranscript(transcript)).toBe(false);
   });
 });
