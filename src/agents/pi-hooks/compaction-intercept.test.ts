@@ -60,11 +60,15 @@ function captureHandler(): CompactionHandler {
   let handler: CompactionHandler | undefined;
   const api = {
     on: vi.fn((event: string, h: CompactionHandler) => {
-      if (event === "session_before_compact") handler = h;
+      if (event === "session_before_compact") {
+        handler = h;
+      }
     }),
   } as unknown as ExtensionAPI;
   compactionInterceptExtension(api);
-  if (!handler) throw new Error("intercept extension did not register a handler");
+  if (!handler) {
+    throw new Error("intercept extension did not register a handler");
+  }
   return handler;
 }
 
@@ -292,6 +296,75 @@ describe("compactionInterceptExtension", () => {
       const ctx = makeCtx(sm);
       await handler(makeEvent(), ctx);
       expect(captured?.sessionKey).toBe("agent:main:subagent:abc123");
+    } finally {
+      setCompactionInterceptRuntime(sm, null);
+    }
+  });
+
+  it("routes correctly for engines with BOTH ownsCompaction AND interceptsCompaction", async () => {
+    // Wave-B P1-4: the wave-A gate change made it possible for an engine
+    // to declare both flags. The factory-registration tests in extensions.test.ts
+    // assert the factory is added; this test asserts the handler ROUTES
+    // traffic correctly when such an engine is active — i.e. an SDK event
+    // for a both-flags engine results in a `{compaction}` return shape,
+    // not a fall-through.
+    const handler = captureHandler();
+    const sm = stubSessionManager();
+    const intercept = vi.fn(
+      async (): Promise<CompactionInterceptResult> => ({
+        handled: true,
+        summary: "owns-and-intercepts summary",
+        firstKeptEntryId: "entry-keep-me",
+        tokensBefore: 232_000,
+      }),
+    );
+    const engine = makeEngine(
+      {
+        id: "lcm",
+        name: "LCM",
+        ownsCompaction: true,
+        interceptsCompaction: true,
+      },
+      intercept,
+    );
+    setCompactionInterceptRuntime(sm, { contextEngine: engine });
+    try {
+      const ctx = makeCtx(sm);
+      const result = await handler(makeEvent(), ctx);
+      expect(intercept).toHaveBeenCalledOnce();
+      expect(result).toEqual({
+        compaction: {
+          summary: "owns-and-intercepts summary",
+          firstKeptEntryId: "entry-keep-me",
+          tokensBefore: 232_000,
+          details: undefined,
+        },
+      });
+    } finally {
+      setCompactionInterceptRuntime(sm, null);
+    }
+  });
+
+  it("trigger is undefined in the request (SDK does not currently expose explicit trigger)", async () => {
+    // Wave-B P1-1: inferTriggerFromEvent previously always returned
+    // "in-attempt-auto" — misleading for overflow-retry events.
+    // The post-wave-B contract: pass undefined and let engines treat
+    // absence as "host didn't disambiguate".
+    const handler = captureHandler();
+    const sm = stubSessionManager();
+    let captured: CompactionInterceptRequest | undefined;
+    const intercept = vi.fn(
+      async (req: CompactionInterceptRequest): Promise<CompactionInterceptResult> => {
+        captured = req;
+        return { handled: false, reason: "captured" };
+      },
+    );
+    const engine = makeEngine({ id: "lcm", name: "LCM", interceptsCompaction: true }, intercept);
+    setCompactionInterceptRuntime(sm, { contextEngine: engine });
+    try {
+      const ctx = makeCtx(sm);
+      await handler(makeEvent(), ctx);
+      expect(captured?.trigger).toBeUndefined();
     } finally {
       setCompactionInterceptRuntime(sm, null);
     }

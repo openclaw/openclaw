@@ -19,29 +19,36 @@ const log = createSubsystemLogger("compaction-intercept");
  *     active, the SDK's last-truthy-wins semantics let intercept override
  *     safeguard. When intercept returns `undefined` (handled:false or no
  *     engine), the safeguard's prior return (if any) is preserved and the
- *     SDK falls back as configured.
- *   - Skipped silently when no runtime is set (e.g. engine not resolved yet
- *     or engine does not advertise `info.interceptsCompaction`).
- *   - Skipped silently when `engine.interceptCompaction` is undefined (which
- *     should not happen if the engine correctly sets `info.interceptsCompaction`
- *     but we keep the defensive check).
- *   - Catches all thrown errors and falls back to the runtime's default path;
- *     the engine contract states `interceptCompaction` must not throw.
- *
- * This extension is a no-op for engines that fully own compaction
- * (`info.ownsCompaction === true`) — those engines bypass the
- * `session_before_compact` event entirely via the engine-owned compaction
- * dispatch path in `compact.queued.ts`.
+ *     SDK falls back as configured. NOTE: the SDK short-circuits on
+ *     `{cancel: true}` (auth failure paths from safeguard) and never calls
+ *     intercept in that case — engines cannot recover an auth-cancelled
+ *     compaction event from this hook.
+ *   - Registration is gated solely on `info.interceptsCompaction === true`
+ *     in `extensions.ts`. Engines may declare BOTH `interceptsCompaction`
+ *     and `ownsCompaction` because the two flags cover distinct
+ *     compaction lanes (SDK event vs openclaw queued lane) — see the
+ *     gate comment in `extensions.ts` and `pi-settings.ts`.
+ *   - Skipped silently when no runtime is set (engine not resolved yet)
+ *     or when `engine.interceptCompaction` is undefined (defensive guard
+ *     for engines that mis-declare the capability flag without
+ *     implementing the method).
+ *   - Catches all thrown errors and falls back to the runtime's default
+ *     path; the engine contract states `interceptCompaction` must not
+ *     throw across the call boundary.
  */
 export default function compactionInterceptExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const runtime = getCompactionInterceptRuntime(ctx.sessionManager);
     const engine = runtime?.contextEngine;
-    const interceptFn = engine?.interceptCompaction;
-    // Bind all three locals separately so TypeScript narrows each one in
-    // isolation — chained optional access on the property `engine.interceptCompaction`
-    // doesn't propagate to subsequent independent property reads on `engine`.
-    if (!runtime || !engine || !interceptFn) {
+    if (!engine || typeof engine.interceptCompaction !== "function") {
+      // Three skip cases collapse into one guard:
+      //   1. no runtime registered for this session (e.g. inner LLM session)
+      //   2. runtime present but no engine threaded through
+      //   3. engine present but doesn't implement interceptCompaction
+      // The `typeof === "function"` form narrows `engine.interceptCompaction`
+      // to a non-undefined function while satisfying the typescript/unbound-method
+      // lint rule (which would fire on a plain `!engine.interceptCompaction`
+      // truthy access).
       return undefined;
     }
 
@@ -66,11 +73,13 @@ export default function compactionInterceptExtension(api: ExtensionAPI): void {
     const currentTokenCount =
       typeof contextUsage?.tokens === "number" ? contextUsage.tokens : undefined;
 
-    // Resolve trigger from the SDK event when available. The pi-coding-agent
-    // event currently does not carry an explicit trigger field; engines may
-    // use the absence of trigger as "unknown source" and apply default policy.
-    // Reserved for forward compatibility with future SDK extensions.
-    const trigger = inferTriggerFromEvent(event);
+    // The pi-coding-agent SDK event does not currently carry an explicit
+    // trigger field — codex's in-attempt-auto, overflow-retry, and manual
+    // /compact all dispatch into the same `session_before_compact` handler
+    // chain. Engines that condition on `request.trigger` should treat
+    // `undefined` as "host couldn't disambiguate" and apply default cadence.
+    // When the SDK surface grows to expose a real trigger, plumb it here.
+    const trigger: CompactionInterceptRequest["trigger"] = undefined;
 
     const request: CompactionInterceptRequest = {
       sessionId,
@@ -86,7 +95,9 @@ export default function compactionInterceptExtension(api: ExtensionAPI): void {
 
     let result: CompactionInterceptResult;
     try {
-      result = await interceptFn.call(engine, request);
+      // Call on the engine directly (preserves `this` binding without
+      // triggering the unbound-method lint rule).
+      result = await engine.interceptCompaction(request);
     } catch (error) {
       log.warn(
         `[compaction-intercept] engine.interceptCompaction threw — falling back to default compaction path. ${String(error)}`,
@@ -94,8 +105,8 @@ export default function compactionInterceptExtension(api: ExtensionAPI): void {
       return undefined;
     }
 
-    if (!result || result.handled !== true) {
-      if (result && result.handled === false) {
+    if (!result || !result.handled) {
+      if (result && !result.handled) {
         log.debug(`[compaction-intercept] engine declined intercept: ${result.reason}`);
       }
       return undefined;
@@ -110,19 +121,4 @@ export default function compactionInterceptExtension(api: ExtensionAPI): void {
       },
     };
   });
-}
-
-/**
- * Best-effort trigger inference from the SDK event. The current
- * pi-coding-agent event surface does not carry an explicit trigger; the
- * presence of a `previousSummary` indicates a redistill / re-compact while
- * its absence indicates a fresh-compact. Engines may use this signal for
- * cadence routing — overflow/in-attempt-auto/manual all collapse to
- * `"in-attempt-auto"` from the openclaw side until the SDK surface grows.
- */
-function inferTriggerFromEvent(
-  event: { preparation?: { previousSummary?: string } } | undefined,
-): "in-attempt-auto" | "overflow" | "timeout" | "manual" | undefined {
-  if (!event || !event.preparation) return undefined;
-  return "in-attempt-auto";
 }
