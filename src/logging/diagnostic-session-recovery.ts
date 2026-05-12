@@ -16,6 +16,7 @@ export type DiagnosticSessionRecoverySkipReason =
   | "stale_session_state";
 
 export type DiagnosticSessionRecoveryNoopReason = "no_active_work";
+export type DiagnosticSessionRecoveryReleaseReason = "recoverable_stale_lane";
 
 export type StuckSessionRecoveryRequest = {
   sessionId?: string;
@@ -46,7 +47,9 @@ export type StuckSessionRecoveryOutcome =
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "released";
       action: "release_lane";
+      reason?: DiagnosticSessionRecoveryReleaseReason;
       released: number;
+      queuedCount?: number;
     })
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "skipped";

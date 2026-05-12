@@ -100,6 +100,7 @@ export async function recoverStuckDiagnosticSession(
     let aborted = false;
     let drained = true;
     let forceCleared = false;
+    let laneSnapshot: ReturnType<typeof getCommandLaneSnapshot> | undefined;
 
     if (activeSessionId) {
       if (params.allowActiveAbort !== true) {
@@ -145,7 +146,7 @@ export async function recoverStuckDiagnosticSession(
     }
 
     if (!activeSessionId && sessionLane) {
-      const laneSnapshot = getCommandLaneSnapshot(sessionLane);
+      laneSnapshot = getCommandLaneSnapshot(sessionLane);
       if (laneSnapshot.activeCount > 0) {
         const outcome: StuckSessionRecoveryOutcome = {
           status: "skipped",
@@ -164,16 +165,30 @@ export async function recoverStuckDiagnosticSession(
 
     const released =
       sessionLane && (!activeSessionId || !aborted || !drained) ? resetCommandLane(sessionLane) : 0;
+    const queuedCount = laneSnapshot?.queuedCount ?? 0;
+    const diagnosticQueueDepth = params.queueDepth ?? 0;
+    const recoverableStaleLane =
+      !activeSessionId &&
+      sessionLane !== null &&
+      released <= 0 &&
+      (queuedCount > 0 || diagnosticQueueDepth > 0);
 
-    if (aborted || released > 0) {
+    if (aborted || released > 0 || recoverableStaleLane) {
       const action = aborted ? "abort_embedded_run" : "release_lane";
+      const effectiveReleased = recoverableStaleLane
+        ? Math.max(1, released, queuedCount, diagnosticQueueDepth)
+        : released;
       const stoppedFields = formatStoppedCronSessionDiagnosticFields(
         resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),
       );
       diag.warn(
         `stuck session recovery: sessionId=${params.sessionId ?? activeSessionId ?? "unknown"} sessionKey=${
           params.sessionKey ?? "unknown"
-        } age=${Math.round(params.ageMs / 1000)}s action=${action} aborted=${aborted} drained=${drained} released=${released}${
+        } age=${Math.round(params.ageMs / 1000)}s action=${action}${
+          recoverableStaleLane ? " reason=recoverable_stale_lane" : ""
+        } aborted=${aborted} drained=${drained} released=${effectiveReleased}${
+          queuedCount > 0 ? ` laneQueued=${queuedCount}` : ""
+        }${
           stoppedFields ? ` ${stoppedFields}` : ""
         }`,
       );
@@ -188,7 +203,7 @@ export async function recoverStuckDiagnosticSession(
             aborted,
             drained,
             forceCleared,
-            released,
+            released: effectiveReleased,
             lane: sessionLane ?? undefined,
           }
         : {
@@ -196,8 +211,10 @@ export async function recoverStuckDiagnosticSession(
             action: "release_lane",
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
-            released,
+            released: effectiveReleased,
             lane: sessionLane ?? undefined,
+            ...(recoverableStaleLane ? { reason: "recoverable_stale_lane" as const } : {}),
+            ...(queuedCount > 0 ? { queuedCount } : {}),
           };
       diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
       return outcome;

@@ -87,4 +87,24 @@ describe("stuck session recovery integration", () => {
     expect(resetCommandLane(lane)).toBe(1);
     await expect(queued).resolves.toBe("drained");
   });
+
+  it("reports a recoverable stale lane when diagnostics show queued work but the lane is empty", async () => {
+    const sessionKey = "agent:main:telegram:direct:123";
+    const sessionId = "telegram-stale-session";
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId,
+      sessionKey,
+      ageMs: 9_907_000,
+      queueDepth: 2,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "released",
+      action: "release_lane",
+      reason: "recoverable_stale_lane",
+      released: 2,
+    });
+    expect(getQueueSize(resolveEmbeddedSessionLane(sessionKey))).toBe(0);
+  });
 });

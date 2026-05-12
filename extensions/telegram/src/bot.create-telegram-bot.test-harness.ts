@@ -37,6 +37,11 @@ const { sessionStorePath } = vi.hoisted(() => ({
 const { loadWebMedia } = vi.hoisted((): { loadWebMedia: AnyMock } => ({
   loadWebMedia: vi.fn(),
 }));
+const { markStaleTelegramInflightInterrupted } = vi.hoisted(
+  (): { markStaleTelegramInflightInterrupted: AnyMock } => ({
+    markStaleTelegramInflightInterrupted: vi.fn(() => []),
+  }),
+);
 
 export function getLoadWebMediaMock(): AnyMock {
   return loadWebMedia;
@@ -304,6 +309,8 @@ export const setMyCommandsSpy: AnyAsyncMock = grammySpies.setMyCommandsSpy;
 export const getMeSpy: AnyAsyncMock = grammySpies.getMeSpy;
 export const getChatSpy: AnyAsyncMock = grammySpies.getChatSpy;
 export const sendMessageSpy: AnyAsyncMock = grammySpies.sendMessageSpy;
+export const markStaleTelegramInflightInterruptedSpy: AnyMock =
+  markStaleTelegramInflightInterrupted;
 export const sendAnimationSpy: AnyAsyncMock = grammySpies.sendAnimationSpy;
 export const sendPhotoSpy: AnyAsyncMock = grammySpies.sendPhotoSpy;
 export const getFileSpy: AnyAsyncMock = grammySpies.getFileSpy;
@@ -384,6 +391,8 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   resolveExecApproval: resolveExecApprovalSpy as NonNullable<
     TelegramBotDeps["resolveExecApproval"]
   >,
+  markStaleTelegramInflightInterrupted:
+    markStaleTelegramInflightInterrupted as TelegramBotDeps["markStaleTelegramInflightInterrupted"],
 };
 
 vi.doMock("./bot.runtime.js", () => telegramBotRuntimeForTest);
@@ -525,6 +534,8 @@ beforeEach(() => {
   enqueueSystemEventSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);
+  markStaleTelegramInflightInterrupted.mockReset();
+  markStaleTelegramInflightInterrupted.mockReturnValue([]);
   listSkillCommandsForAgents.mockReset();
   listSkillCommandsForAgents.mockReturnValue([]);
   buildModelsProviderData.mockReset();
