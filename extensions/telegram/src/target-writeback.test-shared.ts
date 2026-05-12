@@ -22,11 +22,6 @@ type TelegramConfigWrite = {
   };
 };
 
-type CronStoreWrite = {
-  version: number;
-  jobs: Array<{ id: string; delivery: { channel: string; to: string } }>;
-};
-
 vi.mock("openclaw/plugin-sdk/config-mutation", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-mutation")>(
     "openclaw/plugin-sdk/config-mutation",
@@ -87,14 +82,6 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         | undefined;
       if (!call) {
         throw new Error(`expected writeConfigFile call #${index + 1}`);
-      }
-      return call;
-    }
-
-    function requireSaveCronStoreCall(index = 0): [string, CronStoreWrite] {
-      const call = saveCronStore.mock.calls[index] as [string, CronStoreWrite] | undefined;
-      if (!call) {
-        throw new Error(`expected saveCronStore call #${index + 1}`);
       }
       return call;
     }
@@ -182,21 +169,10 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
       });
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
-      expect(writeConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channels: {
-            telegram: {
-              defaultTo: "-100123",
-              accounts: {
-                alerts: {
-                  defaultTo: "-100123",
-                },
-              },
-            },
-          },
-        }),
-        expect.objectContaining({ expectedConfigPath: "/tmp/openclaw.json" }),
-      );
+      const [writtenConfig, writeOptions] = requireWriteConfigCall();
+      expect(writtenConfig.channels?.telegram?.defaultTo).toBe("-100123");
+      expect(writtenConfig.channels?.telegram?.accounts?.alerts?.defaultTo).toBe("-100123");
+      expect(writeOptions.expectedConfigPath).toBe("/tmp/openclaw.json");
       expect(updateCronStoreJobs).toHaveBeenCalledTimes(1);
       expect(updateCronStoreJobs).toHaveBeenCalledWith(
         "telegram-target-writeback",
@@ -258,16 +234,11 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         resolvedChatId: "-100123",
       });
 
-      expect(writeConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channels: {
-            telegram: {
-              defaultTo: "-100123",
-            },
-          },
-        }),
-        expect.any(Object),
-      );
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+      const [writtenConfig, writeOptions] = requireWriteConfigCall();
+      expect(writtenConfig.channels?.telegram?.defaultTo).toBe("-100123");
+      expect(writeOptions).toEqual({});
+      expect(updateCronStoreJobs).toHaveBeenCalledTimes(1);
       expect(updateCronStoreJobs).toHaveBeenCalledWith(
         "telegram-target-writeback",
         expect.any(Function),
