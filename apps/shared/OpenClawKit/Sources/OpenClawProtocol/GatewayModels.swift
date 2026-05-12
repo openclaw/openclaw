@@ -5706,6 +5706,8 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
     public let placement: String?
     public let schema: AnyCodable?
     public let requiredscopes: [String]?
+    public let priority: Double?
+    public let activewhen: [String: AnyCodable]?
 
     public init(
         id: String,
@@ -5716,7 +5718,9 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         description: String?,
         placement: String?,
         schema: AnyCodable?,
-        requiredscopes: [String]?)
+        requiredscopes: [String]?,
+        priority: Double?,
+        activewhen: [String: AnyCodable]?)
     {
         self.id = id
         self.pluginid = pluginid
@@ -5727,6 +5731,8 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         self.placement = placement
         self.schema = schema
         self.requiredscopes = requiredscopes
+        self.priority = priority
+        self.activewhen = activewhen
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -5739,6 +5745,8 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
         case placement
         case schema
         case requiredscopes = "requiredScopes"
+        case priority
+        case activewhen = "activeWhen"
     }
 }
 

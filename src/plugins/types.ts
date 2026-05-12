@@ -97,7 +97,6 @@ import type {
   PluginAgentEventEmitParams,
   PluginAgentEventEmitResult,
   PluginAgentEventSubscriptionRegistration,
-  PluginControlUiActiveWhen,
   PluginControlUiDescriptor,
   PluginJsonValue,
   PluginNextTurnInjection,
