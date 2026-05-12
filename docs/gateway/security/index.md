@@ -578,7 +578,7 @@ OpenClaw has two separate "who can trigger me?" layers:
   - When `dmPolicy="pairing"`, approvals are written to the account-scoped pairing allowlist store under `~/.openclaw/credentials/` (`<channel>-allowFrom.json` for default account, `<channel>-<accountId>-allowFrom.json` for non-default accounts), merged with config allowlists.
 - **Group allowlist** (channel-specific): which groups/channels/guilds the bot will accept messages from at all.
   - Common patterns:
-    - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
+    - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`. When `groupPolicy` is omitted (or explicitly `"allowlist"`), a populated dictionary also acts as an implicit group allowlist (include `"*"` to keep allow-all behavior). When `groupPolicy: "open"` is set explicitly, entries are treated as per-group overrides only and do **not** block unlisted groups - see [Groups](/channels/groups).
     - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot _inside_ a group session (WhatsApp/Telegram/Signal/iMessage/Microsoft Teams).
     - `channels.discord.guilds` / `channels.slack.channels`: per-surface allowlists + mention defaults.
   - Group checks run in this order: `groupPolicy`/group allowlists first, mention/reply activation second.
