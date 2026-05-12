@@ -78,6 +78,7 @@ const BACKGROUND_CONSULT_SYSTEM_PROMPT = [
   "Do NOT give a brief or partial answer. Use every available tool to gather complete, accurate data.",
   "Execute all necessary queries, calculations, and lookups before composing your answer.",
   "Your response must contain the full, final answer — not a plan or summary of what you will do.",
+  "Do NOT narrate your process. Do NOT say 'I will now query...' or 'Let me get...'. Just execute the tools silently and return the final result.",
   "Format the answer clearly for an email body: use tables, lists, or structured text as appropriate.",
   "Do not print secret values or dump environment variables.",
 ].join(" ");
