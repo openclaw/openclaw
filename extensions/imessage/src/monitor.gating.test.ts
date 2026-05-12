@@ -546,8 +546,9 @@ describe("imessage monitor gating + envelope builders", () => {
     cfg.channels.imessage ??= {};
     cfg.channels.imessage.groupPolicy = "allowlist";
 
-    const { decision } = await resolveDispatchDecision({
+    const decision = await resolveIMessageInboundDecision({
       cfg,
+      accountId: "default",
       message: {
         id: 37,
         chat_id: 101,
@@ -556,9 +557,16 @@ describe("imessage monitor gating + envelope builders", () => {
         text: "@openclaw ok",
         is_group: true,
       },
+      opts: {},
+      messageText: "@openclaw ok",
+      bodyText: "@openclaw ok",
       allowFrom: ["chat_id:101"],
       groupAllowFrom: ["+15550004444"],
       groupPolicy: "allowlist",
+      dmPolicy: "pairing",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "not in groupAllowFrom" });
