@@ -181,7 +181,7 @@ describe("custom theme import helpers", () => {
     expect(imported.label).toBe("Light Green");
     const fetchMock = vi.mocked(fetchImpl);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [fetchUrl, fetchOptions] = fetchMock.mock.calls[0] as [
+    const [fetchUrl, fetchOptions] = fetchMock.mock.calls.at(0) as [
       string,
       { headers?: unknown; redirect?: unknown; signal?: unknown },
     ];

@@ -53,6 +53,19 @@ const maybeRunCliInContainerMock = vi.hoisted(() =>
   >((argv: string[]) => ({ handled: false, argv })),
 );
 
+function requireRunCrestodianOptions(index = 0): { onReady?: unknown } {
+  const call = runCrestodianMock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected runCrestodian call ${index}`);
+  }
+  expect(typeof call[0]).toBe("object");
+  expect(call[0]).not.toBeNull();
+  if (typeof call[0] !== "object" || call[0] === null) {
+    throw new Error(`expected runCrestodian call ${index} to receive options`);
+  }
+  return call[0] as { onReady?: unknown };
+}
+
 vi.mock("commander", () => {
   class MockCommanderError extends Error {
     exitCode: number;
@@ -728,7 +741,7 @@ describe("runCli exit behavior", () => {
 
     expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledTimes(1);
     expect(runCrestodianMock).toHaveBeenCalledOnce();
-    const crestodianOptions = runCrestodianMock.mock.calls[0]?.[0] as { onReady?: unknown };
+    const crestodianOptions = requireRunCrestodianOptions();
     expect(crestodianOptions).toEqual({ onReady: crestodianOptions.onReady });
     expect(crestodianOptions.onReady).toBeTypeOf("function");
     expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(

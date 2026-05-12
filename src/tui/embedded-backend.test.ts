@@ -566,7 +566,7 @@ describe("EmbeddedTuiBackend", () => {
       await flushMicrotasks();
 
       expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-      const ingressOptions = agentCommandFromIngressMock.mock.calls[0]?.[0] as
+      const ingressOptions = agentCommandFromIngressMock.mock.calls.at(0)?.[0] as
         | { timeout?: unknown }
         | undefined;
       expect(ingressOptions?.timeout).toBe("300");

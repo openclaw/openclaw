@@ -375,7 +375,7 @@ describe("runDaemonInstall", () => {
 
     expect(actionState.failed).toStrictEqual([]);
     expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
-    const writeParams = replaceConfigFileMock.mock.calls[0]?.[0] as {
+    const writeParams = replaceConfigFileMock.mock.calls.at(0)?.[0] as {
       nextConfig?: { gateway?: { auth?: { token?: string } } };
     };
     expect(writeParams.nextConfig?.gateway?.auth?.token).toBe("minted-token");
@@ -601,7 +601,7 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true });
 
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-    expectFields(resolveNodeStartupTlsEnvironmentMock.mock.calls[0]?.[0], {
+    expectFields(resolveNodeStartupTlsEnvironmentMock.mock.calls.at(0)?.[0], {
       execPath: "/home/test/.nvm/versions/node/v22.18.0/bin/node",
     });
   });

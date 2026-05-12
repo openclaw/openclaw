@@ -88,7 +88,7 @@ describe("tryRouteCli", () => {
     await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
 
     expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
-    const configReadyCall = ensureConfigReadyMock.mock.calls[0]?.[0] as
+    const configReadyCall = ensureConfigReadyMock.mock.calls.at(0)?.[0] as
       | { runtime?: unknown; commandPath?: unknown }
       | undefined;
     expect(typeof configReadyCall?.runtime).toBe("object");
@@ -161,7 +161,7 @@ describe("tryRouteCli", () => {
       ["node", "openclaw", "--log-level", "debug", "status"],
     );
     expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
-    const configReadyCall = ensureConfigReadyMock.mock.calls[0]?.[0] as
+    const configReadyCall = ensureConfigReadyMock.mock.calls.at(0)?.[0] as
       | { runtime?: unknown; commandPath?: unknown }
       | undefined;
     expect(typeof configReadyCall?.runtime).toBe("object");

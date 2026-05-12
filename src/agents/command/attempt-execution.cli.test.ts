@@ -244,8 +244,8 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(2);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionId).toBe("stale-cli-session");
-    expect(runCliAgentMock.mock.calls[1]?.[0]?.cliSessionId).toBeUndefined();
+    expect(runCliAgentMock.mock.calls.at(0)?.[0]?.cliSessionId).toBe("stale-cli-session");
+    expect(runCliAgentMock.mock.calls.at(1)?.[0]?.cliSessionId).toBeUndefined();
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
@@ -286,8 +286,8 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionId).toBeUndefined();
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionBinding).toBeUndefined();
+    expect(runCliAgentMock.mock.calls.at(0)?.[0]?.cliSessionId).toBeUndefined();
+    expect(runCliAgentMock.mock.calls.at(0)?.[0]?.cliSessionBinding).toBeUndefined();
     expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
@@ -344,8 +344,8 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionId).toBe(cliSessionId);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionBinding).toEqual({
+    expect(runCliAgentMock.mock.calls.at(0)?.[0]?.cliSessionId).toBe(cliSessionId);
+    expect(runCliAgentMock.mock.calls.at(0)?.[0]?.cliSessionBinding).toEqual({
       sessionId: cliSessionId,
       authProfileId: "anthropic:claude-cli",
     });
@@ -396,7 +396,7 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBe("openai-codex:work");
+    expect(runCliAgentMock.mock.calls.at(0)?.[0]?.authProfileId).toBe("openai-codex:work");
   });
 
   it("persists CLI replies into the session transcript", async () => {
@@ -902,7 +902,7 @@ describe("CLI attempt execution", () => {
       promptMode: "none",
       disableTools: true,
     });
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt).not.toContain(
+    expect(runEmbeddedPiAgentMock.mock.calls.at(0)?.[0]?.prompt).not.toContain(
       "[Inter-session message]",
     );
   });
@@ -1449,7 +1449,7 @@ describe("embedded attempt harness pinning", () => {
 
     expect(runCliAgentMock).not.toHaveBeenCalled();
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).not.toHaveProperty(
+    expect(runEmbeddedPiAgentMock.mock.calls.at(0)?.[0]).not.toHaveProperty(
       "agentHarnessId",
       "claude-cli",
     );

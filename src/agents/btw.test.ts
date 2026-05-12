@@ -246,7 +246,7 @@ function mockActiveTranscript(messages: unknown[]) {
 async function runMathSideQuestionAndCaptureContext() {
   mockDoneAnswer(MATH_ANSWER);
   await runMathSideQuestion();
-  const [, context] = streamSimpleMock.mock.calls[0] ?? [];
+  const [, context] = streamSimpleMock.mock.calls.at(0) ?? [];
   return context;
 }
 
@@ -474,7 +474,7 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Final answer." });
-    const ensureArgs = ensureOpenClawModelsJsonMock.mock.calls[0];
+    const ensureArgs = ensureOpenClawModelsJsonMock.mock.calls.at(0);
     expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
     expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
   });
@@ -523,7 +523,7 @@ describe("runBtwSideQuestion", () => {
     expect(sideQuestionParams.agentId).toBe("main");
     expect(sideQuestionParams.workspaceDir).toBe("/tmp/workspace");
     expect(sideQuestionParams.authProfileId).toBe("openai-codex:work");
-    expect(codexSideQuestionMock.mock.calls[0]?.[0].sessionFile).toContain("session-1.jsonl");
+    expect(codexSideQuestionMock.mock.calls.at(0)?.[0].sessionFile).toContain("session-1.jsonl");
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
@@ -589,7 +589,7 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Copilot answer." });
     const runtimeAuthParams = expectRecordFields(
-      prepareProviderRuntimeAuthMock.mock.calls[0]?.[0],
+      prepareProviderRuntimeAuthMock.mock.calls.at(0)?.[0],
       {
         provider: "github-copilot",
         workspaceDir: "/tmp/workspace",
@@ -603,7 +603,7 @@ describe("runBtwSideQuestion", () => {
       authMode: "token",
       profileId: "profile-1",
     });
-    const [streamModel, , streamOptions] = streamSimpleMock.mock.calls[0] ?? [];
+    const [streamModel, , streamOptions] = streamSimpleMock.mock.calls.at(0) ?? [];
     expectRecordFields(streamModel, {
       provider: "github-copilot",
       id: "gpt-5.4",
@@ -632,7 +632,7 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Ollama Cloud answer." });
     const registerParams = expectRecordFields(
-      registerProviderStreamForModelMock.mock.calls[0]?.[0],
+      registerProviderStreamForModelMock.mock.calls.at(0)?.[0],
       {
         workspaceDir: "/tmp/workspace",
       },
@@ -661,7 +661,7 @@ describe("runBtwSideQuestion", () => {
 
     await runSideQuestion();
 
-    const [, , options] = streamSimpleMock.mock.calls[0] ?? [];
+    const [, , options] = streamSimpleMock.mock.calls.at(0) ?? [];
     const onPayload = (options as { onPayload?: (payload: unknown) => void })?.onPayload;
     const payloadWithEmptyTools = { messages: [], tools: [] as unknown[] };
 
@@ -712,7 +712,7 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion({ resolvedThinkLevel: "adaptive" });
 
     expect(result).toEqual({ text: "Final answer." });
-    const [, , options] = streamSimpleMock.mock.calls[0] ?? [];
+    const [, , options] = streamSimpleMock.mock.calls.at(0) ?? [];
     expect((options as { reasoning?: unknown } | undefined)?.reasoning).toBeUndefined();
   });
 
