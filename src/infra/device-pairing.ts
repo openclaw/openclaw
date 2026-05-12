@@ -781,65 +781,6 @@ export async function approveBootstrapDevicePairing(
   });
 }
 
-export async function ensureBootstrapDeviceProfile(params: {
-  deviceId: string;
-  publicKey: string;
-  profile: DeviceBootstrapProfile;
-  baseDir?: string;
-}): Promise<PairedDevice | null> {
-  return await withLock(async () => {
-    const state = await loadState(params.baseDir);
-    const deviceId = normalizeDeviceId(params.deviceId);
-    const publicKey = params.publicKey.trim();
-    if (!deviceId || !publicKey) {
-      return null;
-    }
-    const existing = state.pairedByDeviceId[deviceId];
-    if (!existing || existing.publicKey !== publicKey) {
-      return null;
-    }
-    const approvedRoles = mergeRoles(params.profile.roles) ?? [];
-    if (approvedRoles.length === 0) {
-      return null;
-    }
-    const approvedScopes = resolveBootstrapProfileScopesForRoles(
-      approvedRoles,
-      params.profile.scopes,
-    );
-    const roles = mergeRoles(existing.roles, existing.role, approvedRoles);
-    const nextApprovedScopes = mergeScopes(
-      existing.approvedScopes ?? existing.scopes,
-      approvedScopes,
-    );
-    const tokens = cloneDeviceTokens(existing);
-    const now = Date.now();
-    for (const roleForToken of approvedRoles) {
-      const existingToken = tokens[roleForToken];
-      const tokenScopes =
-        roleForToken === OPERATOR_ROLE
-          ? resolveBootstrapProfileScopesForRole(roleForToken, approvedScopes)
-          : [];
-      tokens[roleForToken] = buildDeviceAuthToken({
-        role: roleForToken,
-        scopes: tokenScopes,
-        existing: existingToken,
-        now,
-        ...(existingToken ? { rotatedAtMs: now } : {}),
-      });
-    }
-    const device: PairedDevice = {
-      ...existing,
-      roles,
-      scopes: nextApprovedScopes ?? [],
-      approvedScopes: nextApprovedScopes ?? [],
-      tokens,
-    };
-    state.pairedByDeviceId[device.deviceId] = device;
-    await persistState(state, params.baseDir, "paired");
-    return device;
-  });
-}
-
 export async function rejectDevicePairing(
   requestId: string,
   baseDir?: string,
