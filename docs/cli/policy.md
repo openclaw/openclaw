@@ -93,6 +93,8 @@ Run policy-only checks during authoring:
 openclaw policy check
 openclaw policy check --json
 openclaw policy check --severity-min error
+openclaw policy watch --once
+openclaw policy diff before.json after.json
 ```
 
 `policy check` runs only the policy check set and emits evidence, findings, and
@@ -259,6 +261,11 @@ Use this lifecycle when accepting policy state:
 3. If the result is clean, record `attestation.policy.hash` as `expectedHash`.
 4. Record `attestation.attestationHash` as `expectedAttestationHash`.
 5. Re-run `openclaw doctor --lint` in CI or release gates.
+
+`policy diff` compares two saved `policy check --json` outputs to explain what
+changed: the authored policy, observed evidence, finding set, or clean/dirty
+result. It ignores `checkedAt` for drift decisions because that timestamp is
+audit metadata, not part of the accepted stable attestation.
 
 The tool runtime gate also includes structured approval metadata on gateway
 approval requests: policy path/hash, configured expected hash when present, the
