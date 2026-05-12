@@ -64,7 +64,7 @@ describe("isAllowedParsedChatSender", () => {
       expected: true,
     },
     {
-      name: "does not match chat IDs as senders",
+      name: "matches chat IDs when provided",
       input: {
         allowFrom: ["chat_id:42"],
         sender: "+15551234567",
@@ -72,7 +72,7 @@ describe("isAllowedParsedChatSender", () => {
         normalizeSender: (sender: string) => sender,
         parseAllowTarget,
       },
-      expected: false,
+      expected: true,
     },
   ])("$name", ({ input, expected }) => {
     expect(isAllowedParsedChatSender(input)).toBe(expected);
