@@ -4,13 +4,24 @@
 # WARNING: GitHub CODEOWNERS uses last-match-wins semantics.
 # If you add overlapping rules below the secops block, include @openclaw/openclaw-secops
 # on those entries too or you can silently remove required secops review.
-# Security-sensitive code, config, and docs require secops review.
+# Security-sensitive code, config, workflow automation, and docs require secops review.
 /SECURITY.md @openclaw/openclaw-secops
+/.github/actions/ @openclaw/openclaw-secops
+/.github/actionlint.yaml @openclaw/openclaw-secops
+/.github/codex/ @openclaw/openclaw-secops
 /.github/dependabot.yml @openclaw/openclaw-secops
 /.github/codeql/ @openclaw/openclaw-secops
-/.github/workflows/codeql.yml @openclaw/openclaw-secops
-/.github/workflows/codeql-android-critical-security.yml @openclaw/openclaw-secops
-/.github/workflows/codeql-critical-quality.yml @openclaw/openclaw-secops
+/.github/labeler.yml @openclaw/openclaw-secops
+/.github/workflows/ @openclaw/openclaw-secops
+/.github/zizmor.yml @openclaw/openclaw-secops
+/scripts/*publish* @openclaw/openclaw-secops
+/scripts/*release* @openclaw/openclaw-secops
+/scripts/*scan* @openclaw/openclaw-secops
+/scripts/*secret* @openclaw/openclaw-secops
+/scripts/lib/*publish* @openclaw/openclaw-secops
+/scripts/lib/*release* @openclaw/openclaw-secops
+/scripts/lib/*scan* @openclaw/openclaw-secops
+/scripts/lib/*secret* @openclaw/openclaw-secops
 /src/security/ @openclaw/openclaw-secops
 /src/secrets/ @openclaw/openclaw-secops
 /src/config/*secret*.ts @openclaw/openclaw-secops
@@ -49,8 +60,17 @@
 /docs/reference/secretref-user-supplied-credentials-matrix.json @openclaw/openclaw-secops
 
 # Release workflow and its supporting release-path checks.
-/.github/workflows/openclaw-npm-release.yml @openclaw/openclaw-release-managers
-/docs/reference/RELEASING.md @openclaw/openclaw-release-managers
-/scripts/openclaw-npm-publish.sh @openclaw/openclaw-release-managers
-/scripts/openclaw-npm-release-check.ts @openclaw/openclaw-release-managers
-/scripts/release-check.ts @openclaw/openclaw-release-managers
+/.github/workflows/docker-release.yml @openclaw/openclaw-secops @openclaw/openclaw-release-managers
+/.github/workflows/macos-release.yml @openclaw/openclaw-secops @openclaw/openclaw-release-managers
+/.github/workflows/openclaw-npm-release.yml @openclaw/openclaw-secops @openclaw/openclaw-release-managers
+/.github/workflows/openclaw-release-checks.yml @openclaw/openclaw-secops @openclaw/openclaw-release-managers
+/.github/workflows/openclaw-release-publish.yml @openclaw/openclaw-secops @openclaw/openclaw-release-managers
+/.github/workflows/plugin-clawhub-release.yml @openclaw/openclaw-secops @openclaw/openclaw-release-managers
+/.github/workflows/plugin-npm-release.yml @openclaw/openclaw-secops @openclaw/openclaw-release-managers
+/docs/reference/RELEASING.md @openclaw/openclaw-secops @openclaw/openclaw-release-managers
+/scripts/openclaw-npm-publish.sh @openclaw/openclaw-secops @openclaw/openclaw-release-managers
+/scripts/openclaw-npm-release-check.ts @openclaw/openclaw-secops @openclaw/openclaw-release-managers
+/scripts/plugin-npm-publish.sh @openclaw/openclaw-secops @openclaw/openclaw-release-managers
+/scripts/plugin-npm-release-check.ts @openclaw/openclaw-secops @openclaw/openclaw-release-managers
+/scripts/plugin-npm-release-plan.ts @openclaw/openclaw-secops @openclaw/openclaw-release-managers
+/scripts/release-check.ts @openclaw/openclaw-secops @openclaw/openclaw-release-managers
