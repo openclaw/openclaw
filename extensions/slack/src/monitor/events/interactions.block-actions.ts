@@ -553,10 +553,13 @@ async function handleSlackExecApprovalInteraction(params: {
     senderId: params.parsed.userId,
   });
   const isPluginApproval = approval.approvalId.startsWith("plugin:");
+  const resolveUnprefixedAsPlugin =
+    !isPluginApproval && !execApprovalAuthorizedSender && pluginApprovalAuthorizedSender;
   const authorized = isPluginApproval
     ? pluginApprovalAuthorizedSender
-    : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
-  const allowPluginFallback = !isPluginApproval && pluginApprovalAuthorizedSender;
+    : execApprovalAuthorizedSender || resolveUnprefixedAsPlugin;
+  const allowPluginFallback =
+    !isPluginApproval && execApprovalAuthorizedSender && pluginApprovalAuthorizedSender;
   if (!authorized) {
     params.ctx.runtime.log?.(
       `slack:interaction drop exec approval user=${params.parsed.userId} (not authorized)`,
@@ -572,6 +575,7 @@ async function handleSlackExecApprovalInteraction(params: {
       decision: approval.decision,
       senderId: params.parsed.userId,
       allowPluginFallback,
+      ...(resolveUnprefixedAsPlugin ? { resolveMethod: "plugin" as const } : {}),
       clientDisplayName: `Slack approval (${params.parsed.userId.trim() || "unknown"})`,
     });
   } catch (error) {

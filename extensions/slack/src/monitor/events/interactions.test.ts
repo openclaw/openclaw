@@ -1100,7 +1100,8 @@ describe("registerSlackInteractionEvents", () => {
       approvalId: "req-legacy",
       decision: "allow-once",
       senderId: "U123OWNER",
-      allowPluginFallback: true,
+      allowPluginFallback: false,
+      resolveMethod: "plugin",
       clientDisplayName: "Slack approval (U123OWNER)",
     });
     expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
