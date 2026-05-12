@@ -1684,3 +1684,116 @@ describe("createFollowupRunner agentDir forwarding", () => {
     expect(call?.agentDir).toBe(agentDir);
   });
 });
+
+describe("createFollowupRunner quota/billing failure notice (#80700)", () => {
+  beforeEach(() => {
+    runEmbeddedPiAgentMock.mockReset();
+  });
+
+  it("isFollowupQuotaBillingFailure classifier recognizes known patterns", async () => {
+    const { isFollowupQuotaBillingFailure } = await import("./followup-runner.js");
+    expect(isFollowupQuotaBillingFailure("Third-party apps now draw from your extra usage")).toBe(
+      true,
+    );
+    expect(isFollowupQuotaBillingFailure("Provider anthropic has billing issue")).toBe(true);
+    expect(isFollowupQuotaBillingFailure("insufficient_quota: you exceeded your quota")).toBe(true);
+    expect(isFollowupQuotaBillingFailure("429 rate limit reached")).toBe(true);
+    expect(isFollowupQuotaBillingFailure("rate_limit_exceeded")).toBe(true);
+    expect(isFollowupQuotaBillingFailure("usage limit reached for today")).toBe(true);
+    expect(isFollowupQuotaBillingFailure("socket hang up")).toBe(false);
+    expect(isFollowupQuotaBillingFailure("")).toBe(false);
+  });
+
+  it("sends a user-facing notice when the followup agent fails with a billing error", async () => {
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error(
+        "LLM request rejected: Third-party apps now draw from your extra usage, not your plan limits.",
+      ),
+    );
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(baseQueuedRun());
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const firstCall = (
+      onBlockReply.mock.calls as unknown as Array<Array<{ text?: string; isError?: boolean }>>
+    )[0];
+    const payload = requireRecord(firstCall?.[0], "notice payload");
+    expect(typeof payload.text).toBe("string");
+    expect(payload.text as string).toMatch(/billing\/quota\/rate-limit/);
+    expect(payload.isError).toBe(true);
+  });
+
+  it("sends a notice when the followup agent fails with an explicit quota error", async () => {
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("All models failed: insufficient_quota"),
+    );
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(baseQueuedRun());
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a notice when the followup agent fails with a rate-limit error", async () => {
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("429 Too Many Requests: rate limit reached"),
+    );
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(baseQueuedRun());
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT send a notice for unrelated agent failures", async () => {
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("agent exploded: socket hang up"));
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(baseQueuedRun());
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the notice when sourceReplyDeliveryMode is message_tool_only", async () => {
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("billing block from provider"));
+    const onBlockReply = vi.fn(async () => {});
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+    const queued = createQueuedRun({
+      run: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+
+    await runner(queued);
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+});
