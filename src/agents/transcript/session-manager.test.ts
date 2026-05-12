@@ -33,7 +33,7 @@ afterEach(() => {
 
 describe("TranscriptSessionManager", () => {
   it("exposes create, in-memory, list, continue, and fork through the contract value", async () => {
-    const dir = path.dirname(await makeTempSessionFile());
+    await makeTempSessionFile();
     const memory = SessionManager.inMemory("/tmp/memory-workspace");
     expect(memory.isPersisted()).toBe(false);
     expect(memory.getSessionFile()).toBeUndefined();
@@ -44,7 +44,7 @@ describe("TranscriptSessionManager", () => {
     });
     expect(memory.getLeafId()).toBe(memoryUserId);
 
-    const created = SessionManager.create("/tmp/workspace", dir);
+    const created = SessionManager.create("/tmp/workspace");
     created.appendMessage({ role: "user", content: "persist me", timestamp: 2 });
     const sessionFile = created.getSessionFile();
     expect(sessionFile).toBeTruthy();
@@ -52,13 +52,13 @@ describe("TranscriptSessionManager", () => {
       throw new Error("expected created session file");
     }
 
-    const listed = await SessionManager.list("/tmp/workspace", dir);
+    const listed = await SessionManager.list("/tmp/workspace");
     expect(listed.map((session) => session.id)).toContain(created.getSessionId());
 
-    const continued = SessionManager.continueRecent("/tmp/workspace", dir);
+    const continued = SessionManager.continueRecent("/tmp/workspace");
     expect(continued.getSessionId()).toBe(created.getSessionId());
 
-    const forked = SessionManager.forkFrom(sessionFile, "/tmp/forked-workspace", dir);
+    const forked = SessionManager.forkFrom(sessionFile, "/tmp/forked-workspace");
     expect(forked.getHeader()).toMatchObject({
       cwd: "/tmp/forked-workspace",
       parentSession: sessionFile,
@@ -68,32 +68,24 @@ describe("TranscriptSessionManager", () => {
     ]);
   });
 
-  it("creates a valid header for an empty explicit session file", async () => {
+  it("rejects an unmigrated explicit legacy session file", async () => {
     const sessionFile = await makeTempSessionFile();
 
-    const sessionManager = openTranscriptSessionManager({
-      sessionFile,
-      sessionId: "session-1",
-      cwd: "/tmp/workspace",
-    });
-
-    expect(sessionManager.getSessionId()).toBe("session-1");
-    expect(sessionManager.getCwd()).toBe("/tmp/workspace");
-    expect(sessionManager.getSessionFile()).toBe(sessionFile);
-
-    const entries = readSessionEntries(sessionFile);
-    expect(entries).toMatchObject([
-      {
-        type: "session",
-        version: 3,
-        id: "session-1",
+    expect(() =>
+      openTranscriptSessionManager({
+        sessionFile,
+        sessionId: "session-1",
         cwd: "/tmp/workspace",
-      },
-    ]);
+      }),
+    ).toThrow(/Legacy transcript has not been imported into SQLite/);
   });
 
   it("persists initial user messages synchronously before the first assistant message", async () => {
-    const sessionFile = await makeTempSessionFile();
+    await makeTempSessionFile();
+    const sessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "session-sync",
+    });
     const sessionManager = openTranscriptSessionManager({
       sessionFile,
       sessionId: "session-sync",
@@ -142,7 +134,11 @@ describe("TranscriptSessionManager", () => {
   });
 
   it("removes persisted tail entries through SQLite instead of rewriting JSONL", async () => {
-    const sessionFile = await makeTempSessionFile();
+    await makeTempSessionFile();
+    const sessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "session-tail",
+    });
     const sessionManager = openTranscriptSessionManager({
       sessionFile,
       sessionId: "session-tail",
@@ -186,7 +182,11 @@ describe("TranscriptSessionManager", () => {
   });
 
   it("supports tree, label, name, and branch summary session APIs", async () => {
-    const sessionFile = await makeTempSessionFile();
+    await makeTempSessionFile();
+    const sessionFile = createSqliteSessionTranscriptLocator({
+      agentId: "main",
+      sessionId: "session-tree",
+    });
     const sessionManager = openTranscriptSessionManager({
       sessionFile,
       sessionId: "session-tree",
