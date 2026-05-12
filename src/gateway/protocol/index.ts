@@ -146,6 +146,8 @@ import {
   ConnectParamsSchema,
   type CronAddParams,
   CronAddParamsSchema,
+  type CronGetParams,
+  CronGetParamsSchema,
   type CronJob,
   CronJobSchema,
   type CronListParams,
@@ -192,6 +194,10 @@ import {
   PluginApprovalRequestParamsSchema,
   type PluginApprovalResolveParams,
   PluginApprovalResolveParamsSchema,
+  type PluginsSessionActionParams,
+  type PluginsSessionActionResult,
+  PluginsSessionActionParamsSchema,
+  PluginsSessionActionResultSchema,
   type PluginsUiDescriptorsParams,
   PluginsUiDescriptorsParamsSchema,
   ErrorCodes,
@@ -264,6 +270,8 @@ import {
   NodeRenameParamsSchema,
   type PollParams,
   PollParamsSchema,
+  MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   type PushTestParams,
   PushTestParamsSchema,
@@ -359,6 +367,12 @@ import {
   SkillsSearchResultSchema,
   type SkillsStatusParams,
   SkillsStatusParamsSchema,
+  type SkillsUploadBeginParams,
+  SkillsUploadBeginParamsSchema,
+  type SkillsUploadChunkParams,
+  SkillsUploadChunkParamsSchema,
+  type SkillsUploadCommitParams,
+  SkillsUploadCommitParamsSchema,
   type SkillsUpdateParams,
   SkillsUpdateParamsSchema,
   type ToolsCatalogParams,
@@ -645,11 +659,21 @@ export const validateToolsInvokeParams = ajv.compile<ToolsInvokeParams>(ToolsInv
 export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
+export const validateSkillsUploadBeginParams = ajv.compile<SkillsUploadBeginParams>(
+  SkillsUploadBeginParamsSchema,
+);
+export const validateSkillsUploadChunkParams = ajv.compile<SkillsUploadChunkParams>(
+  SkillsUploadChunkParamsSchema,
+);
+export const validateSkillsUploadCommitParams = ajv.compile<SkillsUploadCommitParams>(
+  SkillsUploadCommitParamsSchema,
+);
 export const validateSkillsUpdateParams = ajv.compile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
 export const validateSkillsSearchParams = ajv.compile<SkillsSearchParams>(SkillsSearchParamsSchema);
 export const validateSkillsDetailParams = ajv.compile<SkillsDetailParams>(SkillsDetailParamsSchema);
 export const validateCronListParams = ajv.compile<CronListParams>(CronListParamsSchema);
 export const validateCronStatusParams = ajv.compile<CronStatusParams>(CronStatusParamsSchema);
+export const validateCronGetParams = ajv.compile<CronGetParams>(CronGetParamsSchema);
 export const validateCronAddParams = ajv.compile<CronAddParams>(CronAddParamsSchema);
 export const validateCronUpdateParams = ajv.compile<CronUpdateParams>(CronUpdateParamsSchema);
 export const validateCronRemoveParams = ajv.compile<CronRemoveParams>(CronRemoveParamsSchema);
@@ -696,6 +720,12 @@ export const validatePluginApprovalResolveParams = ajv.compile<PluginApprovalRes
 );
 export const validatePluginsUiDescriptorsParams = ajv.compile<PluginsUiDescriptorsParams>(
   PluginsUiDescriptorsParamsSchema,
+);
+export const validatePluginsSessionActionParams = ajv.compile<PluginsSessionActionParams>(
+  PluginsSessionActionParamsSchema,
+);
+export const validatePluginsSessionActionResult = ajv.compile<PluginsSessionActionResult>(
+  PluginsSessionActionResultSchema,
 );
 export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
@@ -893,6 +923,8 @@ export {
   AgentsListResultSchema,
   CommandsListParamsSchema,
   CommandsListResultSchema,
+  PluginsSessionActionParamsSchema,
+  PluginsSessionActionResultSchema,
   PluginsUiDescriptorsParamsSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
@@ -904,10 +936,14 @@ export {
   SkillsSearchResultSchema,
   SkillsDetailParamsSchema,
   SkillsDetailResultSchema,
+  SkillsUploadBeginParamsSchema,
+  SkillsUploadChunkParamsSchema,
+  SkillsUploadCommitParamsSchema,
   SkillsUpdateParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
   CronStatusParamsSchema,
+  CronGetParamsSchema,
   CronAddParamsSchema,
   CronUpdateParamsSchema,
   CronRemoveParamsSchema,
@@ -927,6 +963,8 @@ export {
   TickEventSchema,
   ShutdownEventSchema,
   ProtocolSchemas,
+  MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   ErrorCodes,
   errorShape,
@@ -1027,6 +1065,8 @@ export type {
   CommandsListParams,
   CommandsListResult,
   CommandEntry,
+  PluginsSessionActionParams,
+  PluginsSessionActionResult,
   SkillsStatusParams,
   ToolsCatalogParams,
   ToolsCatalogResult,
@@ -1040,6 +1080,9 @@ export type {
   SkillsSearchResult,
   SkillsDetailParams,
   SkillsDetailResult,
+  SkillsUploadBeginParams,
+  SkillsUploadChunkParams,
+  SkillsUploadCommitParams,
   SkillsInstallParams,
   SkillsUpdateParams,
   EnvironmentStatus,
@@ -1083,6 +1126,7 @@ export type {
   CronJob,
   CronListParams,
   CronStatusParams,
+  CronGetParams,
   CronAddParams,
   CronUpdateParams,
   CronRemoveParams,

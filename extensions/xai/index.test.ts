@@ -208,11 +208,11 @@ describe("xai provider plugin", () => {
     } as never);
     expect(normalized?.thinkingLevelMap).toEqual({
       off: null,
-      minimal: null,
-      low: null,
-      medium: null,
-      high: null,
-      xhigh: null,
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "high",
     });
     const normalizedCompat = normalized?.compat as
       | {

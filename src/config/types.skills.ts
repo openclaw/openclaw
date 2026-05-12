@@ -27,6 +27,8 @@ export type SkillsLoadConfig = {
 export type SkillsInstallConfig = {
   preferBrew?: boolean;
   nodeManager?: "npm" | "pnpm" | "yarn" | "bun";
+  /** Allow gateway clients to install zip archives staged through skills.upload.*. */
+  allowUploadedArchives?: boolean;
 };
 
 export type SkillsLimitsConfig = {

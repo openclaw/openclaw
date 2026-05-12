@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { resolveHeartbeatPromptForResponseTool } from "../../../src/auto-reply/heartbeat.js";
 import {
   buildDirectChatContext,
@@ -82,7 +82,10 @@ type CodexPromptSnapshotApi = {
   };
   createCodexDynamicToolSpecsForPromptSnapshot: (params: {
     tools: AnyAgentTool[];
-    pluginConfig?: { codexDynamicToolsProfile?: "native-first" | "openclaw-compat" };
+    pluginConfig?: {
+      codexDynamicToolsLoading?: "searchable" | "direct";
+      codexDynamicToolsExclude?: string[];
+    };
     directToolNames?: string[];
   }) => CodexDynamicToolSpec[];
 };
@@ -133,7 +136,7 @@ const CODEX_WORKSPACE_BOOTSTRAP_INSTRUCTIONS = [
   "# Project Context",
   "",
   "The following project context files have been loaded:",
-  "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+  "SOUL.md: persona/tone. Follow it unless higher-priority instructions override.",
   "",
   ...CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.flatMap((file) => [
     `## ${file.path}`,
@@ -359,7 +362,6 @@ function createDynamicTools(params: {
   });
   return codexApi.createCodexDynamicToolSpecsForPromptSnapshot({
     tools: normalized.filter((tool) => HAPPY_PATH_TOOL_NAMES.has(tool.name)),
-    pluginConfig: { codexDynamicToolsProfile: "native-first" },
     directToolNames: ["message"],
   });
 }
@@ -670,9 +672,7 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
     scenario,
     sessionKey: scenario.ctx.SessionKey ?? `agent:main:${scenario.id}`,
   });
-  const appServer = codexApi.resolveCodexPromptSnapshotAppServerOptions({
-    codexDynamicToolsProfile: "native-first",
-  });
+  const appServer = codexApi.resolveCodexPromptSnapshotAppServerOptions();
   const codexSnapshot = codexApi.buildCodexHarnessPromptSnapshot({
     attempt,
     cwd: WORKSPACE_DIR,

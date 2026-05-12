@@ -327,7 +327,7 @@ export function resolveTrustedGroupId(params: {
   });
 }
 
-function resolveProviderToolPolicy(params: {
+export function resolveProviderToolPolicy(params: {
   byProvider?: Record<string, ToolPolicyConfig>;
   modelProvider?: string;
   modelId?: string;
@@ -561,6 +561,7 @@ export function resolveGroupToolPolicy(params: {
   const configTools = resolveChannelGroupToolsPolicy({
     cfg: params.config,
     channel,
+    messageProvider: channel,
     groupId: groupIds[0],
     groupIdCandidates: groupIds.slice(1),
     accountId: params.accountId,

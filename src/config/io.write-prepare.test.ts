@@ -223,6 +223,64 @@ describe("config io write prepare", () => {
     expect(persisted.gateway?.port).toBe(18888);
   });
 
+  it("normalizes retired Google provider catalog refs during unrelated config writes", () => {
+    const makeModel = (id: string, name: string) => ({
+      id,
+      name,
+      reasoning: true,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+    });
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            models: [makeModel("google/gemini-3-pro-preview", "Gemini 3 Pro")],
+          },
+          kilocode: {
+            baseUrl: "https://kilocode.test/v1",
+            models: [makeModel("google/gemini-3-pro-preview", "Gemini via Kilo")],
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            models: [makeModel("google/gemini-3.1-pro-preview", "Gemini 3 Pro")],
+          },
+          kilocode: {
+            baseUrl: "https://kilocode.test/v1",
+            models: [makeModel("google/gemini-3.1-pro-preview", "Gemini via Kilo")],
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: {
+        ...runtimeConfig,
+        gateway: { port: 18888 },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.models?.providers?.google?.models).toEqual([
+      makeModel("google/gemini-3.1-pro-preview", "Gemini 3 Pro"),
+    ]);
+    expect(persisted.models?.providers?.kilocode?.models).toEqual([
+      makeModel("google/gemini-3.1-pro-preview", "Gemini via Kilo"),
+    ]);
+    expect(persisted.gateway?.port).toBe(18888);
+  });
+
   it("allows explicit unsets to remove authored agent provider params", () => {
     const sourceConfig: OpenClawConfig = {
       agents: {
@@ -574,9 +632,7 @@ describe("config io write prepare", () => {
       auth: { mode: "token" },
     });
     const channels = persisted.channels as Record<string, Record<string, unknown>> | undefined;
-    expect(channels?.imessage).toMatchObject({
-      cliPath: "/usr/local/bin/imsg",
-    });
+    expect(channels?.imessage?.cliPath).toBe("/usr/local/bin/imsg");
     expect(channels?.imessage).not.toHaveProperty("runtimeOnlyDefault");
   });
 
@@ -756,5 +812,145 @@ describe("config io write prepare", () => {
 
     expect(persisted.$schema).toBe(123);
     expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+  });
+
+  it("persists explicitly set keys whose values match runtime defaults", () => {
+    const runtimeConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-abc",
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const sourceConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-abc",
+        },
+      },
+      gateway: { port: 18789 },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: sourceConfig,
+      explicitSetValueSource: runtimeConfig,
+      explicitSetPaths: [
+        ["channels", "telegram", "dmPolicy"],
+        ["channels", "telegram", "groupPolicy"],
+      ],
+    }) as { channels?: { telegram?: Record<string, unknown> } };
+
+    expect(persisted.channels?.telegram?.dmPolicy).toBe("pairing");
+    expect(persisted.channels?.telegram?.groupPolicy).toBe("allowlist");
+    expect(persisted.channels?.telegram?.botToken).toBe("tok-abc");
+  });
+
+  it("persists default-valued children inside explicitly set objects", () => {
+    const runtimeConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-abc",
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+        },
+      },
+    };
+    const sourceConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-abc",
+        },
+      },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: sourceConfig,
+      explicitSetValueSource: runtimeConfig,
+      explicitSetPaths: [["channels", "telegram"]],
+    }) as { channels?: { telegram?: Record<string, unknown> } };
+
+    expect(persisted.channels?.telegram).toEqual({
+      botToken: "tok-abc",
+      dmPolicy: "pairing",
+      groupPolicy: "allowlist",
+    });
+  });
+
+  it("persists explicitly set array-index children whose values match runtime defaults", () => {
+    const runtimeConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5", contextWindow: 128000 }],
+          },
+        },
+      },
+    };
+    const sourceConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5" }],
+          },
+        },
+      },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: sourceConfig,
+      explicitSetValueSource: runtimeConfig,
+      explicitSetPaths: [["models", "providers", "openai", "models", "0", "contextWindow"]],
+    }) as { models?: { providers?: { openai?: { models?: Array<Record<string, unknown>> } } } };
+
+    expect(persisted.models?.providers?.openai?.models?.[0]).toEqual({
+      id: "gpt-5.5",
+      contextWindow: 128000,
+    });
+  });
+
+  it("rejects default-valued explicit writes under include-owned paths", () => {
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: {
+          agents: {
+            defaults: {
+              params: { temperature: 0 },
+            },
+          },
+        },
+        sourceConfig: {
+          agents: {
+            defaults: {},
+          },
+        },
+        rootAuthoredConfig: {
+          agents: {
+            defaults: { $include: "./agents-defaults.json" },
+          },
+        },
+        nextConfig: {
+          agents: {
+            defaults: {},
+          },
+        },
+        explicitSetValueSource: {
+          agents: {
+            defaults: {
+              params: { temperature: 0 },
+            },
+          },
+        },
+        explicitSetPaths: [["agents", "defaults", "params"]],
+      }),
+    ).toThrow("Config write would flatten $include-owned config at agents.defaults");
   });
 });

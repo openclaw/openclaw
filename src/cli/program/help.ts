@@ -125,7 +125,7 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
       return "";
     }
     const rich = isRich();
-    const line = formatCliBannerLine(ctx.programVersion, { richTty: rich });
+    const line = formatCliBannerLine(ctx.programVersion, { richTty: rich, mode: "default" });
     return `\n${line}\n`;
   });
 

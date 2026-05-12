@@ -1,7 +1,7 @@
 import path from "node:path";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatUnknownError } from "./errors.js";
 import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
 import { respondToMSTeamsFileConsentInvoke } from "./file-consent-invoke.js";
@@ -74,7 +74,7 @@ async function isInvokeAuthorized(params: {
 
   const maybeInvokeName = includeInvokeName ? { name: context.activity.name } : undefined;
 
-  if (isDirectMessage && resolved.access.decision !== "allow") {
+  if (isDirectMessage && resolved.senderAccess.decision !== "allow") {
     deps.log.debug?.(deniedLogs.dm, {
       sender: senderId,
       conversationId,
@@ -97,7 +97,7 @@ async function isInvokeAuthorized(params: {
     return false;
   }
 
-  if (!isDirectMessage && !resolved.senderGroupAccess.allowed) {
+  if (!isDirectMessage && !resolved.senderAccess.allowed) {
     deps.log.debug?.(deniedLogs.group, {
       sender: senderId,
       conversationId,

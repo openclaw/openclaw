@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
@@ -1222,7 +1222,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
       const attemptParams = requireRecord(
-        runEmbeddedAttemptMock.mock.calls[0]?.[0],
+        runEmbeddedAttemptMock.mock.calls.at(0)?.[0],
         "embedded attempt params",
       );
       expect(attemptParams.authProfileId).toBe("openai-codex:work");

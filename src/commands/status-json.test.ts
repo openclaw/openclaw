@@ -75,6 +75,34 @@ function createScanResult() {
   };
 }
 
+function createExpectedStatusPayload() {
+  return {
+    ok: true,
+    configuredChannels: [],
+    os: { platform: "linux" },
+    update: { installKind: "npm", git: { tag: null, branch: null } },
+    updateChannel: "stable",
+    updateChannelSource: "config",
+    memory: null,
+    memoryPlugin: null,
+    gateway: {
+      mode: "local",
+      url: "ws://127.0.0.1:18789",
+      urlSource: "config",
+      misconfigured: false,
+      reachable: false,
+      connectLatencyMs: null,
+      self: null,
+      error: null,
+      authWarning: null,
+    },
+    gatewayService: { installed: false },
+    nodeService: { installed: false },
+    agents: [],
+    secretDiagnostics: [],
+  };
+}
+
 describe("statusJsonCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -95,8 +123,10 @@ describe("statusJsonCommand", () => {
     await statusJsonCommand({}, runtime);
 
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
-    expect(logs).toHaveLength(1);
-    expect(JSON.parse(logs[0] ?? "{}")).not.toHaveProperty("securityAudit");
+    expect(logs).toStrictEqual([expect.any(String)]);
+    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+    expect(payload).toEqual(createExpectedStatusPayload());
+    expect(payload).not.toHaveProperty("securityAudit");
   });
 
   it("includes security audit details only when --all is requested", async () => {
@@ -105,7 +135,7 @@ describe("statusJsonCommand", () => {
     await statusJsonCommand({ all: true }, runtime);
 
     expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
-    const auditInput = mocks.runSecurityAudit.mock.calls[0]?.[0] as
+    const auditInput = mocks.runSecurityAudit.mock.calls.at(0)?.[0] as
       | {
           config?: unknown;
           sourceConfig?: unknown;
@@ -130,7 +160,14 @@ describe("statusJsonCommand", () => {
       "telegram",
       "whatsapp",
     ]);
-    expect(logs).toHaveLength(1);
-    expect(JSON.parse(logs[0] ?? "{}")).toHaveProperty("securityAudit.summary.critical", 1);
+    expect(logs).toStrictEqual([expect.any(String)]);
+    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+    expect(payload).toEqual({
+      ...createExpectedStatusPayload(),
+      securityAudit: {
+        summary: { critical: 1, warn: 0, info: 0 },
+        findings: [],
+      },
+    });
   });
 });

@@ -3,6 +3,7 @@ import nodePath from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatPortRangeHint } from "../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -64,7 +65,7 @@ const setupPluginConfigModuleLoader = createLazyImportLoader<SetupPluginConfigMo
 function validateGatewayPortInput(value: unknown): string | undefined {
   const port = Number(typeof value === "string" ? value.trim() : value);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    return "Use a port number from 1 to 65535, for example 18789.";
+    return formatPortRangeHint();
   }
   return undefined;
 }

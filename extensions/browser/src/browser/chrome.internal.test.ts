@@ -25,6 +25,10 @@ vi.mock("../infra/ports.js", () => ({
   ensurePortAvailable: ensurePortAvailableMock,
 }));
 
+vi.mock("../infra/tmp-openclaw-dir.js", () => ({
+  resolvePreferredOpenClawTmpDir: () => "/tmp/openclaw-browser-test",
+}));
+
 // Shrink long launch/bootstrap timeouts so tests don't wait 15s for
 // the CHROME_LAUNCH_READY_WINDOW_MS elapse-on-failure path.
 vi.mock("./cdp-timeouts.js", async () => {
@@ -82,9 +86,25 @@ function makeFakeProc(overrides: Partial<FakeProc> = {}): FakeProc {
   return Object.assign(proc, overrides);
 }
 
-function effectiveSpawnCommand(call: unknown[] | undefined): unknown {
-  const command = call?.[0];
-  const args = call?.[1];
+function requireSpawnCall(index = 0): unknown[] {
+  const call = spawnMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected spawn call #${index + 1}`);
+  }
+  return call;
+}
+
+function requireSpawnOptions(index = 0): { env?: NodeJS.ProcessEnv } {
+  const options = requireSpawnCall(index)[2];
+  if (!options || typeof options !== "object") {
+    throw new Error(`expected spawn options for call #${index + 1}`);
+  }
+  return options as { env?: NodeJS.ProcessEnv };
+}
+
+function effectiveSpawnCommand(call: unknown[]): unknown {
+  const command = call[0];
+  const args = call[1];
   if (
     command === "/bin/sh" &&
     Array.isArray(args) &&
@@ -438,6 +458,8 @@ describe("chrome.ts internal", () => {
       vi.stubEnv("HTTP_PROXY", "http://proxy.test:8080");
       vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8443");
       vi.stubEnv("NO_PROXY", "localhost");
+      vi.stubEnv("XDG_CONFIG_HOME", undefined);
+      vi.stubEnv("XDG_CACHE_HOME", undefined);
 
       // Set up a real HTTP server impersonating Chrome's /json/version.
       await withMockChromeCdpServer({
@@ -448,10 +470,14 @@ describe("chrome.ts internal", () => {
           const running = await launchOpenClawChrome(makeResolved(), profile);
           expect(running.pid).toBe(4242);
           expect(spawnCalls).toBeGreaterThanOrEqual(1);
-          const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv };
+          const spawnOptions = requireSpawnOptions();
           expect(spawnOptions.env?.HTTP_PROXY).toBeUndefined();
           expect(spawnOptions.env?.HTTPS_PROXY).toBeUndefined();
           expect(spawnOptions.env?.NO_PROXY).toBeUndefined();
+          if (process.platform === "linux") {
+            expect(spawnOptions.env?.XDG_CONFIG_HOME).toEqual(expect.any(String));
+            expect(spawnOptions.env?.XDG_CACHE_HOME).toEqual(expect.any(String));
+          }
           // Cleanup.
           running.proc.kill?.("SIGTERM");
         },
@@ -481,7 +507,7 @@ describe("chrome.ts internal", () => {
               executablePath: "/tmp/global-chrome",
             } as ResolvedBrowserConfig;
             const running = await launchOpenClawChrome(resolved, profile);
-            expect(effectiveSpawnCommand(spawnMock.mock.calls[0])).toBe("/tmp/profile-chrome");
+            expect(effectiveSpawnCommand(requireSpawnCall())).toBe("/tmp/profile-chrome");
             running.proc.kill?.("SIGTERM");
           },
         });
@@ -713,7 +739,7 @@ describe("chrome.ts internal", () => {
           wss.on("connection", (ws) => {
             ws.on("message", () => {
               ws.send("not-json-at-all");
-              setTimeout(() => ws.close(), 1);
+              setImmediate(() => ws.close());
             });
           });
         },
@@ -730,7 +756,7 @@ describe("chrome.ts internal", () => {
           wss.on("connection", (ws) => {
             ws.on("message", () => {
               ws.send(JSON.stringify({ id: 42, result: { product: "Chrome" } }));
-              setTimeout(() => ws.close(), 1);
+              setImmediate(() => ws.close());
             });
           });
         },
@@ -839,7 +865,7 @@ describe("chrome.ts internal", () => {
         onConnection: (wss) => {
           wss.on("connection", (ws) => {
             // Immediately close with no response, triggering the 'close' branch.
-            setTimeout(() => ws.close(), 10);
+            setImmediate(() => ws.close());
           });
         },
         run: async (baseUrl) => {
