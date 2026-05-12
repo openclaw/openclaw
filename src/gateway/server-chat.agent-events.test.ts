@@ -13,10 +13,6 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: vi.fn(() => ({})),
-}));
-
 vi.mock("../infra/heartbeat-visibility.js", () => ({
   resolveHeartbeatVisibility: vi.fn(() => ({
     showOk: false,
@@ -184,7 +180,7 @@ describe("agent event handler", () => {
     payloadIndex: number,
     label: string,
   ) {
-    const call = mock.mock.calls[index];
+    const call = mock.mock.calls.at(index);
     if (!call) {
       throw new Error(`missing ${label} call ${index + 1}`);
     }
@@ -930,7 +926,7 @@ describe("agent event handler", () => {
     });
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    expect(broadcastToConnIds.mock.calls[0]?.[0]).toBe("session.tool");
+    expect(broadcastToConnIds.mock.calls.at(0)?.[0]).toBe("session.tool");
     const sessionToolPayload = requireMockPayload(broadcastToConnIds, 0, 1, "session tool payload");
     expectRecordFields(sessionToolPayload, {
       runId: "run-session-tool",
@@ -953,8 +949,8 @@ describe("agent event handler", () => {
       toolCallId: "tool-session-1",
       args: { command: "echo hi" },
     });
-    expect(broadcastToConnIds.mock.calls[0]?.[2]).toEqual(new Set(["conn-session"]));
-    expect(broadcastToConnIds.mock.calls[0]?.[3]).toEqual({ dropIfSlow: true });
+    expect(broadcastToConnIds.mock.calls.at(0)?.[2]).toEqual(new Set(["conn-session"]));
+    expect(broadcastToConnIds.mock.calls.at(0)?.[3]).toEqual({ dropIfSlow: true });
     resetAgentRunContextForTest();
   });
 
@@ -995,7 +991,7 @@ describe("agent event handler", () => {
     });
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    expect(broadcastToConnIds.mock.calls[0]?.[0]).toBe("agent");
+    expect(broadcastToConnIds.mock.calls.at(0)?.[0]).toBe("agent");
     const runToolPayload = requireMockPayload(broadcastToConnIds, 0, 1, "run tool payload");
     expectRecordFields(runToolPayload, {
       runId: "run-tool-owner",
@@ -1018,7 +1014,7 @@ describe("agent event handler", () => {
       toolCallId: "tool-run-1",
       args: { command: "echo hi" },
     });
-    expect(broadcastToConnIds.mock.calls[0]?.[2]).toEqual(new Set(["conn-run"]));
+    expect(broadcastToConnIds.mock.calls.at(0)?.[2]).toEqual(new Set(["conn-run"]));
     resetAgentRunContextForTest();
   });
 
@@ -1047,7 +1043,7 @@ describe("agent event handler", () => {
       },
     });
 
-    const payload = nodeSendToSession.mock.calls[0]?.[2] as {
+    const payload = nodeSendToSession.mock.calls.at(0)?.[2] as {
       stream?: string;
       data?: { name?: string; args?: Record<string, unknown> };
     };
@@ -1111,8 +1107,8 @@ describe("agent event handler", () => {
       },
     });
 
-    expect(nodeSendToSession.mock.calls[0]?.[0]).toBe("session-1");
-    expect(nodeSendToSession.mock.calls[0]?.[1]).toBe("agent");
+    expect(nodeSendToSession.mock.calls.at(0)?.[0]).toBe("session-1");
+    expect(nodeSendToSession.mock.calls.at(0)?.[1]).toBe("agent");
     const nodeToolPayload = requireMockPayload(nodeSendToSession, 0, 2, "node tool payload");
     expectRecordFields(nodeToolPayload, {
       runId: "run-tool-node",
@@ -1270,8 +1266,8 @@ describe("agent event handler", () => {
       },
     });
 
-    expect(broadcastToConnIds.mock.calls[0]?.[0]).toBe("sessions.changed");
-    expectPayloadFields(broadcastToConnIds.mock.calls[0]?.[1], {
+    expect(broadcastToConnIds.mock.calls.at(0)?.[0]).toBe("sessions.changed");
+    expectPayloadFields(broadcastToConnIds.mock.calls.at(0)?.[1], {
       sessionKey: "session-finished",
       phase: "end",
       spawnedBy: "agent:main:main",
@@ -1290,8 +1286,8 @@ describe("agent event handler", () => {
       estimatedCostUsd: 0.12,
       lastThreadId: 42,
     });
-    expect(broadcastToConnIds.mock.calls[0]?.[2]).toEqual(new Set(["conn-session"]));
-    expect(broadcastToConnIds.mock.calls[0]?.[3]).toEqual({ dropIfSlow: true });
+    expect(broadcastToConnIds.mock.calls.at(0)?.[2]).toEqual(new Set(["conn-session"]));
+    expect(broadcastToConnIds.mock.calls.at(0)?.[3]).toEqual({ dropIfSlow: true });
   });
 
   it("keeps tool output for Control UI recipients when verbose is on", () => {
@@ -1317,7 +1313,9 @@ describe("agent event handler", () => {
     });
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    const payload = broadcastToConnIds.mock.calls[0]?.[1] as { data?: Record<string, unknown> };
+    const payload = broadcastToConnIds.mock.calls.at(0)?.[1] as {
+      data?: Record<string, unknown>;
+    };
     expect(payload.data?.result).toEqual({ content: [{ type: "text", text: "secret" }] });
     expect(payload.data?.partialResult).toEqual({ content: [{ type: "text", text: "partial" }] });
     resetAgentRunContextForTest();
@@ -1346,7 +1344,9 @@ describe("agent event handler", () => {
     });
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    const payload = broadcastToConnIds.mock.calls[0]?.[1] as { data?: Record<string, unknown> };
+    const payload = broadcastToConnIds.mock.calls.at(0)?.[1] as {
+      data?: Record<string, unknown>;
+    };
     expect(payload.data?.result).toEqual(result);
     resetAgentRunContextForTest();
   });
@@ -1627,7 +1627,7 @@ describe("agent event handler", () => {
     expect(broadcast.mock.calls.some(([event]) => event === "agent")).toBe(false);
     expect(nodeSendToSession).not.toHaveBeenCalled();
     const persistParams = requireRecord(
-      persistGatewaySessionLifecycleEventMock.mock.calls[0]?.[0],
+      persistGatewaySessionLifecycleEventMock.mock.calls.at(0)?.[0],
       "persist lifecycle params",
     );
     expect(persistParams.sessionKey).toBe("session-hidden");
@@ -1680,7 +1680,7 @@ describe("agent event handler", () => {
     });
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    const payload = broadcastToConnIds.mock.calls[0]?.[1] as { runId?: string };
+    const payload = broadcastToConnIds.mock.calls.at(0)?.[1] as { runId?: string };
     expect(payload.runId).toBe("run-tool-client");
     resetAgentRunContextForTest();
   });
