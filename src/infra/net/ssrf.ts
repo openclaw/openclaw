@@ -669,7 +669,11 @@ export function destroyDispatcher(candidate?: ClosableDispatcher | null): void {
     return;
   }
   try {
-    candidate.destroy?.();
+    if (typeof candidate.destroy === "function") {
+      candidate.destroy();
+    } else if (typeof candidate.close === "function") {
+      candidate.close();
+    }
   } catch {
     // ignore dispatcher cleanup errors
   }
