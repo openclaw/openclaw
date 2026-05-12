@@ -100,13 +100,11 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
     tokensAfter: 45,
     firstKeptEntryId: fixture.preCompactionLeafId,
     preCompaction: {
-      sessionId: fixture.preCompactionSession.getSessionId(),
-      sessionFile: fixture.preCompactionSessionFile,
+      sessionId: fixture.preCompactionSessionId,
       leafId: fixture.preCompactionLeafId,
     },
     postCompaction: {
       sessionId: fixture.sessionId,
-      sessionFile: fixture.sessionFile,
       leafId: fixture.postCompactionLeafId,
       entryId: fixture.postCompactionLeafId,
     },
