@@ -13,6 +13,7 @@ import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 const MAX_NATIVE_HOOK_STDIN_BYTES = 1024 * 1024;
 const NATIVE_HOOK_DIRECT_BRIDGE_TIMEOUT_FRACTION = 0.75;
 const NATIVE_HOOK_RESPONSE_RESERVE_FRACTION = 0.05;
+const MAX_NATIVE_HOOK_BRIDGE_REGISTRATION_WAIT_MS = 250;
 const MAX_NATIVE_HOOK_RESPONSE_RESERVE_MS = 250;
 
 export type NativeHookRelayCliOptions = {
@@ -156,6 +157,7 @@ function calculateNativeHookRelayBridgeRegistrationTimeoutMs(params: {
     1,
     Math.min(
       Math.floor(params.timeoutMs * NATIVE_HOOK_DIRECT_BRIDGE_TIMEOUT_FRACTION),
+      MAX_NATIVE_HOOK_BRIDGE_REGISTRATION_WAIT_MS,
       remainingBeforeResponse,
     ),
   );

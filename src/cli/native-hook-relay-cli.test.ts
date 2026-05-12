@@ -60,14 +60,14 @@ describe("native hook relay CLI", () => {
     }
   });
 
-  it("reserves timeout budget for gateway fallback and fail-closed output", async () => {
+  it("caps absent bridge polling while reserving fallback and fail-closed budget", async () => {
     expect(
       cliTesting.calculateNativeHookRelayBridgeRegistrationTimeoutMs({
         startedAt: 1_000,
         timeoutMs: 5_000,
         now: 1_000,
       }),
-    ).toBe(3_750);
+    ).toBe(250);
     expect(
       cliTesting.calculateNativeHookRelayDirectBridgeTimeoutMs({
         startedAt: 1_000,
