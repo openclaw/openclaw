@@ -30,8 +30,35 @@ MODE="${MODE:-byok}"
 # WS — both surfaces are tenant-scoped against the platform-context
 # X-Tenant-Token header.
 export ROCKIELAB_API_BASE="${ROCKIELAB_API_BASE:-https://api.rockielab.com}"
-if [ -n "${BROKER_TENANT_TOKEN:-}" ] && [ -z "${ROCKIELAB_TENANT_TOKEN:-}" ]; then
-  export ROCKIELAB_TENANT_TOKEN="$BROKER_TENANT_TOKEN"
+# ROCKIELAB_TENANT_TOKEN is the value the in-machine CLIs (rockie-loop,
+# rockie-gpu, rockie-compute) send as `X-Tenant-Token` on every API
+# call. platform-context's `api.tenant_context.tenant_id_dep` reads that
+# header literally as the tenant_id for tenant-scoped queries (see
+# tenant_context.py). So this MUST be the tenant's actual id (e.g.
+# `t-95a34ff7c78c`), not the platform-wide broker token.
+#
+# Source order (most specific wins):
+#   1. ROCKIELAB_TENANT_TOKEN — explicit override (Fly secret).
+#   2. ROCKIELAB_TENANT_ID    — staged by fly_provisioning_service at
+#                               machine create + image-roll time.
+#   3. BROKER_TENANT_TOKEN    — legacy fallback. WRONG semantically
+#                               (broker token != tenant id), but kept
+#                               so old tenants without ROCKIELAB_TENANT_ID
+#                               in env still launch the daemon (it'll
+#                               just be a no-op because /api/notebooks
+#                               returns []). New tenants always have
+#                               ROCKIELAB_TENANT_ID. Task #64.
+if [ -z "${ROCKIELAB_TENANT_TOKEN:-}" ]; then
+  if [ -n "${ROCKIELAB_TENANT_ID:-}" ]; then
+    export ROCKIELAB_TENANT_TOKEN="$ROCKIELAB_TENANT_ID"
+  elif [ -n "${BROKER_TENANT_TOKEN:-}" ]; then
+    export ROCKIELAB_TENANT_TOKEN="$BROKER_TENANT_TOKEN"
+    # `log` is defined further down (after the OpenClaw vars); use a
+    # direct echo here so the warning still surfaces.
+    printf '[entrypoint] %s\n' \
+      "WARN: ROCKIELAB_TENANT_ID unset; falling back to BROKER_TENANT_TOKEN for X-Tenant-Token. Daemon /api/notebooks will return [] until ROCKIELAB_TENANT_ID is staged (task #64)." \
+      >&2
+  fi
 fi
 # OpenClaw gateway needs to listen on the Fly machine's external
 # interface so platform-context can HTTP-proxy to it through the
