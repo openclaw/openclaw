@@ -35,11 +35,30 @@ function expectedGitRepoDir(params: { gitDir: string; normalizedSpec: string }):
 
 function expectParsedGitSpec(spec: string) {
   const parsed = parseGitPluginSpec(spec);
-  expect(parsed).not.toBeNull();
   if (!parsed) {
     throw new Error(`Expected ${spec} to parse as a git plugin spec`);
   }
   return parsed;
+}
+
+function firstCommandRun(): unknown[] | undefined {
+  return runCommandWithTimeoutMock.mock.calls[0];
+}
+
+function firstInstallOptions():
+  | {
+      expectedPluginId?: string;
+      packageDir?: string;
+      installPolicyRequest?: { kind?: string; requestedSpecifier?: string };
+    }
+  | undefined {
+  return installPluginFromInstalledPackageDirMock.mock.calls[0]?.[0] as
+    | {
+        expectedPluginId?: string;
+        packageDir?: string;
+        installPolicyRequest?: { kind?: string; requestedSpecifier?: string };
+      }
+    | undefined;
 }
 
 describe("parseGitPluginSpec", () => {
@@ -101,16 +120,16 @@ describe("installPluginFromGitSpec", () => {
     expect(result.git.url).toBe("https://github.com/acme/demo.git");
     expect(result.git.ref).toBe("v1.2.3");
     expect(result.git.commit).toBe("abc123");
-    const cloneArgv = runCommandWithTimeoutMock.mock.calls[0][0] as string[];
+    const cloneArgv = firstCommandRun()?.[0] as string[];
     expect(cloneArgv.slice(0, 3)).toEqual(["git", "clone", "https://github.com/acme/demo.git"]);
     expect(cloneArgv[3]).toContain("/repo");
-    expect(runCommandWithTimeoutMock.mock.calls[1][0]).toEqual([
+    expect(runCommandWithTimeoutMock.mock.calls.at(1)?.[0]).toEqual([
       "git",
       "checkout",
       "--detach",
       "v1.2.3",
     ]);
-    expect(runCommandWithTimeoutMock.mock.calls[3][0]).toEqual([
+    expect(runCommandWithTimeoutMock.mock.calls.at(3)?.[0]).toEqual([
       "npm",
       "install",
       "--omit=dev",
@@ -119,13 +138,7 @@ describe("installPluginFromGitSpec", () => {
       "--no-audit",
       "--no-fund",
     ]);
-    const installOptions = installPluginFromInstalledPackageDirMock.mock.calls[0]?.[0] as
-      | {
-          expectedPluginId?: string;
-          packageDir?: string;
-          installPolicyRequest?: { kind?: string; requestedSpecifier?: string };
-        }
-      | undefined;
+    const installOptions = firstInstallOptions();
     expect(installOptions?.expectedPluginId).toBe("demo");
     expect(installOptions?.packageDir).toContain("/repo");
     expect(installOptions?.installPolicyRequest?.kind).toBe("plugin-git");
@@ -158,7 +171,7 @@ describe("installPluginFromGitSpec", () => {
       throw new Error(result.error);
     }
 
-    const cloneArgv = runCommandWithTimeoutMock.mock.calls[0][0] as string[];
+    const cloneArgv = firstCommandRun()?.[0] as string[];
     expect(cloneArgv.slice(0, 5)).toEqual([
       "git",
       "clone",

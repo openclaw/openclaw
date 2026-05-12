@@ -100,6 +100,7 @@ export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
   chunker?: ((text: string, limit: number, ctx?: ChannelOutboundChunkContext) => string[]) | null;
   chunkerMode?: "text" | "markdown";
+  chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
   /** Lift remote Markdown image syntax in text into outbound media attachments. */
   extractMarkdownImages?: boolean;
   textChunkLimit?: number;

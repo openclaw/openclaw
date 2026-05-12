@@ -96,6 +96,10 @@ function expectApprovalRuntime(
   return runtime;
 }
 
+function firstCallArg(mock: ReturnType<typeof vi.fn>): unknown {
+  return mock.mock.calls[0]?.[0];
+}
+
 describe("createChannelApprovalHandlerFromCapability", () => {
   it("returns null when the capability does not expose a native runtime", async () => {
     await expect(
@@ -153,12 +157,12 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     await approvalRuntime.handleRequested(request);
     await approvalRuntime.stop();
 
-    expect(unbindPending).toHaveBeenCalledWith(
-      expect.objectContaining({
-        request,
-        approvalKind: "plugin",
-      }),
-    );
+    expect(unbindPending).toHaveBeenCalledOnce();
+    const stopUnbind = firstCallArg(unbindPending) as
+      | { request?: unknown; approvalKind?: string }
+      | undefined;
+    expect(stopUnbind?.request).toBe(request);
+    expect(stopUnbind?.approvalKind).toBe("plugin");
   });
 
   it("ignores duplicate pending request ids before finalization", async () => {
@@ -185,13 +189,12 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     } as never);
 
     expect(unbindPending).toHaveBeenCalledTimes(1);
-    expect(unbindPending).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: { messageId: "1" },
-        binding: { bindingId: "bound-1" },
-        request,
-      }),
-    );
+    const unbind = firstCallArg(unbindPending) as
+      | { entry?: unknown; binding?: unknown; request?: unknown }
+      | undefined;
+    expect(unbind?.entry).toEqual({ messageId: "1" });
+    expect(unbind?.binding).toEqual({ bindingId: "bound-1" });
+    expect(unbind?.request).toBe(request);
     expect(buildResolvedResult).toHaveBeenCalledTimes(1);
   });
 
@@ -231,11 +234,8 @@ describe("createChannelApprovalHandlerFromCapability", () => {
 
     expect(unbindPending).toHaveBeenCalledTimes(2);
     expect(buildResolvedResult).toHaveBeenCalledTimes(1);
-    expect(buildResolvedResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: { messageId: "2" },
-      }),
-    );
+    const resolvedPayload = firstCallArg(buildResolvedResult) as { entry?: unknown } | undefined;
+    expect(resolvedPayload?.entry).toEqual({ messageId: "2" });
   });
 
   it("continues stop-time unbind cleanup when one binding throws", async () => {

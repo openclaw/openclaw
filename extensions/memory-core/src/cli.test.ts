@@ -22,7 +22,14 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
 );
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  let error: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 vi.mock("./cli.host.runtime.js", async () => {
@@ -102,7 +109,7 @@ describe("memory cli", () => {
   const inactiveMemorySecretDiagnostic = "agents.defaults.memorySearch.remote.apiKey inactive"; // pragma: allowlist secret
 
   function expectCliSync(sync: ReturnType<typeof vi.fn>) {
-    const syncCall = sync.mock.calls[0]?.[0] as
+    const syncCall = sync.mock.calls.at(0)?.[0] as
       | { reason?: unknown; force?: unknown; progress?: unknown }
       | undefined;
     expect(syncCall?.reason).toBe("cli");
@@ -254,9 +261,7 @@ describe("memory cli", () => {
 
     params.beforeExpect?.();
     expect(close).toHaveBeenCalled();
-    expect(error).toHaveBeenCalledWith(
-      expect.stringContaining("Memory manager close failed: close boom"),
-    );
+    expect(error).toHaveBeenCalledWith("Memory manager close failed: close boom");
     expect(process.exitCode).toBeUndefined();
   }
 
@@ -348,7 +353,7 @@ describe("memory cli", () => {
 
     await runMemoryCli(["status"]);
 
-    const secretRefsCall = resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as
+    const secretRefsCall = resolveCommandSecretRefsViaGateway.mock.calls.at(0)?.[0] as
       | { config?: unknown; commandName?: unknown; targetIds?: unknown }
       | undefined;
     expect(secretRefsCall?.config).toBe(config);
@@ -666,10 +671,10 @@ describe("memory cli", () => {
 
       expectLogged(log, "Dream repair: archived session corpus");
       expectLogged(log, "Dream archive:");
-      await expect(fs.access(sessionCorpusDir)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(
-        fs.access(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json")),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expectPathMissing(sessionCorpusDir);
+      await expectPathMissing(
+        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
+      );
       await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
         "# Dream Diary",
       );
@@ -832,7 +837,7 @@ describe("memory cli", () => {
 
       expectCliSync(sync);
       expect(error).toHaveBeenCalledWith(
-        expect.stringContaining("Memory index failed (main): QMD index file is empty"),
+        `Memory index failed (main): QMD index file is empty: ${dbPath}`,
       );
       expect(close).toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
@@ -1776,13 +1781,63 @@ describe("memory cli", () => {
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
       const storeRaw = await waitFor(async () => await fs.readFile(storePath, "utf-8"));
       const store = JSON.parse(storeRaw) as {
-        entries?: Record<string, { path: string; recallCount: number }>;
+        entries?: Record<
+          string,
+          {
+            key: string;
+            path: string;
+            startLine: number;
+            endLine: number;
+            source: string;
+            snippet: string;
+            recallCount: number;
+            dailyCount: number;
+            groundedCount: number;
+            totalScore: number;
+            maxScore: number;
+            firstRecalledAt: string;
+            lastRecalledAt: string;
+            queryHashes: string[];
+            recallDays: string[];
+            conceptTags: string[];
+          }
+        >;
       };
       const entries = Object.values(store.entries ?? {});
       expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({
+      const entry = entries[0];
+      if (!entry) {
+        throw new Error("Expected short-term recall entry");
+      }
+      expect(entry.firstRecalledAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(entry.lastRecalledAt).toBe(entry.firstRecalledAt);
+      expect(entry.recallDays).toHaveLength(1);
+      expect(entry.recallDays[0]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(entry.queryHashes).toHaveLength(1);
+      expect(entry.queryHashes[0]).toMatch(/^[0-9a-f]{12}$/);
+      expect({
+        ...entry,
+        firstRecalledAt: "<now>",
+        lastRecalledAt: "<now>",
+        recallDays: ["<today>"],
+        queryHashes: ["<hash>"],
+      }).toEqual({
+        key: "memory:memory/2026-04-03.md:1:2",
         path: "memory/2026-04-03.md",
+        startLine: 1,
+        endLine: 2,
+        source: "memory",
+        snippet: "Move backups to S3 Glacier.",
         recallCount: 1,
+        dailyCount: 0,
+        groundedCount: 0,
+        totalScore: 0.91,
+        maxScore: 0.91,
+        firstRecalledAt: "<now>",
+        lastRecalledAt: "<now>",
+        queryHashes: ["<hash>"],
+        recallDays: ["<today>"],
+        conceptTags: ["backup", "backups", "glacier"],
       });
       expect(close).toHaveBeenCalled();
     });

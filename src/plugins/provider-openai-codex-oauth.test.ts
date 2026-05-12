@@ -8,9 +8,9 @@ const mocks = vi.hoisted(() => ({
   formatOpenAIOAuthTlsPreflightFix: vi.fn(),
 }));
 
-vi.mock("@mariozechner/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-    "@mariozechner/pi-ai/oauth",
+vi.mock("@earendil-works/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
+    "@earendil-works/pi-ai/oauth",
   );
   return {
     ...actual,
@@ -65,8 +65,9 @@ function createCodexCredentials(extra: Record<string, unknown> = {}) {
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);

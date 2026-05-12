@@ -30,9 +30,6 @@ function normalizeUserId(raw?: string | null): string {
   return normalizeLowercaseStringOrEmpty(trimmed.replace(/^users\//i, ""));
 }
 
-type GoogleChatDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
-type GoogleChatGroupPolicy = "open" | "allowlist" | "disabled";
-
 const GOOGLECHAT_EMAIL_KIND = "plugin:googlechat-email" as const;
 
 function normalizeEntryValue(raw?: string | null): string {

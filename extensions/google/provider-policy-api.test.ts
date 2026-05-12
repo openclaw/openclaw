@@ -23,9 +23,21 @@ describe("google provider policy public artifact", () => {
           ],
         },
       }),
-    ).toMatchObject({
+    ).toEqual({
+      api: "google-generative-ai",
+      apiKey: "GEMINI_API_KEY",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      models: [{ id: "gemini-3.1-pro-preview" }],
+      models: [
+        {
+          id: "gemini-3.1-pro-preview",
+          name: "Gemini 3 Pro",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1_048_576,
+          maxTokens: 65_536,
+        },
+      ],
     });
   });
 
@@ -39,9 +51,10 @@ describe("google provider policy public artifact", () => {
           models: [],
         },
       }),
-    ).toMatchObject({
+    ).toEqual({
       baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
       api: "openai-completions",
+      models: [],
     });
   });
 
@@ -65,10 +78,20 @@ describe("google provider policy public artifact", () => {
           ],
         },
       }),
-    ).toMatchObject({
+    ).toEqual({
       baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
       api: "openai-completions",
-      models: [{ id: "google/gemini-3.1-pro-preview" }],
+      models: [
+        {
+          id: "google/gemini-3.1-pro-preview",
+          name: "Gemini 3 Pro",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1_048_576,
+          maxTokens: 65_536,
+        },
+      ],
     });
   });
 
@@ -91,9 +114,19 @@ describe("google provider policy public artifact", () => {
           ],
         },
       }),
-    ).toMatchObject({
+    ).toEqual({
       baseUrl: "openclaw://google-gemini-cli",
-      models: [{ id: "google/gemini-3.1-pro-preview" }],
+      models: [
+        {
+          id: "google/gemini-3.1-pro-preview",
+          name: "Gemini CLI 3 Pro",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1_048_576,
+          maxTokens: 65_536,
+        },
+      ],
     });
   });
 });

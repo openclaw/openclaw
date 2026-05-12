@@ -72,8 +72,16 @@ function detailRecord(result: unknown): Record<string, unknown> {
   return details as Record<string, unknown>;
 }
 
+function mockCall(mock: { mock: { calls: unknown[][] } }, index: number, label: string) {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
 function firstMockArg(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
-  const arg = mock.mock.calls[0]?.[0];
+  const arg = mockCall(mock, 0, "first mock call")[0];
   if (!arg || typeof arg !== "object" || Array.isArray(arg)) {
     throw new Error("expected first mock argument object");
   }
@@ -106,8 +114,8 @@ describe("skill-workshop", () => {
 
     expect(tool).toBeNull();
     expect(on.mock.calls.map(([hook]) => hook)).toEqual(["before_prompt_build", "agent_end"]);
-    expect(typeof on.mock.calls[0]?.[1]).toBe("function");
-    expect(typeof on.mock.calls[1]?.[1]).toBe("function");
+    expect(typeof mockCall(on, 0, "before_prompt_build hook registration")[1]).toBe("function");
+    expect(typeof mockCall(on, 1, "agent_end hook registration")[1]).toBe("function");
   });
 
   it("detects user corrections and creates an animated GIF proposal", async () => {
@@ -975,7 +983,7 @@ describe("skill-workshop", () => {
     const proposal = details.proposal as SkillProposal | undefined;
     expect(proposal?.status).toBe("quarantined");
     expect(proposal?.quarantineReason).toContain("prompt");
-    expect(proposal?.scanFindings?.some((finding) => finding.severity === "critical")).toBe(true);
+    expect(proposal?.scanFindings?.map((finding) => finding.severity)).toContain("critical");
     const store = new SkillWorkshopStore({ stateDir, workspaceDir });
     expect(await store.list("quarantined")).toHaveLength(1);
   });

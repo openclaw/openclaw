@@ -103,6 +103,24 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
+type RunMessageActionInput = {
+  agentId?: string;
+  cfg?: unknown;
+  params?: Record<string, unknown>;
+  requesterSenderId?: string;
+  sandboxRoot?: string;
+  senderIsOwner?: boolean;
+  sessionKey?: string;
+  toolContext?: {
+    currentThreadTs?: string;
+    replyToMode?: string;
+  };
+};
+
+function firstRunMessageActionInput(): RunMessageActionInput | undefined {
+  return mocks.runMessageAction.mock.calls.at(0)?.[0] as RunMessageActionInput | undefined;
+}
+
 const openClawToolsFactoryMocks = vi.hoisted(() => {
   const tool = (name: string) => ({
     name,
@@ -240,17 +258,16 @@ function getActionEnum(properties: Record<string, unknown>) {
 function expectStringSchema(
   schema: unknown,
   expected?: {
-    descriptionIncludes?: string;
+    description?: string;
   },
 ) {
-  expect(schema).toBeTruthy();
   if (!schema || typeof schema !== "object") {
     throw new Error("Expected string schema");
   }
   const record = schema as Record<string, unknown>;
   expect(record.type).toBe("string");
-  if (expected?.descriptionIncludes) {
-    expect(record.description).toEqual(expect.stringContaining(expected.descriptionIncludes));
+  if (expected?.description) {
+    expect(record.description).toBe(expected.description);
   }
 }
 
@@ -331,14 +348,7 @@ async function executeSend(params: {
     action: "send",
     ...params.action,
   });
-  return mocks.runMessageAction.mock.calls[0]?.[0] as
-    | {
-        params?: Record<string, unknown>;
-        sandboxRoot?: string;
-        requesterSenderId?: string;
-        senderIsOwner?: boolean;
-      }
-    | undefined;
+  return firstRunMessageActionInput();
 }
 
 describe("message tool secret scoping", () => {
@@ -475,7 +485,7 @@ describe("message tool secret scoping", () => {
     expect(secretResolveCall.allowedPaths).toEqual(
       new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
     );
-    expect(mocks.runMessageAction.mock.calls[0]?.[0]?.cfg).toBe(resolvedConfig);
+    expect(firstRunMessageActionInput()?.cfg).toBe(resolvedConfig);
   });
 });
 
@@ -495,7 +505,7 @@ describe("message tool agent routing", () => {
       message: "hi",
     });
 
-    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    const call = firstRunMessageActionInput();
     expect(call?.agentId).toBe("alpha");
     expect(call?.sessionKey).toBe("agent:alpha:main");
   });
@@ -518,7 +528,7 @@ describe("message tool agent routing", () => {
       message: "stay in thread",
     });
 
-    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    const call = firstRunMessageActionInput();
     expect(call?.toolContext?.currentThreadTs).toBe("111.222");
     expect(call?.toolContext?.replyToMode).toBe("all");
   });
@@ -542,7 +552,7 @@ describe("message tool agent routing", () => {
       message: "send at channel level",
     });
 
-    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    const call = firstRunMessageActionInput();
     expect(call?.toolContext?.currentThreadTs).toBe("111.222");
     expect(call?.toolContext?.replyToMode).toBe("off");
   });
@@ -568,7 +578,7 @@ describe("message tool agent routing", () => {
       message: "stay in thread",
     });
 
-    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    const call = firstRunMessageActionInput();
     expect(call?.toolContext?.currentThreadTs).toBe("111.222");
     expect(call?.toolContext?.replyToMode).toBe("all");
   });
@@ -616,7 +626,7 @@ describe("message tool explicit target guard", () => {
       filePath: "/tmp/report.png",
     });
 
-    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    const call = firstRunMessageActionInput();
     expect(call?.params?.target).toBe("channel:C999");
   });
 });
@@ -888,6 +898,47 @@ describe("message tool schema scoping", () => {
     expect(properties).not.toHaveProperty("eventName");
   });
 
+  it("filters scoped schemas through the per-agent message action allowlist", () => {
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+      actions: ["send", "read", "react", "delete"],
+    });
+
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const tool = createMessageTool({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "sandbox",
+              tools: {
+                message: {
+                  actions: {
+                    allow: ["send"],
+                  },
+                },
+              },
+            },
+          ],
+        },
+      } as never,
+      currentChannelProvider: "discord",
+      agentId: "sandbox",
+    });
+    const properties = getToolProperties(tool);
+
+    expect(getActionEnum(properties)).toEqual(["send"]);
+    expect(properties).toHaveProperty("message");
+    expect(properties).toHaveProperty("target");
+    expect(properties).not.toHaveProperty("messageId");
+    expect(tool.description).toContain("Supports actions: send.");
+    expect(tool.description).not.toContain("react");
+  });
+
   it("uses discovery account scope for other configured channel actions", () => {
     const currentPlugin = createChannelPlugin({
       id: "discord",
@@ -964,11 +1015,13 @@ describe("message tool schema scoping", () => {
     });
 
     const context = seenContexts.find((item) => item.phase === "describeMessageTool");
-    expect(context).toBeDefined();
-    expect(context?.currentChannelProvider).toBe("discord");
-    expect(context?.currentChannelId).toBe("channel:123");
-    expect(context?.currentThreadTs).toBe("thread-456");
-    expect(context?.currentMessageId).toBe("msg-789");
+    if (!context) {
+      throw new Error("Expected describeMessageTool discovery context");
+    }
+    expect(context.currentChannelProvider).toBe("discord");
+    expect(context.currentChannelId).toBe("channel:123");
+    expect(context.currentThreadTs).toBe("thread-456");
+    expect(context.currentMessageId).toBe("msg-789");
     expect(context?.accountId).toBe("ops");
     expect(context?.sessionKey).toBe("agent:alpha:main");
     expect(context?.sessionId).toBe("session-123");
@@ -1065,7 +1118,10 @@ describe("message tool schema scoping", () => {
     const properties = getToolProperties(tool);
 
     expect(getActionEnum(properties)).toContain("read");
-    expectStringSchema(properties.messageId, { descriptionIncludes: "read" });
+    expectStringSchema(properties.messageId, {
+      description:
+        "Target message id for read, reaction, edit, delete, pin, or unpin. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
+    });
   });
 });
 

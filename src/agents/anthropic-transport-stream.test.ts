@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
@@ -72,6 +72,16 @@ function latestAnthropicRequest() {
 
 function latestAnthropicRequestHeaders() {
   return new Headers(latestAnthropicRequest().init?.headers);
+}
+
+function guardedFetchCall(
+  callIndex = 0,
+): [unknown, { method?: unknown; headers?: HeadersInit } | undefined] {
+  const call = guardedFetchMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected guarded fetch call ${callIndex + 1}`);
+  }
+  return call as [unknown, { method?: unknown; headers?: HeadersInit } | undefined];
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -178,7 +188,7 @@ describe("anthropic transport stream", () => {
     );
 
     expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model);
-    const [url, init] = guardedFetchMock.mock.calls[0] ?? [];
+    const [url, init] = guardedFetchCall();
     expect(url).toBe("https://api.anthropic.com/v1/messages");
     expect(init?.method).toBe("POST");
     const headers = new Headers(init?.headers);
@@ -194,6 +204,35 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
       "fine-grained-tool-streaming-2025-05-14",
     );
+  });
+
+  it("bypasses the OpenAI SSE sanitizer for Kimi Anthropic thinking streams", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "kimi-for-coding",
+      name: "Kimi Code",
+      provider: "kimi",
+      baseUrl: "https://api.kimi.com/coding",
+      maxTokens: 32768,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-kimi-api",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model, undefined, {
+      sanitizeSse: false,
+    });
+    expect(latestAnthropicRequest().payload.thinking).toEqual({
+      type: "enabled",
+      budget_tokens: 16384,
+    });
   });
 
   it("does not add implicit Anthropic beta headers for custom compatible API-key endpoints", async () => {
@@ -212,8 +251,9 @@ describe("anthropic transport stream", () => {
       } as AnthropicStreamOptions,
     );
 
-    expect(guardedFetchMock.mock.calls[0]?.[0]).toBe("https://custom-proxy.example/v1/messages");
-    expect(guardedFetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    const [url, init] = guardedFetchCall();
+    expect(url).toBe("https://custom-proxy.example/v1/messages");
+    expect(init?.method).toBe("POST");
     expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBeNull();
   });
 
@@ -439,8 +479,9 @@ describe("anthropic transport stream", () => {
     );
     const result = await stream.result();
 
-    expect(guardedFetchMock.mock.calls[0]?.[0]).toBe("https://api.anthropic.com/v1/messages");
-    const headers = new Headers(guardedFetchMock.mock.calls[0]?.[1]?.headers);
+    const [url, init] = guardedFetchCall();
+    expect(url).toBe("https://api.anthropic.com/v1/messages");
+    const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer sk-ant-oat-example");
     expect(headers.get("x-app")).toBe("cli");
     expect(headers.get("user-agent")).toContain("claude-cli/");
@@ -688,6 +729,61 @@ describe("anthropic transport stream", () => {
     );
     expect(toolUse.input).toEqual({});
   });
+
+  it.each([
+    {
+      name: "empty history",
+      context: { messages: [] } as AnthropicStreamContext,
+    },
+    {
+      name: "blank user content",
+      context: {
+        messages: [
+          {
+            role: "user",
+            content: " \n\t ",
+            timestamp: 0,
+          },
+        ],
+      } as AnthropicStreamContext,
+    },
+  ])(
+    "sends a minimal user fallback when Anthropic message conversion has no content: $name",
+    async ({ context }) => {
+      await runTransportStream(
+        makeAnthropicTransportModel({
+          id: "MiniMax-M2.7",
+          name: "MiniMax M2.7",
+          provider: "minimax",
+          baseUrl: "https://api.minimax.io/anthropic",
+        }),
+        context,
+        {
+          apiKey: "sk-minimax-test",
+        } as AnthropicStreamOptions,
+      );
+
+      const requestPayload = latestAnthropicRequest().payload;
+      expect(requestPayload.model).toBe("MiniMax-M2.7");
+      expect(requestPayload.messages).toEqual([
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: ".",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        },
+      ]);
+      const [[url, fetchOptions]] = guardedFetchMock.mock.calls as unknown as Array<
+        [string, { method?: string }]
+      >;
+      expect(url).toBe("https://api.minimax.io/anthropic/v1/messages");
+      expect(fetchOptions.method).toBe("POST");
+    },
+  );
 
   it.each([
     ["empty", ""],

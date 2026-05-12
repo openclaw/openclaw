@@ -500,6 +500,7 @@ const TOOLS_HOOKS_TARGET_KEYS = [
   "tools.byProvider",
   "tools.exec.approvalRunningNoticeMs",
   "tools.exec.strictInlineEval",
+  "tools.exec.commandHighlighting",
   "tools.links.enabled",
   "tools.links.maxLinks",
   "tools.links.models",
@@ -539,6 +540,8 @@ const CHANNELS_AGENTS_TARGET_KEYS = [
   "agents.defaults.workspace",
   "agents.list[].tools.alsoAllow",
   "agents.list[].tools.byProvider",
+  "agents.list[].tools.message.crossContext.allowAcrossProviders",
+  "agents.list[].tools.message.crossContext.allowWithinProvider",
   "agents.list[].tools.profile",
   "channels.mattermost",
 ] as const;

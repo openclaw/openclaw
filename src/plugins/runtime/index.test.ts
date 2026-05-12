@@ -199,7 +199,7 @@ describe("plugin runtime command execution", () => {
         coalesceMs: 0,
       });
       await vi.advanceTimersByTimeAsync(1);
-      const request = handler.mock.calls[0]?.[0] as
+      const request = handler.mock.calls.at(0)?.[0] as
         | { source?: string; intent?: string; reason?: string }
         | undefined;
       expect(request?.source).toBe("other");
@@ -247,6 +247,7 @@ describe("plugin runtime command execution", () => {
           "runFile",
           "describeImageFile",
           "describeImageFileWithModel",
+          "extractStructuredWithModel",
           "describeVideoFile",
         ]);
         expect(runtime.mediaUnderstanding.transcribeAudioFile).toBe(

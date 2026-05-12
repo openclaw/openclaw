@@ -49,7 +49,7 @@ function normalizeXaiSpeechResponseFormat(value: unknown): XaiSpeechResponseForm
 }
 
 function resolveSpeechResponseFormat(
-  target: SpeechSynthesisTarget,
+  _target: SpeechSynthesisTarget,
   configuredFormat?: XaiSpeechResponseFormat,
 ): XaiSpeechResponseFormat {
   if (configuredFormat) {

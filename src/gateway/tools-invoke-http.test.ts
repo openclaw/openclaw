@@ -394,9 +394,11 @@ const expectOkInvokeResponse = async (res: Response) => {
 };
 
 const firstHookCallArg = () => {
-  const call = hookMocks.runBeforeToolCallHook.mock.calls[0];
-  expect(call).toBeDefined();
-  return call?.[0];
+  const call = hookMocks.runBeforeToolCallHook.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected before-tool-call hook");
+  }
+  return call[0];
 };
 
 const invokeToolsRpc = async (params: Record<string, unknown>, scopes = ["operator.write"]) => {
@@ -409,7 +411,7 @@ const invokeToolsRpc = async (params: Record<string, unknown>, scopes = ["operat
     req: { type: "req", id: "req-rpc-1", method: "tools.invoke" },
     isWebchatConnect: () => false,
   });
-  return respond.mock.calls[0] as
+  return respond.mock.calls.at(0) as
     | [boolean, { ok?: boolean; toolName?: string; output?: unknown; error?: unknown }?, unknown?]
     | undefined;
 };
@@ -451,11 +453,13 @@ describe("POST /tools/invoke", () => {
     const hookArg = firstHookCallArg();
     expect(hookArg.toolName).toBe("agents_list");
     const hookCtx = hookArg.ctx;
-    expect(hookCtx).toBeDefined();
-    expect(hookCtx?.agentId).toBe("main");
-    expect(hookCtx?.config).toBe(cfg);
-    expect(hookCtx?.sessionKey).toBe("agent:main:main");
-    expect(hookCtx?.loopDetection).toEqual({ warnAt: 3 });
+    if (!hookCtx) {
+      throw new Error("Expected before-tool-call hook context");
+    }
+    expect(hookCtx.agentId).toBe("main");
+    expect(hookCtx.config).toBe(cfg);
+    expect(hookCtx.sessionKey).toBe("agent:main:main");
+    expect(hookCtx.loopDetection).toEqual({ warnAt: 3 });
   });
 
   it("opts direct gateway tool invocation into gateway subagent binding", async () => {
@@ -987,10 +991,12 @@ describe("tools.invoke Gateway RPC", () => {
     expect(hookArg.toolName).toBe("agents_list");
     expect(hookArg.toolCallId).toBe("rpc-rpc-tool-test");
     const hookCtx = hookArg.ctx;
-    expect(hookCtx).toBeDefined();
-    expect(hookCtx?.agentId).toBe("main");
-    expect(hookCtx?.config).toBe(cfg);
-    expect(hookCtx?.sessionKey).toBe("agent:main:main");
+    if (!hookCtx) {
+      throw new Error("Expected before-tool-call hook context");
+    }
+    expect(hookCtx.agentId).toBe("main");
+    expect(hookCtx.config).toBe(cfg);
+    expect(hookCtx.sessionKey).toBe("agent:main:main");
   });
 
   it("returns typed approval-needed refusal when the policy hook blocks", async () => {

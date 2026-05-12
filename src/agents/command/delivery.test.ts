@@ -137,7 +137,8 @@ function expectRuntimeErrorIncludes(
   runtime: { error: { mock: { calls: Array<Array<unknown>> } } },
   text: string,
 ) {
-  expect(runtime.error.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+  const errorOutput = runtime.error.mock.calls.map(([message]) => String(message)).join("\n");
+  expect(errorOutput).toContain(text);
 }
 
 function latestJsonOutput(runtime: { writeJson: { mock: { calls: Array<Array<unknown>> } } }) {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import type { OAuthCredentials } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyAuthProfileConfig,
@@ -82,8 +82,9 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
 }));
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value, label).toBe("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 

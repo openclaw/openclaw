@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
+import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
@@ -163,6 +164,14 @@ function expectRecordFields(
   return record;
 }
 
+function firstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
+  const [arg] = mock.mock.calls[0] ?? [];
+  if (arg === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return arg;
+}
+
 async function expectGatewayRequestError(
   promise: Promise<unknown>,
   expected: Record<string, unknown>,
@@ -197,7 +206,7 @@ function expectSecurityConnectError(
   onConnectError: ReturnType<typeof vi.fn>,
   params?: { expectTailscaleHint?: boolean },
 ) {
-  const error = onConnectError.mock.calls[0]?.[0] as Error;
+  const error = firstMockArg(onConnectError, "connect error") as Error;
   expect(error.message).toContain("SECURITY ERROR");
   expect(error.message).toContain("openclaw doctor --fix");
   if (params?.expectTailscaleHint) {
@@ -512,10 +521,10 @@ describe("GatewayClient request errors", () => {
       expect(onConnectError).not.toHaveBeenCalled();
       expect(onClose).not.toHaveBeenCalled();
       expect(ws.lastClose).toEqual({ code: 1013, reason: "gateway starting" });
-      expect(logDebugMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
-      expect(logErrorMock).not.toHaveBeenCalledWith(
-        expect.stringContaining("gateway connect failed:"),
-      );
+      expect(logDebugMock.mock.calls).toEqual([
+        ["gateway connect failed: GatewayClientRequestError: gateway starting; retry shortly"],
+      ]);
+      expect(logErrorMock.mock.calls).toEqual([]);
       expect(wsInstances).toHaveLength(1);
 
       await vi.advanceTimersByTimeAsync(249);
@@ -567,7 +576,7 @@ describe("GatewayClient close handling", () => {
     expect(getLatestWs().emitClose(1008, "unauthorized: device token mismatch")).toBeUndefined();
 
     expect(logDebugMock).toHaveBeenCalledWith(
-      expect.stringContaining("failed clearing stale device-auth token"),
+      "failed clearing stale device-auth token for device dev-2: Error: disk unavailable",
     );
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
     client.stop();
@@ -710,6 +719,7 @@ describe("GatewayClient connect auth payload", () => {
   beforeEach(() => {
     vi.useRealTimers();
     wsInstances.length = 0;
+    clearDeviceAuthTokenMock.mockReset();
     loadDeviceAuthTokenMock.mockReset();
     storeDeviceAuthTokenMock.mockReset();
     logDebugMock.mockClear();
@@ -719,6 +729,8 @@ describe("GatewayClient connect auth payload", () => {
   type ParsedConnectRequest = {
     id?: string;
     params?: {
+      minProtocol?: number;
+      maxProtocol?: number;
       scopes?: string[];
       auth?: {
         token?: string;
@@ -752,6 +764,19 @@ describe("GatewayClient connect auth payload", () => {
   function connectRequestFrom(ws: MockWebSocket) {
     return parseConnectRequest(ws);
   }
+
+  it("advertises the default protocol compatibility range", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+    });
+
+    const { connect } = startClientAndConnect({ client });
+
+    expect(connect.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
+    expect(connect.params?.maxProtocol).toBe(PROTOCOL_VERSION);
+    client.stop();
+  });
 
   function emitConnectChallenge(ws: MockWebSocket, nonce = "nonce-1") {
     ws.emitMessage(
@@ -888,7 +913,7 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
 
     await vi.waitFor(() => {
-      const error = onConnectError.mock.calls[0]?.[0] as Error | undefined;
+      const error = firstMockArg(onConnectError, "connect error") as Error;
       expect(error?.message).toBe("gateway client stopped");
     });
     expect(logDebugMock).toHaveBeenCalledWith(
@@ -1001,7 +1026,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectChallenge(ws);
 
     const loadTokenParams = expectRecordFields(
-      loadDeviceAuthTokenMock.mock.calls[0]?.[0],
+      firstMockArg(loadDeviceAuthTokenMock, "load device token params"),
       {
         role: "operator",
         env,
@@ -1179,7 +1204,7 @@ describe("GatewayClient connect auth payload", () => {
       failureDetails: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
     });
     const clearTokenParams = expectRecordFields(
-      clearDeviceAuthTokenMock.mock.calls[0]?.[0],
+      firstMockArg(clearDeviceAuthTokenMock, "clear device token params"),
       { role: "operator" },
       "clear device token params",
     );
@@ -1188,6 +1213,33 @@ describe("GatewayClient connect auth payload", () => {
       code: 1008,
       reason: "connect failed",
       detailCode: "AUTH_DEVICE_TOKEN_MISMATCH",
+    });
+  });
+
+  it("does not clear stored device tokens or reconnect on AUTH_SCOPE_MISMATCH", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: ["operator.read"],
+    });
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onReconnectPaused,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    expect(firstConnect.params?.auth?.token).toBe("stored-device-token");
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_SCOPE_MISMATCH" },
+    });
+    expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_SCOPE_MISMATCH",
     });
   });
 

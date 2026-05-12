@@ -134,11 +134,11 @@ function runtimeErrorMessages(): string[] {
 }
 
 function expectRuntimeErrorContaining(text: string): void {
-  expect(runtimeErrorMessages().some((message) => message.includes(text))).toBe(true);
+  expect(runtimeErrorMessages().join("\n")).toContain(text);
 }
 
 function expectNoRuntimeErrorContaining(text: string): void {
-  expect(runtimeErrorMessages().some((message) => message.includes(text))).toBe(false);
+  expect(runtimeErrorMessages().join("\n")).not.toContain(text);
 }
 
 function stdoutText(): string {
@@ -511,6 +511,14 @@ describe("cron cli", () => {
 
     const listCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.list");
     expect(listCall?.[2]).toEqual({ includeDisabled: false, agentId: "ops" });
+  });
+
+  it("routes cron get to cron.get with the provided id", async () => {
+    await runCronCommand(["cron", "get", "job-1"]);
+
+    const getCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.get");
+    expect(getCall?.[2]).toEqual({ id: "job-1" });
+    expect(stdoutText()).toContain('"id": "job-1"');
   });
 
   it("paginates cron show lookups", async () => {

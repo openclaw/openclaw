@@ -74,21 +74,21 @@ function createManifestlessClaudeBundleIndex(params: {
 }
 
 function expectDiagnosticsContainCode(diagnostics: readonly { code?: unknown }[], code: string) {
-  expect(diagnostics.some((diagnostic) => diagnostic.code === code)).toBe(true);
+  expect(diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
 }
 
 function expectDiagnosticsContainSource(
   diagnostics: readonly { source?: unknown }[],
   source: string,
 ) {
-  expect(diagnostics.some((diagnostic) => diagnostic.source === source)).toBe(true);
+  expect(diagnostics.map((diagnostic) => diagnostic.source)).toContain(source);
 }
 
 function expectDiagnosticsDoNotContainSource(
   diagnostics: readonly { source?: unknown }[],
   source: string,
 ) {
-  expect(diagnostics.some((diagnostic) => diagnostic.source === source)).toBe(false);
+  expect(diagnostics.map((diagnostic) => diagnostic.source)).not.toContain(source);
 }
 
 function requirePluginRecord(
@@ -96,7 +96,6 @@ function requirePluginRecord(
   pluginId: string,
 ): InstalledPluginIndex["plugins"][number] {
   const plugin = plugins.find((candidate) => candidate.pluginId === pluginId);
-  expect(plugin, `plugin ${pluginId}`).toBeDefined();
   if (!plugin) {
     throw new Error(`expected plugin ${pluginId}`);
   }

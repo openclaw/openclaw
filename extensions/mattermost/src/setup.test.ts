@@ -212,11 +212,14 @@ describe("mattermost setup", () => {
           httpUrl: "https://chat.example.com",
         },
       } as never),
-    ).toMatchObject({
+    ).toEqual({
       channels: {
         mattermost: {
+          enabled: true,
           accounts: {
-            default: { name: "Legacy" },
+            default: {
+              name: "Legacy",
+            },
             "work-team": {
               enabled: true,
               name: "Work",
@@ -243,7 +246,7 @@ describe("mattermost setup", () => {
     }
 
     expect(registerHttpRoute).toHaveBeenCalledTimes(1);
-    const [route] = registerHttpRoute.mock.calls[0] ?? [];
+    const [route] = registerHttpRoute.mock.calls.at(0) ?? [];
     expect(route?.path).toBe("/api/channels/mattermost/command");
     expect(route?.auth).toBe("plugin");
     expect(typeof route?.handler).toBe("function");

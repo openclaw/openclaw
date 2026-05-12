@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { getApiProvider, streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { getApiProvider, streamSimple } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as providerTransportStream from "../provider-transport-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt-cache-boundary.js";
@@ -30,8 +30,6 @@ const overrideBoundaryAwareStreamFnOnce = (streamFn: StreamFn): void => {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected ${label} to be an object`);
   }

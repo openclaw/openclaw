@@ -190,6 +190,56 @@ const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } =
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttachRuntime>[1]>;
 
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected mock call ${index}`);
+  }
+  return call[argIndex];
+}
+
+function firstStartupLog(): { loadedPluginIds?: string[] } {
+  return mockCallArg(hoisted.logGatewayStartup) as { loadedPluginIds?: string[] };
+}
+
+function firstEnsureModelsJsonCall(): [
+  unknown,
+  string,
+  {
+    workspaceDir?: string;
+    providerDiscoveryProviderIds?: string[];
+  },
+] {
+  const call = hoisted.ensureOpenClawModelsJson.mock.calls[0];
+  if (!call || call.length < 3) {
+    throw new Error("expected ensureOpenClawModelsJson call");
+  }
+  return call as unknown as [
+    unknown,
+    string,
+    {
+      workspaceDir?: string;
+      providerDiscoveryProviderIds?: string[];
+    },
+  ];
+}
+
+function firstPrewarmCall(
+  prewarmPrimaryModel: ReturnType<typeof vi.fn>,
+): [{ workspaceDir?: string }] {
+  return prewarmPrimaryModel.mock.calls[0] as [{ workspaceDir?: string }];
+}
+
+function firstGatewayStartCall(
+  runGatewayStart: ReturnType<typeof vi.fn>,
+): [PluginHookGatewayStartEvent, PluginHookGatewayContext] {
+  const call = runGatewayStart.mock.calls[0];
+  if (!call) {
+    throw new Error("gateway_start was not invoked");
+  }
+  return call as [PluginHookGatewayStartEvent, PluginHookGatewayContext];
+}
+
 describe("startGatewayPostAttachRuntime", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "0");
@@ -248,9 +298,8 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
     expect(hoisted.loadInternalHooks).not.toHaveBeenCalled();
     expect(hoisted.setInternalHooksEnabled).not.toHaveBeenCalled();
-    expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
-      expect.objectContaining({ loadedPluginIds: ["beta", "alpha"] }),
-    );
+    expect(hoisted.logGatewayStartup).toHaveBeenCalledTimes(1);
+    expect(firstStartupLog().loadedPluginIds).toEqual(["beta", "alpha"]);
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
@@ -417,9 +466,8 @@ describe("startGatewayPostAttachRuntime", () => {
       pluginRegistry: loadedPluginRegistry,
       gatewayMethods: ["ping", "acp.spawn"],
     });
-    expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
-      expect.objectContaining({ loadedPluginIds: ["acpx"] }),
-    );
+    expect(hoisted.logGatewayStartup).toHaveBeenCalledTimes(1);
+    expect(firstStartupLog().loadedPluginIds).toEqual(["acpx"]);
   });
 
   it("waits for deferred startup plugin attachment before channel sidecars", async () => {
@@ -624,14 +672,13 @@ describe("startGatewayPostAttachRuntime", () => {
     });
 
     expect(hoisted.resolveDefaultAgentDir).toHaveBeenCalledWith(cfg);
-    expect(hoisted.ensureOpenClawModelsJson).toHaveBeenCalledWith(
-      cfg,
-      "/tmp/openclaw-state/agents/ops/agent",
-      expect.objectContaining({
-        workspaceDir: "/tmp/openclaw-workspace",
-        providerDiscoveryProviderIds: ["openai"],
-      }),
-    );
+    expect(hoisted.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
+    const ensureCall = firstEnsureModelsJsonCall();
+    expect(ensureCall[0]).toBe(cfg);
+    expect(ensureCall[1]).toBe("/tmp/openclaw-state/agents/ops/agent");
+    const options = ensureCall[2];
+    expect(options?.workspaceDir).toBe("/tmp/openclaw-workspace");
+    expect(options?.providerDiscoveryProviderIds).toEqual(["openai"]);
   });
 
   it("starts channels without waiting for primary model prewarm completion", async () => {
@@ -672,10 +719,8 @@ describe("startGatewayPostAttachRuntime", () => {
         await vi.waitFor(
           () => {
             expect(prewarmPrimaryModel).toHaveBeenCalledTimes(1);
-            expect(prewarmPrimaryModel).toHaveBeenCalledWith(
-              expect.objectContaining({
-                workspaceDir: "/tmp/openclaw-workspace",
-              }),
+            expect(firstPrewarmCall(prewarmPrimaryModel)[0].workspaceDir).toBe(
+              "/tmp/openclaw-workspace",
             );
             expect(startChannels).toHaveBeenCalledTimes(1);
           },
@@ -850,17 +895,11 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(runGatewayStart).toHaveBeenCalledTimes(1);
     });
 
-    const firstCall = runGatewayStart.mock.calls[0];
-    if (!firstCall) {
-      throw new Error("gateway_start was not invoked");
-    }
-    const [event, ctx] = firstCall;
+    const [event, ctx] = firstGatewayStartCall(runGatewayStart);
     expect(event).toEqual({ port: 18789 });
-    expect(ctx).toMatchObject({
-      port: 18789,
-      config: params.gatewayPluginConfigAtStart,
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    expect(ctx.port).toBe(18789);
+    expect(ctx.config).toBe(params.gatewayPluginConfigAtStart);
+    expect(ctx.workspaceDir).toBe("/tmp/openclaw-workspace");
     const getCron = ctx.getCron;
     if (!getCron) {
       throw new Error("gateway_start context did not expose getCron");
@@ -917,7 +956,7 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(runGatewayStart).toHaveBeenCalledTimes(1);
     });
 
-    const ctx = runGatewayStart.mock.calls[0]?.[1];
+    const [, ctx] = firstGatewayStartCall(runGatewayStart);
     if (!ctx?.getCron) {
       throw new Error("gateway_start context did not expose getCron");
     }

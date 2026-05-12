@@ -202,15 +202,29 @@ function setupBaseWizardState(config: OpenClawConfig = {}) {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
+function mockCallArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  label: string,
+  callIndex = 0,
+): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected ${label} call ${callIndex}`);
+  }
+  return call[0];
+}
+
 function requireWriteConfig(callIndex = 0) {
-  const call = mocks.writeConfigFile.mock.calls.at(callIndex);
-  expect(call, "writeConfigFile call").toBeDefined();
-  return requireRecord(call?.[0], "written config");
+  return requireRecord(
+    mockCallArg(mocks.writeConfigFile, "writeConfigFile", callIndex),
+    "written config",
+  );
 }
 
 function getGateway(config: Record<string, unknown>) {
@@ -329,7 +343,10 @@ describe("runConfigureWizard", () => {
 
     await runWebConfigureWizard();
 
-    const setupConfig = requireRecord(mocks.setupSearch.mock.calls[0]?.[0], "setupSearch config");
+    const setupConfig = requireRecord(
+      mockCallArg(mocks.setupSearch, "setupSearch"),
+      "setupSearch config",
+    );
     expect(getGateway(setupConfig).mode).toBe("local");
     const written = requireWriteConfig();
     const search = getWebSearch(written);
@@ -355,9 +372,11 @@ describe("runConfigureWizard", () => {
     await expect(runWebConfigureWizard()).resolves.toBeUndefined();
 
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining(
+      [
         "No web search providers are currently available under this plugin policy.",
-      ),
+        "Enable plugins or remove deny rules, then rerun configure.",
+        "Docs: https://docs.openclaw.ai/tools/web",
+      ].join("\n"),
       "Web search",
     );
     expect(getWebSearch(requireWriteConfig()).enabled).toBe(false);
@@ -373,7 +392,7 @@ describe("runConfigureWizard", () => {
     await runWebConfigureWizard();
 
     const ownersRequest = requireRecord(
-      mocks.resolvePluginContributionOwners.mock.calls[0]?.[0],
+      mockCallArg(mocks.resolvePluginContributionOwners, "plugin owner request"),
       "plugin owner request",
     );
     expect(ownersRequest.contribution).toBe("contracts");
@@ -589,7 +608,7 @@ describe("runConfigureWizard", () => {
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(3);
 
     // Verify plugin-written nested config survived the retry merge.
-    const retryCall = mocks.replaceConfigFile.mock.calls[1][0] as {
+    const retryCall = mockCallArg(mocks.replaceConfigFile, "replaceConfigFile", 1) as {
       nextConfig: Record<string, unknown>;
     };
     const agents = requireRecord(retryCall.nextConfig.agents, "agents config");

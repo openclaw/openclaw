@@ -59,9 +59,17 @@ type TelegramMessageCacheBucket = {
   persistedEntryCount: number;
 };
 
+type PersistedMessageReadResult = TelegramMessageCacheBucket & {
+  needsRewrite: boolean;
+};
+
 const DEFAULT_MAX_MESSAGES = 5000;
 const COMPACT_THRESHOLD_RATIO = 2;
 const persistedMessageCacheBuckets = new Map<string, TelegramMessageCacheBucket>();
+
+export function resetTelegramMessageCacheBucketsForTest(): void {
+  persistedMessageCacheBuckets.clear();
+}
 
 function telegramMessageCacheKey(params: {
   accountId: string;
@@ -173,6 +181,85 @@ function parsePersistedEntry(value: unknown): {
   return node ? { key: value.key, node } : null;
 }
 
+function findJsonArrayEnd(text: string): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let started = false;
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    if (!started) {
+      if (char.trim() === "") {
+        continue;
+      }
+      if (char !== "[") {
+        return -1;
+      }
+      started = true;
+      depth = 1;
+      continue;
+    }
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === "[") {
+      depth++;
+    } else if (char === "]") {
+      depth--;
+      if (depth === 0) {
+        return index + 1;
+      }
+    }
+  }
+  return -1;
+}
+
+function readPersistedEntryValues(raw: string): { values: unknown[]; needsRewrite: boolean } {
+  const values: unknown[] = [];
+  let needsRewrite = false;
+  const readLines = (text: string) => {
+    for (const line of text.split("\n")) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const value: unknown = JSON.parse(line);
+        values.push(value);
+      } catch {
+        needsRewrite = true;
+      }
+    }
+  };
+  const trimmedStart = raw.trimStart();
+  if (trimmedStart.startsWith("[")) {
+    const startOffset = raw.length - trimmedStart.length;
+    const arrayEnd = findJsonArrayEnd(raw.slice(startOffset));
+    if (arrayEnd === -1) {
+      needsRewrite = true;
+      readLines(raw);
+      return { values, needsRewrite };
+    }
+    const legacyValue: unknown = JSON.parse(raw.slice(startOffset, startOffset + arrayEnd));
+    if (Array.isArray(legacyValue)) {
+      values.push(...legacyValue);
+    }
+    needsRewrite = true;
+    readLines(raw.slice(startOffset + arrayEnd));
+    return { values, needsRewrite };
+  }
+  readLines(raw);
+  return { values, needsRewrite };
+}
+
 function trimMessages(messages: Map<string, TelegramCachedMessageNode>, maxMessages: number): void {
   while (messages.size > maxMessages) {
     const oldest = messages.keys().next().value;
@@ -183,18 +270,18 @@ function trimMessages(messages: Map<string, TelegramCachedMessageNode>, maxMessa
   }
 }
 
-function readPersistedMessages(filePath: string, maxMessages: number) {
+function readPersistedMessages(filePath: string, maxMessages: number): PersistedMessageReadResult {
   const messages = new Map<string, TelegramCachedMessageNode>();
   let persistedEntryCount = 0;
+  let needsRewrite = false;
   if (!fs.existsSync(filePath)) {
-    return { messages, persistedEntryCount };
+    return { messages, persistedEntryCount, needsRewrite };
   }
   try {
-    for (const line of fs.readFileSync(filePath, "utf-8").split("\n")) {
-      if (!line.trim()) {
-        continue;
-      }
-      const entry = parsePersistedEntry(JSON.parse(line));
+    const persisted = readPersistedEntryValues(fs.readFileSync(filePath, "utf-8"));
+    needsRewrite = persisted.needsRewrite;
+    for (const value of persisted.values) {
+      const entry = parsePersistedEntry(value);
       if (!entry) {
         continue;
       }
@@ -205,8 +292,9 @@ function readPersistedMessages(filePath: string, maxMessages: number) {
     }
   } catch (error) {
     logVerbose(`telegram: failed to read message cache: ${String(error)}`);
+    needsRewrite = true;
   }
-  return { messages, persistedEntryCount };
+  return { messages, persistedEntryCount, needsRewrite };
 }
 
 function serializePersistedEntry(key: string, node: TelegramCachedMessageNode): string {
@@ -279,6 +367,16 @@ function resolveMessageCacheBucket(params: {
     messages: persisted.messages,
     persistedEntryCount: persisted.persistedEntryCount,
   };
+  if (persisted.needsRewrite) {
+    try {
+      bucket.persistedEntryCount = replacePersistedMessages({
+        messages: bucket.messages,
+        persistedPath,
+      });
+    } catch (error) {
+      logVerbose(`telegram: failed to compact message cache: ${String(error)}`);
+    }
+  }
   persistedMessageCacheBuckets.set(persistedPath, bucket);
   return bucket;
 }
@@ -398,6 +496,88 @@ function compareCachedMessageNodes(
   return (left.messageId ?? "").localeCompare(right.messageId ?? "");
 }
 
+const SESSION_BOUNDARY_COMMAND_RE = /^\/(?:new|reset)(?:@[A-Za-z0-9_]+)?(?:\s|$)/i;
+const SOFT_RESET_COMMAND_RE = /^\/reset(?:@[A-Za-z0-9_]+)?\s+soft(?:\s|$)/i;
+
+function isSessionBoundaryCommandNode(node: TelegramCachedMessageNode): boolean {
+  const body = node.body?.trim();
+  return Boolean(
+    body && SESSION_BOUNDARY_COMMAND_RE.test(body) && !SOFT_RESET_COMMAND_RE.test(body),
+  );
+}
+
+function isAfterSessionBoundary(
+  node: TelegramCachedMessageNode,
+  boundary?: TelegramCachedMessageNode,
+): boolean {
+  if (!boundary) {
+    return true;
+  }
+  const nodeId = Number(node.messageId);
+  const boundaryId = Number(boundary.messageId);
+  if (Number.isFinite(nodeId) && Number.isFinite(boundaryId)) {
+    return nodeId > boundaryId;
+  }
+  if (
+    typeof node.timestamp === "number" &&
+    Number.isFinite(node.timestamp) &&
+    typeof boundary.timestamp === "number" &&
+    Number.isFinite(boundary.timestamp)
+  ) {
+    return node.timestamp > boundary.timestamp;
+  }
+  return true;
+}
+
+function normalizeSessionBoundaryTimestamp(timestampMs?: number): number | undefined {
+  if (typeof timestampMs !== "number" || !Number.isFinite(timestampMs)) {
+    return undefined;
+  }
+  return Math.floor(timestampMs / 1000) * 1000;
+}
+
+function isAtOrAfterSessionBoundaryTimestamp(
+  node: TelegramCachedMessageNode,
+  boundaryTimestampMs?: number,
+): boolean {
+  if (boundaryTimestampMs === undefined) {
+    return true;
+  }
+  return typeof node.timestamp !== "number" || !Number.isFinite(node.timestamp)
+    ? true
+    : node.timestamp >= boundaryTimestampMs;
+}
+
+function resolveSessionBoundaryNode(params: {
+  cache: TelegramMessageCache;
+  accountId: string;
+  chatId: string | number;
+  messageId?: string;
+  threadId?: number;
+}): TelegramCachedMessageNode | undefined {
+  if (!params.messageId) {
+    return undefined;
+  }
+  const candidates = params.cache
+    .recentBefore({
+      accountId: params.accountId,
+      chatId: params.chatId,
+      messageId: params.messageId,
+      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
+      limit: Number.MAX_SAFE_INTEGER,
+    })
+    .filter(isSessionBoundaryCommandNode);
+  const current = params.cache.get({
+    accountId: params.accountId,
+    chatId: params.chatId,
+    messageId: params.messageId,
+  });
+  if (current && isSessionBoundaryCommandNode(current)) {
+    candidates.push(current);
+  }
+  return candidates.toSorted(compareCachedMessageNodes).at(-1);
+}
+
 export function buildTelegramReplyChain(params: {
   cache: TelegramMessageCache;
   accountId: string;
@@ -441,11 +621,20 @@ export function buildTelegramConversationContext(params: {
   replyChainNodes: TelegramCachedMessageNode[];
   recentLimit: number;
   replyTargetWindowSize: number;
+  minTimestampMs?: number;
 }): TelegramConversationContextNode[] {
   const selected = new Map<string, TelegramConversationContextNode>();
   const replyTargetIds = new Set<string>();
+  const sessionBoundary = resolveSessionBoundaryNode(params);
+  const sessionBoundaryTimestamp = normalizeSessionBoundaryTimestamp(params.minTimestampMs);
   const addNode = (node: TelegramCachedMessageNode, flags?: { replyTarget?: boolean }) => {
     if (!node.messageId || node.messageId === params.messageId) {
+      return;
+    }
+    if (!isAfterSessionBoundary(node, sessionBoundary)) {
+      return;
+    }
+    if (!isAtOrAfterSessionBoundaryTimestamp(node, sessionBoundaryTimestamp)) {
       return;
     }
     const existing = selected.get(node.messageId);

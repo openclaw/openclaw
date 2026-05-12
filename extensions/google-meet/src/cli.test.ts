@@ -43,8 +43,9 @@ function captureStdout() {
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -54,8 +55,9 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 function firstRecord(value: unknown): Record<string, unknown> {
   expect(Array.isArray(value)).toBe(true);
   const [record] = value as unknown[];
-  expect(record).toBeTypeOf("object");
-  expect(record).not.toBeNull();
+  if (!record || typeof record !== "object") {
+    throw new Error("expected first record");
+  }
   return record as Record<string, unknown>;
 }
 
@@ -809,7 +811,7 @@ describe("google-meet CLI", () => {
         ],
         { from: "user" },
       );
-      const gatewayCall = callGatewayFromCli.mock.calls[0] as unknown as
+      const gatewayCall = callGatewayFromCli.mock.calls.at(0) as unknown as
         | [
             string,
             { json?: boolean; timeout?: unknown },
@@ -1142,7 +1144,7 @@ describe("google-meet CLI", () => {
       expectFields(checks[0], { id: "oauth-config", ok: true });
       expectFields(checks[1], { id: "oauth-token", ok: true });
       expect(ensureRuntime).not.toHaveBeenCalled();
-      const body = fetchMock.mock.calls[0]?.[1]?.body as URLSearchParams;
+      const body = fetchMock.mock.calls.at(0)?.[1]?.body as URLSearchParams;
       expect(body.get("grant_type")).toBe("refresh_token");
     } finally {
       stdout.restore();

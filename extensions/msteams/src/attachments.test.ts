@@ -245,6 +245,14 @@ const expectMockCallState = (mockFn: unknown, shouldCall: boolean) => {
   }
 };
 
+const firstMockCall = (mock: ReturnType<typeof vi.fn>, label: string): unknown[] => {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+};
+
 const expectAttachmentMediaLength = (media: DownloadedMedia, expectedLength: number) => {
   expect(media).toHaveLength(expectedLength);
 };
@@ -639,7 +647,7 @@ describe("msteams attachments", () => {
         });
         // Should have hit the original host, NOT graph shares.
         expect(calledUrls).toContain(directUrl);
-        expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(false);
+        expect(calledUrls.filter((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toEqual([]);
       });
     });
 
@@ -660,13 +668,14 @@ describe("msteams attachments", () => {
         );
 
         expectAttachmentMediaLength(media, 0);
-        expect(logger.warn).toHaveBeenCalledWith(
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+        expect(firstMockCall(logger.warn, "logger.warn")).toStrictEqual([
           "msteams attachment download failed",
-          expect.objectContaining({
-            error: expect.stringContaining("HTTP 500"),
-            host: expect.any(String),
-          }),
-        );
+          {
+            error: "HTTP 500",
+            host: "x",
+          },
+        ]);
       });
 
       it("does not log when downloads succeed", async () => {

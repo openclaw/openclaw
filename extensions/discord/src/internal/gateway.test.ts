@@ -29,6 +29,23 @@ function sentGatewayOpcodes(send: ReturnType<typeof attachOpenSocket>) {
   });
 }
 
+function firstDispatchedData(dispatchGatewayEvent: ReturnType<typeof vi.fn>): unknown {
+  const [call] = dispatchGatewayEvent.mock.calls;
+  if (!call) {
+    throw new Error("Expected dispatched gateway event call");
+  }
+  return call[1];
+}
+
+function firstSentGatewayPayload(send: ReturnType<typeof attachOpenSocket>): unknown {
+  const [call] = send.mock.calls;
+  if (!call) {
+    throw new Error("Expected gateway socket send call");
+  }
+  const [rawPayload] = call;
+  return JSON.parse(String(rawPayload));
+}
+
 function presenceUpdate(
   status: PresenceUpdateStatus.Online | PresenceUpdateStatus.Idle = PresenceUpdateStatus.Online,
 ): GatewaySendPayload {
@@ -53,12 +70,12 @@ class TestGatewayPlugin extends GatewayPlugin {
   sockets: FakeSocket[] = [];
   connectCalls: boolean[] = [];
 
-  connect(resume = false): void {
+  override connect(resume = false): void {
     this.connectCalls.push(resume);
     super.connect(resume);
   }
 
-  protected createWebSocket(): never {
+  protected override createWebSocket(): never {
     const socket = new FakeSocket();
     this.sockets.push(socket);
     return socket as never;
@@ -201,7 +218,7 @@ describe("GatewayPlugin", () => {
     });
 
     expect(dispatchGatewayEvent).toHaveBeenCalledTimes(1);
-    const dispatched = dispatchGatewayEvent.mock.calls[0]?.[1] as {
+    const dispatched = firstDispatchedData(dispatchGatewayEvent) as {
       author?: { id: string };
       message?: { author?: { id: string } | null; content?: string };
     };
@@ -606,7 +623,7 @@ describe("GatewayPlugin", () => {
 
     valid.requestGuildMembers({ guild_id: "guild1", query: "", limit: 0, presences: true });
     expect(send).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(send.mock.calls[0]?.[0] as string)).toEqual({
+    expect(firstSentGatewayPayload(send)).toEqual({
       op: GatewayOpcodes.RequestGuildMembers,
       d: { guild_id: "guild1", query: "", limit: 0, presences: true },
     });

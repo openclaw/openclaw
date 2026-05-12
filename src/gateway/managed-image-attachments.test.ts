@@ -393,7 +393,6 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(second.result.statusCode).toBe(200);
     expect(readSessionMessagesMock).toHaveBeenCalledTimes(1);
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
     await fs.writeFile(sessionFile, '{"message":{}}\n{"message":{"content":"updated"}}\n', "utf-8");
 
     const third = await requestManagedImage({
@@ -668,8 +667,8 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(blocks).toHaveLength(1);
     expect(requireBlock(blocks).type).toBe("image");
     expect(onPrepareError).toHaveBeenCalledTimes(1);
-    expect(onPrepareError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-    expect(onPrepareError.mock.calls[0]?.[0]?.message).toMatch(
+    expect(onPrepareError.mock.calls.at(0)?.[0]).toBeInstanceOf(Error);
+    expect(onPrepareError.mock.calls.at(0)?.[0]?.message).toMatch(
       /Managed image attachment .* could not be prepared/i,
     );
   });

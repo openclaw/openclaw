@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
@@ -165,6 +165,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) {
     throw new Error(`Expected ${label} to be an object`);
+  }
+  return value;
+}
+
+function firstMockArg(mock: { mock: { calls: unknown[][] } }): unknown {
+  return mock.mock.calls[0]?.[0];
+}
+
+function firstMockStringArg(mock: { mock: { calls: unknown[][] } }, label: string): string {
+  const value = firstMockArg(mock);
+  if (typeof value !== "string") {
+    throw new Error(`Expected ${label} to be a string`);
   }
   return value;
 }
@@ -669,7 +681,7 @@ describe("provider-runtime", () => {
     }
 
     expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
-    const warning = String(providerRuntimeWarnMock.mock.calls[0]?.[0] ?? "");
+    const warning = firstMockStringArg(providerRuntimeWarnMock, "provider warning");
     expect(warning).toContain('Provider plugin "legacy-providerWARN forged"');
     expect(warning).not.toContain("\n");
   });
@@ -870,7 +882,7 @@ describe("provider-runtime", () => {
       },
     });
     expectRecordFields(
-      requireRecord(extraParamsForTransport.mock.calls[0]?.[0], "transport params context"),
+      requireRecord(firstMockArg(extraParamsForTransport), "transport params context"),
       {
         provider: DEMO_PROVIDER_ID,
         modelId: MODEL.id,
@@ -1006,10 +1018,7 @@ describe("provider-runtime", () => {
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
     expect(contribution?.stablePrefix).toContain("provider overlay");
     expect(contribution?.sectionOverrides?.execution_bias).toBe("saw built-in overlay");
-    const overlayContext = requireRecord(
-      resolvePromptOverlay.mock.calls[0]?.[0],
-      "overlay context",
-    );
+    const overlayContext = requireRecord(firstMockArg(resolvePromptOverlay), "overlay context");
     expect(overlayContext.provider).toBe("openrouter");
     expect(overlayContext.modelId).toBe("openai/gpt-5.4");
     expect(

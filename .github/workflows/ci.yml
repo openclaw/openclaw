@@ -26,7 +26,7 @@ permissions:
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha))) }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -1114,7 +1114,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "22.18.0"
-          cache-key-suffix: "node22"
+          cache-key-suffix: "node22-pnpm11"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1194,7 +1194,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
-          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
+          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24-pnpm11' }}"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1844,8 +1844,8 @@ jobs:
         id: pnpm-cache
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          pnpm-version: "10.33.0"
-          cache-key-suffix: "node24"
+          pnpm-version: "11.0.8"
+          cache-key-suffix: "node24-pnpm11"
           use-restore-keys: "false"
           use-actions-cache: "true"
 

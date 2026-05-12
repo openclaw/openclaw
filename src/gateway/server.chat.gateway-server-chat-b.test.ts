@@ -193,16 +193,14 @@ describe("gateway server chat", () => {
       });
 
       expect(context.loadGatewayModelCatalog).not.toHaveBeenCalled();
-      expect(responses).toEqual([
-        expect.objectContaining({
-          ok: true,
-          payload: expect.objectContaining({
-            sessionKey: "main",
-            sessionId: "sess-main",
-            messages: expect.any(Array),
-          }),
-        }),
-      ]);
+      expect(responses).toHaveLength(1);
+      expect(responses[0]?.ok).toBe(true);
+      const payload = responses[0]?.payload as
+        | { sessionKey?: string; sessionId?: string; messages?: unknown }
+        | undefined;
+      expect(payload?.sessionKey).toBe("main");
+      expect(payload?.sessionId).toBe("sess-main");
+      expect(Array.isArray(payload?.messages)).toBe(true);
     } finally {
       clearConfigCache();
       testState.agentConfig = undefined;
@@ -297,12 +295,14 @@ describe("gateway server chat", () => {
       }, FAST_WAIT_OPTS);
 
       await callSend("duplicate");
-      expect(responses).toContainEqual({
-        id: "duplicate",
-        ok: true,
-        payload: { runId: "idem-attachment-race", status: "started" },
-        error: undefined,
-      });
+      expect(responses).toEqual([
+        {
+          id: "duplicate",
+          ok: true,
+          payload: { runId: "idem-attachment-race", status: "started" },
+          error: undefined,
+        },
+      ]);
 
       firstCatalog.resolve([
         {
@@ -314,12 +314,20 @@ describe("gateway server chat", () => {
       ]);
       await first;
 
-      expect(responses).toContainEqual({
-        id: "first",
-        ok: true,
-        payload: { runId: "idem-attachment-race", status: "in_flight" },
-        error: undefined,
-      });
+      expect(responses).toEqual([
+        {
+          id: "duplicate",
+          ok: true,
+          payload: { runId: "idem-attachment-race", status: "started" },
+          error: undefined,
+        },
+        {
+          id: "first",
+          ok: true,
+          payload: { runId: "idem-attachment-race", status: "in_flight" },
+          error: undefined,
+        },
+      ]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
       dispatchRelease.resolve();
@@ -409,22 +417,32 @@ describe("gateway server chat", () => {
 
       const first = Promise.resolve(callSend("first", "idem-active-a"));
       await vi.waitFor(() => {
-        expect(responses).toContainEqual({
-          id: "first",
-          ok: true,
-          payload: { runId: "idem-active-a", status: "started" },
-          error: undefined,
-        });
+        expect(responses).toEqual([
+          {
+            id: "first",
+            ok: true,
+            payload: { runId: "idem-active-a", status: "started" },
+            error: undefined,
+          },
+        ]);
       }, FAST_WAIT_OPTS);
 
       await callSend("duplicate", "idem-active-b");
 
-      expect(responses).toContainEqual({
-        id: "duplicate",
-        ok: true,
-        payload: { runId: "idem-active-a", status: "in_flight" },
-        error: undefined,
-      });
+      expect(responses).toEqual([
+        {
+          id: "first",
+          ok: true,
+          payload: { runId: "idem-active-a", status: "started" },
+          error: undefined,
+        },
+        {
+          id: "duplicate",
+          ok: true,
+          payload: { runId: "idem-active-a", status: "in_flight" },
+          error: undefined,
+        },
+      ]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
 
@@ -523,18 +541,20 @@ describe("gateway server chat", () => {
         expect(context.removeChatRun).toHaveBeenCalledTimes(2);
       }, FAST_WAIT_OPTS);
 
-      expect(responses).toContainEqual({
-        id: "first",
-        ok: true,
-        payload: { runId: "idem-sequential-a", status: "started" },
-        error: undefined,
-      });
-      expect(responses).toContainEqual({
-        id: "second",
-        ok: true,
-        payload: { runId: "idem-sequential-b", status: "started" },
-        error: undefined,
-      });
+      expect(responses).toEqual([
+        {
+          id: "first",
+          ok: true,
+          payload: { runId: "idem-sequential-a", status: "started" },
+          error: undefined,
+        },
+        {
+          id: "second",
+          ok: true,
+          payload: { runId: "idem-sequential-b", status: "started" },
+          error: undefined,
+        },
+      ]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(context.addChatRun).toHaveBeenCalledTimes(2);
     } finally {
@@ -607,14 +627,12 @@ describe("gateway server chat", () => {
 
         const messages = await fetchHistoryMessages(ws);
         expect(messages).toHaveLength(2);
-        expect(messages[0]).toMatchObject({
-          role: "user",
-          content: "hi",
-        });
-        expect(messages[1]).toMatchObject({
-          role: "assistant",
-          provider: "claude-cli",
-        });
+        const userMessage = messages[0] as { role?: string; content?: string };
+        expect(userMessage.role).toBe("user");
+        expect(userMessage.content).toBe("hi");
+        const assistantMessage = messages[1] as { role?: string; provider?: string };
+        expect(assistantMessage.role).toBe("assistant");
+        expect(assistantMessage.provider).toBe("claude-cli");
       } finally {
         if (originalHome === undefined) {
           delete process.env.HOME;
@@ -835,11 +853,16 @@ describe("gateway server chat", () => {
 
       const messages = await fetchHistoryMessages(ws);
       expect(messages).toHaveLength(1);
-      expect(messages[0]).toMatchObject({
-        role: "assistant",
-        usage: { input: 12, output: 5, totalTokens: 17 },
-        cost: { total: 0.0123 },
-      });
+      const message = messages[0] as {
+        role?: string;
+        usage?: { input?: number; output?: number; totalTokens?: number };
+        cost?: { total?: number };
+      };
+      expect(message.role).toBe("assistant");
+      expect(message.usage?.input).toBe(12);
+      expect(message.usage?.output).toBe(5);
+      expect(message.usage?.totalTokens).toBe(17);
+      expect(message.cost?.total).toBe(0.0123);
       expect(messages[0]).not.toHaveProperty("details");
     });
   });
@@ -950,11 +973,16 @@ describe("gateway server chat", () => {
       ]);
 
       const messages = await fetchHistoryMessages(ws);
-      expect(messages[1]).toMatchObject({
-        role: "assistant",
-        content: [{ type: "text", text: "I will clean that up now." }],
-        timestamp: 2,
-      });
+      const assistantMessage = messages[1] as {
+        role?: string;
+        content?: Array<{ type?: string; text?: string }>;
+        timestamp?: number;
+      };
+      expect(assistantMessage.role).toBe("assistant");
+      expect(assistantMessage.content).toEqual([
+        { type: "text", text: "I will clean that up now." },
+      ]);
+      expect(assistantMessage.timestamp).toBe(2);
     });
   });
 

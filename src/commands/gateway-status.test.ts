@@ -259,6 +259,14 @@ function requireProbeCall(url: string): ProbeGatewayCall {
   return call;
 }
 
+function requireSshForwardCall(index = 0): Record<string, unknown> {
+  const [call] = startSshPortForward.mock.calls[index] ?? [];
+  if (!call || typeof call !== "object") {
+    throw new Error(`Expected SSH forward call ${index}`);
+  }
+  return call as Record<string, unknown>;
+}
+
 function makeRemoteGatewayConfig(url: string, token = "rtok", localToken = "ltok") {
   return {
     gateway: {
@@ -398,18 +406,20 @@ describe("gateway-status command", () => {
     expect(runtimeErrors).toHaveLength(0);
     const parsed = JSON.parse(runtimeLogs.join("\n")) as {
       degraded?: boolean;
-      warnings?: Array<{ code?: string; message?: string }>;
+      warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
     };
-    expect(parsed.degraded).toBe(true);
-    expect(parsed.warnings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "model_pricing_degraded",
-          message:
-            "Model pricing degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
-        }),
-      ]),
-    );
+    expect(parsed.degraded).toBe(false);
+    const pricingWarnings =
+      parsed.warnings?.filter((warning) => warning.code === "model_pricing_degraded") ?? [];
+    expect(pricingWarnings).toHaveLength(2);
+    expect(pricingWarnings.map((warning) => warning.message)).toEqual([
+      "Model pricing warning: optional pricing refresh degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
+      "Model pricing warning: optional pricing refresh degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
+    ]);
+    expect(pricingWarnings.map((warning) => warning.targetIds)).toEqual([
+      ["sshTunnel"],
+      ["configRemote"],
+    ]);
   });
 
   it("includes diagnostic next steps when no gateway is reachable or discoverable", async () => {
@@ -966,7 +976,7 @@ describe("gateway-status command", () => {
       await runGatewayStatus(runtime, { timeout: "1000", json: true, sshAuto: true });
 
       expect(startSshPortForward).toHaveBeenCalledTimes(1);
-      const call = startSshPortForward.mock.calls[0]?.[0] as { target: string };
+      const call = requireSshForwardCall();
       expect(call.target).toBe("steipete@goodhost:2222");
     });
   });
@@ -988,10 +998,7 @@ describe("gateway-status command", () => {
       await runGatewayStatus(runtime, { timeout: "1000", json: true });
 
       expect(startSshPortForward).toHaveBeenCalledTimes(1);
-      const call = startSshPortForward.mock.calls[0]?.[0] as {
-        target: string;
-        identity?: string;
-      };
+      const call = requireSshForwardCall();
       expect(call.target).toBe("steipete@peters-mac-studio-1.sheep-coho.ts.net:2222");
       expect(call.identity).toBe("/tmp/id_ed25519");
     });
@@ -1008,9 +1015,7 @@ describe("gateway-status command", () => {
       startSshPortForward.mockClear();
       await runGatewayStatus(runtime, { timeout: "1000", json: true });
 
-      const call = startSshPortForward.mock.calls[0]?.[0] as {
-        target: string;
-      };
+      const call = requireSshForwardCall();
       expect(call.target).toBe("studio.example");
     });
   });
@@ -1035,9 +1040,7 @@ describe("gateway-status command", () => {
       sshIdentity: "/tmp/explicit_id",
     });
 
-    const call = startSshPortForward.mock.calls[0]?.[0] as {
-      identity?: string;
-    };
+    const call = requireSshForwardCall();
     expect(call.identity).toBe("/tmp/explicit_id");
   });
 });

@@ -104,10 +104,12 @@ describe("probeGatewayStatus", () => {
       json: true,
     });
 
-    expect(result).toMatchObject({
-      ok: true,
-      server: { version: "2026.5.6", connId: "conn-1" },
-    });
+    expect(result.ok).toBe(true);
+    if (!result.ok || !("server" in result)) {
+      throw new Error("expected successful probe with server details");
+    }
+    expect(result.server?.version).toBe("2026.5.6");
+    expect(result.server?.connId).toBe("conn-1");
   });
 
   it("uses a real status RPC when requireRpc is enabled", async () => {
@@ -187,18 +189,26 @@ describe("probeGatewayStatus", () => {
       requireRpc: true,
     });
 
-    expect(probeGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preauthHandshakeTimeoutMs: 30_000,
-        timeoutMs: 30_000,
-      }),
-    );
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        timeoutMs: 30_000,
-      }),
-    );
+    expect(probeGatewayMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:19191",
+      auth: {
+        token: "temp-token",
+        password: undefined,
+      },
+      tlsFingerprint: undefined,
+      preauthHandshakeTimeoutMs: 30_000,
+      timeoutMs: 30_000,
+      includeDetails: false,
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      password: undefined,
+      tlsFingerprint: undefined,
+      config,
+      method: "status",
+      timeoutMs: 30_000,
+    });
   });
 
   it("falls back to read-only when the status RPC succeeds but the auth probe is inconclusive", async () => {
@@ -273,11 +283,9 @@ describe("probeGatewayStatus", () => {
       timeoutMs: 5_000,
     });
 
-    expect(result).toMatchObject({
-      ok: false,
-      kind: "connect",
-      error: "scope upgrade pending approval (requestId: req-123)",
-    });
+    expect(result.ok).toBe(false);
+    expect(result.kind).toBe("connect");
+    expect(result.error).toBe("scope upgrade pending approval (requestId: req-123)");
   });
 
   it("surfaces status RPC errors when requireRpc is enabled", async () => {

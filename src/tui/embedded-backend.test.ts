@@ -366,12 +366,12 @@ describe("EmbeddedTuiBackend", () => {
       .filter((entry) => entry.event === "chat")
       .map((entry) => entry.payload as { state?: string; message?: { content?: unknown } });
     expect(chatPayloads.some((payload) => payload.state === "error")).toBe(false);
-    expect(chatPayloads.at(-1)).toMatchObject({
-      state: "final",
-      message: {
-        content: [{ text: "fallback answer" }],
-      },
-    });
+    const finalPayload = chatPayloads.at(-1);
+    expect(finalPayload?.state).toBe("final");
+    const finalContent = finalPayload?.message?.content as Array<{ type?: string; text?: string }>;
+    expect(finalContent).toHaveLength(1);
+    expect(finalContent[0]?.type).toBe("text");
+    expect(finalContent[0]?.text).toBe("fallback answer");
   });
 
   it("emits side-result events for local /btw runs", async () => {
@@ -438,16 +438,26 @@ describe("EmbeddedTuiBackend", () => {
     });
     await flushMicrotasks();
 
-    expect(events).toContainEqual({
-      event: "chat.side_result",
-      payload: {
-        kind: "btw",
-        runId: "run-side-1",
-        sessionKey: "agent:main:main",
-        question: "what changed?",
-        text: "alias answer",
+    expect(events).toEqual([
+      {
+        event: "chat.side_result",
+        payload: {
+          kind: "btw",
+          runId: "run-side-1",
+          sessionKey: "agent:main:main",
+          question: "what changed?",
+          text: "alias answer",
+        },
       },
-    });
+      {
+        event: "chat",
+        payload: {
+          runId: "run-side-1",
+          sessionKey: "agent:main:main",
+          state: "final",
+        },
+      },
+    ]);
   });
 
   it("registers tool-first local runs before forwarding agent events", async () => {
@@ -566,7 +576,7 @@ describe("EmbeddedTuiBackend", () => {
       await flushMicrotasks();
 
       expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-      const ingressOptions = agentCommandFromIngressMock.mock.calls[0]?.[0] as
+      const ingressOptions = agentCommandFromIngressMock.mock.calls.at(0)?.[0] as
         | { timeout?: unknown }
         | undefined;
       expect(ingressOptions?.timeout).toBe("300");

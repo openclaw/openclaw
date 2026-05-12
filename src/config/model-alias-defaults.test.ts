@@ -224,6 +224,17 @@ describe("applyModelDefaults", () => {
     expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
   });
 
+  it("normalizes nested retired Gemini ids in proxy provider rows", () => {
+    const cfg = buildProxyProviderConfig();
+    const model = cfg.models.providers.myproxy.models[0];
+    model.id = "google/gemini-3-pro-preview";
+    model.name = "Gemini via proxy";
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.models?.providers?.myproxy?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
+  });
+
   it("fills missing model provider defaults", () => {
     const cfg = buildProxyProviderConfig();
 

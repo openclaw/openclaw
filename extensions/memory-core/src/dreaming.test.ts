@@ -156,11 +156,11 @@ function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
 }
 
 function expectLogContains(mock: { mock: { calls: unknown[][] } }, expected: string): void {
-  expect(mockStringMessages(mock).some((message) => message.includes(expected))).toBe(true);
+  expect(mockStringMessages(mock).join("\n")).toContain(expected);
 }
 
 function expectLogNotContains(mock: { mock: { calls: unknown[][] } }, expected: string): void {
-  expect(mockStringMessages(mock).every((message) => !message.includes(expected))).toBe(true);
+  expect(mockStringMessages(mock).join("\n")).not.toContain(expected);
 }
 
 function requireAddCall(harness: { addCalls: CronAddInput[] }, index: number): CronAddInput {
@@ -1339,7 +1339,94 @@ describe("gateway startup reconciliation", () => {
     }
   });
 
-  it("still warns on runtime reconciliation when cron remains unavailable (preserves #69939 genuine-failure signal)", async () => {
+  it("keeps ordinary heartbeat reconciliation quiet when no gateway cron context is available", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      await beforeAgentReply(
+        { cleanedBody: "" },
+        { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
+      );
+
+      expectLogNotContains(logger.warn, "cron service unavailable");
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("still warns on gateway runtime reconciliation when cron remains unavailable", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => undefined,
+      });
+      expect(logger.warn).not.toHaveBeenCalled();
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      await beforeAgentReply(
+        { cleanedBody: "" },
+        { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
+      );
+
+      expectLogContains(logger.warn, "cron service unavailable");
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("still warns on managed runtime reconciliation when cron remains unavailable (preserves #69939 genuine-failure signal)", async () => {
     clearInternalHooks();
     const logger = createLogger();
     const onMock = vi.fn();
@@ -1374,12 +1461,12 @@ describe("gateway startup reconciliation", () => {
       });
       expect(logger.warn).not.toHaveBeenCalled();
 
-      // Now a runtime heartbeat reconciliation happens and cron is still missing
+      // Now a managed runtime reconciliation happens and cron is still missing
       // (e.g. the cron service genuinely failed to initialize). The warning must fire.
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
       await beforeAgentReply(
-        { cleanedBody: "" },
-        { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "cron", workspaceDir: ".", sessionKey: "agent:main:cron:job-managed" },
       );
 
       expectLogContains(logger.warn, "cron service unavailable");
@@ -2162,7 +2249,7 @@ describe("short-term dreaming trigger", () => {
       const dreamsText = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
       expect(dreamsText).toContain("A diary entry.");
     });
-    expect(subagent.run.mock.calls[0]?.[0]?.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(subagent.run.mock.calls.at(0)?.[0]?.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
   it("skips dreaming promotion cleanly when limit is zero", async () => {

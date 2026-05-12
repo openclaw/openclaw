@@ -41,11 +41,11 @@ function requireMockCallArg(
 }
 
 function expectLogIncludes(mock: { mock: { calls: unknown[][] } }, fragment: string) {
-  expect(mock.mock.calls.some((call) => String(call[0]).includes(fragment))).toBe(true);
+  expect(mock.mock.calls.map((call) => String(call[0])).join("\n")).toContain(fragment);
 }
 
 function expectLogExcludes(mock: { mock: { calls: unknown[][] } }, fragment: string) {
-  expect(mock.mock.calls.some((call) => String(call[0]).includes(fragment))).toBe(false);
+  expect(mock.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(fragment);
 }
 
 function expectRetryContinuesFromTranscript() {
@@ -630,6 +630,20 @@ describe("overflow compaction in run loop", () => {
     expect(result.messagingToolSentTexts).toEqual(["already delivered"]);
   });
 
+  it("propagates deterministic approval prompt delivery from attempts", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        didSendDeterministicApprovalPrompt: true,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendDeterministicApprovalPrompt).toBe(true);
+  });
+
   it("returns a timeout payload instead of a partial assistant fragment after stream timeout", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
@@ -648,6 +662,42 @@ describe("overflow compaction in run loop", () => {
     expect(
       result.payloads?.some((payload) => (payload.text ?? "").includes("# Current Tasks")),
     ).toBe(false);
+  });
+
+  it("preserves tool media payloads and appends an explicit timeout error", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        aborted: true,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        assistantTexts: [],
+        toolMediaUrls: ["https://example.test/tool-output.png"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(
+      result.payloads?.map((payload) => ({
+        isError: payload.isError,
+        textIncludesTimedOut: payload.text?.includes("timed out") ?? false,
+        mediaUrl: payload.mediaUrl,
+        mediaUrls: payload.mediaUrls,
+      })),
+    ).toEqual([
+      {
+        isError: undefined,
+        textIncludesTimedOut: false,
+        mediaUrl: "https://example.test/tool-output.png",
+        mediaUrls: ["https://example.test/tool-output.png"],
+      },
+      {
+        isError: true,
+        textIncludesTimedOut: true,
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+      },
+    ]);
   });
 
   it("sets promptTokens from the latest model call usage, not accumulated attempt usage", async () => {

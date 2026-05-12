@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createActiveRun,
@@ -90,8 +90,9 @@ function findMessageWithIdempotencyKey(
 }
 
 function expectRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 

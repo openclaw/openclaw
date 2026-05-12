@@ -128,7 +128,7 @@ describe("bundled channel legacy config migrations", () => {
     });
 
     expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledOnce();
-    const migrationCall = applyPluginDoctorCompatibilityMigrations.mock.calls[0];
+    const migrationCall = applyPluginDoctorCompatibilityMigrations.mock.calls.at(0);
     expect(typeof migrationCall?.[0]).toBe("object");
     expect(migrationCall?.[1]?.config).toStrictEqual({
       channels: {
@@ -160,13 +160,10 @@ describe("bundled channel legacy config migrations", () => {
         },
       },
     });
-    expect(result.changes).toHaveLength(2);
-    expect(result.changes).toContain(
+    expect(result.changes).toStrictEqual([
       "Moved channels.mattermost.allowPrivateNetwork → channels.mattermost.network.dangerouslyAllowPrivateNetwork (true).",
-    );
-    expect(result.changes).toContain(
       "Moved channels.mattermost.accounts.work.allowPrivateNetwork → channels.mattermost.accounts.work.network.dangerouslyAllowPrivateNetwork (false).",
-    );
+    ]);
   });
 
   it("applies plugin doctor normalizers for configured non-channel plugin entries", () => {
@@ -201,7 +198,7 @@ describe("bundled channel legacy config migrations", () => {
     const result = applyChannelDoctorCompatibilityMigrations(config);
 
     expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledOnce();
-    const migrationCall = applyPluginDoctorCompatibilityMigrations.mock.calls[0];
+    const migrationCall = applyPluginDoctorCompatibilityMigrations.mock.calls.at(0);
     expect(typeof migrationCall?.[0]).toBe("object");
     expect(migrationCall?.[1]).toStrictEqual({
       config,

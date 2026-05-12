@@ -98,11 +98,11 @@ function getJoinedRuntimeLogs() {
 }
 
 function expectLogsInclude(logs: readonly string[], fragment: string) {
-  expect(logs.some((log) => log.includes(fragment))).toBe(true);
+  expect(logs.join("\n")).toContain(fragment);
 }
 
 function expectLogsExclude(logs: readonly string[], fragment: string) {
-  expect(logs.some((log) => log.includes(fragment))).toBe(false);
+  expect(logs.join("\n")).not.toContain(fragment);
 }
 
 function expectLogsMatch(logs: readonly string[], pattern: RegExp) {
@@ -1025,7 +1025,7 @@ describe("statusCommand", () => {
     const allPayload = JSON.parse(getRuntimeLog(0));
     expect(allPayload.securityAudit.summary.critical).toBe(1);
     expect(allPayload.securityAudit.summary.warn).toBe(1);
-    const auditParams = mocks.runSecurityAudit.mock.calls[0]?.[0];
+    const auditParams = mocks.runSecurityAudit.mock.calls.at(0)?.[0];
     expect(auditParams?.includeFilesystem).toBe(true);
     expect(auditParams?.includeChannelSecurity).toBe(true);
   });

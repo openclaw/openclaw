@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -13,7 +13,7 @@ const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
 }));
 
-vi.mock("@mariozechner/pi-ai", () => ({
+vi.mock("@earendil-works/pi-ai", () => ({
   completeSimple: hoisted.completeMock,
 }));
 
@@ -102,8 +102,10 @@ function expectPreparedModelResult(
 
 function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
   const call = mock.mock.calls[index];
-  expect(call).toBeDefined();
-  return call?.[0];
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call[0];
 }
 
 describe("prepareSimpleCompletionModel", () => {
@@ -352,7 +354,7 @@ describe("prepareSimpleCompletionModel", () => {
       modelId: "chat-local",
     });
 
-    const overrideCall = hoisted.applyLocalNoAuthHeaderOverrideMock.mock.calls[0];
+    const overrideCall = hoisted.applyLocalNoAuthHeaderOverrideMock.mock.calls.at(0);
     expect((overrideCall?.[0] as { provider?: string; id?: string } | undefined)?.provider).toBe(
       "local-openai",
     );

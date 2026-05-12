@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
@@ -223,7 +223,9 @@ describe("embedded attempt context injection", () => {
       modelId: "gpt-test",
     });
 
-    const assembleInput = assemble.mock.calls[0]?.[0] as { messages?: AgentMessage[] } | undefined;
+    const assembleInput = assemble.mock.calls.at(0)?.[0] as
+      | { messages?: AgentMessage[] }
+      | undefined;
     const projectedMessages = assembleInput?.messages?.map((message) => ({
       role: message.role,
       content: (message as { content?: unknown }).content,

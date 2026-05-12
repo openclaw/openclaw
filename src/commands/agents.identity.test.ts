@@ -43,7 +43,7 @@ async function writeIdentityFile(workspace: string, lines: string[]) {
 }
 
 function getWrittenMainIdentity() {
-  const [written] = configMocks.writeConfigFile.mock.calls[0] ?? [];
+  const [written] = configMocks.writeConfigFile.mock.calls.at(0) ?? [];
   if (!written) {
     throw new Error("expected written agent config");
   }
@@ -120,7 +120,9 @@ describe("agents set-identity command", () => {
 
     await agentsSetIdentityCommand({ workspace }, runtime);
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Multiple agents match"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Multiple agents match ${workspace}: main, ops. Pass --agent to choose one.`,
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
@@ -216,7 +218,9 @@ describe("agents set-identity command", () => {
 
     await runIdentityCommandFromWorkspace(workspace);
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("No identity data found"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      `No identity data found in ${path.join(workspace, "IDENTITY.md")}.`,
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });

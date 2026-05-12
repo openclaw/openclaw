@@ -123,6 +123,10 @@ function createFakeProcess() {
   }) as unknown as NodeJS.Process;
 }
 
+function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
+  return mock.mock.calls[0];
+}
+
 async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
   const pluginSdkAliasPath = path.join(tmp, "src", "plugin-sdk", "root-alias.cjs");
   await fs.mkdir(path.dirname(pluginSdkAliasPath), { recursive: true });
@@ -171,7 +175,13 @@ function resolvePath(tmp: string, relativePath: string) {
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  let accessError: unknown;
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    accessError = error;
+  }
+  expect((accessError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
 }
 
 async function writeProjectFiles(tmp: string, files: Record<string, string>) {
@@ -346,9 +356,10 @@ async function runQaCommand(params: {
 }
 
 async function expectManifestId(tmp: string, relativePath: string, id: string) {
-  await expect(
-    fs.readFile(resolvePath(tmp, relativePath), "utf-8").then((raw) => JSON.parse(raw)),
-  ).resolves.toMatchObject({ id });
+  const manifest = JSON.parse(await fs.readFile(resolvePath(tmp, relativePath), "utf-8")) as {
+    id?: unknown;
+  };
+  expect(manifest.id).toBe(id);
 }
 
 describe("run-node script", () => {
@@ -444,11 +455,7 @@ describe("run-node script", () => {
       await expect(
         fs.readFile(resolvePath(tmp, "dist/plugin-sdk/root-alias.cjs"), "utf-8"),
       ).resolves.toContain("module.exports = {};");
-      await expect(
-        fs
-          .readFile(resolvePath(tmp, DIST_EXTENSION_MANIFEST), "utf-8")
-          .then((raw) => JSON.parse(raw)),
-      ).resolves.toMatchObject({ id: "demo" });
+      await expectManifestId(tmp, DIST_EXTENSION_MANIFEST, "demo");
       await expect(
         fs.readFile(resolvePath(tmp, DIST_EXTENSION_PACKAGE), "utf-8"),
       ).resolves.toContain(
@@ -843,15 +850,13 @@ describe("run-node script", () => {
       const exitCode = await runQaCommand({ tmp, spawn, spawnSync, runRuntimePostBuild });
 
       expect(exitCode).toBe(0);
-      expect(runRuntimePostBuild).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cwd: tmp,
-          env: expect.objectContaining({
-            OPENCLAW_BUILD_PRIVATE_QA: "1",
-            OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
-          }),
-        }),
-      );
+      expect(runRuntimePostBuild).toHaveBeenCalledTimes(1);
+      const postBuildParams = firstMockCall(runRuntimePostBuild)?.[0] as
+        | { cwd?: string; env?: Record<string, string | undefined> }
+        | undefined;
+      expect(postBuildParams?.cwd).toBe(tmp);
+      expect(postBuildParams?.env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
+      expect(postBuildParams?.env?.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
     });
   });
 
@@ -1319,18 +1324,18 @@ describe("run-node script", () => {
         execPath: process.execPath,
       });
 
-      while (spawn.mock.calls.length === 0) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
+      await vi.waitFor(() => {
+        expect(spawn).toHaveBeenCalled();
+      });
       fakeProcess.emit("SIGTERM");
       const exitCode = await exitCodePromise;
 
       expect(exitCode).toBe(143);
-      expect(spawn).toHaveBeenCalledWith(
-        process.execPath,
-        ["openclaw.mjs", "status"],
-        expect.objectContaining({ stdio: "inherit" }),
-      );
+      expect(spawn).toHaveBeenCalledTimes(1);
+      const spawnCall = firstMockCall(spawn) as [string, string[], { stdio?: unknown }] | undefined;
+      expect(spawnCall?.[0]).toBe(process.execPath);
+      expect(spawnCall?.[1]).toEqual(["openclaw.mjs", "status"]);
+      expect(spawnCall?.[2].stdio).toBe("inherit");
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
       expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
       expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);

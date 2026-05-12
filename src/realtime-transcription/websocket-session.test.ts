@@ -73,6 +73,15 @@ function createSignal() {
   return { promise, resolve };
 }
 
+function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string): T {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  return arg;
+}
+
 describe("createRealtimeTranscriptionWebSocketSession", () => {
   it("flushes queued binary audio after an open-ready connection", async () => {
     const frames: Buffer[] = [];
@@ -183,10 +192,10 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       "test realtime transcription connection timeout",
     );
     expect(session.isConnected()).toBe(false);
-    expect(onError).toHaveBeenCalledWith(expect.any(Error));
-    expect(onError.mock.calls[0]?.[0]).toMatchObject({
-      message: "test realtime transcription connection timeout",
-    });
+    expect(onError).toHaveBeenCalledTimes(1);
+    const timeoutError = requireFirstMockArg(onError, "connect timeout error");
+    expect(timeoutError).toBeInstanceOf(Error);
+    expect(timeoutError.message).toBe("test realtime transcription connection timeout");
   });
 
   it("does not open a socket when closed while async connection resolves", async () => {
@@ -243,7 +252,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     await expect(session.connect()).rejects.toThrow("nope");
     expect(session.isConnected()).toBe(false);
     expect(onError).toHaveBeenCalledTimes(1);
-    const setupError = onError.mock.calls[0]?.[0];
+    const setupError = requireFirstMockArg(onError, "provider setup error");
     expect(setupError).toBeInstanceOf(Error);
     expect(setupError.message).toBe("nope");
   });
@@ -266,7 +275,7 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       "test realtime transcription connection closed before ready",
     );
     expect(onError).toHaveBeenCalledTimes(1);
-    const closeError = onError.mock.calls[0]?.[0];
+    const closeError = requireFirstMockArg(onError, "pre-ready close error");
     expect(closeError).toBeInstanceOf(Error);
     expect(closeError.message).toBe("test realtime transcription connection closed before ready");
   });

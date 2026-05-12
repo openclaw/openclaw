@@ -347,7 +347,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("live_suite_filter:");
     expect(workflow).toContain("validate_live_suite_filter:");
     expect(workflow).toContain("LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}");
-    expect(workflow).toContain("live-cache attempt ${attempt}/3");
+    expect(workflow).toContain("live-cache attempt ${attempt}/2");
     expect(workflow).toContain(
       "live_suite_filter '${LIVE_SUITE_FILTER}' does not match any runnable suite",
     );
@@ -683,7 +683,7 @@ describe("package artifact reuse", () => {
       for (const [jobName, job] of Object.entries(jobs)) {
         for (const step of job.steps ?? []) {
           if (step.run === "pnpm build") {
-            expect(step.env, `${workflowPath}:${jobName}:${step.name}`).toMatchObject({
+            expect(step.env, `${workflowPath}:${jobName}:${step.name}`).toEqual({
               NODE_OPTIONS: "--max-old-space-size=8192",
             });
           }
@@ -876,6 +876,28 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain("timeout-minutes: 360");
   });
 
+  it("keeps beta release verification and ClawHub publish repair hooks wired", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const clawHubWorkflow = readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8");
+
+    expect(packageJson.scripts?.["release:verify-beta"]).toBe(
+      "node --import tsx scripts/release-verify-beta.ts",
+    );
+    expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
+      "bash scripts/release-fast-pretag-check.sh",
+    );
+    expect(clawHubWorkflow).toContain("Verify published ClawHub package");
+    expect(clawHubWorkflow).toContain("bun install failed while preparing ClawHub CLI; retrying");
+    expect(clawHubWorkflow).toContain("max-parallel: 32");
+    expect(releaseWorkflow).toContain("Plugin npm run ID");
+    expect(releaseWorkflow).toContain("Plugin ClawHub run ID");
+    expect(releaseWorkflow).toContain("OpenClaw npm run ID");
+    expect(releaseWorkflow).toContain("finished with ${conclusion} in ${duration_label}");
+  });
+
   it("keeps release workflow setup and timeout budgets bounded", () => {
     const fullRelease = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
     const releaseChecks = readWorkflow(RELEASE_CHECKS_WORKFLOW);
@@ -899,7 +921,7 @@ describe("package artifact reuse", () => {
       const workflow = readWorkflow(workflowPath);
       expect(workflow.env?.NODE_VERSION, workflowPath).toBe("24.15.0");
       if (workflow.env?.PNPM_VERSION !== undefined) {
-        expect(workflow.env.PNPM_VERSION, workflowPath).toBe("10.33.0");
+        expect(workflow.env.PNPM_VERSION, workflowPath).toBe("11.0.8");
       }
     }
 
@@ -909,9 +931,10 @@ describe("package artifact reuse", () => {
     expect(fullRelease.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
     expect(releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
     expect(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"]).toBe(60);
-    expect(liveE2e.jobs?.validate_release_live_cache?.["timeout-minutes"]).toBe(40);
+    expect(liveE2e.jobs?.validate_release_live_cache?.["timeout-minutes"]).toBe(20);
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain(
-      "timeout --foreground --kill-after=30s 12m pnpm test:live:cache",
+      "timeout --foreground --kill-after=30s 8m pnpm test:live:cache",
     );
+    expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
   });
 });
