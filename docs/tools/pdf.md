@@ -115,6 +115,11 @@ Fallback details:
 - Extraction fallback uses the bundled `document-extract` plugin. The plugin owns
   `pdfjs-dist`; `@napi-rs/canvas` is used only when image rendering fallback is
   available.
+- When `@napi-rs/canvas` is not installed, the plugin will attempt to fall back to
+  `pdftoppm` (from poppler-utils) if it is found on `$PATH`. The fallback honors
+  the same pixel and page budget as the canvas path and enforces a 30-second
+  timeout per page. No additional installation is required beyond having
+  poppler-utils present on the host system.
 
 ## Config
 

@@ -1,7 +1,8 @@
+import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { canvasSizes, getDocumentMock, pdfDocument } = vi.hoisted(() => ({
   canvasSizes: [] as Array<{ width: number; height: number }>,
@@ -120,5 +121,152 @@ describe("PDF document extractor", () => {
     expect(standardFontDataUrl.startsWith("file://")).toBe(false);
     expect(existsSync(standardFontDataUrl)).toBe(true);
     expect(existsSync(path.join(standardFontDataUrl, "LiberationSans-Regular.ttf"))).toBe(true);
+  });
+});
+
+describe("pdftoppm fallback — canvas unavailable, pdftoppm available", () => {
+  const mockSpawn = vi.fn();
+  const mockMkdtemp = vi.fn();
+  const mockChmod = vi.fn();
+  const mockWriteFile = vi.fn();
+  const mockReaddir = vi.fn();
+  const mockReadFileFs = vi.fn();
+  const mockRm = vi.fn();
+  let capturedTempDirs: string[] = [];
+  let freshCreate!: typeof createPdfDocumentExtractor;
+
+  beforeAll(async () => {
+    vi.resetModules();
+    vi.doMock("@napi-rs/canvas", () => {
+      throw new Error("@napi-rs/canvas not installed");
+    });
+    vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => ({ getDocument: getDocumentMock }));
+    vi.doMock("node:child_process", () => ({ spawn: mockSpawn }));
+    vi.doMock("node:fs/promises", () => {
+      const m = {
+        mkdtemp: mockMkdtemp,
+        chmod: mockChmod,
+        writeFile: mockWriteFile,
+        readdir: mockReaddir,
+        readFile: mockReadFileFs,
+        rm: mockRm,
+      };
+      return { ...m, default: m };
+    });
+    const mod =
+      (await import("./document-extractor.js")) as typeof import("./document-extractor.js");
+    freshCreate = mod.createPdfDocumentExtractor;
+  });
+
+  afterAll(() => {
+    vi.doUnmock("@napi-rs/canvas");
+    vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+    vi.doUnmock("node:child_process");
+    vi.doUnmock("node:fs/promises");
+    vi.resetModules();
+  });
+
+  beforeEach(() => {
+    capturedTempDirs = [];
+    mockMkdtemp.mockImplementation(async (prefix: string) => {
+      const dir = `${prefix}testdir`;
+      capturedTempDirs.push(dir);
+      return dir;
+    });
+    mockChmod.mockResolvedValue(undefined);
+    mockWriteFile.mockResolvedValue(undefined);
+    mockReaddir.mockResolvedValue(["page-1.png"]);
+    mockReadFileFs.mockResolvedValue(Buffer.from("fakepng"));
+    mockRm.mockResolvedValue(undefined);
+    mockSpawn.mockImplementation(() => {
+      const emitter = new EventEmitter();
+      setImmediate(() => emitter.emit("close", 0));
+      return emitter;
+    });
+    getDocumentMock.mockReset();
+    getDocumentMock.mockReturnValue({ promise: Promise.resolve(pdfDocument) });
+    pdfDocument.getPage.mockClear();
+  });
+
+  it("produces page images using pdftoppm when @napi-rs/canvas is unavailable", async () => {
+    const extractor = freshCreate();
+    const result = await extractor.extract({
+      buffer: Buffer.from("%PDF-1.4"),
+      mimeType: "application/pdf",
+      maxPages: 1,
+      maxPixels: 1_000_000,
+      minTextChars: 10,
+    });
+    expect(result.images.length).toBeGreaterThan(0);
+    for (const img of result.images) {
+      expect(img.mimeType).toBe("image/png");
+      expect(typeof img.data).toBe("string");
+      expect(img.data.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("removes the temp directory after pdftoppm renders", async () => {
+    const extractor = freshCreate();
+    await extractor.extract({
+      buffer: Buffer.from("%PDF-1.4"),
+      mimeType: "application/pdf",
+      maxPages: 1,
+      maxPixels: 1_000_000,
+      minTextChars: 10,
+    });
+    expect(capturedTempDirs.length).toBeGreaterThan(0);
+    for (const dir of capturedTempDirs) {
+      expect(mockRm).toHaveBeenCalledWith(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("pdftoppm fallback — canvas unavailable, pdftoppm unavailable", () => {
+  const mockSpawn = vi.fn();
+  let freshCreate!: typeof createPdfDocumentExtractor;
+
+  beforeAll(async () => {
+    vi.resetModules();
+    vi.doMock("@napi-rs/canvas", () => {
+      throw new Error("@napi-rs/canvas not installed");
+    });
+    vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => ({ getDocument: getDocumentMock }));
+    vi.doMock("node:child_process", () => ({ spawn: mockSpawn }));
+    const mod =
+      (await import("./document-extractor.js")) as typeof import("./document-extractor.js");
+    freshCreate = mod.createPdfDocumentExtractor;
+  });
+
+  afterAll(() => {
+    vi.doUnmock("@napi-rs/canvas");
+    vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+    vi.doUnmock("node:child_process");
+    vi.resetModules();
+  });
+
+  beforeEach(() => {
+    mockSpawn.mockImplementation(() => {
+      const emitter = new EventEmitter();
+      setImmediate(() => emitter.emit("error", new Error("spawn ENOENT")));
+      return emitter;
+    });
+    getDocumentMock.mockReset();
+    getDocumentMock.mockReturnValue({ promise: Promise.resolve(pdfDocument) });
+    pdfDocument.getPage.mockClear();
+  });
+
+  it("calls onImageExtractionError and returns empty images when pdftoppm is also unavailable", async () => {
+    const onImageExtractionError = vi.fn();
+    const extractor = freshCreate();
+    const result = await extractor.extract({
+      buffer: Buffer.from("%PDF-1.4"),
+      mimeType: "application/pdf",
+      maxPages: 1,
+      maxPixels: 1_000_000,
+      minTextChars: 10,
+      onImageExtractionError,
+    });
+    expect(onImageExtractionError).toHaveBeenCalledTimes(1);
+    expect(result.images).toEqual([]);
   });
 });

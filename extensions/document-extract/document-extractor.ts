@@ -1,4 +1,7 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import type {
   DocumentExtractedImage,
@@ -49,6 +52,7 @@ const MAX_RENDER_DIMENSION = 10_000;
 const require = createRequire(import.meta.url);
 
 let canvasModulePromise: Promise<CanvasModule> | null = null;
+let pdftoppmAvailablePromise: Promise<boolean> | null = null;
 let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
 let pdfJsStandardFontDataPath: string | null = null;
 
@@ -83,6 +87,67 @@ function resolvePdfJsStandardFontDataPath(): string {
       path.join(path.dirname(pdfJsPackageJsonPath), "standard_fonts") + "/";
   }
   return pdfJsStandardFontDataPath;
+}
+
+function isPdftoppmAvailable(): Promise<boolean> {
+  if (!pdftoppmAvailablePromise) {
+    pdftoppmAvailablePromise = new Promise<boolean>((resolve) => {
+      const child = spawn("pdftoppm", ["-v"], { timeout: 5000, stdio: "ignore" });
+      child.on("error", () => resolve(false));
+      child.on("close", () => resolve(true));
+    });
+  }
+  return pdftoppmAvailablePromise;
+}
+
+async function renderPageWithPdftoppm(
+  buffer: Buffer,
+  pageNumber: number,
+  dpi: number,
+): Promise<Buffer | null> {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-pdf-"));
+  await fs.chmod(tempDir, 0o700);
+  try {
+    const pdfPath = path.join(tempDir, "input.pdf");
+    const outPrefix = path.join(tempDir, "page");
+    await fs.writeFile(pdfPath, buffer);
+    const clampedDpi = Math.min(300, Math.max(72, dpi));
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(
+        "pdftoppm",
+        [
+          "-png",
+          "-f",
+          String(pageNumber),
+          "-l",
+          String(pageNumber),
+          "-r",
+          String(clampedDpi),
+          pdfPath,
+          outPrefix,
+        ],
+        { timeout: 30000, stdio: "ignore" },
+      );
+      child.on("error", reject);
+      child.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`pdftoppm exited with code ${String(code)}`));
+        }
+      });
+    });
+    const files = await fs.readdir(tempDir);
+    const pngFile = files.find((f) => f.endsWith(".png"));
+    if (!pngFile) {
+      return null;
+    }
+    return await fs.readFile(path.join(tempDir, pngFile));
+  } catch {
+    return null;
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 function appendTextWithinLimit(parts: string[], pageText: string, currentLength: number): number {
@@ -185,6 +250,28 @@ async function extractPdfContent(
   try {
     canvasModule = await loadCanvasModule();
   } catch (err) {
+    if (await isPdftoppmAvailable()) {
+      const images: DocumentExtractedImage[] = [];
+      let remainingPixels = Math.max(1, Math.floor(request.maxPixels));
+      for (const pageNum of effectivePages) {
+        if (remainingPixels <= 0) {
+          break;
+        }
+        const page = await pdf.getPage(pageNum);
+        const viewport = page.getViewport({ scale: 1 });
+        const plan = resolveRenderPlan(viewport, remainingPixels);
+        if (!plan) {
+          break;
+        }
+        const dpi = Math.min(300, Math.max(72, Math.round((72 * plan.width) / viewport.width)));
+        const png = await renderPageWithPdftoppm(Buffer.from(request.buffer), pageNum, dpi);
+        if (png) {
+          images.push({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
+          remainingPixels -= plan.pixels;
+        }
+      }
+      return { text, images };
+    }
     request.onImageExtractionError?.(err);
     return { text, images: [] };
   }
