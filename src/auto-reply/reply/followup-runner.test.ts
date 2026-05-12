@@ -113,9 +113,7 @@ function expectNoBlockReplyTextIncludes(
   ).toBe(false);
 }
 
-function registerFollowupTestSessionStore(
-  sessionStore: Record<string, SessionEntry>,
-): void {
+function registerFollowupTestSessionStore(sessionStore: Record<string, SessionEntry>): void {
   FOLLOWUP_TEST_SESSION_STORES.add(sessionStore);
 }
 
