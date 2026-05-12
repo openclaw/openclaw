@@ -3086,7 +3086,11 @@ export async function runEmbeddedPiAgent(
           if (lastProfileId) {
             await markAuthProfileSuccess({
               store: profileFailureStore,
-              provider,
+              provider: resolveAuthProfileStateProvider(
+                profileFailureStore,
+                lastProfileId,
+                provider,
+              ),
               profileId: lastProfileId,
               agentDir: params.agentDir,
             });

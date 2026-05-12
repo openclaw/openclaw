@@ -479,12 +479,12 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     });
     const harnessParams = mockCallArg(pluginRunAttempt) as { runtimePlan?: unknown };
     expect(harnessParams?.runtimePlan).toBe(runtimePlan);
-    expect(mockedMarkAuthProfileSuccess).toHaveBeenCalledTimes(1);
-    const [[successParams]] = mockedMarkAuthProfileSuccess.mock.calls as unknown as Array<
-      [{ provider?: string; profileId?: string }]
-    >;
-    expect(successParams.provider).toBe("openai-codex");
-    expect(successParams.profileId).toBe("openai-codex:work");
+    expect(mockedMarkAuthProfileSuccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        profileId: "openai-codex:work",
+      }),
+    );
   });
 
   it("keeps auto-selected OpenAI Codex auth profiles for forced codex harness runs", async () => {
