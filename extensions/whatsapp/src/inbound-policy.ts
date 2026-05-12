@@ -133,6 +133,22 @@ export function resolveWhatsAppInboundPolicy(params: {
   };
 }
 
+export function resolveWhatsAppConversationGroupAllowFrom(params: {
+  policy: ResolvedWhatsAppInboundPolicy;
+  conversationId: string;
+}): string[] {
+  const groups = params.policy.account.groups;
+  if (groups && typeof groups === "object") {
+    const groupId = resolveGroupConversationId(params.conversationId);
+    const entry = groups[groupId] ?? groups[params.conversationId];
+    const perGroupAllowFrom = Array.isArray(entry?.allowFrom) ? entry.allowFrom : undefined;
+    if (perGroupAllowFrom && perGroupAllowFrom.length > 0) {
+      return perGroupAllowFrom;
+    }
+  }
+  return params.policy.groupAllowFrom;
+}
+
 export async function resolveWhatsAppIngressAccess(params: {
   cfg: OpenClawConfig;
   policy: ResolvedWhatsAppInboundPolicy;
@@ -148,6 +164,12 @@ export async function resolveWhatsAppIngressAccess(params: {
     dmSenderId: params.dmSenderId,
   });
   const dmAllowFrom = [...params.policy.dmAllowFrom, ...samePhoneDmAllowFrom];
+  const effectiveGroupAllowFrom = params.isGroup
+    ? resolveWhatsAppConversationGroupAllowFrom({
+        policy: params.policy,
+        conversationId: params.conversationId,
+      })
+    : params.policy.groupAllowFrom;
   return await resolveStableChannelMessageIngress({
     channelId: "whatsapp",
     accountId: params.policy.account.accountId,
@@ -171,7 +193,7 @@ export async function resolveWhatsAppIngressAccess(params: {
       groupAllowFromFallbackToAllowFrom: false,
     },
     allowFrom: dmAllowFrom,
-    groupAllowFrom: params.policy.groupAllowFrom,
+    groupAllowFrom: effectiveGroupAllowFrom,
     command: params.includeCommand === true ? {} : undefined,
   });
 }

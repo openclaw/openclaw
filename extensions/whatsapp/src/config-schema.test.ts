@@ -118,4 +118,46 @@ describe("whatsapp config schema", () => {
       },
     });
   });
+
+  it("accepts per-group allowFrom on a channel-level group entry", () => {
+    const res = expectWhatsAppConfigValid({
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15550001111"],
+      groups: {
+        "1203630000000000000@g.us": {
+          allowFrom: ["+15550003333", "+15550004444"],
+          requireMention: true,
+        },
+      },
+    });
+
+    if (res.success) {
+      expect(res.data.groups?.["1203630000000000000@g.us"]?.allowFrom).toEqual([
+        "+15550003333",
+        "+15550004444",
+      ]);
+    }
+  });
+
+  it("accepts per-group allowFrom on an account-scoped group entry", () => {
+    const res = expectWhatsAppConfigValid({
+      accounts: {
+        work: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15550001111"],
+          groups: {
+            "1203630000000000000@g.us": {
+              allowFrom: ["+15550005555"],
+            },
+          },
+        },
+      },
+    });
+
+    if (res.success) {
+      expect(res.data.accounts?.work?.groups?.["1203630000000000000@g.us"]?.allowFrom).toEqual([
+        "+15550005555",
+      ]);
+    }
+  });
 });
