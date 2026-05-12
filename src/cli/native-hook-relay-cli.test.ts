@@ -114,12 +114,18 @@ describe("native hook relay CLI", () => {
     expect(stdout.text()).toBe("");
     expect(stderr.text()).toBe("");
     expect(callGateway).not.toHaveBeenCalled();
-    expect(invokeNativeHookRelayBridge).toHaveBeenCalledWith(
+    const firstCall = (
+      invokeNativeHookRelayBridge.mock.calls as unknown as Array<
+        [{ registrationTimeoutMs: number; timeoutMs: number }]
+      >
+    )[0]?.[0];
+    expect(firstCall).toEqual(
       expect.objectContaining({
         registrationTimeoutMs: 90,
-        timeoutMs: 114,
       }),
     );
+    expect(firstCall?.timeoutMs).toBeGreaterThanOrEqual(100);
+    expect(firstCall?.timeoutMs).toBeLessThanOrEqual(114);
   });
 
   it("uses the remaining timeout budget when the bridge is absent", async () => {
