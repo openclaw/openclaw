@@ -93,6 +93,7 @@ import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
+import { resolveMaxOverflowCompactionAttempts } from "./compaction-runtime-config.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
@@ -893,7 +894,7 @@ export async function runEmbeddedPiAgent(
       const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
 
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
-      const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
+      const MAX_OVERFLOW_COMPACTION_ATTEMPTS = resolveMaxOverflowCompactionAttempts(params.config);
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;

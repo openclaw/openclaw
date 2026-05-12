@@ -178,6 +178,8 @@ export const AgentDefaultsSchema = z
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
         maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
+        preemptiveOverflowRatio: z.number().gt(0).lt(1).optional(),
+        maxOverflowAttempts: z.number().int().nonnegative().optional(),
         customInstructions: z.string().optional(),
         identifierPolicy: z
           .union([z.literal("strict"), z.literal("off"), z.literal("custom")])

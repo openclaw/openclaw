@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { DEFAULT_PREEMPTIVE_OVERFLOW_RATIO } from "./compaction-runtime-config.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
   formatContextLimitTruncationNotice,
@@ -20,7 +21,6 @@ import {
 } from "./tool-result-char-estimator.js";
 
 const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
-const PREEMPTIVE_OVERFLOW_RATIO = 0.9;
 
 export const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
   "Context overflow: estimated context size exceeds safe threshold during tool loop.";
@@ -359,11 +359,19 @@ export function installToolResultContextGuard(params: {
   agent: GuardableAgent;
   contextWindowTokens: number;
   midTurnPrecheck?: MidTurnPrecheckOptions;
+  preemptiveOverflowRatio?: number;
 }): () => void {
   const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
+  const preemptiveOverflowRatio =
+    typeof params.preemptiveOverflowRatio === "number" &&
+    Number.isFinite(params.preemptiveOverflowRatio) &&
+    params.preemptiveOverflowRatio > 0 &&
+    params.preemptiveOverflowRatio < 1
+      ? params.preemptiveOverflowRatio
+      : DEFAULT_PREEMPTIVE_OVERFLOW_RATIO;
   const maxContextChars = Math.max(
     1_024,
-    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * PREEMPTIVE_OVERFLOW_RATIO),
+    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * preemptiveOverflowRatio),
   );
   const maxSingleToolResultChars = Math.max(
     1_024,

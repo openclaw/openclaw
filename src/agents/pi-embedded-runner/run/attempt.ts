@@ -191,6 +191,7 @@ import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
+import { resolvePreemptiveOverflowRatio } from "../compaction-runtime-config.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
@@ -1963,6 +1964,7 @@ export async function runEmbeddedAttempt(
         removeToolResultContextGuard = installToolResultContextGuard({
           agent: activeSession.agent,
           contextWindowTokens: contextTokenBudgetForGuard,
+          preemptiveOverflowRatio: resolvePreemptiveOverflowRatio(params.config),
           ...(midTurnPrecheckEnabled
             ? {
                 midTurnPrecheck: {

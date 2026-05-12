@@ -399,6 +399,8 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.keepRecentTokens",
   "agents.defaults.compaction.reserveTokensFloor",
   "agents.defaults.compaction.maxHistoryShare",
+  "agents.defaults.compaction.preemptiveOverflowRatio",
+  "agents.defaults.compaction.maxOverflowAttempts",
   "agents.defaults.compaction.identifierPolicy",
   "agents.defaults.compaction.identifierInstructions",
   "agents.defaults.compaction.recentTurnsPreserve",
@@ -850,6 +852,13 @@ describe("config help copy quality", () => {
 
     const historyShare = FIELD_HELP["agents.defaults.compaction.maxHistoryShare"];
     expect(/0\\.1-0\\.9|fraction|share/i.test(historyShare)).toBe(true);
+
+    expect(FIELD_HELP["agents.defaults.compaction.preemptiveOverflowRatio"]).toMatch(
+      /overflow.*ratio.*default:\s*0\.9/i,
+    );
+    expect(FIELD_HELP["agents.defaults.compaction.maxOverflowAttempts"]).toMatch(
+      /maximum.*overflow.*default:\s*3/i,
+    );
 
     const identifierPolicy = FIELD_HELP["agents.defaults.compaction.identifierPolicy"];
     expect(identifierPolicy.includes('"strict"')).toBe(true);

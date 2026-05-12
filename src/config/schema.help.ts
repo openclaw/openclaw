@@ -1392,6 +1392,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Minimum floor enforced for reserveTokens in Pi compaction paths (0 disables the floor guard). Use a non-zero floor to avoid over-aggressive compression under fluctuating token estimates.",
   "agents.defaults.compaction.maxHistoryShare":
     "Maximum fraction of total context budget allowed for retained history after compaction (range 0.1-0.9). Use lower shares for more generation headroom or higher shares for deeper historical continuity.",
+  "agents.defaults.compaction.preemptiveOverflowRatio":
+    "Soft context-overflow threshold ratio for Pi tool-loop preemptive checks (range 0-1 exclusive, default: 0.9). Lower this to compact earlier with more headroom; raise it to preserve more context before compaction.",
+  "agents.defaults.compaction.maxOverflowAttempts":
+    "Maximum automatic compaction retries after Pi context-overflow errors (default: 3). Lower this to fail faster and avoid repeated billable summarization calls; set 0 to skip overflow retry compaction.",
   "agents.defaults.compaction.identifierPolicy":
     'Identifier-preservation policy for compaction summaries: "strict" prepends built-in opaque-identifier retention guidance (default), "off" disables this prefix, and "custom" uses identifierInstructions. Keep "strict" unless you have a specific compatibility need.',
   "agents.defaults.compaction.identifierInstructions":
