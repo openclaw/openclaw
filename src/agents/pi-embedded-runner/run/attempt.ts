@@ -2192,6 +2192,9 @@ export async function runEmbeddedAttempt(
       // that must be passed to the resource loader for the safeguard to be active.
       // Threading `activeContextEngine` enables the compaction-intercept
       // extension when the engine declares `info.interceptsCompaction === true`.
+      // `sessionKey` is also threaded so engines that route on session-key
+      // patterns (e.g. lossless-claw's ignored-/stateless-session patterns)
+      // can identify the active session inside the intercept handler.
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
@@ -2199,6 +2202,7 @@ export async function runEmbeddedAttempt(
         modelId: params.modelId,
         model: params.model,
         activeContextEngine,
+        sessionKey: params.sessionKey,
       });
       const resourceLoader = createEmbeddedPiResourceLoader({
         cwd: resolvedWorkspace,

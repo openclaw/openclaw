@@ -224,11 +224,15 @@ export async function runCliTurnCompactionLifecycle(params: {
   cliCompactionDeps.ensureContextEnginesInitialized();
   const contextEngine = await cliCompactionDeps.resolveContextEngine(params.cfg);
   const sessionManager = cliCompactionDeps.openSessionManager(sessionFile);
+  // Thread `contextEngineInfo` so `reserveTokensFloor` is auto-zeroed for
+  // engines that own or intercept compaction (matches the in-attempt path
+  // at run/attempt.ts).
   const settingsManager = await cliCompactionDeps.createPreparedEmbeddedPiSettingsManager({
     cwd: params.workspaceDir,
     agentDir: params.agentDir,
     cfg: params.cfg,
     contextTokenBudget,
+    contextEngineInfo: contextEngine.info,
   });
   await cliCompactionDeps.applyPiAutoCompactionGuard({
     settingsManager,

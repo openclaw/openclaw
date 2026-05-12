@@ -157,6 +157,13 @@ export function buildEmbeddedExtensionFactories(params: {
    * subagent runs that have no separate engine) pass `undefined` to skip.
    */
   activeContextEngine?: ContextEngine;
+  /**
+   * Openclaw session key (agent:id:suffix form) for the active session.
+   * Threaded into the compaction-intercept runtime so engines that route on
+   * sessionKey (e.g. ignored-/stateless-session patterns in lossless-claw)
+   * receive it inside the `session_before_compact` handler.
+   */
+  sessionKey?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
@@ -196,6 +203,7 @@ export function buildEmbeddedExtensionFactories(params: {
   ) {
     setCompactionInterceptRuntime(params.sessionManager, {
       contextEngine: params.activeContextEngine,
+      sessionKey: params.sessionKey,
     });
     factories.push(compactionInterceptExtension);
   }

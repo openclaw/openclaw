@@ -17,14 +17,16 @@ type CompactionHandler = (event: unknown, ctx: unknown) => Promise<unknown>;
 function stubSessionManager(
   overrides: Partial<{
     sessionId: string;
-    sessionFile: string;
+    sessionFile: string | undefined;
   }> = {},
 ): ExtensionContext["sessionManager"] {
+  const sessionFileResolved =
+    "sessionFile" in overrides ? overrides.sessionFile : "/stub/session.jsonl";
   const stub: ExtensionContext["sessionManager"] = {
     getCwd: () => "/stub",
     getSessionDir: () => "/stub",
     getSessionId: () => overrides.sessionId ?? "stub-session-id",
-    getSessionFile: () => overrides.sessionFile ?? "/stub/session.jsonl",
+    getSessionFile: () => sessionFileResolved as string,
     getLeafId: () => null,
     getLeafEntry: () => undefined,
     getEntry: () => undefined,
@@ -238,6 +240,54 @@ describe("compactionInterceptExtension", () => {
       const ctx = makeCtx(sm);
       await handler(event, ctx);
       expect(captured.signal).toBe(controller.signal);
+    } finally {
+      setCompactionInterceptRuntime(sm, null);
+    }
+  });
+
+  it("bails (returns undefined) when getSessionFile() returns undefined", async () => {
+    const handler = captureHandler();
+    const sm = stubSessionManager({ sessionFile: undefined });
+    const intercept = vi.fn(async () => ({
+      handled: true,
+      summary: "should not be called",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 1,
+    }));
+    const engine = makeEngine(
+      { id: "lcm", name: "LCM", interceptsCompaction: true },
+      intercept as (req: CompactionInterceptRequest) => Promise<CompactionInterceptResult>,
+    );
+    setCompactionInterceptRuntime(sm, { contextEngine: engine });
+    try {
+      const ctx = makeCtx(sm);
+      const result = await handler(makeEvent(), ctx);
+      expect(intercept).not.toHaveBeenCalled();
+      expect(result).toBeUndefined();
+    } finally {
+      setCompactionInterceptRuntime(sm, null);
+    }
+  });
+
+  it("passes sessionKey from the runtime registry into the engine request", async () => {
+    const handler = captureHandler();
+    const sm = stubSessionManager();
+    let captured: CompactionInterceptRequest | undefined;
+    const intercept = vi.fn(
+      async (req: CompactionInterceptRequest): Promise<CompactionInterceptResult> => {
+        captured = req;
+        return { handled: false, reason: "captured" };
+      },
+    );
+    const engine = makeEngine({ id: "lcm", name: "LCM", interceptsCompaction: true }, intercept);
+    setCompactionInterceptRuntime(sm, {
+      contextEngine: engine,
+      sessionKey: "agent:main:subagent:abc123",
+    });
+    try {
+      const ctx = makeCtx(sm);
+      await handler(makeEvent(), ctx);
+      expect(captured?.sessionKey).toBe("agent:main:subagent:abc123");
     } finally {
       setCompactionInterceptRuntime(sm, null);
     }

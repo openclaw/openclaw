@@ -43,11 +43,20 @@ export default function compactionInterceptExtension(api: ExtensionAPI): void {
 
     // Extract the runtime-level identifiers from the session manager so the
     // engine can route on sessionId/sessionFile without needing the SDK event
-    // type directly. `sessionKey` is an openclaw-level concept not surfaced
-    // by ReadonlySessionManager — engines that need it can derive it from
-    // sessionFile path conventions or fall back to sessionId-only routing.
+    // type directly. `sessionKey` (an openclaw-level concept) is carried
+    // through the runtime registry because ReadonlySessionManager does not
+    // expose it.
     const sessionId = ctx.sessionManager.getSessionId();
     const sessionFile = ctx.sessionManager.getSessionFile();
+    if (typeof sessionFile !== "string" || sessionFile.length === 0) {
+      // pi-coding-agent's getSessionFile() returns string | undefined for
+      // not-yet-persisted sessions. Without a session file the engine
+      // cannot read raw history; bail and let the runtime fall back.
+      log.debug(
+        "[compaction-intercept] session has no on-disk file; falling back to default compaction path",
+      );
+      return undefined;
+    }
     const contextUsage = ctx.getContextUsage();
     const tokenBudget = contextUsage?.contextWindow;
     const currentTokenCount =
@@ -55,6 +64,7 @@ export default function compactionInterceptExtension(api: ExtensionAPI): void {
 
     const request: CompactionInterceptRequest = {
       sessionId,
+      sessionKey: runtime.sessionKey,
       sessionFile,
       tokenBudget,
       currentTokenCount,

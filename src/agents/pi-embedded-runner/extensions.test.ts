@@ -179,6 +179,33 @@ describe("buildEmbeddedExtensionFactories — compactionInterceptExtension wirin
     expect(runtime?.contextEngine).toBe(engine);
   });
 
+  it("threads sessionKey into the intercept runtime when supplied", () => {
+    const sessionManager = {} as SessionManager;
+    const engine = makeEngine({ id: "lcm", name: "LCM", interceptsCompaction: true });
+    buildEmbeddedExtensionFactories({
+      ...baseParams,
+      sessionManager,
+      activeContextEngine: engine,
+      sessionKey: "agent:main:main",
+    });
+    const runtime = getCompactionInterceptRuntime(sessionManager);
+    expect(runtime?.sessionKey).toBe("agent:main:main");
+  });
+
+  it("registers intercept with undefined sessionKey when not supplied (back-compat)", () => {
+    const sessionManager = {} as SessionManager;
+    const engine = makeEngine({ id: "lcm", name: "LCM", interceptsCompaction: true });
+    buildEmbeddedExtensionFactories({
+      ...baseParams,
+      sessionManager,
+      activeContextEngine: engine,
+      // sessionKey intentionally omitted
+    });
+    const runtime = getCompactionInterceptRuntime(sessionManager);
+    expect(runtime?.sessionKey).toBeUndefined();
+    expect(runtime?.contextEngine).toBe(engine);
+  });
+
   it("does NOT register intercept when engine ownsCompaction (engine bypasses SDK event)", () => {
     const sessionManager = {} as SessionManager;
     const engine = makeEngine({
