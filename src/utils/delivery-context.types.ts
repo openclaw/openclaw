@@ -20,9 +20,5 @@ export type DeliveryContext = Pick<
 
 export type DeliveryContextSessionSource = {
   channel?: string;
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
   deliveryContext?: DeliveryContext;
 };

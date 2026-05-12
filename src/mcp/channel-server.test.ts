@@ -290,8 +290,7 @@ describe("openclaw channel mcp server", () => {
             }
           ).handleSessionMessageEvent({
             sessionKey,
-            lastChannel: "imessage",
-            lastTo: "+15551234567",
+            deliveryContext: { channel: "imessage", to: "+15551234567" },
             messageId: "msg-user-1",
             message: {
               role: "user",
@@ -324,8 +323,7 @@ describe("openclaw channel mcp server", () => {
             }
           ).handleSessionMessageEvent({
             sessionKey,
-            lastChannel: "imessage",
-            lastTo: "+15551234567",
+            deliveryContext: { channel: "imessage", to: "+15551234567" },
             messageId: "msg-user-2",
             message: {
               role: "user",
@@ -347,8 +345,7 @@ describe("openclaw channel mcp server", () => {
             }
           ).handleSessionMessageEvent({
             sessionKey,
-            lastChannel: "imessage",
-            lastTo: "+15551234567",
+            deliveryContext: { channel: "imessage", to: "+15551234567" },
             messageId: "msg-user-3",
             message: {
               role: "user",
@@ -529,10 +526,12 @@ describe("openclaw channel mcp server", () => {
           }
         ).handleSessionMessageEvent({
           sessionKey: "agent:main:main",
-          lastChannel: "telegram",
-          lastTo: "-100123",
-          lastAccountId: "acct-1",
-          lastThreadId: 42,
+          deliveryContext: {
+            channel: "telegram",
+            to: "-100123",
+            accountId: "acct-1",
+            threadId: 42,
+          },
           messageId: "msg-2",
           messageSeq: 1,
           message: {
