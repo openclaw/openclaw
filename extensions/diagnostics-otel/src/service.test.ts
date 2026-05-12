@@ -246,7 +246,7 @@ async function emitAndCaptureLog(
   });
   await flushDiagnosticEvents();
   expect(logEmit).toHaveBeenCalled();
-  const emitCall = logEmit.mock.calls[0]?.[0];
+  const emitCall = logEmit.mock.calls.at(0)?.[0];
   await service.stop?.(ctx);
   return emitCall;
 }
@@ -753,7 +753,7 @@ describe("diagnostics-otel service", () => {
     const ctx = createTraceOnlyContext("https://www.comet.com/opik/api/v1/private/otel");
     await service.start(ctx);
 
-    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    const options = traceExporterCtor.mock.calls.at(0)?.[0] as { url?: string } | undefined;
     expect(options?.url).toBe("https://www.comet.com/opik/api/v1/private/otel/v1/traces");
     await service.stop?.(ctx);
   });
@@ -763,7 +763,7 @@ describe("diagnostics-otel service", () => {
     const ctx = createTraceOnlyContext("https://collector.example.com/v1/traces");
     await service.start(ctx);
 
-    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    const options = traceExporterCtor.mock.calls.at(0)?.[0] as { url?: string } | undefined;
     expect(options?.url).toBe("https://collector.example.com/v1/traces");
     await service.stop?.(ctx);
   });
@@ -773,7 +773,7 @@ describe("diagnostics-otel service", () => {
     const ctx = createTraceOnlyContext("https://collector.example.com/v1/traces?timeout=30s");
     await service.start(ctx);
 
-    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    const options = traceExporterCtor.mock.calls.at(0)?.[0] as { url?: string } | undefined;
     expect(options?.url).toBe("https://collector.example.com/v1/traces?timeout=30s");
     await service.stop?.(ctx);
   });
@@ -783,7 +783,7 @@ describe("diagnostics-otel service", () => {
     const ctx = createTraceOnlyContext("https://collector.example.com/v1/Traces");
     await service.start(ctx);
 
-    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    const options = traceExporterCtor.mock.calls.at(0)?.[0] as { url?: string } | undefined;
     expect(options?.url).toBe("https://collector.example.com/v1/Traces");
     await service.stop?.(ctx);
   });
@@ -801,9 +801,9 @@ describe("diagnostics-otel service", () => {
 
     await service.start(ctx);
 
-    const traceOptions = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
-    const metricOptions = metricExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
-    const logOptions = logExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    const traceOptions = traceExporterCtor.mock.calls.at(0)?.[0] as { url?: string } | undefined;
+    const metricOptions = metricExporterCtor.mock.calls.at(0)?.[0] as { url?: string } | undefined;
+    const logOptions = logExporterCtor.mock.calls.at(0)?.[0] as { url?: string } | undefined;
     expect(traceOptions?.url).toBe("https://trace.example.com/otlp/v1/traces");
     expect(metricOptions?.url).toBe("https://metric.example.com/v1/metrics");
     expect(logOptions?.url).toBe("https://log.example.com/otlp/v1/logs");
@@ -823,9 +823,9 @@ describe("diagnostics-otel service", () => {
     });
     await service.start(ctx);
 
-    const traceOptions = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
-    const metricOptions = metricExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
-    const logOptions = logExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    const traceOptions = traceExporterCtor.mock.calls.at(0)?.[0] as { url?: string } | undefined;
+    const metricOptions = metricExporterCtor.mock.calls.at(0)?.[0] as { url?: string } | undefined;
+    const logOptions = logExporterCtor.mock.calls.at(0)?.[0] as { url?: string } | undefined;
     expect(traceOptions?.url).toBe("https://trace-env.example.com/v1/traces");
     expect(metricOptions?.url).toBe("https://metric-env.example.com/otlp/v1/metrics");
     expect(logOptions?.url).toBe("https://log-env.example.com/otlp/v1/logs");
@@ -895,7 +895,7 @@ describe("diagnostics-otel service", () => {
     );
 
     expect(telemetryState.tracer.setSpanContext).toHaveBeenCalledTimes(1);
-    const trustedSpanContext = telemetryState.tracer.setSpanContext.mock.calls[0]?.[1] as
+    const trustedSpanContext = telemetryState.tracer.setSpanContext.mock.calls.at(0)?.[1] as
       | Record<string, unknown>
       | undefined;
     expect(trustedSpanContext?.traceId).toBe(TRACE_ID);
@@ -935,7 +935,7 @@ describe("diagnostics-otel service", () => {
     } as Parameters<typeof emitDiagnosticEvent>[0]);
     await flushDiagnosticEvents();
 
-    const emitCall = logEmit.mock.calls[0]?.[0];
+    const emitCall = logEmit.mock.calls.at(0)?.[0];
     expect(emitCall?.body.length).toBeLessThanOrEqual(4200);
     expect(String(emitCall?.attributes?.["openclaw.good"])).toMatch(/^y+/);
     expect(emitCall?.attributes?.["code.lineno"]).toBe(42);
@@ -1385,7 +1385,7 @@ describe("diagnostics-otel service", () => {
     expect(timeToFirstByte?.[1]?.["openclaw.provider"]).toBe("openai");
     expect(timeToFirstByte?.[1]?.["openclaw.model"]).toBe("gpt-5.4");
     const modelCallSpan = telemetryState.spans.find((span) => span.name === "openclaw.model.call");
-    const modelSpanAttributes = modelCallSpan?.setAttributes.mock.calls[0]?.[0] as
+    const modelSpanAttributes = modelCallSpan?.setAttributes.mock.calls.at(0)?.[0] as
       | Record<string, unknown>
       | undefined;
     expect(modelSpanAttributes?.["openclaw.model_call.request_bytes"]).toBe(1234);
@@ -1411,7 +1411,7 @@ describe("diagnostics-otel service", () => {
       code: 2,
       message: "TypeError",
     });
-    expect(toolSpan?.end.mock.calls[0]?.[0]).toBeTypeOf("number");
+    expect(toolSpan?.end.mock.calls.at(0)?.[0]).toBeTypeOf("number");
     expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
     await service.stop?.(ctx);
   });
@@ -1450,7 +1450,7 @@ describe("diagnostics-otel service", () => {
     const span = telemetryState.spans.find(
       (candidate) => candidate.name === "openclaw.model.failover",
     );
-    expect(span?.end.mock.calls[0]?.[0]).toBeTypeOf("number");
+    expect(span?.end.mock.calls.at(0)?.[0]).toBeTypeOf("number");
     await service.stop?.(ctx);
   });
 
@@ -1648,7 +1648,7 @@ describe("diagnostics-otel service", () => {
     expect(contextOptions?.startTime).toBeTypeOf("number");
     expect(JSON.stringify(contextCall)).not.toContain("session-key");
     expect(JSON.stringify(contextCall)).not.toContain("prompt text");
-    const linkedSpanContext = telemetryState.tracer.setSpanContext.mock.calls[0]?.[1] as
+    const linkedSpanContext = telemetryState.tracer.setSpanContext.mock.calls.at(0)?.[1] as
       | Record<string, unknown>
       | undefined;
     expect(linkedSpanContext?.traceId).toBe(TRACE_ID);
@@ -1942,7 +1942,7 @@ describe("diagnostics-otel service", () => {
       (call) => call[0] === "openclaw.model.usage",
     );
 
-    const linkedSpanContext = telemetryState.tracer.setSpanContext.mock.calls[0]?.[1] as
+    const linkedSpanContext = telemetryState.tracer.setSpanContext.mock.calls.at(0)?.[1] as
       | Record<string, unknown>
       | undefined;
     expect(linkedSpanContext?.traceId).toBe(TRACE_ID);
@@ -1951,7 +1951,7 @@ describe("diagnostics-otel service", () => {
       (modelUsageCall?.[2] as { spanContext?: { spanId?: string } } | undefined)?.spanContext
         ?.spanId,
     ).toBe(runSpanId);
-    expect(runSpan?.end.mock.calls[0]?.[0]).toBeTypeOf("number");
+    expect(runSpan?.end.mock.calls.at(0)?.[0]).toBeTypeOf("number");
     await service.stop?.(ctx);
   });
 
@@ -2229,7 +2229,7 @@ describe("diagnostics-otel service", () => {
       code: 2,
       message: "runtime-error",
     });
-    expect(execSpan?.end.mock.calls[0]?.[0]).toBeTypeOf("number");
+    expect(execSpan?.end.mock.calls.at(0)?.[0]).toBeTypeOf("number");
     await service.stop?.(ctx);
   });
 
@@ -2400,14 +2400,16 @@ describe("diagnostics-otel service", () => {
     });
     await flushDiagnosticEvents();
 
-    const recoveryRequestedCall = telemetryState.counters.get("openclaw.session.recovery.requested")
-      ?.add.mock.calls[0];
+    const recoveryRequestedCall = telemetryState.counters
+      .get("openclaw.session.recovery.requested")
+      ?.add.mock.calls.at(0);
     expect(recoveryRequestedCall?.[0]).toBe(1);
     expect(recoveryRequestedCall?.[1]?.["openclaw.state"]).toBe("processing");
     expect(recoveryRequestedCall?.[1]?.["openclaw.action"]).toBe("abort");
     expect(recoveryRequestedCall?.[1]?.["openclaw.active_work_kind"]).toBe("tool_call");
-    const recoveryCompletedCall = telemetryState.counters.get("openclaw.session.recovery.completed")
-      ?.add.mock.calls[0];
+    const recoveryCompletedCall = telemetryState.counters
+      .get("openclaw.session.recovery.completed")
+      ?.add.mock.calls.at(0);
     expect(recoveryCompletedCall?.[0]).toBe(1);
     expect(recoveryCompletedCall?.[1]?.["openclaw.state"]).toBe("processing");
     expect(recoveryCompletedCall?.[1]?.["openclaw.status"]).toBe("released");
@@ -2597,8 +2599,8 @@ describe("diagnostics-otel service", () => {
     });
 
     const sessionCounter = telemetryState.counters.get("openclaw.session.state");
-    const attrs = sessionCounter?.add.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
-    expect(sessionCounter?.add.mock.calls[0]?.[0]).toBe(1);
+    const attrs = sessionCounter?.add.mock.calls.at(0)?.[1] as Record<string, unknown> | undefined;
+    expect(sessionCounter?.add.mock.calls.at(0)?.[0]).toBe(1);
     expect(String(attrs?.["openclaw.reason"])).toContain("…");
     expect(typeof attrs?.["openclaw.reason"]).toBe("string");
     expect(String(attrs?.["openclaw.reason"])).not.toContain(
