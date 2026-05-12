@@ -587,6 +587,14 @@ function createAnimatedInstallProgress(
   };
 }
 
+function logInstallWarningWithSpacing(runtime: RuntimeEnv, message: string): void {
+  const sanitized = sanitizeTerminalText(message).trim();
+  if (!sanitized) {
+    return;
+  }
+  runtime.log?.(`${sanitized}\n`);
+}
+
 async function installPluginFromNpmSpecWithProgress(params: {
   entry: OnboardingPluginInstallEntry;
   npmSpec: string;
@@ -628,7 +636,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
           info: updateProgress,
           warn: (message) => {
             updateProgress(message);
-            params.runtime.log?.(sanitizeTerminalText(message));
+            logInstallWarningWithSpacing(params.runtime, message);
           },
         },
       }),
@@ -697,7 +705,7 @@ async function installPluginFromNpmPackArchiveWithProgress(params: {
           info: updateProgress,
           warn: (message) => {
             updateProgress(message);
-            params.runtime.log?.(sanitizeTerminalText(message));
+            logInstallWarningWithSpacing(params.runtime, message);
           },
         },
       }),
@@ -877,7 +885,7 @@ async function installPluginFromClawHubSpecWithProgress(params: {
           info: updateProgress,
           warn: (message) => {
             updateProgress(message);
-            params.runtime.log?.(sanitizeTerminalText(message));
+            logInstallWarningWithSpacing(params.runtime, message);
           },
         },
       }),
