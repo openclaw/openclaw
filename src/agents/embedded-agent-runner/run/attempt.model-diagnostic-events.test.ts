@@ -1088,6 +1088,50 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(JSON.stringify(completed?.privateData.modelContent)).not.toContain("hidden developer prompt");
   });
 
+  it("does not capture tool role chat messages as inputMessages", async () => {
+    async function* stream() {
+      yield { type: "text_delta", delta: "output text" };
+    }
+    const requestPayload = {
+      messages: [
+        { role: "user", content: "visible user message" },
+        { role: "tool", content: "hidden tool result" },
+      ],
+      model: "gpt-5.4",
+    };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      ((
+        model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => {
+        options?.onPayload?.(requestPayload, model);
+        return stream();
+      }) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-filter-tool-chat",
+        contentCapture: { inputMessages: true, outputMessages: true },
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      const streamResult = await wrapped({} as never, {} as never, {} as never);
+      await drain(streamResult as unknown as AsyncIterable<unknown>);
+    });
+
+    const completed = events.find((e) => e.type === "model.call.completed");
+    expect(completed).toMatchObject({
+      type: "model.call.completed",
+      inputMessages: ["visible user message"],
+      outputMessages: ["output text"],
+    });
+    expect(JSON.stringify(completed)).not.toContain("hidden tool result");
+  });
+
   it("captures output from normalized text_delta chunks", async () => {
     async function* stream() {
       yield { type: "text_delta", delta: "hello" };
