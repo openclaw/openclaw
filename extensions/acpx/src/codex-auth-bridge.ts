@@ -25,6 +25,8 @@ const CODEX_ACP_PACKAGE = "@zed-industries/codex-acp";
 const CODEX_ACP_BIN = "codex-acp";
 const CLAUDE_ACP_PACKAGE = "@agentclientprotocol/claude-agent-acp";
 const CLAUDE_ACP_BIN = "claude-agent-acp";
+const GEMINI_ACP_BIN = "gemini";
+const GEMINI_ACP_ARGS = ["--acp"];
 const RUN_CONFIGURED_COMMAND_SENTINEL = "--openclaw-run-configured";
 const requireFromHere = createRequire(import.meta.url);
 
@@ -33,6 +35,22 @@ type PackageManifest = {
   bin?: unknown;
   dependencies?: Record<string, unknown>;
 };
+
+type BuiltInAcpHarnessMetadata = {
+  displayName: string;
+  stripEnvVars?: string[];
+};
+
+const BUILT_IN_ACP_HARNESS_METADATA = {
+  claude: {
+    displayName: "Claude",
+    stripEnvVars: ["ANTHROPIC_API_KEY"],
+  },
+  gemini: {
+    displayName: "Gemini",
+    stripEnvVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+  },
+} satisfies Record<string, BuiltInAcpHarnessMetadata>;
 
 function readSelfManifest(): PackageManifest {
   const manifestPath = path.join(resolveAcpxPluginRoot(import.meta.url), "package.json");
@@ -225,17 +243,32 @@ function renderDiagnosticRedactionRuleSpecs(): string {
 
 function buildAdapterWrapperScript(params: {
   displayName: string;
-  packageSpec: string;
+  packageSpec?: string;
   binName: string;
   installedBinPath?: string;
+  defaultCommand?: string;
+  defaultArgs?: string[];
   envSetup: string;
   stderrLogFileNamePrefix?: string;
+  stripEnvVars?: string[];
 }): string {
   return `#!/usr/bin/env node
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+const providerEnvVarsToStrip = new Set([
+  ${(params.stripEnvVars ?? []).map(quoteCommandPart).join(",\n  ")}
+]);
+
+function createChildEnv(sourceEnv) {
+  const childEnv = { ...sourceEnv };
+  for (const name of providerEnvVarsToStrip) {
+    delete childEnv[name];
+  }
+  return childEnv;
+}
 
 ${params.envSetup}
 const stderrLogFileNamePrefix = ${params.stderrLogFileNamePrefix ? JSON.stringify(params.stderrLogFileNamePrefix) : "undefined"};
@@ -412,12 +445,15 @@ let defaultArgs;
 if (installedBinPath) {
   defaultCommand = process.execPath;
   defaultArgs = [installedBinPath];
-} else if (npmCliPath) {
+} else if (${params.packageSpec ? "true" : "false"} && npmCliPath) {
   defaultCommand = process.execPath;
-  defaultArgs = [npmCliPath, "exec", "--yes", "--package", "${params.packageSpec}", "--", "${params.binName}"];
-} else {
+  defaultArgs = [npmCliPath, "exec", "--yes", "--package", "${params.packageSpec ?? ""}", "--", "${params.binName}"];
+} else if (${params.packageSpec ? "true" : "false"}) {
   defaultCommand = process.platform === "win32" ? "npx.cmd" : "npx";
-  defaultArgs = ["--yes", "--package", "${params.packageSpec}", "--", "${params.binName}"];
+  defaultArgs = ["--yes", "--package", "${params.packageSpec ?? ""}", "--", "${params.binName}"];
+} else {
+  defaultCommand = ${params.defaultCommand ? quoteCommandPart(params.defaultCommand) : quoteCommandPart(params.binName)};
+  defaultArgs = [${(params.defaultArgs ?? []).map(quoteCommandPart).join(", ")}];
 }
 const command =
   configuredArgs[0] === "${RUN_CONFIGURED_COMMAND_SENTINEL}" ? configuredArgs[1] : defaultCommand;
@@ -562,7 +598,7 @@ if (shouldWriteCodexApiKeyAuth) {
   );
 }
 const env = {
-  ...process.env,
+  ...createChildEnv(process.env),
   CODEX_HOME: codexHome,
 };`,
   });
@@ -575,9 +611,19 @@ function buildClaudeAcpWrapperScript(installedBinPath?: string): string {
     packageSpec: `${CLAUDE_ACP_PACKAGE}@${CLAUDE_ACP_PACKAGE_VERSION}`,
     binName: CLAUDE_ACP_BIN,
     installedBinPath,
-    envSetup: `const env = {
-  ...process.env,
-};`,
+    envSetup: `const env = createChildEnv(process.env);`,
+    stripEnvVars: BUILT_IN_ACP_HARNESS_METADATA.claude.stripEnvVars,
+  });
+}
+
+function buildGeminiAcpWrapperScript(): string {
+  return buildAdapterWrapperScript({
+    displayName: BUILT_IN_ACP_HARNESS_METADATA.gemini.displayName,
+    binName: GEMINI_ACP_BIN,
+    defaultCommand: GEMINI_ACP_BIN,
+    defaultArgs: GEMINI_ACP_ARGS,
+    envSetup: `const env = createChildEnv(process.env);`,
+    stripEnvVars: BUILT_IN_ACP_HARNESS_METADATA.gemini.stripEnvVars,
   });
 }
 
@@ -637,6 +683,16 @@ async function writeClaudeAcpWrapper(baseDir: string, installedBinPath?: string)
   await fs.mkdir(baseDir, { recursive: true });
   const wrapperPath = path.join(baseDir, "claude-agent-acp-wrapper.mjs");
   await fs.writeFile(wrapperPath, buildClaudeAcpWrapperScript(installedBinPath), {
+    encoding: "utf8",
+  });
+  await makeGeneratedWrapperExecutableIfPossible(wrapperPath);
+  return wrapperPath;
+}
+
+async function writeGeminiAcpWrapper(baseDir: string): Promise<string> {
+  await fs.mkdir(baseDir, { recursive: true });
+  const wrapperPath = path.join(baseDir, "gemini-acp-wrapper.mjs");
+  await fs.writeFile(wrapperPath, buildGeminiAcpWrapperScript(), {
     encoding: "utf8",
   });
   await makeGeneratedWrapperExecutableIfPossible(wrapperPath);
@@ -728,6 +784,30 @@ function buildClaudeAcpWrapperCommand(wrapperPath: string, configuredCommand?: s
   return configuredCommand?.trim() || buildWrapperCommand(wrapperPath);
 }
 
+function buildDirectAcpWrapperCommand(params: {
+  wrapperPath: string;
+  configuredCommand?: string;
+  binName: string;
+}): string {
+  const trimmed = params.configuredCommand?.trim();
+  if (!trimmed) {
+    return buildWrapperCommand(params.wrapperPath);
+  }
+  const parts = splitCommandParts(trimmed);
+  if (isAcpBinName(parts[0] ?? "", params.binName)) {
+    return buildWrapperCommand(params.wrapperPath, parts.slice(1));
+  }
+  return trimmed;
+}
+
+function buildGeminiAcpWrapperCommand(wrapperPath: string, configuredCommand?: string): string {
+  return buildDirectAcpWrapperCommand({
+    wrapperPath,
+    configuredCommand,
+    binName: GEMINI_ACP_BIN,
+  });
+}
+
 /** Prepare ACPX agent commands and isolated auth homes for Codex/Claude adapters. */
 export async function prepareAcpxCodexAuthConfig(params: {
   pluginConfig: ResolvedAcpxPluginConfig;
@@ -750,8 +830,10 @@ export async function prepareAcpxCodexAuthConfig(params: {
   )();
   const wrapperPath = await writeCodexAcpWrapper(codexBaseDir, installedCodexBinPath);
   const claudeWrapperPath = await writeClaudeAcpWrapper(codexBaseDir, installedClaudeBinPath);
+  const geminiWrapperPath = await writeGeminiAcpWrapper(codexBaseDir);
   const configuredCodexCommand = params.pluginConfig.agents.codex;
   const configuredClaudeCommand = params.pluginConfig.agents.claude;
+  const configuredGeminiCommand = params.pluginConfig.agents.gemini;
 
   return {
     ...params.pluginConfig,
@@ -759,6 +841,7 @@ export async function prepareAcpxCodexAuthConfig(params: {
       ...params.pluginConfig.agents,
       codex: buildCodexAcpWrapperCommand(wrapperPath, configuredCodexCommand),
       claude: buildClaudeAcpWrapperCommand(claudeWrapperPath, configuredClaudeCommand),
+      gemini: buildGeminiAcpWrapperCommand(geminiWrapperPath, configuredGeminiCommand),
     },
   };
 }

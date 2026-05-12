@@ -204,7 +204,8 @@ function extractGeneratedWrapperPath(command: string | undefined): string {
     parts.find(
       (part) =>
         basename(part) === "codex-acp-wrapper.mjs" ||
-        basename(part) === "claude-agent-acp-wrapper.mjs",
+        basename(part) === "claude-agent-acp-wrapper.mjs" ||
+        basename(part) === "gemini-acp-wrapper.mjs",
     ) ?? ""
   );
 }

@@ -12,7 +12,10 @@ import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./
 const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
 const previousEnv = {
+  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   CODEX_HOME: process.env.CODEX_HOME,
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+  GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
   OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
 };
 
@@ -56,12 +59,26 @@ function generatedClaudePaths(stateDir: string): {
   };
 }
 
+function generatedGeminiPaths(stateDir: string): {
+  wrapperPath: string;
+} {
+  const baseDir = path.join(stateDir, "acpx");
+  return {
+    wrapperPath: path.join(baseDir, "gemini-acp-wrapper.mjs"),
+  };
+}
+
 function expectCodexWrapperCommand(command: string | undefined, wrapperPath: string): void {
   expect(command).toContain(quoteArg(process.execPath));
   expect(command).toContain(quoteArg(wrapperPath));
 }
 
 function expectClaudeWrapperCommand(command: string | undefined, wrapperPath: string): void {
+  expect(command).toContain(quoteArg(process.execPath));
+  expect(command).toContain(quoteArg(wrapperPath));
+}
+
+function expectGeminiWrapperCommand(command: string | undefined, wrapperPath: string): void {
   expect(command).toContain(quoteArg(process.execPath));
   expect(command).toContain(quoteArg(wrapperPath));
 }
@@ -90,7 +107,10 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  restoreEnv("ANTHROPIC_API_KEY");
   restoreEnv("CODEX_HOME");
+  restoreEnv("GEMINI_API_KEY");
+  restoreEnv("GOOGLE_API_KEY");
   restoreEnv("OPENCLAW_AGENT_DIR");
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
@@ -104,6 +124,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const stateDir = path.join(root, "state");
     const generated = generatedCodexPaths(stateDir);
     const generatedClaude = generatedClaudePaths(stateDir);
+    const generatedGemini = generatedGeminiPaths(stateDir);
     const installedBinPath = path.join(
       root,
       "node_modules",
@@ -126,8 +147,10 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
     expectClaudeWrapperCommand(resolved.agents.claude, generatedClaude.wrapperPath);
+    expectGeminiWrapperCommand(resolved.agents.gemini, generatedGemini.wrapperPath);
     await expect(fs.access(generated.wrapperPath)).resolves.toBeUndefined();
     await expect(fs.access(generatedClaude.wrapperPath)).resolves.toBeUndefined();
+    await expect(fs.access(generatedGemini.wrapperPath)).resolves.toBeUndefined();
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain(JSON.stringify(installedBinPath));
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
@@ -139,6 +162,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const stateDir = path.join(root, "state");
     const generatedCodex = generatedCodexPaths(stateDir);
     const generatedClaude = generatedClaudePaths(stateDir);
+    const generatedGemini = generatedGeminiPaths(stateDir);
     const chmodError = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
     const chmodSpy = vi.spyOn(fs, "chmod").mockRejectedValue(chmodError);
     const pluginConfig = resolveAcpxPluginConfig({
@@ -153,10 +177,13 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     expect(chmodSpy).toHaveBeenCalledWith(generatedCodex.wrapperPath, 0o755);
     expect(chmodSpy).toHaveBeenCalledWith(generatedClaude.wrapperPath, 0o755);
+    expect(chmodSpy).toHaveBeenCalledWith(generatedGemini.wrapperPath, 0o755);
     expectCodexWrapperCommand(resolved.agents.codex, generatedCodex.wrapperPath);
     expectClaudeWrapperCommand(resolved.agents.claude, generatedClaude.wrapperPath);
+    expectGeminiWrapperCommand(resolved.agents.gemini, generatedGemini.wrapperPath);
     await expect(fs.access(generatedCodex.wrapperPath)).resolves.toBeUndefined();
     await expect(fs.access(generatedClaude.wrapperPath)).resolves.toBeUndefined();
+    await expect(fs.access(generatedGemini.wrapperPath)).resolves.toBeUndefined();
   });
 
   it("falls back to the current Codex ACP package range when the local adapter is unavailable", async () => {
@@ -460,6 +487,98 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(launched.codexHome).toBeNull();
   });
 
+  it("strips Claude provider API keys only from the spawned ACP child env", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedClaudePaths(stateDir);
+    const installedBinPath = path.join(root, "claude-agent-acp-bin.js");
+    await fs.writeFile(
+      installedBinPath,
+      "console.log(JSON.stringify({ anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? null, inheritedProbe: process.env.OPENCLAW_ACPX_ENV_PROBE ?? null }));\n",
+      "utf8",
+    );
+    process.env.ANTHROPIC_API_KEY = "parent-secret";
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledClaudeAcpBinPath: async () => installedBinPath,
+    });
+
+    const { stdout } = await execFileAsync(process.execPath, [generated.wrapperPath], {
+      cwd: root,
+      env: {
+        ...process.env,
+        ANTHROPIC_API_KEY: "child-secret",
+        OPENCLAW_ACPX_ENV_PROBE: "preserved",
+      },
+    });
+    const launched = JSON.parse(stdout.trim()) as {
+      anthropicApiKey?: unknown;
+      inheritedProbe?: unknown;
+    };
+    expect(launched.anthropicApiKey).toBeNull();
+    expect(launched.inheritedProbe).toBe("preserved");
+    expect(process.env.ANTHROPIC_API_KEY).toBe("parent-secret");
+  });
+
+  it("strips Gemini provider API keys only from the spawned ACP child env", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedGeminiPaths(stateDir);
+    const binDir = path.join(root, "bin");
+    await fs.mkdir(binDir, { recursive: true });
+    const geminiBinPath = path.join(binDir, "gemini");
+    await fs.writeFile(
+      geminiBinPath,
+      [
+        "#!/usr/bin/env node",
+        "console.log(JSON.stringify({ argv: process.argv.slice(2), geminiApiKey: process.env.GEMINI_API_KEY ?? null, googleApiKey: process.env.GOOGLE_API_KEY ?? null, inheritedProbe: process.env.OPENCLAW_ACPX_ENV_PROBE ?? null }));",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.chmod(geminiBinPath, 0o755);
+    process.env.GEMINI_API_KEY = "parent-gemini-secret";
+    process.env.GOOGLE_API_KEY = "parent-google-secret";
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+    });
+
+    const { stdout } = await execFileAsync(process.execPath, [generated.wrapperPath], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GEMINI_API_KEY: "child-gemini-secret",
+        GOOGLE_API_KEY: "child-google-secret",
+        OPENCLAW_ACPX_ENV_PROBE: "preserved",
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+    });
+    const launched = JSON.parse(stdout.trim()) as {
+      argv?: unknown;
+      geminiApiKey?: unknown;
+      googleApiKey?: unknown;
+      inheritedProbe?: unknown;
+    };
+    expect(launched.argv).toEqual(["--acp"]);
+    expect(launched.geminiApiKey).toBeNull();
+    expect(launched.googleApiKey).toBeNull();
+    expect(launched.inheritedProbe).toBe("preserved");
+    expect(process.env.GEMINI_API_KEY).toBe("parent-gemini-secret");
+    expect(process.env.GOOGLE_API_KEY).toBe("parent-google-secret");
+  });
+
   it("does not copy source Codex auth", async () => {
     const root = await makeTempDir();
     const sourceCodexHome = path.join(root, "source-codex");
@@ -663,21 +782,21 @@ describe("prepareAcpxCodexAuthConfig", () => {
       stderrScript,
       `const chunks = [
         "token=sk-test",
-        "secret1234567890\\n",
+        "secret1234567890\n",
         "Authorization: Bearer bearer-secret",
-        "-token-1234567890\\n",
-        '{"client_secret":"json-secret-1234567890","api_key":"json-api-key-1234567890"}\\n',
-        "client-secret: kebab-secret-1234567890\\n",
+        "-token-1234567890\n",
+        '{"client_secret":"json-secret-1234567890","api_key":"json-api-key-1234567890"}\n',
+        "client-secret: kebab-secret-1234567890\n",
         "standalone sk-live-secret",
-        "1234567890\\n",
+        "1234567890\n",
         "url=https://example.test/callback?token=query-secret",
-        "-1234567890\\n",
+        "-1234567890\n",
         "github_pat_1234567890",
-        "abcdefghijklmnopqrstuvwxyz\\n",
-        "-----BEGIN PRIVATE KEY-----\\nprivate-secret-body\\n",
-        "-----END PRIVATE KEY-----\\n",
+        "abcdefghijklmnopqrstuvwxyz\n",
+        "-----BEGIN PRIVATE KEY-----\nprivate-secret-body\n",
+        "-----END PRIVATE KEY-----\n",
         "tail-token=tail-secret-1234567890",
-        "\\n-----BEGIN PRIVATE KEY-----\\ntruncated-private-secret",
+        "\n-----BEGIN PRIVATE KEY-----\ntruncated-private-secret",
       ];
       let index = 0;
       function writeNext() {
@@ -749,6 +868,31 @@ describe("prepareAcpxCodexAuthConfig", () => {
     await expectPathMissing(path.join(stateDir, "acpx", "codex-acp-wrapper.stderr.log"));
   });
 
+  it("normalizes an explicitly configured Gemini ACP command to the local env-stripping wrapper", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedGeminiPaths(stateDir);
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          gemini: {
+            command: "gemini --acp --model gemini-3.1-pro-preview",
+          },
+        },
+      },
+      workspaceDir: root,
+    });
+
+    const resolved = await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+    });
+
+    expectGeminiWrapperCommand(resolved.agents.gemini, generated.wrapperPath);
+    expect(resolved.agents.gemini).toContain("--acp");
+    expect(resolved.agents.gemini).toContain("--model");
+    expect(resolved.agents.gemini).toContain("gemini-3.1-pro-preview");
+  });
   it("leaves a custom Claude agent command alone", async () => {
     const root = await makeTempDir();
     const stateDir = path.join(root, "state");
