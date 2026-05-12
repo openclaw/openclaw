@@ -38,9 +38,12 @@ type TaskRegistryTestDatabase = Pick<
   "task_delivery_state" | "task_runs"
 >;
 
-function requireFirstUpsertParams(upsertTaskWithDeliveryState: ReturnType<typeof vi.fn>): unknown {
-  const params = upsertTaskWithDeliveryState.mock.calls[0]?.[0];
-  if (!params) {
+function requireFirstUpsertParams(upsertTaskWithDeliveryState: ReturnType<typeof vi.fn>): {
+  task?: { taskId?: string };
+  deliveryState?: { lastNotifiedEventAt?: number };
+} {
+  const [call] = upsertTaskWithDeliveryState.mock.calls;
+  if (!call) {
     throw new Error("expected task upsert params");
   }
   const [params] = call;
