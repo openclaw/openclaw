@@ -81,6 +81,10 @@ describe("system run command helpers", () => {
       argv: ["pwsh", "-Command", "allowed.exe", ";", "unlisted.exe"],
       expected: "allowed.exe ; unlisted.exe",
     },
+    {
+      argv: ["pwsh", "-CommandWithArgs", "allowed.exe", ";", "unlisted.exe"],
+      expected: "allowed.exe ; unlisted.exe",
+    },
     { argv: ["pwsh", "-File", "script.ps1"], expected: "script.ps1" },
     { argv: ["powershell", "-f", "script.ps1"], expected: "script.ps1" },
     { argv: ["pwsh", "-ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },

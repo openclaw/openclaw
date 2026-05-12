@@ -389,6 +389,7 @@ function matchExecutableAllowlistForSegment(params: {
   effectiveArgv: string[];
   platform?: string | null;
   inlineCommand: string | null;
+  isShellWrapperInvocation: boolean;
   isPositionalCarrierInvocation: boolean;
 }): ExecAllowlistEntry | null {
   if (params.isPositionalCarrierInvocation) {
@@ -400,10 +401,13 @@ function matchExecutableAllowlistForSegment(params: {
     params.effectiveArgv,
     params.platform,
   );
-  if (
-    params.inlineCommand !== null &&
-    (typeof match?.argPattern !== "string" || match.argPattern.trim().length === 0)
-  ) {
+  const hasBoundArgPattern =
+    typeof match?.argPattern === "string" && match.argPattern.trim().length > 0;
+  const isBareWildcardMatch = match?.pattern?.trim() === "*" && !hasBoundArgPattern;
+  const requiresBoundArgPattern =
+    params.inlineCommand !== null ||
+    (params.isShellWrapperInvocation && params.effectiveArgv.length > 1);
+  if (requiresBoundArgPattern && !hasBoundArgPattern && !isBareWildcardMatch) {
     return null;
   }
   return match;
@@ -453,6 +457,7 @@ function resolveSegmentAllowlistMatch(params: {
       ? { ...executableResolution, resolvedPath: candidatePath }
       : executableResolution;
   const inlineCommand = extractBindableShellWrapperInlineCommand(allowlistSegment.argv);
+  const isShellWrapperInvocation = isShellWrapperSegment(allowlistSegment);
   const isPositionalCarrierInvocation =
     inlineCommand !== null && isDirectShellPositionalCarrierInvocation(inlineCommand);
   const executableMatch = matchExecutableAllowlistForSegment({
@@ -461,6 +466,7 @@ function resolveSegmentAllowlistMatch(params: {
     effectiveArgv,
     platform: params.context.platform,
     inlineCommand,
+    isShellWrapperInvocation,
     isPositionalCarrierInvocation,
   });
   const shellPositionalArgvCandidatePath =

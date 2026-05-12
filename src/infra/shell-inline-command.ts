@@ -22,6 +22,7 @@ function expandPowerShellSwitchForms(names: string[]): string[] {
 
 const POWERSHELL_COMMAND_FLAGS = [
   ...expandPowerShellSwitchPrefixForms("command", 1),
+  ...expandPowerShellSwitchPrefixForms("commandwithargs", 8),
   "-cwa",
   "/cwa",
   "--commandwithargs",

@@ -21,6 +21,12 @@ describe("resolveInlineCommandMatch", () => {
       expected: { command: "Get-ChildItem", valueTokenIndex: 2 },
     },
     {
+      name: "extracts the next token for PowerShell -CommandWithArgs",
+      argv: ["pwsh", "-CommandWithArgs", "Get-ChildItem"],
+      flags: POWERSHELL_INLINE_COMMAND_FLAGS,
+      expected: { command: "Get-ChildItem", valueTokenIndex: 2 },
+    },
+    {
       name: "extracts the next token for PowerShell -File",
       argv: ["pwsh", "-File", "script.ps1"],
       flags: POWERSHELL_INLINE_COMMAND_FLAGS,

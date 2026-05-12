@@ -852,6 +852,14 @@ describe("exec approvals shell analysis", () => {
         name: "encoded arguments prefix before command",
         argv: ["pwsh", "-encodeda", "YQByAGcA", "-Command", "inline_payload"],
       },
+      {
+        name: "command with args full form",
+        argv: ["pwsh", "-CommandWithArgs", "inline_payload"],
+      },
+      {
+        name: "unrecognized shell wrapper argv",
+        argv: ["pwsh", "-UnrecognizedCommandForm", "inline_payload"],
+      },
     ])("does not satisfy bare wrapper allowlist entries for PowerShell $name", ({ argv }) => {
       const dir = makeTempDir();
       const pwshPath = path.join(dir, "pwsh");

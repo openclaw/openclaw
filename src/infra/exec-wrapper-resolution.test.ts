@@ -569,6 +569,11 @@ describe("extractShellWrapperCommand", () => {
       expectedCommand: { isWrapper: true, command: "allowed.exe ; unlisted.exe" },
     },
     {
+      argv: ["pwsh", "-CommandWithArgs", "allowed.exe", ";", "unlisted.exe"],
+      expectedInline: "allowed.exe ; unlisted.exe",
+      expectedCommand: { isWrapper: true, command: "allowed.exe ; unlisted.exe" },
+    },
+    {
       argv: ["bash", "script.sh"],
       expectedInline: null,
       expectedCommand: { isWrapper: false, command: null },
