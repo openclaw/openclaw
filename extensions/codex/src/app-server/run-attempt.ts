@@ -38,7 +38,7 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -73,7 +73,11 @@ import {
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./config.js";
-import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
+import {
+  projectContextEngineAssemblyForCodex,
+  resolveCodexContextEngineProjectionMaxChars,
+  resolveCodexContextEngineProjectionReserveTokens,
+} from "./context-engine-projection.js";
 import { filterCodexDynamicTools, normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -107,6 +111,7 @@ import {
 import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
 import {
   formatCodexUsageLimitErrorMessage,
+  resolveCodexUsageLimitResetAtMs,
   shouldRefreshCodexRateLimitsForUsageLimitMessage,
 } from "./rate-limits.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
@@ -140,6 +145,7 @@ const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
+const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
 const CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS = 5_000;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
@@ -428,6 +434,19 @@ function resolveCodexPluginAppCacheCodexHome(
   return appServer.start.transport === "stdio" ? resolveCodexAppServerHomeDir(agentDir) : undefined;
 }
 
+function restrictCodexAppServerSandboxForOpenClawSandbox(
+  appServer: CodexAppServerRuntimeOptions,
+  sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>,
+): CodexAppServerRuntimeOptions {
+  if (!sandbox?.enabled || appServer.sandbox !== "danger-full-access") {
+    return appServer;
+  }
+  return {
+    ...appServer,
+    sandbox: "workspace-write",
+  };
+}
+
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -447,12 +466,7 @@ export async function runCodexAppServerAttempt(
   const attemptStartedAt = Date.now();
   const attemptClientFactory = resolveCodexAppServerClientFactory();
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
-  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-  let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
-  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
-    configuredEvents: options.nativeHookRelay?.events,
-    appServer,
-  });
+  const configuredAppServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =
@@ -468,6 +482,12 @@ export async function runCodexAppServerAttempt(
       : sandbox.workspaceDir
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
+  const appServer = restrictCodexAppServerSandboxForOpenClawSandbox(configuredAppServer, sandbox);
+  let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
+  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
+    configuredEvents: options.nativeHookRelay?.events,
+    appServer,
+  });
 
   const runAbortController = new AbortController();
   const abortFromUpstream = () => {
@@ -618,6 +638,12 @@ export async function runCodexAppServerAttempt(
         originalHistoryMessages: historyMessages,
         prompt: params.prompt,
         systemPromptAddition: assembled.systemPromptAddition,
+        maxRenderedContextChars: resolveCodexContextEngineProjectionMaxChars({
+          contextTokenBudget: params.contextTokenBudget,
+          reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
+            config: params.config,
+          }),
+        }),
       });
       promptText = projection.promptText;
       developerInstructions = joinPresentSections(
@@ -1331,8 +1357,9 @@ export async function runCodexAppServerAttempt(
   const turnStartFailureMessages = [
     ...historyMessages,
     {
-      role: "user",
-      content: [{ type: "text", text: promptBuild.prompt }],
+      role: "user" as const,
+      content: promptBuild.prompt,
+      timestamp: Date.now(),
     },
   ];
 
@@ -1366,7 +1393,7 @@ export async function runCodexAppServerAttempt(
       timeoutMs: appServer.requestTimeoutMs,
       signal: runAbortController.signal,
     });
-    const turnStartErrorMessage = usageLimitError ?? formatErrorMessage(error);
+    const turnStartErrorMessage = usageLimitError?.message ?? formatErrorMessage(error);
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "turn_start_failed", error: turnStartErrorMessage },
@@ -1417,8 +1444,16 @@ export async function runCodexAppServerAttempt(
     });
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     if (usageLimitError) {
-      throw new Error(usageLimitError, {
-        cause: error,
+      await markCodexAuthProfileBlockedFromRateLimits({
+        params,
+        authProfileId: startupAuthProfileId,
+        rateLimits: usageLimitError.rateLimitsForProfile,
+      });
+      return buildCodexTurnStartFailureResult({
+        params,
+        message: usageLimitError.message,
+        messagesSnapshot: turnStartFailureMessages,
+        systemPromptReport,
       });
     }
     throw error;
@@ -1438,7 +1473,10 @@ export async function runCodexAppServerAttempt(
     prompt: promptBuild.prompt,
     imagesCount: params.images?.length ?? 0,
   });
-  projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId);
+  projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId, {
+    nativePostToolUseRelayEnabled:
+      nativeHookRelay?.allowedEvents.includes("post_tool_use") === true,
+  });
   emitLifecycleStart();
   const activeProjector = projector;
   for (const notification of pendingNotifications.splice(0)) {
@@ -1486,10 +1524,19 @@ export async function runCodexAppServerAttempt(
   );
 
   const abortListener = () => {
+    const shouldRetireClient = timedOut;
     interruptCodexTurnBestEffort(client, {
       threadId: thread.threadId,
       turnId: activeTurnId,
+      timeoutMs: shouldRetireClient ? CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS : undefined,
     });
+    if (shouldRetireClient) {
+      retireCodexAppServerClientAfterTimedOutTurn(client, {
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+        reason: String(runAbortController.signal.reason ?? "timeout"),
+      });
+    }
     resolveCompletion?.();
   };
   runAbortController.signal.addEventListener("abort", abortListener, { once: true });
@@ -1668,6 +1715,75 @@ export async function runCodexAppServerAttempt(
     steeringQueue?.cancel();
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   }
+}
+
+async function markCodexAuthProfileBlockedFromRateLimits(params: {
+  params: EmbeddedRunAttemptParams;
+  authProfileId?: string;
+  rateLimits?: JsonValue;
+}): Promise<void> {
+  const authProfileId = params.authProfileId?.trim();
+  if (!authProfileId || !params.params.authProfileStore) {
+    return;
+  }
+  const blockedUntil = resolveCodexUsageLimitResetAtMs(params.rateLimits);
+  if (!blockedUntil) {
+    return;
+  }
+  try {
+    await markAuthProfileBlockedUntil({
+      store: params.params.authProfileStore,
+      profileId: authProfileId,
+      blockedUntil,
+      source: "codex_rate_limits",
+      agentDir: params.params.agentDir,
+      runId: params.params.runId,
+      modelId: params.params.modelId,
+    });
+  } catch (error) {
+    embeddedAgentLog.debug("failed to mark Codex auth profile blocked from app-server limits", {
+      authProfileId,
+      error: formatErrorMessage(error),
+    });
+  }
+}
+
+function buildCodexTurnStartFailureResult(params: {
+  params: EmbeddedRunAttemptParams;
+  message: string;
+  messagesSnapshot: AgentMessage[];
+  systemPromptReport: ReturnType<typeof buildCodexSystemPromptReport>;
+}): EmbeddedRunAttemptResult {
+  return {
+    aborted: false,
+    externalAbort: false,
+    timedOut: false,
+    idleTimedOut: false,
+    timedOutDuringCompaction: false,
+    timedOutDuringToolExecution: false,
+    promptError: params.message,
+    promptErrorSource: "prompt",
+    sessionIdUsed: params.params.sessionId,
+    messagesSnapshot: params.messagesSnapshot,
+    assistantTexts: [],
+    toolMetas: [],
+    lastAssistant: undefined,
+    didSendViaMessagingTool: false,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
+    cloudCodeAssistFormatError: false,
+    replayMetadata: {
+      hadPotentialSideEffects: false,
+      replaySafe: true,
+    },
+    itemLifecycle: {
+      startedCount: 0,
+      completedCount: 0,
+      activeCount: 0,
+    },
+    systemPromptReport: params.systemPromptReport,
+  };
 }
 
 async function handleDynamicToolCallWithTimeout(params: {
@@ -1895,13 +2011,47 @@ function interruptCodexTurnBestEffort(
   params: {
     threadId: string;
     turnId: string;
+    timeoutMs?: number;
   },
 ): void {
-  void Promise.resolve()
-    .then(() => client.request("turn/interrupt", params))
-    .catch((error: unknown) => {
+  const requestOptions =
+    params.timeoutMs && Number.isFinite(params.timeoutMs) && params.timeoutMs > 0
+      ? { timeoutMs: params.timeoutMs }
+      : undefined;
+  const requestParams = { threadId: params.threadId, turnId: params.turnId };
+  try {
+    const interrupt = requestOptions
+      ? client.request("turn/interrupt", requestParams, requestOptions)
+      : client.request("turn/interrupt", requestParams);
+    void Promise.resolve(interrupt).catch((error: unknown) => {
       embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
     });
+  } catch (error) {
+    embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
+  }
+}
+
+function retireCodexAppServerClientAfterTimedOutTurn(
+  client: CodexAppServerClient,
+  params: {
+    threadId: string;
+    turnId: string;
+    reason: string;
+  },
+): void {
+  const clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(client);
+  if (!clearedSharedClient) {
+    const close = (client as { close?: () => void }).close;
+    if (typeof close === "function") {
+      close.call(client);
+    }
+  }
+  embeddedAgentLog.warn("codex app-server client retired after timed-out turn", {
+    threadId: params.threadId,
+    turnId: params.turnId,
+    reason: params.reason,
+    clearedSharedClient,
+  });
 }
 
 type DynamicToolBuildParams = {
@@ -2135,6 +2285,12 @@ type CodexUsageLimitErrorSource = {
   message?: string | null;
   codexErrorInfo?: JsonValue | null;
   rateLimits?: JsonValue;
+  rateLimitsTrustedForProfile?: boolean;
+};
+
+type CodexUsageLimitErrorResult = {
+  message: string;
+  rateLimitsForProfile?: JsonValue;
 };
 
 async function formatCodexTurnStartUsageLimitError(params: {
@@ -2143,8 +2299,8 @@ async function formatCodexTurnStartUsageLimitError(params: {
   pendingNotifications: CodexServerNotification[];
   timeoutMs?: number;
   signal?: AbortSignal;
-}): Promise<string | undefined> {
-  return refreshCodexUsageLimitErrorMessage({
+}): Promise<CodexUsageLimitErrorResult | undefined> {
+  return refreshCodexUsageLimitError({
     client: params.client,
     source: readCodexTurnStartUsageLimitErrorSource(params.error, params.pendingNotifications),
     timeoutMs: params.timeoutMs,
@@ -2158,9 +2314,32 @@ async function refreshCodexUsageLimitErrorMessage(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<string | undefined> {
+  return (
+    await refreshCodexUsageLimitError({
+      client: params.client,
+      source: params.source,
+      timeoutMs: params.timeoutMs,
+      signal: params.signal,
+    })
+  )?.message;
+}
+
+async function refreshCodexUsageLimitError(params: {
+  client: CodexAppServerClient;
+  source: CodexUsageLimitErrorSource;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<CodexUsageLimitErrorResult | undefined> {
   const initialMessage = formatCodexUsageLimitErrorMessage(params.source);
   if (!shouldRefreshCodexRateLimitsForUsageLimitMessage(initialMessage)) {
-    return initialMessage ?? undefined;
+    return initialMessage
+      ? {
+          message: initialMessage,
+          ...(params.source.rateLimitsTrustedForProfile
+            ? { rateLimitsForProfile: params.source.rateLimits }
+            : {}),
+        }
+      : undefined;
   }
   const rateLimits = await readCodexRateLimitsFromAppServerForUsageLimitError({
     client: params.client,
@@ -2168,14 +2347,22 @@ async function refreshCodexUsageLimitErrorMessage(params: {
     signal: params.signal,
   });
   if (!rateLimits) {
-    return initialMessage;
+    return initialMessage
+      ? {
+          message: initialMessage,
+          ...(params.source.rateLimitsTrustedForProfile
+            ? { rateLimitsForProfile: params.source.rateLimits }
+            : {}),
+        }
+      : undefined;
   }
   const refreshedMessage = formatCodexUsageLimitErrorMessage({
     message: params.source.message,
     codexErrorInfo: params.source.codexErrorInfo,
     rateLimits,
   });
-  return refreshedMessage ?? initialMessage;
+  const message = refreshedMessage ?? initialMessage;
+  return message ? { message, rateLimitsForProfile: rateLimits } : undefined;
 }
 
 async function readCodexRateLimitsFromAppServerForUsageLimitError(params: {
@@ -2213,14 +2400,16 @@ function readCodexTurnStartUsageLimitErrorSource(
   pendingNotifications: CodexServerNotification[],
 ): CodexUsageLimitErrorSource {
   const notificationError = readLatestCodexErrorNotification(pendingNotifications);
+  const notificationRateLimits = readLatestRateLimitNotificationPayload(pendingNotifications);
   const errorPayload = readCodexErrorPayload(error);
+  const rateLimits =
+    notificationRateLimits ?? errorPayload.rateLimits ?? readRecentCodexRateLimits();
   return {
     message: notificationError?.message ?? errorPayload.message ?? formatErrorMessage(error),
     codexErrorInfo: notificationError?.codexErrorInfo ?? errorPayload.codexErrorInfo,
-    rateLimits:
-      readLatestRateLimitNotificationPayload(pendingNotifications) ??
-      errorPayload.rateLimits ??
-      readRecentCodexRateLimits(),
+    rateLimits,
+    rateLimitsTrustedForProfile:
+      notificationRateLimits !== undefined || errorPayload.rateLimits !== undefined,
   };
 }
 
@@ -2271,10 +2460,14 @@ function readCodexErrorPayload(error: unknown): {
     return { message };
   }
   const nestedError = isJsonObject(data.error) ? data.error : data;
+  const rateLimits = nestedError.rateLimits ?? data.rateLimits;
+  if (rateLimits !== undefined) {
+    rememberCodexRateLimits(rateLimits);
+  }
   return {
     message: readString(nestedError, "message") ?? message,
     codexErrorInfo: nestedError.codexErrorInfo,
-    rateLimits: nestedError.rateLimits ?? data.rateLimits,
+    rateLimits,
   };
 }
 
@@ -2786,6 +2979,7 @@ export const __testing = {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
   resolveCodexPluginAppCacheEndpoint,
+  restrictCodexAppServerSandboxForOpenClawSandbox,
   resolveOpenClawCodingToolsSessionKeys,
   shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {

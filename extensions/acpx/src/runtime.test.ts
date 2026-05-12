@@ -111,7 +111,11 @@ function makeLeaseStore() {
 function readFirstEnsureSessionInput(ensure: {
   mock: { calls: Array<Array<unknown>> };
 }): Parameters<AcpRuntime["ensureSession"]>[0] {
-  const input = ensure.mock.calls[0]?.[0];
+  const [call] = ensure.mock.calls;
+  if (!call) {
+    throw new Error("Expected ensureSession to be called");
+  }
+  const [input] = call;
   if (typeof input !== "object" || input === null) {
     throw new Error("Expected ensureSession to be called with an input object");
   }

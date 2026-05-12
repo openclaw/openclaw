@@ -141,11 +141,13 @@ test("exec emits bounded process diagnostics without command text", async () => 
     const event = events.find(
       (item): item is DiagnosticExecProcessCompletedEvent => item.type === "exec.process.completed",
     );
-    expect(event).toBeDefined();
-    expect(event?.type).toBe("exec.process.completed");
-    expect(event?.target).toBe("host");
-    expect(event?.mode).toBe("child");
-    expect(event?.outcome).toBe("completed");
+    if (!event) {
+      throw new Error("Expected exec process completed event");
+    }
+    expect(event.type).toBe("exec.process.completed");
+    expect(event.target).toBe("host");
+    expect(event.mode).toBe("child");
+    expect(event.outcome).toBe("completed");
     expect(typeof event?.durationMs).toBe("number");
     expect(event?.commandLength).toBe(command.length);
     expect(event?.exitCode).toBe(0);

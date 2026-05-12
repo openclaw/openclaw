@@ -443,7 +443,11 @@ describe("exec notifyOnExit suppression", () => {
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("partial output");
     expect(options.sessionKey).toBe("agent:main:main");
-    expect(requestHeartbeatMock).toHaveBeenCalled();
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:main:main");
   });
 
   it("still notifies for no-output background exec timeouts", async () => {
@@ -452,7 +456,11 @@ describe("exec notifyOnExit suppression", () => {
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("Exec failed");
     expect(options.sessionKey).toBe("agent:main:main");
-    expect(requestHeartbeatMock).toHaveBeenCalled();
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:main:main");
   });
 });
 
@@ -501,13 +509,13 @@ describe("emitExecSystemEvent", () => {
       contextKey: "exec:run-cron",
       trusted: false,
     });
-    expect(requestHeartbeatMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        coalesceMs: 0,
-        reason: "exec-event",
-        sessionKey: "agent:ops:primary",
-      }),
-    );
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
+      [{ coalesceMs?: number; reason?: string; sessionKey?: string }]
+    >;
+    expect(heartbeatParams.coalesceMs).toBe(0);
+    expect(heartbeatParams.reason).toBe("exec-event");
+    expect(heartbeatParams.sessionKey).toBe("agent:ops:primary");
   });
 
   it("routes global-scope cron-run events to the global queue and preserves the agent wake target", () => {
@@ -522,13 +530,13 @@ describe("emitExecSystemEvent", () => {
       contextKey: "exec:run-global",
       trusted: false,
     });
-    expect(requestHeartbeatMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "ops",
-        coalesceMs: 0,
-        reason: "exec-event",
-      }),
-    );
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
+      [{ agentId?: string; coalesceMs?: number; reason?: string }]
+    >;
+    expect(heartbeatParams.agentId).toBe("ops");
+    expect(heartbeatParams.coalesceMs).toBe(0);
+    expect(heartbeatParams.reason).toBe("exec-event");
     expect(requestHeartbeatMock.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
   });
 

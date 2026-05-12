@@ -93,8 +93,6 @@ async function readSessionFileJsonLines<T>(sessionFile: string): Promise<T[]> {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -109,7 +107,9 @@ function expectRecordFields(record: Record<string, unknown>, fields: Record<stri
 
 function requireMockArg(mock: typeof runCliAgentMock, callIndex: number, label: string) {
   const arg = mock.mock.calls[callIndex]?.[0];
-  expect(arg).toBeDefined();
+  if (arg === undefined) {
+    throw new Error(`Expected mock argument for ${label}`);
+  }
   return requireRecord(arg, label);
 }
 
@@ -542,11 +542,15 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
     const sessionFile = updatedFirst?.sessionFile;
-    expect(typeof sessionFile).toBe("string");
-    expect(sessionFile?.length ?? 0).toBeGreaterThan(0);
-    if (typeof sessionFile !== "string" || sessionFile.length === 0) {
+    if (typeof sessionFile !== "string") {
       throw new Error("Expected CLI transcript session file.");
     }
+    expect(path.isAbsolute(sessionFile)).toBe(true);
+    expect(
+      sessionFile.endsWith(
+        path.join(".openclaw", "agents", "main", "sessions", `${sessionEntry.sessionId}.jsonl`),
+      ),
+    ).toBe(true);
 
     await appendSessionTranscriptMessage({
       transcriptPath: sessionFile,

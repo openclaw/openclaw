@@ -113,7 +113,6 @@ const createCompactionHandler = () => {
     }),
   } as unknown as ExtensionAPI;
   compactionSafeguardExtension(mockApi);
-  expect(compactionHandler).toBeDefined();
   if (!compactionHandler) {
     throw new Error("Expected compaction safeguard to register a handler.");
   }
@@ -872,8 +871,12 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const identifiers = extractOpaqueIdentifiers(
       "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and URL https://example.com/a and /tmp/x.log plus port host.local:18789",
     );
-    expect(identifiers.length).toBeGreaterThan(0);
-    expect(identifiers).toContain("A1B2C3D4E5F6"); // pragma: allowlist secret
+    expect(identifiers).toStrictEqual([
+      "A1B2C3D4E5F6", // pragma: allowlist secret
+      "https://example.com/a",
+      "/tmp/x.log",
+      "host.local:18789",
+    ]);
 
     const summary = [
       "## Decisions",
@@ -941,7 +944,15 @@ describe("compaction-safeguard recent-turn preservation", () => {
       latestAsk: "Need a status update",
     });
     expect(quality.ok).toBe(false);
-    expect(quality.reasons.length).toBeGreaterThan(0);
+    expect(quality.reasons).toStrictEqual([
+      "missing_section:## Decisions",
+      "missing_section:## Open TODOs",
+      "missing_section:## Constraints/Rules",
+      "missing_section:## Pending user asks",
+      "missing_section:## Exact identifiers",
+      "missing_identifiers:abc12345",
+      "latest_user_ask_not_reflected",
+    ]);
   });
 
   it("requires exact section headings instead of substring matches", () => {
@@ -1296,7 +1307,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     };
 
     expect(result.cancel).not.toBe(true);
-    expect(mockSummarizeInStages).toHaveBeenCalled();
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
     const droppedCall = mockSummarizeInStages.mock.calls[0]?.[0];
     expect(droppedCall?.customInstructions).toContain(
       "Produce a compact, factual summary with these exact section headings:",
@@ -2119,7 +2130,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     });
 
     expect(result).toEqual({ cancel: true });
-    expect(getApiKeyAndHeadersMock).toHaveBeenCalled();
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
   });
 
   it("falls back to visible custom session branch entries before writing an empty boundary", async () => {
@@ -2190,22 +2201,21 @@ describe("compaction-safeguard double-compaction guard", () => {
     const compaction = expectCompactionResult(result);
     expect(compaction.summary).toContain("branch summary");
     expect(compaction.summary).not.toContain("No prior history.");
-    expect(mockSummarizeInStages).toHaveBeenCalled();
-    const summaryCall = mockSummarizeInStages.mock.calls[0]?.[0];
-    const summaryMessages = summaryCall?.messages ?? [];
-    const cronRequest = summaryMessages.find(
-      (message) =>
-        message.role === "custom" &&
-        "customType" in message &&
-        message.customType === "cron-request",
-    ) as { content?: unknown } | undefined;
-    expect(cronRequest?.content).toBe("prepare the daily report");
-    expect(
-      summaryMessages.some(
-        (message) =>
-          message.role === "toolResult" && "toolName" in message && message.toolName === "read",
-      ),
-    ).toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            role: "custom",
+            customType: "cron-request",
+            content: "prepare the daily report",
+          }),
+          expect.objectContaining({
+            role: "toolResult",
+            toolName: "read",
+          }),
+        ]),
+      }),
+    );
   });
 
   it("continues when messages include real conversation content", async () => {
@@ -2223,7 +2233,7 @@ describe("compaction-safeguard double-compaction guard", () => {
       apiKey: null,
     });
     expect(result).toEqual({ cancel: true });
-    expect(getApiKeyAndHeadersMock).toHaveBeenCalled();
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
   });
 
   it("treats tool results as real conversation only when linked to a meaningful user ask", () => {

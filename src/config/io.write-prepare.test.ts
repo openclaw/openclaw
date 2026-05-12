@@ -632,9 +632,7 @@ describe("config io write prepare", () => {
       auth: { mode: "token" },
     });
     const channels = persisted.channels as Record<string, Record<string, unknown>> | undefined;
-    expect(channels?.imessage).toMatchObject({
-      cliPath: "/usr/local/bin/imsg",
-    });
+    expect(channels?.imessage?.cliPath).toBe("/usr/local/bin/imsg");
     expect(channels?.imessage).not.toHaveProperty("runtimeOnlyDefault");
   });
 

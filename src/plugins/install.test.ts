@@ -324,7 +324,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function requireHookPayload(handler: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const payload = handler.mock.calls[0]?.[0];
+  const payload = handler.mock.calls.at(0)?.[0];
   return requireRecord(payload, "before_install hook payload");
 }
 
@@ -664,7 +664,7 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    const commandRun = vi.mocked(runCommandWithTimeout).mock.calls[0];
+    const commandRun = vi.mocked(runCommandWithTimeout).mock.calls.at(0);
     expect(commandRun?.[0]).toContain("npm");
     expect(commandRun?.[0]).toContain("install");
     const commandOptions = commandRun?.[1];
@@ -2412,7 +2412,7 @@ describe("installPluginFromArchive", () => {
       version: "1.0.0",
       extensions: ["index.js"],
     });
-    expect(handler.mock.calls[0]?.[1]).toEqual({
+    expect(handler.mock.calls.at(0)?.[1]).toEqual({
       origin: "plugin-package",
       targetType: "plugin",
       requestKind: "plugin-dir",

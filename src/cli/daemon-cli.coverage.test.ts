@@ -211,7 +211,7 @@ describe("daemon-cli coverage", () => {
       "ws://127.0.0.1:18789",
     );
     expect(findExtraGatewayServices).not.toHaveBeenCalled();
-    expect(inspectPortUsage).toHaveBeenCalled();
+    expect(inspectPortUsage).toHaveBeenCalledTimes(1);
   });
 
   it("derives probe URL from service args + env (json)", async () => {
@@ -256,7 +256,9 @@ describe("daemon-cli coverage", () => {
     await runDaemonCommand(["daemon", "status", "--deep"]);
 
     expect(findExtraGatewayServices).toHaveBeenCalledTimes(1);
-    expect(findExtraGatewayServices.mock.calls[0]?.[0]).toBeDefined();
+    if (findExtraGatewayServices.mock.calls[0]?.[0] === undefined) {
+      throw new Error("Expected gateway service discovery params");
+    }
     expect(findExtraGatewayServices.mock.calls[0]?.[1]).toEqual({ deep: true });
   });
 

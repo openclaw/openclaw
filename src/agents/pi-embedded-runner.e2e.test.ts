@@ -705,6 +705,6 @@ describe("runEmbeddedPiAgent", () => {
     const result = await runWithOrphanedSingleUserMessage("orphaned user", nextSessionKey());
 
     expect(result.meta.error).toBeUndefined();
-    expect(result.payloads?.length ?? 0).toBeGreaterThan(0);
+    expect(result.payloads?.[0]?.text).toBe("ok");
   });
 });

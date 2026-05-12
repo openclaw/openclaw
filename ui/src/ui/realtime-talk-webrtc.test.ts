@@ -46,6 +46,21 @@ class FakePeerConnection extends EventTarget {
   }
 }
 
+function requireTalkEvent(
+  onTalkEvent: ReturnType<typeof vi.fn>,
+  index: number,
+): Record<string, unknown> {
+  const call = onTalkEvent.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected talk event at index ${index}`);
+  }
+  const [event] = call;
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    throw new Error(`expected talk event record at index ${index}`);
+  }
+  return event as Record<string, unknown>;
+}
+
 describe("WebRtcSdpRealtimeTalkTransport", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -237,12 +252,12 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       "output.text.done",
     ]);
     expect(onTalkEvent.mock.calls.map(([event]) => event.turnId)).toEqual(["turn-1", "turn-1"]);
-    const userTranscriptEvent = onTalkEvent.mock.calls[0]?.[0];
+    const userTranscriptEvent = requireTalkEvent(onTalkEvent, 0);
     expect(userTranscriptEvent.itemId).toBe("input-1");
     expect(userTranscriptEvent.payload).toEqual({ role: "user", text: "hello" });
     expect(userTranscriptEvent.sessionId).toBe("main:openai:webrtc");
     expect(userTranscriptEvent.transport).toBe("webrtc");
-    const assistantTranscriptEvent = onTalkEvent.mock.calls[1]?.[0];
+    const assistantTranscriptEvent = requireTalkEvent(onTalkEvent, 1);
     expect(assistantTranscriptEvent.itemId).toBe("response-1");
     expect(assistantTranscriptEvent.payload).toEqual({ text: "hi there" });
     expect(assistantTranscriptEvent.sessionId).toBe("main:openai:webrtc");
@@ -300,9 +315,13 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         }),
       }),
     );
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("talk.client.toolCall", expect.anything()),
-    );
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    expect(request).toHaveBeenCalledWith("talk.client.toolCall", {
+      sessionKey: "main",
+      callId: "call-1",
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      args: { question: "status?" },
+    });
 
     transport.stop();
 

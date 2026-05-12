@@ -319,7 +319,7 @@ function isHeartbeatEnabledForSessionAgent(params: {
     return true;
   }
 
-  const agentEntries = params.cfg.agents?.list ?? [];
+  const agentEntries = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
   const hasExplicitHeartbeatAgents = agentEntries.some((entry) => Boolean(entry?.heartbeat));
   const enabledByPolicy = hasExplicitHeartbeatAgents
     ? agentEntries.some(

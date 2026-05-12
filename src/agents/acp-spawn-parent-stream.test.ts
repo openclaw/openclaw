@@ -175,20 +175,19 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
     vi.advanceTimersByTime(15);
 
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      expect.stringContaining("codex: hello from child"),
-      expect.objectContaining({
-        contextKey: "acp-spawn:run-cron:progress",
-        sessionKey: "global",
-        trusted: false,
-      }),
+    const progressEvent = enqueueSystemEventMock.mock.calls.find(
+      ([text]) => typeof text === "string" && text.includes("codex: hello from child"),
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "ops",
-        reason: "acp:spawn:stream",
-      }),
-    );
+    expect(progressEvent?.[0]).toContain("codex: hello from child");
+    const progressOptions = progressEvent?.[1] as
+      | { contextKey?: unknown; sessionKey?: unknown; trusted?: unknown }
+      | undefined;
+    expect(progressOptions?.contextKey).toBe("acp-spawn:run-cron:progress");
+    expect(progressOptions?.sessionKey).toBe("global");
+    expect(progressOptions?.trusted).toBe(false);
+    const heartbeatOptions = requestHeartbeatMock.mock.calls[0]?.[0];
+    expect(heartbeatOptions?.agentId).toBe("ops");
+    expect(heartbeatOptions?.reason).toBe("acp:spawn:stream");
     expect(requestHeartbeatMock.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
     relay.dispose();
   });

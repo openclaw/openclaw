@@ -260,10 +260,11 @@ describe("renderApp assistant avatar routing", () => {
     quickSettingsProps.current?.onToolProfileChange?.("full");
 
     expect(state.configForm?.browser).toEqual({ enabled: true });
-    expect(state.configForm?.tools).toMatchObject({
-      profile: "full",
-      exec: { security: "full" },
-    });
+    const tools = state.configForm?.tools as
+      | { profile?: string; exec?: { security?: string } }
+      | undefined;
+    expect(tools?.profile).toBe("full");
+    expect(tools?.exec?.security).toBe("full");
   });
 
   it("renders stale cron state containing a job without a payload", () => {
