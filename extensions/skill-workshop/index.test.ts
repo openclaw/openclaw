@@ -53,6 +53,52 @@ function createProposal(
   };
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error) {
+      expect(error.code).toBe("ENOENT");
+      return;
+    }
+    throw error;
+  }
+  throw new Error(`expected path to be missing: ${targetPath}`);
+}
+
+function detailRecord(result: unknown): Record<string, unknown> {
+  const details = (result as { details?: unknown } | undefined)?.details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    throw new Error("expected tool result details");
+  }
+  return details as Record<string, unknown>;
+}
+
+function mockCall(mock: { mock: { calls: unknown[][] } }, index: number, label: string) {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
+}
+
+function firstMockArg(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
+  const arg = mockCall(mock, 0, "first mock call")[0];
+  if (!arg || typeof arg !== "object" || Array.isArray(arg)) {
+    throw new Error("expected first mock argument object");
+  }
+  return arg as Record<string, unknown>;
+}
+
+function requireApprovalDecision(result: unknown): {
+  requireApproval: { title: string; allowedDecisions: string[] };
+} {
+  if (!result || typeof result !== "object" || !("requireApproval" in result)) {
+    throw new Error("expected approval decision");
+  }
+  return result as { requireApproval: { title: string; allowedDecisions: string[] } };
+}
+
 describe("skill-workshop", () => {
   it("registers inert hooks and a null tool when disabled", () => {
     const on = vi.fn();
