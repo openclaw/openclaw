@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { ReplyPayload } from "../types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter } from "./reply-threading.js";
 
@@ -114,6 +115,66 @@ describe("createReplyDispatcher", () => {
 
     await dispatcher.waitForIdle();
     expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("surfaces operational NO_REPLY after model failover instead of dropping it", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    };
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      silentReplyContext: {
+        cfg,
+        sessionKey: "agent:main:discord:channel:1492296441803182130",
+        surface: "discord",
+        conversationType: "group",
+      },
+    });
+
+    const payload: ReplyPayload & {
+      operationalFailure: {
+        kind: "silent_after_model_failover";
+        selectedModel: string;
+        activeModel: string;
+        reason: string;
+      };
+    } = {
+      text: SILENT_REPLY_TOKEN,
+      operationalFailure: {
+        kind: "silent_after_model_failover",
+        selectedModel: "lmstudio/gemma-4-e4b-it",
+        activeModel: "openai-codex/gpt-5.5",
+        reason: "network connection error",
+      },
+    };
+
+    expect(dispatcher.sendFinalReply(payload)).toBe(true);
+
+    await dispatcher.waitForIdle();
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]?.[0]).toMatchObject({
+      isError: true,
+      operationalFailure: {
+        kind: "silent_after_model_failover",
+        selectedModel: "lmstudio/gemma-4-e4b-it",
+        activeModel: "openai-codex/gpt-5.5",
+        reason: "network connection error",
+      },
+    });
+    expect(deliver.mock.calls[0]?.[0]?.text).toContain("configured model backend");
+    expect(deliver.mock.calls[0]?.[0]?.text).toContain("lmstudio/gemma-4-e4b-it");
   });
 
   it("strips heartbeat tokens and applies responsePrefix", async () => {
