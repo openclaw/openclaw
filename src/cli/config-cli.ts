@@ -89,6 +89,7 @@ type ConfigPatchOptions = {
 };
 type ConfigUnsetOptions = {
   dryRun?: boolean | undefined;
+  allowExec?: boolean | undefined;
   json?: boolean | undefined;
 };
 type ConfigMutationOptions = {
@@ -1778,6 +1779,9 @@ export async function runConfigUnset(opts: {
     if (cliOptions.json && !cliOptions.dryRun) {
       throw new Error("config unset mode error: --json requires --dry-run.");
     }
+    if (cliOptions.allowExec && !cliOptions.dryRun) {
+      throw new Error("config unset mode error: --allow-exec requires --dry-run.");
+    }
     const parsedPath = parseRequiredPath(opts.path);
     const snapshot = await loadValidConfig(runtime);
     // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
@@ -1836,10 +1840,10 @@ export async function runConfigUnset(opts: {
           // Top-level secrets removal - collect all refs
           refs = collectAffectedRefsForProviderRemoval(nextConfig, undefined);
         }
-        // Filter out exec refs since config unset doesn't support --allow-exec
+        // Filter out exec refs unless --allow-exec is set
         const { refsToResolve, skippedExecRefs: execRefs } = selectDryRunRefsForResolution({
           refs,
-          allowExecInDryRun: false,
+          allowExecInDryRun: Boolean(cliOptions.allowExec),
         });
         skippedExecRefs = execRefs;
         errors.push(
@@ -2158,6 +2162,11 @@ export function registerConfigCli(program: Command) {
     .option(
       "--dry-run",
       "Validate removal without writing openclaw.json",
+      false,
+    )
+    .option(
+      "--allow-exec",
+      "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
       false,
     )
     .option("--json", "Output dry-run result as JSON", false)
