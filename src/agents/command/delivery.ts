@@ -243,7 +243,7 @@ function duplicateExplicitMessageSendStatus(): AgentCommandDeliveryStatus {
 }
 
 function normalizeRoutePart(value: unknown): string | undefined {
-  if (value === null || value === undefined) {
+  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
     return undefined;
   }
   const text = String(value).trim();

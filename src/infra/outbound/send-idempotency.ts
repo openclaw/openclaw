@@ -53,7 +53,7 @@ function pruneSent(state: OutboundSendIdempotencyState, now: number): void {
     }
   }
   while (state.sent.size > OUTBOUND_SEND_IDEMPOTENCY_MAX_SENT) {
-    const firstKey = state.sent.keys().next().value as string | undefined;
+    const firstKey = state.sent.keys().next().value;
     if (!firstKey) {
       break;
     }
