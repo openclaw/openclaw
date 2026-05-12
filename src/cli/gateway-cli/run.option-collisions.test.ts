@@ -230,8 +230,8 @@ describe("gateway run option collisions", () => {
       "--force",
     ]);
 
-    expect(forceFreePortAndWait.mock.calls[0]?.[0]).toBe(18789);
-    expect(waitForPortBindable.mock.calls[0]?.[0]).toBe(18789);
+    expect(callArg(forceFreePortAndWait, 0, 0)).toBe(18789);
+    expect(callArg(waitForPortBindable, 0, 0)).toBe(18789);
     expect(
       callArg(waitForPortBindable, 0, 1) as { intervalMs?: number; timeoutMs?: number },
     ).toEqual({ intervalMs: 150, timeoutMs: 3000 });

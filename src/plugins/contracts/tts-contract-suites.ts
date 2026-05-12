@@ -900,7 +900,7 @@ export function describeTtsSummarizationContract() {
     it("calls the summary model with the expected parameters", async () => {
       await runSummarizeText();
 
-      const callArgs = vi.mocked(completeSimple).mock.calls[0];
+      const callArgs = vi.mocked(completeSimple).mock.calls.at(0);
       expect(callArgs?.[1]?.messages?.[0]?.role).toBe("user");
       expect(callArgs?.[2]?.maxTokens).toBe(250);
       expect(callArgs?.[2]?.temperature).toBe(0.3);
@@ -928,7 +928,7 @@ export function describeTtsSummarizationContract() {
 
       await runSummarizeText();
 
-      expect(vi.mocked(completeSimple).mock.calls[0]?.[0]?.api).toBe("openai-completions");
+      expect(vi.mocked(completeSimple).mock.calls.at(0)?.[0]?.api).toBe("openai-completions");
       expect(ensureCustomApiRegisteredMock).not.toHaveBeenCalled();
     });
 
@@ -1196,7 +1196,7 @@ export function describeTtsProviderRuntimeContract() {
 
           expect(result.success).toBe(true);
           expect(fetchMock).toHaveBeenCalledTimes(1);
-          const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+          const [, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
           expect(typeof init.body).toBe("string");
           const body = JSON.parse(init.body as string) as Record<string, unknown>;
           expect(body.instructions).toBe(expectedInstructions);

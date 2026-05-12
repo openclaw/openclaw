@@ -167,7 +167,8 @@ describe("gateway-cli coverage", () => {
       "--json",
     ]);
 
-    const stabilityCall = callGateway.mock.calls[0]?.[0] as
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const stabilityCall = callGateway.mock.calls.at(0)?.[0] as
       | { method?: string; params?: unknown }
       | undefined;
     expect(stabilityCall?.method).toBe("diagnostics.stability");
@@ -266,7 +267,7 @@ describe("gateway-cli coverage", () => {
       );
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const healthCall = callGateway.mock.calls[0]?.[0] as
+      const healthCall = callGateway.mock.calls.at(0)?.[0] as
         | { method?: string; timeoutMs?: number }
         | undefined;
       expect(healthCall?.method).toBe("health");
@@ -430,7 +431,7 @@ describe("gateway-cli coverage", () => {
       await expectGatewayExit(["gateway", "--token", "test-token", "--allow-unconfigured"]);
 
       expect(startGatewayServer).toHaveBeenCalledTimes(1);
-      const startCall = startGatewayServer.mock.calls[0];
+      const startCall = startGatewayServer.mock.calls.at(0);
       expect(startCall?.[0]).toBe(19001);
       expect(typeof startCall?.[1]).toBe("object");
     });

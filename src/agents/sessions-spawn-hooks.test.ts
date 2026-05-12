@@ -131,7 +131,7 @@ function mockAgentStartFailure() {
 }
 
 function getSpawnedEventCall(): Record<string, unknown> {
-  const [event] = (hookRunnerMocks.runSubagentSpawned.mock.calls[0] ?? []) as unknown as [
+  const [event] = (hookRunnerMocks.runSubagentSpawned.mock.calls.at(0) ?? []) as unknown as [
     Record<string, unknown>,
   ];
   return event;
@@ -242,8 +242,9 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
 
     expectFields(result, { status: "accepted", runId: "run-1" }, "spawn result");
     expect(hookRunnerMocks.runSubagentSpawning).toHaveBeenCalledTimes(1);
-    const [spawningEvent, spawningContext] = (hookRunnerMocks.runSubagentSpawning.mock.calls[0] ??
-      []) as unknown as [Record<string, unknown>, Record<string, unknown>];
+    const [spawningEvent, spawningContext] = (hookRunnerMocks.runSubagentSpawning.mock.calls.at(
+      0,
+    ) ?? []) as unknown as [Record<string, unknown>, Record<string, unknown>];
     const spawningChildSessionKey = expectSubagentSessionKey(
       spawningEvent?.childSessionKey,
       "spawning event child session key",
@@ -275,7 +276,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     );
 
     expect(hookRunnerMocks.runSubagentSpawned).toHaveBeenCalledTimes(1);
-    const [event, ctx] = (hookRunnerMocks.runSubagentSpawned.mock.calls[0] ?? []) as unknown as [
+    const [event, ctx] = (hookRunnerMocks.runSubagentSpawned.mock.calls.at(0) ?? []) as unknown as [
       Record<string, unknown>,
       Record<string, unknown>,
     ];
@@ -321,7 +322,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     expectFields(result, { status: "accepted", runId: "run-1" }, "spawn result");
     expect(hookRunnerMocks.runSubagentSpawning).not.toHaveBeenCalled();
     expect(hookRunnerMocks.runSubagentSpawned).toHaveBeenCalledTimes(1);
-    const [event] = (hookRunnerMocks.runSubagentSpawned.mock.calls[0] ?? []) as unknown as [
+    const [event] = (hookRunnerMocks.runSubagentSpawned.mock.calls.at(0) ?? []) as unknown as [
       Record<string, unknown>,
     ];
     expectFields(
@@ -440,7 +441,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
 
     expect(result.status).toBe("error");
     expect(hookRunnerMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
-    const [event] = (hookRunnerMocks.runSubagentEnded.mock.calls[0] ?? []) as unknown as [
+    const [event] = (hookRunnerMocks.runSubagentEnded.mock.calls.at(0) ?? []) as unknown as [
       Record<string, unknown>,
     ];
     expectSubagentSessionKey(event.targetSessionKey, "ended event target session key");
