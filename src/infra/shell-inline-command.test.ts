@@ -148,6 +148,11 @@ describe("resolveInlineCommandMatch", () => {
       expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 4 },
     },
     {
+      name: "skips slash PowerShell input format alias values before slash encoded command",
+      argv: ["pwsh", "/if", "XML", "/ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 4 },
+    },
+    {
       name: "extracts PowerShell slash switch forms before script file binding",
       argv: ["pwsh", "/ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
       expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 2 },
