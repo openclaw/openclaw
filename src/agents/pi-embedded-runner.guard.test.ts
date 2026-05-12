@@ -128,7 +128,6 @@ describe("guardSessionManager integration", () => {
       .filter((e) => e.type === "message")
       .map((e) => (e as { message: AgentMessage }).message);
 
-<<<<<<< HEAD
     const serialized = JSON.stringify(messages);
 
     expect(serialized).not.toContain("the email is peter@dc.io");
