@@ -372,8 +372,15 @@ describe("memory index", () => {
     const agentDbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const agentDb = openOpenClawAgentDatabase({ agentId: "main" });
     agentDb.db
-      .prepare("INSERT INTO session_entries (session_key, entry_json, updated_at) VALUES (?, ?, ?)")
-      .run("agent:main:test", JSON.stringify({ sessionId: "keep-me", updatedAt: 1 }), 1);
+      .prepare(
+        "INSERT INTO sessions (session_id, session_key, session_scope, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("keep-me", "agent:main:test", "conversation", 1, 1);
+    agentDb.db
+      .prepare(
+        "INSERT INTO session_entries (session_key, session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run("agent:main:test", "keep-me", JSON.stringify({ sessionId: "keep-me", updatedAt: 1 }), 1);
     closeOpenClawAgentDatabasesForTest();
 
     const cfg: TestCfg = {

@@ -39,11 +39,12 @@ function normalizeVfsPath(input: string): string {
   if (input.includes("\0")) {
     throw new Error("VFS path must not contain NUL bytes.");
   }
-  const trimmed = input.trim();
-  if (!trimmed || trimmed === ".") {
+  if (!input || input === ".") {
     return "/";
   }
-  const normalized = path.posix.normalize(`/${trimmed}`).replace(/\/+$/u, "");
+  const normalized = path.posix
+    .normalize(input.startsWith("/") ? input : `/${input}`)
+    .replace(/\/+$/u, "");
   return normalized || "/";
 }
 
@@ -122,12 +123,11 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
         database.db,
         db
           .selectFrom("vfs_entries")
-          .select(["path", "kind", "content_blob", "metadata_json", "updated_at"])
+          .select(["namespace", "path", "kind", "content_blob", "metadata_json", "updated_at"])
           .where("namespace", "=", this.#options.namespace)
           .where("path", "=", normalizeVfsPath(filePath)),
       ) ?? null
     );
-    return row ? virtualAgentFsRowFromDb(row) : null;
   }
 
   #allRows(): VirtualAgentFsRow[] {
@@ -137,7 +137,7 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
       database.db,
       db
         .selectFrom("vfs_entries")
-        .select(["path", "kind", "content_blob", "metadata_json", "updated_at"])
+        .select(["namespace", "path", "kind", "content_blob", "metadata_json", "updated_at"])
         .where("namespace", "=", this.#options.namespace)
         .orderBy("path", "asc"),
     ).rows;
@@ -178,6 +178,10 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
 
   #ensureParents(filePath: string, updatedAt: number): void {
     for (const parentPath of parentPathsFor(filePath)) {
+      const existing = this.#selectRow(parentPath);
+      if (existing && parseVirtualAgentFsEntryKind(existing.kind) !== "directory") {
+        throw new Error(`VFS parent is not a directory: ${parentPath}`);
+      }
       this.#upsert({
         path: parentPath,
         kind: "directory",
@@ -206,6 +210,13 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
     options: VirtualAgentFsWriteOptions = {},
   ): void {
     const normalized = normalizeVfsPath(filePath);
+    if (normalized === "/") {
+      throw new Error("VFS cannot write a file at root.");
+    }
+    const existing = this.#selectRow(normalized);
+    if (existing && parseVirtualAgentFsEntryKind(existing.kind) === "directory") {
+      throw new Error(`VFS path is a directory: ${normalized}`);
+    }
     const updatedAt = this.#now();
     runOpenClawAgentWriteTransaction(() => {
       this.#ensureParents(normalized, updatedAt);
@@ -311,6 +322,15 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
   rename(fromPath: string, toPath: string): void {
     const from = normalizeVfsPath(fromPath);
     const to = normalizeVfsPath(toPath);
+    if (from === "/") {
+      throw new Error("VFS cannot rename root.");
+    }
+    if (to === from || to.startsWith(`${from}/`)) {
+      throw new Error(`VFS cannot move a path into itself: ${from} -> ${to}`);
+    }
+    if (this.#selectRow(to)) {
+      throw new Error(`VFS target already exists: ${to}`);
+    }
     const updatedAt = this.#now();
     const rows = this.#allRows().filter(
       (row) => row.path === from || row.path.startsWith(`${from}/`),
