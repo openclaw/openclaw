@@ -114,7 +114,7 @@ function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPaylo
 
 function buildSilentFallbackFailurePayload(params: {
   fallbackTransition: ReturnType<typeof resolveFallbackTransition>;
-  fallbackAttempts: readonly unknown[];
+  fallbackFailureKnown: boolean;
   isHeartbeat: boolean;
   hasSuccessfulSideEffectDelivery: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
@@ -126,7 +126,7 @@ function buildSilentFallbackFailurePayload(params: {
     params.silentExpected === true ||
     params.hasSuccessfulSideEffectDelivery ||
     !params.fallbackTransition.fallbackActive ||
-    params.fallbackAttempts.length === 0
+    !params.fallbackFailureKnown
   ) {
     return undefined;
   }
@@ -154,6 +154,25 @@ function hasSuccessfulSideEffectDelivery(params: {
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls),
   );
+}
+
+function resolveConfiguredFallbackModel(params: {
+  run: FollowupRun["run"];
+  fallbackStateEntry?: SessionEntry;
+}): { provider: string; model: string; persistedAutoFallback: boolean } {
+  const entry = params.fallbackStateEntry;
+  if (entry?.modelOverrideSource === "auto") {
+    const originProvider = normalizeOptionalString(entry.modelOverrideFallbackOriginProvider);
+    const originModel = normalizeOptionalString(entry.modelOverrideFallbackOriginModel);
+    if (originProvider && originModel) {
+      return { provider: originProvider, model: originModel, persistedAutoFallback: true };
+    }
+  }
+  return {
+    provider: params.run.provider,
+    model: params.run.model,
+    persistedAutoFallback: false,
+  };
 }
 
 function buildInlinePluginStatusPayload(params: {
@@ -1480,10 +1499,14 @@ export async function runReplyAgent(params: {
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
     const verboseEnabled = resolvedVerboseLevel !== "off";
-    const selectedProvider = followupRun.run.provider;
-    const selectedModel = followupRun.run.model;
     const fallbackStateEntry =
       activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
+    const configuredFallbackModel = resolveConfiguredFallbackModel({
+      run: followupRun.run,
+      fallbackStateEntry,
+    });
+    const selectedProvider = configuredFallbackModel.provider;
+    const selectedModel = configuredFallbackModel.model;
     const fallbackTransition = resolveFallbackTransition({
       selectedProvider,
       selectedModel,
@@ -1559,14 +1582,14 @@ export async function runReplyAgent(params: {
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
       const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
         fallbackTransition,
-        fallbackAttempts,
+        fallbackFailureKnown:
+          fallbackAttempts.length > 0 || configuredFallbackModel.persistedAutoFallback,
         isHeartbeat,
         hasSuccessfulSideEffectDelivery: hasSuccessfulSideEffectDelivery({
           blockReplyPipeline,
           directlySentBlockKeys,
           messagingToolSentTexts: runResult.messagingToolSentTexts,
           messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-          messagingToolSentTargets: runResult.messagingToolSentTargets,
         }),
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
         silentExpected: followupRun.run.silentExpected,

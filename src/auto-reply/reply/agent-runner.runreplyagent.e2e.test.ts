@@ -1025,6 +1025,44 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("surfaces a persisted configured backend failure when the active fallback is silent", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "lmstudio",
+      modelOverrideFallbackOriginModel: "gemma-4-e4b-it",
+    };
+    const sessionStore = { main: sessionEntry };
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      runOverrides: {
+        provider: "openai-codex",
+        model: "gpt-5.5",
+      },
+      sessionEntry,
+      sessionStore,
+      sessionCtx: {
+        Provider: "discord",
+        OriginatingChannel: "discord",
+        MessageSid: "1503677587568722061",
+      },
+    });
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
+    expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
+    expect(payload?.text).toContain("no visible reply");
+  });
+
   it("does not surface fallback silence when fallback already replied through a messaging tool", async () => {
     state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "already sent" }],
