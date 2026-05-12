@@ -170,11 +170,13 @@ openclaw migrate apply codex --yes --plugin google-calendar
   `--verify-plugin-apps` when you want migration to force a fresh source
   `app/list` snapshot and require every owned app to be present, enabled, and
   accessible before planning native activation. In that mode, account lookup
-  transport failures fall through to source app inventory verification. Disabled
-  plugins, unreadable plugin details, subscription-gated source accounts, and,
-  when verification is requested, missing apps, disabled apps, inaccessible
-  apps, or source app inventory failures become manual skipped items with typed
-  reasons instead of target config entries.
+  transport failures fall through to source app inventory verification. The
+  source app inventory snapshot is kept in memory for the current process; it
+  is not written to migration output or target config. Disabled plugins,
+  unreadable plugin details, subscription-gated source accounts, and, when
+  verification is requested, missing apps, disabled apps, inaccessible apps, or
+  source app inventory failures become manual skipped items with typed reasons
+  instead of target config entries.
   Apply calls app-server `plugin/install` for each selected eligible plugin,
   even if the target app-server already reports that plugin as installed and
   enabled. Migrated Codex plugins are usable only in sessions that select the

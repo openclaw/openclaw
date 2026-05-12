@@ -135,7 +135,18 @@ V1 is intentionally narrow:
 ## App inventory and ownership
 
 OpenClaw reads Codex app inventory through app-server `app/list`, caches it for
-one hour, and refreshes stale or missing entries asynchronously.
+one hour, and refreshes stale or missing entries asynchronously. The cache is
+in memory only; restarting the CLI or gateway drops it, and OpenClaw rebuilds it
+from the next `app/list` read.
+
+Migration and runtime use separate cache keys:
+
+- Source migration verification uses the source Codex home and source app-server
+  start options. This runs only when `--verify-plugin-apps` is set, and it
+  forces a fresh source `app/list` traversal for that planning run.
+- Target runtime setup uses the target agent's Codex app-server identity when it
+  builds the Codex thread app config. Plugin activation invalidates that target
+  cache key and then force-refreshes it after `plugin/install`.
 
 A plugin app is exposed only when OpenClaw can map it back to the migrated
 plugin through stable ownership:
