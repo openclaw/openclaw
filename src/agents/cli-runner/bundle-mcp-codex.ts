@@ -9,10 +9,11 @@ import {
 } from "./bundle-mcp-adapter-shared.js";
 import { serializeTomlInlineValue } from "./toml-inline.js";
 
-// Mutable JSON shape that matches the Codex app-server's `JsonObject`
-// (extensions/codex/src/app-server/protocol.ts) so this projection result is
-// structurally assignable to `mergeCodexThreadConfigs`' parameters without
-// pulling plugin-local types across the boundary.
+// Mutable JSON shape structurally compatible with the bundled Codex
+// app-server thread-config JsonObject (see the protocol module in the codex
+// plugin). Defined locally so this projection result stays assignable to
+// mergeCodexThreadConfigs without pulling plugin-local types across the
+// extensions boundary.
 type CodexThreadConfigValue =
   | string
   | number

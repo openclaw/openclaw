@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { writeCodexAppServerBinding } from "./session-binding.js";
 import { startOrResumeThread } from "./thread-lifecycle.js";
 
@@ -45,7 +46,7 @@ function threadResumeResult(threadId = "thread-existing"): Record<string, unknow
   return threadStartResult(threadId);
 }
 
-function createAppServerOptions() {
+function createAppServerOptions(): CodexAppServerRuntimeOptions {
   return {
     start: {
       transport: "stdio",
@@ -55,10 +56,10 @@ function createAppServerOptions() {
     },
     requestTimeoutMs: 60_000,
     turnCompletionIdleTimeoutMs: 60_000,
-    approvalPolicy: "never" as const,
-    approvalsReviewer: "user" as const,
-    sandbox: "workspace-write" as const,
-  };
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: "workspace-write",
+  } as unknown as CodexAppServerRuntimeOptions;
 }
 
 function createParams(
@@ -82,7 +83,7 @@ function createParams(
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     config: configOverrides,
-  } as EmbeddedRunAttemptParams;
+  } as unknown as EmbeddedRunAttemptParams;
 }
 
 describe("startOrResumeThread — user mcp.servers projection (regression: #80814)", () => {
@@ -120,7 +121,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
             },
           },
         },
-      } as EmbeddedRunAttemptParams["config"]),
+      } as unknown as EmbeddedRunAttemptParams["config"]),
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createAppServerOptions(),
@@ -187,7 +188,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
             },
           },
         },
-      } as EmbeddedRunAttemptParams["config"]),
+      } as unknown as EmbeddedRunAttemptParams["config"]),
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createAppServerOptions(),
