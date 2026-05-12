@@ -3,6 +3,7 @@ import os from "node:os";
 import type { RawData, WebSocket } from "ws";
 import { getRuntimeConfig } from "../../../config/io.js";
 import {
+  getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
   redeemDeviceBootstrapTokenProfile,
   resolveDeviceBootstrapTokenBindingId,
@@ -1296,8 +1297,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           role === "node" &&
           hasServerApprovedDeviceTokenBaseline &&
           authMethod === "bootstrap-token" &&
-          issuedBootstrapProfile
-            ? issuedBootstrapProfile
+          issuedBootstrapProfile &&
+          bootstrapTokenCandidate &&
+          devicePublicKey
+            ? await getBoundDeviceBootstrapProfile({
+                token: bootstrapTokenCandidate,
+                deviceId: device.id,
+                publicKey: devicePublicKey,
+              })
             : null;
         let bootstrapHandoffComplete = false;
 

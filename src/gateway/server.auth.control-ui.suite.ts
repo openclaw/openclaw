@@ -1411,6 +1411,92 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
+  test("does not revive revoked operator token through unbound bootstrap handoff", async () => {
+    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+    const { approveDevicePairing, getPairedDevice, requestDevicePairing, revokeDeviceToken } =
+      await import("../infra/device-pairing.js");
+    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
+    const { server, port, prevToken } = await startControlUiServer("secret");
+
+    const { identityPath, identity } = await createOperatorIdentityFixture(
+      "openclaw-bootstrap-revoked-token-",
+    );
+    const client = {
+      id: "openclaw-ios",
+      version: "2026.3.30",
+      platform: "iOS 26.3.1",
+      mode: "node",
+      deviceFamily: "iPhone",
+    };
+    const bootstrapOperatorScopes = [
+      "operator.approvals",
+      "operator.read",
+      "operator.talk.secrets",
+      "operator.write",
+    ];
+
+    try {
+      const seededRequest = await requestDevicePairing({
+        deviceId: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        role: "node",
+        roles: ["node", "operator"],
+        scopes: bootstrapOperatorScopes,
+        clientId: client.id,
+        clientMode: client.mode,
+        platform: client.platform,
+        deviceFamily: client.deviceFamily,
+      });
+      await expect(
+        approveDevicePairing(seededRequest.request.requestId, {
+          callerScopes: bootstrapOperatorScopes,
+        }),
+      ).resolves.toMatchObject({
+        status: "approved",
+      });
+      await expect(
+        revokeDeviceToken({
+          deviceId: identity.deviceId,
+          role: "operator",
+        }),
+      ).resolves.toEqual(expect.objectContaining({ ok: true }));
+      const pairedBefore = await getPairedDevice(identity.deviceId);
+      const revokedOperatorToken = pairedBefore?.tokens?.operator;
+      expect(typeof revokedOperatorToken?.revokedAtMs).toBe("number");
+
+      const issued = await issueDeviceBootstrapToken();
+      const wsBootstrap = await openWs(port);
+      const initial = await connectReq(wsBootstrap, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client,
+        deviceIdentityPath: identityPath,
+      });
+      expect(initial.ok).toBe(true);
+      const payload = initial.payload as
+        | {
+            auth?: {
+              deviceTokens?: Array<{
+                role?: string;
+              }>;
+            };
+          }
+        | undefined;
+      expect(payload?.auth?.deviceTokens?.some((entry) => entry.role === "operator") ?? false).toBe(
+        false,
+      );
+      const pairedAfter = await getPairedDevice(identity.deviceId);
+      expect(pairedAfter?.tokens?.operator?.token).toBe(revokedOperatorToken?.token);
+      expect(pairedAfter?.tokens?.operator?.revokedAtMs).toBe(revokedOperatorToken?.revokedAtMs);
+      wsBootstrap.close();
+    } finally {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("requires approval for bootstrap-auth role upgrades on already-paired devices", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
     const { approveDevicePairing, getPairedDevice, listDevicePairing, requestDevicePairing } =
