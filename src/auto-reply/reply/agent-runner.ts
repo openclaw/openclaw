@@ -169,13 +169,13 @@ function hasSuccessfulSideEffectDelivery(params: {
   messagingToolSentTargets?: unknown[];
   successfulCronAdds?: number;
 }): boolean {
-  return Boolean(
+  return (
     (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
     hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets) ||
-    (params.successfulCronAdds ?? 0) > 0,
+    (params.successfulCronAdds ?? 0) > 0
   );
 }
 
