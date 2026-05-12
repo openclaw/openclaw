@@ -152,8 +152,8 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
     ctx.MediaPath || ctx.MediaUrl
       ? [
           {
-            path: ctx.MediaPath,
-            url: ctx.MediaUrl,
+            path: ctx.MediaPath || undefined,
+            url: ctx.MediaUrl || undefined,
             mime: ctx.MediaType,
             index: 0,
           },
@@ -167,7 +167,10 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
     return params.cfg.channels?.[channel]?.attachmentRoots ?? [];
   },
   MediaAttachmentCache: class {
-    constructor(private readonly attachments: Array<{ path?: string; url?: string; index: number }>) {}
+    constructor(
+      private readonly attachments: Array<{ path?: string; url?: string; index: number }>,
+    ) {}
+
     async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
       const attachment = this.attachments.find((item) => item.index === attachmentIndex);
       const path = attachment?.path;
@@ -1156,11 +1159,14 @@ describe("tryDispatchAcpReply", () => {
             constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
             async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
               const attachment = this.attachments.find((item) => item.index === attachmentIndex);
+              if (!attachment?.path) {
+                throw new Error("current attachment unavailable");
+              }
               return {
-                buffer: Buffer.from(attachment?.path ?? ""),
+                buffer: Buffer.from(attachment.path),
                 mime: "image/png",
                 fileName: "history.png",
-                size: attachment?.path?.length ?? 0,
+                size: attachment.path.length,
               };
             }
           } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
