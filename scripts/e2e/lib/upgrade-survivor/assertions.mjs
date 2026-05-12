@@ -381,7 +381,7 @@ function assertStateSurvived() {
 }
 
 function readInstalledPluginIndex() {
-  const index = readSqliteInstalledPluginIndex({ allowLegacyFile: true });
+  const index = readSqliteInstalledPluginIndex();
   assert(index.installRecords, "installed plugin index missing installRecords");
   return index;
 }

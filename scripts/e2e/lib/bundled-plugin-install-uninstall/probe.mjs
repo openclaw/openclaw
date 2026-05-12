@@ -72,7 +72,7 @@ function selectedManifestEntries() {
 function assertInstalled(pluginId, pluginDir, requiresConfig) {
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const config = readJson(configPath);
-  const records = readInstalledPluginRecords({ allowLegacyFile: true });
+  const records = readInstalledPluginRecords();
   const record = records[pluginId];
   if (!record) {
     throw new Error(`missing install record for ${pluginId}`);
@@ -115,7 +115,7 @@ function assertInstalled(pluginId, pluginDir, requiresConfig) {
 function assertUninstalled(pluginId, pluginDir) {
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const config = fs.existsSync(configPath) ? readJson(configPath) : {};
-  const records = readInstalledPluginRecords({ allowLegacyFile: true });
+  const records = readInstalledPluginRecords();
   if (records[pluginId]) {
     throw new Error(`install record still present after uninstall for ${pluginId}`);
   }

@@ -245,7 +245,9 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     });
 
     expect(result.detected).toEqual([authPath]);
-    expect(result.changes).toHaveLength(2);
+    expect(result.changes).toStrictEqual([
+      `Moved aws-sdk profile metadata from ${authPath} to auth.profiles (backup: ${authPath}.aws-sdk-profile.456.bak).`,
+    ]);
     expect(result.warnings).toStrictEqual([]);
     expect(cfg).toEqual({
       auth: {

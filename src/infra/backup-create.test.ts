@@ -5,6 +5,7 @@ import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { backupVerifyCommand } from "../commands/backup-verify.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -16,6 +17,7 @@ import {
   formatBackupCreateSummary,
   type BackupCreateResult,
 } from "./backup-create.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
   return {
@@ -31,6 +33,11 @@ function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateRe
     ...overrides,
   };
 }
+
+type BackupCreateTestDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "diagnostic_events" | "backup_runs"
+>;
 
 async function listArchiveEntries(archivePath: string): Promise<string[]> {
   const entries: string[] = [];
@@ -177,14 +184,16 @@ describe("createBackupArchive", () => {
         );
         await fs.mkdir(outputDir, { recursive: true });
         const database = openOpenClawStateDatabase();
-        database.db
-          .prepare(
-            `
-              INSERT INTO kv (scope, key, value_json, updated_at)
-              VALUES ('backup-test', 'seed', '{}', 1)
-            `,
-          )
-          .run();
+        const db = getNodeSqliteKysely<BackupCreateTestDatabase>(database.db);
+        executeSqliteQuerySync(
+          database.db,
+          db.insertInto("diagnostic_events").values({
+            scope: "backup-test",
+            event_key: "seed",
+            payload_json: "{}",
+            created_at: 1,
+          }),
+        );
 
         const result = await createBackupArchive({
           output: outputDir,
@@ -206,11 +215,10 @@ describe("createBackupArchive", () => {
         ).toBe(true);
         expect(entries.some((entry) => entry.endsWith("/state/state/openclaw.sqlite"))).toBe(true);
 
-        const backupRuns = database.db.prepare("SELECT * FROM backup_runs").all() as Array<{
-          archive_path: string;
-          status: string;
-          manifest_json: string;
-        }>;
+        const backupRuns = executeSqliteQuerySync(
+          database.db,
+          db.selectFrom("backup_runs").selectAll(),
+        ).rows;
         expect(backupRuns).toHaveLength(1);
         expect(backupRuns[0]?.archive_path).toBe(result.archivePath);
         expect(backupRuns[0]?.status).toBe("completed");
