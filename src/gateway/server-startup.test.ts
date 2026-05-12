@@ -37,8 +37,8 @@ let prewarmConfiguredPrimaryModel: typeof import("./server-startup-post-attach.j
 let shouldSkipStartupModelPrewarm: typeof import("./server-startup-post-attach.js").__testing.shouldSkipStartupModelPrewarm;
 
 function expectModelsJsonPrewarmCall(cfg: OpenClawConfig) {
-  expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
-  const [calledConfig, agentDir, options] = ensureOpenClawModelsJsonMock.mock.calls.at(0) ?? [];
+  expect(ensureOpenClawModelCatalogMock).toHaveBeenCalledTimes(1);
+  const [calledConfig, agentDir, options] = ensureOpenClawModelCatalogMock.mock.calls[0] ?? [];
   expect(calledConfig).toBe(cfg);
   expect(agentDir).toBe("/tmp/agent");
   expect(options).toEqual({
@@ -79,16 +79,7 @@ describe("gateway startup primary model warmup", () => {
       log: { warn: vi.fn() },
     });
 
-    expect(ensureOpenClawModelCatalogMock).toHaveBeenCalledWith(
-      cfg,
-      "/tmp/agent",
-      expect.objectContaining({
-        workspaceDir: "/tmp/workspace",
-        providerDiscoveryProviderIds: ["openai-codex"],
-        providerDiscoveryTimeoutMs: 5000,
-        providerDiscoveryEntriesOnly: true,
-      }),
-    );
+    expectModelsJsonPrewarmCall(cfg);
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 
@@ -176,16 +167,7 @@ describe("gateway startup primary model warmup", () => {
       log: { warn: vi.fn() },
     });
 
-    expect(ensureOpenClawModelCatalogMock).toHaveBeenCalledWith(
-      cfg,
-      "/tmp/agent",
-      expect.objectContaining({
-        workspaceDir: "/tmp/workspace",
-        providerDiscoveryProviderIds: ["openai-codex"],
-        providerDiscoveryTimeoutMs: 5000,
-        providerDiscoveryEntriesOnly: true,
-      }),
-    );
+    expectModelsJsonPrewarmCall(cfg);
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 
