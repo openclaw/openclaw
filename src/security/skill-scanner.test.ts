@@ -535,6 +535,19 @@ describe("scanDirectoryWithSummary", () => {
       },
     },
     {
+      name: "does not mark scans truncated when file count exactly matches maxFiles",
+      files: {
+        "a.js": `const x = eval("a");`,
+        "b.js": `const x = eval("b");`,
+      },
+      options: { maxFiles: 2 },
+      expected: {
+        scannedFiles: 2,
+        truncated: false,
+        findingCount: 2,
+      },
+    },
+    {
       name: "skips files above maxFileBytes",
       files: {
         "large.js": `eval("${"A".repeat(4096)}");`,

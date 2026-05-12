@@ -11,6 +11,7 @@ import * as installSecurityScan from "./install-security-scan.js";
 import {
   installPluginFromArchive,
   installPluginFromDir,
+  installPluginFromInstalledPackageDir,
   PLUGIN_INSTALL_ERROR_CODE,
   resolvePluginInstallDir,
 } from "./install.js";
@@ -3061,6 +3062,32 @@ describe("installPluginFromDir", () => {
       expect(result.error).toContain("node_modules/plain-crypto-js/package.json");
     }
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
+  it("does not scan pre-existing sibling packages from a managed npm root", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(caseDir, "npm-root");
+    const newPluginDir = path.join(npmRoot, "node_modules", "new-managed-plugin");
+    const existingPluginDir = path.join(npmRoot, "node_modules", "existing-official-plugin");
+    fs.mkdirSync(newPluginDir, { recursive: true });
+    fs.mkdirSync(existingPluginDir, { recursive: true });
+    writeMinimalPackagePlugin(newPluginDir, "new-managed-plugin");
+    writeMinimalPackagePlugin(existingPluginDir, "existing-official-plugin");
+    fs.writeFileSync(
+      path.join(existingPluginDir, "index.js"),
+      `const childProcess = require("node:child_process");\nchildProcess.spawn("node", ["-v"]);\nmodule.exports = {};\n`,
+      "utf-8",
+    );
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: newPluginDir,
+      dependencyScanRootDir: npmRoot,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("new-managed-plugin");
+    }
   });
 
   it.each([

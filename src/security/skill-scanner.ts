@@ -449,7 +449,7 @@ function isExcludedTestFileName(name: string): boolean {
 
 async function walkDirWithLimit(
   dirPath: string,
-  maxFiles: number,
+  candidateLimit: number,
   excludeTestFiles: boolean,
   includeHiddenDirectories: boolean,
   includeNodeModules: boolean,
@@ -457,7 +457,7 @@ async function walkDirWithLimit(
   const files: string[] = [];
   const stack: string[] = [dirPath];
 
-  while (stack.length > 0 && files.length < maxFiles) {
+  while (stack.length > 0 && files.length < candidateLimit) {
     const currentDir = stack.pop();
     if (!currentDir) {
       break;
@@ -465,7 +465,7 @@ async function walkDirWithLimit(
 
     const entries = await readDirEntriesWithCache(currentDir);
     for (const entry of entries) {
-      if (files.length >= maxFiles) {
+      if (files.length >= candidateLimit) {
         break;
       }
       if (
@@ -491,7 +491,7 @@ async function walkDirWithLimit(
     }
   }
 
-  return { files, truncated: files.length >= maxFiles };
+  return { files, truncated: files.length >= candidateLimit };
 }
 
 async function readDirEntriesWithCache(dirPath: string): Promise<CachedDirEntry[]> {
@@ -580,13 +580,13 @@ async function collectScannableFiles(
     rootDir: dirPath,
     includeFiles: opts.includeFiles,
   });
-  if (forcedFiles.length >= opts.maxFiles) {
+  if (forcedFiles.length > opts.maxFiles) {
     return { files: forcedFiles.slice(0, opts.maxFiles), truncated: true };
   }
 
   const walked = await walkDirWithLimit(
     dirPath,
-    opts.maxFiles,
+    opts.maxFiles + 1,
     opts.excludeTestFiles,
     opts.includeHiddenDirectories,
     opts.includeNodeModules,
@@ -594,17 +594,17 @@ async function collectScannableFiles(
   const seen = new Set(forcedFiles.map((f) => path.resolve(f)));
   const out = [...forcedFiles];
   for (const walkedFile of walked.files) {
-    if (out.length >= opts.maxFiles) {
-      break;
-    }
     const resolved = path.resolve(walkedFile);
     if (seen.has(resolved)) {
       continue;
     }
+    if (out.length >= opts.maxFiles) {
+      return { files: out.slice(0, opts.maxFiles), truncated: true };
+    }
     out.push(walkedFile);
     seen.add(resolved);
   }
-  return { files: out, truncated: walked.truncated || out.length >= opts.maxFiles };
+  return { files: out, truncated: false };
 }
 
 async function scanFileWithCache(params: {
