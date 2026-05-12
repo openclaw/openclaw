@@ -86,25 +86,6 @@ type AcpEventLedgerDatabase = Pick<
   "acp_replay_events" | "acp_replay_sessions"
 >;
 
-type LedgerSessionRow = {
-  complete: number;
-  created_at: number;
-  cwd: string;
-  next_seq: number;
-  session_id: string;
-  session_key: string;
-  updated_at: number;
-};
-
-type LedgerEventRow = {
-  at: number;
-  run_id: string | null;
-  seq: number;
-  session_id: string;
-  session_key: string;
-  update_json: string;
-};
-
 type MutableLedgerState = {
   store: LedgerStore;
   maxSessions: number;
