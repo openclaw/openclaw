@@ -54,18 +54,25 @@ describe("Hermes migration secret items", () => {
     );
 
     expect(plan.metadata?.agentDir).toBe(customAgentDir);
-    expect(plan.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "secret:openai",
-          target: `${resolveAuthProfileStoreLocationForDisplay(
-            customAgentDir,
-            stateEnv(stateDir),
-          )}/openai:hermes-import`,
-          status: "planned",
-        }),
-      ]),
-    );
+    expect(plan.items).toEqual([
+      {
+        id: "secret:openai",
+        kind: "secret",
+        action: "create",
+        source: path.join(source, ".env"),
+        target: `${resolveAuthProfileStoreLocationForDisplay(
+          customAgentDir,
+          stateEnv(stateDir),
+        )}/openai:hermes-import`,
+        status: "planned",
+        sensitive: true,
+        details: {
+          envVar: "OPENAI_API_KEY",
+          provider: "openai",
+          profileId: "openai:hermes-import",
+        },
+      },
+    ]);
 
     const result = await provider.apply(
       makeContext({
@@ -149,7 +156,10 @@ describe("Hermes migration secret items", () => {
         kind: "secret",
         action: "create",
         source: path.join(source, ".env"),
-        target: `${agentDir}/auth-profiles.json#openai:hermes-import`,
+        target: `${resolveAuthProfileStoreLocationForDisplay(
+          agentDir,
+          stateEnv(stateDir),
+        )}/openai:hermes-import`,
         status: "conflict",
         sensitive: true,
         reason: HERMES_REASON_AUTH_PROFILE_EXISTS,
