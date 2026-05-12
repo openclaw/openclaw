@@ -27,6 +27,7 @@ async function connectNodeClient(params: {
   port: number;
   deviceIdentity: ReturnType<typeof loadDeviceIdentity>["identity"];
   commands: string[];
+  onEvent?: (evt: { event?: string; payload?: unknown }) => void;
 }) {
   return await connectGatewayClient({
     url: `ws://127.0.0.1:${params.port}`,
@@ -40,6 +41,7 @@ async function connectNodeClient(params: {
     scopes: [],
     commands: params.commands,
     deviceIdentity: params.deviceIdentity,
+    onEvent: params.onEvent,
     timeoutMessage: "timeout waiting for paired node to connect",
   });
 }
@@ -237,6 +239,83 @@ describe("gateway node pairing authorization", () => {
       expect(pairedNode?.nodeId).toBe("node-approve-target");
     } finally {
       pairingWs?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("blocks system command forwarding when node approval is rejected", async () => {
+    const started = await startServerWithClient("secret");
+    const pairedNode = await pairDeviceIdentity({
+      name: "node-invoke-needs-approval",
+      role: "node",
+      scopes: [],
+      clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientMode: GATEWAY_CLIENT_MODES.NODE,
+    });
+    const operator = await issueOperatorToken({
+      name: "node-invoke-pairing-write",
+      approvedScopes: ["operator.admin"],
+      tokenScopes: ["operator.pairing", "operator.write"],
+      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+    });
+
+    let sawInvoke = false;
+    let operatorWs: WebSocket | undefined;
+    let nodeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    try {
+      nodeClient = await connectNodeClient({
+        port: started.port,
+        deviceIdentity: pairedNode.identity,
+        commands: ["system.run"],
+        onEvent: (evt) => {
+          if (evt.event === "node.invoke.request") {
+            sawInvoke = true;
+          }
+        },
+      });
+
+      operatorWs = await openTrackedWs(started.port);
+      await connectOk(operatorWs, {
+        skipDefaultAuth: true,
+        deviceToken: operator.token,
+        deviceIdentityPath: operator.identityPath,
+        scopes: ["operator.pairing", "operator.write"],
+      });
+
+      const list = await rpcReq<{
+        pending?: Array<{ requestId?: string; nodeId?: string; commands?: string[] }>;
+      }>(operatorWs, "node.pair.list", {});
+      expect(list.ok).toBe(true);
+      const pending = list.payload?.pending?.find(
+        (entry) => entry.nodeId === pairedNode.identity.deviceId,
+      );
+      if (!pending?.requestId) {
+        throw new Error("expected pending node pairing request");
+      }
+      expect(pending?.commands).toEqual(["system.run"]);
+
+      const approve = await rpcReq(operatorWs, "node.pair.approve", {
+        requestId: pending.requestId,
+      });
+      expect(approve.ok).toBe(false);
+      expect(approve.error?.message).toBe("missing scope: operator.admin");
+
+      const invoke = await rpcReq(operatorWs, "node.invoke", {
+        nodeId: pairedNode.identity.deviceId,
+        command: "system.run",
+        params: { command: ["echo", "blocked"], rawCommand: "echo blocked" },
+        timeoutMs: 25,
+        idempotencyKey: "node-invoke-needs-node-approval",
+      });
+      expect(invoke.ok).toBe(false);
+      expect(invoke.error?.message).toBe("node pairing approval required");
+      expect(sawInvoke).toBe(false);
+    } finally {
+      operatorWs?.close();
+      await nodeClient?.stopAndWait();
       started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();

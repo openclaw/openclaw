@@ -7,6 +7,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { approveNodePairing, listNodePairing } from "../infra/node-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
@@ -359,6 +360,25 @@ describe("node.invoke approval bypass", () => {
         clearTimeout(timer);
       }
     }
+    await vi.waitFor(
+      async () => {
+        const list = await listNodePairing();
+        const pending = list.pending.find(
+          (entry) => entry.nodeId === resolvedDeviceIdentity.deviceId,
+        );
+        if (!pending) {
+          throw new Error("expected pending node pairing request");
+        }
+        const approved = await approveNodePairing(pending.requestId, {
+          callerScopes: ["operator.admin"],
+        });
+        expect(approved && "node" in approved).toBe(true);
+      },
+      {
+        timeout: NODE_CONNECT_TIMEOUT_MS,
+        interval: 50,
+      },
+    );
     return client;
   };
 

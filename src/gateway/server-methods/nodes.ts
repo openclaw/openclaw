@@ -3,8 +3,10 @@ import { getRuntimeConfig } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { NODE_SYSTEM_RUN_COMMANDS } from "../../infra/node-commands.js";
 import {
   approveNodePairing,
+  getPairedNode,
   listNodePairing,
   rejectNodePairing,
   removePairedNode,
@@ -79,6 +81,7 @@ const NODE_WAKE_THROTTLE_MS = 15_000;
 const NODE_WAKE_NUDGE_THROTTLE_MS = 10 * 60_000;
 const NODE_PENDING_ACTION_TTL_MS = 10 * 60_000;
 const NODE_PENDING_ACTION_MAX_PER_NODE = 64;
+const NODE_PAIRING_APPROVAL_REQUIRED_COMMANDS = new Set<string>(NODE_SYSTEM_RUN_COMMANDS);
 const TALK_PTT_COMMANDS = new Set([
   "talk.ptt.start",
   "talk.ptt.stop",
@@ -138,6 +141,10 @@ function isForbiddenBrowserProxyMutation(params: unknown): boolean {
   const method = (normalizeOptionalString(candidate.method) ?? "").toUpperCase();
   const path = normalizeOptionalString(candidate.path) ?? "";
   return Boolean(method && path && isPersistentBrowserProxyMutation(method, path));
+}
+
+function commandRequiresNodePairingApproval(command: string): boolean {
+  return NODE_PAIRING_APPROVAL_REQUIRED_COMMANDS.has(command);
 }
 
 function normalizePluginSurfaceRefreshParams(params: unknown): { surface: string } | undefined {
@@ -1151,6 +1158,19 @@ export const nodeHandlers: GatewayRequestHandlers = {
           }),
         );
         return;
+      }
+      if (commandRequiresNodePairingApproval(command)) {
+        const pairedNode = await getPairedNode(nodeId);
+        if (!pairedNode || !(pairedNode.commands ?? []).includes(command)) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "node pairing approval required", {
+              details: { code: "NODE_PAIRING_APPROVAL_REQUIRED", nodeId, command },
+            }),
+          );
+          return;
+        }
       }
       const policyResult = await applyPluginNodeInvokePolicy({
         context,
