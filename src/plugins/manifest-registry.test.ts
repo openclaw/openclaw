@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectChannelSchemaMetadata } from "../config/channel-config-metadata.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import type { PluginCandidate } from "./discovery.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import {
+  clearPluginManifestRegistryCache,
+  loadPluginManifestRegistry,
+} from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -363,6 +366,8 @@ function expectCachedPluginRoot(params: {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
+  clearPluginManifestRegistryCache();
   vi.restoreAllMocks();
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -389,6 +394,8 @@ describe("loadPluginManifestRegistry", () => {
     });
     const env = hermeticEnv({
       OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+      OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     });
 
     const first = loadPluginManifestRegistry({ env });
@@ -404,6 +411,45 @@ describe("loadPluginManifestRegistry", () => {
 
     const second = loadPluginManifestRegistry({ env });
     expect(second.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("After");
+  });
+
+  it("keeps default registry cache across short gateway poll intervals", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-12T20:00:00.000Z"));
+
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "registry-cached");
+    mkdirSafe(pluginDir);
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export default function () {}", "utf-8");
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/registry-cached",
+        openclaw: { extensions: ["./index.js"] },
+      }),
+      "utf-8",
+    );
+    writeManifest(pluginDir, {
+      id: "registry-cached",
+      name: "Before",
+      configSchema: { type: "object" },
+    });
+    const env = hermeticEnv({
+      OPENCLAW_STATE_DIR: stateDir,
+    });
+
+    const first = loadPluginManifestRegistry({ env });
+    expect(first.plugins.find((plugin) => plugin.id === "registry-cached")?.name).toBe("Before");
+
+    writeManifest(pluginDir, {
+      id: "registry-cached",
+      name: "After",
+      configSchema: { type: "object" },
+    });
+    vi.advanceTimersByTime(1500);
+
+    const second = loadPluginManifestRegistry({ env });
+    expect(second.plugins.find((plugin) => plugin.id === "registry-cached")?.name).toBe("Before");
   });
 
   it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {

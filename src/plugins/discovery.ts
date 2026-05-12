@@ -78,6 +78,85 @@ export type PluginDiscoveryResult = {
   diagnostics: PluginDiagnostic[];
 };
 
+const discoveryCache = new Map<string, { expiresAt: number; result: PluginDiscoveryResult }>();
+
+// Keep a short cache window to collapse bursty reloads and gateway poll loops.
+const DEFAULT_DISCOVERY_CACHE_MS = 30_000;
+
+export function clearPluginDiscoveryCache(): void {
+  discoveryCache.clear();
+}
+
+function resolveDiscoveryCacheMs(env: NodeJS.ProcessEnv): number {
+  const raw = env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS?.trim();
+  if (raw === "" || raw === "0") {
+    return 0;
+  }
+  if (!raw) {
+    return DEFAULT_DISCOVERY_CACHE_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_DISCOVERY_CACHE_MS;
+  }
+  return Math.max(0, parsed);
+}
+
+function shouldUseDiscoveryCache(env: NodeJS.ProcessEnv): boolean {
+  const disabled = env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE?.trim();
+  if (disabled) {
+    return false;
+  }
+  return resolveDiscoveryCacheMs(env) > 0;
+}
+
+function cloneDiscoveryResult(result: PluginDiscoveryResult): PluginDiscoveryResult {
+  return {
+    candidates: [...result.candidates],
+    diagnostics: [...result.diagnostics],
+  };
+}
+
+function serializeInstallRecords(records: Record<string, PluginInstallRecord> | undefined): string {
+  if (!records) {
+    return "";
+  }
+  return JSON.stringify(
+    Object.entries(records).toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function buildDiscoveryCacheKey(params: {
+  workspaceRoot?: string;
+  roots: ReturnType<typeof resolvePluginSourceRoots>;
+  extraPaths?: string[];
+  installRecords?: Record<string, PluginInstallRecord>;
+  ownershipUid?: number | null;
+  env: NodeJS.ProcessEnv;
+}): string {
+  const normalizedExtraPaths = (params.extraPaths ?? [])
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => resolveUserPath(entry, params.env));
+  const envRootKeys = [
+    "HOME",
+    "OPENCLAW_HOME",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_BUNDLED_PLUGINS_DIR",
+    "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+  ];
+  const envRootValues = envRootKeys.map((key) => [key, params.env[key] ?? ""]);
+  return JSON.stringify({
+    envRootValues,
+    extraPaths: normalizedExtraPaths,
+    installRecords: serializeInstallRecords(params.installRecords),
+    ownershipUid: params.ownershipUid !== undefined ? params.ownershipUid : currentUid(),
+    roots: params.roots,
+    workspaceRoot: params.workspaceRoot ?? "",
+  });
+}
+
 function currentUid(overrideUid?: number | null): number | null {
   if (overrideUid !== undefined) {
     return overrideUid;
@@ -1135,6 +1214,23 @@ export function discoverOpenClawPlugins(params: {
   const workspaceDir = normalizeOptionalString(params.workspaceDir);
   const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
   const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
+  const cacheEnabled = shouldUseDiscoveryCache(env);
+  const cacheKey = cacheEnabled
+    ? buildDiscoveryCacheKey({
+        roots,
+        env,
+        ...(params.extraPaths !== undefined ? { extraPaths: params.extraPaths } : {}),
+        ...(params.installRecords !== undefined ? { installRecords: params.installRecords } : {}),
+        ...(params.ownershipUid !== undefined ? { ownershipUid: params.ownershipUid } : {}),
+        ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
+      })
+    : undefined;
+  if (cacheKey) {
+    const cached = discoveryCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cloneDiscoveryResult(cached.result);
+    }
+  }
   const scopedResult = tracePluginLifecyclePhase(
     "discovery scan",
     () => {
@@ -1310,5 +1406,11 @@ export function discoverOpenClawPlugins(params: {
   const seenDiagnostics = new Set<string>();
   mergeDiscoveryResult(result, scopedResult, seenSources, seenDiagnostics);
   mergeDiscoveryResult(result, sharedResult, seenSources, seenDiagnostics);
+  if (cacheKey) {
+    discoveryCache.set(cacheKey, {
+      expiresAt: Date.now() + resolveDiscoveryCacheMs(env),
+      result: cloneDiscoveryResult(result),
+    });
+  }
   return result;
 }

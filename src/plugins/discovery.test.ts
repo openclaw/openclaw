@@ -4,7 +4,7 @@ import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { clearPluginDiscoveryCache, discoverOpenClawPlugins } from "./discovery.js";
 import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
 import {
   cleanupTrackedTempDirs,
@@ -450,6 +450,8 @@ async function expectRejectedPackageExtensionEntry(params: {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
+  clearPluginDiscoveryCache();
   vi.restoreAllMocks();
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -2116,7 +2118,9 @@ describe("discoverOpenClawPlugins", () => {
     const pluginPath = path.join(globalExt, "fresh.ts");
     fs.writeFileSync(pluginPath, "export default function () {}", "utf-8");
 
-    const env = buildDiscoveryEnvWithOverrides(stateDir);
+    const env = buildDiscoveryEnvWithOverrides(stateDir, {
+      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+    });
     const first = discoverWithEnv({ env });
     expect(first.candidates.map((candidate) => candidate.idHint)).toContain("fresh");
 
@@ -2124,6 +2128,27 @@ describe("discoverOpenClawPlugins", () => {
 
     const second = discoverWithEnv({ env });
     expect(second.candidates.map((candidate) => candidate.idHint)).not.toContain("fresh");
+  });
+
+  it("keeps default discovery cache across short gateway poll intervals", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-12T20:00:00.000Z"));
+
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    mkdirSafe(globalExt);
+    const pluginPath = path.join(globalExt, "poll-cached.ts");
+    fs.writeFileSync(pluginPath, "export default function () {}", "utf-8");
+
+    const env = buildDiscoveryEnvWithOverrides(stateDir);
+    const first = discoverWithEnv({ env });
+    expect(first.candidates.map((candidate) => candidate.idHint)).toContain("poll-cached");
+
+    fs.rmSync(pluginPath, { force: true });
+    vi.advanceTimersByTime(1500);
+
+    const second = discoverWithEnv({ env });
+    expect(second.candidates.map((candidate) => candidate.idHint)).toContain("poll-cached");
   });
 
   it("discovers bundled and global plugins for each workspace-specific scan", () => {

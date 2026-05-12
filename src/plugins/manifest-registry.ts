@@ -183,6 +183,85 @@ export type PluginManifestRegistry = {
   diagnostics: PluginDiagnostic[];
 };
 
+const registryCache = new Map<string, { expiresAt: number; registry: PluginManifestRegistry }>();
+
+// Keep a short cache window to collapse bursty reloads and gateway poll loops.
+const DEFAULT_MANIFEST_CACHE_MS = 30_000;
+
+export function clearPluginManifestRegistryCache(): void {
+  registryCache.clear();
+}
+
+function resolveManifestCacheMs(env: NodeJS.ProcessEnv): number {
+  const raw = env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS?.trim();
+  if (raw === "" || raw === "0") {
+    return 0;
+  }
+  if (!raw) {
+    return DEFAULT_MANIFEST_CACHE_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_MANIFEST_CACHE_MS;
+  }
+  return Math.max(0, parsed);
+}
+
+function shouldUseManifestCache(env: NodeJS.ProcessEnv): boolean {
+  const disabled = env.OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE?.trim();
+  if (disabled) {
+    return false;
+  }
+  return resolveManifestCacheMs(env) > 0;
+}
+
+function clonePluginManifestRegistry(registry: PluginManifestRegistry): PluginManifestRegistry {
+  return {
+    plugins: [...registry.plugins],
+    diagnostics: [...registry.diagnostics],
+  };
+}
+
+function serializeInstallRecords(records: Record<string, PluginInstallRecord> | undefined): string {
+  if (!records) {
+    return "";
+  }
+  return JSON.stringify(
+    Object.entries(records).toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function buildCacheKey(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  plugins: ReturnType<typeof normalizePluginsConfigWithResolver>;
+  env: NodeJS.ProcessEnv;
+  installRecords?: Record<string, PluginInstallRecord>;
+}): string {
+  const workspaceKey = params.workspaceDir ? resolveUserPath(params.workspaceDir, params.env) : "";
+  // The manifest registry only depends on where plugins are discovered from and plugin policy.
+  const loadPaths = params.plugins.loadPaths
+    .map((p) => resolveUserPath(p, params.env))
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const envRootKeys = [
+    "HOME",
+    "OPENCLAW_HOME",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_BUNDLED_PLUGINS_DIR",
+    "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+    "OPENCLAW_VERSION",
+  ];
+  const envRootValues = envRootKeys.map((key) => [key, params.env[key] ?? ""]);
+  return JSON.stringify({
+    envRootValues,
+    installRecords: serializeInstallRecords(params.installRecords),
+    loadPaths,
+    plugins: params.config.plugins ?? null,
+    workspaceKey,
+  });
+}
+
 export type BundledChannelConfigCollector = (params: {
   pluginDir: string;
   manifest: PluginManifest;
@@ -814,11 +893,32 @@ export function loadPluginManifestRegistry(
     diagnostics?: PluginDiagnostic[];
     installRecords?: Record<string, PluginInstallRecord>;
     bundledChannelConfigCollector?: BundledChannelConfigCollector;
+    cache?: boolean;
   } = {},
 ): PluginManifestRegistry {
   const config = params.config ?? {};
   const normalized = normalizePluginsConfigWithResolver(config.plugins);
   const env = params.env ?? process.env;
+  const cacheEnabled =
+    params.cache !== false &&
+    !params.candidates &&
+    !params.bundledChannelConfigCollector &&
+    shouldUseManifestCache(env);
+  const cacheKey = cacheEnabled
+    ? buildCacheKey({
+        config,
+        plugins: normalized,
+        env,
+        ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+        ...(params.installRecords !== undefined ? { installRecords: params.installRecords } : {}),
+      })
+    : undefined;
+  if (cacheKey) {
+    const cached = registryCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return clonePluginManifestRegistry(cached.registry);
+    }
+  }
   let installRecords = params.installRecords;
   let installRecordsLoaded = Boolean(params.installRecords);
   const getInstallRecords = (): Record<string, PluginInstallRecord> => {
@@ -1030,5 +1130,11 @@ export function loadPluginManifestRegistry(
   }
 
   const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };
+  if (cacheKey) {
+    registryCache.set(cacheKey, {
+      expiresAt: Date.now() + resolveManifestCacheMs(env),
+      registry: clonePluginManifestRegistry(registry),
+    });
+  }
   return registry;
 }
