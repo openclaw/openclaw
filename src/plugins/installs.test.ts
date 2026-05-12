@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildNpmResolutionInstallFields,
   recordPluginInstall,
@@ -93,6 +93,9 @@ describe("recordPluginInstall", () => {
   });
 
   it("updates install record maps without a config-shaped carrier", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-11T04:00:00.000Z"));
+
     const next = recordPluginInstallInRecordMap(
       {
         demo: {
@@ -104,10 +107,12 @@ describe("recordPluginInstall", () => {
       { pluginId: "demo", source: "npm", spec: "demo@latest" },
     );
 
-    expect(next.demo).toMatchObject({
-      source: "npm",
-      spec: "demo@latest",
+    expect(next).toEqual({
+      demo: {
+        source: "npm",
+        spec: "demo@latest",
+        installedAt: "2026-05-11T04:00:00.000Z",
+      },
     });
-    expect(typeof next.demo?.installedAt).toBe("string");
   });
 });
