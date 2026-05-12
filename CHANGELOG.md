@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 - fix(node-pairing): replace changed pending requests [AI]. (#80894) Thanks @pgondhi987.
 - Rate limit Google Chat webhook requests [AI]. (#80974) Thanks @pgondhi987.
 - Docker: mount the auth-profile secret key directory so OAuth-backed auth profiles survive container rebuilds. (#80991)
+- Onboarding: accept Codex auth profiles for canonical OpenAI model checks, avoiding false missing-auth warnings. (#80913) Thanks @rubencu.
 - fix(feishu): normalize webhook rate-limit client keys [AI]. (#80975) Thanks @pgondhi987.
 - fix(auth): prevent bootstrap pairing scope changes [AI]. (#80976) Thanks @pgondhi987.
 - Validate Control UI loopback retry endpoints [AI]. (#80900) Thanks @pgondhi987.
