@@ -352,6 +352,24 @@ describe("install.sh", () => {
     expect(result?.stdout).toContain(`missing=${openclawBin.replace(/ /g, "\\ ")}`);
     expect(result?.stdout).toContain("present=openclaw");
   });
+
+  it("guards 'Starting setup' + onboard exec behind skip_onboard=false (#66785)", () => {
+    // Existing-config detection inside the finalization branch sets
+    // skip_onboard=true after running doctor, but on current main the script
+    // fell through to "Starting setup" and `exec "$claw" onboard` regardless.
+    // Pin the guard so the regression cannot return.
+    const guard =
+      'if [[ "$skip_onboard" != "true" ]]; then\n                ui_info "Starting setup"';
+    expect(script).toContain(guard);
+
+    // No bare "Starting setup" emission outside the skip_onboard guard inside
+    // the install-finalization branch — every emission must be preceded by the
+    // guard check at the same indent level.
+    const startingSetupEmissions = script
+      .split("\n")
+      .filter((line) => line.includes('ui_info "Starting setup"'));
+    expect(startingSetupEmissions).toHaveLength(1);
+  });
 });
 
 describe("install.sh macOS Homebrew Node behavior", () => {
