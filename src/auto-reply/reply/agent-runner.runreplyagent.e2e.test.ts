@@ -1077,6 +1077,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       payloads: [{ text: "NO_REPLY" }],
       messagingToolSentTexts: ["  "],
       messagingToolSentMediaUrls: ["\t"],
+      messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
       meta: {},
     });
     const fallbackSpy = vi

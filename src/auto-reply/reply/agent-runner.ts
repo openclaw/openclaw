@@ -8,7 +8,6 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { hasCommittedMessagingToolDeliveryEvidence } from "../../agents/pi-embedded-runner/delivery-evidence.js";
 import {
   formatEmbeddedPiQueueFailureSummary,
   queueEmbeddedPiMessageWithOutcome,
@@ -139,17 +138,21 @@ function buildSilentFallbackFailurePayload(params: {
   });
 }
 
+function hasNonEmptyStringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.some((entry) => typeof entry === "string" && entry.trim());
+}
+
 function hasSuccessfulSideEffectDelivery(params: {
   blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
   directlySentBlockKeys?: Set<string>;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
-  messagingToolSentTargets?: unknown[];
 }): boolean {
   return Boolean(
     (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
-    hasCommittedMessagingToolDeliveryEvidence(params),
+    hasNonEmptyStringArray(params.messagingToolSentTexts) ||
+    hasNonEmptyStringArray(params.messagingToolSentMediaUrls),
   );
 }
 
