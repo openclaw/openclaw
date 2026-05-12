@@ -54,6 +54,31 @@ describe("resolveCommandConfigWithSecrets", () => {
     });
   });
 
+  it("routes diagnostics to stderr for json commands", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as const;
+    const config = { channels: {} };
+    const resolvedConfig = { channels: { discord: {} } };
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig,
+      diagnostics: [
+        'status --json: failed to resolve channels.discord.token locally (Environment variable "DISCORD_BOT_TOKEN" is missing or empty.).',
+      ],
+    });
+
+    await resolveCommandConfigWithSecrets({
+      config,
+      commandName: "status --json",
+      targetIds: new Set(["channels.discord.token"]),
+      mode: "read_only_status",
+      runtime,
+    });
+
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      '[secrets] status --json: failed to resolve channels.discord.token locally (Environment variable "DISCORD_BOT_TOKEN" is missing or empty.).',
+    );
+  });
+
   it("returns auto-enabled config when requested", async () => {
     const resolvedConfig = { channels: {} };
     const effectiveConfig = { channels: {}, plugins: { allow: ["telegram"] } };
