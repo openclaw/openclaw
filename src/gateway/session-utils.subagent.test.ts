@@ -1122,8 +1122,8 @@ describe("loadCombinedSessionEntriesForGateway includes SQLite-registered agents
       } as OpenClawConfig;
 
       const { entries } = loadCombinedSessionEntriesForGateway(cfg);
-      expect(entries["agent:main:main"]).toBeDefined();
-      expect(entries["agent:codex:acp-task"]).toBeDefined();
+      expect(entries["agent:main:main"]?.sessionId).toBe("s-main");
+      expect(entries["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
     });
   });
 
@@ -1151,7 +1151,7 @@ describe("loadCombinedSessionEntriesForGateway includes SQLite-registered agents
 
       const { entries } = loadCombinedSessionEntriesForGateway(cfg, { agentId: "codex" });
 
-      expect(entries["agent:codex:acp-task"]).toBeDefined();
+      expect(entries["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
       expect(entries["agent:main:main"]).toBeUndefined();
     });
   });
