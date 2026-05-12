@@ -129,7 +129,8 @@ function deliveryContextPeerId(context: DeliveryContext | undefined): string | u
 export function conversationIdentityFromSessionEntry(
   entry: SessionEntry,
 ): ConversationIdentity | null {
-  const deliveryContext = deliveryContextFromSession(entry);
+  const deliveryContext =
+    normalizeDeliveryContext(entry.deliveryContext) ?? deliveryContextFromSession(entry);
   const kind = normalizeKind(entry.chatType);
   const channel = deliveryContext?.channel ?? normalizeText(entry.channel);
   const peerId =

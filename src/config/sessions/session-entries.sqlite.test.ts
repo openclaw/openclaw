@@ -689,10 +689,7 @@ describe("SQLite session row backend", () => {
           .select(["session_id", "session_key"])
           .orderBy("updated_at", "asc"),
       ).rows,
-    ).toEqual([
-      { session_id: "first-session", session_key: "discord:ops" },
-      { session_id: "second-session", session_key: "discord:ops" },
-    ]);
+    ).toEqual([{ session_id: "second-session", session_key: "discord:ops" }]);
   });
 
   it("updates one session entry without replacing the whole SQLite store", async () => {

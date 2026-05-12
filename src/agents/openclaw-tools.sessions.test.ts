@@ -294,7 +294,10 @@ describe("sessions tools", () => {
               kind: "direct",
               sessionId: "s-main",
               updatedAt: 10,
-              lastChannel: "whatsapp",
+              deliveryContext: {
+                channel: "whatsapp",
+                to: "+1555",
+              },
               derivedTitle: "Main mailbox",
               lastMessagePreview: "Latest assistant update",
             },
@@ -504,11 +507,40 @@ describe("sessions tools", () => {
         }>;
       };
       expect(details.sessions).toStrictEqual([
-        expect.objectContaining({
+        {
+          key: "agent:main:main",
+          agentId: "main",
+          kind: "other",
+          channel: "unknown",
+          spawnedBy: undefined,
+          label: undefined,
+          displayName: undefined,
           derivedTitle: "Visible project kickoff",
           key: "agent:main:main",
           lastMessagePreview: "Visible latest reply",
-        }),
+          parentSessionKey: undefined,
+          deliveryContext: undefined,
+          updatedAt: 20,
+          sessionId: "visible",
+          model: undefined,
+          contextTokens: undefined,
+          totalTokens: undefined,
+          estimatedCostUsd: undefined,
+          status: undefined,
+          startedAt: undefined,
+          endedAt: undefined,
+          runtimeMs: undefined,
+          childSessions: undefined,
+          thinkingLevel: undefined,
+          fastMode: undefined,
+          verboseLevel: undefined,
+          reasoningLevel: undefined,
+          elevatedLevel: undefined,
+          responseUsage: undefined,
+          systemSent: undefined,
+          abortedLastRun: undefined,
+          sendPolicy: undefined,
+        },
       ]);
       expect(JSON.stringify(details.sessions)).not.toContain("Hidden");
     } finally {

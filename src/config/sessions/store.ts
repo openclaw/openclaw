@@ -210,6 +210,7 @@ export async function recordSessionMetaFromInbound(params: {
 
 export async function updateLastRoute(params: {
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   sessionKey: string;
   channel?: SessionEntry["channel"];
   to?: string;
@@ -225,6 +226,7 @@ export async function updateLastRoute(params: {
   const rowOptions = resolveSessionRowOptionsFromSessionKey({
     agentId: params.agentId,
     sessionKey,
+    env: params.env,
   });
   const normalizedKey = normalizeSessionRowKey(sessionKey);
   const existing = getSessionEntry({ ...rowOptions, sessionKey });
@@ -275,6 +277,10 @@ export async function updateLastRoute(params: {
   const basePatch: Partial<SessionEntry> = {
     channel: normalized.deliveryContext?.channel,
     deliveryContext: normalized.deliveryContext,
+    lastChannel: normalized.lastChannel,
+    lastTo: normalized.lastTo,
+    lastAccountId: normalized.lastAccountId,
+    lastThreadId: normalized.lastThreadId,
   };
   const next = mergeSessionEntryPreserveActivity(
     existing,

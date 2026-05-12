@@ -13,6 +13,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { type OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
   conversationIdentityFromSessionEntry,
   type ConversationIdentity,
@@ -131,6 +132,18 @@ function clearCompatibilityRoutingShadow(
   delete entry.lastThreadId;
 }
 
+function projectCompatibilityRoutingShadow(entry: SessionEntry): void {
+  const deliveryContext = normalizeDeliveryContext(entry.deliveryContext);
+  if (!deliveryContext?.channel || !deliveryContext.to) {
+    return;
+  }
+  entry.deliveryContext = deliveryContext;
+  entry.lastChannel = deliveryContext.channel;
+  entry.lastTo = deliveryContext.to;
+  entry.lastAccountId = deliveryContext.accountId;
+  entry.lastThreadId = deliveryContext.threadId;
+}
+
 function projectTypedSessionColumns(row: SessionEntryRow): SessionEntry | null {
   const parsed = parseSessionEntry(row);
   const sessionId = optionalString(row.typed_session_id) ?? parsed?.sessionId;
@@ -223,6 +236,7 @@ function projectTypedSessionColumns(row: SessionEntryRow): SessionEntry | null {
   if (displayName) {
     next.displayName = displayName;
   }
+  projectCompatibilityRoutingShadow(next);
   return next;
 }
 
@@ -854,7 +868,6 @@ export function loadSqliteSessionEntries(
       entries[row.session_key] = entry;
     }
   }
-  normalizeSessionEntries(entries);
   return entries;
 }
 

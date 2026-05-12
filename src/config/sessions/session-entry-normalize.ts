@@ -14,6 +14,10 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   const normalized = normalizeSessionDeliveryFields({
     channel: entry.channel,
     deliveryContext: entry.deliveryContext,
+    lastChannel: legacyEntry.lastChannel,
+    lastTo: legacyEntry.lastTo,
+    lastAccountId: legacyEntry.lastAccountId,
+    lastThreadId: legacyEntry.lastThreadId,
   });
   const nextDelivery = normalized.deliveryContext;
   const sameDelivery =

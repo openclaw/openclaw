@@ -395,8 +395,8 @@ describe("session history HTTP endpoints", () => {
                 updated_at: row.updatedAt,
               })
               .onConflict((conflict) =>
-                conflict.column("session_id").doUpdateSet({
-                  session_key: (eb) => eb.ref("excluded.session_key"),
+                conflict.column("session_key").doUpdateSet({
+                  session_id: (eb) => eb.ref("excluded.session_id"),
                   entry_json: (eb) => eb.ref("excluded.entry_json"),
                   updated_at: (eb) => eb.ref("excluded.updated_at"),
                 }),
