@@ -83,6 +83,9 @@ describe("shared ip helpers", () => {
     expect(isLinkLocalIpAddress("2852039166")).toBe(true);
     expect(isLinkLocalIpAddress("0xa9fea9fe")).toBe(true);
     expect(isLinkLocalIpAddress("0xa9.0xfe.0xa9.0xfe")).toBe(true);
+    expect(isLinkLocalIpAddress("64:ff9b::169.254.169.254")).toBe(true);
+    expect(isLinkLocalIpAddress("64:ff9b:1::a9fe:a9fe")).toBe(true);
+    expect(isLinkLocalIpAddress("2002:a9fe:a9fe::")).toBe(true);
     expect(isLinkLocalIpAddress("fe80::1%lo0")).toBe(true);
     expect(isLinkLocalIpAddress("[fe80::1]")).toBe(true);
     expect(isLinkLocalIpAddress("10.0.0.5")).toBe(false);

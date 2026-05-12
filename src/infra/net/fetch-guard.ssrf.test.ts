@@ -700,6 +700,23 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("blocks exact-origin private DNS when it resolves to embedded IPv6 link-local metadata IPs", async () => {
+    const lookupFn: LookupFn = vi.fn(async () => [
+      { address: "64:ff9b::a9fe:a9fe", family: 6 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://model.lan:11434/v1/models",
+        fetchImpl,
+        lookupFn,
+        policy: { allowedOrigins: ["http://model.lan:11434"] },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("blocks exact-origin private DNS when it resolves to non-link-local metadata IPs", async () => {
     const lookupFn: LookupFn = vi.fn(async () => [
       { address: "100.100.100.200", family: 4 },
