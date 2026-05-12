@@ -55,7 +55,11 @@ function logDeviceTokenRotationDenied(params: {
   log: { warn: (message: string) => void };
   deviceId: string;
   role: string;
-  reason: RotateDeviceTokenDenyReason | "unknown-device-or-role" | "device-ownership-mismatch";
+  reason:
+    | RotateDeviceTokenDenyReason
+    | "unknown-device-or-role"
+    | "device-ownership-mismatch"
+    | "role-management-requires-admin";
   scope?: string | null;
 }) {
   const suffix = params.scope ? ` scope=${params.scope}` : "";
@@ -68,7 +72,10 @@ function logDeviceTokenRevocationDenied(params: {
   log: { warn: (message: string) => void };
   deviceId: string;
   role: string;
-  reason: RevokeDeviceTokenDenyReason | "device-ownership-mismatch";
+  reason:
+    | RevokeDeviceTokenDenyReason
+    | "device-ownership-mismatch"
+    | "role-management-requires-admin";
   scope?: string | null;
 }) {
   const suffix = params.scope ? ` scope=${params.scope}` : "";
@@ -111,6 +118,17 @@ function deniesCrossDeviceManagement(authz: DeviceManagementAuthz): boolean {
 
 function shouldReturnRotatedDeviceToken(authz: DeviceManagementAuthz): boolean {
   return Boolean(authz.callerDeviceId && authz.callerDeviceId === authz.normalizedTargetDeviceId);
+}
+
+function deniesDeviceTokenRoleManagement(
+  authz: DeviceManagementAuthz,
+  targetRole: string,
+): boolean {
+  const normalizedTargetRole = targetRole.trim();
+  if (!normalizedTargetRole || authz.isAdminCaller) {
+    return false;
+  }
+  return normalizedTargetRole !== "operator";
 }
 
 export const deviceHandlers: GatewayRequestHandlers = {
@@ -341,6 +359,20 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (deniesDeviceTokenRoleManagement(authz, role)) {
+      logDeviceTokenRotationDenied({
+        log: context.logGateway,
+        deviceId,
+        role,
+        reason: "role-management-requires-admin",
+      });
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_TOKEN_ROTATION_DENIED_MESSAGE),
+      );
+      return;
+    }
     const rotated = await rotateDeviceToken({
       deviceId,
       role,
@@ -401,6 +433,20 @@ export const deviceHandlers: GatewayRequestHandlers = {
       context.logGateway.warn(
         `device token revocation denied device=${deviceId} role=${role} reason=device-ownership-mismatch`,
       );
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_TOKEN_REVOCATION_DENIED_MESSAGE),
+      );
+      return;
+    }
+    if (deniesDeviceTokenRoleManagement(authz, role)) {
+      logDeviceTokenRevocationDenied({
+        log: context.logGateway,
+        deviceId,
+        role,
+        reason: "role-management-requires-admin",
+      });
       respond(
         false,
         undefined,
