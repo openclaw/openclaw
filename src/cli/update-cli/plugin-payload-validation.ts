@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { resolvePackageExtensionEntries, type PackageManifest } from "../../plugins/manifest.js";
 import { resolveUserPath } from "../../utils.js";
 
 export type PluginPayloadSmokeFailureReason =
@@ -8,7 +9,8 @@ export type PluginPayloadSmokeFailureReason =
   | "missing-package-dir"
   | "missing-package-json"
   | "invalid-package-json"
-  | "missing-main-entry";
+  | "missing-main-entry"
+  | "missing-extension-entry";
 
 export type PluginPayloadSmokeFailure = {
   pluginId: string;
@@ -27,7 +29,7 @@ const TRACKED_SOURCES: ReadonlySet<string> = new Set(["npm", "clawhub", "git", "
 /**
  * Verify that each tracked plugin install record on disk is structurally
  * loadable: the install dir exists, contains a parseable `package.json`,
- * and the resolved main entry exists.
+ * and any declared package entry files exist.
  *
  * IMPORTANT: this is intentionally a *static* check. We do NOT execute the
  * plugin's code, so post-update side effects (network calls, filesystem
@@ -50,8 +52,12 @@ export async function runPluginPayloadSmokeCheck(params: {
     }
     const rawInstallPath = typeof record.installPath === "string" ? record.installPath.trim() : "";
     if (!rawInstallPath) {
-      // Upstream payload validator already reports `missing-install-path`;
-      // skip here to avoid duplicate noise.
+      checked.push(pluginId);
+      failures.push({
+        pluginId,
+        reason: "missing-install-path",
+        detail: "Install path is missing from the plugin install record.",
+      });
       continue;
     }
     const installPath = resolveUserPath(rawInstallPath, params.env);
@@ -80,7 +86,7 @@ export async function runPluginPayloadSmokeCheck(params: {
       continue;
     }
 
-    let manifest: { main?: unknown; exports?: unknown; openclaw?: unknown };
+    let manifest: PackageManifest & { main?: unknown; exports?: unknown };
     try {
       manifest = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as typeof manifest;
     } catch (err) {
@@ -93,12 +99,26 @@ export async function runPluginPayloadSmokeCheck(params: {
       continue;
     }
 
+    const extensionResolution = resolvePackageExtensionEntries(manifest);
+    if (extensionResolution.status === "ok") {
+      for (const extensionRel of extensionResolution.entries) {
+        const extensionPath = path.join(installPath, extensionRel);
+        const extensionStat = await safeStat(extensionPath);
+        if (!extensionStat?.isFile()) {
+          failures.push({
+            pluginId,
+            installPath,
+            reason: "missing-extension-entry",
+            detail: `Plugin extension entry "${extensionRel}" not found at ${extensionPath}`,
+          });
+        }
+      }
+    }
+
     // Only fail on `missing-main-entry` when `main` is *explicitly declared*
-    // and absent on disk. OpenClaw plugins use multiple entry mechanisms
-    // (`main`, `exports`, `openclaw.extensions`); fully resolving `exports`
-    // conditional sub-keys is out of scope for a static smoke check, so we
-    // are intentionally permissive: if `main` is not declared we trust the
-    // package and stop at the dir/package.json existence checks above.
+    // and absent on disk. Fully resolving `exports` conditional sub-keys is
+    // out of scope for a static smoke check, so packages with only `exports`
+    // remain intentionally permissive.
     if (typeof manifest.main !== "string" || !manifest.main.trim()) {
       continue;
     }

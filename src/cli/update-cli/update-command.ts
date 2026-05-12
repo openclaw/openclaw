@@ -2557,10 +2557,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     } else {
       defaultRuntime.error(theme.error("Update failed during plugin post-update sync."));
     }
-    await maybeRestartServiceAfterFailedPackageUpdate({
-      prePackageServiceStop,
-      jsonMode: Boolean(opts.json),
-    });
     defaultRuntime.exit(1);
     return;
   }

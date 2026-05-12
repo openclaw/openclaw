@@ -153,6 +153,35 @@ describe("runPostCorePluginConvergence", () => {
     ]);
   });
 
+  it("flags errored=true when smoke check finds a missing install path", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      records: { brave: { source: "npm" } },
+    });
+    mocks.runPluginPayloadSmokeCheck.mockResolvedValue({
+      checked: ["brave"],
+      failures: [
+        {
+          pluginId: "brave",
+          reason: "missing-install-path",
+          detail: "Install path is missing from the plugin install record.",
+        },
+      ],
+    });
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { entries: { brave: { enabled: true } } },
+      } as unknown as OpenClawConfig,
+      env: {},
+    });
+    expect(result.errored).toBe(true);
+    expect(result.warnings[0]).toMatchObject({
+      pluginId: "brave",
+      reason: expect.stringContaining("missing-install-path"),
+    });
+  });
+
   it("hands repair's post-mutation records straight to the smoke check (no second disk read)", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: ["Repaired"],

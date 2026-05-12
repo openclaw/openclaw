@@ -114,17 +114,36 @@ describe("runPluginPayloadSmokeCheck", () => {
     expect(result.failures).toEqual([]);
   });
 
-  it("accepts a manifest that declares only `openclaw.extensions` and no `main`", async () => {
+  it("accepts a manifest that declares an existing `openclaw.extensions` entry and no `main`", async () => {
     const dir = path.join(tmpRoot, "brave");
     await writePackage(dir, {
       name: "@openclaw/brave-plugin",
       openclaw: { extensions: ["./index.js"] },
     });
+    await fs.writeFile(path.join(dir, "index.js"), "export default {};\n", "utf8");
     const result = await runPluginPayloadSmokeCheck({
       records: { brave: { source: "npm", installPath: dir } },
       env: {},
     });
     expect(result.failures).toEqual([]);
+  });
+
+  it("reports a failure when an `openclaw.extensions` entry file is missing", async () => {
+    const dir = path.join(tmpRoot, "brave");
+    await writePackage(dir, {
+      name: "@openclaw/brave-plugin",
+      openclaw: { extensions: ["./dist/index.js"] },
+    });
+    const result = await runPluginPayloadSmokeCheck({
+      records: { brave: { source: "npm", installPath: dir } },
+      env: {},
+    });
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toMatchObject({
+      pluginId: "brave",
+      reason: "missing-extension-entry",
+    });
+    expect(result.failures[0]?.detail).toContain("./dist/index.js");
   });
 
   it("reports a failure when `main` resolves to a directory rather than a file", async () => {
@@ -183,15 +202,21 @@ describe("runPluginPayloadSmokeCheck", () => {
     });
   });
 
-  it("skips records without an installPath (handled by upstream payload check)", async () => {
+  it("reports a failure when an install record is missing installPath", async () => {
     const result = await runPluginPayloadSmokeCheck({
       records: {
         discord: { source: "npm" } as unknown as { source: "npm"; installPath?: string },
       },
       env: {},
     });
-    expect(result.checked).toEqual([]);
-    expect(result.failures).toEqual([]);
+    expect(result.checked).toEqual(["discord"]);
+    expect(result.failures).toEqual([
+      {
+        pluginId: "discord",
+        reason: "missing-install-path",
+        detail: "Install path is missing from the plugin install record.",
+      },
+    ]);
   });
 
   it("only checks records whose source is package-tracked (npm/clawhub/git/marketplace)", async () => {
