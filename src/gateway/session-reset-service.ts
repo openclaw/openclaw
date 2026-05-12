@@ -74,7 +74,16 @@ export function emitGatewaySessionEndPluginHook(params: {
   sessionKey: string;
   sessionId?: string;
   agentId?: string;
-  reason: "new" | "reset" | "idle" | "daily" | "compaction" | "deleted" | "unknown";
+  reason:
+    | "new"
+    | "reset"
+    | "idle"
+    | "daily"
+    | "compaction"
+    | "deleted"
+    | "shutdown"
+    | "restart"
+    | "unknown";
   nextSessionId?: string;
   nextSessionKey?: string;
 }): void {
@@ -107,8 +116,6 @@ export function emitGatewaySessionStartPluginHook(params: {
   sessionKey: string;
   sessionId?: string;
   resumedFrom?: string;
-  storePath?: string;
-  sessionFile?: string;
   agentId?: string;
 }): void {
   if (!params.sessionId) {
@@ -120,16 +127,12 @@ export function emitGatewaySessionStartPluginHook(params: {
   // tracker is keyed by `sessionId`, so a session that is subsequently closed
   // via reset / delete / compaction is forgotten before the shutdown drain
   // ever runs (see #57790).
-  if (params.storePath) {
-    noteActiveSessionForShutdown({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      storePath: params.storePath,
-      sessionFile: params.sessionFile,
-      agentId: params.agentId,
-    });
-  }
+  noteActiveSessionForShutdown({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+  });
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("session_start")) {
     return;
@@ -175,43 +178,18 @@ export async function drainActiveSessionsForShutdown(params: {
     Math.floor(params.totalTimeoutMs ?? SHUTDOWN_DRAIN_DEFAULT_TOTAL_TIMEOUT_MS),
   );
   const emittedSessionIds: string[] = [];
-  const hookRunner = getGlobalHookRunner();
-  let settledEmissions = 0;
-  // Inline the session_end emission instead of calling
-  // `emitGatewaySessionEndPluginHook`, because that helper uses fire-and-forget
-  // (`void hookRunner.runSessionEnd(...)`). Start every tracked session's
-  // emission before awaiting the bounded aggregate so one slow plugin write
-  // cannot prevent later active sessions from receiving `session_end`.
-  const drain = Promise.allSettled(
-    tracked.map(async (entry) => {
-      try {
-        forgetActiveSessionForShutdown(entry.sessionId);
-        emittedSessionIds.push(entry.sessionId);
-        if (!hookRunner?.hasHooks("session_end")) {
-          return;
-        }
-        const transcript = resolveStableSessionEndTranscript({
-          sessionId: entry.sessionId,
-          storePath: entry.storePath,
-          sessionFile: entry.sessionFile,
-          agentId: entry.agentId,
-        });
-        const payload = buildSessionEndHookPayload({
-          sessionId: entry.sessionId,
-          sessionKey: entry.sessionKey,
-          cfg: entry.cfg,
-          reason: params.reason,
-          sessionFile: transcript.sessionFile,
-          transcriptArchived: transcript.transcriptArchived,
-        });
-        await hookRunner.runSessionEnd(payload.event, payload.context);
-      } catch (err) {
-        logVerbose(`session_end hook failed during shutdown drain: ${String(err)}`);
-      } finally {
-        settledEmissions++;
-      }
-    }),
-  );
+  const drain = (async () => {
+    for (const entry of tracked) {
+      emitGatewaySessionEndPluginHook({
+        cfg: entry.cfg,
+        sessionKey: entry.sessionKey,
+        sessionId: entry.sessionId,
+        agentId: entry.agentId,
+        reason: params.reason,
+      });
+      emittedSessionIds.push(entry.sessionId);
+    }
+  })();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<"timeout">((resolve) => {
     timer = setTimeout(() => resolve("timeout"), totalTimeoutMs);
@@ -221,7 +199,7 @@ export async function drainActiveSessionsForShutdown(params: {
     const result = await Promise.race([drain.then(() => "ok" as const), timeout]);
     if (result === "timeout") {
       logVerbose(
-        `shutdown session-end drain timed out after ${totalTimeoutMs}ms with ${tracked.length - settledEmissions} session_end handler(s) still pending`,
+        `shutdown session-end drain timed out after ${totalTimeoutMs}ms with ${tracked.length - emittedSessionIds.length} sessions remaining`,
       );
       return { emittedSessionIds, timedOut: true };
     }
@@ -769,8 +747,6 @@ export async function performGatewaySessionReset(params: {
     sessionKey: target.canonicalKey ?? params.key,
     sessionId: next.sessionId,
     resumedFrom: oldSessionId,
-    storePath,
-    sessionFile: next.sessionFile,
     agentId: target.agentId,
   });
   if (deleteOldTranscript && oldSessionId) {

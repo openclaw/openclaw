@@ -29,23 +29,19 @@ describe("active-sessions-shutdown-tracker", () => {
       cfg,
       sessionKey: "agent:main:main",
       sessionId: "session-A",
-      storePath: "/tmp/store.json",
-      sessionFile: "/tmp/old.jsonl",
       agentId: "main",
     });
     noteActiveSessionForShutdown({
       cfg,
       sessionKey: "agent:main:main",
       sessionId: "session-A",
-      storePath: "/tmp/store.json",
-      sessionFile: "/tmp/new.jsonl",
       agentId: "main",
     });
 
     const entries = listActiveSessionsForShutdown();
     expect(entries).toHaveLength(1);
     expect(entries[0].sessionId).toBe("session-A");
-    expect(entries[0].sessionFile).toBe("/tmp/new.jsonl");
+    expect(entries[0].agentId).toBe("main");
   });
 
   it("ignores empty sessionId notes", () => {
@@ -53,7 +49,6 @@ describe("active-sessions-shutdown-tracker", () => {
       cfg,
       sessionKey: "agent:main:main",
       sessionId: "",
-      storePath: "/tmp/store.json",
     });
 
     expect(listActiveSessionsForShutdown()).toEqual([]);
@@ -64,13 +59,11 @@ describe("active-sessions-shutdown-tracker", () => {
       cfg,
       sessionKey: "agent:main:main",
       sessionId: "session-A",
-      storePath: "/tmp/store.json",
     });
     noteActiveSessionForShutdown({
       cfg,
       sessionKey: "agent:main:other",
       sessionId: "session-B",
-      storePath: "/tmp/store.json",
     });
 
     forgetActiveSessionForShutdown("session-A");
@@ -84,7 +77,6 @@ describe("active-sessions-shutdown-tracker", () => {
       cfg,
       sessionKey: "agent:main:main",
       sessionId: "session-A",
-      storePath: "/tmp/store.json",
     });
 
     forgetActiveSessionForShutdown("does-not-exist");
@@ -98,7 +90,6 @@ describe("active-sessions-shutdown-tracker", () => {
       cfg,
       sessionKey: "agent:main:main",
       sessionId: "session-A",
-      storePath: "/tmp/store.json",
     });
 
     const snapshot = listActiveSessionsForShutdown();
@@ -112,13 +103,11 @@ describe("active-sessions-shutdown-tracker", () => {
       cfg,
       sessionKey: "agent:main:a",
       sessionId: "session-A",
-      storePath: "/tmp/store.json",
     });
     noteActiveSessionForShutdown({
       cfg,
       sessionKey: "agent:main:b",
       sessionId: "session-B",
-      storePath: "/tmp/store.json",
     });
 
     clearActiveSessionsForShutdownTracker();
