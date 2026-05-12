@@ -555,7 +555,7 @@ async function handleSlackExecApprovalInteraction(params: {
   const isPluginApproval = approval.approvalId.startsWith("plugin:");
   const authorized = isPluginApproval
     ? pluginApprovalAuthorizedSender
-    : execApprovalAuthorizedSender;
+    : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
   const allowPluginFallback = !isPluginApproval && pluginApprovalAuthorizedSender;
   if (!authorized) {
     params.ctx.runtime.log?.(

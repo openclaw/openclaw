@@ -1041,6 +1041,80 @@ describe("registerSlackInteractionEvents", () => {
     expect(respond).not.toHaveBeenCalled();
   });
 
+  it("allows unprefixed plugin approval fallback from plugin approvers", async () => {
+    const { ctx, app, getHandler } = createContext({
+      cfg: {
+        channels: {
+          slack: {
+            accounts: {
+              default: {
+                allowFrom: ["U123OWNER"],
+                execApprovals: {
+                  enabled: true,
+                  approvers: ["U999EXEC"],
+                  target: "both",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      respond,
+      body: {
+        user: { id: "U123OWNER" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200" },
+        message: {
+          ts: "100.200",
+          text: "Plugin approval required",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "plugin_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "plugin_actions",
+        value: "/approve req-legacy allow-once",
+        text: { type: "plain_text", text: "Allow once" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      approvalId: "req-legacy",
+      decision: "allow-once",
+      senderId: "U123OWNER",
+      allowPluginFallback: true,
+      clientDisplayName: "Slack approval (U123OWNER)",
+    });
+    expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
+    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expectRecordFields(chatUpdateCall(app), {
+      channel: "C1",
+      ts: "100.200",
+      text: "Plugin approval required",
+      blocks: [],
+    });
+    expect(respond).not.toHaveBeenCalled();
+  });
+
   it("rejects plugin approval buttons from exec-only approvers", async () => {
     const { ctx, app, getHandler } = createContext({
       cfg: {
