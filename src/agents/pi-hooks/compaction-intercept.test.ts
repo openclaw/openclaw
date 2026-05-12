@@ -96,12 +96,16 @@ function makeCtx(
     tokens: number | null;
   }> = {},
 ) {
+  // `"tokens" in overrides` distinguishes "explicitly set to null" from "not
+  // overridden" — `??` would swallow an explicit null and substitute the
+  // default, which breaks the null-tokens contract test.
+  const tokensResolved = "tokens" in overrides ? overrides.tokens : 232_000;
   return {
     sessionManager,
     cwd: "/stub",
     getContextUsage: () => ({
       contextWindow: overrides.contextWindow ?? 258_000,
-      tokens: overrides.tokens ?? 232_000,
+      tokens: tokensResolved,
       percent: 0.9,
     }),
   } as unknown as ExtensionContext;
