@@ -3125,6 +3125,139 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(npmInstallCall()?.trustedSourceLinkedOfficialInstall).toBe(true);
   });
 
+  it("preserves expected integrity for ClawHub-to-npm fallback reinstalls", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromClawHubMock.mockResolvedValue({
+      ok: false,
+      code: "package_not_found",
+      error: "Package not found on ClawHub.",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "legacy-chat",
+        targetDir: "/tmp/openclaw-plugins/legacy-chat",
+        version: "2.0.0",
+      }),
+    );
+    const onIntegrityDrift = vi.fn(async () => false);
+
+    await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          preferredSource: "clawhub",
+          clawhubSpec: "clawhub:legacy-chat@2026.5.1-beta.2",
+          npmSpec: "@openclaw/legacy-chat@2.0.0",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config: {
+        channels: {
+          "legacy-chat": {
+            enabled: true,
+          },
+        },
+        plugins: {
+          installs: {
+            "legacy-chat": {
+              source: "npm",
+              spec: "@openclaw/legacy-chat@2.0.0",
+              integrity: "sha512-original",
+              installPath: "/tmp/openclaw-plugins/legacy-chat",
+            },
+          },
+        },
+      },
+      onIntegrityDrift,
+    });
+
+    expect(npmInstallCall()?.spec).toBe("@openclaw/legacy-chat@2.0.0");
+    expect(npmInstallCall()?.expectedPluginId).toBe("legacy-chat");
+    expect(npmInstallCall()?.expectedIntegrity).toBe("sha512-original");
+    expect(npmInstallCall()?.onIntegrityDrift).toBeTypeOf("function");
+    const driftHandler = npmInstallCall()?.onIntegrityDrift;
+    if (typeof driftHandler !== "function") {
+      throw new Error("Expected fallback npm install to include an integrity drift handler");
+    }
+    await expect(
+      driftHandler({
+        spec: "@openclaw/legacy-chat@2.0.0",
+        expectedIntegrity: "sha512-original",
+        actualIntegrity: "sha512-replaced",
+        resolution: {
+          name: "@openclaw/legacy-chat",
+          version: "2.0.0",
+          resolvedSpec: "@openclaw/legacy-chat@2.0.0",
+          integrity: "sha512-replaced",
+          resolvedAt: "2026-05-12T00:00:00.000Z",
+        },
+      }),
+    ).resolves.toBe(false);
+    expect(onIntegrityDrift).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "legacy-chat",
+        spec: "@openclaw/legacy-chat@2.0.0",
+        expectedIntegrity: "sha512-original",
+        actualIntegrity: "sha512-replaced",
+        resolvedSpec: "@openclaw/legacy-chat@2.0.0",
+        resolvedVersion: "2.0.0",
+        dryRun: false,
+      }),
+    );
+  });
+
+  it("does not reuse fallback npm integrity when the fallback spec changes", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromClawHubMock.mockResolvedValue({
+      ok: false,
+      code: "package_not_found",
+      error: "Package not found on ClawHub.",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "legacy-chat",
+        targetDir: "/tmp/openclaw-plugins/legacy-chat",
+        version: "2.0.1",
+      }),
+    );
+
+    await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          preferredSource: "clawhub",
+          clawhubSpec: "clawhub:legacy-chat@2026.5.1-beta.2",
+          npmSpec: "@openclaw/legacy-chat@2.0.1",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config: {
+        channels: {
+          "legacy-chat": {
+            enabled: true,
+          },
+        },
+        plugins: {
+          installs: {
+            "legacy-chat": {
+              source: "npm",
+              spec: "@openclaw/legacy-chat@2.0.0",
+              integrity: "sha512-original",
+              installPath: "/tmp/openclaw-plugins/legacy-chat",
+            },
+          },
+        },
+      },
+    });
+
+    expect(npmInstallCall()?.spec).toBe("@openclaw/legacy-chat@2.0.1");
+    expect(npmInstallCall()?.expectedPluginId).toBe("legacy-chat");
+    expect(npmInstallCall()?.expectedIntegrity).toBeUndefined();
+    expect(npmInstallCall()?.onIntegrityDrift).toBeTypeOf("function");
+  });
+
   it("moves ClawHub-preferred externalized plugin fallbacks back to ClawHub", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     installPluginFromClawHubMock.mockResolvedValue(

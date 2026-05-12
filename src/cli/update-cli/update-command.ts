@@ -1191,24 +1191,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     params.configSnapshot.sourceConfig,
     pluginInstallRecords,
   );
-  const syncResult = await syncPluginsForUpdateChannel({
-    config: syncConfig,
-    channel: params.channel,
-    workspaceDir: params.root,
-    externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
-      workspaceDir: params.root,
-    }),
-    logger: pluginLogger,
-  });
-  for (const error of syncResult.summary.errors) {
-    warnings.push(createPostUpdatePluginWarning({ reason: error }));
-  }
-  let pluginConfig = syncResult.config;
   const integrityDrifts: PostCorePluginUpdateResult["integrityDrifts"] = [];
-  const pluginUpdateOutcomes: PluginUpdateOutcome[] = [];
-  let pluginsChanged = syncResult.changed;
-  let npmPluginsChanged = false;
-
   const onPluginIntegrityDrift = async (drift: PluginUpdateIntegrityDriftParams) => {
     integrityDrifts.push({
       pluginId: drift.pluginId,
@@ -1232,6 +1215,23 @@ export async function updatePluginsAfterCoreUpdate(params: {
     }
     return false;
   };
+  const syncResult = await syncPluginsForUpdateChannel({
+    config: syncConfig,
+    channel: params.channel,
+    workspaceDir: params.root,
+    externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
+      workspaceDir: params.root,
+    }),
+    logger: pluginLogger,
+    onIntegrityDrift: onPluginIntegrityDrift,
+  });
+  for (const error of syncResult.summary.errors) {
+    warnings.push(createPostUpdatePluginWarning({ reason: error }));
+  }
+  let pluginConfig = syncResult.config;
+  const pluginUpdateOutcomes: PluginUpdateOutcome[] = [];
+  let pluginsChanged = syncResult.changed;
+  let npmPluginsChanged = false;
 
   const collectMissingPayloadWarnings = async (
     records: Record<string, PluginInstallRecord>,
@@ -1285,6 +1285,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     config: pluginConfig,
     timeoutMs: params.timeoutMs,
     updateChannel: params.channel,
+    // Bridge sync already updated these ids, including pinned fallback integrity checks.
     skipIds: new Set([...syncResult.summary.switchedToNpm, ...missingPayloadIds]),
     skipDisabledPlugins: true,
     syncOfficialPluginInstalls: true,
