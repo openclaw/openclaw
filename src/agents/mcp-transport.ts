@@ -111,27 +111,14 @@ function rewriteRedirectInitForMethod(init: RequestInit | undefined, status: num
   };
 }
 
-function rewriteRedirectInitForCrossOrigin(init: RequestInit | undefined) {
-  if (!init) {
-    return init;
-  }
-
-  const currentMethod = init.method?.toUpperCase() ?? "GET";
-  if (currentMethod === "GET" || currentMethod === "HEAD") {
-    return init;
-  }
-
-  return {
-    ...init,
-    body: undefined,
-    headers: dropBodyHeaders(init.headers),
-  };
+function getRedirectVisitKey(url: string, init: RequestInit | undefined): string {
+  return `${init?.method?.toUpperCase() ?? "GET"} ${url}`;
 }
 
 const fetchStreamableHttpWithRedirectScrub: FetchLike = async (url, init) => {
   let currentUrl = resolveFetchUrl(url);
   let currentInit = init ? { ...init } : undefined;
-  const visited = new Set<string>([currentUrl]);
+  const visited = new Set<string>([getRedirectVisitKey(currentUrl, currentInit)]);
 
   for (let redirectCount = 0; redirectCount <= STREAMABLE_HTTP_MAX_REDIRECTS; redirectCount += 1) {
     const parsedUrl = new URL(currentUrl);
@@ -152,27 +139,28 @@ const fetchStreamableHttpWithRedirectScrub: FetchLike = async (url, init) => {
       throw new Error(`Too many redirects (limit: ${STREAMABLE_HTTP_MAX_REDIRECTS})`);
     }
 
-    const nextUrl = new URL(location, parsedUrl).toString();
-    if (visited.has(nextUrl)) {
-      void response.body?.cancel();
-      throw new Error("Redirect loop detected");
-    }
-
-    const nextParsedUrl = new URL(nextUrl);
-    currentInit = rewriteRedirectInitForMethod(currentInit, response.status);
+    const nextParsedUrl = new URL(location, parsedUrl);
+    const nextUrl = nextParsedUrl.toString();
+    let nextInit = rewriteRedirectInitForMethod(currentInit, response.status);
     if (nextParsedUrl.origin !== parsedUrl.origin) {
-      currentInit = rewriteRedirectInitForCrossOrigin(currentInit);
-      if (currentInit?.headers) {
-        currentInit = {
-          ...currentInit,
-          headers: retainSafeHeadersForCrossOriginRedirect(currentInit.headers),
+      if (nextInit?.headers) {
+        nextInit = {
+          ...nextInit,
+          headers: retainSafeHeadersForCrossOriginRedirect(nextInit.headers),
         };
       }
     }
 
-    visited.add(nextUrl);
+    const nextVisitKey = getRedirectVisitKey(nextUrl, nextInit);
+    if (visited.has(nextVisitKey)) {
+      void response.body?.cancel();
+      throw new Error("Redirect loop detected");
+    }
+
+    visited.add(nextVisitKey);
     void response.body?.cancel();
     currentUrl = nextUrl;
+    currentInit = nextInit;
   }
 
   throw new Error(`Too many redirects (limit: ${STREAMABLE_HTTP_MAX_REDIRECTS})`);

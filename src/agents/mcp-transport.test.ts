@@ -27,9 +27,9 @@ vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   },
 }));
 
-function redirectResponse(location: string): Response {
+function redirectResponse(location: string, status = 302): Response {
   return new Response(null, {
-    status: 302,
+    status,
     headers: { location },
   });
 }
@@ -88,5 +88,69 @@ describe("resolveMcpTransport", () => {
     expect(redirectedHeaders.get("x-api-key")).toBeNull();
     expect(redirectedHeaders.get("accept")).toBe("application/json, text/event-stream");
     expect(redirectedHeaders.get("user-agent")).toBe("node");
+  });
+
+  it("preserves replayable request bodies for cross-origin streamable HTTP redirects", async () => {
+    runtimeFetchMock
+      .mockResolvedValueOnce(redirectResponse("https://redirect.example/mcp", 307))
+      .mockResolvedValueOnce(new Response("ok"));
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+      headers: {
+        "X-Api-Key": "secret",
+      },
+    });
+
+    const options = latestStreamableTransportOptions();
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+
+    await options.fetch?.("https://mcp.example.com/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "secret",
+      },
+      body,
+    });
+
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
+    expect(runtimeFetchMock.mock.calls[1]?.[0]).toBe("https://redirect.example/mcp");
+    expect(runtimeFetchMock.mock.calls[1]?.[1]?.method).toBe("POST");
+    expect(runtimeFetchMock.mock.calls[1]?.[1]?.body).toBe(body);
+
+    const redirectedHeaders = new Headers(runtimeFetchMock.mock.calls[1]?.[1]?.headers);
+    expect(redirectedHeaders.get("x-api-key")).toBeNull();
+    expect(redirectedHeaders.get("content-type")).toBe("application/json");
+  });
+
+  it("allows same-url redirects when the request method changes", async () => {
+    runtimeFetchMock
+      .mockResolvedValueOnce(redirectResponse("https://mcp.example.com/mcp", 303))
+      .mockResolvedValueOnce(new Response("ok"));
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+    });
+
+    const options = latestStreamableTransportOptions();
+
+    await options.fetch?.("https://mcp.example.com/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
+    expect(runtimeFetchMock.mock.calls[1]?.[0]).toBe("https://mcp.example.com/mcp");
+    expect(runtimeFetchMock.mock.calls[1]?.[1]?.method).toBe("GET");
+    expect(runtimeFetchMock.mock.calls[1]?.[1]?.body).toBeUndefined();
+
+    const redirectedHeaders = new Headers(runtimeFetchMock.mock.calls[1]?.[1]?.headers);
+    expect(redirectedHeaders.get("content-type")).toBeNull();
   });
 });
