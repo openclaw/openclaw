@@ -717,7 +717,7 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.droppedEntries).toBe(2);
 
-    await expect(readTranscriptEvents(scope)).resolves.toHaveLength(2);
+    await expect(readTranscriptEvents(scope)).resolves.toEqual([header, message]);
   });
 
   it("preserves non-`message` envelope types (e.g. compactionSummary, custom) without role inspection", async () => {
