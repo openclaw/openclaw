@@ -44,11 +44,52 @@ import type {
 
 export type { MigrateApplyOptions, MigrateCommonOptions, MigrateDefaultOptions };
 
-function selectMigrationItems(plan: MigrationPlan, opts: MigrateCommonOptions): MigrationPlan {
-  return applyMigrationPluginSelection(
-    applyMigrationSkillSelection(plan, opts.skills),
-    opts.plugins,
+const CODEX_UNVERIFIED_APP_BACKED_PLUGIN_WARNING =
+  "Codex app-backed plugins were planned without source app accessibility verification.";
+
+function isPlannedUnverifiedCodexAppPlugin(item: MigrationPlan["items"][number]): boolean {
+  return (
+    item.kind === "plugin" &&
+    item.action === "install" &&
+    item.status === "planned" &&
+    item.details?.sourceAppVerification === "not_run"
   );
+}
+
+function filterSelectionScopedWarnings(
+  plan: MigrationPlan,
+  opts: MigrateCommonOptions,
+): MigrationPlan {
+  if (
+    opts.plugins === undefined ||
+    plan.providerId !== "codex" ||
+    !plan.warnings?.some((warning) =>
+      warning.includes(CODEX_UNVERIFIED_APP_BACKED_PLUGIN_WARNING),
+    ) ||
+    plan.items.some(isPlannedUnverifiedCodexAppPlugin)
+  ) {
+    return plan;
+  }
+  const warnings = plan.warnings.filter(
+    (warning) => !warning.includes(CODEX_UNVERIFIED_APP_BACKED_PLUGIN_WARNING),
+  );
+  return {
+    ...plan,
+    ...(warnings.length > 0 ? { warnings } : { warnings: undefined }),
+  };
+}
+
+function selectMigrationItems(plan: MigrationPlan, opts: MigrateCommonOptions): MigrationPlan {
+  return filterSelectionScopedWarnings(
+    applyMigrationPluginSelection(applyMigrationSkillSelection(plan, opts.skills), opts.plugins),
+    opts,
+  );
+}
+
+function assertVerifyPluginAppsProvider(providerId: string, opts: MigrateCommonOptions): void {
+  if (opts.verifyPluginApps && providerId !== "codex") {
+    throw new Error("--verify-plugin-apps is only supported for Codex migrations.");
+  }
 }
 
 async function promptCodexMigrationSkillSelection(
@@ -202,7 +243,30 @@ function shouldSkipCodexApplyAfterInteractiveSelection(plan: MigrationPlan): boo
   return plan.providerId === "codex" && !hasSelectedCodexMigrationWork(plan);
 }
 
-function logNoCodexSelection(runtime: RuntimeEnv): void {
+function hasCodexSubscriptionRequiredPlugin(plan: MigrationPlan): boolean {
+  if (plan.providerId !== "codex") {
+    return false;
+  }
+  return plan.items.some((item) => item.reason === "codex_subscription_required");
+}
+
+function readCodexSubscriptionWarning(plan: MigrationPlan): string | undefined {
+  return plan.warnings?.find((warning) =>
+    warning.includes("Codex app-backed plugin migration requires"),
+  );
+}
+
+function logNoCodexSelection(runtime: RuntimeEnv, plan: MigrationPlan): void {
+  if (hasCodexSubscriptionRequiredPlugin(plan)) {
+    const warning = readCodexSubscriptionWarning(plan);
+    if (warning) {
+      runtime.log(warning);
+    }
+    runtime.log(
+      "No Codex skills selected; native Codex plugins are not eligible for migration in this run.",
+    );
+    return;
+  }
   runtime.log("No Codex skills or native Codex plugins selected for migration.");
 }
 
@@ -245,6 +309,7 @@ export async function migratePlanCommand(
       `Migration provider is required. Run ${formatCliCommand("openclaw migrate list")} to choose one.`,
     );
   }
+  assertVerifyPluginAppsProvider(providerId, opts);
   const plan = selectMigrationItems(
     await createMigrationPlan(runtime, { ...opts, provider: providerId }),
     opts,
@@ -275,6 +340,7 @@ export async function migrateApplyCommand(
       `Migration provider is required. Run ${formatCliCommand("openclaw migrate list")} to choose one.`,
     );
   }
+  assertVerifyPluginAppsProvider(providerId, opts);
   if (opts.noBackup && !opts.force) {
     throw new Error("--no-backup requires --force because it skips the automatic rollback copy.");
   }
@@ -298,7 +364,7 @@ export async function migrateApplyCommand(
       return plan;
     }
     if (shouldSkipCodexApplyAfterInteractiveSelection(selectedPlan)) {
-      logNoCodexSelection(runtime);
+      logNoCodexSelection(runtime, selectedPlan);
       return selectedPlan;
     }
     const ok = await promptYesNo("Apply this migration now?", false);
@@ -338,6 +404,7 @@ export async function migrateDefaultCommand(
       items: [],
     };
   }
+  assertVerifyPluginAppsProvider(providerId, opts);
   const plan =
     opts.json && opts.yes && !opts.dryRun
       ? selectMigrationItems(
@@ -365,7 +432,7 @@ export async function migrateDefaultCommand(
       return plan;
     }
     if (shouldSkipCodexApplyAfterInteractiveSelection(selectedPlan)) {
-      logNoCodexSelection(runtime);
+      logNoCodexSelection(runtime, selectedPlan);
       return selectedPlan;
     }
     const ok = await promptYesNo("Apply this migration now?", false);

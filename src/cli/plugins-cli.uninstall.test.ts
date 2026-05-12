@@ -36,11 +36,13 @@ function expectLatestUninstallPlanParams(expected: {
   const params = planPluginUninstall.mock.calls.at(-1)?.[0] as
     | { pluginId?: string; deleteFiles?: boolean; channelIds?: unknown }
     | undefined;
-  expect(params).toBeDefined();
-  expect(params?.pluginId).toBe(expected.pluginId);
-  expect(params?.deleteFiles).toBe(expected.deleteFiles);
+  if (params === undefined) {
+    throw new Error("expected latest plugin uninstall plan params");
+  }
+  expect(params.pluginId).toBe(expected.pluginId);
+  expect(params.deleteFiles).toBe(expected.deleteFiles);
   if ("channelIds" in expected) {
-    expect(params?.channelIds).toBe(expected.channelIds);
+    expect(params.channelIds).toBe(expected.channelIds);
   }
 }
 

@@ -2367,24 +2367,18 @@ describe("update-cli", () => {
     const installArgvs = commandCalls()
       .map(([argv]) => argv)
       .filter((argv) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g");
-    expect(installArgvs).toContainEqual([
-      "npm",
-      "i",
-      "-g",
-      "openclaw@latest",
-      "--no-fund",
-      "--no-audit",
-      "--loglevel=error",
-    ]);
-    expect(installArgvs).toContainEqual([
-      "npm",
-      "i",
-      "-g",
-      "openclaw@latest",
-      "--omit=optional",
-      "--no-fund",
-      "--no-audit",
-      "--loglevel=error",
+    expect(installArgvs).toEqual([
+      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      [
+        "npm",
+        "i",
+        "-g",
+        "openclaw@latest",
+        "--omit=optional",
+        "--no-fund",
+        "--no-audit",
+        "--loglevel=error",
+      ],
     ]);
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });

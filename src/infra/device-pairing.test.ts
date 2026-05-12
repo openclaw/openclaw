@@ -1039,13 +1039,12 @@ describe("device pairing tokens", () => {
       baseDir,
     );
 
-    await expect(
-      approveBootstrapDevicePairing(
-        request.request.requestId,
-        PAIRING_SETUP_BOOTSTRAP_PROFILE,
-        baseDir,
-      ),
-    ).resolves.toEqual(expect.objectContaining({ status: "approved" }));
+    const approved = await approveBootstrapDevicePairing(
+      request.request.requestId,
+      PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      baseDir,
+    );
+    expectRecordFields(approved, "approved result", { status: "approved" });
 
     const paired = await getPairedDevice("bootstrap-device-operator-default", baseDir);
     const operatorToken = requireToken(paired?.tokens?.operator?.token);

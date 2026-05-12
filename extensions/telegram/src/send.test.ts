@@ -2157,7 +2157,7 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledTimes(4);
     const plainFallbackCalls = [sendMessage.mock.calls.at(1), sendMessage.mock.calls.at(3)];
     expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
-    expect(plainFallbackCalls.some((call) => String(call?.[1] ?? "").includes("<"))).toBe(false);
+    expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).not.toContain("<");
     expect(res.messageId).toBe("91");
   });
 
@@ -2190,7 +2190,9 @@ describe("sendMessageTelegram", () => {
     ).toMatch(/^&/);
     const plainFallbackCalls = [sendMessage.mock.calls.at(1), sendMessage.mock.calls.at(3)];
     expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
-    expect(plainFallbackCalls.every((call) => String(call?.[1] ?? "").length > 0)).toBe(true);
+    expect(
+      plainFallbackCalls.map((call) => String(call?.[1] ?? "")).filter((text) => text === ""),
+    ).toEqual([]);
     expect(res.messageId).toBe("93");
   });
 
@@ -2214,7 +2216,11 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(3);
-    expect(sendMessage.mock.calls.some((call) => call[2]?.parse_mode !== undefined)).toBe(false);
+    expect(sendMessage.mock.calls.map((call) => call[2]?.parse_mode)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toBe(plainText);
     expect(res.messageId).toBe("96");
   });

@@ -27,7 +27,7 @@ function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
 }
 
 function expectLogsToInclude(logs: readonly string[], text: string): void {
-  expect(logs).toEqual(expect.arrayContaining([expect.stringContaining(text)]));
+  expect(logs.some((log) => log.includes(text))).toBe(true);
 }
 
 function createBaseJob(overrides: Partial<CronJob>): CronJob {

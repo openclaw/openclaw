@@ -2228,21 +2228,25 @@ describe("compaction-safeguard double-compaction guard", () => {
     const compaction = expectCompactionResult(result);
     expect(compaction.summary).toContain("branch summary");
     expect(compaction.summary).not.toContain("No prior history.");
-    expect(mockSummarizeInStages).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: expect.arrayContaining([
-          expect.objectContaining({
-            role: "custom",
-            customType: "cron-request",
-            content: "prepare the daily report",
-          }),
-          expect.objectContaining({
-            role: "toolResult",
-            toolName: "read",
-          }),
-        ]),
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const messages = requireArray(summarizeCall.messages);
+    expect(
+      messages.some((message) => {
+        const record = requireRecord(message);
+        return (
+          record.role === "custom" &&
+          record.customType === "cron-request" &&
+          record.content === "prepare the daily report"
+        );
       }),
-    );
+    ).toBe(true);
+    expect(
+      messages.some((message) => {
+        const record = requireRecord(message);
+        return record.role === "toolResult" && record.toolName === "read";
+      }),
+    ).toBe(true);
   });
 
   it("continues when messages include real conversation content", async () => {
