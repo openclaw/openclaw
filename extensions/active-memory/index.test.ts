@@ -225,6 +225,40 @@ describe("active-memory plugin", () => {
     }
     return value;
   };
+  const requirePrependContext = (result: unknown): string =>
+    requireNonEmptyString(
+      (result as { prependContext?: unknown } | undefined)?.prependContext,
+      "expected prependContext",
+    );
+  const expectPrependContextContains = (result: unknown, text: string) => {
+    expect(requirePrependContext(result)).toContain(text);
+  };
+  const lastEmbeddedRunParams = () =>
+    requireRecord(runEmbeddedPiAgent.mock.calls.at(-1)?.[0], "expected embedded run params");
+  const embeddedRunConfig = () =>
+    requireRecord(lastEmbeddedRunParams().config, "expected embedded run config");
+  const activeMemoryConfigFrom = (config: Record<string, unknown>) => {
+    const plugins = requireRecord(config.plugins, "expected plugins config");
+    const entries = requireRecord(plugins.entries, "expected plugin entries");
+    const activeMemoryEntry = requireRecord(
+      entries["active-memory"],
+      "expected active-memory entry",
+    );
+    return requireRecord(activeMemoryEntry.config, "expected active-memory config");
+  };
+  const currentActiveMemoryConfig = () => activeMemoryConfigFrom(configFile);
+  const expectEmbeddedChannel = (messageChannel: string, messageProvider = messageChannel) => {
+    const params = lastEmbeddedRunParams();
+    expect(params.messageChannel).toBe(messageChannel);
+    expect(params.messageProvider).toBe(messageProvider);
+  };
+  const firstHookRegistration = () => {
+    const [call] = api.on.mock.calls as Array<[string, Function, Record<string, unknown>?]>;
+    if (!call) {
+      throw new Error("expected before_prompt_build hook registration");
+    }
+    return call;
+  };
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -293,9 +327,10 @@ describe("active-memory plugin", () => {
   });
 
   it("registers a before_prompt_build hook", () => {
-    expect(api.on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function), {
-      timeoutMs: 15_000,
-    });
+    const [hookName, handler, options] = firstHookRegistration();
+    expect(hookName).toBe("before_prompt_build");
+    expect(typeof handler).toBe("function");
+    expect(options).toEqual({ timeoutMs: 15_000 });
     expect(hookOptions.before_prompt_build?.timeoutMs).toBe(15_000);
   });
 
