@@ -32,6 +32,7 @@ import {
   listBundledPluginPackArtifacts,
 } from "./lib/bundled-plugin-build-entries.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
+import { collectPackageLocalAbsolutePathContentErrors } from "./lib/package-local-path-scan.mjs";
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
 import {
@@ -576,8 +577,9 @@ export function collectForbiddenPackContentPaths(
   paths: Iterable<string>,
   rootDir = process.cwd(),
 ): string[] {
+  const pathList = [...paths];
   const textPathPattern = /\.(?:[cm]?js|d\.ts|json|md|mjs|cjs)$/u;
-  return [...paths]
+  const privateQaPaths = pathList
     .filter((packedPath) => {
       if (!forbiddenPrivateQaContentScanPrefixes.some((prefix) => packedPath.startsWith(prefix))) {
         return false;
@@ -594,6 +596,17 @@ export function collectForbiddenPackContentPaths(
       return forbiddenPrivateQaContentMarkers.some((marker) => content.includes(marker));
     })
     .toSorted((left, right) => left.localeCompare(right));
+  const localPathContentErrors = collectPackageLocalAbsolutePathContentErrors({
+    files: pathList,
+    forbiddenRoots: [rootDir],
+    readText(relativePath: string) {
+      return readFileSync(resolve(rootDir, relativePath), "utf8");
+    },
+  });
+  const localPathPaths = localPathContentErrors.map((error) => error.split(" contains ", 1)[0]);
+  return [...new Set([...privateQaPaths, ...localPathPaths])].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
 }
 
 export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";

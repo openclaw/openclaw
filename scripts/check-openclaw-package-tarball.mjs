@@ -13,6 +13,7 @@ import {
   collectPackageDistImportErrors,
   expandPackageDistImportClosure,
 } from "./lib/package-dist-imports.mjs";
+import { collectPackageLocalAbsolutePathContentErrors } from "./lib/package-local-path-scan.mjs";
 
 function usage() {
   return "Usage: node scripts/check-openclaw-package-tarball.mjs <openclaw.tgz>";
@@ -258,6 +259,13 @@ errors.push(
     files: normalized,
     readText: readTarEntry,
     imports: packageDistImports ?? undefined,
+  }),
+);
+errors.push(
+  ...collectPackageLocalAbsolutePathContentErrors({
+    files: normalized,
+    readText: readTarEntry,
+    forbiddenRoots: [process.cwd(), process.env.OPENCLAW_PACKAGE_LOCAL_PATH_ROOT ?? ""],
   }),
 );
 

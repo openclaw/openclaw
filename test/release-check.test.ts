@@ -469,6 +469,57 @@ describe("collectForbiddenPackPaths", () => {
       rmSync(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it("blocks local absolute paths from packaged dist content", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-local-paths-"));
+
+    try {
+      mkdirSync(join(tempRoot, "dist", "web"), { recursive: true });
+      writeFileSync(
+        join(tempRoot, "dist", "web", "qr-image.js"),
+        [
+          'const staleBuildRoot = "/Users/steipete/Projects/clawdis/dist/web/qr-image.js";',
+          'const staleDependency = "/home/builder/openclaw/node_modules/pkg/package.json";',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      writeFileSync(join(tempRoot, "dist", "ok.js"), "export const ok = true;\n", "utf8");
+      writeFileSync(
+        join(tempRoot, "README.md"),
+        "docs may mention /home/node container paths without being dist runtime output\n",
+        "utf8",
+      );
+
+      expect(
+        collectForbiddenPackContentPaths(
+          ["dist/web/qr-image.js", "dist/ok.js", "README.md"],
+          tempRoot,
+        ),
+      ).toEqual(["dist/web/qr-image.js"]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks the current package root from packaged dist content", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-root-path-"));
+
+    try {
+      mkdirSync(join(tempRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(tempRoot, "dist", "entry.js"),
+        `export const root = ${JSON.stringify(`${tempRoot}/dist/entry.js`)};\n`,
+        "utf8",
+      );
+
+      expect(collectForbiddenPackContentPaths(["dist/entry.js"], tempRoot)).toEqual([
+        "dist/entry.js",
+      ]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("collectMissingPackPaths", () => {
