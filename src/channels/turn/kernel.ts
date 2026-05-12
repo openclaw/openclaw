@@ -496,22 +496,19 @@ export async function runChannelTurn<
     const hookResult = await hookRunner.runBeforeRouteInboundMessage(hookEvent, hookCtx);
 
     if (hookResult?.handled) {
-      // Redirect: update ctxPayload.SessionKey for compat mode and resolved values for adapter mode
-      if (
-        hookResult.redirectSessionKey &&
-        hookResult.redirectSessionKey !== (resolved.sessionKey ?? resolved.routeSessionKey)
-      ) {
-        if (params.ctxPayload?.SessionKey) {
-          // Compat mode: ctxPayload already has SessionKey set by buildInboundReplyDispatchBase
-          params.ctxPayload.SessionKey = hookResult.redirectSessionKey;
+      // Redirect: update SessionKey in the payload that record/dispatch actually reads
+      // (runPreparedChannelTurnCore reads params.ctxPayload.SessionKey, not resolved values)
+      if (hookResult.redirectSessionKey) {
+        const originalKey = resolved.sessionKey ?? resolved.routeSessionKey;
+        if (hookResult.redirectSessionKey !== originalKey) {
+          // Update the SessionKey in ctxPayload — this is what record/dispatch reads
+          if (params.ctxPayload?.SessionKey) {
+            params.ctxPayload.SessionKey = hookResult.redirectSessionKey;
+          }
+          // Also update resolved values for any downstream code that reads them directly
+          resolved.sessionKey = hookResult.redirectSessionKey;
+          resolved.routeSessionKey = hookResult.redirectSessionKey;
         }
-        // Adapter mode: also update resolved.ctxPayload.SessionKey so record/dispatch use the redirect
-        if (resolved.ctxPayload) {
-          resolved.ctxPayload.SessionKey = hookResult.redirectSessionKey;
-        }
-        // Update resolved sessionKey values for downstream
-        resolved.sessionKey = hookResult.redirectSessionKey;
-        resolved.routeSessionKey = hookResult.redirectSessionKey;
       }
       // Suppress: drop the message entirely — return early after onFinalize
       if (hookResult.suppressDelivery) {
