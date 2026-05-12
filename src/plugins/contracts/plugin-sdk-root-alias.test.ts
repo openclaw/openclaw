@@ -326,6 +326,18 @@ describe("plugin-sdk root alias", () => {
       },
       expectedTryNative: false,
     },
+    {
+      name: "prefers native loading on Windows when compat resolves to dist",
+      options: {
+        distExists: true,
+        env: { NODE_ENV: "production" },
+        platform: "win32",
+        monolithicExports: {
+          slowHelper: (): string => "loaded",
+        },
+      },
+      expectedTryNative: true,
+    },
   ])("$name", ({ options, expectedTryNative }) => {
     const lazyModule = loadRootAliasWithStubs(options);
 
