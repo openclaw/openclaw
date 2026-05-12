@@ -497,6 +497,45 @@ describe("bedrock mantle discovery", () => {
     expect(provider).toBeNull();
   });
 
+  it("skips implicit discovery entirely when no AWS creds are present (#67288)", async () => {
+    // Regression for #67288: previously the mantle provider's discovery ran on
+    // every request even when the user had no AWS credentials configured,
+    // logging "[bedrock-mantle-discovery] Mantle IAM token generation
+    // unavailable" on every turn. Mirror amazon-bedrock's gate
+    // (extensions/amazon-bedrock/discovery.ts:596): when discovery is not
+    // explicitly enabled AND there's no usable bearer source, skip entirely
+    // without calling the IAM token factory.
+    const tokenProviderFactory = vi.fn(() => {
+      throw new Error("should not be called");
+    });
+
+    const provider = await resolveImplicitMantleProvider({
+      env: {} as NodeJS.ProcessEnv, // no AWS_BEARER_TOKEN_BEDROCK, no AWS_* SDK creds
+      tokenProviderFactory,
+    });
+
+    expect(provider).toBeNull();
+    expect(tokenProviderFactory).not.toHaveBeenCalled();
+  });
+
+  it("honors pluginConfig.discovery.enabled=false even when AWS creds are present (#67288)", async () => {
+    const tokenProviderFactory = vi.fn(() => {
+      throw new Error("should not be called");
+    });
+
+    const provider = await resolveImplicitMantleProvider({
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
+        AWS_REGION: "us-east-1",
+      } as NodeJS.ProcessEnv,
+      pluginConfig: { discovery: { enabled: false } },
+      tokenProviderFactory,
+    });
+
+    expect(provider).toBeNull();
+    expect(tokenProviderFactory).not.toHaveBeenCalled();
+  });
+
   it("uses a generated IAM token when no explicit token is set", async () => {
     const tokenProvider = vi.fn(async () => "bedrock-api-key-iam"); // pragma: allowlist secret
     const tokenProviderFactory = createTokenProviderFactory(tokenProvider);

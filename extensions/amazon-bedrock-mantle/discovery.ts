@@ -8,11 +8,16 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { resolveAwsSdkEnvVarName } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+function hasAwsSdkCreds(env: NodeJS.ProcessEnv): boolean {
+  return resolveAwsSdkEnvVarName(env) !== undefined;
+}
 
 const log = createSubsystemLogger("bedrock-mantle-discovery");
 
@@ -241,7 +246,7 @@ interface MantleCacheEntry {
   fetchedAt: number;
 }
 
-type MantleDiscoveryConfig = {
+export type MantleDiscoveryConfig = {
   enabled?: boolean;
 };
 
@@ -349,11 +354,22 @@ export async function resolveImplicitMantleProvider(params: {
   tokenProviderFactory?: MantleBearerTokenProviderFactory;
 }): Promise<ModelProviderConfig | null> {
   const env = params.env ?? process.env;
-  if (params.pluginConfig?.discovery?.enabled === false) {
+  const enabled = params.pluginConfig?.discovery?.enabled;
+  if (enabled === false) {
     return null;
   }
   const region = resolveMantleRegion(env);
   const explicitBearerToken = resolveMantleBearerToken(env);
+
+  // Mirror amazon-bedrock's discovery gate (extensions/amazon-bedrock/discovery.ts:596):
+  // when discovery is not explicitly enabled AND there's no usable bearer source
+  // (no AWS_BEARER_TOKEN_BEDROCK + no SDK AWS creds env marker), skip implicit
+  // discovery entirely instead of running IAM token generation and emitting
+  // "Mantle IAM token generation unavailable" log lines on every request.
+  // Fixes #67288.
+  if (enabled !== true && !explicitBearerToken && !hasAwsSdkCreds(env)) {
+    return null;
+  }
 
   if (!isSupportedRegion(region)) {
     log.debug?.("Mantle not available in region", { region });
