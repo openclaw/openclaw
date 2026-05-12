@@ -3061,7 +3061,7 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     expect(fs.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
   });
 
-  it("warns and skips when resolveOpenClawPackageRootSync returns null", async () => {
+  it("rejects when resolveOpenClawPackageRootSync returns null", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     resolveRootMock.mockReturnValue(null);
 
@@ -3069,7 +3069,10 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
 
     const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("plugin-local node_modules/openclaw link");
+    }
     expectWarningIncludes(warnings, "Could not locate openclaw package root");
   });
 });
