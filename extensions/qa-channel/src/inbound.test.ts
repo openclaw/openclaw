@@ -119,12 +119,10 @@ describe("handleQaInbound", () => {
     );
 
     expect(runtime.channel.session.recordInboundSession).toHaveBeenCalledTimes(1);
-    expect(
-      vi.mocked(runtime.channel.session.recordInboundSession).mock.calls[0]?.[0].ctx,
-    ).toMatchObject({
-      CommandAuthorized: true,
-      SenderId: "alice",
-    });
+    const ctxPayload = vi.mocked(runtime.channel.session.recordInboundSession).mock.calls[0]?.[0]
+      .ctx;
+    expect(ctxPayload?.CommandAuthorized).toBe(true);
+    expect(ctxPayload?.SenderId).toBe("alice");
   });
 
   it("uses allowFrom as the group sender fallback for allowlist policy", async () => {
