@@ -275,14 +275,11 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "main");
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "main");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "main");
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: "/tmp/openclaw/agents/main",
-        agentId: "main",
-        sandboxSessionKey: "agent:main:voice:15550001111",
-        workspaceDir: "/tmp/openclaw/workspace/main",
-      }),
-    );
+    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    expect(args.agentDir).toBe("/tmp/openclaw/agents/main");
+    expect(args.agentId).toBe("main");
+    expect(args.sandboxSessionKey).toBe("agent:main:voice:15550001111");
+    expect(args.workspaceDir).toBe("/tmp/openclaw/workspace/main");
   });
 
   it("uses the configured voice response agent workspace", async () => {
@@ -312,14 +309,11 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "voice");
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "voice");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "voice");
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: "/tmp/openclaw/agents/voice",
-        agentId: "voice",
-        sandboxSessionKey: "agent:voice:voice:15550001111",
-        workspaceDir: "/tmp/openclaw/workspace/voice",
-      }),
-    );
+    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    expect(args.agentDir).toBe("/tmp/openclaw/agents/voice");
+    expect(args.agentId).toBe("voice");
+    expect(args.sandboxSessionKey).toBe("agent:voice:voice:15550001111");
+    expect(args.workspaceDir).toBe("/tmp/openclaw/workspace/voice");
   });
 
   it("passes the routed voice agent explicit tool allowlist to the embedded run", async () => {
