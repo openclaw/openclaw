@@ -253,6 +253,45 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(ctxPayload.Body ?? "").not.toContain("[Replying to");
   });
 
+  it("keeps group reply context when the group allowlist matches the chat target", async () => {
+    const cfg = baseCfg();
+    cfg.channels ??= {};
+    cfg.channels.imessage ??= {};
+    cfg.channels.imessage.groupPolicy = "allowlist";
+    cfg.channels.imessage.contextVisibility = "allowlist";
+
+    const message: IMessagePayload = {
+      id: 8,
+      chat_id: 55,
+      sender: "+15550001111",
+      is_from_me: false,
+      text: "@openclaw replying now",
+      is_group: true,
+      reply_to_id: 9001,
+      reply_to_text: "quoted context",
+      reply_to_sender: "+15559998888",
+    };
+    const { decision, groupHistories } = await resolveDispatchDecision({
+      cfg,
+      message,
+      allowFrom: ["*"],
+      groupAllowFrom: ["chat_id:55"],
+      groupPolicy: "allowlist",
+    });
+    const { ctxPayload } = buildIMessageInboundContext({
+      cfg,
+      decision,
+      message,
+      historyLimit: 0,
+      groupHistories,
+    });
+
+    expect(ctxPayload.ReplyToId).toBe("9001");
+    expect(ctxPayload.ReplyToBody).toBe("quoted context");
+    expect(ctxPayload.ReplyToSender).toBe("+15559998888");
+    expect(ctxPayload.Body ?? "").toContain("[Replying to +15559998888 id:9001]");
+  });
+
   it("keeps group reply context in allowlist_quote mode", async () => {
     const cfg = baseCfg();
     cfg.channels ??= {};

@@ -8,6 +8,7 @@ import { parseIMessageAllowFromEntries } from "./setup-surface.js";
 import {
   formatIMessageChatTarget,
   inferIMessageTargetChatType,
+  isAllowedIMessageReplyContextSender,
   isAllowedIMessageSender,
   looksLikeIMessageExplicitTargetId,
   normalizeIMessageHandle,
@@ -95,6 +96,32 @@ describe("imessage targets", () => {
       sender: "User@Example.com",
     });
     expect(ok).toBe(true);
+  });
+
+  it("checks reply context allowFrom against conversation targets", () => {
+    expect(
+      isAllowedIMessageReplyContextSender({
+        allowFrom: ["chat_id:9"],
+        sender: "+1555",
+        chatId: 9,
+      }),
+    ).toBe(true);
+
+    expect(
+      isAllowedIMessageReplyContextSender({
+        allowFrom: ["imessage:chat_guid:team-thread"],
+        sender: "+1555",
+        chatGuid: "team-thread",
+      }),
+    ).toBe(true);
+
+    expect(
+      isAllowedIMessageReplyContextSender({
+        allowFrom: ["chat_identifier:team"],
+        sender: "+1555",
+        chatIdentifier: "team",
+      }),
+    ).toBe(true);
   });
 
   it("denies when allowFrom is empty", () => {

@@ -37,6 +37,7 @@ import {
 } from "../monitor-reply-cache.js";
 import {
   formatIMessageChatTarget,
+  isAllowedIMessageReplyContextSender,
   isAllowedIMessageSender,
   normalizeIMessageHandle,
   parseIMessageAllowTarget,
@@ -740,7 +741,7 @@ export async function resolveIMessageInboundDecision(params: {
     !isGroup || effectiveGroupAllowFrom.length === 0
       ? true
       : replyContext?.sender
-        ? isAllowedIMessageSender({
+        ? isAllowedIMessageReplyContextSender({
             allowFrom: effectiveGroupAllowFrom,
             sender: replyContext.sender,
             chatId,

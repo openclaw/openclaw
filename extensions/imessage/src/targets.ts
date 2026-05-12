@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   type ChatSenderAllowParams,
+  createAllowedChatSenderMatcher,
   type ParsedChatTarget,
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedChatTarget,
@@ -177,6 +178,15 @@ export function isAllowedIMessageSender(params: ChatSenderAllowParams): boolean 
     const parsed = parseIMessageAllowTarget(entry);
     return parsed.kind === "handle" && parsed.handle === senderNormalized;
   });
+}
+
+const isAllowedIMessageReplyContextSenderMatcher = createAllowedChatSenderMatcher({
+  normalizeSender: normalizeIMessageHandle,
+  parseAllowTarget: parseIMessageAllowTarget,
+});
+
+export function isAllowedIMessageReplyContextSender(params: ChatSenderAllowParams): boolean {
+  return isAllowedIMessageReplyContextSenderMatcher(params);
 }
 
 export function formatIMessageChatTarget(chatId?: number | null): string {
