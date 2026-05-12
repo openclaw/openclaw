@@ -40,4 +40,24 @@ describe("session reset thread detection", () => {
       }),
     ).toBe("direct");
   });
+
+  it("prefers typed session metadata over session-key shape for group resets", () => {
+    expect(
+      resolveSessionResetType({
+        sessionKey: "agent:main:main",
+        sessionScope: "channel",
+        chatType: "channel",
+      }),
+    ).toBe("group");
+  });
+
+  it("keeps shared-main direct sessions direct even when the key is generic", () => {
+    expect(
+      resolveSessionResetType({
+        sessionKey: "agent:main:main",
+        sessionScope: "shared-main",
+        chatType: "direct",
+      }),
+    ).toBe("direct");
+  });
 });

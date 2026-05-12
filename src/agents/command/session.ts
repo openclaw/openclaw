@@ -238,7 +238,7 @@ export function resolveSession(opts: {
   });
   const channelReset = resolveChannelResetConfig({
     sessionCfg,
-    channel: routingInfo?.channel ?? sessionEntry?.lastChannel ?? sessionEntry?.channel,
+    channel: routingInfo?.channel ?? sessionEntry?.channel,
   });
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg,

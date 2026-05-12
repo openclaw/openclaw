@@ -131,22 +131,19 @@ export function conversationIdentityFromSessionEntry(
 ): ConversationIdentity | null {
   const deliveryContext = deliveryContextFromSession(entry);
   const kind = normalizeKind(entry.chatType);
-  const channel =
-    deliveryContext?.channel ?? normalizeText(entry.channel) ?? normalizeText(entry.lastChannel);
+  const channel = deliveryContext?.channel ?? normalizeText(entry.channel);
   const peerId =
     kind === "direct"
-      ? (normalizeText(entry.nativeDirectUserId) ??
-        deliveryContextPeerId(deliveryContext) ??
-        normalizeText(entry.lastTo))
+      ? (normalizeText(entry.nativeDirectUserId) ?? deliveryContextPeerId(deliveryContext))
       : (normalizeText(entry.groupId) ??
         normalizeText(entry.nativeChannelId) ??
         deliveryContextPeerId(deliveryContext));
   return finalizeConversationIdentity({
     channel,
-    accountId: deliveryContext?.accountId ?? entry.lastAccountId,
+    accountId: deliveryContext?.accountId,
     kind,
     peerId,
-    threadId: normalizeThreadId(deliveryContext?.threadId ?? entry.lastThreadId),
+    threadId: normalizeThreadId(deliveryContext?.threadId),
     nativeChannelId: entry.nativeChannelId,
     nativeDirectUserId: entry.nativeDirectUserId,
     label: entry.displayName ?? entry.label,
