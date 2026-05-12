@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import {
+  defaultVoiceWakeTriggers,
+  importLegacyVoiceWakeConfigFileToSqlite,
+  legacyVoiceWakeConfigFileExists,
+} from "./voicewake-legacy.js";
 import {
   defaultVoiceWakeTriggers,
   importLegacyVoiceWakeConfigFileToSqlite,

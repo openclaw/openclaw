@@ -463,38 +463,6 @@ function apnsRegistrationToRow(registration: ApnsRegistration): ApnsRegistration
   }
 }
 
-async function loadRegistrationsState(baseDir?: string): Promise<ApnsRegistrationState> {
-  const { database, db } = openApnsRegistrationDatabase(baseDir);
-  const registrations = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("apns_registrations")
-      .select([
-        "node_id",
-        "transport",
-        "token",
-        "relay_handle",
-        "send_grant",
-        "installation_id",
-        "topic",
-        "environment",
-        "distribution",
-        "token_debug_suffix",
-        "updated_at_ms",
-      ])
-      .orderBy("updated_at_ms", "desc")
-      .orderBy("node_id", "asc"),
-  ).rows;
-  const normalized: Record<string, ApnsRegistration> = {};
-  for (const row of registrations) {
-    const registration = rowToApnsRegistration(row);
-    if (registration) {
-      normalized[registration.nodeId] = registration;
-    }
-  }
-  return { registrationsByNodeId: normalized };
-}
-
 async function persistRegistrationsState(
   state: ApnsRegistrationState,
   baseDir?: string,
