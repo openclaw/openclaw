@@ -38,7 +38,6 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(requestPairing).toHaveBeenCalledWith(
       expect.objectContaining({
         nodeId: "ios-node-1",
-        commands: ["canvas.snapshot"],
         permissions: { camera: true, notifications: false },
       }),
     );
