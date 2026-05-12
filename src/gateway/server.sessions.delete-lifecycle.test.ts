@@ -19,6 +19,11 @@ import {
 
 const { openClient } = setupGatewaySessionsTestHarness();
 
+function expectObject(value: unknown) {
+  expect(typeof value).toBe("object");
+  expect(value).not.toBeNull();
+}
+
 test("sessions.delete rejects main and aborts active runs", async () => {
   await seedSqliteSessionTranscript("sess-main", "hello");
   await seedSqliteSessionTranscript("sess-active", "active");
@@ -216,11 +221,11 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
   const [event, context] = (
     sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
   )[0] ?? [undefined, undefined];
-  expect(event).toMatchObject({
-    sessionId: "sess-delete",
-    sessionKey: "agent:main:discord:group:delete",
-    reason: "deleted",
-  });
+  expect((event as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");
+  expect((event as { sessionKey?: string } | undefined)?.sessionKey).toBe(
+    "agent:main:discord:group:delete",
+  );
+  expect((event as { reason?: string } | undefined)?.reason).toBe("deleted");
   expect((event as { nextSessionId?: string } | undefined)?.nextSessionId).toBeUndefined();
   expect((context as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");
   expect((context as { sessionKey?: string } | undefined)?.sessionKey).toBe(
