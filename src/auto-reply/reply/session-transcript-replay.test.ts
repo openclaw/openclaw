@@ -73,11 +73,26 @@ describe("replayRecentUserAssistantMessages", () => {
 
     expect(await call("prev")).toBe(DEFAULT_REPLAY_MAX_MESSAGES);
     const records = readEvents();
-    expect(records[0]).toMatchObject({ type: "session", id: "new-session" });
+    expect((records[0] as { type?: unknown }).type).toBe("session");
+    expect((records[0] as { id?: unknown }).id).toBe("new-session");
     expect(records).toHaveLength(1 + DEFAULT_REPLAY_MAX_MESSAGES);
-    for (const r of records.slice(1) as Array<{ message: { role: string } }>) {
-      expect(["user", "assistant"]).toContain(r.message.role);
-    }
+    const replayed = records.slice(1) as Array<{ message?: { role?: string; content?: string } }>;
+    expect(replayed.map((record) => record.message?.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    expect(replayed.map((record) => record.message?.content)).toEqual([
+      "m4",
+      "m5",
+      "m6",
+      "m7",
+      "m8",
+      "m9",
+    ]);
     expect(await call("missing")).toBe(0);
 
     seedTranscript({
@@ -105,8 +120,8 @@ describe("replayRecentUserAssistantMessages", () => {
     expect(await call("prev")).toBe(DEFAULT_REPLAY_MAX_MESSAGES - 1);
     const records = readEvents();
     expect(records.filter((r) => (r as { type?: unknown }).type === "session")).toHaveLength(1);
-    expect(records[0]).toMatchObject({ id: "existing" });
-    expect((records[1] as { message: { role: string } }).message.role).toBe("user");
+    expect((records[0] as { id?: unknown }).id).toBe("existing");
+    expect((records[1] as { message?: { role?: string } }).message?.role).toBe("user");
   });
 
   it("coalesces same-role runs so replayed records strictly alternate", async () => {
