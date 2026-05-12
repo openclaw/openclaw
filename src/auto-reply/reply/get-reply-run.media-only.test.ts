@@ -238,8 +238,22 @@ function ownerParams(): Parameters<typeof runPreparedReply>[0] {
   return params;
 }
 
+type MockCallSource = {
+  mock: {
+    calls: ReadonlyArray<ReadonlyArray<unknown>>;
+  };
+};
+
+function requireMockCallArg(mock: MockCallSource, label: string, index = 0): unknown {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`${label} call ${index} missing`);
+  }
+  return call[0];
+}
+
 function requireRunReplyAgentCall(index = 0) {
-  const call = vi.mocked(runReplyAgent).mock.calls.at(index)?.[0];
+  const call = vi.mocked(runReplyAgent).mock.calls[index]?.[0];
   if (!call) {
     throw new Error(`runReplyAgent call ${index} missing`);
   }
@@ -365,9 +379,13 @@ describe("runPreparedReply media-only handling", () => {
     );
 
     expect(buildDirectChatContext).toHaveBeenCalledTimes(1);
-    const directContextParams = vi.mocked(buildDirectChatContext).mock.calls.at(0)?.[0] as
-      | { sessionCtx?: { Provider?: string; ChatType?: string }; sourceReplyDeliveryMode?: string }
-      | undefined;
+    const directContextParams = requireMockCallArg(
+      vi.mocked(buildDirectChatContext),
+      "direct chat context",
+    ) as {
+      sessionCtx?: { Provider?: string; ChatType?: string };
+      sourceReplyDeliveryMode?: string;
+    };
     expect(directContextParams?.sessionCtx?.Provider).toBe("telegram");
     expect(directContextParams?.sessionCtx?.ChatType).toBe("direct");
     expect(directContextParams?.sourceReplyDeliveryMode).toBe("message_tool_only");
@@ -1277,16 +1295,17 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
     expect(buildGroupChatContext).toHaveBeenCalledTimes(1);
-    const groupContextParams = vi.mocked(buildGroupChatContext).mock.calls.at(0)?.[0] as
-      | {
-          sessionCtx?: {
-            Provider?: string;
-            Surface?: string;
-            ChatType?: string;
-            GroupChannel?: string;
-          };
-        }
-      | undefined;
+    const groupContextParams = requireMockCallArg(
+      vi.mocked(buildGroupChatContext),
+      "group chat context",
+    ) as {
+      sessionCtx?: {
+        Provider?: string;
+        Surface?: string;
+        ChatType?: string;
+        GroupChannel?: string;
+      };
+    };
     expect(groupContextParams?.sessionCtx?.Provider).toBe("discord");
     expect(groupContextParams?.sessionCtx?.Surface).toBe("discord");
     expect(groupContextParams?.sessionCtx?.ChatType).toBe("channel");
@@ -1494,9 +1513,9 @@ describe("runPreparedReply media-only handling", () => {
       }),
     );
 
-    const call = vi.mocked(resolveTypingMode).mock.calls.at(0)?.[0] as
-      | { suppressTyping?: boolean }
-      | undefined;
+    const call = requireMockCallArg(vi.mocked(resolveTypingMode), "typing mode params") as {
+      suppressTyping?: boolean;
+    };
     expect(call?.suppressTyping).toBe(true);
   });
 

@@ -17,7 +17,8 @@ export async function requestCodexAppServerJson<M extends CodexAppServerRequestM
   requestParams: CodexAppServerRequestParams<M>;
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
-  authProfileId?: string;
+  authProfileId?: string | null;
+  agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   isolated?: boolean;
 }): Promise<CodexAppServerRequestResult<M>>;
@@ -26,7 +27,8 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   requestParams?: unknown;
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
-  authProfileId?: string;
+  authProfileId?: string | null;
+  agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   isolated?: boolean;
 }): Promise<T>;
@@ -35,7 +37,8 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   requestParams?: unknown;
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
-  authProfileId?: string;
+  authProfileId?: string | null;
+  agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   isolated?: boolean;
 }): Promise<T> {
@@ -48,6 +51,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
         startOptions: params.startOptions,
         timeoutMs,
         authProfileId: params.authProfileId,
+        agentDir: params.agentDir,
         config: params.config,
       });
       try {

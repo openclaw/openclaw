@@ -85,7 +85,8 @@ function expectConfigDefaults(value: unknown) {
 }
 
 function expectRuntimeErrorIncludes(runtime: ReturnType<typeof createRuntime>, text: string) {
-  expect(runtime.error.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+  const errorOutput = runtime.error.mock.calls.map(([message]) => String(message)).join("\n");
+  expect(errorOutput).toContain(text);
 }
 
 describe("applyNonInteractivePluginProviderChoice", () => {

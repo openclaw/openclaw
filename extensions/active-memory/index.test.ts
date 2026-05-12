@@ -141,10 +141,10 @@ describe("active-memory plugin", () => {
     return entries?.find((entry) => entry.pluginId === "active-memory")?.lines ?? [];
   };
   const expectLinesToContain = (lines: string[], text: string) => {
-    expect(lines.some((line) => line.includes(text))).toBe(true);
+    expect(lines.join("\n")).toContain(text);
   };
   const expectLinesNotToContain = (lines: string[], text: string) => {
-    expect(lines.every((line) => !line.includes(text))).toBe(true);
+    expect(lines.join("\n")).not.toContain(text);
   };
   const writeTranscriptJsonl = async (sessionFile: string, records: unknown[], suffix = "\n") => {
     await fs.mkdir(path.dirname(sessionFile), { recursive: true });
@@ -2694,7 +2694,7 @@ describe("active-memory plugin", () => {
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes("cached status="))).toBe(false);
+    expect(infoLines.join("\n")).not.toContain("cached status=");
   });
 
   it("surfaces timeout_partial summaries in status lines, metadata, and prompt prefixes", () => {
@@ -2837,12 +2837,12 @@ describe("active-memory plugin", () => {
       .mock.calls.map((call: unknown[]) => String(call[0]));
     expectLinesToContain(infoLines, "status=timeout");
     expect(
-      infoLines.some(
+      infoLines.filter(
         (line: string) =>
           line.includes("activeProvider=github-copilot") &&
           line.includes("activeModel=gpt-5.4-mini"),
       ),
-    ).toBe(true);
+    ).not.toEqual([]);
   });
 
   it("does not spend the model timeout budget on active-memory subagent setup", async () => {
@@ -3176,7 +3176,7 @@ describe("active-memory plugin", () => {
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
     expect(
-      infoLines.some(
+      infoLines.filter(
         (line: string) =>
           line.includes("agent=main") &&
           line.includes("session=agent:main:webchat:direct:12345 forged") &&
@@ -3184,7 +3184,7 @@ describe("active-memory plugin", () => {
           line.includes("activeModel=gpt-5.4-mini lane") &&
           !/[\r\n\t]/.test(line),
       ),
-    ).toBe(true);
+    ).not.toEqual([]);
   });
 
   it("caps active-memory log field lengths", async () => {

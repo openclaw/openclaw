@@ -309,11 +309,11 @@ function expectFailedInstallResult<
 }
 
 function expectWarningIncludes(warnings: readonly string[], fragment: string) {
-  expect(warnings.some((warning) => warning.includes(fragment))).toBe(true);
+  expect(warnings.join("\n")).toContain(fragment);
 }
 
 function expectWarningExcludes(warnings: readonly string[], fragment: string) {
-  expect(warnings.some((warning) => warning.includes(fragment))).toBe(false);
+  expect(warnings.join("\n")).not.toContain(fragment);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

@@ -84,11 +84,11 @@ function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
 }
 
 function expectIncludesSubstring(values: readonly string[], expected: string): void {
-  expect(values.some((value) => value.includes(expected))).toBe(true);
+  expect(values.join("\n")).toContain(expected);
 }
 
 function expectNotIncludesSubstring(values: readonly string[], expected: string): void {
-  expect(values.every((value) => !value.includes(expected))).toBe(true);
+  expect(values.join("\n")).not.toContain(expected);
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -1595,11 +1595,7 @@ describe("memory-core dreaming phases", () => {
         { trigger: "heartbeat", workspaceDir },
       );
 
-      expect(
-        readFileSpy.mock.calls.some(
-          ([target]) => typeof target === "string" && target === transcriptPath,
-        ),
-      ).toBe(false);
+      expect(readFileSpy.mock.calls.filter(([target]) => target === transcriptPath)).toEqual([]);
       readFileSpy.mockRestore();
     } finally {
       vi.restoreAllMocks();

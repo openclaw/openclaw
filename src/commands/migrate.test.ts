@@ -56,7 +56,8 @@ const {
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
 } = await import("./migrate/selection.js");
-const { migrateApplyCommand, migrateDefaultCommand } = await import("./migrate.js");
+const { migrateApplyCommand, migrateDefaultCommand, migratePlanCommand } =
+  await import("./migrate.js");
 
 function plan(overrides: Partial<MigrationPlan> = {}): MigrationPlan {
   return {
@@ -283,6 +284,81 @@ describe("migrateApplyCommand", () => {
       "requires --yes",
     );
     expect(mocks.provider.plan).not.toHaveBeenCalled();
+  });
+
+  it("rejects --verify-plugin-apps for non-Codex providers", async () => {
+    await expect(
+      migrateApplyCommand(runtime, { provider: "hermes", yes: true, verifyPluginApps: true }),
+    ).rejects.toThrow("--verify-plugin-apps is only supported for Codex migrations");
+    expect(mocks.provider.plan).not.toHaveBeenCalled();
+    expect(mocks.provider.apply).not.toHaveBeenCalled();
+  });
+
+  it("rejects --verify-plugin-apps for non-Codex default and plan paths", async () => {
+    await expect(
+      migrateDefaultCommand(runtime, { provider: "hermes", verifyPluginApps: true }),
+    ).rejects.toThrow("--verify-plugin-apps is only supported for Codex migrations");
+    await expect(
+      migratePlanCommand(runtime, { provider: "hermes", verifyPluginApps: true }),
+    ).rejects.toThrow("--verify-plugin-apps is only supported for Codex migrations");
+    expect(mocks.provider.plan).not.toHaveBeenCalled();
+    expect(mocks.provider.apply).not.toHaveBeenCalled();
+  });
+
+  it("passes --verify-plugin-apps into Codex migration planning", async () => {
+    const planned = codexPluginPlan();
+    mocks.provider.plan.mockImplementation(async (ctx) => {
+      expect(ctx.providerOptions).toEqual({ verifyPluginApps: true });
+      return planned;
+    });
+
+    const result = await migrateDefaultCommand(runtime, {
+      provider: "codex",
+      dryRun: true,
+      verifyPluginApps: true,
+    });
+
+    expect(result).toBe(planned);
+    expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
+    expect(mocks.provider.apply).not.toHaveBeenCalled();
+  });
+
+  it("passes --verify-plugin-apps into Codex plan command", async () => {
+    const planned = codexPluginPlan();
+    mocks.provider.plan.mockImplementation(async (ctx) => {
+      expect(ctx.providerOptions).toEqual({ verifyPluginApps: true });
+      return planned;
+    });
+
+    const result = await migratePlanCommand(runtime, {
+      provider: "codex",
+      verifyPluginApps: true,
+    });
+
+    expect(result).toBe(planned);
+    expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes --verify-plugin-apps into Codex apply planning and apply contexts", async () => {
+    const planned = codexPluginPlan();
+    const applied: MigrationApplyResult = {
+      ...planned,
+      summary: { ...planned.summary, planned: 0, migrated: planned.summary.planned },
+      items: planned.items.map((item) => ({ ...item, status: "migrated" as const })),
+    };
+    mocks.provider.plan.mockImplementation(async (ctx) => {
+      expect(ctx.providerOptions).toEqual({ verifyPluginApps: true });
+      return planned;
+    });
+    mocks.provider.apply.mockImplementation(async (ctx) => {
+      expect(ctx.providerOptions).toEqual({ verifyPluginApps: true });
+      return applied;
+    });
+
+    await migrateApplyCommand(runtime, { provider: "codex", yes: true, verifyPluginApps: true });
+
+    expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
+    expect(mocks.provider.apply).toHaveBeenCalledTimes(1);
   });
 
   it("previews and prompts before interactive apply without --yes", async () => {
@@ -759,6 +835,54 @@ describe("migrateApplyCommand", () => {
     expect(itemsById.get("plugin:gmail")?.status).toBe("planned");
     expect(itemsById.get("plugin:google-calendar")?.status).toBe("skipped");
     expect(itemsById.get("plugin:google-calendar")?.reason).toBe("not selected for migration");
+  });
+
+  it("explains skipped plugin selection when Codex subscription auth is required", async () => {
+    Object.defineProperty(process.stdin, "isTTY", {
+      configurable: true,
+      value: true,
+    });
+    const skillPlan = codexSkillPlan();
+    const warning =
+      "Codex app-backed plugin migration requires the Codex app-server source account to be logged in with a ChatGPT subscription account.";
+    const planned = codexSkillPlan({
+      summary: {
+        total: skillPlan.items.length + 1,
+        planned: skillPlan.summary.planned,
+        migrated: 0,
+        skipped: 1,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [
+        ...skillPlan.items,
+        {
+          id: "plugin:gmail:1",
+          kind: "manual",
+          action: "manual",
+          status: "skipped",
+          reason: "codex_subscription_required",
+          details: { pluginName: "gmail" },
+        },
+      ],
+      warnings: [warning],
+    });
+    mocks.provider.plan.mockResolvedValue(planned);
+    mocks.multiselect.mockResolvedValueOnce([MIGRATION_SKILL_SELECTION_SKIP]);
+
+    const result = await migrateDefaultCommand(runtime, { provider: "codex" });
+
+    expect(result.summary.planned).toBe(1);
+    expect(result.summary.skipped).toBe(3);
+    expect(mocks.multiselect).toHaveBeenCalledTimes(1);
+    expect(mocks.promptYesNo).not.toHaveBeenCalled();
+    expect(mocks.provider.apply).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("Codex skill migration skipped for now.");
+    expect(runtime.log).toHaveBeenCalledWith(warning);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "No Codex skills selected; native Codex plugins are not eligible for migration in this run.",
+    );
   });
 
   it("does not apply archive-only Codex migration work after Toggle all off", async () => {
@@ -1265,5 +1389,75 @@ describe("migrateApplyCommand", () => {
     expect(logPayload.summary?.planned).toBe(1);
     expect(mocks.provider.apply).not.toHaveBeenCalled();
     expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
+  });
+
+  it("includes Codex app verification warnings in JSON dry-run output", async () => {
+    const warning =
+      "Codex app-backed plugins were planned without source app accessibility verification.";
+    const planned = codexPluginPlan({ warnings: [warning] });
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const jsonRuntime: RuntimeEnv = {
+      ...runtime,
+      log(message) {
+        logs.push(String(message));
+      },
+      error(message) {
+        errors.push(String(message));
+      },
+    };
+    mocks.provider.plan.mockResolvedValue(planned);
+
+    await migrateDefaultCommand(jsonRuntime, {
+      provider: "codex",
+      dryRun: true,
+      json: true,
+    });
+
+    expect(logs).toHaveLength(1);
+    expect(errors).toEqual([]);
+    const logPayload = JSON.parse(logs[0] ?? "{}") as { warnings?: unknown };
+    expect(logPayload.warnings).toEqual([warning]);
+  });
+
+  it("drops Codex app verification warning after plugin selection excludes app-backed items", async () => {
+    const warning =
+      "Codex app-backed plugins were planned without source app accessibility verification.";
+    const base = codexPluginPlan();
+    const items = [...base.items];
+    const gmailIndex = items.findIndex((item) => item.id === "plugin:gmail");
+    const gmailItem = items[gmailIndex];
+    if (!gmailItem) {
+      throw new Error("Expected gmail plugin item");
+    }
+    items[gmailIndex] = {
+      ...gmailItem,
+      details: {
+        ...gmailItem.details,
+        sourceAppVerification: "not_run",
+      },
+    };
+    const planned = codexPluginPlan({
+      warnings: [warning],
+      items,
+    });
+    const logs: string[] = [];
+    const jsonRuntime: RuntimeEnv = {
+      ...runtime,
+      log(message) {
+        logs.push(String(message));
+      },
+    };
+    mocks.provider.plan.mockResolvedValue(planned);
+
+    await migrateDefaultCommand(jsonRuntime, {
+      provider: "codex",
+      plugins: ["google-calendar"],
+      dryRun: true,
+      json: true,
+    });
+
+    const logPayload = JSON.parse(logs[0] ?? "{}") as { warnings?: unknown };
+    expect(logPayload.warnings).toBeUndefined();
   });
 });

@@ -220,7 +220,7 @@ function expectRuntimeLogContaining(
   runtime: { log: ReturnType<typeof vi.fn> },
   text: string,
 ): void {
-  expect(runtime.log.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+  expect(runtime.log.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
 }
 
 describe("web session", () => {
