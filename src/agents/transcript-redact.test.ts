@@ -196,6 +196,35 @@ describe("redactTranscriptMessage", () => {
     expect(inputValue.nested.accessToken[0]).toBe("nested…t123");
   });
 
+  it("redacts arbitrary gateway/custom content-block fields recursively", () => {
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "gatewayCustom",
+          source: {
+            url: "https://example.com/callback?token=sk-abcdef1234567890xyz",
+          },
+          data: {
+            apiKey: "plainsecretvalue123",
+            nested: {
+              accessToken: "nestedplainsecret123",
+            },
+          },
+          safe: "visible",
+        },
+      ],
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const block = (msgContent(result) as Array<Record<string, unknown>>)[0];
+    const serializedBlock = JSON.stringify(block);
+    expect(serializedBlock).not.toContain("sk-abcdef1234567890xyz");
+    expect(serializedBlock).not.toContain("plainsecretvalue123");
+    expect(serializedBlock).not.toContain("nestedplainsecret123");
+    expect(serializedBlock).toContain("visible");
+  });
+
   it("redacts structured secret fields in tool-result details", () => {
     const msg = {
       role: "toolResult",
