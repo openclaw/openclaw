@@ -1,6 +1,9 @@
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
-import { maybeRepairStaleManagedNpmBundledPlugins } from "../doctor-plugin-registry.js";
+import {
+  maybeRepairManagedNpmOpenClawPeerLinks,
+  maybeRepairStaleManagedNpmBundledPlugins,
+} from "../doctor-plugin-registry.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
 import {
@@ -70,6 +73,11 @@ export async function runDoctorRepairSequence(params: {
   applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, env));
   maybeRepairStaleManagedNpmBundledPlugins({
+    config: state.candidate,
+    env,
+    prompter: { shouldRepair: true },
+  });
+  await maybeRepairManagedNpmOpenClawPeerLinks({
     config: state.candidate,
     env,
     prompter: { shouldRepair: true },

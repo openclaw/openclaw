@@ -26,7 +26,12 @@ import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import * as agentStep from "./tools/agent-step.js";
 
-type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
+type AgentCallRequest = {
+  method?: string;
+  params?: Record<string, unknown> & {
+    internalEvents?: Array<{ type?: string; taskLabel?: string }>;
+  };
+};
 type RequesterResolution = {
   requesterSessionKey: string;
   requesterOrigin?: Record<string, unknown>;
@@ -74,7 +79,6 @@ function expectInputProvenance(
   sourceSessionKey: string,
 ) {
   const inputProvenance = params?.inputProvenance;
-  expect(inputProvenance).toBeTruthy();
   if (!inputProvenance || typeof inputProvenance !== "object") {
     throw new Error("Expected input provenance");
   }
@@ -85,8 +89,7 @@ function expectInputProvenance(
 }
 
 function getAgentCall(index = 0): AgentCallRequest {
-  const call = agentSpy.mock.calls[index]?.[0];
-  expect(call).toBeDefined();
+  const call = agentSpy.mock.calls.at(index)?.[0];
   if (!call) {
     throw new Error(`Expected agent call at index ${index}`);
   }
@@ -496,14 +499,8 @@ describe("subagent announce formatting", () => {
       endedAt: 20,
     });
 
-    expect(agentSpy).toHaveBeenCalled();
-    const call = agentSpy.mock.calls[0]?.[0] as {
-      params?: {
-        message?: string;
-        sessionKey?: string;
-        internalEvents?: Array<{ type?: string; taskLabel?: string }>;
-      };
-    };
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = getAgentCall();
     const msg = call?.params?.message as string;
     expect(call?.params?.sessionKey).toBe("agent:main:main");
     expect(msg).toContain("OpenClaw runtime context (internal):");
