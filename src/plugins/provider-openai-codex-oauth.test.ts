@@ -366,7 +366,11 @@ describe("loginOpenAICodexOAuth", () => {
     expect(prompter.note).not.toHaveBeenCalledWith("tls fix", "OAuth prerequisites");
   });
 
-  it("fails fast on TLS certificate preflight failures before starting OAuth login", async () => {
+  it("treats TLS certificate preflight failures as advisory and proceeds with OAuth login (#67917)", async () => {
+    // Regression for #67917: the preflight cannot see the runtime's custom-CA
+    // bundle / proxy config, so a `tls-cert` failure must not hard-block when
+    // the real browser OAuth round-trip can still succeed. CHANGELOG already
+    // documents this as the intended advisory behaviour.
     mocks.runOpenAIOAuthTlsPreflight.mockResolvedValue({
       ok: false,
       kind: "tls-cert",
@@ -377,22 +381,24 @@ describe("loginOpenAICodexOAuth", () => {
     const creds = createCodexCredentials();
     mocks.loginOpenAICodex.mockResolvedValue(creds);
 
-    const { prompter } = createPrompter();
-    const runtime = createRuntime();
+    const { result, prompter, runtime } = await runCodexOAuth({ isRemote: false });
 
-    await expect(
-      loginOpenAICodexOAuth({
-        prompter,
-        runtime,
-        isRemote: false,
-        openUrl: async () => {},
-      }),
-    ).rejects.toThrow(/OAuth prerequisites/i);
+    // Real OAuth flow runs and returns credentials — preflight is advisory.
+    expect(result).toEqual(creds);
+    expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
 
-    expect(mocks.loginOpenAICodex).not.toHaveBeenCalled();
+    // The fix hint is still surfaced to the user, but explicitly tagged
+    // advisory so it does not read as a fatal prerequisite failure.
     expect(prompter.note).toHaveBeenCalledWith(
       "Run brew postinstall openssl@3",
-      "OAuth prerequisites",
+      "OAuth prerequisites (advisory)",
+    );
+
+    // The hint is logged through the non-fatal `runtime.log` channel with an
+    // explicit `[advisory]` prefix, not the `runtime.error` blocker channel.
+    expect(runtime.log).toHaveBeenCalledWith("[advisory] Run brew postinstall openssl@3");
+    expect(runtime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("OpenAI Codex OAuth prerequisites failed"),
     );
   });
 

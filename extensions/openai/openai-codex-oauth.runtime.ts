@@ -267,10 +267,16 @@ export async function loginOpenAICodexOAuth(params: {
 
   const preflight = await runOpenAIOAuthTlsPreflight();
   if (!preflight.ok && preflight.kind === "tls-cert") {
+    // Advisory only: the preflight makes an ad-hoc fetch to `auth.openai.com`
+    // against Node's default trust store, but it does not see the runtime's
+    // custom-CA bundle or proxy config that the real browser OAuth flow uses.
+    // A `tls-cert` failure here can co-exist with a working OAuth round-trip
+    // (see #67917 and the matching CHANGELOG entry describing this as
+    // advisory). Surface the fix hint so users with a real misconfig get it,
+    // but do not block the flow.
     const hint = formatOpenAIOAuthTlsPreflightFix(preflight);
-    await prompter.note(hint, "OAuth prerequisites");
-    runtime.error(hint);
-    throw new Error(`OpenAI Codex OAuth prerequisites failed: ${preflight.message}`);
+    await prompter.note(hint, "OAuth prerequisites (advisory)");
+    runtime.log(`[advisory] ${hint}`);
   }
 
   await prompter.note(
