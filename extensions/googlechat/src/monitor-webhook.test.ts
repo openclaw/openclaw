@@ -147,7 +147,7 @@ describe("googlechat monitor webhook", () => {
             core: {} as never,
             path: "/googlechat",
             mediaMaxMb: 20,
-          } as WebhookTarget,
+          } as unknown as WebhookTarget,
         ],
       ],
     ]);
@@ -201,7 +201,7 @@ describe("googlechat monitor webhook", () => {
             core: {} as never,
             path: "/googlechat",
             mediaMaxMb: 20,
-          } as WebhookTarget,
+          } as unknown as WebhookTarget,
         ],
       ],
     ]);
