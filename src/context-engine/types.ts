@@ -154,9 +154,18 @@ export type ContextEngineInfo = {
    * and intends to override the runtime's default `session_before_compact`
    * compaction path with its own assembly.
    *
-   * Distinct from {@link ownsCompaction}: engines that fully own compaction
-   * never see the runtime event at all, while engines that intercept run
-   * alongside the runtime and only replace the summarization step.
+   * This flag and {@link ownsCompaction} cover DISTINCT compaction lanes —
+   * engines may declare either, both, or neither:
+   *   - `ownsCompaction` → the openclaw queued-compaction lane
+   *     (`compact.queued.ts` → `engine.compact()`), driven by `afterTurn`
+   *     or explicit `/compact`. Engines fully own timing and assembly.
+   *   - `interceptsCompaction` → the pi-coding-agent SDK event lane
+   *     (`session_before_compact`), driven by codex's in-attempt overflow
+   *     auto-compact (~90% context). Engines replace the codex GPT
+   *     summarization with their own.
+   * Codex still fires `session_before_compact` on in-attempt overflow even
+   * when an engine owns the queued lane, so declaring both is correct for
+   * engines that want to handle both flows (e.g. lossless-claw v4.1).
    *
    * The host treats this as authoritative for capability gating (e.g. it
    * auto-zeroes Pi's `reserveTokensFloor` headroom reserve when this is true,

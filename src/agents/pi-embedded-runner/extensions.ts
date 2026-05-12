@@ -150,11 +150,13 @@ export function buildEmbeddedExtensionFactories(params: {
   /**
    * Active context engine for the user-facing session, when known.
    *
-   * When the engine declares `info.interceptsCompaction === true` and does
-   * NOT own compaction outright, a `compaction-intercept` extension is
-   * registered that routes `session_before_compact` events through
-   * `engine.interceptCompaction()`. Inner LLM sessions (compaction LLM,
-   * subagent runs that have no separate engine) pass `undefined` to skip.
+   * When the engine declares `info.interceptsCompaction === true`, a
+   * `compaction-intercept` extension is registered that routes
+   * `session_before_compact` events through `engine.interceptCompaction()`.
+   * `ownsCompaction` does NOT exclude intercept — engines may declare both
+   * because the two flags cover distinct lanes (SDK event vs queued lane).
+   * Inner LLM sessions (compaction LLM, subagent runs that have no separate
+   * engine) pass `undefined` to skip.
    */
   activeContextEngine?: ContextEngine;
   /**
