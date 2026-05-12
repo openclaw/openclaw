@@ -15,10 +15,6 @@ import {
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
-import {
-  getPackageManifestMetadata,
-  type PackageManifest as OpenClawPackageManifest,
-} from "./manifest.js";
 import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
 
 type InstallScanLogger = {
@@ -51,7 +47,11 @@ type PackageManifest = {
   peerDependencies?: Record<string, string>;
 };
 
-type PackageInstallScanManifest = PackageManifest & OpenClawPackageManifest;
+type PackageExecutableScanMetadata = {
+  runtimeExtensions?: readonly string[];
+  runtimeSetupEntry?: string;
+  setupEntry?: string;
+};
 
 type PackageManifestTraversalLimits = {
   maxDepth: number;
@@ -608,15 +608,12 @@ function readStringList(value: unknown): string[] {
     .filter((entry): entry is string => Boolean(entry));
 }
 
-async function collectPackageExecutableScanEntries(params: {
+function collectPackageExecutableScanEntries(params: {
   extensions: string[];
-  packageDir: string;
-}): Promise<string[]> {
+  packageMetadata?: PackageExecutableScanMetadata;
+}): string[] {
   const entries: string[] = [];
-  const manifest = await tryReadJson<PackageInstallScanManifest>(
-    path.join(params.packageDir, "package.json"),
-  );
-  const metadata = getPackageManifestMetadata(manifest ?? undefined);
+  const metadata = params.packageMetadata;
   const runtimeExtensions = readStringList(metadata?.runtimeExtensions);
   for (const [index, extensionEntry] of params.extensions.entries()) {
     entries.push(extensionEntry);
@@ -855,6 +852,7 @@ export async function scanPackageInstallSourceRuntime(
     extensions: string[];
     logger: InstallScanLogger;
     packageDir: string;
+    packageMetadata?: PackageExecutableScanMetadata;
     pluginId: string;
     requestKind?: PluginInstallRequestKind;
     requestedSpecifier?: string;
@@ -874,9 +872,9 @@ export async function scanPackageInstallSourceRuntime(
   }
 
   const forcedScanEntries: string[] = [];
-  const executableEntries = await collectPackageExecutableScanEntries({
+  const executableEntries = collectPackageExecutableScanEntries({
     extensions: params.extensions,
-    packageDir: params.packageDir,
+    ...(params.packageMetadata ? { packageMetadata: params.packageMetadata } : {}),
   });
   for (const entry of executableEntries) {
     const resolvedEntry = path.resolve(params.packageDir, entry);
