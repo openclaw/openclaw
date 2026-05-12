@@ -89,6 +89,7 @@ vi.mock("../config/config.js", () => ({
     }
   },
   readConfigFileSnapshot: vi.fn(),
+  readSourceConfigBestEffort: vi.fn(),
   replaceConfigFile: vi.fn(),
   resolveGatewayPort: vi.fn(() => 18789),
 }));
@@ -265,8 +266,12 @@ vi.mock("../runtime.js", () => ({
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
 const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
-const { ConfigMutationConflictError, readConfigFileSnapshot, replaceConfigFile } =
-  await import("../config/config.js");
+const {
+  ConfigMutationConflictError,
+  readConfigFileSnapshot,
+  readSourceConfigBestEffort,
+  replaceConfigFile,
+} = await import("../config/config.js");
 const { checkUpdateStatus, fetchNpmPackageTargetStatus, fetchNpmTagVersion, resolveNpmChannelTag } =
   await import("../infra/update-check.js");
 const { runCommandWithTimeout } = await import("../process/exec.js");
@@ -427,7 +432,9 @@ describe("update-cli", () => {
       "--no-audit",
       "--loglevel=error",
     ]);
-    expect(call?.[1]).toBeDefined();
+    if (call?.[1] === undefined) {
+      throw new Error("Expected package install command options");
+    }
   };
 
   const statfsFixture = (params: {
@@ -476,7 +483,7 @@ describe("update-cli", () => {
       force: true,
       json: undefined,
     });
-    expect(runDaemonRestart).toHaveBeenCalled();
+    expect(runDaemonRestart).toHaveBeenCalledTimes(1);
   };
 
   const setupNonInteractiveDowngrade = async () => {
@@ -538,6 +545,7 @@ describe("update-cli", () => {
     vi.mocked(defaultRuntime.exit).mockImplementation(() => {});
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
+    vi.mocked(readSourceConfigBestEffort).mockResolvedValue(baseSnapshot.config);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
       tag: "latest",
       version: "9999.0.0",
@@ -878,8 +886,8 @@ describe("update-cli", () => {
     await updateCommand({ yes: true, tag: "2026.4.10", restart: false });
 
     expect(spawn).not.toHaveBeenCalled();
-    expect(syncPluginsForUpdateChannel).toHaveBeenCalled();
-    expect(updateNpmInstalledPlugins).toHaveBeenCalled();
+    expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(probeGateway).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
@@ -1495,6 +1503,28 @@ describe("update-cli", () => {
     },
   ] as const)("updateStatusCommand rendering: $name", runUpdateCliScenario);
 
+  it("renders update status when unrelated config validation would fail", async () => {
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      valid: false,
+      config: {} as OpenClawConfig,
+    });
+    vi.mocked(readSourceConfigBestEffort).mockResolvedValue({
+      update: { channel: "dev" },
+    } as OpenClawConfig);
+
+    await updateStatusCommand({ json: true });
+
+    const last = requireValue(
+      vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0],
+      "update status JSON output",
+    );
+    const parsed = last as Record<string, unknown>;
+    const channel = parsed.channel as { value?: unknown; config?: unknown };
+    expect(channel.value).toBe("dev");
+    expect(channel.config).toBe("dev");
+  });
+
   it("parses update status --json as the subcommand option", async () => {
     const program = new Command();
     program.name("openclaw");
@@ -1574,7 +1604,7 @@ describe("update-cli", () => {
       }
 
       if (expectedPersistedChannel !== undefined) {
-        expect(replaceConfigFile).toHaveBeenCalled();
+        expect(replaceConfigFile).toHaveBeenCalledTimes(1);
         const writeCall = vi.mocked(replaceConfigFile).mock.calls[0]?.[0] as
           | { nextConfig?: { update?: { channel?: string } } }
           | undefined;
@@ -1617,7 +1647,7 @@ describe("update-cli", () => {
         ([argv]) => Array.isArray(argv) && argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g",
       );
     expect(installCalls).toHaveLength(1);
-    expect(updateNpmInstalledPlugins).toHaveBeenCalled();
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
     expect(replaceConfigFile).not.toHaveBeenCalled();
     const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
     expect(logs.join("\n")).not.toContain("already-current");
@@ -1663,9 +1693,11 @@ describe("update-cli", () => {
     );
 
     expect(defaultRuntime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining(
+      [
         "Package updates cannot run from inside the gateway service process.",
-      ),
+        "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+        "Run `openclaw update` from a shell outside the gateway service, or stop the gateway service first and then update.",
+      ].join("\n"),
     );
     expectPackageInstallSpec("openclaw@latest");
   });
@@ -1692,9 +1724,11 @@ describe("update-cli", () => {
     );
 
     expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
+      [
         "Package updates cannot run from inside the gateway service process.",
-      ),
+        "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+        "Run `openclaw update` from a shell outside the gateway service, or stop the gateway service first and then update.",
+      ].join("\n"),
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();
@@ -1736,9 +1770,11 @@ describe("update-cli", () => {
       );
 
       expect(defaultRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining(
+        [
           "Package updates cannot run from inside the gateway service process.",
-        ),
+          "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+          "Run `openclaw update` from a shell outside the gateway service, or stop the gateway service first and then update.",
+        ].join("\n"),
       );
       expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
       expect(serviceStop).not.toHaveBeenCalled();
@@ -1767,9 +1803,11 @@ describe("update-cli", () => {
     );
 
     expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
+      [
         "Package updates cannot run from inside the gateway service process.",
-      ),
+        "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+        "Run `openclaw update` from a shell outside the gateway service, or stop the gateway service first and then update.",
+      ].join("\n"),
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();
@@ -2904,7 +2942,7 @@ describe("update-cli", () => {
           force: true,
           json: undefined,
         });
-        expect(runRestartScript).toHaveBeenCalled();
+        expect(runRestartScript).toHaveBeenCalledTimes(1);
         expect(runDaemonRestart).not.toHaveBeenCalled();
       },
     },
@@ -2919,7 +2957,7 @@ describe("update-cli", () => {
           force: true,
           json: undefined,
         });
-        expect(runDaemonRestart).toHaveBeenCalled();
+        expect(runDaemonRestart).toHaveBeenCalledTimes(1);
       },
     },
     {
@@ -2933,7 +2971,7 @@ describe("update-cli", () => {
           force: true,
           json: undefined,
         });
-        expect(runDaemonRestart).toHaveBeenCalled();
+        expect(runDaemonRestart).toHaveBeenCalledTimes(1);
       },
     },
     {
@@ -3133,7 +3171,7 @@ describe("update-cli", () => {
 
     await updateCommand({ yes: true });
 
-    expect(runRestartScript).toHaveBeenCalled();
+    expect(runRestartScript).toHaveBeenCalledTimes(1);
     const probeCall = probeGateway.mock.calls[0]?.[0] as { includeDetails?: boolean } | undefined;
     expect(probeCall?.includeDetails).toBe(true);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
@@ -3153,7 +3191,7 @@ describe("update-cli", () => {
       },
       assertExtra: () => {
         expect(runDaemonInstall).not.toHaveBeenCalled();
-        expect(runRestartScript).toHaveBeenCalled();
+        expect(runRestartScript).toHaveBeenCalledTimes(1);
       },
     },
     {
@@ -3274,25 +3312,26 @@ describe("update-cli", () => {
       name: "update command invalid timeout",
       run: async () => await updateCommand({ timeout: "invalid" }),
       requireTty: false,
-      expectedError: "timeout",
+      expectedError: "--timeout must be a positive integer (seconds)",
     },
     {
       name: "update status command invalid timeout",
       run: async () => await updateStatusCommand({ timeout: "invalid" }),
       requireTty: false,
-      expectedError: "timeout",
+      expectedError: "--timeout must be a positive integer (seconds)",
     },
     {
       name: "update wizard invalid timeout",
       run: async () => await updateWizardCommand({ timeout: "invalid" }),
       requireTty: true,
-      expectedError: "timeout",
+      expectedError: "--timeout must be a positive integer (seconds)",
     },
     {
       name: "update wizard requires a TTY",
       run: async () => await updateWizardCommand({}),
       requireTty: false,
-      expectedError: "Update wizard requires a TTY",
+      expectedError:
+        "Update wizard requires a TTY. Use `openclaw update --channel <stable|beta|dev>` instead.",
     },
   ] as const)(
     "validates update command invocation errors: $name",
@@ -3303,9 +3342,7 @@ describe("update-cli", () => {
 
       await run();
 
-      expect(defaultRuntime.error, name).toHaveBeenCalledWith(
-        expect.stringContaining(expectedError),
-      );
+      expect(defaultRuntime.error, name).toHaveBeenCalledWith(expectedError);
       expect(defaultRuntime.exit, name).toHaveBeenCalledWith(1);
     },
   );
@@ -3336,7 +3373,7 @@ describe("update-cli", () => {
     } else {
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     }
-    expect(vi.mocked(runGatewayUpdate).mock.calls.length > 0).toBe(false);
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
     expect(
       vi
         .mocked(runCommandWithTimeout)

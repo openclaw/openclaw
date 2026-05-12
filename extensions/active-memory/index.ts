@@ -11,7 +11,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
@@ -1174,7 +1174,9 @@ function resolveChatType(ctx: {
   channelId?: string;
   mainKey?: string;
 }): ActiveMemoryChatType | undefined {
-  const sessionKey = ctx.sessionKey?.trim().toLowerCase();
+  const rawSessionKey = ctx.sessionKey?.trim();
+  const { baseSessionKey } = parseThreadSessionSuffix(rawSessionKey);
+  const sessionKey = (baseSessionKey ?? rawSessionKey)?.trim().toLowerCase();
   if (sessionKey) {
     if (sessionKey.startsWith("agent:") && sessionKey.split(":")[2] === "explicit") {
       return "explicit";

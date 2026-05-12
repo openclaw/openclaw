@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  consumeExecApprovalFollowupRuntimeHandoff,
+  resetExecApprovalFollowupRuntimeHandoffsForTests,
+} from "./bash-tools.exec-approval-followup-state.js";
+import {
   buildExecApprovalPendingToolResult,
   enforceStrictInlineEvalApprovalBoundary,
   MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS as maxExecApprovalFollowupFailureLogKeys,
@@ -59,6 +63,7 @@ describe("sendExecApprovalFollowupResult", () => {
       allowlist: [],
       file: { version: 1, agents: {} },
     });
+    resetExecApprovalFollowupRuntimeHandoffsForTests();
   });
 
   it("logs repeated followup dispatch failures once per approval id and error message", async () => {
@@ -105,6 +110,92 @@ describe("sendExecApprovalFollowupResult", () => {
     expect(logWarn).toHaveBeenLastCalledWith(
       "exec approval followup dispatch failed (id=approval-0): Channel is required",
     );
+  });
+
+  it("registers elevated defaults behind an internal token for agent followups", async () => {
+    sendExecApprovalFollowup.mockResolvedValue(true);
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+
+    await sendExecApprovalFollowupResult(
+      {
+        approvalId: "approval-elevated-75832",
+        sessionKey: "agent:main:telegram:direct:123",
+        turnSourceChannel: "telegram",
+        bashElevated,
+      },
+      "Exec finished",
+      { sendExecApprovalFollowup, logWarn },
+    );
+
+    const call = sendExecApprovalFollowup.mock.calls[0]?.[0] as
+      | {
+          internalRuntimeHandoffId?: string;
+          idempotencyKey?: string;
+          execApprovalFollowupToken?: string;
+          bashElevated?: unknown;
+        }
+      | undefined;
+    if (!call) {
+      throw new Error("Expected elevated exec approval followup call");
+    }
+    expect(call.internalRuntimeHandoffId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(call.idempotencyKey).toMatch(/^exec-approval-followup:approval-elevated-75832:nonce:/);
+    expect(call.idempotencyKey).not.toContain(call.internalRuntimeHandoffId ?? "");
+    expect(call).not.toHaveProperty("bashElevated");
+    expect(call).not.toHaveProperty("execApprovalFollowupToken");
+    expect(
+      consumeExecApprovalFollowupRuntimeHandoff({
+        handoffId: call.internalRuntimeHandoffId ?? "",
+        approvalId: "approval-elevated-75832",
+        idempotencyKey: call.idempotencyKey ?? "",
+        sessionKey: "agent:main:telegram:direct:wrong",
+      }),
+    ).toBeUndefined();
+    expect(
+      consumeExecApprovalFollowupRuntimeHandoff({
+        handoffId: call.internalRuntimeHandoffId ?? "",
+        approvalId: "approval-elevated-75832",
+        idempotencyKey: call.idempotencyKey ?? "",
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
+    ).toEqual({
+      kind: "exec-approval-followup",
+      approvalId: "approval-elevated-75832",
+      sessionKey: "agent:main:telegram:direct:123",
+      idempotencyKey: call.idempotencyKey,
+      bashElevated,
+    });
+  });
+
+  it("keeps non-elevated agent followups on the deterministic idempotency path", async () => {
+    sendExecApprovalFollowup.mockResolvedValue(true);
+
+    await sendExecApprovalFollowupResult(
+      {
+        approvalId: "approval-normal-75832",
+        sessionKey: "agent:main:telegram:direct:123",
+        turnSourceChannel: "telegram",
+      },
+      "Exec finished",
+      { sendExecApprovalFollowup, logWarn },
+    );
+
+    const call = sendExecApprovalFollowup.mock.calls[0]?.[0] as
+      | {
+          internalRuntimeHandoffId?: string;
+          idempotencyKey?: string;
+          bashElevated?: unknown;
+        }
+      | undefined;
+    expect(call).not.toHaveProperty("internalRuntimeHandoffId");
+    expect(call).not.toHaveProperty("idempotencyKey");
+    expect(call).not.toHaveProperty("bashElevated");
   });
 });
 

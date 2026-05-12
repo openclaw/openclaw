@@ -92,6 +92,35 @@ async function readSessionFileJsonLines<T>(sessionFile: string): Promise<T[]> {
   return entries;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function requireMockArg(mock: typeof runCliAgentMock, callIndex: number, label: string) {
+  const arg = mock.mock.calls[callIndex]?.[0];
+  if (arg === undefined) {
+    throw new Error(`Expected mock argument for ${label}`);
+  }
+  return requireRecord(arg, label);
+}
+
+function expectMockArgFields(
+  mock: typeof runCliAgentMock,
+  fields: Record<string, unknown>,
+  callIndex = 0,
+) {
+  expectRecordFields(requireMockArg(mock, callIndex, "mock call argument"), fields);
+}
+
 describe("CLI attempt execution", () => {
   let tmpDir: string;
   let storePath: string;
@@ -397,23 +426,26 @@ describe("CLI attempt execution", () => {
       throw new Error("expected CLI transcript persistence to create a session file");
     }
     const entries = await readSessionFileEntries(sessionFile);
-    expect(entries[0]).toMatchObject({
+    expectRecordFields(requireRecord(entries[0], "session entry"), {
       type: "session",
       id: sessionEntry.sessionId,
       cwd: tmpDir,
     });
-    expect(entries[1]).toMatchObject({ type: "message", parentId: null });
-    expect(entries[2]).toMatchObject({
+    expectRecordFields(requireRecord(entries[1], "user transcript entry"), {
+      type: "message",
+      parentId: null,
+    });
+    expectRecordFields(requireRecord(entries[2], "assistant transcript entry"), {
       type: "message",
       parentId: entries[1]?.id,
     });
     const messages = await readSessionMessages(sessionFile);
     expect(messages).toHaveLength(2);
-    expect(messages[0]).toMatchObject({
+    expectRecordFields(requireRecord(messages[0], "user message"), {
       role: "user",
       content: "persist this",
     });
-    expect(messages[1]).toMatchObject({
+    expectRecordFields(requireRecord(messages[1], "assistant message"), {
       role: "assistant",
       api: "cli",
       provider: "claude-cli",
@@ -456,7 +488,7 @@ describe("CLI attempt execution", () => {
 
     let messages = await readSessionMessages(updatedFirst?.sessionFile ?? "");
     expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({
+    expectRecordFields(requireRecord(messages[0], "assistant message"), {
       role: "assistant",
       content: [{ type: "text", text: "already mirrored" }],
     });
@@ -510,11 +542,15 @@ describe("CLI attempt execution", () => {
       embeddedAssistantGapFill: true,
     });
     const sessionFile = updatedFirst?.sessionFile;
-    expect(typeof sessionFile).toBe("string");
-    expect(sessionFile?.length ?? 0).toBeGreaterThan(0);
-    if (typeof sessionFile !== "string" || sessionFile.length === 0) {
+    if (typeof sessionFile !== "string") {
       throw new Error("Expected CLI transcript session file.");
     }
+    expect(path.isAbsolute(sessionFile)).toBe(true);
+    expect(
+      sessionFile.endsWith(
+        path.join(".openclaw", "agents", "main", "sessions", `${sessionEntry.sessionId}.jsonl`),
+      ),
+    ).toBe(true);
 
     await appendSessionTranscriptMessage({
       transcriptPath: sessionFile,
@@ -545,7 +581,7 @@ describe("CLI attempt execution", () => {
     const messages = await readSessionMessages(sessionFile);
     expect(messages).toHaveLength(3);
     expect(messages.map((message) => message.role)).toEqual(["assistant", "user", "assistant"]);
-    expect(messages[2]).toMatchObject({
+    expectRecordFields(requireRecord(messages[2], "deduped assistant message"), {
       content: [{ type: "text", text: "same answer" }],
     });
   });
@@ -580,7 +616,7 @@ describe("CLI attempt execution", () => {
     });
 
     const messages = await readSessionMessages(updatedEntry?.sessionFile ?? "");
-    expect(messages[0]).toMatchObject({
+    expectRecordFields(requireRecord(messages[0], "transcript user message"), {
       role: "user",
       content: "visible ask",
     });
@@ -630,13 +666,11 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        trigger: "user",
-        messageChannel: "discord",
-        messageProvider: "discord-voice",
-      }),
-    );
+    expectMockArgFields(runCliAgentMock, {
+      trigger: "user",
+      messageChannel: "discord",
+      messageProvider: "discord-voice",
+    });
   });
 
   it("forwards runtime toolsAllow into CLI attempts so the CLI harness can fail closed", async () => {
@@ -682,12 +716,10 @@ describe("CLI attempt execution", () => {
       sessionHasHistory: false,
     });
 
-    expect(runCliAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "claude-cli",
-        toolsAllow: ["read", "web_search"],
-      }),
-    );
+    expectMockArgFields(runCliAgentMock, {
+      provider: "claude-cli",
+      toolsAllow: ["read", "web_search"],
+    });
   });
 
   it("routes canonical Anthropic models through the configured Claude CLI runtime", async () => {
@@ -739,12 +771,10 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    expect(runCliAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "claude-cli",
-        model: "claude-opus-4-7",
-      }),
-    );
+    expectMockArgFields(runCliAgentMock, {
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+    });
   });
 
   it("routes canonical OpenAI models through the configured Codex CLI runtime", async () => {
@@ -796,12 +826,10 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    expect(runCliAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "codex-cli",
-        model: "gpt-5.4",
-      }),
-    );
+    expectMockArgFields(runCliAgentMock, {
+      provider: "codex-cli",
+      model: "gpt-5.4",
+    });
   });
 
   it("keeps one-shot model runs on the raw embedded provider path", async () => {
@@ -863,22 +891,77 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runCliAgentMock).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "anthropic",
-        model: "claude-opus-4-7",
-        agentHarnessId: "pi",
-        prompt: "raw prompt",
-        messageChannel: "discord",
-        messageProvider: "discord-voice",
-        modelRun: true,
-        promptMode: "none",
-        disableTools: true,
-      }),
-    );
+    expectMockArgFields(runEmbeddedPiAgentMock, {
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      agentHarnessId: "pi",
+      prompt: "raw prompt",
+      messageChannel: "discord",
+      messageProvider: "discord-voice",
+      modelRun: true,
+      promptMode: "none",
+      disableTools: true,
+    });
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt).not.toContain(
       "[Inter-session message]",
     );
+  });
+
+  it("forwards trusted elevated defaults to embedded agent runs", async () => {
+    const sessionKey = "agent:main:telegram:direct:123";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-elevated-followup",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.4",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "follow up after approved exec",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-elevated-followup",
+      opts: {
+        senderIsOwner: false,
+        bashElevated,
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "telegram",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expectMockArgFields(runEmbeddedPiAgentMock, {
+      provider: "openai",
+      model: "gpt-5.4",
+      bashElevated,
+    });
   });
 
   it("forwards one-shot CLI cleanup to CLI providers", async () => {
@@ -925,12 +1008,10 @@ describe("CLI attempt execution", () => {
       sessionHasHistory: false,
     });
 
-    expect(runCliAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cleanupBundleMcpOnRunEnd: true,
-        cleanupCliLiveSessionOnRunEnd: true,
-      }),
-    );
+    expectMockArgFields(runCliAgentMock, {
+      cleanupBundleMcpOnRunEnd: true,
+      cleanupCliLiveSessionOnRunEnd: true,
+    });
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 });
@@ -985,11 +1066,7 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: true,
     });
 
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentHarnessId: undefined,
-      }),
-    );
+    expectMockArgFields(runEmbeddedPiAgentMock, { agentHarnessId: undefined });
   });
 
   it("ignores stale session Codex harness pins on non-OpenAI model switches", async () => {
@@ -1030,11 +1107,7 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: true,
     });
 
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentHarnessId: undefined,
-      }),
-    );
+    expectMockArgFields(runEmbeddedPiAgentMock, { agentHarnessId: undefined });
   });
 
   it("forwards runtime toolsAllow into embedded attempts", async () => {
@@ -1077,11 +1150,7 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: false,
     });
 
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolsAllow: ["read", "web_search"],
-      }),
-    );
+    expectMockArgFields(runEmbeddedPiAgentMock, { toolsAllow: ["read", "web_search"] });
   });
 
   it("lets provider/model runtime policy choose Codex without storing a session harness pin", async () => {
@@ -1131,11 +1200,7 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: true,
     });
 
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentHarnessId: undefined,
-      }),
-    );
+    expectMockArgFields(runEmbeddedPiAgentMock, { agentHarnessId: undefined });
   });
 
   it("auto-forwards OpenAI Codex auth profiles to default Codex harness runs", async () => {
@@ -1190,13 +1255,11 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: true,
     });
 
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentHarnessId: undefined,
-        authProfileId: "openai-codex:work",
-        authProfileIdSource: "auto",
-      }),
-    );
+    expectMockArgFields(runEmbeddedPiAgentMock, {
+      agentHarnessId: undefined,
+      authProfileId: "openai-codex:work",
+      authProfileIdSource: "auto",
+    });
   });
 
   it("pins a fresh OpenAI session to the Codex harness by default", async () => {
@@ -1236,11 +1299,7 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: false,
     });
 
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentHarnessId: undefined,
-      }),
-    );
+    expectMockArgFields(runEmbeddedPiAgentMock, { agentHarnessId: undefined });
   });
 
   it("ignores stale OpenAI sessions pinned to PI and relies on default Codex routing", async () => {
@@ -1281,12 +1340,10 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: true,
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        agentHarnessId: undefined,
-      }),
-    );
+    expectMockArgFields(runEmbeddedPiAgentMock, {
+      provider: "openai",
+      agentHarnessId: undefined,
+    });
   });
 
   it("routes explicit OpenAI PI runs with Codex OAuth through the legacy Codex auth transport", async () => {
@@ -1338,15 +1395,13 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: false,
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai-codex",
-        model: "gpt-5.4",
-        agentHarnessId: undefined,
-        authProfileId: "openai-codex:work",
-        authProfileIdSource: "user",
-      }),
-    );
+    expectMockArgFields(runEmbeddedPiAgentMock, {
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      agentHarnessId: undefined,
+      authProfileId: "openai-codex:work",
+      authProfileIdSource: "user",
+    });
   });
 
   it("does not pass CLI runtime aliases as embedded harness ids for fallback providers", async () => {

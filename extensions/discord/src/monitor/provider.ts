@@ -3,7 +3,7 @@ import {
   listNativeCommandSpecsForConfig,
   listSkillCommandsForAgents,
 } from "openclaw/plugin-sdk/command-auth-native";
-import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   resolveNativeCommandsEnabled,
@@ -497,8 +497,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     let voiceManager: DiscordVoiceManager | null = null;
 
     if (voiceEnabled) {
-      const { DiscordVoiceManager, DiscordVoiceReadyListener, DiscordVoiceResumedListener } =
-        await loadDiscordVoiceRuntime();
+      const {
+        DiscordVoiceManager,
+        DiscordVoiceReadyListener,
+        DiscordVoiceResumedListener,
+        DiscordVoiceStateUpdateListener,
+      } = await loadDiscordVoiceRuntime();
       voiceManager = new DiscordVoiceManager({
         client,
         cfg,
@@ -510,6 +514,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       voiceManagerRef.current = voiceManager;
       registerDiscordListener(client.listeners, new DiscordVoiceReadyListener(voiceManager));
       registerDiscordListener(client.listeners, new DiscordVoiceResumedListener(voiceManager));
+      registerDiscordListener(client.listeners, new DiscordVoiceStateUpdateListener(voiceManager));
     }
 
     const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({

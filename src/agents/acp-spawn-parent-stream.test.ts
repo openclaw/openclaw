@@ -51,7 +51,9 @@ let resolveAcpSpawnStreamLogPath: typeof import("./acp-spawn-parent-stream.js").
 let startAcpSpawnParentStreamRelay: typeof import("./acp-spawn-parent-stream.js").startAcpSpawnParentStreamRelay;
 
 function collectedTexts() {
-  return enqueueSystemEventMock.mock.calls.map((call) => String(call[0] ?? ""));
+  return enqueueSystemEventMock.mock.calls.map((call) =>
+    typeof call[0] === "string" ? call[0] : (JSON.stringify(call[0]) ?? ""),
+  );
 }
 
 function expectTextWithFragment(texts: string[], fragment: string): void {
@@ -149,6 +151,44 @@ describe("startAcpSpawnParentStreamRelay", () => {
           options.reason === "acp:spawn:stream" && options.sessionKey === "agent:main:main",
       ),
     ).toBe(true);
+    relay.dispose();
+  });
+
+  it("remaps cron-run parent session keys while relaying stream events", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-cron",
+      parentSessionKey: "agent:ops:cron:nightly:run:run-1:subagent:worker",
+      childSessionKey: "agent:codex:acp:child-cron",
+      agentId: "codex",
+      mainKey: "primary",
+      sessionScope: "global",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-cron",
+      stream: "assistant",
+      data: {
+        delta: "hello from child",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    const progressEvent = enqueueSystemEventMock.mock.calls.find(
+      ([text]) => typeof text === "string" && text.includes("codex: hello from child"),
+    );
+    expect(progressEvent?.[0]).toContain("codex: hello from child");
+    const progressOptions = progressEvent?.[1] as
+      | { contextKey?: unknown; sessionKey?: unknown; trusted?: unknown }
+      | undefined;
+    expect(progressOptions?.contextKey).toBe("acp-spawn:run-cron:progress");
+    expect(progressOptions?.sessionKey).toBe("global");
+    expect(progressOptions?.trusted).toBe(false);
+    const heartbeatOptions = requestHeartbeatMock.mock.calls[0]?.[0];
+    expect(heartbeatOptions?.agentId).toBe("ops");
+    expect(heartbeatOptions?.reason).toBe("acp:spawn:stream");
+    expect(requestHeartbeatMock.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
     relay.dispose();
   });
 

@@ -26,6 +26,40 @@ beforeEach(() => {
   wsMockState.urls = [];
 });
 
+function requireFetchCall(index = 0): [RequestInfo | URL, RequestInit] {
+  const call = mockFetch.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected fetch call ${index}`);
+  }
+  return call as [RequestInfo | URL, RequestInit];
+}
+
+function expectFetchCall(index: number, url: string, method?: string): RequestInit {
+  const [actualUrl, init] = requireFetchCall(index);
+  expect(actualUrl).toBe(url);
+  if (method) {
+    expect(init.method).toBe(method);
+  }
+  return init;
+}
+
+function expectFirstFetchCall(url: string, method?: string): RequestInit {
+  return expectFetchCall(0, url, method);
+}
+
+function parseFetchBody(index = 0): Record<string, unknown> {
+  const init = requireFetchCall(index)[1];
+  if (typeof init.body !== "string") {
+    throw new Error(`expected fetch call ${index} body to be a string`);
+  }
+  return JSON.parse(init.body) as Record<string, unknown>;
+}
+
+function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: string): void {
+  const messages = mock.mock.calls.map((call) => String(call[0] ?? ""));
+  expect(messages.every((message) => !message.includes(expected))).toBe(true);
+}
+
 // Minimal WebSocket mock for connection-log assertions.
 vi.mock("ws", () => ({
   default: class MockWebSocket {
@@ -91,10 +125,7 @@ describe("containerCheck", () => {
 
     const result = await containerCheck("http://localhost:8080");
     expect(result).toEqual({ ok: true, status: 200, error: null });
-    expect(mockFetch).toHaveBeenCalledWith(
-      "http://localhost:8080/v1/about",
-      expect.objectContaining({ method: "GET" }),
-    );
+    expectFirstFetchCall("http://localhost:8080/v1/about", "GET");
   });
 
   it("returns ok:false when /v1/about returns 404", async () => {
@@ -118,14 +149,14 @@ describe("containerCheck", () => {
     mockFetch.mockResolvedValue({ ok: true, status: 200 });
 
     await containerCheck("http://localhost:8080/");
-    expect(mockFetch).toHaveBeenCalledWith("http://localhost:8080/v1/about", expect.anything());
+    expectFirstFetchCall("http://localhost:8080/v1/about");
   });
 
   it("adds http:// prefix when missing", async () => {
     mockFetch.mockResolvedValue({ ok: true, status: 200 });
 
     await containerCheck("localhost:8080");
-    expect(mockFetch).toHaveBeenCalledWith("http://localhost:8080/v1/about", expect.anything());
+    expectFirstFetchCall("http://localhost:8080/v1/about");
   });
 
   it("validates the receive WebSocket when an account is provided", async () => {
@@ -166,13 +197,8 @@ describe("containerRestRequest", () => {
 
     const result = await containerRestRequest("/v1/about", { baseUrl: "http://localhost:8080" });
     expect(result).toEqual({ version: "1.0" });
-    expect(mockFetch).toHaveBeenCalledWith(
-      "http://localhost:8080/v1/about",
-      expect.objectContaining({
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    const init = expectFirstFetchCall("http://localhost:8080/v1/about", "GET");
+    expect(init.headers).toEqual({ "Content-Type": "application/json" });
   });
 
   it("makes POST request with body", async () => {
@@ -188,15 +214,12 @@ describe("containerRestRequest", () => {
       recipients: ["+1234567890"],
     });
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      "http://localhost:8080/v2/send",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          message: "test",
-          number: "+1234567890",
-          recipients: ["+1234567890"],
-        }),
+    const init = expectFirstFetchCall("http://localhost:8080/v2/send", "POST");
+    expect(init.body).toBe(
+      JSON.stringify({
+        message: "test",
+        number: "+1234567890",
+        recipients: ["+1234567890"],
       }),
     );
   });
@@ -265,8 +288,9 @@ describe("containerRestRequest", () => {
 
     // The timeout is enforced via AbortController, so we verify the call was made with a signal
     expect(mockFetch).toHaveBeenCalled();
-    const callArgs = mockFetch.mock.calls[0];
-    expect(callArgs[1].signal).toBeDefined();
+    if (requireFetchCall()[1].signal === undefined) {
+      throw new Error("expected fetch call to include an abort signal");
+    }
   });
 });
 
@@ -290,15 +314,12 @@ describe("containerSendMessage", () => {
     });
 
     expect(result).toEqual({ timestamp: 1700000000000 });
-    expect(mockFetch).toHaveBeenCalledWith(
-      "http://localhost:8080/v2/send",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          message: "Hello world",
-          number: "+14259798283",
-          recipients: ["+15550001111"],
-        }),
+    const init = expectFirstFetchCall("http://localhost:8080/v2/send", "POST");
+    expect(init.body).toBe(
+      JSON.stringify({
+        message: "Hello world",
+        number: "+14259798283",
+        recipients: ["+15550001111"],
       }),
     );
   });
@@ -335,12 +356,9 @@ describe("containerSendMessage", () => {
       textStyles: [{ start: 0, length: 4, style: "BOLD" }],
     });
 
-    const callArgs = mockFetch.mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
-    expect(body).toMatchObject({
-      message: "**Bold** text",
-      text_mode: "styled",
-    });
+    const body = parseFetchBody();
+    expect(body.message).toBe("**Bold** text");
+    expect(body.text_mode).toBe("styled");
     expect(body).not.toHaveProperty("text_style");
   });
 
@@ -412,7 +430,9 @@ describe("containerSendMessage", () => {
     const callArgs = mockFetch.mock.calls[0];
     const body = JSON.parse(callArgs[1].body);
     expect(body.attachments).toBeUndefined();
-    expect(body.base64_attachments).toBeDefined();
+    if (!Array.isArray(body.base64_attachments)) {
+      throw new Error("expected base64 attachments array");
+    }
     expect(body.base64_attachments).toHaveLength(1);
     expect(body.base64_attachments[0]).toMatch(
       /^data:image\/jpeg;filename=test-image\.jpg;base64,/,
@@ -441,13 +461,11 @@ describe("containerSendTyping", () => {
     });
 
     expect(result).toBe(true);
-    expect(mockFetch).toHaveBeenCalledWith(
+    const init = expectFirstFetchCall(
       "http://localhost:8080/v1/typing-indicator/%2B14259798283",
-      expect.objectContaining({
-        method: "PUT",
-        body: JSON.stringify({ recipient: "+15550001111" }),
-      }),
+      "PUT",
     );
+    expect(init.body).toBe(JSON.stringify({ recipient: "+15550001111" }));
   });
 
   it("stops typing indicator with DELETE", async () => {
@@ -463,10 +481,7 @@ describe("containerSendTyping", () => {
       stop: true,
     });
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ method: "DELETE" }),
-    );
+    expect(requireFetchCall()[1].method).toBe("DELETE");
   });
 });
 
@@ -490,8 +505,7 @@ describe("containerRpcRequest typing", () => {
       { baseUrl: "http://localhost:8080" },
     );
 
-    const callArgs = mockFetch.mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
+    const body = parseFetchBody();
     expect(body.recipient).toBe("group.Z3JvdXAtMTIz");
   });
 });
@@ -515,15 +529,12 @@ describe("containerSendReceipt", () => {
     });
 
     expect(result).toBe(true);
-    expect(mockFetch).toHaveBeenCalledWith(
-      "http://localhost:8080/v1/receipts/%2B14259798283",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          recipient: "+15550001111",
-          timestamp: 1700000000000,
-          receipt_type: "read",
-        }),
+    const init = expectFirstFetchCall("http://localhost:8080/v1/receipts/%2B14259798283", "POST");
+    expect(init.body).toBe(
+      JSON.stringify({
+        recipient: "+15550001111",
+        timestamp: 1700000000000,
+        receipt_type: "read",
       }),
     );
   });
@@ -542,8 +553,7 @@ describe("containerSendReceipt", () => {
       type: "viewed",
     });
 
-    const callArgs = mockFetch.mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
+    const body = parseFetchBody();
     expect(body.receipt_type).toBe("viewed");
   });
 });
@@ -566,10 +576,7 @@ describe("containerFetchAttachment", () => {
     });
 
     expect(result).toBeInstanceOf(Buffer);
-    expect(mockFetch).toHaveBeenCalledWith(
-      "http://localhost:8080/v1/attachments/attachment-123",
-      expect.objectContaining({ method: "GET" }),
-    );
+    expectFirstFetchCall("http://localhost:8080/v1/attachments/attachment-123", "GET");
   });
 
   it("returns null on non-ok response", async () => {
@@ -596,10 +603,7 @@ describe("containerFetchAttachment", () => {
       baseUrl: "http://localhost:8080",
     });
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      "http://localhost:8080/v1/attachments/path%2Fwith%2Fslashes",
-      expect.anything(),
-    );
+    expectFirstFetchCall("http://localhost:8080/v1/attachments/path%2Fwith%2Fslashes");
   });
 
   it("rejects attachments above the content-length cap", async () => {
@@ -661,17 +665,14 @@ describe("normalizeBaseUrl edge cases", () => {
     mockFetch.mockResolvedValue({ ok: true, status: 200 });
 
     await containerCheck("https://signal.example.com");
-    expect(mockFetch).toHaveBeenCalledWith(
-      "https://signal.example.com/v1/about",
-      expect.anything(),
-    );
+    expectFirstFetchCall("https://signal.example.com/v1/about");
   });
 
   it("handles URLs with ports", async () => {
     mockFetch.mockResolvedValue({ ok: true, status: 200 });
 
     await containerCheck("http://192.168.1.100:9922");
-    expect(mockFetch).toHaveBeenCalledWith("http://192.168.1.100:9922/v1/about", expect.anything());
+    expectFirstFetchCall("http://192.168.1.100:9922/v1/about");
   });
 
   it("rejects base URLs with credentials", async () => {
@@ -698,10 +699,7 @@ describe("containerRestRequest edge cases", () => {
       "DELETE",
     );
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      "http://localhost:8080/v1/some-resource/123",
-      expect.objectContaining({ method: "DELETE" }),
-    );
+    expectFirstFetchCall("http://localhost:8080/v1/some-resource/123", "DELETE");
   });
 
   it("handles error response with empty body", async () => {
@@ -748,8 +746,8 @@ describe("streamContainerEvents", () => {
     expect(log).toHaveBeenCalledWith(
       "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
     );
-    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("+14259798283"));
-    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("%2B14259798283"));
+    expectMockLogNotContains(log, "+14259798283");
+    expectMockLogNotContains(log, "%2B14259798283");
   });
 
   it("removes the abort listener when the stream closes", async () => {
@@ -792,16 +790,13 @@ describe("containerSendReaction", () => {
     });
 
     expect(result).toEqual({ timestamp: 1700000000000 });
-    expect(mockFetch).toHaveBeenCalledWith(
-      "http://localhost:8080/v1/reactions/%2B14259798283",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          recipient: "+15550001111",
-          reaction: "👍",
-          target_author: "+15550001111",
-          timestamp: 1699999999999,
-        }),
+    const init = expectFirstFetchCall("http://localhost:8080/v1/reactions/%2B14259798283", "POST");
+    expect(init.body).toBe(
+      JSON.stringify({
+        recipient: "+15550001111",
+        reaction: "👍",
+        target_author: "+15550001111",
+        timestamp: 1699999999999,
       }),
     );
   });
@@ -823,8 +818,7 @@ describe("containerSendReaction", () => {
       groupId: "group-123",
     });
 
-    const callArgs = mockFetch.mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
+    const body = parseFetchBody();
     expect(body.group_id).toBe("group-123");
   });
 });
@@ -854,8 +848,7 @@ describe("containerRpcRequest reactions", () => {
       { baseUrl: "http://localhost:8080" },
     );
 
-    const callArgs = mockFetch.mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
+    const body = parseFetchBody();
     expect(body.recipient).toBe("group.Z3JvdXAtMTIz");
     expect(body.group_id).toBe("group.Z3JvdXAtMTIz");
     expect(body.target_author).toBe("author-uuid");
@@ -884,16 +877,16 @@ describe("containerRemoveReaction", () => {
     });
 
     expect(result).toEqual({ timestamp: 1700000000000 });
-    expect(mockFetch).toHaveBeenCalledWith(
+    const init = expectFirstFetchCall(
       "http://localhost:8080/v1/reactions/%2B14259798283",
-      expect.objectContaining({
-        method: "DELETE",
-        body: JSON.stringify({
-          recipient: "+15550001111",
-          reaction: "👍",
-          target_author: "+15550001111",
-          timestamp: 1699999999999,
-        }),
+      "DELETE",
+    );
+    expect(init.body).toBe(
+      JSON.stringify({
+        recipient: "+15550001111",
+        reaction: "👍",
+        target_author: "+15550001111",
+        timestamp: 1699999999999,
       }),
     );
   });
@@ -915,8 +908,7 @@ describe("containerRemoveReaction", () => {
       groupId: "group-123",
     });
 
-    const callArgs = mockFetch.mock.calls[0];
-    const body = JSON.parse(callArgs[1].body);
+    const body = parseFetchBody();
     expect(body.group_id).toBe("group-123");
   });
 });

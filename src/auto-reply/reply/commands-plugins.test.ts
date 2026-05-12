@@ -102,6 +102,49 @@ function buildPluginsParams(commandBodyNormalized: string, cfg: OpenClawConfig) 
   });
 }
 
+type MockCalls = {
+  mock: { calls: unknown[][] };
+};
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function getNestedRecord(record: Record<string, unknown>, key: string, label: string) {
+  return requireRecord(record[key], label);
+}
+
+function expectPluginEnabledInConfig(config: unknown, enabled: boolean) {
+  const configRecord = requireRecord(config, "config");
+  const plugins = getNestedRecord(configRecord, "plugins", "config.plugins");
+  const entries = getNestedRecord(plugins, "entries", "config.plugins.entries");
+  const superpowers = getNestedRecord(entries, "superpowers", "superpowers entry");
+  expect(superpowers.enabled).toBe(enabled);
+}
+
+function expectLastReplaceConfig(enabled: boolean) {
+  expect(replaceConfigFileMock).toHaveBeenLastCalledWith(
+    expect.objectContaining({ afterWrite: { mode: "auto" } }),
+  );
+  const calls = (replaceConfigFileMock as unknown as MockCalls).mock.calls;
+  const [payload] = calls.at(-1) ?? [];
+  const payloadRecord = requireRecord(payload, "replace config payload");
+  expectPluginEnabledInConfig(payloadRecord.nextConfig, enabled);
+}
+
+function expectLastRegistryRefresh(enabled: boolean) {
+  expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(
+    expect.objectContaining({ reason: "policy-changed" }),
+  );
+  const calls = (refreshPluginRegistryAfterConfigMutationMock as unknown as MockCalls).mock.calls;
+  const [payload] = calls.at(-1) ?? [];
+  const payloadRecord = requireRecord(payload, "registry refresh payload");
+  expectPluginEnabledInConfig(payloadRecord.config, enabled);
+}
+
 describe("handlePluginsCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -206,60 +249,16 @@ describe("handlePluginsCommand", () => {
 
     const enableResult = await handlePluginsCommand(enableParams, true);
     expect(enableResult?.reply?.text).toContain('Plugin "superpowers" enabled');
-    expect(replaceConfigFileMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        nextConfig: expect.objectContaining({
-          plugins: expect.objectContaining({
-            entries: expect.objectContaining({
-              superpowers: expect.objectContaining({ enabled: true }),
-            }),
-          }),
-        }),
-        afterWrite: { mode: "auto" },
-      }),
-    );
-    expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        reason: "policy-changed",
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            entries: expect.objectContaining({
-              superpowers: expect.objectContaining({ enabled: true }),
-            }),
-          }),
-        }),
-      }),
-    );
+    expectLastReplaceConfig(true);
+    expectLastRegistryRefresh(true);
 
     const disableParams = buildPluginsParams("/plugins disable superpowers", buildCfg());
     disableParams.command.senderIsOwner = true;
 
     const disableResult = await handlePluginsCommand(disableParams, true);
     expect(disableResult?.reply?.text).toContain('Plugin "superpowers" disabled');
-    expect(replaceConfigFileMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        nextConfig: expect.objectContaining({
-          plugins: expect.objectContaining({
-            entries: expect.objectContaining({
-              superpowers: expect.objectContaining({ enabled: false }),
-            }),
-          }),
-        }),
-        afterWrite: { mode: "auto" },
-      }),
-    );
-    expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        reason: "policy-changed",
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            entries: expect.objectContaining({
-              superpowers: expect.objectContaining({ enabled: false }),
-            }),
-          }),
-        }),
-      }),
-    );
+    expectLastReplaceConfig(false);
+    expectLastRegistryRefresh(false);
   });
 
   it("refuses plugin enablement in Nix mode before reading or replacing config", async () => {
@@ -304,7 +303,7 @@ describe("handlePluginsCommand", () => {
 
     const result = await handlePluginsCommand(params, true);
     expect(result?.reply?.text).toContain('Plugin "superpowers" enabled');
-    expect(buildPluginRegistrySnapshotReportMock).toHaveBeenCalled();
+    expect(buildPluginRegistrySnapshotReportMock).toHaveBeenCalledTimes(1);
     expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
   });
 

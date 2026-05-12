@@ -586,6 +586,29 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     );
   });
 
+  it("normalizes retired Google Gemini default models returned by auth methods", async () => {
+    const method: ProviderAuthMethod = {
+      id: "google",
+      label: "Google",
+      kind: "custom",
+      run: async () => ({
+        profiles: [],
+        defaultModel: "google/gemini-3-pro-preview",
+      }),
+    };
+
+    const result = await runProviderPluginAuthMethod({
+      config: {},
+      runtime: {} as ApplyAuthChoiceParams["runtime"],
+      prompter: {
+        note: vi.fn(async () => {}),
+      } as unknown as ApplyAuthChoiceParams["prompter"],
+      method,
+    });
+
+    expect(result.defaultModel).toBe("google/gemini-3.1-pro-preview");
+  });
+
   it("replaces provider-owned default model maps during auth migrations", async () => {
     const method: ProviderAuthMethod = {
       id: "local",

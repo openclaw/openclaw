@@ -107,47 +107,77 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     sendInvokeResult: MockedSendInvokeResult,
     params?: { payloadContains?: string },
   ) {
-    expect(sendInvokeResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ok: true,
-        ...(params?.payloadContains
-          ? { payloadJSON: expect.stringContaining(params.payloadContains) }
-          : {}),
-      }),
-    );
+    const result = requireInvokeResult(sendInvokeResult);
+    expect(result.ok).toBe(true);
+    if (params?.payloadContains) {
+      expect(result.payloadJSON).toContain(params.payloadContains);
+    }
   }
 
   function expectInvokeErrorMessage(
     sendInvokeResult: MockedSendInvokeResult,
     params: { message: string; exact?: boolean },
   ) {
-    expect(sendInvokeResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ok: false,
-        error: expect.objectContaining({
-          message: params.exact ? params.message : expect.stringContaining(params.message),
-        }),
-      }),
-    );
+    const result = requireInvokeResult(sendInvokeResult);
+    expect(result.ok).toBe(false);
+    const message = result.error?.message;
+    if (params.exact) {
+      expect(message).toBe(params.message);
+    } else {
+      expect(message).toContain(params.message);
+    }
+  }
+
+  function requireInvokeResult(sendInvokeResult: MockedSendInvokeResult): {
+    ok?: boolean;
+    payloadJSON?: string;
+    error?: { message?: string };
+  } {
+    const result = firstMockCallArg(sendInvokeResult, "sendInvokeResult", 0);
+    return result as { ok?: boolean; payloadJSON?: string; error?: { message?: string } };
   }
 
   function requireFirstRunCommandArgs(runCommand: MockedRunCommand): string[] {
-    const args = vi.mocked(runCommand).mock.calls[0]?.[0] as string[] | undefined;
-    if (!args) {
-      throw new Error("expected runCommand args");
+    return firstMockCallArg(vi.mocked(runCommand), "runCommand", 0) as string[];
+  }
+
+  function requireMacExecHostCall(runViaMacAppExecHost: MockedRunViaMacAppExecHost): {
+    approvals?: { agent?: { security?: string; ask?: string } };
+    request?: { command?: string[]; rawCommand?: string; cwd?: string };
+  } {
+    const call = firstMockCallArg(runViaMacAppExecHost, "runViaMacAppExecHost", 0);
+    return call as {
+      approvals?: { agent?: { security?: string; ask?: string } };
+      request?: { command?: string[]; rawCommand?: string; cwd?: string };
+    };
+  }
+
+  function firstMockCallArg(
+    mock: { mock: { calls: readonly unknown[][] } },
+    label: string,
+    argIndex: number,
+  ): unknown {
+    const [call] = mock.mock.calls;
+    if (!call) {
+      throw new Error(`expected ${label} call`);
     }
-    return args;
+    return call[argIndex];
+  }
+
+  function expectExecDeniedEvent(sendNodeEvent: MockedSendNodeEvent): void {
+    const call = sendNodeEvent.mock.calls.at(0);
+    if (!call) {
+      throw new Error("expected sendNodeEvent call");
+    }
+    expect(call[1]).toBe("exec.denied");
+    expect((call[2] as { reason?: string }).reason).toBe("approval-required");
   }
 
   function expectApprovalRequiredDenied(params: {
     sendNodeEvent: MockedSendNodeEvent;
     sendInvokeResult: MockedSendInvokeResult;
   }) {
-    expect(params.sendNodeEvent).toHaveBeenCalledWith(
-      expect.anything(),
-      "exec.denied",
-      expect.objectContaining({ reason: "approval-required" }),
-    );
+    expectExecDeniedEvent(params.sendNodeEvent);
     expectInvokeErrorMessage(params.sendInvokeResult, {
       message: "SYSTEM_RUN_DENIED: approval required",
       exact: true,
@@ -511,17 +541,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       runViaResponse: createMacExecHostSuccess(),
     });
 
-    expect(macHostInvoke.runViaMacAppExecHost).toHaveBeenCalledWith({
-      approvals: expect.objectContaining({
-        agent: expect.objectContaining({
-          security: "full",
-          ask: "off",
-        }),
-      }),
-      request: expect.objectContaining({
-        command: ["echo", "ok"],
-      }),
-    });
+    const macHostCall = requireMacExecHostCall(macHostInvoke.runViaMacAppExecHost);
+    expect(macHostCall.approvals?.agent?.security).toBe("full");
+    expect(macHostCall.approvals?.agent?.ask).toBe("off");
+    expect(macHostCall.request?.command).toEqual(["echo", "ok"]);
     expect(macHostInvoke.runCommand).not.toHaveBeenCalled();
     expectInvokeOk(macHostInvoke.sendInvokeResult, { payloadContains: "app-ok" });
 
@@ -531,13 +554,20 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       runViaResponse: createMacExecHostSuccess(),
     });
 
-    expect(shellWrapperInvoke.runViaMacAppExecHost).toHaveBeenCalledWith({
-      approvals: expect.anything(),
-      request: expect.objectContaining({
-        command: ["/bin/sh", "-lc", '$0 "$1"', "/usr/bin/touch", "/tmp/marker"],
-        rawCommand: '/bin/sh -lc "$0 \\"$1\\"" /usr/bin/touch /tmp/marker',
-      }),
-    });
+    const shellWrapperCall = requireMacExecHostCall(shellWrapperInvoke.runViaMacAppExecHost);
+    if (shellWrapperCall.approvals === undefined) {
+      throw new Error("Expected shell-wrapper approvals");
+    }
+    expect(shellWrapperCall.request?.command).toEqual([
+      "/bin/sh",
+      "-lc",
+      '$0 "$1"',
+      "/usr/bin/touch",
+      "/tmp/marker",
+    ]);
+    expect(shellWrapperCall.request?.rawCommand).toBe(
+      '/bin/sh -lc "$0 \\"$1\\"" /usr/bin/touch /tmp/marker',
+    );
   });
 
   const approvedEnvShellWrapperCases = [
@@ -594,14 +624,13 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         if (testCase.preferMacAppExecHost) {
           const canonicalCwd = fs.realpathSync(tmp);
           expect(invoke.runCommand).not.toHaveBeenCalled();
-          expect(invoke.runViaMacAppExecHost).toHaveBeenCalledWith({
-            approvals: expect.anything(),
-            request: expect.objectContaining({
-              command: ["env", "sh", "-c", "echo SAFE"],
-              rawCommand: 'env sh -c "echo SAFE"',
-              cwd: canonicalCwd,
-            }),
-          });
+          const macHostCall = requireMacExecHostCall(invoke.runViaMacAppExecHost);
+          if (macHostCall.approvals === undefined) {
+            throw new Error("Expected Mac host approvals");
+          }
+          expect(macHostCall.request?.command).toEqual(["env", "sh", "-c", "echo SAFE"]);
+          expect(macHostCall.request?.rawCommand).toBe('env sh -c "echo SAFE"');
+          expect(macHostCall.request?.cwd).toBe(canonicalCwd);
           expectInvokeOk(invoke.sendInvokeResult, { payloadContains: "app-ok" });
           continue;
         }
@@ -633,8 +662,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect(transparent.runCommand).not.toHaveBeenCalled();
         expectInvokeErrorMessage(transparent.sendInvokeResult, { message: "allowlist miss" });
       } else {
+        const expectedTrPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/tr") ? "/usr/bin/tr" : "/bin/tr",
+        );
         expect(requireFirstRunCommandArgs(transparent.runCommand)).toEqual([
-          expect.stringMatching(/(^|[/\\])tr$/),
+          expectedTrPath,
           "a",
           "b",
         ]);
@@ -1153,7 +1185,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
 
     expect(runCommand).toHaveBeenCalledTimes(1);
-    const passedEnv = runCommand.mock.calls[0]?.[2];
+    const passedEnv = firstMockCallArg(runCommand, "runCommand", 2);
     expect(passedEnv).toEqual({
       LANG: "C",
       LC_TIME: "C",
@@ -1248,11 +1280,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         });
 
         expect(runCommand, testCase.command.join(" ")).not.toHaveBeenCalled();
-        expect(sendNodeEvent, testCase.command.join(" ")).toHaveBeenCalledWith(
-          expect.anything(),
-          "exec.denied",
-          expect.objectContaining({ reason: "approval-required" }),
-        );
+        expectExecDeniedEvent(sendNodeEvent);
         expectInvokeErrorMessage(sendInvokeResult, {
           message: testCase.expected,
         });
@@ -1279,11 +1307,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       });
 
       expect(runCommand).not.toHaveBeenCalled();
-      expect(sendNodeEvent).toHaveBeenCalledWith(
-        expect.anything(),
-        "exec.denied",
-        expect.objectContaining({ reason: "approval-required" }),
-      );
+      expectExecDeniedEvent(sendNodeEvent);
       expectInvokeErrorMessage(sendInvokeResult, {
         message: "awk inline program requires explicit approval in strictInlineEval mode",
       });
@@ -1361,9 +1385,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
           expect(benign.runCommand).toHaveBeenCalledTimes(1);
           expectInvokeOk(benign.sendInvokeResult, { payloadContains: "awk-ok" });
-          expect(loadExecApprovals().agents?.main?.allowlist ?? []).toEqual([
-            expect.objectContaining({ pattern: executablePath }),
-          ]);
+          const allowlist = loadExecApprovals().agents?.main?.allowlist ?? [];
+          expect(allowlist).toHaveLength(1);
+          expect(allowlist[0]?.pattern).toBe(executablePath);
 
           const malicious = await runSystemInvoke({
             preferMacAppExecHost: false,

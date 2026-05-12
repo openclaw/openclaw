@@ -134,22 +134,21 @@ describe("googlechat inbound access policy", () => {
       issueChallenge: vi.fn(),
     });
 
-    await expect(
-      applyInboundAccessPolicy({
-        isGroup: false,
-        account: {
-          accountId: "default",
-          config: {
-            dm: {
-              policy: "allowlist",
-              allowFrom,
-            },
+    const result = await applyInboundAccessPolicy({
+      isGroup: false,
+      account: {
+        accountId: "default",
+        config: {
+          dm: {
+            policy: "allowlist",
+            allowFrom,
           },
-        } as never,
-        senderId,
-        senderEmail: "Jane@Example.com",
-      }),
-    ).resolves.toMatchObject({ ok });
+        },
+      } as never,
+      senderId,
+      senderEmail: "Jane@Example.com",
+    });
+    expect(result.ok).toBe(ok);
   });
 
   it("issues a pairing challenge for unauthorized DMs in pairing mode", async () => {
@@ -167,18 +166,19 @@ describe("googlechat inbound access policy", () => {
 
     const statusSink = vi.fn();
     const logVerbose = vi.fn();
+    const account = {
+      accountId: "default",
+      config: {
+        dm: { policy: "pairing" },
+      },
+    };
 
     vi.useFakeTimers();
     vi.setSystemTime(now);
     try {
       await expect(
         applyGoogleChatInboundAccessPolicy({
-          account: {
-            accountId: "default",
-            config: {
-              dm: { policy: "pairing" },
-            },
-          } as never,
+          account: account as never,
           config: {
             channels: { googlechat: {} },
           } as never,
@@ -197,7 +197,7 @@ describe("googlechat inbound access policy", () => {
 
       expect(issueChallenge).toHaveBeenCalledTimes(1);
       expect(sendGoogleChatMessage).toHaveBeenCalledWith({
-        account: expect.anything(),
+        account,
         space: "spaces/AAA",
         text: "pairing text",
       });
@@ -253,34 +253,31 @@ describe("googlechat inbound access policy", () => {
     primeCommonDefaults();
     allowInboundGroupTraffic();
 
-    await expect(
-      applyInboundAccessPolicy({
+    const result = await applyInboundAccessPolicy({
+      config: {
+        ...baseAccessConfig,
+        accessGroups: {
+          operators: {
+            type: "message.senders",
+            members: {
+              googlechat: ["users/alice"],
+            },
+          },
+        },
+      } as never,
+      account: {
+        accountId: "default",
         config: {
-          ...baseAccessConfig,
-          accessGroups: {
-            operators: {
-              type: "message.senders",
-              members: {
-                googlechat: ["users/alice"],
-              },
+          groups: {
+            "spaces/AAA": {
+              users: ["accessGroup:operators"],
+              requireMention: false,
             },
           },
-        } as never,
-        account: {
-          accountId: "default",
-          config: {
-            groups: {
-              "spaces/AAA": {
-                users: ["accessGroup:operators"],
-                requireMention: false,
-              },
-            },
-          },
-        } as never,
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
+        },
+      } as never,
     });
+    expect(result.ok).toBe(true);
   });
 
   it("expands generic message sender access groups before DM access checks", async () => {
@@ -291,33 +288,30 @@ describe("googlechat inbound access policy", () => {
       issueChallenge: vi.fn(),
     });
 
-    await expect(
-      applyInboundAccessPolicy({
-        isGroup: false,
+    const result = await applyInboundAccessPolicy({
+      isGroup: false,
+      config: {
+        ...baseAccessConfig,
+        accessGroups: {
+          operators: {
+            type: "message.senders",
+            members: {
+              googlechat: ["users/alice"],
+            },
+          },
+        },
+      } as never,
+      account: {
+        accountId: "default",
         config: {
-          ...baseAccessConfig,
-          accessGroups: {
-            operators: {
-              type: "message.senders",
-              members: {
-                googlechat: ["users/alice"],
-              },
-            },
+          dm: {
+            policy: "allowlist",
+            allowFrom: ["accessGroup:operators"],
           },
-        } as never,
-        account: {
-          accountId: "default",
-          config: {
-            dm: {
-              policy: "allowlist",
-              allowFrom: ["accessGroup:operators"],
-            },
-          },
-        } as never,
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
+        },
+      } as never,
     });
+    expect(result.ok).toBe(true);
 
     expect(readAllowFromStore).not.toHaveBeenCalled();
   });

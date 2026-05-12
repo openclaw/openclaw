@@ -43,6 +43,7 @@ function expectGatewayAgentFollowup(expected: Record<string, unknown>) {
     expect(params[key]).toBe(value);
   }
   expect(call[3]).toEqual({ expectFinal: true });
+  return params;
 }
 
 function expectDirectSend(expected: Record<string, unknown>) {
@@ -281,6 +282,26 @@ describe("exec approval followup", () => {
       channel: "telegram",
     });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("carries the runtime handoff separately from idempotency without exposing elevated defaults", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-elevated-75832",
+      sessionKey: "agent:main:telegram:direct:123",
+      turnSourceChannel: "telegram",
+      resultText: "Exec finished (gateway id=req-elevated-75832, code 0)\nok",
+      internalRuntimeHandoffId: "handoff-75832",
+      idempotencyKey: "exec-approval-followup:req-elevated-75832:nonce:nonce-75832",
+    });
+
+    const agentArgs = expectGatewayAgentFollowup({
+      sessionKey: "agent:main:telegram:direct:123",
+      channel: "telegram",
+      idempotencyKey: "exec-approval-followup:req-elevated-75832:nonce:nonce-75832",
+      internalRuntimeHandoffId: "handoff-75832",
+    });
+    expect(agentArgs).not.toHaveProperty("bashElevated");
+    expect(agentArgs).not.toHaveProperty("execApprovalFollowupToken");
   });
 
   it("throws when neither a session nor a deliverable route is available", async () => {

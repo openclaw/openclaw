@@ -97,6 +97,28 @@ function buildPluginApprovalElicitation(overrides: Record<string, unknown> = {})
   };
 }
 
+function buildConnectorPluginApprovalElicitation(overrides: Record<string, unknown> = {}) {
+  return {
+    threadId: "thread-1",
+    turnId: "turn-1",
+    serverName: "codex_apps",
+    mode: "form",
+    message: "Allow Google Calendar to create an event?",
+    _meta: {
+      codex_approval_kind: "mcp_tool_call",
+      source: "connector",
+      connector_id: "connector_google_calendar",
+      connector_name: "Google Calendar",
+      tool_title: "create_event",
+    },
+    requestedSchema: {
+      type: "object",
+      properties: {},
+    },
+    ...overrides,
+  };
+}
+
 function createPluginAppPolicyContext(
   params: {
     allowDestructiveActions?: boolean;
@@ -240,17 +262,14 @@ describe("Codex app-server elicitation bridge", () => {
       content: null,
       _meta: null,
     });
-    expect(mockCallGatewayTool).toHaveBeenCalledWith(
-      "plugin.approval.request",
-      expect.any(Object),
-      expect.objectContaining({
-        description: expect.stringContaining("App: GitHub"),
-      }),
-      { expectFinal: false },
-    );
-    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+    const approvalRequestCall = mockCallGatewayTool.mock.calls[0];
+    expect(approvalRequestCall?.[0]).toBe("plugin.approval.request");
+    expect(approvalRequestCall?.[1]).toStrictEqual({ timeoutMs: 130_000 });
+    expect(approvalRequestCall?.[3]).toStrictEqual({ expectFinal: false });
+    const approvalRequest = approvalRequestCall?.[2] as {
       description: string;
     };
+    expect(approvalRequest.description).toContain("App: GitHub");
     expect(approvalRequest.description).toContain("Tool: Create pull request");
     expect(approvalRequest.description).toContain("Repository: openclaw/openclaw");
   });
@@ -546,6 +565,114 @@ describe("Codex app-server elicitation bridge", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("accepts connector-id plugin app elicitations when destructive actions are enabled", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation(),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        apps: [
+          {
+            appId: "connector_google_calendar",
+            pluginName: "google-calendar",
+            mcpServerNames: [],
+          },
+        ],
+      }),
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("declines connector-id plugin app elicitations when destructive actions are disabled", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation(),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: false,
+        apps: [
+          {
+            appId: "connector_google_calendar",
+            pluginName: "google-calendar",
+            mcpServerNames: [],
+          },
+        ],
+      }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("declines live connector elicitations that only match display names", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation({
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          source: "connector",
+          connector_name: "Google Calendar",
+          tool_title: "create_event",
+        },
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        apps: [
+          {
+            appId: "connector_google_calendar",
+            pluginName: "google-calendar",
+            mcpServerNames: [],
+          },
+        ],
+      }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("declines live connector elicitations with mismatched app and connector ids", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation({
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          source: "connector",
+          app_id: "other-app",
+          connector_id: "connector_google_calendar",
+          connector_name: "Google Calendar",
+          tool_title: "create_event",
+        },
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        apps: [
+          {
+            appId: "connector_google_calendar",
+            pluginName: "google-calendar",
+            mcpServerNames: [],
+          },
+        ],
+      }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("declines plugin app elicitations that are missing active turn correlation", async () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildPluginApprovalElicitation({ turnId: null }),
@@ -811,19 +938,16 @@ describe("Codex app-server elicitation bridge", () => {
       },
       _meta: null,
     });
-    expect(mockCallGatewayTool).toHaveBeenCalledWith(
-      "plugin.approval.request",
-      expect.any(Object),
-      expect.objectContaining({
-        title: expect.any(String),
-        description: expect.any(String),
-      }),
-      { expectFinal: false },
-    );
-    const approvalRequest = mockCallGatewayTool.mock.calls[0]?.[2] as {
+    const approvalRequestCall = mockCallGatewayTool.mock.calls[0];
+    expect(approvalRequestCall?.[0]).toBe("plugin.approval.request");
+    expect(approvalRequestCall?.[1]).toStrictEqual({ timeoutMs: 130_000 });
+    expect(approvalRequestCall?.[3]).toStrictEqual({ expectFinal: false });
+    const approvalRequest = approvalRequestCall?.[2] as {
       title: string;
       description: string;
     };
+    expect(typeof approvalRequest.title).toBe("string");
+    expect(typeof approvalRequest.description).toBe("string");
     expect(approvalRequest.title.length).toBeLessThanOrEqual(80);
     expect(approvalRequest.description.length).toBeLessThanOrEqual(256);
   });
@@ -905,13 +1029,14 @@ describe("Codex app-server elicitation bridge", () => {
       content: null,
       _meta: null,
     });
-    expect(warn).toHaveBeenCalledWith(
+    const [warningMessage, warningDetails] = warn.mock.calls[0] ?? [];
+    expect(warningMessage).toBe(
       "codex MCP approval elicitation approved without a mappable response",
-      expect.objectContaining({
-        approvalKind: "mcp_tool_call",
-        fields: ["confirmChoice"],
-        outcome: "approved-once",
-      }),
     );
+    expect(warningDetails).toStrictEqual({
+      approvalKind: "mcp_tool_call",
+      fields: ["confirmChoice"],
+      outcome: "approved-once",
+    });
   });
 });

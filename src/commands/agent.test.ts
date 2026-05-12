@@ -590,7 +590,7 @@ describe("agentCommand", () => {
       const thinkingDefaultCall = vi.mocked(modelSelectionModule.resolveThinkingDefault).mock
         .calls[0]?.[0];
       expect(thinkingDefaultCall?.provider).toBe("openrouter");
-      expect(thinkingDefaultCall?.model).toBe("auto");
+      expect(thinkingDefaultCall?.model).toBe("openrouter/auto");
       expect(thinkingDefaultCall?.catalog).toBeUndefined();
     });
   });

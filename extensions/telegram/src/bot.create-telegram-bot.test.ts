@@ -1,5 +1,10 @@
-import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  escapeRegExp,
+  formatEnvelopeTimestamp,
+  stripAnsi,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotOptions } from "./bot.types.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
@@ -161,6 +166,36 @@ function requireValue<T>(value: T | null | undefined, label: string): T {
   return value;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(
+  value: unknown,
+  expected: Record<string, unknown>,
+  label: string,
+): Record<string, unknown> {
+  const record = requireRecord(value, label);
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
+  }
+  return record;
+}
+
+function getBotCtorOptions(callIndex = 0): Record<string, unknown> {
+  const call = requireValue(botCtorSpy.mock.calls[callIndex], `bot constructor call ${callIndex}`);
+  expect(call[0]).toBe("tok");
+  return requireRecord(call[1], `bot constructor options ${callIndex}`);
+}
+
+function expectBotClientFields(expected: Record<string, unknown>, callIndex = 0): void {
+  const options = getBotCtorOptions(callIndex);
+  expectRecordFields(options.client, expected, `bot constructor client ${callIndex}`);
+}
+
 describe("createTelegramBot", () => {
   beforeAll(() => {
     process.env.TZ = "UTC";
@@ -215,7 +250,10 @@ describe("createTelegramBot", () => {
 
     expect(errorHandler).toBeTypeOf("function");
     errorHandler?.(new Error("handler boom"));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("telegram bot error:"));
+    const errorCalls = (runtime.error as unknown as { mock: { calls: Array<[unknown]> } }).mock
+      .calls;
+    const errorMessage = sanitizeTerminalText(String(errorCalls[0]?.[0]));
+    expect(errorMessage.startsWith("telegram bot error: Error: handler boom")).toBe(true);
   });
 
   it("uses wrapped fetch when global fetch is available", () => {
@@ -242,12 +280,7 @@ describe("createTelegramBot", () => {
       },
     });
     createTelegramBot({ token: "tok" });
-    expect(botCtorSpy).toHaveBeenCalledWith(
-      "tok",
-      expect.objectContaining({
-        client: expect.objectContaining({ timeoutSeconds: 60 }),
-      }),
-    );
+    expectBotClientFields({ timeoutSeconds: 60 });
     botCtorSpy.mockClear();
 
     loadConfig.mockReturnValue({
@@ -263,12 +296,7 @@ describe("createTelegramBot", () => {
       },
     });
     createTelegramBot({ token: "tok", accountId: "foo" });
-    expect(botCtorSpy).toHaveBeenCalledWith(
-      "tok",
-      expect.objectContaining({
-        client: expect.objectContaining({ timeoutSeconds: 61 }),
-      }),
-    );
+    expectBotClientFields({ timeoutSeconds: 61 });
   });
 
   it("keeps low timeoutSeconds above the outbound request guard", () => {
@@ -278,12 +306,7 @@ describe("createTelegramBot", () => {
       },
     });
     createTelegramBot({ token: "tok" });
-    expect(botCtorSpy).toHaveBeenCalledWith(
-      "tok",
-      expect.objectContaining({
-        client: expect.objectContaining({ timeoutSeconds: 60 }),
-      }),
-    );
+    expectBotClientFields({ timeoutSeconds: 60 });
   });
 
   it("keeps polling client timeout above the outbound request guard", () => {
@@ -293,12 +316,7 @@ describe("createTelegramBot", () => {
       },
     });
     createTelegramBot({ token: "tok", minimumClientTimeoutSeconds: 45 });
-    expect(botCtorSpy).toHaveBeenCalledWith(
-      "tok",
-      expect.objectContaining({
-        client: expect.objectContaining({ timeoutSeconds: 60 }),
-      }),
-    );
+    expectBotClientFields({ timeoutSeconds: 60 });
   });
 
   it("passes startup probe botInfo to grammY", () => {
@@ -319,12 +337,7 @@ describe("createTelegramBot", () => {
 
     createTelegramBot({ token: "tok", botInfo });
 
-    expect(botCtorSpy).toHaveBeenCalledWith(
-      "tok",
-      expect.objectContaining({
-        botInfo,
-      }),
-    );
+    expect(getBotCtorOptions().botInfo).toBe(botInfo);
   });
 
   it("normalizes full Telegram bot endpoint apiRoot before passing it to grammY", () => {
@@ -340,12 +353,7 @@ describe("createTelegramBot", () => {
 
     createTelegramBot({ token: "tok" });
 
-    expect(botCtorSpy).toHaveBeenCalledWith(
-      "tok",
-      expect.objectContaining({
-        client: expect.objectContaining({ apiRoot: "https://api.telegram.org" }),
-      }),
-    );
+    expectBotClientFields({ apiRoot: "https://api.telegram.org" });
   });
 
   it("sequentializes updates by chat and thread", () => {
@@ -437,9 +445,8 @@ describe("createTelegramBot", () => {
     const sequentializer = sequentializeSpy.mock.results[0]?.value as
       | TelegramMiddleware
       | undefined;
-    expect(sequentializer).toBeDefined();
     if (!sequentializer) {
-      return;
+      throw new Error("Expected sequentialize middleware");
     }
 
     const topicCtx = (threadId: number, updateId: number) => {
@@ -713,10 +720,9 @@ describe("createTelegramBot", () => {
 
       expect(startedBodies[0]).toContain("first");
       expect(startedBodies[1]).toContain("second");
-      expect(sendMessageSpy.mock.calls.map((call) => call[1])).toEqual([
-        expect.stringContaining("first"),
-        expect.stringContaining("second"),
-      ]);
+      const sentBodies = sendMessageSpy.mock.calls.map((call) => String(call[1]));
+      expect(sentBodies[0]).toContain("first");
+      expect(sentBodies[1]).toContain("second");
     } finally {
       setTimeoutSpy.mockRestore();
     }
@@ -949,7 +955,8 @@ describe("createTelegramBot", () => {
   it("wraps inbound message with Telegram envelope", async () => {
     await withEnvAsync({ TZ: "Europe/Vienna" }, async () => {
       createTelegramBot({ token: "tok" });
-      expect(onSpy).toHaveBeenCalledWith("message", expect.any(Function));
+      const messageRegistration = onSpy.mock.calls.find(([event]) => event === "message");
+      expect(messageRegistration?.[1]).toBeTypeOf("function");
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
 
       const message = {
@@ -1041,9 +1048,7 @@ describe("createTelegramBot", () => {
       expect(pairingText, testCase.name).toContain(`Your Telegram user id: ${senderId}`);
       expect(pairingText, testCase.name).toContain("Pairing code:");
       expect(pairingText, testCase.name).toContain("openclaw pairing approve telegram");
-      expect(sendMessageSpy.mock.calls[0]?.[2], testCase.name).toEqual(
-        expect.objectContaining({ parse_mode: "HTML" }),
-      );
+      expectRecordFields(sendMessageSpy.mock.calls[0]?.[2], { parse_mode: "HTML" }, testCase.name);
     }
   });
 
@@ -1123,8 +1128,10 @@ describe("createTelegramBot", () => {
       const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
       expect(pairingText).toContain("Pairing code:");
       expect(pairingText).toContain("<pre><code>");
-      expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
-        expect.objectContaining({ parse_mode: "HTML" }),
+      expectRecordFields(
+        sendMessageSpy.mock.calls[0]?.[2],
+        { parse_mode: "HTML" },
+        "pairing reply options",
       );
       expect(replySpy).not.toHaveBeenCalled();
     } finally {
@@ -1243,8 +1250,10 @@ describe("createTelegramBot", () => {
       const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
       expect(pairingText).toContain("Pairing code:");
       expect(pairingText).toContain("<pre><code>");
-      expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
-        expect.objectContaining({ parse_mode: "HTML" }),
+      expectRecordFields(
+        sendMessageSpy.mock.calls[0]?.[2],
+        { parse_mode: "HTML" },
+        "album pairing reply options",
       );
       expect(replySpy).not.toHaveBeenCalled();
     } finally {
@@ -2366,7 +2375,10 @@ describe("createTelegramBot", () => {
     });
 
     expect(sendAnimationSpy).toHaveBeenCalledTimes(1);
-    expect(sendAnimationSpy).toHaveBeenCalledWith("1234", expect.anything(), {
+    const animationCall = requireValue(sendAnimationSpy.mock.calls[0], "animation send call");
+    expect(animationCall[0]).toBe("1234");
+    requireValue(animationCall[1], "animation payload");
+    expect(animationCall[2]).toEqual({
       caption: "caption",
       parse_mode: "HTML",
       reply_to_message_id: undefined,
@@ -2826,14 +2838,16 @@ describe("createTelegramBot", () => {
 
     expect(getChatSpy).toHaveBeenCalledOnce();
     expect(getChatSpy).toHaveBeenCalledWith(-1001234567890);
-    expect(dispatchCall?.ctx).toEqual(
-      expect.objectContaining({
-        SessionKey: expect.stringContaining("telegram:group:-1001234567890:topic:1"),
+    const dispatchCtx = expectRecordFields(
+      dispatchCall?.ctx,
+      {
         From: "telegram:group:-1001234567890:topic:1",
         MessageThreadId: 1,
         IsForum: true,
-      }),
+      },
+      "forum dispatch context",
     );
+    expect(String(dispatchCtx.SessionKey)).toContain("telegram:group:-1001234567890:topic:1");
     expect(sendChatActionSpy).toHaveBeenCalledWith(-1001234567890, "typing", {
       message_thread_id: 1,
     });
@@ -3264,10 +3278,13 @@ describe("createTelegramBot", () => {
       match: "",
     });
 
-    expect(sendMessageSpy).toHaveBeenCalledWith(
-      "-1001234567890",
-      expect.any(String),
-      expect.objectContaining({ message_thread_id: 99, reply_to_message_id: 42 }),
+    const statusCall = requireValue(sendMessageSpy.mock.calls[0], "status reply call");
+    expect(statusCall[0]).toBe("-1001234567890");
+    expect(statusCall[1]).toBeTypeOf("string");
+    expectRecordFields(
+      statusCall[2],
+      { message_thread_id: 99, reply_to_message_id: 42 },
+      "status reply options",
     );
   });
   it("reloads native command routing bindings between invocations without recreating the bot", async () => {

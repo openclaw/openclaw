@@ -20,7 +20,4 @@ providers: codex; contracts: mediaUnderstandingProviders, migrationProviders
 
 ## Related docs
 
-- [Codex harness](/plugins/codex-harness)
-- [Codex harness reference](/plugins/codex-harness-reference)
-- [Codex harness runtime](/plugins/codex-harness-runtime)
-- [Native Codex plugins](/plugins/codex-native-plugins)
+- [codex](/plugins/codex-harness)
