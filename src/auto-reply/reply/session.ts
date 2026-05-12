@@ -33,6 +33,10 @@ import {
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import {
+  forgetActiveSessionForShutdown,
+  noteActiveSessionForShutdown,
+} from "../../gateway/active-sessions-shutdown-tracker.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { closeTrackedBrowserTabsForSessions } from "../../plugin-sdk/browser-maintenance.js";
@@ -800,8 +804,6 @@ export async function initSessionState(params: {
         cfg,
         sessionKey,
         sessionId: effectiveSessionId,
-        storePath,
-        sessionFile: sessionEntry?.sessionFile,
         agentId,
       });
     }

@@ -178,16 +178,32 @@ export async function drainActiveSessionsForShutdown(params: {
     Math.floor(params.totalTimeoutMs ?? SHUTDOWN_DRAIN_DEFAULT_TOTAL_TIMEOUT_MS),
   );
   const emittedSessionIds: string[] = [];
+  const hookRunner = getGlobalHookRunner();
+  // Inline the session_end emission instead of calling
+  // `emitGatewaySessionEndPluginHook`, because that helper uses fire-and-forget
+  // (`void hookRunner.runSessionEnd(...)`). The shutdown drain must actually
+  // await each plugin handler so the bounded total-timeout races real plugin
+  // work, not just a synchronous for-loop -- otherwise the close handler can
+  // proceed to subsystem teardown while a database-writing `session_end`
+  // plugin is still in flight, which is the original ghost-session failure.
   const drain = (async () => {
     for (const entry of tracked) {
-      emitGatewaySessionEndPluginHook({
-        cfg: entry.cfg,
-        sessionKey: entry.sessionKey,
+      forgetActiveSessionForShutdown(entry.sessionId);
+      emittedSessionIds.push(entry.sessionId);
+      if (!hookRunner?.hasHooks("session_end")) {
+        continue;
+      }
+      const payload = buildSessionEndHookPayload({
         sessionId: entry.sessionId,
-        agentId: entry.agentId,
+        sessionKey: entry.sessionKey,
+        cfg: entry.cfg,
         reason: params.reason,
       });
-      emittedSessionIds.push(entry.sessionId);
+      try {
+        await hookRunner.runSessionEnd(payload.event, payload.context);
+      } catch (err) {
+        logVerbose(`session_end hook failed during shutdown drain: ${String(err)}`);
+      }
     }
   })();
   let timer: ReturnType<typeof setTimeout> | undefined;
