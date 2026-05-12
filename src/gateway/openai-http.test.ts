@@ -94,6 +94,30 @@ function parseSseDataLines(text: string): string[] {
     .map((line) => line.slice("data: ".length));
 }
 
+type FirstAgentCommandOptions = {
+  clientTools?: Array<{
+    function?: {
+      description?: string;
+      name?: string;
+      parameters?: Record<string, unknown>;
+      strict?: boolean;
+    };
+    type?: string;
+  }>;
+  extraSystemPrompt?: string;
+  images?: Array<{ data: string; mimeType: string; type: string }>;
+  message?: string;
+  messageChannel?: string;
+  model?: string;
+  senderIsOwner?: boolean;
+  sessionKey?: string;
+  streamParams?: { maxTokens?: number };
+};
+
+function firstAgentCommandOptions() {
+  return agentCommand.mock.calls.at(0)?.[0] as FirstAgentCommandOptions | undefined;
+}
+
 describe("OpenAI-compatible HTTP API (e2e)", () => {
   it("handles request validation and routing", async () => {
     const port = enabledPort;
@@ -110,10 +134,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const res = await postChatCompletions(port, request.body, request.headers);
       expect(res.status).toBe(200);
       expect(agentCommand).toHaveBeenCalledTimes(1);
-      const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-      expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
-        request.matcher,
-      );
+      expect(firstAgentCommandOptions()?.sessionKey ?? "").toMatch(request.matcher);
       await res.text();
     };
     const expectMessageContext = (
@@ -129,26 +150,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(message).toContain(line);
       }
     };
-    const getFirstAgentCall = () =>
-      (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | {
-            sessionKey?: string;
-            messageChannel?: string;
-            message?: string;
-            extraSystemPrompt?: string;
-            images?: Array<{ type: string; data: string; mimeType: string }>;
-            clientTools?: Array<{
-              type?: string;
-              function?: {
-                name?: string;
-                description?: string;
-                parameters?: Record<string, unknown>;
-                strict?: boolean;
-              };
-            }>;
-            senderIsOwner?: boolean;
-          }
-        | undefined;
+    const getFirstAgentCall = () => firstAgentCommandOptions();
     const getFirstAgentMessage = () => getFirstAgentCall()?.message ?? "";
     const expectInvalidRequestNoDispatch = async (messages: unknown[]) => {
       agentCommand.mockClear();
@@ -233,10 +235,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         );
         expect(res.status).toBe(200);
 
-        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-        expect((opts as { sessionKey?: string } | undefined)?.sessionKey).toBe(
-          "agent:beta:openai:custom",
-        );
+        expect(firstAgentCommandOptions()?.sessionKey).toBe("agent:beta:openai:custom");
         await res.text();
       }
 
@@ -249,10 +248,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(200);
 
-        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-        expect((opts as { sessionKey?: string } | undefined)?.sessionKey ?? "").toContain(
-          "openai-user:alice",
-        );
+        expect(firstAgentCommandOptions()?.sessionKey ?? "").toContain("openai-user:alice");
         await res.text();
       }
 
@@ -284,8 +280,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           },
         );
         expect(res.status).toBe(200);
-        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-        expect((opts as { model?: string } | undefined)?.model).toBe("openai/gpt-5.4");
+        expect(firstAgentCommandOptions()?.model).toBe("openai/gpt-5.4");
         await res.text();
       }
 
@@ -312,8 +307,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           },
         );
         expect(res.status).toBe(200);
-        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-        expect((opts as { model?: string } | undefined)?.model).toBe("gpt-5.4");
+        expect(firstAgentCommandOptions()?.model).toBe("gpt-5.4");
         await res.text();
         await writeGatewayConfig({});
       }
@@ -366,8 +360,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         });
         expect(res.status).toBe(200);
 
-        const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-        expect((opts as { message?: string } | undefined)?.message).toBe("hello\nworld");
+        expect(firstAgentCommandOptions()?.message).toBe("hello\nworld");
         await res.text();
       }
 
@@ -1279,11 +1272,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       agentCommand.mockClear();
       agentCommand.mockResolvedValueOnce({ payloads } as never);
     };
-    const getFirstAgentMaxTokens = () => {
-      const opts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
-      return (opts as { streamParams?: { maxTokens?: number } } | undefined)?.streamParams
-        ?.maxTokens;
-    };
+    const getFirstAgentMaxTokens = () => firstAgentCommandOptions()?.streamParams?.maxTokens;
 
     {
       mockAgentOnce([{ text: "hello" }]);
@@ -2037,10 +2026,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       });
 
       expect(res.status).toBe(200);
-      const firstCall = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
-        | { senderIsOwner?: boolean }
-        | undefined;
-      expect(firstCall?.senderIsOwner).toBe(true);
+      expect(firstAgentCommandOptions()?.senderIsOwner).toBe(true);
       await res.text();
     } finally {
       await server.close({ reason: "openai token auth owner test done" });
