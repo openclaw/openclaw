@@ -105,6 +105,125 @@ describe("applyPiCompactionSettingsFromConfig", () => {
     });
   });
 
+  describe("contextEngineInfo gating (auto-zero reserveTokensFloor)", () => {
+    it("auto-zeroes the floor when engine info advertises interceptsCompaction", () => {
+      const settingsManager = {
+        getCompactionReserveTokens: () => 0,
+        getCompactionKeepRecentTokens: () => 20_000,
+        applyOverrides: vi.fn(),
+      };
+      const result = applyPiCompactionSettingsFromConfig({
+        settingsManager,
+        cfg: {
+          agents: {
+            defaults: { compaction: { reserveTokensFloor: 20_000 } },
+          },
+        },
+        contextEngineInfo: {
+          id: "lcm",
+          name: "LCM",
+          interceptsCompaction: true,
+        },
+      });
+      // With the floor zeroed, the current reserve (0) is already at/above
+      // the effective floor (0), so no override is applied.
+      expect(result.didOverride).toBe(false);
+      expect(result.compaction.reserveTokens).toBe(0);
+      expect(settingsManager.applyOverrides).not.toHaveBeenCalled();
+    });
+
+    it("auto-zeroes the floor when engine info has ownsCompaction (legacy gate path)", () => {
+      const settingsManager = {
+        getCompactionReserveTokens: () => 0,
+        getCompactionKeepRecentTokens: () => 20_000,
+        applyOverrides: vi.fn(),
+      };
+      const result = applyPiCompactionSettingsFromConfig({
+        settingsManager,
+        cfg: {
+          agents: {
+            defaults: { compaction: { reserveTokensFloor: 20_000 } },
+          },
+        },
+        contextEngineInfo: {
+          id: "owner",
+          name: "Owner",
+          ownsCompaction: true,
+        },
+      });
+      expect(result.didOverride).toBe(false);
+      expect(result.compaction.reserveTokens).toBe(0);
+    });
+
+    it("does NOT zero the floor when engine info lacks both flags", () => {
+      const settingsManager = {
+        getCompactionReserveTokens: () => 0,
+        getCompactionKeepRecentTokens: () => 20_000,
+        applyOverrides: vi.fn(),
+      };
+      const result = applyPiCompactionSettingsFromConfig({
+        settingsManager,
+        cfg: {
+          agents: {
+            defaults: { compaction: { reserveTokensFloor: 20_000 } },
+          },
+        },
+        contextEngineInfo: { id: "legacy", name: "Legacy" },
+      });
+      expect(result.didOverride).toBe(true);
+      expect(result.compaction.reserveTokens).toBe(20_000);
+    });
+
+    it("does NOT zero the floor when contextEngineInfo is omitted (back-compat)", () => {
+      const settingsManager = {
+        getCompactionReserveTokens: () => 0,
+        getCompactionKeepRecentTokens: () => 20_000,
+        applyOverrides: vi.fn(),
+      };
+      const result = applyPiCompactionSettingsFromConfig({
+        settingsManager,
+        cfg: {
+          agents: {
+            defaults: { compaction: { reserveTokensFloor: 20_000 } },
+          },
+        },
+        // contextEngineInfo intentionally omitted
+      });
+      expect(result.didOverride).toBe(true);
+      expect(result.compaction.reserveTokens).toBe(20_000);
+    });
+
+    it("auto-zero overrides an explicit reserveTokens configuration", () => {
+      // When the engine intercepts, the floor is 0 and the explicit
+      // reserveTokens config is honored (no floor bump applies).
+      const settingsManager = {
+        getCompactionReserveTokens: () => 16_384,
+        getCompactionKeepRecentTokens: () => 20_000,
+        applyOverrides: vi.fn(),
+      };
+      const result = applyPiCompactionSettingsFromConfig({
+        settingsManager,
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: { reserveTokens: 5_000, reserveTokensFloor: 20_000 },
+            },
+          },
+        },
+        contextEngineInfo: {
+          id: "lcm",
+          name: "LCM",
+          interceptsCompaction: true,
+        },
+      });
+      // Explicit reserveTokens (5K) > 0 floor → 5K wins.
+      expect(result.compaction.reserveTokens).toBe(5_000);
+      expect(settingsManager.applyOverrides).toHaveBeenCalledWith({
+        compaction: { reserveTokens: 5_000 },
+      });
+    });
+  });
+
   it("applies keepRecentTokens when explicitly configured", () => {
     const settingsManager = {
       getCompactionReserveTokens: () => 20_000,
