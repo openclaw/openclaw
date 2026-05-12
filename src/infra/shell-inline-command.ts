@@ -14,6 +14,7 @@ function expandPowerShellSwitchPrefixForms(match: string, smallestMatch: string)
 export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
   ...expandPowerShellSwitchPrefixForms("command", "c"),
   ...expandPowerShellSwitchPrefixForms("commandwithargs", "cwa"),
+  ...expandPowerShellSwitchForms(["cwa"]),
   ...expandPowerShellSwitchPrefixForms("file", "f"),
   ...expandPowerShellSwitchPrefixForms("encodedcommand", "e"),
   ...expandPowerShellSwitchPrefixForms("ec", "e"),
@@ -21,6 +22,7 @@ export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
 
 const POWERSHELL_INLINE_REST_COMMAND_FLAGS = new Set([
   ...expandPowerShellSwitchPrefixForms("commandwithargs", "cwa"),
+  ...expandPowerShellSwitchForms(["cwa"]),
 ]);
 
 function expandPowerShellSwitchForms(names: readonly string[]): string[] {
