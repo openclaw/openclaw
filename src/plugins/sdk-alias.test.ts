@@ -244,6 +244,28 @@ function writePluginEntry(root: string, relativePath: string) {
   return pluginEntry;
 }
 
+function writeInstalledPluginEntry(params: {
+  installRoot: string;
+  packageName: string;
+  entry?: string;
+}) {
+  const entry = params.entry ?? "dist/index.js";
+  const packageRoot = path.join(
+    params.installRoot,
+    "node_modules",
+    ...params.packageName.split("/"),
+  );
+  const pluginEntry = path.join(packageRoot, entry);
+  mkdirSafeDir(path.dirname(pluginEntry));
+  fs.writeFileSync(
+    path.join(packageRoot, "package.json"),
+    JSON.stringify({ name: params.packageName, type: "module" }, null, 2),
+    "utf-8",
+  );
+  fs.writeFileSync(pluginEntry, 'export const plugin = "installed";\n', "utf-8");
+  return { packageRoot, pluginEntry };
+}
+
 function createUserInstalledPluginSdkAliasFixture() {
   const { fixture, sourcePluginEntryPath, sourceRootAlias, sourceChannelRuntimePath } =
     createPluginSdkAliasTargetFixture();
@@ -631,7 +653,7 @@ describe("plugin sdk alias helpers", () => {
     expect(subpaths).toEqual(["core", "qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"]);
   });
 
-  it("adds the non-QA private Codex task runtime subpath only for bundled Codex", () => {
+  it("adds the non-QA private Codex task runtime subpath only for trusted Codex plugins", () => {
     const fixture = createPluginSdkAliasFixture({
       packageExports: {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
@@ -660,6 +682,16 @@ describe("plugin sdk alias helpers", () => {
       fixture.root,
       bundledPluginFile("demo", "src/index.ts"),
     );
+    const { packageRoot: installedCodexRoot, pluginEntry: installedCodexEntry } =
+      writeInstalledPluginEntry({
+        installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
+        packageName: "@openclaw/codex",
+      });
+    const { packageRoot: installedOtherRoot, pluginEntry: installedOtherEntry } =
+      writeInstalledPluginEntry({
+        installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
+        packageName: "@openclaw/demo",
+      });
 
     const codexSubpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
       listPluginSdkExportedSubpaths({
@@ -671,9 +703,27 @@ describe("plugin sdk alias helpers", () => {
         modulePath: sourceOtherEntry,
       }),
     );
+    const installedCodexSubpaths = withCwd(installedCodexRoot, () =>
+      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
+        listPluginSdkExportedSubpaths({
+          modulePath: installedCodexEntry,
+          argv1: path.join(fixture.root, "openclaw.mjs"),
+        }),
+      ),
+    );
+    const installedOtherSubpaths = withCwd(installedOtherRoot, () =>
+      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
+        listPluginSdkExportedSubpaths({
+          modulePath: installedOtherEntry,
+          argv1: path.join(fixture.root, "openclaw.mjs"),
+        }),
+      ),
+    );
 
     expect(codexSubpaths).toEqual(["codex-native-task-runtime", "core"]);
+    expect(installedCodexSubpaths).toEqual(["codex-native-task-runtime", "core"]);
     expect(otherSubpaths).toEqual(["core"]);
+    expect(installedOtherSubpaths).toEqual(["core"]);
   });
 
   it("does not reuse a non-private cached subpath list after private qa gets enabled", () => {
@@ -844,7 +894,7 @@ describe("plugin sdk alias helpers", () => {
     );
   });
 
-  it("aliases non-QA private plugin-sdk subpaths for bundled runtime source loading", () => {
+  it("aliases non-QA private plugin-sdk subpaths for trusted Codex runtime loading", () => {
     const fixture = createPluginSdkAliasFixture({
       packageExports: {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
@@ -857,8 +907,16 @@ describe("plugin sdk alias helpers", () => {
       "plugin-sdk",
       "codex-native-task-runtime.ts",
     );
+    const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
+    const distCodexNativeTaskRuntimePath = path.join(
+      fixture.root,
+      "dist",
+      "plugin-sdk",
+      "codex-native-task-runtime.js",
+    );
     const sourceQaRuntimePath = path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts");
     fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(distRootAlias, "module.exports = {};\n", "utf-8");
     fs.writeFileSync(
       path.join(fixture.root, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
       JSON.stringify(["codex-native-task-runtime", "qa-runtime"], null, 2),
@@ -866,6 +924,11 @@ describe("plugin sdk alias helpers", () => {
     );
     fs.writeFileSync(
       sourceCodexNativeTaskRuntimePath,
+      "export const codexNativeTaskRuntime = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      distCodexNativeTaskRuntimePath,
       "export const codexNativeTaskRuntime = true;\n",
       "utf-8",
     );
@@ -878,6 +941,16 @@ describe("plugin sdk alias helpers", () => {
       fixture.root,
       bundledPluginFile("demo", "src/index.ts"),
     );
+    const { packageRoot: installedCodexRoot, pluginEntry: installedCodexEntry } =
+      writeInstalledPluginEntry({
+        installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
+        packageName: "@openclaw/codex",
+      });
+    const { packageRoot: installedOtherRoot, pluginEntry: installedOtherEntry } =
+      writeInstalledPluginEntry({
+        installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
+        packageName: "@openclaw/demo",
+      });
 
     const aliases = withEnv(
       { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
@@ -887,6 +960,26 @@ describe("plugin sdk alias helpers", () => {
       { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
       () => buildPluginLoaderAliasMap(sourceOtherPluginEntry),
     );
+    const installedAliases = withCwd(installedCodexRoot, () =>
+      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(
+          installedCodexEntry,
+          path.join(fixture.root, "openclaw.mjs"),
+          undefined,
+          "dist",
+        ),
+      ),
+    );
+    const installedOtherAliases = withCwd(installedOtherRoot, () =>
+      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(
+          installedOtherEntry,
+          path.join(fixture.root, "openclaw.mjs"),
+          undefined,
+          "dist",
+        ),
+      ),
+    );
 
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
       fs.realpathSync(sourceRootAlias),
@@ -894,8 +987,12 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["openclaw/plugin-sdk/codex-native-task-runtime"] ?? "")).toBe(
       fs.realpathSync(sourceCodexNativeTaskRuntimePath),
     );
+    expect(
+      fs.realpathSync(installedAliases["openclaw/plugin-sdk/codex-native-task-runtime"] ?? ""),
+    ).toBe(fs.realpathSync(distCodexNativeTaskRuntimePath));
     expect(aliases["openclaw/plugin-sdk/qa-runtime"]).toBeUndefined();
     expect(otherAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
+    expect(installedOtherAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
   });
 
   it("applies explicit dist resolution to plugin-sdk subpath aliases too", () => {
