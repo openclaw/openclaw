@@ -981,8 +981,10 @@ export function registerControlUiAndPairingSuite(): void {
   });
 
   test("requires approval for fresh node bootstrap pairing from setup code", async () => {
-    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
-    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { getDeviceBootstrapTokenProfile, issueDeviceBootstrapToken } =
+      await import("../infra/device-bootstrap.js");
+    const { approveDevicePairing, getPairedDevice, listDevicePairing, verifyDeviceToken } =
+      await import("../infra/device-pairing.js");
     const { server, port, prevToken } = await startControlUiServer("secret");
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
@@ -1050,6 +1052,94 @@ export function registerControlUiAndPairingSuite(): void {
       expect(retryPending).toHaveLength(1);
       expect(await getPairedDevice(identity.deviceId)).toBeNull();
       wsRetry.close();
+
+      const requestId = retryPending[0]?.requestId;
+      expect(typeof requestId).toBe("string");
+      if (!requestId) {
+        throw new Error("expected pending bootstrap pairing request");
+      }
+      await expect(approveDevicePairing(requestId, { callerScopes: [] })).resolves.toMatchObject({
+        status: "approved",
+      });
+
+      const wsApproved = await openWs(port);
+      const approved = await connectReq(wsApproved, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client,
+        deviceIdentityPath: identityPath,
+      });
+      expect(approved.ok).toBe(true);
+      const approvedPayload = approved.payload as
+        | {
+            type?: string;
+            auth?: {
+              deviceToken?: string;
+              role?: string;
+              scopes?: string[];
+              deviceTokens?: Array<{
+                deviceToken?: string;
+                role?: string;
+                scopes?: string[];
+              }>;
+            };
+          }
+        | undefined;
+      expect(approvedPayload?.type).toBe("hello-ok");
+      const issuedDeviceToken = approvedPayload?.auth?.deviceToken;
+      const issuedOperatorToken = approvedPayload?.auth?.deviceTokens?.find(
+        (entry) => entry.role === "operator",
+      )?.deviceToken;
+      if (!issuedDeviceToken || !issuedOperatorToken) {
+        throw new Error("expected bootstrap node and operator device tokens");
+      }
+      expect(approvedPayload?.auth?.role).toBe("node");
+      expect(approvedPayload?.auth?.scopes ?? []).toEqual([]);
+      const operatorBootstrapScopes = approvedPayload?.auth?.deviceTokens?.find(
+        (entry) => entry.role === "operator",
+      )?.scopes;
+      expectArrayIncludes(operatorBootstrapScopes, [
+        "operator.approvals",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ]);
+
+      const paired = await getPairedDevice(identity.deviceId);
+      expectArrayIncludes(paired?.roles, ["node", "operator"]);
+      expectArrayIncludes(paired?.approvedScopes, [
+        "operator.approvals",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ]);
+      expect(paired?.tokens?.node?.token).toBe(issuedDeviceToken);
+      expect(paired?.tokens?.operator?.token).toBe(issuedOperatorToken);
+      await expect(
+        verifyDeviceToken({
+          deviceId: identity.deviceId,
+          token: issuedDeviceToken,
+          role: "node",
+          scopes: [],
+        }),
+      ).resolves.toEqual({ ok: true });
+      await expect(
+        verifyDeviceToken({
+          deviceId: identity.deviceId,
+          token: issuedOperatorToken,
+          role: "operator",
+          scopes: [
+            "operator.approvals",
+            "operator.read",
+            "operator.talk.secrets",
+            "operator.write",
+          ],
+        }),
+      ).resolves.toEqual({ ok: true });
+      await expect(getDeviceBootstrapTokenProfile({ token: issued.token })).resolves.toBeNull();
+      wsApproved.close();
     } finally {
       await server.close();
       restoreGatewayToken(prevToken);

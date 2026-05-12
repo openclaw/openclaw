@@ -14,6 +14,7 @@ import {
 } from "../../../infra/device-identity.js";
 import {
   approveDevicePairing,
+  ensureBootstrapDeviceProfile,
   ensureDeviceToken,
   getPairedDevice,
   hasEffectivePairedDeviceRole,
@@ -40,6 +41,10 @@ import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import { logRejectedLargePayload } from "../../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
+import {
+  resolveBootstrapProfileScopesForRole,
+  type DeviceBootstrapProfile,
+} from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserOperatorUiClient,
@@ -1248,6 +1253,25 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
         }
 
+        let handoffBootstrapProfile: DeviceBootstrapProfile | null = null;
+        if (
+          device &&
+          devicePublicKey &&
+          role === "node" &&
+          hasServerApprovedDeviceTokenBaseline &&
+          authMethod === "bootstrap-token" &&
+          issuedBootstrapProfile
+        ) {
+          const seeded = await ensureBootstrapDeviceProfile({
+            deviceId: device.id,
+            publicKey: devicePublicKey,
+            profile: issuedBootstrapProfile,
+          });
+          if (seeded) {
+            handoffBootstrapProfile = issuedBootstrapProfile;
+          }
+        }
+
         const deviceToken =
           device && hasServerApprovedDeviceTokenBaseline
             ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
@@ -1265,6 +1289,34 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             scopes: deviceToken.scopes,
             issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
           });
+        }
+        if (device && handoffBootstrapProfile) {
+          for (const bootstrapRole of handoffBootstrapProfile.roles) {
+            if (bootstrapDeviceTokens.some((entry) => entry.role === bootstrapRole)) {
+              continue;
+            }
+            const bootstrapRoleScopes =
+              bootstrapRole === "operator"
+                ? resolveBootstrapProfileScopesForRole(
+                    bootstrapRole,
+                    handoffBootstrapProfile.scopes,
+                  )
+                : [];
+            const extraToken = await ensureDeviceToken({
+              deviceId: device.id,
+              role: bootstrapRole,
+              scopes: bootstrapRoleScopes,
+            });
+            if (!extraToken) {
+              continue;
+            }
+            bootstrapDeviceTokens.push({
+              deviceToken: extraToken.token,
+              role: extraToken.role,
+              scopes: extraToken.scopes,
+              issuedAtMs: extraToken.rotatedAtMs ?? extraToken.createdAtMs,
+            });
+          }
         }
         if (role === "node") {
           const reconciliation = await reconcileNodePairingOnConnect({
@@ -1500,7 +1552,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
         if (authMethod === "bootstrap-token" && bootstrapTokenCandidate && device) {
           try {
-            if (issuedBootstrapProfile) {
+            if (handoffBootstrapProfile) {
+              const revoked = await revokeDeviceBootstrapToken({
+                token: bootstrapTokenCandidate,
+              });
+              if (!revoked.removed) {
+                logGateway.warn(
+                  `bootstrap token revoke skipped after device-token handoff device=${device.id}`,
+                );
+              }
+            } else if (issuedBootstrapProfile) {
               const redemption = await redeemDeviceBootstrapTokenProfile({
                 token: bootstrapTokenCandidate,
                 role,
