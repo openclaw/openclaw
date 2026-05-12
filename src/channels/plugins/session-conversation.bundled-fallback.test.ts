@@ -134,30 +134,21 @@ describe("session conversation bundled fallback", () => {
   it("delegates repeated fallback calls through the public-surface loader", () => {
     enableThreadedFallback();
 
-    expect(
-      resolveSessionConversation({
-        channel: "mock-threaded",
-        kind: "group",
-        rawId: "room:topic:42",
-      }),
-    ).toEqual(
-      expect.objectContaining({
-        id: "room",
-        threadId: "42",
-      }),
-    );
-    expect(
-      resolveSessionConversation({
-        channel: "mock-threaded",
-        kind: "group",
-        rawId: "room:topic:43",
-      }),
-    ).toEqual(
-      expect.objectContaining({
-        id: "room",
-        threadId: "43",
-      }),
-    );
+    const firstRef = resolveSessionConversation({
+      channel: "mock-threaded",
+      kind: "group",
+      rawId: "room:topic:42",
+    });
+    expect(firstRef?.id).toBe("room");
+    expect(firstRef?.threadId).toBe("42");
+
+    const secondRef = resolveSessionConversation({
+      channel: "mock-threaded",
+      kind: "group",
+      rawId: "room:topic:43",
+    });
+    expect(secondRef?.id).toBe("room");
+    expect(secondRef?.threadId).toBe("43");
     expect(fallbackState.loadCalls).toBe(2);
   });
 });
