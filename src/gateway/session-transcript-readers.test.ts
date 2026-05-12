@@ -56,7 +56,9 @@ function seedTranscript(params: {
   agentId?: string;
   events: TranscriptEvent[];
 }) {
-  setupStateIfNeeded();
+  if (!stateDir) {
+    setupState();
+  }
   const agentId = params.agentId ?? "main";
   replaceSqliteSessionTranscriptEvents({
     agentId,
@@ -64,11 +66,44 @@ function seedTranscript(params: {
     events: params.events,
     now: () => 1_778_100_000_000,
   });
+  return { agentId, sessionId: params.sessionId };
 }
 
-function setupStateIfNeeded() {
-  if (!stateDir) {
-    setupState();
+function buildBasicSessionTranscript(
+  sessionId: string,
+  userText = "Hello world",
+  assistantText = "Hi there",
+): unknown[] {
+  return [
+    { type: "session", version: 1, id: sessionId },
+    { message: { role: "user", content: userText } },
+    { message: { role: "assistant", content: assistantText } },
+  ];
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectMessageFields(
+  message: unknown,
+  fields: { role?: string; content?: unknown; openclaw?: Record<string, unknown> },
+) {
+  const record = requireRecord(message, "message");
+  if ("role" in fields) {
+    expect(record.role).toBe(fields.role);
+  }
+  if ("content" in fields) {
+    expect(record.content).toEqual(fields.content);
+  }
+  if (fields.openclaw) {
+    const metadata = requireRecord(record.__openclaw, "message metadata");
+    for (const [key, value] of Object.entries(fields.openclaw)) {
+      expect(metadata[key]).toEqual(value);
+    }
   }
 }
 

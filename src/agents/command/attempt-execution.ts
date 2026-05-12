@@ -1,11 +1,10 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import {
   readTailAssistantTextFromSessionTranscript,
-  resolveSessionTranscriptFile,
+  resolveSessionTranscriptTarget,
 } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -42,7 +41,7 @@ import type { AgentCommandOpts } from "./types.js";
 
 export {
   createAcpVisibleTextAccumulator,
-  sessionFileHasContent,
+  sessionTranscriptHasContent,
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -193,21 +192,22 @@ async function persistTextTurnTranscript(
     return params.sessionEntry;
   }
 
-  const { sessionFile, sessionEntry } = await resolveSessionTranscriptFile({
+  const resolvedTranscript = await resolveSessionTranscriptTarget({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
     agentId: params.sessionAgentId,
     threadId: params.threadId,
   });
+  const { sessionEntry } = resolvedTranscript;
+  if (sessionEntry && params.sessionStore) {
+    params.sessionStore[params.sessionKey] = sessionEntry;
+  }
   if (promptText) {
     await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      agentId: params.sessionAgentId,
-      sessionId: params.sessionId,
+      agentId: resolvedTranscript.agentId,
+      sessionId: resolvedTranscript.sessionId,
       cwd: params.sessionCwd,
-      config: params.config,
       message: {
         role: "user",
         content: promptText,
@@ -219,9 +219,9 @@ async function persistTextTurnTranscript(
   if (replyText) {
     let appendAssistant = true;
     if (params.embeddedAssistantGapFill) {
-      const latest = await readTailAssistantTextFromSessionTranscript(sessionFile, {
-        agentId: params.sessionAgentId,
-        sessionId: params.sessionId,
+      const latest = await readTailAssistantTextFromSessionTranscript({
+        agentId: resolvedTranscript.agentId,
+        sessionId: resolvedTranscript.sessionId,
       });
       const normalizedReply = normalizeTranscriptMirrorText(replyText);
       const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
@@ -231,11 +231,9 @@ async function persistTextTurnTranscript(
     }
     if (appendAssistant) {
       await appendSessionTranscriptMessage({
-        transcriptPath: sessionFile,
-        agentId: params.sessionAgentId,
-        sessionId: params.sessionId,
+        agentId: resolvedTranscript.agentId,
+        sessionId: resolvedTranscript.sessionId,
         cwd: params.sessionCwd,
-        config: params.config,
         message: {
           role: "assistant",
           content: [{ type: "text", text: replyText }],
@@ -251,9 +249,8 @@ async function persistTextTurnTranscript(
   }
 
   emitSessionTranscriptUpdate({
-    agentId: params.sessionAgentId,
-    sessionId: params.sessionId,
-    sessionFile,
+    agentId: resolvedTranscript.agentId,
+    sessionId: resolvedTranscript.sessionId,
     sessionKey: params.sessionKey,
   });
   return sessionEntry;
@@ -349,7 +346,6 @@ export function runAgentAttempt(params: {
   sessionId: string;
   sessionKey: string | undefined;
   sessionAgentId: string;
-  sessionFile: string;
   workspaceDir: string;
   body: string;
   isFallbackRetry: boolean;
@@ -466,7 +462,7 @@ export function runAgentAttempt(params: {
         `cli session reset: provider=${sanitizeForLog(cliExecutionProvider)} reason=transcript-missing sessionKey=${params.sessionKey ?? params.sessionId}`,
       );
 
-      if (params.sessionKey && params.sessionStore) {
+      if (params.sessionKey) {
         params.sessionEntry =
           (await clearCliSessionEntry({
             provider: cliExecutionProvider,
@@ -486,7 +482,6 @@ export function runAgentAttempt(params: {
         sessionKey: params.sessionKey,
         agentId: params.sessionAgentId,
         trigger: "user",
-        sessionFile: params.sessionFile,
         workspaceDir: params.workspaceDir,
         config: params.cfg,
         prompt: effectivePrompt,
@@ -525,8 +520,7 @@ export function runAgentAttempt(params: {
           err instanceof FailoverError &&
           err.reason === "session_expired" &&
           activeCliSessionBinding?.sessionId &&
-          params.sessionKey &&
-          params.sessionStore
+          params.sessionKey
         ) {
           log.warn(
             `CLI session expired, clearing from SQLite session row: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
@@ -540,12 +534,8 @@ export function runAgentAttempt(params: {
             })) ?? params.sessionEntry;
 
           return await runCliWithSession(undefined).then(async (result) => {
-            if (
-              result.meta.agentMeta?.cliSessionBinding?.sessionId &&
-              params.sessionKey &&
-              params.sessionStore
-            ) {
-              const entry = params.sessionStore[params.sessionKey];
+            if (result.meta.agentMeta?.cliSessionBinding?.sessionId && params.sessionKey) {
+              const entry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
               if (entry) {
                 const updatedEntry = { ...entry };
                 setCliSessionBinding(
@@ -589,7 +579,6 @@ export function runAgentAttempt(params: {
     replyToMode: params.runContext.replyToMode,
     hasRepliedRef: params.runContext.hasRepliedRef,
     senderIsOwner: params.opts.senderIsOwner,
-    sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
     agentHarnessId: requestedAgentHarnessId,
@@ -618,6 +607,7 @@ export function runAgentAttempt(params: {
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     streamParams: params.opts.streamParams,
+    initialVfsEntries: params.opts.initialVfsEntries,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,

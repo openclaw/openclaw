@@ -47,7 +47,6 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
   getSessionEntry,
-  listSessionEntries,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
   type SessionEntry,
@@ -57,7 +56,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import {
-  DEFAULT_AGENT_ID,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
@@ -79,16 +77,12 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
-import {
-  resolveSessionRowAgentId,
-  resolveSessionRowKey,
-  resolveStoredSessionRowKeyForAgent,
-} from "./session-row-key.js";
+import { resolveSessionRowAgentId, resolveSessionRowKey } from "./session-row-key.js";
 import {
   readRecentSessionUsageFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionTitleFieldsFromTranscript,
-} from "./session-utils.fs.js";
+} from "./session-transcript-readers.js";
 import type {
   GatewayAgentRow,
   GatewaySessionRow,
@@ -107,7 +101,7 @@ export {
   readRecentSessionUsageFromTranscriptAsync,
   readRecentSessionMessagesAsync,
   readRecentSessionMessagesWithStatsAsync,
-  readRecentSessionTranscriptLines,
+  readRecentSessionTranscriptEvents,
   readRecentSessionUsageFromTranscript,
   readSessionMessageCountAsync,
   readSessionTitleFieldsFromTranscript,
@@ -115,9 +109,8 @@ export {
   readSessionPreviewItemsFromTranscript,
   readSessionMessagesAsync,
   visitSessionMessagesAsync,
-  resolveSessionTranscriptCandidates,
-} from "./session-utils.fs.js";
-export type { ReadSessionMessagesAsyncOptions } from "./session-utils.fs.js";
+} from "./session-transcript-readers.js";
+export type { ReadSessionMessagesAsyncOptions } from "./session-transcript-readers.js";
 export { canonicalizeSpawnedByForAgent, resolveSessionRowKey } from "./session-row-key.js";
 export type {
   GatewayAgentRow,
@@ -635,9 +628,7 @@ function resolveTranscriptUsageFallback(params: {
     ? normalizeAgentId(parsed.agentId)
     : resolveDefaultAgentId(params.cfg);
   const snapshot = readRecentSessionUsageFromTranscript(
-    entry.sessionId,
-    entry.sessionFile,
-    agentId,
+    { agentId, sessionId: entry.sessionId },
     typeof params.maxTranscriptBytes === "number" ? params.maxTranscriptBytes : 256 * 1024,
   );
   if (!snapshot) {
@@ -676,7 +667,7 @@ function resolveTranscriptUsageFallback(params: {
 
 /**
  * Returns the owning agent id if the session key belongs to an agent that is no
- * longer present in config (deleted). Returns null for non-agent legacy/global
+ * longer present in config (deleted). Returns null for non-agent or global
  * keys, or when the owning agent still exists (#65524).
  */
 export function resolveDeletedAgentIdFromSessionKey(
@@ -702,105 +693,20 @@ export function loadSessionEntry(sessionKey: string) {
     key,
   });
   const store: Record<string, SessionEntry> = {};
-  const freshestMatch = target.storeKeys
-    .map((storeKey) => {
-      const entry = getSessionEntry({
-        agentId: target.agentId,
-        sessionKey: storeKey,
-      });
-      if (entry) {
-        store[storeKey] = entry;
-        return { key: storeKey, entry };
-      }
-      return undefined;
-    })
-    .filter((match): match is { key: string; entry: SessionEntry } => Boolean(match))
-    .toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0))[0];
-  const legacyKey = freshestMatch?.key !== target.canonicalKey ? freshestMatch?.key : undefined;
+  const entry = getSessionEntry({
+    agentId: target.agentId,
+    sessionKey: target.canonicalKey,
+  });
+  if (entry) {
+    store[target.canonicalKey] = entry;
+  }
   return {
     cfg,
     agentId: target.agentId,
     store,
-    entry: freshestMatch?.entry,
+    entry,
     canonicalKey: target.canonicalKey,
-    legacyKey,
   };
-}
-
-export function resolveFreshestSessionEntryMatch(
-  store: Record<string, SessionEntry>,
-  storeKeys: string[],
-): { key: string; entry: SessionEntry } | undefined {
-  let freshest: { key: string; entry: SessionEntry } | undefined;
-  for (const key of storeKeys) {
-    const entry = store[key];
-    if (!entry) {
-      continue;
-    }
-    const match = { key, entry };
-    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
-      freshest = match;
-    }
-  }
-  return freshest;
-}
-
-export function resolveFreshestSessionEntryFromStoreKeys(
-  store: Record<string, SessionEntry>,
-  storeKeys: string[],
-): SessionEntry | undefined {
-  return resolveFreshestSessionEntryMatch(store, storeKeys)?.entry;
-}
-
-function findFreshestStoreMatch(
-  store: Record<string, SessionEntry>,
-  ...candidates: string[]
-): { entry: SessionEntry; key: string } | undefined {
-  const matches = new Map<string, { entry: SessionEntry; key: string }>();
-  for (const candidate of candidates) {
-    const trimmed = normalizeOptionalString(candidate) ?? "";
-    if (!trimmed) {
-      continue;
-    }
-    const exact = store[trimmed];
-    if (exact) {
-      matches.set(trimmed, { entry: exact, key: trimmed });
-    }
-    for (const key of findStoreKeysIgnoreCase(store, trimmed)) {
-      const entry = store[key];
-      if (entry) {
-        matches.set(key, { entry, key });
-      }
-    }
-  }
-  if (matches.size === 0) {
-    return undefined;
-  }
-  let freshest: { entry: SessionEntry; key: string } | undefined;
-  for (const match of matches.values()) {
-    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
-      freshest = match;
-    }
-  }
-  return freshest;
-}
-
-/**
- * Find all persisted session row keys that match the given key case-insensitively.
- * Returns every key from the store whose lowercased form equals the target's lowercased form.
- */
-export function findStoreKeysIgnoreCase(
-  store: Record<string, unknown>,
-  targetKey: string,
-): string[] {
-  const lowered = normalizeLowercaseStringOrEmpty(targetKey);
-  const matches: string[] = [];
-  for (const key of Object.keys(store)) {
-    if (normalizeLowercaseStringOrEmpty(key) === lowered) {
-      matches.push(key);
-    }
-  }
-  return matches;
 }
 
 export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
@@ -977,195 +883,21 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   return { defaultId, mainKey, scope, agents };
 }
 
-function buildGatewaySessionDatabaseScanTargets(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  canonicalKey: string;
-  agentId: string;
-}): string[] {
-  const targets = new Set<string>();
-  if (params.canonicalKey) {
-    targets.add(params.canonicalKey);
-  }
-  if (params.key && params.key !== params.canonicalKey) {
-    targets.add(params.key);
-  }
-  if (params.canonicalKey === "global" || params.canonicalKey === "unknown") {
-    return [...targets];
-  }
-  const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
-  if (params.canonicalKey === agentMainKey) {
-    targets.add(`agent:${params.agentId}:main`);
-  }
-  return [...targets];
-}
-
-function resolveGatewaySessionDatabaseLookup(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  canonicalKey: string;
-  agentId: string;
-  initialStore?: Record<string, SessionEntry>;
-}): {
-  databasePath: string;
-  store: Record<string, SessionEntry>;
-  match: { entry: SessionEntry; key: string } | undefined;
-} {
-  const scanTargets = buildGatewaySessionDatabaseScanTargets(params);
-  const selectedStore =
-    params.initialStore ??
-    Object.fromEntries(
-      listSessionEntries({ agentId: params.agentId }).map(({ sessionKey, entry }) => [
-        sessionKey,
-        entry,
-      ]),
-    );
-  const selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
-
-  return {
-    databasePath: resolveOpenClawAgentSqlitePath({ agentId: params.agentId }),
-    store: selectedStore,
-    match: selectedMatch,
-  };
-}
-
-function resolveExplicitDeletedLegacyMainDatabaseTarget(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  scanLegacyKeys?: boolean;
-}): {
+export function resolveGatewaySessionDatabaseTarget(params: { cfg: OpenClawConfig; key: string }): {
   agentId: string;
   databasePath: string;
   canonicalKey: string;
-  storeKeys: string[];
-} | null {
-  const parsed = parseAgentSessionKey(params.key);
-  const legacyAgentId = normalizeAgentId(parsed?.agentId);
-  if (
-    !parsed ||
-    legacyAgentId !== DEFAULT_AGENT_ID ||
-    listAgentIds(params.cfg).includes(legacyAgentId)
-  ) {
-    return null;
-  }
-
-  // Only preserve agent:main:* when the retired main-agent database still has the row.
-  // Legacy aliases without a retired-agent row should remap to the configured default agent.
-  const canonicalKey = resolveStoredSessionRowKeyForAgent({
-    cfg: params.cfg,
-    agentId: legacyAgentId,
-    sessionKey: params.key,
-  });
-  const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: legacyAgentId });
-  const legacyAgentMainKey = `agent:${legacyAgentId}:main`;
-  const lookupSeeds = Array.from(
-    new Set([params.key, canonicalKey, agentMainKey, legacyAgentMainKey]),
-  );
-  let best:
-    | {
-        store: Record<string, SessionEntry>;
-        match: { entry: SessionEntry; key: string };
-      }
-    | undefined;
-  const store = Object.fromEntries(
-    listSessionEntries({ agentId: legacyAgentId }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
-  );
-  const match = findFreshestStoreMatch(store, ...lookupSeeds);
-  if (match) {
-    best = { store, match };
-  }
-  if (!best) {
-    return null;
-  }
-
-  const storeKeys = new Set<string>([canonicalKey]);
-  if (params.key !== canonicalKey) {
-    storeKeys.add(params.key);
-  }
-  storeKeys.add(best.match.key);
-  if (params.scanLegacyKeys !== false) {
-    for (const seed of lookupSeeds) {
-      storeKeys.add(seed);
-      for (const legacyKey of findStoreKeysIgnoreCase(best.store, seed)) {
-        storeKeys.add(legacyKey);
-      }
-    }
-  }
-  return {
-    agentId: legacyAgentId,
-    databasePath: resolveOpenClawAgentSqlitePath({ agentId: legacyAgentId }),
-    canonicalKey,
-    storeKeys: Array.from(storeKeys),
-  };
-}
-
-export function resolveGatewaySessionDatabaseTarget(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  scanLegacyKeys?: boolean;
-  store?: Record<string, SessionEntry>;
-}): {
-  agentId: string;
-  databasePath: string;
-  canonicalKey: string;
-  storeKeys: string[];
 } {
   const key = normalizeOptionalString(params.key) ?? "";
-  const explicitDeletedMainTarget = resolveExplicitDeletedLegacyMainDatabaseTarget({
-    cfg: params.cfg,
-    key,
-    scanLegacyKeys: params.scanLegacyKeys,
-  });
-  if (explicitDeletedMainTarget) {
-    return explicitDeletedMainTarget;
-  }
-
   const canonicalKey = resolveSessionRowKey({
     cfg: params.cfg,
     sessionKey: key,
   });
   const agentId = resolveSessionRowAgentId(params.cfg, canonicalKey);
-  const { databasePath, store } = resolveGatewaySessionDatabaseLookup({
-    cfg: params.cfg,
-    key,
-    canonicalKey,
-    agentId,
-    initialStore: params.store,
-  });
-
-  if (canonicalKey === "global" || canonicalKey === "unknown") {
-    const storeKeys = key && key !== canonicalKey ? [canonicalKey, key] : [key];
-    return { agentId, databasePath, canonicalKey, storeKeys };
-  }
-
-  const storeKeys = new Set<string>();
-  storeKeys.add(canonicalKey);
-  if (key && key !== canonicalKey) {
-    storeKeys.add(key);
-  }
-  if (params.scanLegacyKeys !== false) {
-    // Scan SQLite row keys for case variants of every target to find
-    // legacy mixed-case entries (e.g. "agent:ops:MAIN" when canonical is "agent:ops:work").
-    const scanTargets = buildGatewaySessionDatabaseScanTargets({
-      cfg: params.cfg,
-      key,
-      canonicalKey,
-      agentId,
-    });
-    for (const seed of scanTargets) {
-      for (const legacyKey of findStoreKeysIgnoreCase(store, seed)) {
-        storeKeys.add(legacyKey);
-      }
-    }
-  }
   return {
     agentId,
-    databasePath,
+    databasePath: resolveOpenClawAgentSqlitePath({ agentId }),
     canonicalKey,
-    storeKeys: Array.from(storeKeys),
   };
 }
 
@@ -1470,8 +1202,6 @@ export function buildGatewaySessionRow(params: {
   const groupChannel = entry?.groupChannel;
   const space = entry?.space;
   const id = parsed?.id;
-  const origin = entry?.origin;
-  const originLabel = origin?.label;
   const displayName =
     entry?.displayName ??
     (channel
@@ -1484,9 +1214,10 @@ export function buildGatewaySessionRow(params: {
           key,
         })
       : undefined) ??
-    entry?.label ??
-    originLabel;
-  const deliveryFields = normalizeSessionDeliveryFields(entry);
+    entry?.label;
+  const deliveryFields = normalizeSessionDeliveryFields({
+    deliveryContext: entry?.deliveryContext,
+  });
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
   const rowContext = params.rowContext;
@@ -1656,11 +1387,10 @@ export function buildGatewaySessionRow(params: {
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
-    const fields = readSessionTitleFieldsFromTranscript(
-      entry.sessionId,
-      entry.sessionFile,
-      sessionAgentId,
-    );
+    const fields = readSessionTitleFieldsFromTranscript({
+      agentId: sessionAgentId,
+      sessionId: entry.sessionId,
+    });
     if (params.includeDerivedTitles) {
       derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
     }
@@ -1702,7 +1432,6 @@ export function buildGatewaySessionRow(params: {
     groupChannel,
     space,
     chatType: entry?.chatType,
-    origin,
     updatedAt,
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
@@ -1736,10 +1465,6 @@ export function buildGatewaySessionRow(params: {
     agentRuntime,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,
-    lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
-    lastTo: deliveryFields.lastTo ?? entry?.lastTo,
-    lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
-    lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
     compactionCheckpointCount: entry?.compactionCheckpoints?.length,
     latestCompactionCheckpoint,
     pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
@@ -2045,8 +1770,9 @@ export function listSessionsFromStore(params: {
  * batches of session row builds. This prevents large session row sets from
  * blocking the event loop during sessions.list requests.
  *
- * The synchronous file I/O in readSessionTitleFieldsFromTranscript (head/tail
- * reads for derived titles and last-message previews) is the dominant blocker.
+ * The synchronous transcript lookup in readSessionTitleFieldsFromTranscript
+ * (SQLite event scans for derived titles and last-message previews) is the
+ * dominant blocker.
  * By yielding every SESSIONS_LIST_YIELD_BATCH_SIZE rows, we keep the event
  * loop responsive for WebSocket heartbeats, channel I/O, and concurrent RPC.
  */
@@ -2107,11 +1833,10 @@ export async function listSessionsFromStoreAsync(params: {
       const sessionAgentId = parsed?.agentId
         ? normalizeAgentId(parsed.agentId)
         : resolveDefaultAgentId(cfg);
-      const fields = await readSessionTitleFieldsFromTranscriptAsync(
-        entry.sessionId,
-        entry.sessionFile,
-        sessionAgentId,
-      );
+      const fields = await readSessionTitleFieldsFromTranscriptAsync({
+        agentId: sessionAgentId,
+        sessionId: entry.sessionId,
+      });
       if (includeDerivedTitles) {
         row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
       }

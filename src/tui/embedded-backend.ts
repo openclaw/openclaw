@@ -36,7 +36,7 @@ import {
 } from "../gateway/server-methods/chat.js";
 import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
-import { capArrayByJsonBytes } from "../gateway/session-utils.fs.js";
+import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
 import {
   listAgentsForGateway,
   listSessionsFromStoreAsync,
@@ -207,12 +207,17 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages = sessionId
-      ? await readSessionMessagesAsync(sessionId, entry?.sessionFile, {
-          agentId: sessionAgentId,
-          mode: "recent",
-          maxMessages: max,
-          maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-        })
+      ? await readSessionMessagesAsync(
+          {
+            agentId: sessionAgentId,
+            sessionId,
+          },
+          {
+            mode: "recent",
+            maxMessages: max,
+            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+          },
+        )
       : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
@@ -282,12 +287,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
         entry,
       ]),
     ) as Record<string, SessionEntry>;
-    const freshest = target.storeKeys
-      .map((storeKey) => getSessionEntry({ agentId: target.agentId, sessionKey: storeKey }))
-      .filter((entry): entry is SessionEntry => Boolean(entry))
-      .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
-    if (freshest) {
-      store[target.canonicalKey] = freshest;
+    const current = getSessionEntry({ agentId: target.agentId, sessionKey: target.canonicalKey });
+    if (current) {
+      store[target.canonicalKey] = current;
     }
     const applied = await applySessionsPatchToStore({
       cfg,
