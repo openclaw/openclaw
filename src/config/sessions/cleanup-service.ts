@@ -207,7 +207,18 @@ function pruneMissingTranscriptEntries(params: {
     if (!entry?.sessionId) {
       continue;
     }
-    const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
+    let transcriptPath: string;
+    try {
+      transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
+    } catch {
+      // Malformed legacy rows (e.g. key-shaped `sessionId` like `agent:main:main`)
+      // cannot resolve a transcript. Treat as missing under --fix-missing instead
+      // of crashing the entire cleanup pass.
+      delete params.store[key];
+      removed += 1;
+      params.onPruned?.(key);
+      continue;
+    }
     if (!fs.existsSync(transcriptPath)) {
       delete params.store[key];
       removed += 1;

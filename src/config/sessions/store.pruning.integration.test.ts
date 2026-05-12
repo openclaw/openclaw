@@ -403,6 +403,48 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(archivedDirectTranscripts.length).toBeGreaterThan(0);
   });
 
+  it("sessions cleanup --fix-missing prunes legacy rows with key-shaped sessionId instead of crashing", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        // Legacy rows accidentally persisted a session KEY (with colons) as the
+        // sessionId. The cleanup path must not crash on these (#80970).
+        sessionId: "agent:main:main",
+        updatedAt: now,
+      },
+      fresh: {
+        sessionId: "fresh-session",
+        updatedAt: now,
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+    await fs.writeFile(path.join(testDir, "fresh-session.jsonl"), "fresh", "utf-8");
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+    expect(dryRun.previewResults[0]?.summary.missing).toBe(1);
+    expect(dryRun.previewResults[0]?.summary.beforeCount).toBe(2);
+    expect(dryRun.previewResults[0]?.summary.afterCount).toBe(1);
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+    expect(applied.appliedSummaries).toHaveLength(1);
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(Object.keys(persisted)).toEqual(["fresh"]);
+  });
+
   it("sessions cleanup dry-run does not double-count artifacts already covered by disk budget", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
