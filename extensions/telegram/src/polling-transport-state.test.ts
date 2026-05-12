@@ -141,6 +141,52 @@ describe("TelegramPollingTransportState", () => {
     expect(createTelegramTransport).not.toHaveBeenCalled();
   });
 
+  it("disposeIfDirty() awaits close() and clears the slot when dirty", async () => {
+    const initial = makeMockTransport("initial");
+    const state = new TelegramPollingTransportState({
+      log,
+      initialTransport: initial,
+    });
+
+    state.markDirty();
+    let closeResolved = false;
+    initial.close.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      closeResolved = true;
+    });
+
+    await state.disposeIfDirty();
+
+    expect(initial.close).toHaveBeenCalledTimes(1);
+    expect(closeResolved).toBe(true);
+    expect(anyLogMatches(log, "closed dirty transport at cycle teardown")).toBe(true);
+  });
+
+  it("disposeIfDirty() is a no-op when not dirty", async () => {
+    const initial = makeMockTransport("initial");
+    const state = new TelegramPollingTransportState({
+      log,
+      initialTransport: initial,
+    });
+
+    await state.disposeIfDirty();
+
+    expect(initial.close).not.toHaveBeenCalled();
+  });
+
+  it("disposeIfDirty() swallows close() errors and still clears state", async () => {
+    const initial = makeMockTransport("initial");
+    initial.close.mockRejectedValueOnce(new Error("boom"));
+    const state = new TelegramPollingTransportState({
+      log,
+      initialTransport: initial,
+    });
+    state.markDirty();
+
+    await expect(state.disposeIfDirty()).resolves.toBeUndefined();
+    expect(anyLogMatches(log, "failed to close dirty transport at cycle teardown")).toBe(true);
+  });
+
   it("clears the dirty flag even when no factory is configured", () => {
     const initial = makeMockTransport("initial");
     const state = new TelegramPollingTransportState({

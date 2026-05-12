@@ -30,6 +30,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
+let __resetTelegramBotSetupSemaphoreForTests: (typeof import("./polling-session.js"))["__resetTelegramBotSetupSemaphoreForTests"];
 
 type TelegramApiMiddleware = (
   prev: (...args: unknown[]) => Promise<unknown>,
@@ -260,7 +261,9 @@ async function waitForApiMiddleware(
 
 describe("TelegramPollingSession", () => {
   beforeAll(async () => {
-    ({ TelegramPollingSession } = await import("./polling-session.js"));
+    ({ TelegramPollingSession, __resetTelegramBotSetupSemaphoreForTests } = await import(
+      "./polling-session.js"
+    ));
   });
 
   beforeEach(() => {
@@ -269,6 +272,10 @@ describe("TelegramPollingSession", () => {
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
+    // The setup semaphore is module-level state shared with other test cases.
+    // Reset between cases so a leak from one test (e.g. an unfinished await)
+    // does not starve the next case of slots.
+    __resetTelegramBotSetupSemaphoreForTests();
   });
 
   it("uses backoff helpers for recoverable polling retries", async () => {
@@ -1134,5 +1141,77 @@ describe("TelegramPollingSession", () => {
     // dispose() closes transport2 since it becomes the held transport after the rebuild.
     expect(transport1.close).toHaveBeenCalled();
     expect(transport2.close).toHaveBeenCalled();
+  });
+
+  it("waits for the prior cycle teardown before starting the next bot setup", async () => {
+    // Reproducer for the 409 tight-loop fix: when a polling cycle errors out
+    // (recoverable network error here), the next createTelegramBot call must
+    // not start until the prior runner.stop()/bot.stop() have settled.
+    const abort = new AbortController();
+    const recoverableError = new Error("recoverable polling error");
+    let stopRelease: (() => void) | undefined;
+    const stopPromise = new Promise<void>((resolve) => {
+      stopRelease = resolve;
+    });
+    const runnerStop = vi.fn(async () => {
+      await stopPromise;
+    });
+    const botStop = vi.fn(async () => undefined);
+
+    let cycle = 0;
+    createTelegramBotMock.mockImplementation(() => ({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        getUpdates: vi.fn(async () => []),
+        config: { use: vi.fn() },
+      },
+      stop: botStop,
+    }));
+    runMock.mockImplementation(() => {
+      cycle += 1;
+      if (cycle === 1) {
+        return {
+          task: async () => {
+            throw recoverableError;
+          },
+          stop: runnerStop,
+          isRunning: () => false,
+        };
+      }
+      return {
+        task: async () => {
+          abort.abort();
+        },
+        stop: vi.fn(async () => undefined),
+        isRunning: () => false,
+      };
+    });
+
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => null,
+      persistUpdateId: async () => undefined,
+      log: () => undefined,
+      telegramTransport: undefined,
+    });
+
+    const runPromise = session.runUntilAbort();
+    for (let i = 0; i < 50; i += 1) {
+      await Promise.resolve();
+    }
+    // First cycle is in flight; runner stop is blocked, so createTelegramBot
+    // should only have been called once. The second call must wait on the
+    // stoppingCycle teardown.
+    expect(createTelegramBotMock).toHaveBeenCalledTimes(1);
+
+    stopRelease?.();
+    await runPromise;
+    expect(createTelegramBotMock).toHaveBeenCalledTimes(2);
   });
 });
