@@ -1325,9 +1325,7 @@ describe("AcpSessionManager", () => {
     });
 
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
-    const ensureInput = runtimeState.ensureSession.mock.calls[0]?.[0] as
-      | { resumeSessionId?: string; mode?: string }
-      | undefined;
+    const ensureInput = mockCallArg(runtimeState.ensureSession);
     expectRecordFields(ensureInput, {
       sessionKey,
       agent: "codex",
@@ -1420,15 +1418,13 @@ describe("AcpSessionManager", () => {
       agent: "codex",
       resumeSessionId: "agent-sid-stale",
     });
-    const retryInput = runtimeState.ensureSession.mock.calls[1]?.[0] as
-      | { resumeSessionId?: string }
-      | undefined;
-    expect(retryInput?.resumeSessionId).toBeUndefined();
-    const runTurnInput = runtimeState.runTurn.mock.calls[0]?.[0] as
-      | { handle?: { agentSessionId?: string; backendSessionId?: string } }
-      | undefined;
-    expect(runTurnInput?.handle?.backendSessionId).toBe("acpx-sid-fresh");
-    expect(runTurnInput?.handle?.agentSessionId).toBeUndefined();
+    const retryInput = mockCallArg(runtimeState.ensureSession, 1);
+    expect(retryInput.resumeSessionId).toBeUndefined();
+    const runTurnInput = mockCallArg(runtimeState.runTurn);
+    const handle = expectRecordFields(runTurnInput.handle, {
+      backendSessionId: "acpx-sid-fresh",
+    });
+    expect(handle.agentSessionId).toBeUndefined();
     expect(currentMeta.identity?.acpxSessionId).toBe("acpx-sid-fresh");
     expect(currentMeta.identity?.agentSessionId).toBeUndefined();
   });
@@ -2433,10 +2429,8 @@ describe("AcpSessionManager", () => {
       sessionKey,
       resumeSessionId: "acpx-sid-stale",
     });
-    const retryInput = runtimeState.ensureSession.mock.calls[1]?.[0] as
-      | { resumeSessionId?: string }
-      | undefined;
-    expect(retryInput?.resumeSessionId).toBeUndefined();
+    const retryInput = mockCallArg(runtimeState.ensureSession, 1);
+    expect(retryInput.resumeSessionId).toBeUndefined();
     expect(currentMeta.identity?.acpxSessionId).toBe("acpx-sid-fresh");
     expect(currentMeta.identity?.state).toBe("resolved");
     const states = extractStatesFromUpserts();

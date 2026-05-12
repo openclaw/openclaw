@@ -57,7 +57,11 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     await tool?.execute?.("call", { url: "https://example.com/page" });
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [, init] = fetchSpy.mock.calls[0];
+    const fetchCall = fetchSpy.mock.calls.at(0);
+    if (!fetchCall) {
+      throw new Error("expected fetch to be called");
+    }
+    const [, init] = fetchCall;
     expect(init.headers.Accept).toBe("text/markdown, text/html;q=0.9, */*;q=0.1");
   });
 
@@ -141,7 +145,7 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     await tool?.execute?.("call", { url: "https://example.com/runtime-firecrawl-off" });
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("https://example.com/runtime-firecrawl-off");
+    expect(fetchSpy.mock.calls.at(0)?.[0]).toBe("https://example.com/runtime-firecrawl-off");
   });
 
   it("logs x-markdown-tokens when header is present", async () => {

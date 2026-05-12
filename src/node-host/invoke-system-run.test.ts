@@ -750,6 +750,55 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
+  it("denies abbreviated PowerShell encoded payloads even when the wrapper is allowlisted", async () => {
+    const binDir = createFixtureDir("openclaw-pwsh-allowlist-");
+    const executablePath = createTempExecutable({ dir: binDir, name: "pwsh" });
+    await withTempApprovalsHome({
+      approvals: createAllowlistOnMissApprovals({
+        agents: {
+          main: {
+            allowlist: [{ pattern: executablePath }],
+          },
+        },
+      }),
+      run: async () => {
+        const { runCommand, sendInvokeResult, sendNodeEvent } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          security: "allowlist",
+          ask: "on-miss",
+          command: [
+            executablePath,
+            "-win",
+            "hidden",
+            "-if",
+            "XML",
+            "-config",
+            "SomeConfig",
+            "/NoProfile",
+            "/ec",
+            "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA",
+          ],
+        });
+
+        expect(runCommand).not.toHaveBeenCalled();
+        expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
+
+        const commandWithArgs = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          security: "allowlist",
+          ask: "on-miss",
+          command: [executablePath, "-cwa", "Write-Output", "hi"],
+        });
+
+        expect(commandWithArgs.runCommand).not.toHaveBeenCalled();
+        expectApprovalRequiredDenied({
+          sendNodeEvent: commandWithArgs.sendNodeEvent,
+          sendInvokeResult: commandWithArgs.sendInvokeResult,
+        });
+      },
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "pins PATH-token executable to canonical path",
     async () => {

@@ -54,6 +54,14 @@ const { clearActiveSessionsForShutdownTracker, listActiveSessionsForShutdown } =
 
 const cfg: OpenClawConfig = {};
 
+const requireSessionEndHookEvent = (index: number): SessionEndHookEvent => {
+  const call = runSessionEndMock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`Expected session_end hook call ${index}`);
+  }
+  return call[0];
+};
+
 beforeEach(() => {
   clearActiveSessionsForShutdownTracker();
   runSessionEndMock.mockClear();
@@ -113,7 +121,7 @@ describe("drainActiveSessionsForShutdown", () => {
     await drainActiveSessionsForShutdown({ reason: "restart" });
 
     expect(runSessionEndMock).toHaveBeenCalledTimes(1);
-    expect((runSessionEndMock.mock.calls[0][0] as { reason?: string }).reason).toBe("restart");
+    expect(requireSessionEndHookEvent(0).reason).toBe("restart");
   });
 
   it("does not double-fire for a session already finalized by reset/delete/compaction", async () => {
@@ -144,7 +152,7 @@ describe("drainActiveSessionsForShutdown", () => {
     await drainActiveSessionsForShutdown({ reason: "shutdown" });
 
     expect(runSessionEndMock).toHaveBeenCalledTimes(1);
-    expect((runSessionEndMock.mock.calls[0][0] as { sessionId?: string }).sessionId).toBe("sess-B");
+    expect(requireSessionEndHookEvent(0).sessionId).toBe("sess-B");
   });
 
   it("awaits each session_end handler so the bounded timeout actually races real plugin work", async () => {

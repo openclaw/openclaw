@@ -45,7 +45,7 @@ describe("warnIfModelConfigLooksOff", () => {
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(ensureAuthProfileStore).toHaveBeenCalledOnce();
     expect(listProfilesForProvider).toHaveBeenCalledOnce();
-    const [profileStore, providerId] = listProfilesForProvider.mock.calls[0] as unknown as [
+    const [profileStore, providerId] = listProfilesForProvider.mock.calls.at(0) as unknown as [
       AuthProfileStore,
       string,
     ];
