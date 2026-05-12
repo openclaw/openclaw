@@ -6,6 +6,7 @@ import {
   collectSbomRiskCheckErrors,
   collectSbomRiskReport,
   packageNameFromLockKey,
+  renderDependencyOwnershipSurfaceMarkdownReport,
 } from "../../scripts/sbom-risk-report.mjs";
 
 const tempDirs: string[] = [];
@@ -36,7 +37,7 @@ describe("packageNameFromLockKey", () => {
 });
 
 describe("collectSbomRiskReport", () => {
-  it("reports root closure sizes, build-risk packages, and ownership gaps", () => {
+  it("reports root dependency reachability, install-surface packages, and ownership metadata gaps", () => {
     const repoRoot = makeTempRepo();
     writeRepoFile(
       repoRoot,
@@ -126,6 +127,23 @@ snapshots:
     expect(collectSbomRiskCheckErrors(report)).toEqual([
       "root dependency 'missing-owner' is missing from scripts/lib/dependency-ownership.json",
     ]);
+
+    const markdown = renderDependencyOwnershipSurfaceMarkdownReport(report);
+    expect(markdown).toContain("# Dependency Ownership and Install Surface Report");
+    expect(markdown).toContain("## Target");
+    expect(markdown).toContain("## Scope");
+    expect(markdown).toContain("It does not query npm advisories");
+    expect(markdown).toContain("## Root Dependencies Missing Ownership Metadata");
+    expect(markdown).toContain("`missing-owner`");
+    expect(markdown).toContain("## Root Dependencies By Resolved Transitive Package Count");
+    expect(markdown).toContain("`core-lib`: 3 resolved transitive packages");
+    expect(markdown).toContain("## Workspace Packages With The Most Dependencies");
+    expect(markdown).toContain("## Packages With Install-Time Or Platform-Specific Behavior");
+    expect(markdown).toContain("`transitive-native@1.0.0`: requires build");
+    expect(markdown).not.toContain("SBOM dependency risk report");
+    expect(markdown).not.toContain("Ownership gaps");
+    expect(markdown).not.toContain("Largest root dependency cones");
+    expect(markdown).not.toContain("## Root Dependencies With The Most Transitive Packages");
   });
 
   it("does not mark plugin importer dependencies as stale ownership records", () => {
