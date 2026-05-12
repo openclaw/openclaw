@@ -3,8 +3,8 @@ import path from "node:path";
 import { appendCronRunLogToSqlite, parseAllRunLogEntries } from "../../../cron/run-log.js";
 import { pathExists, root as fsRoot } from "../../../infra/fs-safe.js";
 
-export async function legacyCronRunLogFilesExist(storePath: string): Promise<boolean> {
-  const runsDir = path.resolve(path.dirname(path.resolve(storePath)), "runs");
+export async function legacyCronRunLogFilesExist(legacyStorePath: string): Promise<boolean> {
+  const runsDir = path.resolve(path.dirname(path.resolve(legacyStorePath)), "runs");
   if (!(await pathExists(runsDir))) {
     return false;
   }

@@ -31,11 +31,11 @@ export function resolveLegacyCronStorePath(configuredLegacyStorePath?: string): 
   return resolveDefaultLegacyCronStorePath();
 }
 
-function resolveStatePath(storePath: string): string {
-  if (storePath.endsWith(".json")) {
-    return storePath.replace(/\.json$/, "-state.json");
+function resolveStatePath(legacyStorePath: string): string {
+  if (legacyStorePath.endsWith(".json")) {
+    return legacyStorePath.replace(/\.json$/, "-state.json");
   }
-  return `${storePath}-state.json`;
+  return `${legacyStorePath}-state.json`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -66,17 +66,17 @@ function normalizeCronStateFile(value: unknown): CronRuntimeStateSnapshot | null
   return { version: 1, jobs };
 }
 
-export function legacyCronStoreFileExists(storePath: string): boolean {
+export function legacyCronStoreFileExists(legacyStorePath: string): boolean {
   try {
-    return fs.existsSync(storePath);
+    return fs.existsSync(legacyStorePath);
   } catch {
     return false;
   }
 }
 
-export function legacyCronStateFileExists(storePath: string): boolean {
+export function legacyCronStateFileExists(legacyStorePath: string): boolean {
   try {
-    return fs.existsSync(resolveStatePath(storePath));
+    return fs.existsSync(resolveStatePath(legacyStorePath));
   } catch {
     return false;
   }
@@ -105,16 +105,16 @@ async function loadStateFile(statePath: string): Promise<CronRuntimeStateSnapsho
 }
 
 export async function loadLegacyCronStoreForMigration(
-  storePath: string,
+  legacyStorePath: string,
 ): Promise<CronStoreSnapshot | null> {
   let raw: string;
   try {
-    raw = await fs.promises.readFile(storePath, "utf-8");
+    raw = await fs.promises.readFile(legacyStorePath, "utf-8");
   } catch (err) {
     if ((err as { code?: unknown })?.code === "ENOENT") {
       return null;
     }
-    throw new Error(`Failed to read cron store at ${storePath}: ${String(err)}`, {
+    throw new Error(`Failed to read cron store at ${legacyStorePath}: ${String(err)}`, {
       cause: err,
     });
   }
@@ -122,7 +122,7 @@ export async function loadLegacyCronStoreForMigration(
   try {
     parsed = parseJsonWithJson5Fallback(raw);
   } catch (err) {
-    throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
+    throw new Error(`Failed to parse cron store at ${legacyStorePath}: ${String(err)}`, {
       cause: err,
     });
   }

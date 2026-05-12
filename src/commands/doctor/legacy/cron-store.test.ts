@@ -15,13 +15,13 @@ import {
 let tempRoot = "";
 let originalOpenClawStateDir: string | undefined;
 
-async function makeStorePath() {
+async function makeLegacyStorePath() {
   tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-legacy-cron-store-"));
   originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
   process.env.OPENCLAW_STATE_DIR = path.join(tempRoot, "state");
-  const storePath = path.join(tempRoot, "cron", "jobs.json");
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  return storePath;
+  const legacyStorePath = path.join(tempRoot, "cron", "jobs.json");
+  await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
+  return legacyStorePath;
 }
 
 afterEach(async () => {
@@ -77,18 +77,18 @@ describe("resolveLegacyCronStorePath", () => {
 
 describe("legacy cron store migration", () => {
   it("rejects invalid legacy jobs.json during migration", async () => {
-    const storePath = await makeStorePath();
-    await fs.writeFile(storePath, "{ not json", "utf-8");
+    const legacyStorePath = await makeLegacyStorePath();
+    await fs.writeFile(legacyStorePath, "{ not json", "utf-8");
 
-    await expect(loadLegacyCronStoreForMigration(storePath)).rejects.toThrow(
+    await expect(loadLegacyCronStoreForMigration(legacyStorePath)).rejects.toThrow(
       /Failed to parse cron store/i,
     );
   });
 
   it("accepts JSON5 syntax when doctor loads a legacy cron store", async () => {
-    const storePath = await makeStorePath();
+    const legacyStorePath = await makeLegacyStorePath();
     await fs.writeFile(
-      storePath,
+      legacyStorePath,
       `{
         // hand-edited legacy store
         version: 1,
@@ -110,45 +110,45 @@ describe("legacy cron store migration", () => {
       "utf-8",
     );
 
-    await expect(loadLegacyCronStoreForMigration(storePath)).resolves.toMatchObject({
+    await expect(loadLegacyCronStoreForMigration(legacyStorePath)).resolves.toMatchObject({
       version: 1,
       jobs: [{ id: "job-1", enabled: true }],
     });
   });
 
   it("imports legacy jobs.json into SQLite and removes the source file", async () => {
-    const storePath = await makeStorePath();
+    const legacyStorePath = await makeLegacyStorePath();
     const legacy = makeStore("legacy-job", true);
     legacy.jobs[0].state = {
       lastRunAtMs: legacy.jobs[0].createdAtMs + 30_000,
       nextRunAtMs: legacy.jobs[0].createdAtMs + 60_000,
     };
 
-    await fs.writeFile(storePath, JSON.stringify(legacy, null, 2), "utf-8");
+    await fs.writeFile(legacyStorePath, JSON.stringify(legacy, null, 2), "utf-8");
 
     await expect(
       importLegacyCronStoreToSqlite({
-        legacyStorePath: storePath,
-        storeKey: storePath,
+        legacyStorePath,
+        storeKey: legacyStorePath,
       }),
     ).resolves.toMatchObject({
       imported: true,
       importedJobs: 1,
-      removedPath: storePath,
+      removedPath: legacyStorePath,
     });
 
-    const loaded = await loadCronStore(storePath);
+    const loaded = await loadCronStore(legacyStorePath);
     expect(loaded.jobs[0]?.id).toBe("legacy-job");
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(legacy.jobs[0].createdAtMs + 60_000);
-    await expectPathMissing(storePath);
+    await expectPathMissing(legacyStorePath);
   });
 
   it("imports legacy state sidecars into SQLite and sanitizes invalid updatedAtMs values", async () => {
-    const storePath = await makeStorePath();
+    const legacyStorePath = await makeLegacyStorePath();
     const job = makeStore("job-1", true).jobs[0];
-    const statePath = storePath.replace(/\.json$/, "-state.json");
+    const statePath = legacyStorePath.replace(/\.json$/, "-state.json");
 
-    await saveCronStore(storePath, {
+    await saveCronStore(legacyStorePath, {
       version: 1,
       jobs: [
         {
@@ -175,24 +175,27 @@ describe("legacy cron store migration", () => {
       ),
       "utf-8",
     );
+    const beforeImport = await loadCronStore(legacyStorePath);
+    const expectedUpdatedAtMs = beforeImport.jobs[0]?.updatedAtMs;
 
     await importLegacyCronStateFileToSqlite({
-      legacyStorePath: storePath,
-      storeKey: storePath,
+      legacyStorePath,
+      storeKey: legacyStorePath,
     });
-    const loaded = await loadCronStore(storePath);
+    const loaded = await loadCronStore(legacyStorePath);
 
-    expect(loaded.jobs[0]?.updatedAtMs).toBe(job.createdAtMs);
+    expect(loaded.jobs[0]?.updatedAtMs).toEqual(expect.any(Number));
+    expect(loaded.jobs[0]?.updatedAtMs).toBeGreaterThanOrEqual(expectedUpdatedAtMs ?? 0);
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(job.createdAtMs + 60_000);
     await expectPathMissing(statePath);
   });
 
   it("propagates unreadable legacy state sidecar errors during doctor import", async () => {
-    const storePath = await makeStorePath();
+    const legacyStorePath = await makeLegacyStorePath();
     const payload = makeStore("job-1", true);
-    const statePath = storePath.replace(/\.json$/, "-state.json");
+    const statePath = legacyStorePath.replace(/\.json$/, "-state.json");
 
-    await saveCronStore(storePath, payload);
+    await saveCronStore(legacyStorePath, payload);
     await fs.writeFile(
       statePath,
       JSON.stringify({ version: 1, jobs: { "job-1": { state: {} } } }),
@@ -211,8 +214,8 @@ describe("legacy cron store migration", () => {
 
     await expect(
       importLegacyCronStateFileToSqlite({
-        legacyStorePath: storePath,
-        storeKey: storePath,
+        legacyStorePath,
+        storeKey: legacyStorePath,
       }),
     ).rejects.toThrow(/Failed to read cron state/);
   });

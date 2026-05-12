@@ -30,7 +30,7 @@ describe("legacy cron run-log migration", () => {
 
   it("imports legacy JSONL run-log files into SQLite and removes them", async () => {
     await withRunLogDir("openclaw-cron-log-import-", async (dir) => {
-      const storePath = path.join(dir, "cron", "jobs.json");
+      const legacyStorePath = path.join(dir, "cron", "jobs.json");
       const logPath = path.join(dir, "cron", "runs", "job-1.jsonl");
       await fs.mkdir(path.dirname(logPath), { recursive: true });
       await fs.writeFile(
@@ -39,30 +39,30 @@ describe("legacy cron run-log migration", () => {
         "utf-8",
       );
 
-      expect(await legacyCronRunLogFilesExist(storePath)).toBe(true);
+      expect(await legacyCronRunLogFilesExist(legacyStorePath)).toBe(true);
       const result = await importLegacyCronRunLogFilesToSqlite({
-        legacyStorePath: storePath,
-        storeKey: storePath,
+        legacyStorePath,
+        storeKey: legacyStorePath,
       });
 
       expect(result).toMatchObject({ imported: 1, files: 1 });
-      expect(readCronRunLogEntriesFromSqliteSync(storePath, { jobId: "job-1" })).toEqual([
+      expect(readCronRunLogEntriesFromSqliteSync(legacyStorePath, { jobId: "job-1" })).toEqual([
         expect.objectContaining({ ts: 1, status: "ok" }),
       ]);
       await expect(fs.stat(logPath)).rejects.toThrow();
-      expect(await legacyCronRunLogFilesExist(storePath)).toBe(false);
+      expect(await legacyCronRunLogFilesExist(legacyStorePath)).toBe(false);
     });
   });
 
   it("skips when the legacy runs directory is missing", async () => {
     await withRunLogDir("openclaw-cron-log-import-missing-", async (dir) => {
-      const storePath = path.join(dir, "cron", "jobs.json");
+      const legacyStorePath = path.join(dir, "cron", "jobs.json");
 
-      expect(await legacyCronRunLogFilesExist(storePath)).toBe(false);
+      expect(await legacyCronRunLogFilesExist(legacyStorePath)).toBe(false);
       await expect(
         importLegacyCronRunLogFilesToSqlite({
-          legacyStorePath: storePath,
-          storeKey: storePath,
+          legacyStorePath,
+          storeKey: legacyStorePath,
         }),
       ).resolves.toEqual({ imported: 0, files: 0 });
     });
