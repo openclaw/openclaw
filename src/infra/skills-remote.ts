@@ -142,7 +142,6 @@ async function hasApprovedRemoteProbeCommand(nodeId: string, command: string): P
       platform: pairedNode.platform,
       deviceFamily: pairedNode.deviceFamily,
       remoteIp: pairedNode.remoteIp,
-      bins: pairedNode.bins,
     });
   } else {
     clearRemoteNodeApproval(nodeId);
