@@ -66,6 +66,14 @@ describe("imessage targets", () => {
 
     expect(
       isAllowedIMessageSender({
+        allowFrom: ["imessage:chat_id:9"],
+        sender: "+1555",
+        chatId: 9,
+      }),
+    ).toBe(false);
+
+    expect(
+      isAllowedIMessageSender({
         allowFrom: ["chat_guid:team-thread"],
         sender: "+1555",
         chatGuid: "team-thread",
