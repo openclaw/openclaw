@@ -14,13 +14,6 @@ const testState = vi.hoisted(() => ({
   authDir: `${(process.env.TMPDIR ?? "/tmp").replace(/\/+$/, "")}/openclaw-wa-creds-${process.pid}-${Math.random().toString(16).slice(2)}`,
 }));
 
-function stripAnsi(value: string): string {
-  return value.replace(
-    new RegExp(`${String.fromCharCode(0x1b)}\\[[\\x20-\\x3f]*[\\x40-\\x7e]`, "g"),
-    "",
-  );
-}
-
 function resolveTestAuthDir() {
   return testState.authDir;
 }
