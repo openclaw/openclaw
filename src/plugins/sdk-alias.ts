@@ -310,10 +310,14 @@ function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
   const parsed = tryReadJsonSync(
     path.join(packageRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
   );
-  if (!Array.isArray(parsed)) {
-    return [];
-  }
-  return parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath));
+  return [
+    ...new Set([
+      CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
+      ...(Array.isArray(parsed)
+        ? parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath))
+        : []),
+    ]),
+  ];
 }
 
 function readBundledPluginPackageName(packageJsonPath: string): string | null {

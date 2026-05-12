@@ -659,10 +659,9 @@ describe("plugin sdk alias helpers", () => {
         "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
       },
     });
-    fs.writeFileSync(
+    fs.rmSync(
       path.join(fixture.root, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
-      JSON.stringify(["codex-native-task-runtime", "qa-runtime"], null, 2),
-      "utf-8",
+      { force: true },
     );
     fs.writeFileSync(
       path.join(fixture.root, "src", "plugin-sdk", "codex-native-task-runtime.ts"),
@@ -692,6 +691,15 @@ describe("plugin sdk alias helpers", () => {
         installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
         packageName: "@openclaw/demo",
       });
+    const shadowCodexRoot = path.join(makeTempDir(), ".openclaw", "extensions", "codex-shadow");
+    const shadowCodexEntry = path.join(shadowCodexRoot, "dist", "index.js");
+    mkdirSafeDir(path.dirname(shadowCodexEntry));
+    fs.writeFileSync(
+      path.join(shadowCodexRoot, "package.json"),
+      JSON.stringify({ name: "@openclaw/codex", type: "module" }, null, 2),
+      "utf-8",
+    );
+    fs.writeFileSync(shadowCodexEntry, 'export const plugin = "shadow";\n', "utf-8");
 
     const codexSubpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
       listPluginSdkExportedSubpaths({
@@ -719,11 +727,20 @@ describe("plugin sdk alias helpers", () => {
         }),
       ),
     );
+    const shadowCodexSubpaths = withCwd(shadowCodexRoot, () =>
+      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
+        listPluginSdkExportedSubpaths({
+          modulePath: shadowCodexEntry,
+          argv1: path.join(fixture.root, "openclaw.mjs"),
+        }),
+      ),
+    );
 
     expect(codexSubpaths).toEqual(["codex-native-task-runtime", "core"]);
     expect(installedCodexSubpaths).toEqual(["codex-native-task-runtime", "core"]);
     expect(otherSubpaths).toEqual(["core"]);
     expect(installedOtherSubpaths).toEqual(["core"]);
+    expect(shadowCodexSubpaths).toEqual(["core"]);
   });
 
   it("does not reuse a non-private cached subpath list after private qa gets enabled", () => {
@@ -917,10 +934,9 @@ describe("plugin sdk alias helpers", () => {
     const sourceQaRuntimePath = path.join(fixture.root, "src", "plugin-sdk", "qa-runtime.ts");
     fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
     fs.writeFileSync(distRootAlias, "module.exports = {};\n", "utf-8");
-    fs.writeFileSync(
+    fs.rmSync(
       path.join(fixture.root, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
-      JSON.stringify(["codex-native-task-runtime", "qa-runtime"], null, 2),
-      "utf-8",
+      { force: true },
     );
     fs.writeFileSync(
       sourceCodexNativeTaskRuntimePath,
@@ -951,6 +967,15 @@ describe("plugin sdk alias helpers", () => {
         installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
         packageName: "@openclaw/demo",
       });
+    const shadowCodexRoot = path.join(makeTempDir(), ".openclaw", "extensions", "codex-shadow");
+    const shadowCodexEntry = path.join(shadowCodexRoot, "dist", "index.js");
+    mkdirSafeDir(path.dirname(shadowCodexEntry));
+    fs.writeFileSync(
+      path.join(shadowCodexRoot, "package.json"),
+      JSON.stringify({ name: "@openclaw/codex", type: "module" }, null, 2),
+      "utf-8",
+    );
+    fs.writeFileSync(shadowCodexEntry, 'export const plugin = "shadow";\n', "utf-8");
 
     const aliases = withEnv(
       { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
@@ -964,6 +989,16 @@ describe("plugin sdk alias helpers", () => {
       withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
         buildPluginLoaderAliasMap(
           installedCodexEntry,
+          path.join(fixture.root, "openclaw.mjs"),
+          undefined,
+          "dist",
+        ),
+      ),
+    );
+    const shadowCodexAliases = withCwd(shadowCodexRoot, () =>
+      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(
+          shadowCodexEntry,
           path.join(fixture.root, "openclaw.mjs"),
           undefined,
           "dist",
@@ -993,6 +1028,7 @@ describe("plugin sdk alias helpers", () => {
     expect(aliases["openclaw/plugin-sdk/qa-runtime"]).toBeUndefined();
     expect(otherAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
     expect(installedOtherAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
+    expect(shadowCodexAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
   });
 
   it("applies explicit dist resolution to plugin-sdk subpath aliases too", () => {
