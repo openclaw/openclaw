@@ -250,7 +250,7 @@ async function listWorkspaceDailyFiles(memoryDir: string): Promise<string[]> {
     throw err;
   }
   return entries
-    .filter((name) => /^\d{4}-\d{2}-\d{2}\.md$/i.test(name))
+    .filter((name) => /^\d{4}-\d{2}-\d{2}(?:-[^/]+)?\.md$/i.test(name))
     .map((name) => path.join(memoryDir, name))
     .toSorted((left, right) => left.localeCompare(right));
 }
