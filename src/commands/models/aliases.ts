@@ -14,7 +14,11 @@ export async function modelsAliasesListCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
-  const cfg = await loadModelsConfig({ commandName: "models aliases list", runtime });
+  const cfg = await loadModelsConfig({
+    commandName: "models aliases list",
+    runtime,
+    json: opts.json,
+  });
   const models = cfg.agents?.defaults?.models ?? {};
   const aliases = Object.entries(models).reduce<Record<string, string>>(
     (acc, [modelKey, entry]) => {

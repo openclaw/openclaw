@@ -121,7 +121,7 @@ export async function modelsAuthListCommand(
   opts: { provider?: string; agent?: string; json?: boolean },
   runtime: RuntimeEnv,
 ) {
-  const cfg = await loadModelsConfig({ commandName: "models auth list", runtime });
+  const cfg = await loadModelsConfig({ commandName: "models auth list", runtime, json: opts.json });
   const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
   const providerFilter = resolveProviderFilter(opts.provider);
   const store = ensureAuthProfileStore(

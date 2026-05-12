@@ -33,7 +33,7 @@ function describeOrder(store: AuthProfileStore, provider: string): string[] {
 }
 
 async function resolveAuthOrderContext(
-  opts: { provider: string; agent?: string },
+  opts: { provider: string; agent?: string; json?: boolean },
   runtime: RuntimeEnv,
 ) {
   const rawProvider = opts.provider?.trim();
@@ -43,7 +43,11 @@ async function resolveAuthOrderContext(
     );
   }
   const provider = normalizeProviderId(rawProvider);
-  const cfg = await loadModelsConfig({ commandName: "models auth-order", runtime });
+  const cfg = await loadModelsConfig({
+    commandName: "models auth-order",
+    runtime,
+    json: opts.json,
+  });
   const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
   return { cfg, agentId, agentDir, provider };
 }

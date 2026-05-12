@@ -244,6 +244,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 
 import { buildAuthHealthSummary } from "../../agents/auth-health.js";
 import { modelsStatusCommand } from "./list.status-command.js";
+import { loadModelsConfig } from "./load-config.js";
 
 const defaultResolveEnvApiKeyImpl:
   | ((provider: string) => { apiKey: string; source: string } | null)
@@ -365,6 +366,11 @@ describe("modelsStatusCommand auth overview", () => {
     await modelsStatusCommand({ json: true }, runtime as never);
     const payload = parseFirstJsonLog(runtime);
 
+    expect(vi.mocked(loadModelsConfig)).toHaveBeenCalledWith({
+      commandName: "models status",
+      runtime,
+      json: true,
+    });
     expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");

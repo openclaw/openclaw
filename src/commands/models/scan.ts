@@ -203,7 +203,7 @@ export async function modelsScanCommand(
     storedKey = getEnvApiKey("openrouter")?.trim() || undefined;
     if (!storedKey) {
       try {
-        const cfg = await loadModelsConfig({ commandName: "models scan" });
+        const cfg = await loadModelsConfig({ commandName: "models scan", json: opts.json });
         const resolved = await resolveApiKeyForProvider({
           provider: "openrouter",
           cfg,

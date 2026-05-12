@@ -54,7 +54,7 @@ describe("resolveCommandConfigWithSecrets", () => {
     });
   });
 
-  it("routes diagnostics to stderr for json commands", async () => {
+  it("routes diagnostics to stderr when requested for json output", async () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as const;
     const config = { channels: {} };
     const resolvedConfig = { channels: { discord: {} } };
@@ -67,9 +67,10 @@ describe("resolveCommandConfigWithSecrets", () => {
 
     await resolveCommandConfigWithSecrets({
       config,
-      commandName: "status --json",
+      commandName: "models status",
       targetIds: new Set(["channels.discord.token"]),
       mode: "read_only_status",
+      diagnosticStream: "stderr",
       runtime,
     });
 
@@ -77,6 +78,26 @@ describe("resolveCommandConfigWithSecrets", () => {
     expect(runtime.error).toHaveBeenCalledWith(
       '[secrets] status --json: failed to resolve channels.discord.token locally (Environment variable "DISCORD_BOT_TOKEN" is missing or empty.).',
     );
+  });
+
+  it("routes diagnostics to stdout only when explicitly requested", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as const;
+    const config = { channels: {} };
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: config,
+      diagnostics: ["resolved channels.discord.token"],
+    });
+
+    await resolveCommandConfigWithSecrets({
+      config,
+      commandName: "status",
+      targetIds: new Set(["channels.discord.token"]),
+      diagnosticStream: "stdout",
+      runtime,
+    });
+
+    expect(runtime.log).toHaveBeenCalledWith("[secrets] resolved channels.discord.token");
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("returns auto-enabled config when requested", async () => {

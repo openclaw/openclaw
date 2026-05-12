@@ -82,6 +82,7 @@ export async function modelsListCommand(
   const { resolvedConfig: cfg } = await loadModelsConfigWithSource({
     commandName: "models list",
     runtime,
+    json: opts.json,
   });
   const agentDir = resolveDefaultAgentDir(cfg);
   const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);

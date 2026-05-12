@@ -87,6 +87,17 @@ describe("models load-config", () => {
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
   });
 
+  it("routes diagnostics to stderr when loading for json output", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const sourceConfig = { models: { providers: {} } };
+    mockResolvedConfigFlow({ sourceConfig, diagnostics: ["missing model api key"] });
+
+    await loadModelsConfigWithSource({ commandName: "models status", runtime, json: true });
+
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("[secrets] missing model api key");
+  });
+
   it("does not reread config when no source snapshot is pinned", async () => {
     mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);

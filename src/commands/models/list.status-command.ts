@@ -231,7 +231,7 @@ export async function modelsStatusCommand(
     throw new Error("--probe cannot be used with --plain output.");
   }
   const configPath = createConfigIO().configPath;
-  const cfg = await loadModelsConfig({ commandName: "models status", runtime });
+  const cfg = await loadModelsConfig({ commandName: "models status", runtime, json: opts.json });
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
   const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
   const agentDir = agentId
