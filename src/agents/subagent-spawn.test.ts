@@ -253,6 +253,11 @@ describe("spawnSubagentDirect seam flow", () => {
     const agentParams = requireRecord(agentRequest.params);
     expect(agentParams.sessionKey).toBe(childSessionKey);
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
+    expect(agentParams.deliver).toBe(false);
+    expect(agentParams.channel).toBeUndefined();
+    expect(agentParams.to).toBeUndefined();
+    expect(agentParams.accountId).toBeUndefined();
+    expect(agentParams.threadId).toBeUndefined();
   });
 
   it("omits requesterOrigin threadId when no requester thread is provided", async () => {
