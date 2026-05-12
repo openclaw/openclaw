@@ -468,12 +468,15 @@ describe("memory-wiki gateway methods", () => {
     });
   });
 
-  it("registers wiki.ingest with admin scope", async () => {
+  it("registers wiki.ingest with admin scope and keeps compile at write scope", async () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
 
     registerMemoryWikiGatewayMethods({ api, config });
 
+    expect(readGatewayMethodOptions(registerGatewayMethod, "wiki.compile")).toEqual({
+      scope: "operator.write",
+    });
     expect(readGatewayMethodOptions(registerGatewayMethod, "wiki.ingest")).toEqual({
       scope: "operator.admin",
     });
