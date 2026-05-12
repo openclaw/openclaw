@@ -55,7 +55,47 @@ type ChannelStopPayload = {
 };
 
 const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;
-const CHANNEL_STATUS_PROBE_CONCURRENCY = 5;
+// Each probe issues a fresh TLS handshake (Telegram getMe, etc.); high fan-out
+// stacks handshakes on the event loop and contributes to the 7s+ freeze traces
+// observed against the polling restart bursts. Watchdog + agent-view both call
+// channels.status repeatedly, so a 30s probe-result cache + 2-wide fan-out is
+// the sweet spot for keeping the loop responsive without making status stale.
+const CHANNEL_STATUS_PROBE_CONCURRENCY = 2;
+const CHANNEL_STATUS_PROBE_CACHE_TTL_MS = 30_000;
+
+type ProbeCacheEntry = {
+  ts: number;
+  probe?: unknown;
+  audit?: unknown;
+  lastProbeAt: number | null;
+};
+
+const channelStatusProbeCache = new Map<string, ProbeCacheEntry>();
+
+function probeCacheKey(channelId: string, accountId: string): string {
+  return `${channelId}::${accountId}`;
+}
+
+function getFreshProbeCacheEntry(
+  channelId: string,
+  accountId: string,
+  now: number,
+): ProbeCacheEntry | undefined {
+  const entry = channelStatusProbeCache.get(probeCacheKey(channelId, accountId));
+  if (!entry) {
+    return undefined;
+  }
+  if (now - entry.ts > CHANNEL_STATUS_PROBE_CACHE_TTL_MS) {
+    channelStatusProbeCache.delete(probeCacheKey(channelId, accountId));
+    return undefined;
+  }
+  return entry;
+}
+
+/** Test-only: clear the probe result cache between cases. */
+export function __resetChannelStatusProbeCacheForTests(): void {
+  channelStatusProbeCache.clear();
+}
 
 function channelStatusTimeoutPayload(step: string, timeoutMs: number): Record<string, unknown> {
   return {
@@ -355,7 +395,20 @@ export const channelsHandlers: GatewayRequestHandlers = {
       const enabled = isAccountEnabled(plugin, account);
       let probeResult: unknown;
       let lastProbeAt: number | null = null;
-      if (probe && enabled && plugin.status?.probeAccount) {
+      // Cached probe/audit short-circuit: watchdog + agent-view hit
+      // channels.status every ~30s, so re-fanning TLS probes against
+      // api.telegram.org each time pegs the event loop. Reuse a fresh-enough
+      // probe result here to break that loop.
+      const cacheNow = Date.now();
+      const cached =
+        probe && enabled ? getFreshProbeCacheEntry(channelId, accountId, cacheNow) : undefined;
+      let auditResultEarly: unknown;
+      if (cached) {
+        probeResult = cached.probe;
+        auditResultEarly = cached.audit;
+        lastProbeAt = cached.lastProbeAt;
+      }
+      if (!cached && probe && enabled && plugin.status?.probeAccount) {
         let configured = true;
         if (plugin.config.isConfigured) {
           configured = await plugin.config.isConfigured(account, cfg);
@@ -377,8 +430,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
           lastProbeAt = Date.now();
         }
       }
-      let auditResult: unknown;
-      if (probe && enabled && plugin.status?.auditAccount) {
+      let auditResult: unknown = auditResultEarly;
+      if (!cached && probe && enabled && plugin.status?.auditAccount) {
         let configured = true;
         if (plugin.config.isConfigured) {
           configured = await plugin.config.isConfigured(account, cfg);
@@ -399,6 +452,14 @@ export const channelsHandlers: GatewayRequestHandlers = {
               }),
           });
         }
+      }
+      if (!cached && probe && enabled) {
+        channelStatusProbeCache.set(probeCacheKey(channelId, accountId), {
+          ts: cacheNow,
+          probe: probeResult,
+          audit: auditResult,
+          lastProbeAt,
+        });
       }
       const runtimeSnapshot = resolveRuntimeSnapshot(channelId, accountId, defaultAccountId);
       const snapshot = await buildChannelAccountSnapshot({

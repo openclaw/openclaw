@@ -42,7 +42,10 @@ vi.mock("../../infra/channel-activity.js", () => ({
   getChannelActivity: mocks.getChannelActivity,
 }));
 
-import { channelsHandlers } from "./channels.js";
+import {
+  __resetChannelStatusProbeCacheForTests,
+  channelsHandlers,
+} from "./channels.js";
 
 function getSuccessPayload(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
   return requireRespondPayload(respond);
@@ -97,6 +100,10 @@ function requireRespondPayload(respond: ReturnType<typeof vi.fn>): Record<string
 describe("channelsHandlers channels.status", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // The probe-result cache is module-level (per-process) so it bleeds across
+    // test cases. Reset it before each case so probe stubs do not return a
+    // memoized result from a prior case.
+    __resetChannelStatusProbeCacheForTests();
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.buildChannelUiCatalog.mockReturnValue({
