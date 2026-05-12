@@ -1,8 +1,5 @@
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeStringEntries,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   type ChatSenderAllowParams,
   createAllowedChatSenderMatcher,
@@ -162,22 +159,14 @@ export function parseIMessageAllowTarget(raw: string): IMessageAllowTarget {
   return { kind: "handle", handle: normalizeIMessageHandle(trimmed) };
 }
 
+const isAllowedIMessageSenderMatcher = createAllowedChatSenderMatcher({
+  normalizeSender: normalizeIMessageHandle,
+  parseAllowTarget: parseIMessageAllowTarget,
+  allowConversationTargets: false,
+});
+
 export function isAllowedIMessageSender(params: ChatSenderAllowParams): boolean {
-  const allowFrom = normalizeStringEntries(params.allowFrom);
-  if (allowFrom.length === 0) {
-    return false;
-  }
-  if (allowFrom.includes("*")) {
-    return true;
-  }
-  const senderNormalized = normalizeIMessageHandle(params.sender);
-  if (!senderNormalized) {
-    return false;
-  }
-  return allowFrom.some((entry) => {
-    const parsed = parseIMessageAllowTarget(entry);
-    return parsed.kind === "handle" && parsed.handle === senderNormalized;
-  });
+  return isAllowedIMessageSenderMatcher(params);
 }
 
 const isAllowedIMessageReplyContextSenderMatcher = createAllowedChatSenderMatcher({

@@ -49,7 +49,7 @@ export function isAllowedParsedChatSender(params: {
   }
 
   const senderNormalized = params.normalizeSender(params.sender);
-  const allowConversationTargets = params.allowConversationTargets === true;
+  const allowConversationTargets = params.allowConversationTargets !== false;
   const chatId = allowConversationTargets ? (params.chatId ?? undefined) : undefined;
   const chatGuid = allowConversationTargets ? normalizeOptionalString(params.chatGuid) : undefined;
   const chatIdentifier = allowConversationTargets
@@ -242,7 +242,7 @@ export function createAllowedChatSenderMatcher(params: {
       chatGuid: input.chatGuid,
       chatIdentifier: input.chatIdentifier,
       allowConversationTargets:
-        input.allowConversationTargets ?? params.allowConversationTargets ?? false,
+        input.allowConversationTargets ?? params.allowConversationTargets ?? true,
       normalizeSender: params.normalizeSender,
       parseAllowTarget: params.parseAllowTarget,
     });
