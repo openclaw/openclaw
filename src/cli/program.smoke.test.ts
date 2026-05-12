@@ -52,13 +52,13 @@ describe("cli program (smoke)", () => {
 
   it("runs tui with explicit timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "45000"]);
-    const options = runTui.mock.calls[0]?.[0] as { timeoutMs?: number } | undefined;
+    const options = runTui.mock.calls.at(0)?.[0] as { timeoutMs?: number } | undefined;
     expect(options?.timeoutMs).toBe(45000);
   });
 
   it("runs crestodian one-shot requests", async () => {
     await runProgram(["crestodian", "--message", "status"]);
-    const options = runCrestodian.mock.calls[0]?.[0] as
+    const options = runCrestodian.mock.calls.at(0)?.[0] as
       | { message?: string; yes?: boolean; json?: boolean }
       | undefined;
     expect(options?.message).toBe("status");
@@ -69,7 +69,7 @@ describe("cli program (smoke)", () => {
   it("warns and ignores invalid tui timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "nope"]);
     expect(runtime.error).toHaveBeenCalledWith('warning: invalid --timeout-ms "nope"; ignoring');
-    const options = runTui.mock.calls[0]?.[0] as { timeoutMs?: number } | undefined;
+    const options = runTui.mock.calls.at(0)?.[0] as { timeoutMs?: number } | undefined;
     expect(options?.timeoutMs).toBeUndefined();
   });
 

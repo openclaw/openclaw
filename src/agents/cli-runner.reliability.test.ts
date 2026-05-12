@@ -290,7 +290,7 @@ describe("runCliAgent reliability", () => {
     ).rejects.toThrow("produced no output");
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    const [notice, opts] = enqueueSystemEventMock.mock.calls[0] ?? [];
+    const [notice, opts] = enqueueSystemEventMock.mock.calls.at(0) ?? [];
     expect(String(notice)).toContain("produced no output");
     expect(String(notice)).toContain("interactive input or an approval prompt");
     expect(requireRecord(opts, "system event options").sessionKey).toBe("agent:main:main");

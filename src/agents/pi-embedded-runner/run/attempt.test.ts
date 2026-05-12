@@ -1894,7 +1894,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -1926,7 +1926,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toBe(messages);
   });
 
@@ -1958,7 +1958,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -1996,7 +1996,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -2037,7 +2037,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -2077,7 +2077,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -2118,7 +2118,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -2171,7 +2171,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -2230,7 +2230,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toEqual([
       {
         role: "user",
@@ -2268,7 +2268,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toHaveLength(3);
     expect(seenContext.messages[0]).toEqual({
       role: "assistant",
@@ -2328,7 +2328,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as {
       messages: Array<{ content?: Array<Record<string, unknown>> }>;
     };
     const toolCall = seenContext.messages[0]?.content?.[0] as {
@@ -2366,7 +2366,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as {
       messages: Array<{ content?: unknown[] }>;
     };
     expect(seenContext.messages[0]?.content).toEqual([
@@ -2396,7 +2396,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toBe(messages);
   });
 
@@ -2418,7 +2418,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("read");
@@ -2442,7 +2442,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("ReadFile");
@@ -2466,7 +2466,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("write");
@@ -2497,7 +2497,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toStrictEqual([]);
   });
 
@@ -2519,7 +2519,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("read");
@@ -2555,7 +2555,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as {
       messages: Array<{ role?: string }>;
     };
     expect(seenContext.messages).toEqual([
@@ -2595,7 +2595,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as {
       messages: Array<{ role?: string }>;
     };
     expect(seenContext.messages).toEqual([
@@ -2630,7 +2630,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toStrictEqual([]);
   });
 
@@ -2655,7 +2655,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toStrictEqual([]);
   });
 
@@ -2692,7 +2692,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as { messages: unknown[] };
     expect(seenContext.messages).toEqual([
       {
         role: "assistant",
@@ -2745,7 +2745,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual([
@@ -2792,7 +2792,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual([
@@ -2846,7 +2846,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual([
@@ -2897,7 +2897,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual(messages);
@@ -2939,7 +2939,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       await Promise.resolve(stream);
 
       expect(baseFn).toHaveBeenCalledTimes(1);
-      const seenContext = baseFn.mock.calls[0]?.[1] as {
+      const seenContext = baseFn.mock.calls.at(0)?.[1] as {
         messages: Array<{ role?: string; content?: unknown[] }>;
       };
       expect(seenContext.messages).toEqual(messages);
@@ -2981,7 +2981,7 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     await Promise.resolve(stream);
 
     expect(baseFn).toHaveBeenCalledTimes(1);
-    const seenContext = baseFn.mock.calls[0]?.[1] as {
+    const seenContext = baseFn.mock.calls.at(0)?.[1] as {
       messages: Array<{ role?: string; content?: unknown[] }>;
     };
     expect(seenContext.messages).toEqual([

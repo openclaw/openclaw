@@ -354,7 +354,7 @@ describe("prepareSimpleCompletionModel", () => {
       modelId: "chat-local",
     });
 
-    const overrideCall = hoisted.applyLocalNoAuthHeaderOverrideMock.mock.calls[0];
+    const overrideCall = hoisted.applyLocalNoAuthHeaderOverrideMock.mock.calls.at(0);
     expect((overrideCall?.[0] as { provider?: string; id?: string } | undefined)?.provider).toBe(
       "local-openai",
     );
