@@ -293,7 +293,7 @@ function resolveTalkSpeed(params: TalkSpeakParams): number | undefined {
     return undefined;
   }
   const resolved = params.rateWpm / 175;
-  if (resolved <= 0.5 || resolved >= 2.0) {
+  if (resolved <= 0.5 || resolved >= 2) {
     return undefined;
   }
   return resolved;

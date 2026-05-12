@@ -103,6 +103,7 @@
     "unicorn/no-instanceof-array": "error",
     "unicorn/no-negation-in-equality-check": "error",
     "unicorn/no-new-buffer": "error",
+    "unicorn/no-zero-fractions": "error",
     "unicorn/no-thenable": "error",
     "unicorn/no-typeof-undefined": "error",
     "unicorn/no-unnecessary-array-flat-depth": "error",

@@ -51,6 +51,7 @@ const ZERO_BASELINE_RULES = [
   "unicorn/no-instanceof-array",
   "unicorn/no-negation-in-equality-check",
   "unicorn/no-new-buffer",
+  "unicorn/no-zero-fractions",
   "unicorn/no-typeof-undefined",
   "unicorn/no-useless-error-capture-stack-trace",
   "unicorn/prefer-array-some",

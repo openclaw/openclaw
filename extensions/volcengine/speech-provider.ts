@@ -143,7 +143,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
         return { handled: true };
       }
       const speedRatio = Number(ctx.value);
-      if (!Number.isFinite(speedRatio) || speedRatio < 0.2 || speedRatio > 3.0) {
+      if (!Number.isFinite(speedRatio) || speedRatio < 0.2 || speedRatio > 3) {
         return { handled: true, warnings: [`invalid Volcengine speedRatio "${ctx.value}"`] };
       }
       return { handled: true, overrides: { ...ctx.currentOverrides, speedRatio } };
