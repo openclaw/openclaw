@@ -77,6 +77,7 @@ describe("system run command helpers", () => {
     { argv: ["powershell", "-f", "script.ps1"], expected: "script.ps1" },
     { argv: ["pwsh", "-EncodedCommand", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
     { argv: ["powershell", "-enc", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
+    { argv: ["pwsh", "-ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },
     { argv: ["busybox", "sh", "-c", "echo hi"], expected: "echo hi" },
     { argv: ["toybox", "ash", "-c", "echo hi"], expected: "echo hi" },
   ])("extractShellCommandFromArgv unwraps %j", ({ argv, expected }) => {

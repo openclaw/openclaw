@@ -10,6 +10,7 @@ export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
   "-encodedcommand",
   "-enc",
   "-e",
+  "-ec",
 ]);
 
 const POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
