@@ -136,15 +136,17 @@ function expectRowFields(
 
 function modelRegistryOptions(index = 0): Record<string, unknown> {
   const options = mocks.loadModelRegistry.mock.calls[index]?.[1];
-  expect(options).toBeTypeOf("object");
-  expect(options).not.toBeNull();
+  if (!options || typeof options !== "object") {
+    throw new Error(`expected model registry options ${index}`);
+  }
   return options as Record<string, unknown>;
 }
 
 function providerCatalogOptions(index = 0): Record<string, unknown> {
   const options = mocks.loadProviderCatalogModelsForList.mock.calls[index]?.[0];
-  expect(options).toBeTypeOf("object");
-  expect(options).not.toBeNull();
+  if (!options || typeof options !== "object") {
+    throw new Error(`expected provider catalog options ${index}`);
+  }
   return options as Record<string, unknown>;
 }
 
@@ -912,7 +914,7 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, provider: "openai", json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expect(mocks.loadModelRegistry.mock.calls.at(0)?.[0]).toBe(mocks.resolvedConfig);
       expect(modelRegistryOptions().providerFilter).toBe("openai");
       expect(modelRegistryOptions().normalizeModels).toBe(true);
       expectRowKeys(lastPrintedRows<{ key: string }>(), ["openai/gpt-5.4", "openai/gpt-5.5-pro"]);
@@ -974,7 +976,7 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expect(mocks.loadModelRegistry.mock.calls.at(0)?.[0]).toBe(mocks.resolvedConfig);
       expect(modelRegistryOptions().providerFilter).toBeUndefined();
       expect(modelRegistryOptions().normalizeModels).toBe(false);
       expect(mocks.loadProviderCatalogModelsForList).not.toHaveBeenCalled();
@@ -1004,7 +1006,7 @@ describe("modelsListCommand forward-compat", () => {
         runtime as never,
       );
 
-      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expect(mocks.loadModelRegistry.mock.calls.at(0)?.[0]).toBe(mocks.resolvedConfig);
       expect(modelRegistryOptions().providerFilter).toBe("openai-codex");
       expect(modelRegistryOptions().normalizeModels).toBe(true);
       expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(1, {
@@ -1062,7 +1064,7 @@ describe("modelsListCommand forward-compat", () => {
 
       await modelsListCommand({ all: true, provider: "anthropic", json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry.mock.calls[0]?.[0]).toBe(mocks.resolvedConfig);
+      expect(mocks.loadModelRegistry.mock.calls.at(0)?.[0]).toBe(mocks.resolvedConfig);
       expect(modelRegistryOptions().providerFilter).toBe("anthropic");
       expect(modelRegistryOptions().normalizeModels).toBe(false);
       expect(modelRegistryOptions().loadAvailability).toBe(false);

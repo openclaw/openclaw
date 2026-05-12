@@ -86,7 +86,9 @@ async function waitForFakeSocket(): Promise<FakeWebSocketInstance> {
   let socket: FakeWebSocketInstance | undefined;
   await vi.waitFor(() => {
     socket = FakeWebSocket.instances[0];
-    expect(socket).toBeDefined();
+    if (!socket) {
+      throw new Error("expected session to create a websocket");
+    }
   });
   if (!socket) {
     throw new Error("expected session to create a websocket");

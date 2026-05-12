@@ -101,7 +101,7 @@ describe("parseSlashCommand", () => {
     expectRecordFields(side.command, "side command", { key: "btw", name: "btw" });
     expect(
       requireArray(requireRecord(side.command, "side command").aliases, "side aliases"),
-    ).toContain("side");
+    ).toEqual(["side"]);
     expect(side.args).toBe("what changed?");
   });
 
@@ -114,9 +114,7 @@ describe("parseSlashCommand", () => {
     expectRecordFields(think, "think command", {
       name: "think",
     });
-    const aliases = requireArray(think.aliases, "think aliases");
-    expect(aliases).toContain("thinking");
-    expect(aliases).toContain("t");
+    expect(requireArray(think.aliases, "think aliases")).toEqual(["thinking", "t"]);
   });
 
   it("keeps a single local /steer entry with the control-ui metadata", () => {
@@ -129,7 +127,7 @@ describe("parseSlashCommand", () => {
       args: "[id] <message>",
       executeLocal: true,
     });
-    expect(requireArray(steer.aliases, "steer aliases")).toContain("tell");
+    expect(requireArray(steer.aliases, "steer aliases")).toEqual(["tell"]);
   });
 
   it("keeps focus as a local slash command", () => {

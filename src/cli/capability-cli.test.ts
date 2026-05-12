@@ -417,7 +417,7 @@ describe("capability cli", () => {
   };
 
   function firstGatewayCall() {
-    return mocks.callGateway.mock.calls[0]?.[0] as GatewayCall | undefined;
+    return mocks.callGateway.mock.calls.at(0)?.[0] as GatewayCall | undefined;
   }
 
   function firstCompletionCall() {
@@ -435,7 +435,7 @@ describe("capability cli", () => {
   }
 
   function firstJsonOutput() {
-    return mocks.runtime.writeJson.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    return mocks.runtime.writeJson.mock.calls.at(0)?.[0] as Record<string, unknown> | undefined;
   }
 
   function imageDescribeCall(index = 0) {
@@ -505,7 +505,7 @@ describe("capability cli", () => {
       argv: ["capability", "list", "--json"],
     });
 
-    const payload = mocks.runtime.writeJson.mock.calls[0]?.[0] as Array<{ id: string }>;
+    const payload = (firstJsonOutput() as Array<{ id: string }> | undefined) ?? [];
     const ids = payload.map((entry) => entry.id);
     expect(ids).toContain("model.run");
     expect(ids).toContain("image.describe");
@@ -559,7 +559,9 @@ describe("capability cli", () => {
       [Record<string, unknown>]
     >;
     const params = calls[0]?.[0];
-    expect(params).toBeDefined();
+    if (!params) {
+      throw new Error("Expected simple completion model params");
+    }
     expect(params).not.toHaveProperty("allowBundledStaticCatalogFallback");
   });
 
@@ -1522,7 +1524,7 @@ describe("capability cli", () => {
     });
 
     const outputPath = `${outputBase}.mp4`;
-    const fetchCall = fetchMock.mock.calls[0] as unknown as
+    const fetchCall = fetchMock.mock.calls.at(0) as unknown as
       | [string, { signal?: unknown }]
       | undefined;
     expect(fetchCall?.[0]).toBe("https://example.com/generated-video.mp4");
@@ -1870,7 +1872,9 @@ describe("capability cli", () => {
       argv: ["capability", "model", "auth", "logout", "--provider", "openai", "--json"],
     });
 
-    expect(updatedStore).not.toBeNull();
+    if (updatedStore === null) {
+      throw new Error("expected updated auth store");
+    }
     const storeSnapshot = updatedStore as unknown as Record<string, any>;
     expect(storeSnapshot.profiles).toEqual({
       "anthropic:default": { id: "anthropic:default" },
@@ -1978,7 +1982,7 @@ describe("capability cli", () => {
       argv: ["capability", "embedding", "providers", "--json"],
     });
 
-    const bootstrapArg = mocks.registerBuiltInMemoryEmbeddingProviders.mock.calls[0]?.[0] as
+    const bootstrapArg = mocks.registerBuiltInMemoryEmbeddingProviders.mock.calls.at(0)?.[0] as
       | { registerMemoryEmbeddingProvider?: unknown }
       | undefined;
     expect(typeof bootstrapArg?.registerMemoryEmbeddingProvider).toBe("function");

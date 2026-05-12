@@ -225,31 +225,35 @@ describe("telegramPlugin outbound attachments", () => {
     installTelegramRuntime();
     sendMessageTelegram.mockResolvedValue({ messageId: "tg-1", chatId: "12345" });
     const sendText = telegramPlugin.outbound?.sendText;
-    expect(sendText).toBeDefined();
+    if (!sendText) {
+      throw new Error("Expected Telegram outbound sendText");
+    }
 
-    await sendText!({
+    await sendText({
       cfg: createTelegramConfig(),
       to: "12345",
       text: "hi **boss**",
     });
-    expect(sendMessageTelegram.mock.calls[0]?.[2]).not.toHaveProperty("textMode");
+    expect(sendMessageTelegram.mock.calls.at(0)?.[2]).not.toHaveProperty("textMode");
 
-    await sendText!({
+    await sendText({
       cfg: createTelegramConfig(),
       to: "12345",
       text: "<b>hi boss</b>",
       formatting: { parseMode: "HTML" },
     });
-    expect(sendMessageTelegram.mock.calls[1]?.[2]?.textMode).toBe("html");
+    expect(sendMessageTelegram.mock.calls.at(1)?.[2]?.textMode).toBe("html");
   });
 
   it("preserves explicit HTML parse mode for payload media captions", async () => {
     installTelegramRuntime();
     sendMessageTelegram.mockResolvedValue({ messageId: "tg-payload", chatId: "12345" });
     const sendPayload = telegramPlugin.outbound?.sendPayload;
-    expect(sendPayload).toBeDefined();
+    if (!sendPayload) {
+      throw new Error("Expected Telegram outbound sendPayload");
+    }
 
-    await sendPayload!({
+    await sendPayload({
       cfg: createTelegramConfig(),
       to: "12345",
       text: "",
@@ -260,6 +264,6 @@ describe("telegramPlugin outbound attachments", () => {
       formatting: { parseMode: "HTML" },
     });
 
-    expect(sendMessageTelegram.mock.calls[0]?.[2]?.textMode).toBe("html");
+    expect(sendMessageTelegram.mock.calls.at(0)?.[2]?.textMode).toBe("html");
   });
 });

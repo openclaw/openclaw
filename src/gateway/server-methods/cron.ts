@@ -23,6 +23,7 @@ import {
   errorShape,
   formatValidationErrors,
   validateCronAddParams,
+  validateCronGetParams,
   validateCronListParams,
   validateCronRemoveParams,
   validateCronRunParams,
@@ -247,6 +248,39 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const status = await context.cron.status();
     respond(true, status, undefined);
+  },
+  "cron.get": async ({ params, respond, context }) => {
+    if (!validateCronGetParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.get params: ${formatValidationErrors(validateCronGetParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as { id?: string; jobId?: string };
+    const jobId = p.id ?? p.jobId;
+    if (!jobId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.get params: missing id"),
+      );
+      return;
+    }
+    const job = await context.cron.readJob(jobId);
+    if (!job) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `cron job not found: ${jobId}`),
+      );
+      return;
+    }
+    respond(true, job, undefined);
   },
   "cron.add": async ({ params, respond, context }) => {
     const sessionKey =

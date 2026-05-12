@@ -336,7 +336,6 @@ describe("acp translator stable lifecycle handlers", () => {
     const result = await agent.resumeSession(createResumeSessionRequest("agent:main:work"));
 
     expect(result.modes?.currentModeId).toBe("adaptive");
-    expect(result.configOptions).toBeDefined();
     if (!result.configOptions) {
       throw new Error("expected resume session config options");
     }

@@ -49,9 +49,25 @@ describe("minimax image-generation provider", () => {
 
   function expectImageGenerationUrl(fetchMock: ReturnType<typeof vi.fn>, url: string) {
     expect(fetchMock).toHaveBeenCalled();
-    const [actualUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
+    const [actualUrl, init] = fetchMock.mock.calls.at(0) as [string, RequestInit | undefined];
     expect(actualUrl).toBe(url);
     expect(init?.method).toBe("POST");
+  }
+
+  function requireFirstPostJsonRequest(mock: ReturnType<typeof vi.fn>): {
+    body?: unknown;
+    ssrfPolicy?: unknown;
+    url?: string;
+  } {
+    const [call] = mock.mock.calls;
+    if (!call) {
+      throw new Error("expected MiniMax image request");
+    }
+    const [request] = call;
+    if (!request || typeof request !== "object" || Array.isArray(request)) {
+      throw new Error("expected MiniMax image request");
+    }
+    return request as { body?: unknown; url?: string };
   }
 
   it("generates PNG buffers through the shared provider HTTP path", async () => {
@@ -67,7 +83,7 @@ describe("minimax image-generation provider", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
     expect(url).toBe("https://api.minimax.io/v1/image_generation");
     expect(init.method).toBe("POST");
     expect(init.body).toBe(
@@ -117,10 +133,7 @@ describe("minimax image-generation provider", () => {
     });
 
     expect(postJsonRequest).toHaveBeenCalledOnce();
-    const request = postJsonRequest.mock.calls[0]?.[0];
-    if (!request) {
-      throw new Error("expected MiniMax image request");
-    }
+    const request = requireFirstPostJsonRequest(postJsonRequest);
     expect(request.url).toBe("https://api.minimax.io/v1/image_generation");
     expect(request.body).toEqual({
       model: "image-01",

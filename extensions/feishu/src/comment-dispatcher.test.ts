@@ -149,7 +149,9 @@ describe("createFeishuCommentReplyDispatcher", () => {
 
     expect(status).toBe("done");
     const client = createFeishuClientMock.mock.results[0]?.value;
-    expect(client).toBeDefined();
+    if (!client) {
+      throw new Error("Expected Feishu client");
+    }
     expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(client, {
       file_token: "doc_token_1",
       file_type: "docx",

@@ -95,8 +95,11 @@ function mockStringMessages(mocked: unknown): string[] {
 
 function mockCallArg(mocked: unknown, callIndex: number, argIndex: number): unknown {
   const calls = (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls;
-  expect(calls?.[callIndex]).toBeDefined();
-  return calls?.[callIndex]?.[argIndex];
+  const call = calls?.[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call at index ${callIndex}`);
+  }
+  return call[argIndex];
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -901,8 +904,8 @@ describe("web auto-reply connection", () => {
         });
 
         expect(resolver).toHaveBeenCalledTimes(2);
-        const firstArgs = resolver.mock.calls[0][0];
-        const secondArgs = resolver.mock.calls[1][0];
+        const firstArgs = resolver.mock.calls.at(0)?.[0];
+        const secondArgs = resolver.mock.calls.at(1)?.[0];
         const firstTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T00:00:00Z"));
         const secondTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T01:00:00Z"));
         const firstPattern = escapeRegExp(firstTimestamp);

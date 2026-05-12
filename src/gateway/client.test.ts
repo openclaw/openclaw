@@ -198,7 +198,7 @@ function expectSecurityConnectError(
   onConnectError: ReturnType<typeof vi.fn>,
   params?: { expectTailscaleHint?: boolean },
 ) {
-  const error = onConnectError.mock.calls[0]?.[0] as Error;
+  const error = onConnectError.mock.calls.at(0)?.[0] as Error;
   expect(error.message).toContain("SECURITY ERROR");
   expect(error.message).toContain("openclaw doctor --fix");
   if (params?.expectTailscaleHint) {
@@ -711,6 +711,7 @@ describe("GatewayClient connect auth payload", () => {
   beforeEach(() => {
     vi.useRealTimers();
     wsInstances.length = 0;
+    clearDeviceAuthTokenMock.mockReset();
     loadDeviceAuthTokenMock.mockReset();
     storeDeviceAuthTokenMock.mockReset();
     logDebugMock.mockClear();
@@ -904,7 +905,7 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
 
     await vi.waitFor(() => {
-      const error = onConnectError.mock.calls[0]?.[0] as Error | undefined;
+      const error = onConnectError.mock.calls.at(0)?.[0] as Error | undefined;
       expect(error?.message).toBe("gateway client stopped");
     });
     expect(logDebugMock).toHaveBeenCalledWith(
@@ -1017,7 +1018,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectChallenge(ws);
 
     const loadTokenParams = expectRecordFields(
-      loadDeviceAuthTokenMock.mock.calls[0]?.[0],
+      loadDeviceAuthTokenMock.mock.calls.at(0)?.[0],
       {
         role: "operator",
         env,
@@ -1195,7 +1196,7 @@ describe("GatewayClient connect auth payload", () => {
       failureDetails: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
     });
     const clearTokenParams = expectRecordFields(
-      clearDeviceAuthTokenMock.mock.calls[0]?.[0],
+      clearDeviceAuthTokenMock.mock.calls.at(0)?.[0],
       { role: "operator" },
       "clear device token params",
     );
@@ -1204,6 +1205,33 @@ describe("GatewayClient connect auth payload", () => {
       code: 1008,
       reason: "connect failed",
       detailCode: "AUTH_DEVICE_TOKEN_MISMATCH",
+    });
+  });
+
+  it("does not clear stored device tokens or reconnect on AUTH_SCOPE_MISMATCH", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: ["operator.read"],
+    });
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onReconnectPaused,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    expect(firstConnect.params?.auth?.token).toBe("stored-device-token");
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_SCOPE_MISMATCH" },
+    });
+    expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_SCOPE_MISMATCH",
     });
   });
 

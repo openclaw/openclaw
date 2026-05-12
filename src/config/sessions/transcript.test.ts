@@ -18,6 +18,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   type ExactAssistantMessage = Parameters<
     typeof appendExactAssistantMessageToSessionTranscript
   >[0]["message"];
+  type TranscriptUpdateEmitterSpy = {
+    mock: {
+      calls: [string | SessionTranscriptUpdate][];
+    };
+  };
 
   function writeTranscriptStore() {
     fs.writeFileSync(
@@ -56,6 +61,18 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       stopReason: "stop",
       timestamp: Date.now(),
     };
+  }
+
+  function requireTranscriptUpdateCall(spy: TranscriptUpdateEmitterSpy): SessionTranscriptUpdate {
+    const call = spy.mock.calls.at(0);
+    if (!call) {
+      throw new Error("expected transcript update event");
+    }
+    const event = call[0];
+    if (typeof event === "string") {
+      throw new Error("expected structured transcript update event");
+    }
+    return event;
   }
 
   it("creates transcript file and appends message for valid session", async () => {
@@ -109,7 +126,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     expect(emitSpy).toHaveBeenCalledTimes(1);
-    const [event] = emitSpy.mock.calls[0] as [SessionTranscriptUpdate];
+    const event = requireTranscriptUpdateCall(emitSpy);
     const message = event.message as
       | {
           role?: string;

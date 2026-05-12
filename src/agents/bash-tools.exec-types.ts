@@ -14,6 +14,7 @@ export type ExecToolDefaults = {
   pathPrepend?: string[];
   safeBins?: string[];
   strictInlineEval?: boolean;
+  commandHighlighting?: boolean;
   safeBinTrustedDirs?: string[];
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   agentId?: string;

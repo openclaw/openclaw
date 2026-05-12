@@ -19,7 +19,6 @@ describe("createOpencodeCatalogApiKeyAuthMethod", () => {
     expect(method.label).toBe("OpenCode Go catalog");
     expect(method.hint).toBe("Shared API key for Zen + Go catalogs");
     expect(method.kind).toBe("api_key");
-    expect(method.wizard).toBeDefined();
     if (!method.wizard) {
       throw new Error("expected OpenCode auth method to include wizard metadata");
     }

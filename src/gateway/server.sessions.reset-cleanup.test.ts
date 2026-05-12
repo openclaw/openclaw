@@ -173,7 +173,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   expect(reset.ok).toBe(true);
   expectResetAcpState(reset.payload?.entry.acp);
   expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(1);
-  const closeSessionCall = acpManagerMocks.closeSession.mock.calls[0] as unknown as
+  const closeSessionCall = acpManagerMocks.closeSession.mock.calls.at(0) as unknown as
     | [
         {
           allowBackendUnavailable?: boolean;
@@ -196,7 +196,9 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
       }
     | undefined;
   expect(closeSessionParams?.allowBackendUnavailable).toBe(true);
-  expect(closeSessionParams?.cfg).toBeTruthy();
+  if (!closeSessionParams?.cfg) {
+    throw new Error("expected closeSession config");
+  }
   expect(closeSessionParams?.discardPersistentState).toBe(true);
   expect(closeSessionParams?.requireAcpSession).toBe(false);
   expect(closeSessionParams?.reason).toBe("session-reset");

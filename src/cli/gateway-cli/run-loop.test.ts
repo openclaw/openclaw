@@ -289,7 +289,7 @@ function expectRestartHandoffCall(expected: {
   supervisorMode: "external" | "launchd";
 }) {
   expect(writeGatewayRestartHandoffSync).toHaveBeenCalledTimes(1);
-  const [handoff] = writeGatewayRestartHandoffSync.mock.calls[0] ?? [];
+  const [handoff] = writeGatewayRestartHandoffSync.mock.calls.at(0) ?? [];
   if (!handoff || typeof handoff !== "object" || Array.isArray(handoff)) {
     throw new Error("expected restart handoff options object");
   }
@@ -655,7 +655,7 @@ describe("runGatewayLoop", () => {
       sigusr1();
 
       await exited;
-      expect(lockRelease).toHaveBeenCalled();
+      expect(lockRelease).toHaveBeenCalledTimes(1);
       expect(runtime.exit).toHaveBeenCalledWith(0);
       expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
       expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();

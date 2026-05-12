@@ -209,8 +209,6 @@ describe("before_tool_call loop detection behavior", () => {
   }
 
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    expect(typeof value).toBe("object");
-    expect(value).not.toBeNull();
     if (typeof value !== "object" || value === null) {
       throw new Error(`${label} was not an object`);
     }
@@ -649,8 +647,6 @@ describe("before_tool_call requireApproval handling", () => {
   const mockCallGateway = vi.mocked(callGatewayTool);
 
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    expect(typeof value).toBe("object");
-    expect(value).not.toBeNull();
     if (typeof value !== "object" || value === null) {
       throw new Error(`${label} was not an object`);
     }
@@ -661,7 +657,6 @@ describe("before_tool_call requireApproval handling", () => {
     index: number,
   ): [event: Record<string, unknown>, context: Record<string, unknown>] {
     const call = hookRunner.runBeforeToolCall.mock.calls[index] as unknown[] | undefined;
-    expect(call).toBeDefined();
     if (!call) {
       throw new Error(`missing before_tool_call hook call ${index + 1}`);
     }
@@ -1014,12 +1009,12 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(false);
     expect(mockCallGateway).toHaveBeenCalledTimes(2);
-    const requestCall = mockCallGateway.mock.calls[0];
+    const requestCall = mockCallGateway.mock.calls.at(0);
     expect(requestCall?.[0]).toBe("plugin.approval.request");
     requireRecord(requestCall?.[1], "approval request gateway client");
     expect(requireRecord(requestCall?.[2], "approval request params").twoPhase).toBe(true);
     expect(requestCall?.[3]).toEqual({ expectFinal: false });
-    const waitCall = mockCallGateway.mock.calls[1];
+    const waitCall = mockCallGateway.mock.calls.at(1);
     expect(waitCall?.[0]).toBe("plugin.approval.waitDecision");
     requireRecord(waitCall?.[1], "approval wait gateway client");
     expect(waitCall?.[2]).toEqual({ id: "server-id-1" });

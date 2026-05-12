@@ -395,8 +395,6 @@ describe("music-generation runtime", () => {
       durationSeconds: 30,
     });
     expect(result.ignoredOverrides).toStrictEqual([]);
-    expect(result.normalization).toBeDefined();
-    expect(result.metadata).toBeDefined();
     if (!result.normalization || !result.metadata) {
       throw new Error("Expected normalization and metadata");
     }

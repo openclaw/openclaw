@@ -131,9 +131,9 @@ describe("gateway server chat", () => {
       .filter((value): value is string => typeof value === "string");
 
   const expectRecordFields = (value: unknown, expected: Record<string, unknown>) => {
-    expect(value).toBeDefined();
-    expect(typeof value).toBe("object");
-    expect(value).not.toBeNull();
+    if (!value || typeof value !== "object") {
+      throw new Error("Expected record");
+    }
     const actual = value as Record<string, unknown>;
     for (const [key, expectedValue] of Object.entries(expected)) {
       expect(actual[key]).toEqual(expectedValue);
@@ -973,7 +973,9 @@ describe("gateway server chat", () => {
               message !== null &&
               (message as { role?: unknown }).role === "assistant",
           );
-          expect(assistantMessage).toBeDefined();
+          if (!assistantMessage) {
+            throw new Error("Expected assistant history message");
+          }
         });
         const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
         expect(assistantContent).toHaveLength(2);

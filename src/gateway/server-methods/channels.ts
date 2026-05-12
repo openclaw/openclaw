@@ -298,14 +298,28 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const probe = (params as { probe?: boolean }).probe === true;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs = resolveChannelsStatusTimeoutMs({ probe, timeoutMsRaw });
+    const rawChannel = (params as { channel?: unknown }).channel;
+    const requestedChannel =
+      typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : undefined;
     const cfg = applyPluginAutoEnable({
       config: context.getRuntimeConfig(),
       env: process.env,
     }).config;
     const runtime = context.getRuntimeSnapshot();
     const plugins = listChannelPlugins();
+    const selectedPlugins = requestedChannel
+      ? plugins.filter((plugin) => plugin.id === requestedChannel)
+      : plugins;
+    if (rawChannel !== undefined && !requestedChannel) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `unknown channel: ${formatForLog(rawChannel)}`),
+      );
+      return;
+    }
     const pluginMap = new Map<ChannelId, ChannelPlugin>(
-      plugins.map((plugin) => [plugin.id, plugin]),
+      selectedPlugins.map((plugin) => [plugin.id, plugin]),
     );
     const statusWarnings: string[] = [];
 
@@ -461,7 +475,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return { accounts, defaultAccountId, defaultAccount, resolvedAccounts };
     };
 
-    const uiCatalog = buildChannelUiCatalog(plugins);
+    const uiCatalog = buildChannelUiCatalog(selectedPlugins);
     const payload: Record<string, unknown> = {
       ts: Date.now(),
       channelOrder: uiCatalog.order,
@@ -478,7 +492,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const accountsMap = payload.channelAccounts as Record<string, unknown>;
     const defaultAccountIdMap = payload.channelDefaultAccountId as Record<string, unknown>;
     const { results: channelResults } = await runTasksWithConcurrency({
-      tasks: plugins.map((plugin) => async () => {
+      tasks: selectedPlugins.map((plugin) => async () => {
         const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
           await buildChannelAccounts(plugin.id);
         const fallbackAccount =
@@ -509,7 +523,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
         }
         return { pluginId: plugin.id, summary, accounts, defaultAccountId };
       }),
-      limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : plugins.length || 1,
+      limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : selectedPlugins.length || 1,
     });
     for (const result of channelResults) {
       if (result) {

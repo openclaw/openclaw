@@ -177,12 +177,14 @@ function expectBufferedPerformanceEvent(
       return candidate.payload?.[key] === expected;
     });
   });
-  expect(entry).toBeDefined();
-  for (const [key, expected] of Object.entries(expectedPayload)) {
-    expect(entry?.payload?.[key]).toBe(expected);
+  if (!entry) {
+    throw new Error(`Expected performance event ${event}`);
   }
-  expect(entry?.payload?.durationMs).toBeTypeOf("number");
-  return entry?.payload;
+  for (const [key, expected] of Object.entries(expectedPayload)) {
+    expect(entry.payload?.[key]).toBe(expected);
+  }
+  expect(entry.payload?.durationMs).toBeTypeOf("number");
+  return entry.payload;
 }
 
 describe("refreshActiveTab", () => {

@@ -253,9 +253,12 @@ describe("Cron issue regressions", () => {
 
     const result = await cron.run("missing-enabled-due", "due");
     expect(result).toEqual({ ok: true, ran: true });
-    const enqueueCall = enqueueSystemEvent.mock.calls[0];
-    expect(enqueueCall?.[0]).toBe("missing-enabled-due");
-    expect(enqueueCall?.[1]?.agentId).toBeUndefined();
+    const enqueueCall = enqueueSystemEvent.mock.calls.at(0);
+    if (!enqueueCall) {
+      throw new Error("Expected due cron job to enqueue a system event");
+    }
+    expect(enqueueCall[0]).toBe("missing-enabled-due");
+    expect(enqueueCall[1]?.agentId).toBeUndefined();
 
     cron.stop();
   });

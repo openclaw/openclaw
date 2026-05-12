@@ -46,10 +46,6 @@ describe("command owner health", () => {
       ].join("\n"),
       "Command owner",
     );
-    const message = String(note.mock.calls[0]?.[0] ?? "");
-    expect(message).toContain("human operator account");
-    expect(message).toContain("DM pairing only lets someone talk to the bot");
-    expect(message).toContain("commands.ownerAllowFrom");
   });
 
   it("does not warn when command owners are configured", () => {

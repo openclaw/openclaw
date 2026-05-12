@@ -329,6 +329,31 @@ describe("config schema", () => {
     });
   });
 
+  it("accepts exec command highlighting config in global and agent scopes", () => {
+    const tools = ToolsSchema.parse({
+      exec: {
+        commandHighlighting: false,
+      },
+    });
+    expect(tools?.exec?.commandHighlighting).toBe(false);
+
+    const config = OpenClawSchema.parse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              exec: {
+                commandHighlighting: false,
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(config.agents?.list?.[0]?.tools?.exec?.commandHighlighting).toBe(false);
+  });
+
   it("accepts experimental tool flags in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       experimental: {

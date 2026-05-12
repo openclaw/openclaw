@@ -37,8 +37,23 @@ function installFallbackShell(window: TestWindow, html: string): void {
   const sentinel = Array.from(parsed.querySelectorAll<HTMLScriptElement>("script:not([src])")).find(
     (script) => script.textContent?.includes("openclaw-mount-fallback"),
   );
-  expect(sentinel).toBeTruthy();
-  window.eval(sentinel?.textContent ?? "");
+  if (!sentinel?.textContent) {
+    throw new Error("Expected inline mount fallback script in index.html");
+  }
+  window.eval(sentinel.textContent);
+}
+
+function requireElementById<T extends HTMLElement>(
+  window: TestWindow,
+  id: string,
+  constructor: new () => T,
+): T {
+  const element = window.document.getElementById(id);
+  expect(element).toBeInstanceOf(constructor);
+  if (!(element instanceof constructor)) {
+    throw new Error(`Expected #${id}`);
+  }
+  return element;
 }
 
 describe("Control UI mount fallback", () => {
@@ -52,26 +67,31 @@ describe("Control UI mount fallback", () => {
     installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
     await waitForWindowTimeout(frameWindow, 10);
 
-    const fallback = frameWindow.document.getElementById("openclaw-mount-fallback");
-    expect(fallback?.hidden).toBe(false);
-    expect(frameWindow.document.body.classList.contains("openclaw-mount-fallback-active")).toBe(
-      true,
+    const fallback = requireElementById(
+      frameWindow,
+      "openclaw-mount-fallback",
+      frameWindow.HTMLElement,
     );
-    expect(fallback?.textContent).toContain("Control UI did not start");
-    expect(fallback?.textContent).toContain("Control UI troubleshooting");
-    expect(frameWindow.document.activeElement?.classList.contains("mount-fallback__panel")).toBe(
-      true,
-    );
+    expect(fallback.hidden).toBe(false);
+    expect([...frameWindow.document.body.classList]).toEqual(["openclaw-mount-fallback-active"]);
+    expect(fallback.querySelector("h1")?.textContent?.trim()).toBe("Control UI did not start");
+    expect(fallback.querySelector("a")?.textContent?.trim()).toBe("Control UI troubleshooting");
+    expect(frameWindow.document.activeElement).toBeInstanceOf(frameWindow.HTMLElement);
+    expect([...(frameWindow.document.activeElement as HTMLElement).classList]).toEqual([
+      "mount-fallback__panel",
+    ]);
 
-    const waitButton = frameWindow.document.getElementById("openclaw-mount-wait");
-    waitButton?.click();
-    expect(fallback?.hidden).toBe(true);
-    expect(frameWindow.document.body.classList.contains("openclaw-mount-fallback-active")).toBe(
-      false,
+    const waitButton = requireElementById(
+      frameWindow,
+      "openclaw-mount-wait",
+      frameWindow.HTMLButtonElement,
     );
+    waitButton.click();
+    expect(fallback.hidden).toBe(true);
+    expect([...frameWindow.document.body.classList]).toEqual([]);
 
     await waitForWindowTimeout(frameWindow, 10);
-    expect(fallback?.hidden).toBe(false);
+    expect(fallback.hidden).toBe(false);
   });
 
   it("keeps the fallback hidden when the app element registers before the timeout", async () => {
@@ -83,10 +103,12 @@ describe("Control UI mount fallback", () => {
     await frameWindow.customElements.whenDefined("openclaw-app");
     await waitForWindowTimeout(frameWindow, 35);
 
-    const fallback = frameWindow.document.getElementById("openclaw-mount-fallback");
-    expect(fallback?.hidden).toBe(true);
-    expect(frameWindow.document.body.classList.contains("openclaw-mount-fallback-active")).toBe(
-      false,
+    const fallback = requireElementById(
+      frameWindow,
+      "openclaw-mount-fallback",
+      frameWindow.HTMLElement,
     );
+    expect(fallback.hidden).toBe(true);
+    expect([...frameWindow.document.body.classList]).toEqual([]);
   });
 });

@@ -37,9 +37,12 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   } catch (error) {
     statError = error;
   }
-  expect(statError).toBeDefined();
-  expect(typeof statError).toBe("object");
-  expect(statError).not.toBeNull();
+  if (statError === undefined) {
+    throw new Error(`Expected ${targetPath} to be missing`);
+  }
+  if (!statError || typeof statError !== "object") {
+    throw new Error("expected stat error object");
+  }
   expect((statError as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 

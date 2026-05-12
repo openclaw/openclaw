@@ -20,6 +20,7 @@ import {
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
@@ -110,6 +111,7 @@ export class CodexAppServerEventProjector {
   private readonly activeItemIds = new Set<string>();
   private readonly completedItemIds = new Set<string>();
   private readonly activeCompactionItemIds = new Set<string>();
+  private readonly toolProgressTexts = new Set<string>();
   private readonly toolResultSummaryItemIds = new Set<string>();
   private readonly toolResultOutputItemIds = new Set<string>();
   private readonly toolResultOutputStreamedItemIds = new Set<string>();
@@ -135,18 +137,33 @@ export class CodexAppServerEventProjector {
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
   private latestRateLimits: JsonValue | undefined;
+  private readonly nativeSubagentTaskMirror: CodexNativeSubagentTaskMirror;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
     private readonly threadId: string,
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},
-  ) {}
+  ) {
+    this.nativeSubagentTaskMirror = new CodexNativeSubagentTaskMirror({
+      parentThreadId: threadId,
+      requesterSessionKey: params.sessionKey,
+      agentId: params.agentId,
+    });
+  }
 
   async handleNotification(notification: CodexServerNotification): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
       return;
+    }
+    try {
+      this.nativeSubagentTaskMirror.handleNotification(notification);
+    } catch (error) {
+      embeddedAgentLog.warn("Failed to mirror Codex native subagent lifecycle event", {
+        method: notification.method,
+        error: formatErrorMessage(error),
+      });
     }
     if (notification.method === "account/rateLimits/updated") {
       this.latestRateLimits = params;
@@ -946,11 +963,16 @@ export class CodexAppServerEventProjector {
     text: string;
     finalOutput?: boolean;
   }): void {
+    const text = params.text.trim();
+    if (!text) {
+      return;
+    }
+    this.toolProgressTexts.add(text);
     if (params.finalOutput) {
       this.toolResultOutputItemIds.add(params.itemId);
     }
     try {
-      void Promise.resolve(this.params.onToolResult?.({ text: params.text })).catch(() => {
+      void Promise.resolve(this.params.onToolResult?.({ text })).catch(() => {
         // Tool progress delivery is best-effort and should not affect the turn.
       });
     } catch {
@@ -1093,7 +1115,7 @@ export class CodexAppServerEventProjector {
         continue;
       }
       const text = this.assistantTextByItem.get(itemId)?.trim();
-      if (text) {
+      if (text && !this.toolProgressTexts.has(text)) {
         return text;
       }
     }

@@ -630,6 +630,20 @@ describe("overflow compaction in run loop", () => {
     expect(result.messagingToolSentTexts).toEqual(["already delivered"]);
   });
 
+  it("propagates deterministic approval prompt delivery from attempts", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: [],
+        didSendDeterministicApprovalPrompt: true,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendDeterministicApprovalPrompt).toBe(true);
+  });
+
   it("returns a timeout payload instead of a partial assistant fragment after stream timeout", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({
@@ -648,6 +662,31 @@ describe("overflow compaction in run loop", () => {
     expect(
       result.payloads?.some((payload) => (payload.text ?? "").includes("# Current Tasks")),
     ).toBe(false);
+  });
+
+  it("preserves tool media payloads and appends an explicit timeout error", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        aborted: true,
+        timedOut: true,
+        timedOutDuringCompaction: false,
+        assistantTexts: [],
+        toolMediaUrls: ["https://example.test/tool-output.png"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(result.payloads).toEqual([
+      expect.objectContaining({
+        mediaUrl: "https://example.test/tool-output.png",
+        mediaUrls: ["https://example.test/tool-output.png"],
+      }),
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("timed out"),
+      }),
+    ]);
   });
 
   it("sets promptTokens from the latest model call usage, not accumulated attempt usage", async () => {

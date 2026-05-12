@@ -109,13 +109,12 @@ describe("collectImplicitFallbackClobberWarnings", () => {
       list: [{ id: "ops", model: "openai/gpt-5.3" }],
     });
     const warnings = collectImplicitFallbackClobberWarnings(cfg);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("agents.list[0].model (id=ops)");
-    expect(warnings[0]).toContain('"openai/gpt-5.3"');
-    expect(warnings[0]).toContain("bare string with no fallbacks");
-    expect(warnings[0]).toContain("clobbers agents.defaults.model.fallbacks");
-    expect(warnings[0]).toContain("openai/gpt-5.4");
-    expect(warnings[0]).toContain("openai/gpt-5.3");
+    expect(warnings).toStrictEqual([
+      [
+        '- agents.list[0].model (id=ops) is "openai/gpt-5.3", a bare string with no fallbacks. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4, openai/gpt-5.3), leaving the agent with no fallbacks.',
+        '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
+      ].join("\n"),
+    ]);
   });
 
   it("matches runtime fallback resolution for warned string and partial-object shapes", () => {
@@ -146,11 +145,12 @@ describe("collectImplicitFallbackClobberWarnings", () => {
       list: [{ id: "researcher", model: { primary: "openai/gpt-5.4" } }],
     });
     const warnings = collectImplicitFallbackClobberWarnings(cfg);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("agents.list[0].model (id=researcher)");
-    expect(warnings[0]).toContain('{ primary: "openai/gpt-5.4" }');
-    expect(warnings[0]).toContain('object with no explicit "fallbacks" key');
-    expect(warnings[0]).toContain("clobbers agents.defaults.model.fallbacks");
+    expect(warnings).toStrictEqual([
+      [
+        '- agents.list[0].model (id=researcher) is { primary: "openai/gpt-5.4" }, a object with no explicit "fallbacks" key. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
+        '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
+      ].join("\n"),
+    ]);
   });
 
   it("does not warn for object form with blank primary", () => {
@@ -213,8 +213,15 @@ describe("collectImplicitFallbackClobberWarnings", () => {
       ],
     });
     const warnings = collectImplicitFallbackClobberWarnings(cfg);
-    expect(warnings).toHaveLength(2);
-    expect(warnings[0]).toContain("agents.list[0].model (id=ops)");
-    expect(warnings[1]).toContain("agents.list[1].model (id=researcher)");
+    expect(warnings).toStrictEqual([
+      [
+        '- agents.list[0].model (id=ops) is "openai/gpt-5.3", a bare string with no fallbacks. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
+        '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
+      ].join("\n"),
+      [
+        '- agents.list[1].model (id=researcher) is { primary: "openai/gpt-5.4" }, a object with no explicit "fallbacks" key. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
+        '  Fix: add "fallbacks": [...] to inherit or override, or "fallbacks": [] to explicitly disable.',
+      ].join("\n"),
+    ]);
   });
 });

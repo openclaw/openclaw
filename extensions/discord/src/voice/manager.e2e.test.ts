@@ -362,8 +362,9 @@ describe("DiscordVoiceManager", () => {
   };
 
   const requireRecord = (value: unknown, label: string): Record<string, unknown> => {
-    expect(value, label).toBeTypeOf("object");
-    expect(value, label).not.toBeNull();
+    if (!value || typeof value !== "object") {
+      throw new Error(`expected ${label}`);
+    }
     return value as Record<string, unknown>;
   };
 
@@ -386,8 +387,10 @@ describe("DiscordVoiceManager", () => {
 
   const expectOffEventWithFunction = (source: MockCallSource, event: string) => {
     const call = Array.from(source.mock.calls).find((candidate) => candidate[0] === event);
-    expect(call, `${event} listener removal`).toBeDefined();
-    expect(call?.[1], `${event} listener`).toBeTypeOf("function");
+    if (!call) {
+      throw new Error(`Expected ${event} listener removal`);
+    }
+    expect(call[1], `${event} listener`).toBeTypeOf("function");
   };
 
   const lastAgentCommandArgs = () =>
@@ -1085,9 +1088,11 @@ describe("DiscordVoiceManager", () => {
       },
       realtimeSessionMock,
     );
-    await Promise.resolve();
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(() =>
+      expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-1", {
+        text: "agent proxy answer",
+      }),
+    );
 
     const commandArgs = lastAgentCommandArgs();
     expect(commandArgs.model).toBe("openai-codex/gpt-5.5");
@@ -1103,9 +1108,6 @@ describe("DiscordVoiceManager", () => {
       "working",
     );
     expect(workingToolResultCall?.[2]).toEqual({ willContinue: true });
-    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-1", {
-      text: "agent proxy answer",
-    });
   });
 
   it("does not require speaker context for internal exact-speech consults", async () => {
@@ -1798,20 +1800,19 @@ describe("DiscordVoiceManager", () => {
       realtimeSessionMock,
     );
     rejectAgentTurn?.(new Error("agent broke"));
-    await Promise.resolve();
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(() =>
+      expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith(
+        "call-late",
+        {
+          status: "already_delivered",
+          message: "OpenClaw already delivered this answer to Discord voice.",
+        },
+        { suppressResponse: true },
+      ),
+    );
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expectUserMessageIncludes("I hit an error while checking that. Please try again.");
-    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith(
-      "call-late",
-      {
-        status: "already_delivered",
-        message: "OpenClaw already delivered this answer to Discord voice.",
-      },
-      { suppressResponse: true },
-    );
   });
 
   it("does not reuse recent agent-proxy answers over newer speaker audio", async () => {
@@ -1947,13 +1948,11 @@ describe("DiscordVoiceManager", () => {
       },
       realtimeSessionMock,
     );
-    await Promise.resolve();
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-old", {
-      text: "old direct answer",
-    });
+    await vi.waitFor(() =>
+      expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-old", {
+        text: "old direct answer",
+      }),
+    );
 
     const secondTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
@@ -2105,9 +2104,11 @@ describe("DiscordVoiceManager", () => {
       },
       realtimeSessionMock,
     );
-    await Promise.resolve();
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(() =>
+      expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-1", {
+        text: "consult answer",
+      }),
+    );
 
     const workingToolResultCall = mockCall(
       realtimeSessionMock.submitToolResult as unknown as MockCallSource,
@@ -2119,9 +2120,6 @@ describe("DiscordVoiceManager", () => {
       "working",
     );
     expect(workingToolResultCall?.[2]).toEqual({ willContinue: true });
-    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-1", {
-      text: "consult answer",
-    });
     const commandArgs = lastAgentCommandArgs();
     expect(commandArgs.senderIsOwner).toBe(true);
     expect(commandArgs.toolsAllow).toEqual([
@@ -2206,14 +2204,13 @@ describe("DiscordVoiceManager", () => {
       },
       realtimeSessionMock,
     );
-    await Promise.resolve();
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.waitFor(() =>
+      expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-1", {
+        text: "maintainer answer",
+      }),
+    );
 
     expect(lastAgentCommandArgs().sessionKey).toBe("agent:main:discord:channel:maintainers");
-    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-1", {
-      text: "maintainer answer",
-    });
   });
 
   it("keeps bidi realtime consults on the audio turn speaker context", async () => {
@@ -2787,9 +2784,13 @@ describe("DiscordVoiceManager", () => {
     expect(lastTtsStreamArgs().disableFallback).toBe(true);
     expect(lastTtsStreamArgs().text).toBe("hello back");
     expect(textToSpeechMock).not.toHaveBeenCalled();
-    expect(
-      lastMockCall(createAudioResourceMock as unknown as MockCallSource, "audio resource")[0],
-    ).toBeDefined();
+    const audioResourceInput = lastMockCall(
+      createAudioResourceMock as unknown as MockCallSource,
+      "audio resource",
+    )[0];
+    if (audioResourceInput === undefined) {
+      throw new Error("expected Discord audio resource input");
+    }
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
   });
 

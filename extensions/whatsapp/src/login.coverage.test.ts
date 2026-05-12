@@ -135,11 +135,11 @@ describe("loginWeb coverage", () => {
     await loginWeb(false, waitForWaConnectionMock as never, runtime);
 
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    expect(createWaSocketMock.mock.calls[0]?.[0]).toBe(false);
-    const initialOpts = createWaSocketMock.mock.calls[0]?.[2] as
+    expect(createWaSocketMock.mock.calls.at(0)?.[0]).toBe(false);
+    const initialOpts = createWaSocketMock.mock.calls.at(0)?.[2] as
       | { onQr?: (qr: string) => void }
       | undefined;
-    const restartOpts = createWaSocketMock.mock.calls[1]?.[2] as
+    const restartOpts = createWaSocketMock.mock.calls.at(1)?.[2] as
       | { onQr?: (qr: string) => void }
       | undefined;
     expect(initialOpts?.onQr).toBe(restartOpts?.onQr);
@@ -153,8 +153,8 @@ describe("loginWeb coverage", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith("terminal:initial-qr");
     expect(runtime.log).toHaveBeenCalledWith("terminal:restart-qr");
-    expect(renderQrTerminalMock).toHaveBeenCalledWith("initial-qr", { small: true });
-    expect(renderQrTerminalMock).toHaveBeenCalledWith("restart-qr", { small: true });
+    expect(renderQrTerminalMock).toHaveBeenCalledWith("initial-qr");
+    expect(renderQrTerminalMock).toHaveBeenCalledWith("restart-qr");
   });
 
   it("clears creds and throws when logged out", async () => {

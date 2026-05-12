@@ -15,6 +15,21 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error(`expected ${label} params to be an object`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
   recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
   resolveStorePath: mocks.resolveStorePath,
@@ -444,8 +459,11 @@ describe("ensureOutboundSessionEntry", () => {
       agentId: "main",
     });
     expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalledOnce();
-    const metadata = mocks.recordSessionMetaFromInbound.mock.calls[0]?.[0];
-    expect(metadata?.storePath).toBe("/stores/main.json");
-    expect(metadata?.sessionKey).toBe("agent:main:workspace:channel:c1");
+    const metadata = firstMockArg(
+      mocks.recordSessionMetaFromInbound,
+      "recordSessionMetaFromInbound",
+    );
+    expect(metadata.storePath).toBe("/stores/main.json");
+    expect(metadata.sessionKey).toBe("agent:main:workspace:channel:c1");
   });
 });

@@ -493,10 +493,17 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(invoke.ok).toBe(true);
-      await vi.waitFor(() => expect(lastInvokeParams).toBeTruthy(), {
-        timeout: 5_000,
-        interval: 50,
-      });
+      await vi.waitFor(
+        () => {
+          if (!lastInvokeParams) {
+            throw new Error("expected forwarded invoke params");
+          }
+        },
+        {
+          timeout: 5_000,
+          interval: 50,
+        },
+      );
       const forwardedParams = requireRecord(lastInvokeParams, "forwarded invoke params");
       expect(forwardedParams["approved"]).toBe(true);
       expect(forwardedParams["approvalDecision"]).toBe("allow-once");
@@ -576,10 +583,17 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(invoke.ok).toBe(true);
-      await vi.waitFor(() => expect(lastInvokeParams).toBeTruthy(), {
-        timeout: 5_000,
-        interval: 50,
-      });
+      await vi.waitFor(
+        () => {
+          if (!lastInvokeParams) {
+            throw new Error("expected forwarded invoke params");
+          }
+        },
+        {
+          timeout: 5_000,
+          interval: 50,
+        },
+      );
       const forwardedParams = requireRecord(lastInvokeParams, "forwarded invoke params");
       expect(forwardedParams["approved"]).toBe(true);
       expect(forwardedParams["approvalDecision"]).toBe("allow-once");

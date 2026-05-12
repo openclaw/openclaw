@@ -127,8 +127,9 @@ async function expectOversizedPromptRejected(params: { sessionId: string; text: 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -139,9 +140,11 @@ function configOptions(value: unknown) {
 
 function expectConfigOption(options: unknown, id: string, fields: Record<string, unknown>) {
   const option = configOptions(options).find((candidate) => candidate.id === id);
-  expect(option, `config option ${id}`).toBeDefined();
+  if (!option) {
+    throw new Error(`Expected config option ${id}`);
+  }
   for (const [field, value] of Object.entries(fields)) {
-    expect(option?.[field]).toEqual(value);
+    expect(option[field]).toEqual(value);
   }
 }
 
@@ -260,7 +263,14 @@ describe("acp session UX bridge behavior", () => {
     const result = await agent.newSession(createNewSessionRequest());
 
     expect(result.modes?.currentModeId).toBe("adaptive");
-    expect(result.modes?.availableModes.map((mode) => mode.id)).toContain("adaptive");
+    expect(result.modes?.availableModes.map((mode) => mode.id)).toStrictEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "adaptive",
+    ]);
     expectConfigOption(result.configOptions, "thought_level", {
       currentValue: "adaptive",
       category: "thought_level",

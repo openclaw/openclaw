@@ -22,6 +22,7 @@ import {
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 type OpenAICompletionsOutput = Parameters<typeof __testing.processOpenAICompletionsStream>[1];
+type OpenAIResponsesOutput = Parameters<typeof __testing.processResponsesStream>[1];
 
 type CapturedStreamEvent = { type?: string; delta?: string };
 
@@ -60,6 +61,54 @@ function createAssistantOutput(model: Model<"openai-completions">): OpenAIComple
   };
 }
 
+function createResponsesAssistantOutput(
+  model: Model<"azure-openai-responses">,
+): OpenAIResponsesOutput {
+  return {
+    role: "assistant" as const,
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
+function createAzureResponsesModel(): Model<"azure-openai-responses"> {
+  return {
+    id: "gpt-5.4-pro",
+    name: "GPT-5.4 Pro",
+    api: "azure-openai-responses",
+    provider: "azure-openai-responses-devdiv",
+    baseUrl: "https://example.openai.azure.com/openai/responses",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+  };
+}
+
+function neverYieldsStream(): AsyncIterable<unknown> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        next: async () => await new Promise<IteratorResult<unknown>>(() => undefined),
+        return: async () => ({ done: true, value: undefined }),
+      };
+    },
+  };
+}
+
 async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> {
   for (const chunk of chunks) {
     yield chunk as never;
@@ -67,7 +116,9 @@ async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> 
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -76,6 +127,19 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 }
 
 describe("openai transport stream", () => {
+  it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
+    const model = createAzureResponsesModel();
+    await expect(
+      __testing.processResponsesStream(
+        neverYieldsStream(),
+        createResponsesAssistantOutput(model),
+        { push: vi.fn() },
+        model,
+        { firstEventTimeoutMs: 1 },
+      ),
+    ).rejects.toThrow(/did not deliver a first event within 1ms after HTTP streaming headers/);
+  });
+
   it("summarizes model payload tools with full names when requested", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "tools";
@@ -990,7 +1054,7 @@ describe("openai transport stream", () => {
 
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
-    expect(output.content).toContainEqual({ type: "text", text: "ok" });
+    expect(output.content).toStrictEqual([{ type: "text", text: "ok" }]);
     expect(output.stopReason).toBe("stop");
   });
 

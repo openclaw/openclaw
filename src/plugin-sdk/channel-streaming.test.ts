@@ -284,7 +284,6 @@ describe("channel-streaming", () => {
       name: "write",
       args: { path: "/tmp/demo/index.html" },
     });
-    expect(progressLine).toBeDefined();
     if (!progressLine) {
       throw new Error("expected tool progress draft line");
     }

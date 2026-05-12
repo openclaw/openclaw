@@ -150,16 +150,23 @@ type MockWithCalls = {
 };
 
 function mockCallArg(mock: MockWithCalls, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return call?.[argIndex];
+  const call = mock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`Expected mock call ${callIndex} argument ${argIndex}`);
+  }
+  return call[argIndex];
 }
 
 function expectRecordFields(
   record: unknown,
   expected: Record<string, unknown>,
 ): Record<string, unknown> {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -250,7 +257,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     });
 
     expect(mockedEnsureAuthProfileStore).not.toHaveBeenCalled();
-    const authStoreCall = mockedEnsureAuthProfileStoreWithoutExternalProfiles.mock.calls[0];
+    const authStoreCall = mockedEnsureAuthProfileStoreWithoutExternalProfiles.mock.calls.at(0) as
+      | [string | undefined, { allowKeychainPrompt?: boolean } | undefined]
+      | undefined;
     expect(typeof authStoreCall?.[0]).toBe("string");
     expect(
       String(authStoreCall?.[0]).replaceAll("\\", "/").endsWith("/.openclaw/agents/main/agent"),
@@ -288,7 +297,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(typeof forwardedTools.normalize).toBe("function");
     const forwardedTransport = expectRecordFields(forwardedPlan.transport, {});
     expect(typeof forwardedTransport.resolveExtraParams).toBe("function");
-    const attemptParams = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as
+    const attemptParams = mockedRunEmbeddedAttempt.mock.calls.at(0)?.[0] as
       | EmbeddedRunAttemptParams
       | undefined;
     expect(attemptParams?.runtimePlan).toBe(runtimePlan);
@@ -386,7 +395,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         forwardedAuthProfileId: "openai-codex:work",
       },
     });
-    const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
+    const harnessParams = pluginRunAttempt.mock.calls.at(0)?.[0];
     expect(harnessParams?.runtimePlan).toBe(runtimePlan);
     expect(Object.keys(harnessParams?.authProfileStore.profiles ?? {})).toEqual([
       "openai-codex:work",
@@ -463,7 +472,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         forwardedAuthProfileId: "openai-codex:work",
       },
     });
-    const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
+    const harnessParams = pluginRunAttempt.mock.calls.at(0)?.[0];
     expect(harnessParams?.runtimePlan).toBe(runtimePlan);
     expect(mockedMarkAuthProfileSuccess).toHaveBeenCalledTimes(1);
     const [[successParams]] = mockedMarkAuthProfileSuccess.mock.calls as unknown as Array<
@@ -540,7 +549,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         forwardedAuthProfileId: "openai-codex:default",
       },
     });
-    const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
+    const harnessParams = pluginRunAttempt.mock.calls.at(0)?.[0];
     expect(harnessParams?.runtimePlan).toBe(runtimePlan);
   });
 
@@ -613,7 +622,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         forwardedAuthProfileId: "openai-codex:default",
       },
     });
-    const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
+    const harnessParams = pluginRunAttempt.mock.calls.at(0)?.[0];
     expect(harnessParams?.runtimePlan).toBe(runtimePlan);
   });
 
@@ -698,7 +707,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         forwardedAuthProfileId: "openai:personal",
       },
     });
-    const harnessParams = pluginRunAttempt.mock.calls[0]?.[0];
+    const harnessParams = pluginRunAttempt.mock.calls.at(0)?.[0];
     expect(harnessParams?.runtimePlan).toBe(runtimePlan);
     expect(Object.keys(harnessParams?.authProfileStore.profiles ?? {})).toEqual([
       "openai:personal",

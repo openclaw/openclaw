@@ -93,8 +93,9 @@ function runWrappedPayloadCase(params: {
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -128,9 +129,10 @@ describe("buildOpenAIProvider", () => {
 
     expectFields(apiKey?.wizard, {
       choiceLabel: "OpenAI API Key",
+      choiceHint: "Use your OpenAI API key directly",
       groupId: "openai",
       groupLabel: "OpenAI",
-      groupHint: "Direct API key",
+      groupHint: "ChatGPT subscription or API key",
     });
   });
 
@@ -545,6 +547,7 @@ describe("buildOpenAIProvider", () => {
       sanitizeToolCallIds: false,
       validateGeminiTurns: false,
       validateAnthropicTurns: false,
+      allowSyntheticToolResults: true,
     });
   });
 

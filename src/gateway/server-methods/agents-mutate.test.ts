@@ -251,7 +251,9 @@ function makeCall(method: keyof typeof agentsHandlers, params: Record<string, un
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -442,7 +444,7 @@ async function listAgentFileNames(agentId = "main") {
   const { respond, promise } = makeCall("agents.files.list", { agentId });
   await promise;
 
-  const [, result] = respond.mock.calls[0] ?? [];
+  const [, result] = respond.mock.calls.at(0) ?? [];
   const files = (result as { files: Array<{ name: string }> }).files;
   return files.map((file) => file.name);
 }
@@ -1168,7 +1170,7 @@ describe("agents.files.list", () => {
     const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
     await promise;
 
-    const [, result] = respond.mock.calls[0] ?? [];
+    const [, result] = respond.mock.calls.at(0) ?? [];
     const files = (result as { files: Array<{ name: string; missing: boolean; size?: number }> })
       .files;
     const file = files.find((entry) => entry.name === "AGENTS.md");
@@ -1195,7 +1197,7 @@ describe("agents.files.list", () => {
     const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
     await promise;
 
-    const [, result] = respond.mock.calls[0] ?? [];
+    const [, result] = respond.mock.calls.at(0) ?? [];
     const files = (result as { files: Array<{ name: string; missing: boolean; size?: number }> })
       .files;
     const file = files.find((entry) => entry.name === "AGENTS.md");

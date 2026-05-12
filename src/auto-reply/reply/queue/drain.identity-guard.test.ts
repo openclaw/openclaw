@@ -74,8 +74,10 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
     await firstEntered.promise;
 
     const q1 = FOLLOWUP_QUEUES.get(key);
-    expect(q1, "Q1 should be registered pre-/stop").toBeDefined();
-    expect(q1?.draining).toBe(true);
+    if (!q1) {
+      throw new Error("Q1 should be registered pre-/stop");
+    }
+    expect(q1.draining).toBe(true);
 
     clearSessionQueues([key]);
     expect(FOLLOWUP_QUEUES.has(key)).toBe(false);
@@ -90,10 +92,12 @@ describe("drain finally identity guard — late D1 must not orphan Q2", () => {
     );
 
     const q2 = FOLLOWUP_QUEUES.get(key);
-    expect(q2, "Q2 must be registered in map after T2 enqueue").toBeDefined();
+    if (!q2) {
+      throw new Error("Q2 must be registered in map after T2 enqueue");
+    }
     expect(q2).not.toBe(q1);
-    expect(q2?.items.length).toBe(1);
-    expect(q2?.draining).toBe(false);
+    expect(q2.items.length).toBe(1);
+    expect(q2.draining).toBe(false);
     expect(getFollowupQueueDepth(key)).toBe(1);
 
     gate.resolve();

@@ -109,8 +109,9 @@ function createCronConfig(name: string): OpenClawConfig {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -126,8 +127,13 @@ function callArg(
   label: string,
 ) {
   const call = mock.mock.calls.at(callIndex);
-  expect(call, label).toBeDefined();
-  return call?.[argIndex];
+  if (!call) {
+    throw new Error(`Expected mock call: ${label}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`Expected mock call argument ${argIndex}: ${label}`);
+  }
+  return call[argIndex];
 }
 
 function expectHookContext(callIndex: number, fields: { config?: unknown; hasGetCron?: boolean }) {
@@ -646,7 +652,9 @@ describe("buildGatewayCronService", () => {
         ?.sessionKey;
       const wakeOpts = wakeCall?.[0] as { agentId?: string; sessionKey?: string } | undefined;
 
-      expect(enqueueSessionKey).toBeDefined();
+      if (!enqueueSessionKey) {
+        throw new Error("Expected enqueue session key");
+      }
       expect(enqueueSessionKey).toMatch(/^agent:ops:/);
       expect(wakeOpts?.agentId).toBe("ops");
       expect(wakeOpts?.sessionKey).toMatch(/^agent:ops:/);
