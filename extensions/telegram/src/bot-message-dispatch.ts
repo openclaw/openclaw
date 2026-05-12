@@ -1439,8 +1439,7 @@ export const dispatchTelegramMessage = async ({
                     ? (payload) =>
                         enqueueDraftLaneEvent(async () => {
                           if (splitReasoningOnNextStream) {
-                            reasoningLane.stream?.forceNewMessage();
-                            resetDraftLaneState(reasoningLane);
+                            await rotateLaneForNewMessage(reasoningLane);
                             splitReasoningOnNextStream = false;
                           }
                           await ingestDraftLaneSegments(payload, true);

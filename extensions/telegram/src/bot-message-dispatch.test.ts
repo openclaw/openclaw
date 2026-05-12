@@ -1396,6 +1396,30 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
   });
 
+  it("finalizes prior reasoning preview before rotating on a split (regression #80862)", async () => {
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "<think>First segment</think>" });
+        await replyOptions?.onReasoningEnd?.();
+        await replyOptions?.onReasoningStream?.({ text: "<think>Second segment</think>" });
+        await dispatcherOptions.deliver({ text: "Answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    expect(reasoningDraftStream.stop).toHaveBeenCalled();
+    expect(reasoningDraftStream.forceNewMessage).toHaveBeenCalled();
+    const stopOrder = reasoningDraftStream.stop.mock.invocationCallOrder[0];
+    const forceOrder = reasoningDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    expect(stopOrder).toBeLessThan(forceOrder);
+  });
+
   it("suppresses reasoning-only finals without raw text fallback", async () => {
     setupDraftStreams({ answerMessageId: 2001, reasoningMessageId: 3001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
