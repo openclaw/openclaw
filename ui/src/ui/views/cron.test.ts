@@ -138,11 +138,27 @@ describe("cron view", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Latest runs across all jobs.");
-    expect(container.textContent).toContain("Status");
-    expect(container.textContent).toContain("All statuses");
-    expect(container.textContent).toContain("Delivery");
-    expect(container.textContent).toContain("All delivery");
+    const cards = Array.from(container.querySelectorAll(".card"));
+    const runHistoryCard = cards.find(
+      (card) => card.querySelector(".card-title")?.textContent?.trim() === "Run history",
+    );
+    expect(runHistoryCard).toBeInstanceOf(Element);
+    if (!(runHistoryCard instanceof Element)) {
+      throw new Error("Expected run history card");
+    }
+    expect(runHistoryCard.querySelector(".card-sub")?.textContent?.trim()).toBe(
+      "Latest runs across all jobs.",
+    );
+    const runFilterSummaries = Array.from(
+      runHistoryCard.querySelectorAll(".cron-filter-dropdown"),
+    ).map((dropdown) => ({
+      label: dropdown.firstElementChild?.textContent?.trim(),
+      summary: dropdown.querySelector(".cron-filter-dropdown__trigger span")?.textContent?.trim(),
+    }));
+    expect(runFilterSummaries).toEqual([
+      { label: "Status", summary: "All statuses" },
+      { label: "Delivery", summary: "All delivery" },
+    ]);
     expect(container.textContent).not.toContain("multi-select");
 
     const statusOk = getElement(
@@ -155,8 +171,10 @@ describe("cron view", () => {
 
     expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["ok"] });
 
-    expect(container.textContent).toContain("Due");
-    expect(container.textContent).not.toContain("Next 13");
+    const runMeta = Array.from(container.querySelectorAll(".cron-run-entry__meta .muted")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(runMeta.at(-1)).toBe("Due 13m ago");
 
     const scheduleSelect = getElement(
       container,
@@ -249,8 +267,6 @@ describe("cron view", () => {
       "/ui/chat?session=agent%3Amain%3Acron%3Ajob-1%3Arun%3Aabc",
     );
 
-    expect(container.textContent).toContain("Latest runs for Daily ping.");
-
     const cards = Array.from(container.querySelectorAll(".card"));
     const runHistoryCard = cards.find(
       (card) => card.querySelector(".card-title")?.textContent?.trim() === "Run history",
@@ -259,6 +275,9 @@ describe("cron view", () => {
     if (!(runHistoryCard instanceof Element)) {
       throw new Error("Expected run history card");
     }
+    expect(runHistoryCard.querySelector(".card-sub")?.textContent?.trim()).toBe(
+      "Latest runs for Daily ping.",
+    );
 
     const summaries = Array.from(runHistoryCard.querySelectorAll(".cron-run-entry__body")).map(
       (el) => (el.textContent ?? "").trim(),
@@ -369,9 +388,16 @@ describe("cron view", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Delivery");
-    expect(container.textContent).toContain("webhook");
-    expect(container.textContent).toContain("https://example.invalid/cron");
+    const details = Array.from(container.querySelectorAll(".cron-job-detail-section")).map(
+      (section) => ({
+        label: section.querySelector(".cron-job-detail-label")?.textContent?.trim(),
+        value: section.querySelector(".cron-job-detail-value")?.textContent?.trim(),
+      }),
+    );
+    expect(details).toEqual([
+      { label: "Prompt", value: "do it" },
+      { label: "Delivery", value: "webhook (https://example.invalid/cron)" },
+    ]);
   });
 
   it("renders a stale cron job with no payload", () => {
@@ -390,7 +416,7 @@ describe("cron view", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Daily ping");
+    expect(container.querySelector(".cron-job .list-title")?.textContent).toBe("Daily ping");
   });
 
   it("renders cron job prompts and run summaries as sanitized markdown", () => {
@@ -460,8 +486,8 @@ describe("cron view", () => {
       container,
     );
 
-    expect(container.querySelector(".cron-run-entry__meta")?.textContent).not.toContain(
-      "Failed with",
+    expect(container.querySelector(".cron-run-entry__body")?.textContent?.trim()).toBe(
+      "Failed with markdown",
     );
     expect(container.querySelector(".cron-run-entry__body strong")?.textContent).toBe("markdown");
   });
@@ -485,8 +511,8 @@ describe("cron view", () => {
       container,
     );
 
-    expect(container.querySelector(".cron-run-entry__meta")?.textContent).not.toContain(
-      "Failed with",
+    expect(container.querySelector(".cron-run-entry__body")?.textContent?.trim()).toBe(
+      "Failed with markdown",
     );
     expect(container.querySelector(".cron-run-entry__body strong")?.textContent).toBe("markdown");
   });
@@ -746,20 +772,19 @@ describe("cron view", () => {
       "cron-delivery-to-suggestions",
       "cron-delivery-account-suggestions",
     ]);
-    expect(
-      Array.from(container.querySelectorAll("input[list]")).map((node) =>
-        node.getAttribute("list"),
-      ),
-    ).toEqual(
-      expect.arrayContaining([
-        "cron-agent-suggestions",
-        "cron-model-suggestions",
-        "cron-thinking-suggestions",
-        "cron-tz-suggestions",
-        "cron-delivery-to-suggestions",
-        "cron-delivery-account-suggestions",
-      ]),
+    const inputLists = Array.from(container.querySelectorAll("input[list]")).map((node) =>
+      node.getAttribute("list"),
     );
+    for (const expectedList of [
+      "cron-agent-suggestions",
+      "cron-model-suggestions",
+      "cron-thinking-suggestions",
+      "cron-tz-suggestions",
+      "cron-delivery-to-suggestions",
+      "cron-delivery-account-suggestions",
+    ]) {
+      expect(inputLists).toContain(expectedList);
+    }
     expect(container.querySelectorAll("input[list]")).toHaveLength(6);
   });
 });

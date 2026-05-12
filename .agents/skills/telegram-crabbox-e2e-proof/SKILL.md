@@ -51,6 +51,29 @@ proof needs something else.
 
 ## While Testing
 
+For visual proof, first send or identify a bottom marker message, then open the
+group/topic directly by message id:
+
+```bash
+pnpm qa:telegram-user:crabbox -- view \
+  --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json \
+  --message-id <message-id>
+```
+
+This uses Telegram Desktop directly with `tg://privatepost`, not `xdg-open`.
+It also resizes Telegram to `650x1000` at the tested desktop position so
+Telegram switches to single-chat mode with no left chat list or right info
+pane. Do not press Escape after this; Escape can close the selected chat.
+
+Bottom behavior matters:
+
+- deep-linking to the newest message keeps Telegram pinned to the bottom, so
+  later messages appear live in the recording
+- deep-linking to an older message does not auto-scroll to new arrivals; link
+  again to the newest/final marker instead of clicking the down-arrow
+- `650px` is the largest tested clean width; `660px` switches Telegram back to
+  split/sidebar layout
+
 Send as the real Telegram user:
 
 ```bash
@@ -100,13 +123,17 @@ Always finish or explicitly keep the box:
 
 ```bash
 pnpm qa:telegram-user:crabbox -- finish \
-  --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json
+  --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json \
+  --preview-crop telegram-window
 ```
 
 `finish` stops recording, creates motion-trimmed MP4/GIF artifacts, captures a
 final screenshot and logs, releases the Convex credential, stops the local SUT,
-and stops the Crabbox lease. Pass `--keep-box` only when a human needs to
-continue VNC debugging after the credential is released.
+and stops the Crabbox lease. `--preview-crop telegram-window` also creates a
+fixed-geometry GIF from the tested Telegram proof window for clean side-by-side
+PR tables; the full desktop video/GIF remains in the artifact directory. Pass
+`--keep-box` only when a human needs to continue VNC debugging after the
+credential is released.
 
 After any failure or interruption, verify cleanup:
 
@@ -129,19 +156,21 @@ pnpm qa:telegram-user:crabbox -- publish \
   --summary 'Telegram real-user Crabbox session motion GIF'
 ```
 
-This copies only `telegram-user-crabbox-session-motion.gif` into a temporary
-publish bundle and comments that GIF. Use `--full-artifacts` only when the PR
-needs logs or JSON output. Never publish credential payloads, local env files,
-TDLib databases, Telegram Desktop profiles, or raw session archives.
+This copies only the useful GIF into a temporary publish bundle and comments
+that GIF. If `finish --preview-crop telegram-window` produced a cropped GIF,
+publish uses that; otherwise it uses `telegram-user-crabbox-session-motion.gif`.
+Use `--full-artifacts` only when the PR needs logs or JSON output. Never publish
+credential payloads, local env files, TDLib databases, Telegram Desktop
+profiles, or raw session archives.
 
 For before/after proof, run one session on `main` and one on the PR head, then
 publish only the intended GIFs from a clean bundle:
 
 ```bash
 mkdir -p .artifacts/qa-e2e/telegram-user-crabbox/pr-123/comparison
-cp <main-output>/telegram-user-crabbox-session-motion.gif \
+cp <main-output>/telegram-user-crabbox-session-motion-telegram-window.gif \
   .artifacts/qa-e2e/telegram-user-crabbox/pr-123/comparison/main-before.gif
-cp <pr-output>/telegram-user-crabbox-session-motion.gif \
+cp <pr-output>/telegram-user-crabbox-session-motion-telegram-window.gif \
   .artifacts/qa-e2e/telegram-user-crabbox/pr-123/comparison/pr-after.gif
 crabbox artifacts publish \
   --repo openclaw/openclaw \

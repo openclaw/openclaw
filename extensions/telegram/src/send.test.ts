@@ -110,6 +110,38 @@ function requireMockCall<T extends unknown[]>(call: T | undefined, label: string
   return call;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectMediaSendCall(
+  call: unknown[] | undefined,
+  label: string,
+  chatId: string,
+  expectedParams: Record<string, unknown>,
+): void {
+  const [actualChatId, media, actualParams] = requireMockCall(call, label);
+  expect(actualChatId).toBe(chatId);
+  if (media === undefined) {
+    throw new Error(`expected ${label} media`);
+  }
+  expect(actualParams).toEqual(expectedParams);
+}
+
+function expectPersistedTarget(fields: Record<string, unknown>): void {
+  const [target] = requireMockCall(
+    maybePersistResolvedTelegramTarget.mock.calls.at(-1),
+    "persisted Telegram target",
+  );
+  const record = requireRecord(target, "persisted Telegram target");
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
 describe("sent-message-cache", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -286,6 +318,20 @@ describe("buildInlineKeyboard", () => {
         },
       },
       {
+        name: "keeps url buttons",
+        input: [[{ text: "Open", url: "https://example.com" }]],
+        expected: {
+          inline_keyboard: [[{ text: "Open", url: "https://example.com" }]],
+        },
+      },
+      {
+        name: "prefers url over callback data when both are present",
+        input: [[{ text: "Open", callback_data: "cmd:open", url: "https://example.com" }]],
+        expected: {
+          inline_keyboard: [[{ text: "Open", url: "https://example.com" }]],
+        },
+      },
+      {
         name: "filters invalid buttons and empty rows",
         input: [
           [
@@ -293,6 +339,7 @@ describe("buildInlineKeyboard", () => {
             { text: "Ok", callback_data: "cmd:ok" },
           ],
           [{ text: "Missing data", callback_data: "" }],
+          [{ text: "Missing action" }],
           [],
         ],
         expected: {
@@ -492,12 +539,10 @@ describe("sendMessageTelegram", () => {
         chat: { id: "123" },
       });
       await sendMessageTelegram("123", "hi", { ...testCase.opts, cfg: testCase.cfg });
-      expect(botCtorSpy, testCase.name).toHaveBeenCalledWith(
-        "tok",
-        expect.objectContaining({
-          client: expect.objectContaining({ timeoutSeconds: testCase.expectedTimeout }),
-        }),
-      );
+      const [token, options] = requireMockCall(botCtorSpy.mock.calls.at(0), "bot constructor call");
+      expect(token, testCase.name).toBe("tok");
+      const client = requireRecord(requireRecord(options, "bot options").client, "bot client");
+      expect(client.timeoutSeconds, testCase.name).toBe(testCase.expectedTimeout);
     }
   });
 
@@ -518,12 +563,10 @@ describe("sendMessageTelegram", () => {
 
     await sendMessageTelegram("123", "hi", { cfg, token: "tok", accountId: "foo" });
 
-    expect(botCtorSpy).toHaveBeenCalledWith(
-      "tok",
-      expect.objectContaining({
-        client: expect.objectContaining({ apiRoot: "https://api.telegram.org" }),
-      }),
-    );
+    const [token, options] = requireMockCall(botCtorSpy.mock.calls.at(0), "bot constructor call");
+    expect(token).toBe("tok");
+    const client = requireRecord(requireRecord(options, "bot options").client, "bot client");
+    expect(client.apiRoot).toBe("https://api.telegram.org");
   });
 
   it("installs the shared grammY throttler on send clients", async () => {
@@ -531,7 +574,8 @@ describe("sendMessageTelegram", () => {
 
     await sendMessageTelegram("123", "hi", { cfg: TELEGRAM_TEST_CFG, token: "tok" });
 
-    expect(botConfigUseSpy).toHaveBeenCalledWith(expect.any(Function));
+    const [middleware] = requireMockCall(botConfigUseSpy.mock.calls.at(0), "bot config use call");
+    expect(middleware).toBeTypeOf("function");
   });
 
   it("falls back to plain text when Telegram rejects HTML and preserves send params", async () => {
@@ -709,7 +753,7 @@ describe("sendMessageTelegram", () => {
     });
     try {
       await sendMessageTelegram("123", "hi", { cfg: TELEGRAM_TEST_CFG, token: "tok" });
-      const clientFetch = (botCtorSpy.mock.calls[0]?.[1] as { client?: { fetch?: unknown } })
+      const clientFetch = (botCtorSpy.mock.calls.at(0)?.[1] as { client?: { fetch?: unknown } })
         ?.client?.fetch;
       expect(clientFetch).toBeTypeOf("function");
       expect(clientFetch).not.toBe(fetchSpy);
@@ -765,13 +809,11 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledWith("-100123", "hi", {
       parse_mode: "HTML",
     });
-    expect(maybePersistResolvedTelegramTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rawTarget: "https://t.me/mychannel",
-        resolvedChatId: "-100123",
-        gatewayClientScopes: ["operator.write"],
-      }),
-    );
+    expectPersistedTarget({
+      rawTarget: "https://t.me/mychannel",
+      resolvedChatId: "-100123",
+      gatewayClientScopes: ["operator.write"],
+    });
   });
 
   it("fails clearly when a legacy target cannot be resolved", async () => {
@@ -813,7 +855,7 @@ describe("sendMessageTelegram", () => {
       messageThreadId: 99,
     });
 
-    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(sendPhoto.mock.calls.at(0), "send photo call", chatId, {
       caption: "photo in topic",
       parse_mode: "HTML",
       message_thread_id: 99,
@@ -850,7 +892,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(sendPhoto.mock.calls.at(0), "send photo call", chatId, {
       caption: undefined,
     });
     expect(sendMessage).toHaveBeenCalledWith(chatId, longText, {
@@ -889,7 +931,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(sendPhoto.mock.calls.at(0), "send photo call", chatId, {
       caption: undefined,
     });
     expect(sendMessage).toHaveBeenCalledTimes(2);
@@ -926,7 +968,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(sendPhoto.mock.calls.at(0), "send photo call", chatId, {
       caption: shortText,
       parse_mode: "HTML",
     });
@@ -959,7 +1001,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(sendPhoto.mock.calls.at(0), "send photo call", chatId, {
       caption: "hi <b>boss</b>",
       parse_mode: "HTML",
     });
@@ -997,7 +1039,7 @@ describe("sendMessageTelegram", () => {
         asVideoNote: true,
       });
 
-      expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {});
+      expectMediaSendCall(sendVideoNote.mock.calls.at(0), "send video note call", chatId, {});
       expect(sendMessage).toHaveBeenCalledWith(chatId, text, {
         parse_mode: "HTML",
       });
@@ -1028,10 +1070,15 @@ describe("sendMessageTelegram", () => {
         asVideoNote: false,
       });
 
-      expect(sendVideo).toHaveBeenCalledWith(chatId, expect.anything(), {
-        caption: expect.any(String),
-        parse_mode: "HTML",
-      });
+      const [, media, videoParams] = requireMockCall(sendVideo.mock.calls.at(0), "send video call");
+      expect(sendVideo.mock.calls.at(0)?.[0]).toBe(chatId);
+      if (media === undefined) {
+        throw new Error("expected send video media");
+      }
+      const params = requireRecord(videoParams, "send video params");
+      expect(typeof params.caption).toBe("string");
+      expect(params.parse_mode).toBe("HTML");
+      expect(Object.keys(params).toSorted()).toEqual(["caption", "parse_mode"]);
       expect(res.messageId).toBe("201");
     }
   });
@@ -1062,7 +1109,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(probeVideoDimensions).toHaveBeenCalledWith(videoBuffer);
-    expect(sendVideo).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(sendVideo.mock.calls.at(0), "send video call", chatId, {
       caption: "my caption",
       parse_mode: "HTML",
       width: 720,
@@ -1100,7 +1147,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(probeVideoDimensions).not.toHaveBeenCalled();
-    expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {});
+    expectMediaSendCall(sendVideoNote.mock.calls.at(0), "send video note call", chatId, {});
   });
 
   it("applies reply markup and thread options to split video-note sends", async () => {
@@ -1176,9 +1223,10 @@ describe("sendMessageTelegram", () => {
       }
       await sendMessageTelegram(chatId, testCase.text, sendOptions);
 
-      expect(sendVideoNote).toHaveBeenCalledWith(
+      expectMediaSendCall(
+        sendVideoNote.mock.calls.at(0),
+        "send video note call",
         chatId,
-        expect.anything(),
         testCase.expectedVideoNote,
       );
       expect(sendMessage).toHaveBeenCalledWith(chatId, testCase.text, testCase.expectedMessage);
@@ -1213,7 +1261,7 @@ describe("sendMessageTelegram", () => {
 
     await vi.runAllTimersAsync();
     await expect(promise).resolves.toEqual({ messageId: "1", chatId });
-    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(500);
+    expect(setTimeoutSpy.mock.calls.at(0)?.[1]).toBe(500);
     setTimeoutSpy.mockRestore();
     vi.useRealTimers();
   });
@@ -1316,7 +1364,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendAnimation).toHaveBeenCalledTimes(1);
-    expect(sendAnimation).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(sendAnimation.mock.calls.at(0), "send animation call", chatId, {
       caption: "caption",
       parse_mode: "HTML",
     });
@@ -1339,6 +1387,13 @@ describe("sendMessageTelegram", () => {
       fileName: "fun.gif",
       mediaUrl: "https://example.com/fun.gif",
     },
+    {
+      name: "videos",
+      buffer: Buffer.from("fake-video"),
+      contentType: "video/mp4",
+      fileName: "clip.mp4",
+      mediaUrl: "https://example.com/clip.mp4",
+    },
   ])("sends $name as documents when forceDocument is true", async (testCase) => {
     const chatId = "123";
     const sendAnimation = vi.fn();
@@ -1347,10 +1402,12 @@ describe("sendMessageTelegram", () => {
       chat: { id: chatId },
     });
     const sendPhoto = vi.fn();
-    const api = { sendAnimation, sendDocument, sendPhoto } as unknown as {
+    const sendVideo = vi.fn();
+    const api = { sendAnimation, sendDocument, sendPhoto, sendVideo } as unknown as {
       sendAnimation: typeof sendAnimation;
       sendDocument: typeof sendDocument;
       sendPhoto: typeof sendPhoto;
+      sendVideo: typeof sendVideo;
     };
 
     mockLoadedMedia({
@@ -1367,13 +1424,20 @@ describe("sendMessageTelegram", () => {
       forceDocument: true,
     });
 
-    expect(sendDocument, testCase.name).toHaveBeenCalledWith(chatId, expect.anything(), {
-      caption: "caption",
-      parse_mode: "HTML",
-      disable_content_type_detection: true,
-    });
+    expectMediaSendCall(
+      sendDocument.mock.calls.at(0),
+      `send document call ${testCase.name}`,
+      chatId,
+      {
+        caption: "caption",
+        parse_mode: "HTML",
+        disable_content_type_detection: true,
+      },
+    );
     expect(sendPhoto, testCase.name).not.toHaveBeenCalled();
     expect(sendAnimation, testCase.name).not.toHaveBeenCalled();
+    expect(sendVideo, testCase.name).not.toHaveBeenCalled();
+    expect(probeVideoDimensions, testCase.name).not.toHaveBeenCalled();
     expect(res.messageId).toBe("10");
   });
 
@@ -1407,7 +1471,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.png",
     });
 
-    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(sendDocument.mock.calls.at(0), "send document call", chatId, {
       caption: "caption",
       parse_mode: "HTML",
     });
@@ -1442,7 +1506,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.png",
     });
 
-    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(sendDocument.mock.calls.at(0), "send document call", chatId, {
       caption: "caption",
       parse_mode: "HTML",
     });
@@ -1473,7 +1537,7 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/report.pdf",
     });
 
-    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
+    expectMediaSendCall(sendDocument.mock.calls.at(0), "send document call", chatId, {
       caption: "caption",
       parse_mode: "HTML",
     });
@@ -1593,9 +1657,10 @@ describe("sendMessageTelegram", () => {
 
       const called = testCase.expectedMethod === "sendVoice" ? sendVoice : sendAudio;
       const notCalled = testCase.expectedMethod === "sendVoice" ? sendAudio : sendVoice;
-      expect(called, testCase.name).toHaveBeenCalledWith(
+      expectMediaSendCall(
+        called.mock.calls.at(0),
+        `${testCase.expectedMethod} call ${testCase.name}`,
         testCase.chatId,
-        expect.anything(),
         testCase.expectedOptions,
       );
       expect(notCalled, testCase.name).not.toHaveBeenCalled();
@@ -1866,12 +1931,12 @@ describe("sendMessageTelegram", () => {
       messageThreadId: 271,
     });
 
-    expect(sendPhoto).toHaveBeenNthCalledWith(1, chatId, expect.anything(), {
+    expectMediaSendCall(sendPhoto.mock.calls.at(0), "first send photo call", chatId, {
       caption: "photo",
       parse_mode: "HTML",
       message_thread_id: 271,
     });
-    expect(sendPhoto).toHaveBeenNthCalledWith(2, chatId, expect.anything(), {
+    expectMediaSendCall(sendPhoto.mock.calls.at(1), "second send photo call", chatId, {
       caption: "photo",
       parse_mode: "HTML",
     });
@@ -1901,10 +1966,12 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expect(loadWebMedia).toHaveBeenCalledWith(
-      "https://example.com/photo.jpg",
-      expect.objectContaining({ maxBytes: 100 * 1024 * 1024 }),
+    const [mediaUrl, options] = requireMockCall(
+      loadWebMedia.mock.calls.at(0),
+      "load web media call",
     );
+    expect(mediaUrl).toBe("https://example.com/photo.jpg");
+    expect(requireRecord(options, "load web media options").maxBytes).toBe(100 * 1024 * 1024);
   });
 
   it("uses configured telegram mediaMaxMb for outbound uploads", async () => {
@@ -1938,10 +2005,12 @@ describe("sendMessageTelegram", () => {
       mediaUrl: "https://example.com/photo.jpg",
     });
 
-    expect(loadWebMedia).toHaveBeenCalledWith(
-      "https://example.com/photo.jpg",
-      expect.objectContaining({ maxBytes: 42 * 1024 * 1024 }),
+    const [mediaUrl, options] = requireMockCall(
+      loadWebMedia.mock.calls.at(0),
+      "load web media call",
     );
+    expect(mediaUrl).toBe("https://example.com/photo.jpg");
+    expect(requireRecord(options, "load web media options").maxBytes).toBe(42 * 1024 * 1024);
   });
 
   it("chunks long html-mode text and keeps buttons on the last chunk only", async () => {
@@ -1963,8 +2032,8 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    const firstCall = requireMockCall(sendMessage.mock.calls[0], "first sendMessage call");
-    const secondCall = requireMockCall(sendMessage.mock.calls[1], "second sendMessage call");
+    const firstCall = requireMockCall(sendMessage.mock.calls.at(0), "first sendMessage call");
+    const secondCall = requireMockCall(sendMessage.mock.calls.at(1), "second sendMessage call");
     expect((firstCall[1] as string).length).toBeLessThanOrEqual(4000);
     expect((secondCall[1] as string).length).toBeLessThanOrEqual(4000);
     expect(firstCall[2]?.reply_markup).toBeUndefined();
@@ -1992,8 +2061,8 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
-    const firstCall = requireMockCall(sendMessage.mock.calls[0], "first sendMessage call");
-    const secondCall = requireMockCall(sendMessage.mock.calls[1], "second sendMessage call");
+    const firstCall = requireMockCall(sendMessage.mock.calls.at(0), "first sendMessage call");
+    const secondCall = requireMockCall(sendMessage.mock.calls.at(1), "second sendMessage call");
     expect(String(firstCall[1] ?? "").length).toBeLessThanOrEqual(4000);
     expect(String(secondCall[1] ?? "").length).toBeLessThanOrEqual(4000);
     expect(firstCall[2]?.parse_mode).toBe("HTML");
@@ -2031,7 +2100,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(4);
-    const plainFallbackCalls = [sendMessage.mock.calls[1], sendMessage.mock.calls[3]];
+    const plainFallbackCalls = [sendMessage.mock.calls.at(1), sendMessage.mock.calls.at(3)];
     expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
     expect(plainFallbackCalls.some((call) => String(call?.[1] ?? "").includes("<"))).toBe(false);
     expect(res.messageId).toBe("91");
@@ -2061,8 +2130,8 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(4);
-    expect(String(sendMessage.mock.calls[0]?.[1] ?? "")).toMatch(/^&/);
-    const plainFallbackCalls = [sendMessage.mock.calls[1], sendMessage.mock.calls[3]];
+    expect(String(sendMessage.mock.calls.at(0)?.[1] ?? "")).toMatch(/^&/);
+    const plainFallbackCalls = [sendMessage.mock.calls.at(1), sendMessage.mock.calls.at(3)];
     expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
     expect(plainFallbackCalls.every((call) => String(call?.[1] ?? "").length > 0)).toBe(true);
     expect(res.messageId).toBe("93");
@@ -2154,12 +2223,10 @@ describe("reactMessageTelegram", () => {
     expect(setMessageReaction).toHaveBeenCalledWith("-100123", 456, [
       { type: "emoji", emoji: "✅" },
     ]);
-    expect(maybePersistResolvedTelegramTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rawTarget: "@mychannel",
-        resolvedChatId: "-100123",
-      }),
-    );
+    expectPersistedTarget({
+      rawTarget: "@mychannel",
+      resolvedChatId: "-100123",
+    });
   });
 });
 
@@ -2180,10 +2247,11 @@ describe("deleteMessageTelegram", () => {
     });
 
     expect(deleteMessage).toHaveBeenCalledWith("123", 456);
-    expect(result).toMatchObject({
-      ok: false,
-      warning: expect.stringContaining(message),
-    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected delete warning result");
+    }
+    expect(result.warning).toContain(message);
   });
 
   it("throws non-benign delete errors", async () => {
@@ -2340,7 +2408,7 @@ describe("sendStickerTelegram", () => {
 
     await vi.runAllTimersAsync();
     await expect(promise).resolves.toEqual({ messageId: "109", chatId });
-    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(1000);
+    expect(setTimeoutSpy.mock.calls.at(0)?.[1]).toBe(1000);
     expect(sendSticker).toHaveBeenCalledTimes(2);
     setTimeoutSpy.mockRestore();
     vi.useRealTimers();
@@ -2601,28 +2669,27 @@ describe("editMessageTelegram", () => {
     });
 
     expect(botCtorSpy, testCase.name).toHaveBeenCalledTimes(1);
-    expect(botCtorSpy.mock.calls[0]?.[0], testCase.name).toBe("tok");
+    expect(botCtorSpy.mock.calls.at(0)?.[0], testCase.name).toBe("tok");
     expect(botApi.editMessageText, testCase.name).toHaveBeenCalledTimes(testCase.expectedCalls);
 
-    const firstParams = (botApi.editMessageText.mock.calls[0] ?? [])[3] as Record<string, unknown>;
-    expect(firstParams, testCase.name).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
+    const firstParams = requireRecord(
+      (botApi.editMessageText.mock.calls.at(0) ?? [])[3],
+      "first edit params",
+    );
+    expect(firstParams.parse_mode, testCase.name).toBe("HTML");
     if ("firstExpectNoReplyMarkup" in testCase && testCase.firstExpectNoReplyMarkup) {
       expect(firstParams, testCase.name).not.toHaveProperty("reply_markup");
     }
     if ("firstExpectReplyMarkup" in testCase && testCase.firstExpectReplyMarkup) {
-      expect(firstParams, testCase.name).toEqual(
-        expect.objectContaining({ reply_markup: testCase.firstExpectReplyMarkup }),
-      );
+      expect(firstParams.reply_markup, testCase.name).toEqual(testCase.firstExpectReplyMarkup);
     }
 
     if ("secondExpectReplyMarkup" in testCase && testCase.secondExpectReplyMarkup) {
-      const secondParams = (botApi.editMessageText.mock.calls[1] ?? [])[3] as Record<
-        string,
-        unknown
-      >;
-      expect(secondParams, testCase.name).toEqual(
-        expect.objectContaining({ reply_markup: testCase.secondExpectReplyMarkup }),
+      const secondParams = requireRecord(
+        (botApi.editMessageText.mock.calls.at(1) ?? [])[3],
+        "second edit params",
       );
+      expect(secondParams.reply_markup, testCase.name).toEqual(testCase.secondExpectReplyMarkup);
     }
   });
 
@@ -2668,13 +2735,9 @@ describe("editMessageTelegram", () => {
     });
 
     expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
-    const params = (botApi.editMessageText.mock.calls[0] ?? [])[3] as Record<string, unknown>;
-    expect(params).toEqual(
-      expect.objectContaining({
-        parse_mode: "HTML",
-        link_preview_options: { is_disabled: true },
-      }),
-    );
+    const params = requireRecord((botApi.editMessageText.mock.calls.at(0) ?? [])[3], "edit params");
+    expect(params.parse_mode).toBe("HTML");
+    expect(params.link_preview_options).toEqual({ is_disabled: true });
   });
 });
 
@@ -2697,13 +2760,11 @@ describe("sendPollTelegram", () => {
     );
 
     expect(api.getChat).toHaveBeenCalledWith("@mychannel");
-    expect(maybePersistResolvedTelegramTarget).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rawTarget: "https://t.me/mychannel",
-        resolvedChatId: "-100321",
-        gatewayClientScopes: ["operator.admin"],
-      }),
-    );
+    expectPersistedTarget({
+      rawTarget: "https://t.me/mychannel",
+      resolvedChatId: "-100321",
+      gatewayClientScopes: ["operator.admin"],
+    });
   });
 
   it("maps durationSeconds to open_period", async () => {
@@ -2720,10 +2781,12 @@ describe("sendPollTelegram", () => {
     expect(res).toEqual({ messageId: "123", chatId: "555", pollId: "p1" });
     expect(api.sendPoll).toHaveBeenCalledTimes(1);
     const sendPollMock = api.sendPoll as ReturnType<typeof vi.fn>;
-    expect(sendPollMock.mock.calls[0]?.[0]).toBe("123");
-    expect(sendPollMock.mock.calls[0]?.[1]).toBe("Q");
-    expect(sendPollMock.mock.calls[0]?.[2]).toEqual(["A", "B"]);
-    expect(sendPollMock.mock.calls[0]?.[3]).toMatchObject({ open_period: 60 });
+    expect(sendPollMock.mock.calls.at(0)?.[0]).toBe("123");
+    expect(sendPollMock.mock.calls.at(0)?.[1]).toBe("Q");
+    expect(sendPollMock.mock.calls.at(0)?.[2]).toEqual(["A", "B"]);
+    expect(requireRecord(sendPollMock.mock.calls.at(0)?.[3], "send poll params").open_period).toBe(
+      60,
+    );
   });
 
   it("retries without message_thread_id on thread-not-found", async () => {
@@ -2752,9 +2815,11 @@ describe("sendPollTelegram", () => {
 
     expect(res).toEqual({ messageId: "1", chatId: "2", pollId: "p2" });
     expect(api.sendPoll).toHaveBeenCalledTimes(2);
-    expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ message_thread_id: 99 });
     expect(
-      (api.sendPoll.mock.calls[1]?.[3] as { message_thread_id?: unknown } | undefined)
+      requireRecord(api.sendPoll.mock.calls.at(0)?.[3], "send poll params").message_thread_id,
+    ).toBe(99);
+    expect(
+      (api.sendPoll.mock.calls.at(1)?.[3] as { message_thread_id?: unknown } | undefined)
         ?.message_thread_id,
     ).toBeUndefined();
   });

@@ -305,12 +305,13 @@ describe("config view", () => {
 
     const formButton = findButtonByText(container, "Form");
     const rawButton = findButtonByText(container, "Raw");
-    expect(formButton.classList.contains("active")).toBe(true);
+    expect([...formButton.classList]).toEqual(["config-mode-toggle__btn", "active"]);
     expect(rawButton.disabled).toBe(true);
     queryRequired(container, ".config-actions__notice", HTMLElement);
     const actionButtons = queryRequired(container, ".config-actions__buttons", HTMLElement);
-    expect(actionButtons.textContent).toContain("Reload");
-    expect(actionButtons.textContent).toContain("Update");
+    expect(
+      [...actionButtons.querySelectorAll("button")].map((button) => button.textContent?.trim()),
+    ).toEqual(["Reload", "Clear", "Save", "Apply", "Update"]);
     expect(normalizedText(container)).toContain(
       "Raw mode disabled (snapshot cannot safely round-trip raw text).",
     );
@@ -399,6 +400,43 @@ describe("config view", () => {
     expect(content.scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
     expect(content.scrollTop).toBe(0);
     expect(content.scrollLeft).toBe(0);
+  });
+
+  it("does not normalize off-scope schema sections for scoped config tabs", () => {
+    const offScopeSchema = { type: "object" } as Record<string, unknown>;
+    Object.defineProperty(offScopeSchema, "properties", {
+      get() {
+        throw new Error("off-scope schema was normalized");
+      },
+    });
+
+    const { container } = renderConfigView({
+      activeSection: "channels",
+      navRootLabel: "Communication",
+      includeSections: ["channels"],
+      schema: {
+        type: "object",
+        properties: {
+          channels: {
+            type: "object",
+            properties: {
+              telegram: { type: "string", title: "Telegram" },
+            },
+          },
+          models: offScopeSchema,
+        },
+      },
+      formValue: {
+        channels: { telegram: "enabled" },
+        models: {},
+      },
+      originalValue: {
+        channels: { telegram: "enabled" },
+        models: {},
+      },
+    });
+
+    expect(normalizedText(container)).toContain("Telegram");
   });
 
   it("renders and wires the search field controls", () => {

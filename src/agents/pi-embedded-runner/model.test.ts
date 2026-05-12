@@ -161,6 +161,7 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
+import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
 import {
@@ -252,7 +253,9 @@ function expectResolvedModel(result: ResolveModelForTestResult) {
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -466,6 +469,38 @@ describe("resolveModel", () => {
       baseUrl: "http://127.0.0.1:3000/v1",
     });
     expect(getModelProviderRequestTransport(model)).toBeUndefined();
+  });
+
+  it("attaches provider localService metadata to configured fallback models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ds4: {
+            baseUrl: "http://127.0.0.1:18000/v1",
+            api: "openai-completions",
+            localService: {
+              command: "/opt/ds4/ds4-server",
+              args: ["--port", "18000"],
+              healthUrl: "http://127.0.0.1:18000/v1/models",
+              readyTimeoutMs: 180_000,
+              idleStopMs: 0,
+            },
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ds4", "deepseek-v4-flash", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expect(getModelProviderLocalService(model)).toEqual({
+      command: "/opt/ds4/ds4-server",
+      args: ["--port", "18000"],
+      healthUrl: "http://127.0.0.1:18000/v1/models",
+      readyTimeoutMs: 180_000,
+      idleStopMs: 0,
+    });
   });
 
   it("resolves explicitly configured qwen3.6-plus before Coding Plan built-in suppression", () => {
@@ -1386,7 +1421,9 @@ describe("resolveModel", () => {
       contextWindow: 262144,
       maxTokens: 65536,
     });
-    expect(resolvedModel.compat).toMatchObject({ supportsTools: false });
+    expect((resolvedModel.compat as { supportsTools?: boolean } | undefined)?.supportsTools).toBe(
+      false,
+    );
   });
 
   it("falls back to text-only when OpenRouter API cache is empty", () => {

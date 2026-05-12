@@ -543,8 +543,13 @@ describe("renderMarkdownSidebar", () => {
       container,
     );
 
+    expect(container.querySelector(".sidebar-title")?.textContent?.trim()).toBe("Markdown Preview");
+    expect(container.querySelector(".sidebar-markdown-shell__eyebrow span")?.textContent).toBe(
+      "Rendered Markdown",
+    );
     expect(container.querySelector(".sidebar-markdown strong")?.textContent).toBe("world");
-    expect(container.textContent).toContain("Rendered Markdown");
-    expect(container.textContent).toContain("View Raw Text");
+    expect(
+      Array.from(container.querySelectorAll("button")).map((button) => button.textContent?.trim()),
+    ).toEqual(["", "View Raw Text"]);
   });
 });

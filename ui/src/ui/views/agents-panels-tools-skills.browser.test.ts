@@ -127,7 +127,9 @@ describe("agents tools panel (browser)", () => {
     );
     await Promise.resolve();
 
-    expect(container.textContent ?? "").toContain("Could not load runtime tool catalog");
+    expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
+      "Could not load runtime tool catalog. Showing built-in fallback list instead.",
+    );
   });
 
   it("closes expanded tool rows when the parent group collapses", async () => {
@@ -164,8 +166,10 @@ describe("agents tools panel (browser)", () => {
     const group = container.querySelector<HTMLDetailsElement>(".agent-tools-group");
     const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
 
-    expect(group?.classList.contains("agent-tools-group")).toBe(true);
-    expect(tool?.classList.contains("agent-tool-card")).toBe(true);
+    expect(group).toBeInstanceOf(HTMLDetailsElement);
+    expect(tool).toBeInstanceOf(HTMLDetailsElement);
+    expect(group ? [...group.classList] : []).toEqual(["agent-tools-group"]);
+    expect(tool ? [...tool.classList] : []).toEqual(["agent-tool-card"]);
 
     if (!group || !tool) {
       throw new Error("expected agent tool group and card");
@@ -254,11 +258,17 @@ describe("agents tools panel (browser)", () => {
     const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
     tool!.open = true;
 
-    const sourceDetail = Array.from(
-      container.querySelectorAll<HTMLElement>(".agent-tool-detail"),
-    ).find((detail) => detail.textContent?.includes("Source"));
-
-    expect(sourceDetail?.textContent).toContain("Plugin: voice-call");
+    expect(
+      Array.from(container.querySelectorAll<HTMLElement>(".agent-tool-detail")).map((detail) => ({
+        label: detail.querySelector(".label")?.textContent?.trim(),
+        value: detail.lastElementChild?.textContent?.trim(),
+      })),
+    ).toEqual([
+      { label: "Access", value: "Enabled by the current profile." },
+      { label: "Source", value: "Plugin: voice-call" },
+      { label: "Default Presets", value: "full" },
+      { label: "Current Session", value: "Not available in this chat session right now." },
+    ]);
   });
 
   it("opens the collapsed group and tool row from a live tool chip", async () => {
@@ -319,8 +329,10 @@ describe("agents tools panel (browser)", () => {
       '.agent-tools-runtime-chip[href="#agent-tool-read"]',
     );
 
-    expect(group?.classList.contains("agent-tools-group")).toBe(true);
-    expect(tool?.classList.contains("agent-tool-card")).toBe(true);
+    expect(group).toBeInstanceOf(HTMLDetailsElement);
+    expect(tool).toBeInstanceOf(HTMLDetailsElement);
+    expect(group ? [...group.classList] : []).toEqual(["agent-tools-group"]);
+    expect(tool ? [...tool.classList] : []).toEqual(["agent-tool-card"]);
     expect(chip?.getAttribute("href")).toBe("#agent-tool-read");
 
     if (!group || !tool || !chip) {

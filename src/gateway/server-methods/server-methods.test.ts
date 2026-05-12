@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -42,7 +43,9 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -861,12 +864,13 @@ describe("exec approval handlers", () => {
     });
   }
 
-  function createExecApprovalFixture() {
+  function createExecApprovalFixture(opts?: { config?: OpenClawConfig }) {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const broadcasts: Array<{ event: string; payload: unknown }> = [];
     const respond = vi.fn();
     const context = {
+      getRuntimeConfig: () => opts?.config ?? {},
       broadcast: (event: string, payload: unknown) => {
         broadcasts.push({ event, payload });
       },
@@ -999,6 +1003,31 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(respond)).toBe(false);
     expect(mockCallArg(respond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(respond, 0, 2), { message: "command is required" });
+  });
+
+  it("rejects approval requests when the command display would be truncated", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        command: `printf visible # ${"A".repeat(18 * 1024)}\nprintf hidden`,
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+      },
+    });
+
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(respond, 0, 2), {
+      message: "command exceeds exec approval display limit",
+    });
+    expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
+      reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT",
+    });
+    expect(broadcasts).toEqual([]);
   });
 
   it("returns pending approval details for exec.approval.get", async () => {
@@ -1476,7 +1505,9 @@ describe("exec approval handlers", () => {
   });
 
   it("preserves command analysis and normalizes command spans", async () => {
-    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture({
+      config: { tools: { exec: { commandHighlighting: true } } },
+    });
     await requestExecApproval({
       handlers,
       respond,
@@ -1503,8 +1534,56 @@ describe("exec approval handlers", () => {
     ]);
   });
 
-  it("drops command spans when command display sanitization changes offsets", async () => {
+  it("drops command spans by default", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "ls | python -c 'print(1)'",
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 5, endIndex: 11 },
+        ],
+      },
+    });
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
+    expect(request["commandAnalysis"]).toEqual(
+      expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
+    );
+    expect(request["commandSpans"]).toBeUndefined();
+  });
+
+  it("drops command spans when command highlighting is disabled", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture({
+      config: { tools: { exec: { commandHighlighting: false } } },
+    });
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "ls | python -c 'print(1)'",
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 5, endIndex: 11 },
+        ],
+      },
+    });
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
+    expect(request["commandAnalysis"]).toEqual(
+      expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
+    );
+    expect(request["commandSpans"]).toBeUndefined();
+  });
+
+  it("drops command spans when command display sanitization changes offsets", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture({
+      config: { tools: { exec: { commandHighlighting: true } } },
+    });
     await requestExecApproval({
       handlers,
       respond,
@@ -2111,9 +2190,19 @@ describe("gateway healthHandlers.status scope handling", () => {
 
 describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
+  let pricingState: typeof import("../model-pricing-cache-state.js");
 
   beforeAll(async () => {
     ({ healthHandlers } = await import("./health.js"));
+    pricingState = await import("../model-pricing-cache-state.js");
+  });
+
+  beforeEach(() => {
+    pricingState.clearGatewayModelPricingCacheState();
+  });
+
+  afterEach(() => {
+    pricingState.clearGatewayModelPricingCacheState();
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {
@@ -2255,6 +2344,66 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(mockCallArg(respond)).toBe(true);
     expectRecordFields(mockCallArg(respond, 0, 1), { eventLoop });
     expect(mockCallArg(respond, 0, 2)).toBeUndefined();
+  });
+
+  it("merges live model-pricing state into cached health responses", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      modelPricing: { state: "ok", sources: [] },
+    };
+    pricingState.recordGatewayModelPricingSourceFailure(
+      "openrouter",
+      "OpenRouter pricing fetch failed: TypeError: fetch failed",
+      123,
+    );
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    const payload = mockCallArg(respond, 0, 1) as
+      | {
+          modelPricing?: {
+            state?: string;
+            detail?: string;
+            sources?: Array<{ source?: string; state?: string; lastFailureAt?: number }>;
+          };
+        }
+      | undefined;
+    expect(payload?.modelPricing?.state).toBe("degraded");
+    expect(payload?.modelPricing?.detail).toBe(
+      "OpenRouter pricing fetch failed: TypeError: fetch failed",
+    );
+    expect(payload?.modelPricing?.sources).toHaveLength(1);
+    expect(payload?.modelPricing?.sources?.[0]?.source).toBe("openrouter");
+    expect(payload?.modelPricing?.sources?.[0]?.state).toBe("degraded");
+    expect(payload?.modelPricing?.sources?.[0]?.lastFailureAt).toBe(123);
+    expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
   });
 
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {

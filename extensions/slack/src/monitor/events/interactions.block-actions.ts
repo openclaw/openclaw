@@ -4,12 +4,10 @@ import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import {
-  isSlackExecApprovalApprover,
-  isSlackExecApprovalAuthorizedSender,
-} from "../../exec-approvals.js";
+import { isSlackApprovalAuthorizedSender } from "../../approval-auth.js";
+import { isSlackExecApprovalAuthorizedSender } from "../../exec-approvals.js";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
 import {
   SLACK_REPLY_BUTTON_ACTION_ID,
@@ -544,7 +542,7 @@ async function handleSlackExecApprovalInteraction(params: {
   if (!approval) {
     return false;
   }
-  const pluginApprovalAuthorizedSender = isSlackExecApprovalApprover({
+  const pluginApprovalAuthorizedSender = isSlackApprovalAuthorizedSender({
     cfg: params.ctx.cfg,
     accountId: params.ctx.accountId,
     senderId: params.parsed.userId,
@@ -555,9 +553,13 @@ async function handleSlackExecApprovalInteraction(params: {
     senderId: params.parsed.userId,
   });
   const isPluginApproval = approval.approvalId.startsWith("plugin:");
+  const resolveUnprefixedAsPlugin =
+    !isPluginApproval && !execApprovalAuthorizedSender && pluginApprovalAuthorizedSender;
   const authorized = isPluginApproval
     ? pluginApprovalAuthorizedSender
-    : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
+    : execApprovalAuthorizedSender || resolveUnprefixedAsPlugin;
+  const allowPluginFallback =
+    !isPluginApproval && execApprovalAuthorizedSender && pluginApprovalAuthorizedSender;
   if (!authorized) {
     params.ctx.runtime.log?.(
       `slack:interaction drop exec approval user=${params.parsed.userId} (not authorized)`,
@@ -572,7 +574,8 @@ async function handleSlackExecApprovalInteraction(params: {
       approvalId: approval.approvalId,
       decision: approval.decision,
       senderId: params.parsed.userId,
-      allowPluginFallback: pluginApprovalAuthorizedSender,
+      allowPluginFallback,
+      ...(resolveUnprefixedAsPlugin ? { resolveMethod: "plugin" as const } : {}),
       clientDisplayName: `Slack approval (${params.parsed.userId.trim() || "unknown"})`,
     });
   } catch (error) {

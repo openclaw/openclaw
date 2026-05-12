@@ -142,9 +142,10 @@ const OPENROUTER_CATALOG = [
 ] as const;
 
 function expectRouterModelFiltering(options: Array<{ value: string }>) {
-  const values = options.map((option) => option.value);
-  expect(values).not.toContain("openrouter/auto");
-  expect(values).toContain("openrouter/meta-llama/llama-3.3-70b:free");
+  const routerValues = options
+    .map((option) => option.value)
+    .filter((value) => value.startsWith("openrouter/"));
+  expect(routerValues).toEqual(["openrouter/meta-llama/llama-3.3-70b:free"]);
 }
 
 function createSelectAllMultiselect() {
@@ -165,18 +166,19 @@ function configuredTextModel(id: string, name: string) {
 
 type MockCallSource = {
   mock: {
-    calls: ArrayLike<ReadonlyArray<unknown>>;
+    calls: ReadonlyArray<ReadonlyArray<unknown>>;
   };
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
 function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
-  const call = source.mock.calls[callIndex];
+  const call = source.mock.calls.at(callIndex);
   if (!call) {
     throw new Error(`expected mock call: ${label}`);
   }
@@ -283,7 +285,7 @@ describe("promptDefaultModel", () => {
       ignoreAllowlist: true,
     });
 
-    const values = (select.mock.calls[0]?.[0]?.options ?? []).map(
+    const values = (select.mock.calls.at(0)?.[0]?.options ?? []).map(
       (option: { value: string }) => option.value,
     );
     expect(values).toEqual(["anthropic/claude-sonnet-4-6"]);
@@ -307,7 +309,7 @@ describe("promptDefaultModel", () => {
       ignoreAllowlist: true,
     });
 
-    const values = (select.mock.calls[0]?.[0]?.options ?? []).map(
+    const values = (select.mock.calls.at(0)?.[0]?.options ?? []).map(
       (option: { value: string }) => option.value,
     );
     expect(values).toEqual(["amazon-bedrock/us.anthropic.claude-sonnet-4-5"]);
@@ -336,7 +338,7 @@ describe("promptDefaultModel", () => {
       ignoreAllowlist: true,
     });
 
-    const optionValues = (select.mock.calls[0]?.[0]?.options ?? []).map(
+    const optionValues = (select.mock.calls.at(0)?.[0]?.options ?? []).map(
       (option: { value: string }) => option.value,
     );
     expect(optionValues).toEqual([
@@ -446,11 +448,11 @@ describe("promptDefaultModel", () => {
       preferredProvider: "byteplus",
     });
 
-    const options = select.mock.calls[0]?.[0]?.options ?? [];
+    const options = select.mock.calls.at(0)?.[0]?.options ?? [];
     const optionValues = options.map((opt: { value: string }) => opt.value);
     expect(optionValues).toContain("byteplus-plan/ark-code-latest");
     expect(optionValues[1]).toBe("byteplus-plan/ark-code-latest");
-    expect(select.mock.calls[0]?.[0]?.initialValue).toBe("byteplus-plan/ark-code-latest");
+    expect(select.mock.calls.at(0)?.[0]?.initialValue).toBe("byteplus-plan/ark-code-latest");
     expect(result.model).toBe("byteplus-plan/ark-code-latest");
     expect(providerCallProviders()).toContain("byteplus");
     expect(providerCallProviders()).toContain("byteplus-plan");
@@ -615,7 +617,7 @@ describe("promptDefaultModel", () => {
     expect(result.model).toBe("openai-codex/gpt-5.5-pro");
     expect(loadModelCatalog).toHaveBeenCalledOnce();
     expect(select).toHaveBeenCalledTimes(2);
-    expect(select.mock.calls[1]?.[0]?.searchable).toBe(true);
+    expect(select.mock.calls.at(1)?.[0]?.searchable).toBe(true);
   });
 
   it("supports configuring vLLM during setup", async () => {
@@ -855,7 +857,7 @@ describe("promptModelAllowlist", () => {
       allowedKeys: ["anthropic/claude-opus-4-6"],
     });
 
-    const options = multiselect.mock.calls[0]?.[0]?.options ?? [];
+    const options = multiselect.mock.calls.at(0)?.[0]?.options ?? [];
     expect(options.map((opt: { value: string }) => opt.value)).toEqual([
       "anthropic/claude-opus-4-6",
     ]);
@@ -893,7 +895,7 @@ describe("promptModelAllowlist", () => {
     });
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(
-      multiselect.mock.calls[0]?.[0]?.options.map((option: { value: string }) => option.value),
+      multiselect.mock.calls.at(0)?.[0]?.options.map((option: { value: string }) => option.value),
     ).toEqual(["github-copilot/gpt-5.4"]);
   });
 
@@ -929,7 +931,7 @@ describe("promptModelAllowlist", () => {
 
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(
-      multiselect.mock.calls[0]?.[0]?.options.map((option: { value: string }) => option.value),
+      multiselect.mock.calls.at(0)?.[0]?.options.map((option: { value: string }) => option.value),
     ).toEqual(["minimax/MiniMax-M2.7-highspeed", "zhipu/glm-4.5-air"]);
     expect(result.models).toEqual(["minimax/MiniMax-M2.7-highspeed", "zhipu/glm-4.5-air"]);
   });
@@ -963,7 +965,7 @@ describe("promptModelAllowlist", () => {
       preferredProvider: "openai",
     });
 
-    const options = multiselect.mock.calls[0]?.[0]?.options ?? [];
+    const options = multiselect.mock.calls.at(0)?.[0]?.options ?? [];
     expect(options.map((opt: { value: string }) => opt.value)).toEqual([
       "openai/gpt-5.5",
       "openai/gpt-5.4-mini",
@@ -1001,7 +1003,7 @@ describe("promptModelAllowlist", () => {
 
     expect(text).not.toHaveBeenCalled();
     expect(
-      multiselect.mock.calls[0]?.[0]?.options.map((option: { value: string }) => option.value),
+      multiselect.mock.calls.at(0)?.[0]?.options.map((option: { value: string }) => option.value),
     ).toEqual(["ollama/kimi-k2.5:cloud", "ollama/gpt-oss:20b-cloud"]);
     expect(result).toEqual({
       models: ["ollama/kimi-k2.5:cloud", "ollama/gpt-oss:20b-cloud"],
@@ -1042,7 +1044,7 @@ describe("promptModelAllowlist", () => {
     const result = await promptModelAllowlist({ config, prompter });
 
     expect(
-      multiselect.mock.calls[0]?.[0]?.options.map((option: { value: string }) => option.value),
+      multiselect.mock.calls.at(0)?.[0]?.options.map((option: { value: string }) => option.value),
     ).toEqual(["vllm/meta-llama/Meta-Llama-3-8B-Instruct"]);
     expect(result.models).toEqual(["vllm/meta-llama/Meta-Llama-3-8B-Instruct"]);
   });
@@ -1073,7 +1075,7 @@ describe("promptModelAllowlist", () => {
     } as OpenClawConfig;
 
     const result = await promptModelAllowlist({ config, prompter });
-    const call = multiselect.mock.calls[0]?.[0];
+    const call = multiselect.mock.calls.at(0)?.[0];
     expect(call?.options.map((option: { value: string }) => option.value)).toEqual([
       "openai/gpt-5.5",
       "anthropic/claude-sonnet-4-6",
@@ -1115,7 +1117,7 @@ describe("promptModelAllowlist", () => {
     } as OpenClawConfig;
 
     const result = await promptModelAllowlist({ config, prompter });
-    const call = multiselect.mock.calls[0]?.[0];
+    const call = multiselect.mock.calls.at(0)?.[0];
 
     expect(call?.initialValues).toEqual([
       "anthropic/claude-opus-4-6",
@@ -1139,7 +1141,7 @@ describe("promptModelAllowlist", () => {
 
     const result = await promptModelAllowlist({ config, prompter });
 
-    expect(text.mock.calls[0]?.[0]?.initialValue).toBe("");
+    expect(text.mock.calls.at(0)?.[0]?.initialValue).toBe("");
     expect(result).toStrictEqual({});
   });
 
@@ -1164,7 +1166,7 @@ describe("promptModelAllowlist", () => {
 
     const result = await promptModelAllowlist({ config, prompter });
 
-    expect(text.mock.calls[0]?.[0]?.initialValue).toBe(
+    expect(text.mock.calls.at(0)?.[0]?.initialValue).toBe(
       "openai/gpt-5.5, anthropic/claude-sonnet-4-6",
     );
     expect(result.models).toEqual(["openai/gpt-5.5", "anthropic/claude-sonnet-4-6"]);
@@ -1208,7 +1210,7 @@ describe("promptModelAllowlist", () => {
       preferredProvider: "openai",
     });
 
-    const call = multiselect.mock.calls[0]?.[0];
+    const call = multiselect.mock.calls.at(0)?.[0];
     expect(call?.options.map((option: { value: string }) => option.value)).toEqual([
       "openai/gpt-5.5",
       "openai/gpt-5.4",
@@ -1242,7 +1244,7 @@ describe("promptModelAllowlist", () => {
     expect(optionValues(pickerOptions(multiselect as MockCallSource))).toEqual([
       "openai-codex/gpt-5.5",
     ]);
-    expect(multiselect.mock.calls[0]?.[0]?.initialValues).toEqual(["openai-codex/gpt-5.5"]);
+    expect(multiselect.mock.calls.at(0)?.[0]?.initialValues).toEqual(["openai-codex/gpt-5.5"]);
     expect(result).toEqual({
       models: ["openai-codex/gpt-5.5"],
       scopeKeys: ["openai-codex/gpt-5.5"],
@@ -1269,9 +1271,9 @@ describe("promptModelAllowlist", () => {
 
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(
-      multiselect.mock.calls[0]?.[0]?.options.map((option: { value: string }) => option.value),
+      multiselect.mock.calls.at(0)?.[0]?.options.map((option: { value: string }) => option.value),
     ).toEqual(["openai-codex/gpt-5.5", "openai-codex/gpt-5.4"]);
-    expect(multiselect.mock.calls[0]?.[0]?.initialValues).toEqual(["openai-codex/gpt-5.5"]);
+    expect(multiselect.mock.calls.at(0)?.[0]?.initialValues).toEqual(["openai-codex/gpt-5.5"]);
     expect(result).toEqual({
       models: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.4"],
       scopeKeys: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.4"],
@@ -1307,7 +1309,7 @@ describe("runtime model picker visibility", () => {
 
     await promptModelAllowlist({ config, prompter });
 
-    const call = multiselect.mock.calls[0]?.[0];
+    const call = multiselect.mock.calls.at(0)?.[0];
     const optionValues = (call?.options ?? []).map((option: { value: string }) => option.value);
     expect(optionValues).toEqual([
       "openai/gpt-5.5",
@@ -1340,10 +1342,10 @@ describe("router model filtering", () => {
     });
     await promptModelAllowlist({ config, prompter: allowlistPrompter });
 
-    const defaultOptions = select.mock.calls[0]?.[0]?.options ?? [];
+    const defaultOptions = select.mock.calls.at(0)?.[0]?.options ?? [];
     expectRouterModelFiltering(defaultOptions);
 
-    const allowlistCall = multiselect.mock.calls[0]?.[0];
+    const allowlistCall = multiselect.mock.calls.at(0)?.[0];
     expectRouterModelFiltering(allowlistCall?.options as Array<{ value: string }>);
     expect(allowlistCall?.searchable).toBe(true);
     expect(runProviderPluginAuthMethod).not.toHaveBeenCalled();
@@ -1388,7 +1390,7 @@ describe("applyModelAllowlist", () => {
     expect(next.agents?.defaults?.models).toEqual({
       "google/gemini-3.1-pro-preview": { alias: "gemini" },
       "google-gemini-cli/gemini-3.1-pro-preview": {},
-      "openrouter/google/gemini-3-pro-preview": {},
+      "openrouter/google/gemini-3.1-pro-preview": {},
     });
   });
 
@@ -1511,10 +1513,11 @@ describe("applyModelFallbacksFromSelection", () => {
     const next = applyModelFallbacksFromSelection(config, [
       "openai/gpt-5.5",
       "google/gemini-3-pro-preview",
+      "openrouter/google/gemini-3-pro-preview",
     ]);
     expect(next.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.5",
-      fallbacks: ["google/gemini-3.1-pro-preview"],
+      fallbacks: ["google/gemini-3.1-pro-preview", "openrouter/google/gemini-3.1-pro-preview"],
     });
   });
 

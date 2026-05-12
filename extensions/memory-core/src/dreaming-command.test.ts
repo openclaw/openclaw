@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
@@ -117,10 +117,9 @@ describe("memory-core /dreaming command", () => {
     const result = await command.handler(createCommandContext("off"));
 
     expect(runtime.config.replaceConfigFile).toHaveBeenCalledTimes(1);
-    expect(resolveStoredDreaming(getRuntimeConfig())).toMatchObject({
-      enabled: false,
-      frequency: "0 */6 * * *",
-    });
+    const storedDreaming = resolveStoredDreaming(getRuntimeConfig());
+    expect(storedDreaming.enabled).toBe(false);
+    expect(storedDreaming.frequency).toBe("0 */6 * * *");
     expect(result.text).toContain("Dreaming disabled.");
   });
 
@@ -160,9 +159,7 @@ describe("memory-core /dreaming command", () => {
     );
 
     expect(runtime.config.replaceConfigFile).toHaveBeenCalledTimes(1);
-    expect(resolveStoredDreaming(getRuntimeConfig())).toMatchObject({
-      enabled: true,
-    });
+    expect(resolveStoredDreaming(getRuntimeConfig()).enabled).toBe(true);
     expect(result.text).toContain("Dreaming enabled.");
   });
 

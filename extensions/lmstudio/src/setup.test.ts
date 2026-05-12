@@ -394,7 +394,7 @@ describe("lmstudio setup", () => {
     const result = await configureLmstudioNonInteractive(ctx);
 
     const setupCall = requireRecord(
-      configureSelfHostedNonInteractiveMock.mock.calls[0]?.[0],
+      configureSelfHostedNonInteractiveMock.mock.calls.at(0)?.[0],
       "self-hosted setup call",
     );
     const setupCtx = requireRecord(setupCall.ctx, "self-hosted setup context");
@@ -653,7 +653,7 @@ describe("lmstudio setup", () => {
 
     await configureLmstudioNonInteractive(ctx);
 
-    expectRecordFields(ctx.resolveApiKey.mock.calls[0]?.[0], "resolveApiKey options", {
+    expectRecordFields(ctx.resolveApiKey.mock.calls.at(0)?.[0], "resolveApiKey options", {
       flagValue: "new-lmstudio-key",
       flagName: "--lmstudio-api-key",
     });
@@ -698,7 +698,7 @@ describe("lmstudio setup", () => {
     await expect(configureLmstudioNonInteractive(ctx)).resolves.toBeNull();
 
     expect(ctx.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("LM Studio model missing-model was not found"),
+      "LM Studio model missing-model was not found at http://localhost:1234/v1.\nAvailable models: qwen3-8b-instruct",
     );
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
     expect(configureSelfHostedNonInteractiveMock).not.toHaveBeenCalled();
@@ -831,7 +831,7 @@ describe("lmstudio setup", () => {
       prompter,
     });
 
-    const firstTextCall = requireRecord(text.mock.calls[0]?.[0], "first text prompt");
+    const firstTextCall = requireRecord(text.mock.calls.at(0)?.[0], "first text prompt");
     expectRecordFields(firstTextCall, "first text prompt", {
       initialValue: "http://host.docker.internal:1234",
       placeholder: "http://host.docker.internal:1234",

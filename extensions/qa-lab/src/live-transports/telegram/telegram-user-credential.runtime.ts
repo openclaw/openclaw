@@ -1,4 +1,4 @@
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 
 export const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";
 

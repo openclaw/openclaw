@@ -233,9 +233,15 @@ async function expectNextRunUsesTargetSession(
   );
 
   expect(params.runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-  expect(params.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toEqual(
-    expect.objectContaining(expected),
-  );
+  const runParams = params.runEmbeddedPiAgentMock.mock.calls.at(0)?.[0] as
+    | Record<string, unknown>
+    | undefined;
+  if (!runParams) {
+    throw new Error("expected embedded PI agent call params");
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    expect(runParams[key]).toEqual(value);
+  }
 }
 
 async function writeStoredModelOverride(cfg: ReturnType<typeof makeCfg>): Promise<void> {
@@ -467,7 +473,7 @@ describe("trigger handling", () => {
         expect(text, testCase.label).not.toMatch(/Thinking level set/i);
         expect(runEmbeddedPiAgentMock, testCase.label).toHaveBeenCalledOnce();
         if (testCase.assertPrompt) {
-          const prompt = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+          const prompt = runEmbeddedPiAgentMock.mock.calls.at(0)?.[0]?.prompt ?? "";
           expect(prompt).toContain("Give me the status");
           expect(prompt).not.toContain("/thinking high");
           expect(prompt).not.toContain("/think high");
@@ -509,7 +515,7 @@ describe("trigger handling", () => {
         testCase.setup(cfg);
         await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
 
-        const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+        const call = runEmbeddedPiAgentMock.mock.calls.at(0)?.[0];
         expect(call?.provider).toBe(testCase.expected.provider);
         expect(call?.model).toBe(testCase.expected.model);
       }
@@ -567,7 +573,7 @@ describe("trigger handling", () => {
       const text = maybeReplyText(res);
       expect(text?.startsWith("⚙️ Compacted")).toBe(true);
       expect(getCompactEmbeddedPiSessionMock()).toHaveBeenCalledOnce();
-      expect(getCompactEmbeddedPiSessionMock().mock.calls[0]?.[0]?.sessionFile).toContain(
+      expect(getCompactEmbeddedPiSessionMock().mock.calls.at(0)?.[0]?.sessionFile).toContain(
         join("agents", "worker1", "sessions"),
       );
     });

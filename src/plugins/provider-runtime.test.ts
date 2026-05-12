@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
@@ -669,7 +669,7 @@ describe("provider-runtime", () => {
     }
 
     expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
-    const warning = String(providerRuntimeWarnMock.mock.calls[0]?.[0] ?? "");
+    const warning = String(providerRuntimeWarnMock.mock.calls.at(0)?.[0] ?? "");
     expect(warning).toContain('Provider plugin "legacy-providerWARN forged"');
     expect(warning).not.toContain("\n");
   });
@@ -870,7 +870,7 @@ describe("provider-runtime", () => {
       },
     });
     expectRecordFields(
-      requireRecord(extraParamsForTransport.mock.calls[0]?.[0], "transport params context"),
+      requireRecord(extraParamsForTransport.mock.calls.at(0)?.[0], "transport params context"),
       {
         provider: DEMO_PROVIDER_ID,
         modelId: MODEL.id,
@@ -932,10 +932,10 @@ describe("provider-runtime", () => {
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
     expect(contribution?.sectionOverrides?.interaction_style).toContain(
-      "This is a live chat, not a memo.",
+      "Live chat tone: short, natural, human.",
     );
     expect(contribution?.sectionOverrides?.interaction_style).not.toContain(
-      "The purpose of heartbeats is to make you feel magical and proactive.",
+      "Use heartbeats to create useful proactive progress",
     );
   });
 
@@ -951,7 +951,7 @@ describe("provider-runtime", () => {
     });
 
     expect(contribution?.sectionOverrides?.interaction_style).toContain(
-      "The purpose of heartbeats is to make you feel magical and proactive.",
+      "Use heartbeats to create useful proactive progress",
     );
   });
 
@@ -1007,7 +1007,7 @@ describe("provider-runtime", () => {
     expect(contribution?.stablePrefix).toContain("provider overlay");
     expect(contribution?.sectionOverrides?.execution_bias).toBe("saw built-in overlay");
     const overlayContext = requireRecord(
-      resolvePromptOverlay.mock.calls[0]?.[0],
+      resolvePromptOverlay.mock.calls.at(0)?.[0],
       "overlay context",
     );
     expect(overlayContext.provider).toBe("openrouter");
@@ -1036,7 +1036,7 @@ describe("provider-runtime", () => {
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
     expect(contribution?.sectionOverrides?.interaction_style).toContain(
-      "This is a live chat, not a memo.",
+      "Live chat tone: short, natural, human.",
     );
   });
 

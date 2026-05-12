@@ -62,9 +62,10 @@ describe("listChannelCatalogEntries", () => {
     expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
     expect(loadRecordsSpy).toHaveBeenCalledWith({ env: ENV });
     expect(discoverSpy).toHaveBeenCalledTimes(1);
-    expect(discoverSpy.mock.calls[0][0]).toMatchObject({
+    expect(discoverSpy.mock.calls.at(0)?.[0]).toStrictEqual({
       env: ENV,
       installRecords: RECORDS,
+      workspaceDir: undefined,
     });
   });
 
@@ -75,7 +76,7 @@ describe("listChannelCatalogEntries", () => {
 
     expect(loadRecordsSpy).not.toHaveBeenCalled();
     expect(discoverSpy).toHaveBeenCalledTimes(1);
-    expect(discoverSpy.mock.calls[0][0]).not.toHaveProperty("installRecords");
+    expect(discoverSpy.mock.calls.at(0)?.[0]).not.toHaveProperty("installRecords");
   });
 
   it("uses caller-supplied install records verbatim and does not load the ledger", async () => {
@@ -90,7 +91,11 @@ describe("listChannelCatalogEntries", () => {
     module.listChannelCatalogEntries({ env: ENV, installRecords: supplied });
 
     expect(loadRecordsSpy).not.toHaveBeenCalled();
-    expect(discoverSpy.mock.calls[0][0]).toMatchObject({ installRecords: supplied });
+    expect(discoverSpy.mock.calls.at(0)?.[0]).toStrictEqual({
+      env: ENV,
+      installRecords: supplied,
+      workspaceDir: undefined,
+    });
   });
 
   it("omits installRecords from discovery when the ledger is empty", async () => {
@@ -101,7 +106,7 @@ describe("listChannelCatalogEntries", () => {
     module.listChannelCatalogEntries({ env: ENV });
 
     expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
-    expect(discoverSpy.mock.calls[0][0]).not.toHaveProperty("installRecords");
+    expect(discoverSpy.mock.calls.at(0)?.[0]).not.toHaveProperty("installRecords");
   });
 
   it("treats ledger read errors as a soft fallback (no installRecords propagated)", async () => {
@@ -115,6 +120,6 @@ describe("listChannelCatalogEntries", () => {
 
     expect(loadRecordsSpy).toHaveBeenCalledTimes(1);
     expect(discoverSpy).toHaveBeenCalledTimes(1);
-    expect(discoverSpy.mock.calls[0][0]).not.toHaveProperty("installRecords");
+    expect(discoverSpy.mock.calls.at(0)?.[0]).not.toHaveProperty("installRecords");
   });
 });

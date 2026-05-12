@@ -93,9 +93,8 @@ const HOME = path.join(os.tmpdir(), `openclaw-inbound-media-${crypto.randomUUID(
 const ORIGINAL_HOME = process.env.HOME;
 process.env.HOME = HOME;
 
-vi.mock("@whiskeysockets/baileys", async () => {
-  const actual =
-    await vi.importActual<typeof import("@whiskeysockets/baileys")>("@whiskeysockets/baileys");
+vi.mock("baileys", async () => {
+  const actual = await vi.importActual<typeof import("baileys")>("baileys");
   const jpegBuffer = Buffer.from([
     0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x03, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03, 0x02, 0x02,
     0x02, 0x03, 0x03, 0x03, 0x03, 0x04, 0x06, 0x04, 0x04, 0x04, 0x04, 0x04, 0x08, 0x06, 0x06, 0x05,
@@ -154,7 +153,7 @@ async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
     interval: 1,
     timeout: 250,
   });
-  return onMessage.mock.calls[0][0];
+  return onMessage.mock.calls.at(0)?.[0];
 }
 
 function requireMediaPath(value: unknown): string {
