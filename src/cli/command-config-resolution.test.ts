@@ -79,4 +79,25 @@ describe("resolveCommandConfigWithSecrets", () => {
     });
     expect(result.effectiveConfig).toBe(effectiveConfig);
   });
+
+  it("logs diagnostics to stderr when requested", async () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as const;
+    const config = { channels: {} };
+    const resolvedConfig = { channels: { discord: {} } };
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig,
+      diagnostics: ["discord token unresolved"],
+    });
+
+    await resolveCommandConfigWithSecrets({
+      config,
+      commandName: "status --json",
+      targetIds: new Set(["channels.discord.token"]),
+      runtime,
+      diagnosticLogTarget: "stderr",
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith("[secrets] discord token unresolved");
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
 });

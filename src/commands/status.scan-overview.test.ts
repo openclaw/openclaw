@@ -179,4 +179,20 @@ describe("collectStatusScanOverview", () => {
     expect(result.channelsStatus).toBeNull();
     expect(result.channelIssues).toEqual([]);
   });
+
+  it("routes secret diagnostics to stderr for status --json", async () => {
+    await collectStatusScanOverview({
+      commandName: "status --json",
+      opts: {},
+      showSecrets: false,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandName: "status --json",
+        diagnosticLogTarget: "stderr",
+      }),
+    );
+  });
 });
