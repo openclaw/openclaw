@@ -67,6 +67,7 @@ import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.sc
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
+import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
