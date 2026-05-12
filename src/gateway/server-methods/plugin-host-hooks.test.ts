@@ -155,7 +155,7 @@ describe("plugins.uiDescriptors projection ordering", () => {
     }
     await handler(options);
     const descriptors = getDescriptors(options.respond as ReturnType<typeof vi.fn>);
-    expect(descriptors.map((d) => `${d.pluginId}/${d.id}`)).toEqual([
+    expect(descriptors.map((d) => `${String(d.pluginId)}/${String(d.id)}`)).toEqual([
       "alpha/x",
       "alpha/y",
       "beta/x",

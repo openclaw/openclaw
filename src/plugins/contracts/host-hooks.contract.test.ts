@@ -868,21 +868,18 @@ describe("host-hook fixture plugin contract", () => {
           id: "null-active-when",
           surface: "chat-message",
           label: "Null activeWhen",
-          // oxlint-disable-next-line typescript/no-explicit-any -- exercise untyped-plugin shape
           activeWhen: null as any,
         });
         api.session.controls.registerControlUiDescriptor({
           id: "string-active-when",
           surface: "chat-message",
           label: "String activeWhen",
-          // oxlint-disable-next-line typescript/no-explicit-any -- exercise untyped-plugin shape
           activeWhen: "not-an-object" as any,
         });
         api.session.controls.registerControlUiDescriptor({
           id: "array-active-when",
           surface: "chat-message",
           label: "Array activeWhen",
-          // oxlint-disable-next-line typescript/no-explicit-any -- exercise untyped-plugin shape
           activeWhen: ["a", "b"] as any,
         });
       },
