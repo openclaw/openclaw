@@ -998,7 +998,7 @@ export function registerControlUiAndPairingSuite(): void {
 
     try {
       const issued = await issueDeviceBootstrapToken();
-      const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const wsBootstrap = await openWs(port);
       const initial = await connectReq(wsBootstrap, {
         skipDefaultAuth: true,
         bootstrapToken: issued.token,
@@ -1032,7 +1032,7 @@ export function registerControlUiAndPairingSuite(): void {
         wsBootstrap.close();
       });
 
-      const wsRetry = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const wsRetry = await openWs(port);
       const retry = await connectReq(wsRetry, {
         skipDefaultAuth: true,
         bootstrapToken: issued.token,

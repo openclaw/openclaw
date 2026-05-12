@@ -1031,7 +1031,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               publicKey: devicePublicKey,
               ...clientPairingMetadata,
               silent:
-                reason === "scope-upgrade"
+                reason === "scope-upgrade" || authMethod === "bootstrap-token"
                   ? false
                   : allowSilentLocalPairing || allowSilentTrustedCidrsNodePairing,
             });
