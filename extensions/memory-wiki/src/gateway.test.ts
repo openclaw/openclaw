@@ -84,6 +84,13 @@ function findGatewayHandler(
   return registerGatewayMethod.mock.calls.find((call) => call[0] === method)?.[1];
 }
 
+function readGatewayMethodOptions(
+  registerGatewayMethod: ReturnType<typeof vi.fn>,
+  method: string,
+): unknown {
+  return registerGatewayMethod.mock.calls.find((call) => call[0] === method)?.[2];
+}
+
 function readRespondPayload(respond: { mock: { calls: Array<Array<unknown>> } }): unknown {
   const call = respond.mock.calls[0];
   expect(call?.[0]).toBe(true);
@@ -458,6 +465,17 @@ describe("memory-wiki gateway methods", () => {
     expect(readRespondPayload(respond)).toEqual({
       items: [],
       total: 0,
+    });
+  });
+
+  it("registers wiki.ingest with admin scope", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+
+    expect(readGatewayMethodOptions(registerGatewayMethod, "wiki.ingest")).toEqual({
+      scope: "operator.admin",
     });
   });
 
