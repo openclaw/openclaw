@@ -2189,12 +2189,15 @@ export async function runEmbeddedAttempt(
 
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
+      // Threading `activeContextEngine` enables the compaction-intercept
+      // extension when the engine declares `info.interceptsCompaction === true`.
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        activeContextEngine,
       });
       const resourceLoader = createEmbeddedPiResourceLoader({
         cwd: resolvedWorkspace,
