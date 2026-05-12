@@ -117,10 +117,12 @@ function buildSilentFallbackFailurePayload(params: {
   fallbackAttempts: readonly unknown[];
   isHeartbeat: boolean;
   hasSuccessfulSideEffectDelivery: boolean;
+  allowEmptyAssistantReplyAsSilent?: boolean;
   silentExpected?: boolean;
 }): ReplyPayload | undefined {
   if (
     params.isHeartbeat ||
+    params.allowEmptyAssistantReplyAsSilent === true ||
     params.silentExpected === true ||
     params.hasSuccessfulSideEffectDelivery ||
     !params.fallbackTransition.fallbackActive ||
@@ -137,14 +139,14 @@ function buildSilentFallbackFailurePayload(params: {
 }
 
 function hasSuccessfulSideEffectDelivery(params: {
-  blockReplyPipeline: { didStream: () => boolean } | null;
+  blockReplyPipeline: { didStream: () => boolean; isAborted: () => boolean } | null;
   directlySentBlockKeys?: Set<string>;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
 }): boolean {
   return Boolean(
-    params.blockReplyPipeline?.didStream() ||
+    (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
     (params.directlySentBlockKeys?.size ?? 0) > 0 ||
     (params.messagingToolSentTexts?.length ?? 0) > 0 ||
     (params.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
@@ -1599,6 +1601,7 @@ export async function runReplyAgent(params: {
           messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
           messagingToolSentTargets: runResult.messagingToolSentTargets,
         }),
+        allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
         silentExpected: followupRun.run.silentExpected,
       });
       if (silentFallbackFailurePayload) {
