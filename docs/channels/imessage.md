@@ -217,7 +217,7 @@ If SIP-disabled isn't acceptable for your threat model:
 
     Allowlist field: `channels.imessage.allowFrom`.
 
-    Allowlist entries can be handles, static sender access groups (`accessGroup:<name>`), or chat targets (`chat_id:*`, `chat_guid:*`, `chat_identifier:*`).
+    Allowlist entries must identify senders: handles or static sender access groups (`accessGroup:<name>`). Use `channels.imessage.groupAllowFrom` or `channels.imessage.groups` for group/chat targets such as `chat_id:*`, `chat_guid:*`, or `chat_identifier:*`.
 
   </Tab>
 
