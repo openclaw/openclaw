@@ -172,7 +172,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   expect(reset.ok).toBe(true);
   expectResetAcpState(reset.payload?.entry.acp);
   expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(1);
-  const closeSessionCall = acpManagerMocks.closeSession.mock.calls.at(0) as unknown as
+  const closeSessionCall = acpManagerMocks.closeSession.mock.calls[0] as unknown as
     | [
         {
           allowBackendUnavailable?: boolean;
@@ -195,9 +195,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
       }
     | undefined;
   expect(closeSessionParams?.allowBackendUnavailable).toBe(true);
-  if (!closeSessionParams?.cfg) {
-    throw new Error("expected closeSession config");
-  }
+  expect(closeSessionParams?.cfg).toBeTruthy();
   expect(closeSessionParams?.discardPersistentState).toBe(true);
   expect(closeSessionParams?.requireAcpSession).toBe(false);
   expect(closeSessionParams?.reason).toBe("session-reset");
@@ -206,23 +204,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
     sessionKey: "agent:main:main",
   });
   const stored = getSessionEntry({ agentId: "main", sessionKey: "agent:main:main" });
-  expect(stored?.acp).toMatchObject({
-    backend: "acpx",
-    agent: "codex",
-    runtimeSessionName: "runtime:reset",
-    identity: {
-      state: "pending",
-      acpxRecordId: "agent:main:main",
-    },
-    mode: "persistent",
-    runtimeOptions: {
-      runtimeMode: "auto",
-      timeoutSeconds: 30,
-    },
-    cwd: "/tmp/acp-session",
-    state: "idle",
-  });
-  expect(stored?.acp?.identity?.acpxSessionId).toBeUndefined();
+  expectResetAcpState(stored?.acp);
 });
 
 test("sessions.reset does not emit lifecycle events when key does not exist", async () => {
