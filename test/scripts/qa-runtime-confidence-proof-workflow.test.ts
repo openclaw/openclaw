@@ -15,6 +15,7 @@ type WorkflowStep = {
 
 type WorkflowJob = {
   env?: Record<string, string>;
+  environment?: string;
   if?: string | boolean;
   name?: string;
   needs?: string | string[];
@@ -47,21 +48,39 @@ function workflowStep(job: WorkflowJob, name: string): WorkflowStep {
 }
 
 describe("QA runtime confidence proof workflow", () => {
-  it("splits proof into static, mock, live, soak, and final aggregation jobs", () => {
+  it("splits proof into authorization, ref validation, static, mock, live, soak, and final aggregation jobs", () => {
     expect(Object.keys(readWorkflow().jobs ?? {})).toEqual([
+      "authorize_actor",
+      "validate_selected_ref",
       "static_unit",
       "mock_confidence",
       "live_confidence",
       "soak_confidence",
       "final_confidence",
     ]);
+    expect(workflowJob("validate_selected_ref")).toMatchObject({
+      needs: "authorize_actor",
+    });
+    expect(
+      workflowStep(workflowJob("validate_selected_ref"), "Validate selected ref").run,
+    ).toContain('trusted_reason="same-repository-branch-head"');
+    expect(workflowJob("static_unit")).toMatchObject({
+      needs: ["validate_selected_ref"],
+    });
     expect(workflowJob("soak_confidence")).toMatchObject({
       if: "inputs.run_soak",
+      needs: ["validate_selected_ref"],
       "timeout-minutes": 360,
     });
     expect(workflowJob("final_confidence")).toMatchObject({
       if: "always()",
-      needs: ["static_unit", "mock_confidence", "live_confidence", "soak_confidence"],
+      needs: [
+        "validate_selected_ref",
+        "static_unit",
+        "mock_confidence",
+        "live_confidence",
+        "soak_confidence",
+      ],
     });
   });
 
@@ -86,7 +105,17 @@ describe("QA runtime confidence proof workflow", () => {
     const live = workflowJob("live_confidence");
     const liveRun = workflowStep(live, "Run live proof lanes").run;
 
-    expect(live.env).toMatchObject({
+    expect(live).toMatchObject({
+      needs: ["validate_selected_ref"],
+      environment: "qa-live-shared",
+    });
+    expect(live.env ?? {}).not.toHaveProperty("OPENAI_API_KEY");
+    expect(live.env ?? {}).not.toHaveProperty("OPENCLAW_LIVE_OPENAI_KEY");
+    expect(workflowStep(live, "Require live credentials").env).toMatchObject({
+      OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
+      OPENCLAW_LIVE_OPENAI_KEY: "${{ secrets.OPENCLAW_LIVE_OPENAI_KEY }}",
+    });
+    expect(workflowStep(live, "Run live proof lanes").env).toMatchObject({
       OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
       OPENCLAW_LIVE_OPENAI_KEY: "${{ secrets.OPENCLAW_LIVE_OPENAI_KEY }}",
     });

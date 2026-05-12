@@ -60,7 +60,7 @@ export type QaRuntimeParitySuiteSummary = Omit<QaParitySuiteSummary, "scenarios"
 
 type QaRuntimeParityScenarioReport = {
   name: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "skip";
   drift: RuntimeParityDrift | "missing";
   driftDetails?: string;
   piStatus: "pass" | "fail" | "missing";
@@ -619,13 +619,18 @@ export function buildQaRuntimeParityReport(params: {
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
   const driftCounts = buildRuntimeParityDriftCounts();
   const failures: string[] = [];
+  const scenarioStatus = (status: QaParityReportScenario["status"]) =>
+    status === "pass" ? "pass" : status === "skip" ? "skip" : "fail";
   const scenarios = params.summary.scenarios.map((scenario) => {
     const parity = scenario.runtimeParity;
+    const status = scenarioStatus(scenario.status);
     if (!parity) {
-      failures.push(`Missing runtime parity capture for ${scenario.name}.`);
+      if (status !== "skip") {
+        failures.push(`Missing runtime parity capture for ${scenario.name}.`);
+      }
       return {
         name: scenario.name,
-        status: scenario.status === "pass" ? "pass" : "fail",
+        status,
         drift: "missing",
         driftDetails: scenario.details,
         piStatus: "missing",
@@ -642,7 +647,6 @@ export function buildQaRuntimeParityReport(params: {
     const codexCell = parity.cells.codex;
     const piStatus = runtimeCellStatus(piCell);
     const codexStatus = runtimeCellStatus(codexCell);
-    const status = scenario.status === "pass" ? "pass" : "fail";
     if (status === "fail") {
       failures.push(
         `${scenario.name} drift=${parity.drift}${parity.driftDetails ? ` (${parity.driftDetails})` : ""}.`,

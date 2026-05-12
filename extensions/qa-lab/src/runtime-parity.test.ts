@@ -136,6 +136,51 @@ describe("runtime parity", () => {
     expect(result.drift).toBe("none");
   });
 
+  it("captures assistant-message usage cost totals when present", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRoot(
+      [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "first",
+            usage: {
+              input: 10,
+              output: 5,
+              totalTokens: 15,
+              cost: { total: 0.0015 },
+            },
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "second",
+            usage: {
+              input: 20,
+              output: 10,
+              totalTokens: 30,
+              cost: { input: 0.001, output: 0.002, cacheRead: 0.0001, cacheWrite: 0 },
+            },
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "pi",
+      gateway: { tempRoot },
+      scenarioResult: { status: "pass" },
+      wallClockMs: 1,
+    });
+
+    expect(cell.usage).toMatchObject({
+      inputTokens: 30,
+      outputTokens: 15,
+      totalTokens: 45,
+      costUsd: 0.0046,
+    });
+  });
+
   it("classifies final-text-only differences as text-only", async () => {
     const result = await runRuntimeParityScenario({
       scenarioId: "text-only",

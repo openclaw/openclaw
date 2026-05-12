@@ -11,6 +11,7 @@ export type TokenEfficiencyRuntimeUsage = {
   toolSummaryChars: number;
   toolSchemaChars: number;
   transcriptChars: number;
+  costUsd?: number;
 };
 
 export type TokenEfficiencyRow = {
@@ -19,7 +20,9 @@ export type TokenEfficiencyRow = {
   pi: TokenEfficiencyRuntimeUsage;
   codex: TokenEfficiencyRuntimeUsage;
   deltaPercent: number;
+  costDeltaPercent?: number;
   flagged: boolean;
+  costFlagged: boolean;
   toolsUsed: string[];
 };
 
@@ -31,10 +34,12 @@ export type TokenEfficiencyReport = {
   thresholdPercent: number;
   rows: TokenEfficiencyRow[];
   aggregate: {
-    pi: { totalTokens: number; p50PerTurn: number; p90PerTurn: number };
-    codex: { totalTokens: number; p50PerTurn: number; p90PerTurn: number };
+    pi: { totalTokens: number; p50PerTurn: number; p90PerTurn: number; costUsd?: number };
+    codex: { totalTokens: number; p50PerTurn: number; p90PerTurn: number; costUsd?: number };
     deltaPercent: number;
+    costDeltaPercent?: number;
     flaggedScenarios: string[];
+    costFlaggedScenarios: string[];
   };
   pass: boolean;
   failures: string[];
@@ -73,6 +78,7 @@ const ZERO_AGGREGATE: TokenEfficiencyReport["aggregate"] = {
   codex: { totalTokens: 0, p50PerTurn: 0, p90PerTurn: 0 },
   deltaPercent: 0,
   flaggedScenarios: [],
+  costFlaggedScenarios: [],
 };
 
 function normalizeRuntimePair(
@@ -86,6 +92,10 @@ function normalizeRuntimePair(
 
 function normalizeTokenCount(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function normalizeOptionalCost(value: number | undefined): number | undefined {
+  return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : undefined;
 }
 
 function readPromptReportNumber(value: unknown): number {
@@ -141,6 +151,9 @@ function cellUsage(
     outputTokens: normalizeTokenCount(cell.usage.outputTokens),
     totalTokens: normalizeTokenCount(cell.usage.totalTokens),
     toolCallCount: cell.toolCalls.length,
+    ...(normalizeOptionalCost(cell.usage.costUsd) !== undefined
+      ? { costUsd: normalizeOptionalCost(cell.usage.costUsd) }
+      : {}),
     ...stats,
   };
 }
@@ -150,6 +163,16 @@ function deltaPercent(piTotalTokens: number, codexTotalTokens: number): number {
     return codexTotalTokens === 0 ? 0 : 100;
   }
   return ((codexTotalTokens - piTotalTokens) / piTotalTokens) * 100;
+}
+
+function optionalDeltaPercent(
+  piTotalCost: number | undefined,
+  codexTotalCost: number | undefined,
+): number | undefined {
+  if (piTotalCost === undefined || codexTotalCost === undefined) {
+    return undefined;
+  }
+  return deltaPercent(piTotalCost, codexTotalCost);
 }
 
 function percentile(values: readonly number[], p: number): number {
@@ -175,13 +198,16 @@ function buildRow(
   const pi = cellUsage(result.cells.pi, usageSource);
   const codex = cellUsage(result.cells.codex, usageSource);
   const delta = deltaPercent(pi.totalTokens, codex.totalTokens);
+  const costDelta = optionalDeltaPercent(pi.costUsd, codex.costUsd);
   return {
     scenarioId: result.scenarioId,
     usageSource,
     pi,
     codex,
     deltaPercent: delta,
-    flagged: Math.abs(delta) > thresholdPercent,
+    ...(costDelta !== undefined ? { costDeltaPercent: costDelta } : {}),
+    flagged: delta > thresholdPercent,
+    costFlagged: costDelta !== undefined && costDelta > thresholdPercent,
     toolsUsed: toolNamesForCells(result.cells.pi, result.cells.codex),
   };
 }
@@ -191,19 +217,36 @@ function buildAggregate(rows: readonly TokenEfficiencyRow[]): TokenEfficiencyRep
   const codexTotals = rows.map((row) => row.codex.totalTokens);
   const piTotalTokens = piTotals.reduce((sum, value) => sum + value, 0);
   const codexTotalTokens = codexTotals.reduce((sum, value) => sum + value, 0);
+  const piCostValues = rows
+    .map((row) => row.pi.costUsd)
+    .filter((value): value is number => value !== undefined);
+  const codexCostValues = rows
+    .map((row) => row.codex.costUsd)
+    .filter((value): value is number => value !== undefined);
+  const piCostUsd =
+    piCostValues.length > 0 ? piCostValues.reduce((sum, value) => sum + value, 0) : undefined;
+  const codexCostUsd =
+    codexCostValues.length > 0 ? codexCostValues.reduce((sum, value) => sum + value, 0) : undefined;
+  const costDelta = optionalDeltaPercent(piCostUsd, codexCostUsd);
   return {
     pi: {
       totalTokens: piTotalTokens,
       p50PerTurn: percentile(piTotals, 50),
       p90PerTurn: percentile(piTotals, 90),
+      ...(piCostUsd !== undefined ? { costUsd: piCostUsd } : {}),
     },
     codex: {
       totalTokens: codexTotalTokens,
       p50PerTurn: percentile(codexTotals, 50),
       p90PerTurn: percentile(codexTotals, 90),
+      ...(codexCostUsd !== undefined ? { costUsd: codexCostUsd } : {}),
     },
     deltaPercent: deltaPercent(piTotalTokens, codexTotalTokens),
-    flaggedScenarios: rows.filter((row) => row.flagged).map((row) => row.scenarioId),
+    ...(costDelta !== undefined ? { costDeltaPercent: costDelta } : {}),
+    flaggedScenarios: rows
+      .filter((row) => row.flagged || row.costFlagged)
+      .map((row) => row.scenarioId),
+    costFlaggedScenarios: rows.filter((row) => row.costFlagged).map((row) => row.scenarioId),
   };
 }
 
@@ -336,9 +379,15 @@ export function buildTokenEfficiencyReport(
       .filter((scenarioId) => !liveEvidenceFailureScenarioIds.has(scenarioId))
       .map((scenarioId) => {
         const row = rows.find((entry) => entry.scenarioId === scenarioId);
-        return `${scenarioId} delta=${formatPercent(row?.deltaPercent ?? 0)} exceeds ${thresholdPercent.toFixed(
+        const reasons = [
+          row?.flagged === true ? `token delta=${formatPercent(row.deltaPercent)}` : undefined,
+          row?.costFlagged === true
+            ? `cost delta=${formatPercent(row.costDeltaPercent ?? 0)}`
+            : undefined,
+        ].filter((reason): reason is string => Boolean(reason));
+        return `${scenarioId} ${reasons.join(", ")} exceeds ${thresholdPercent.toFixed(
           1,
-        )}% threshold`;
+        )}% Codex increase threshold`;
       }),
   ];
   const failures = isLiveUsage ? liveFailures : [];
@@ -357,6 +406,9 @@ export function buildTokenEfficiencyReport(
       isLiveUsage
         ? "Token totals are read from RuntimeParityCell.usage, which is captured from normalized AssistantMessage.usage."
         : "Mock token totals are algorithmic estimates from prompt/tool/schema/transcript byte counts, not live provider usage.",
+      isLiveUsage
+        ? "Cost totals are read from AssistantMessage.usage.cost when present; rows without provider cost remain token-only."
+        : "Mock estimates do not invent dollar cost; cost fields stay unavailable outside live usage.",
       ...(isLiveUsage ? [] : ["Mock estimate deltas are informational and do not fail the gate."]),
       "The report does not inspect provider transport payload token counters.",
     ],
@@ -367,6 +419,23 @@ function formatPercent(value: number): string {
   const normalized = Math.abs(value) < 0.05 ? 0 : value;
   const prefix = normalized > 0 ? "+" : "";
   return `${prefix}${normalized.toFixed(1)}%`;
+}
+
+function formatOptionalPercent(value: number | undefined): string {
+  return value === undefined ? "n/a" : formatPercent(value);
+}
+
+function formatUsd(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) {
+    return "n/a";
+  }
+  if (value >= 1) {
+    return `$${value.toFixed(2)}`;
+  }
+  if (value >= 0.01) {
+    return `$${value.toFixed(2)}`;
+  }
+  return `$${value.toFixed(4)}`;
 }
 
 function formatRuntimeUsage(usage: TokenEfficiencyRuntimeUsage): string {
@@ -403,31 +472,31 @@ export function renderTokenEfficiencyMarkdownReport(report: TokenEfficiencyRepor
   }
 
   lines.push(
-    `- Threshold: absolute delta > ${report.thresholdPercent.toFixed(1)}%`,
+    `- Threshold: Codex token/cost increase > ${report.thresholdPercent.toFixed(1)}%`,
     "",
     "## Aggregate Metrics",
     "",
-    "| Runtime | Total tokens | p50 per turn | p90 per turn |",
-    "| --- | ---: | ---: | ---: |",
-    `| pi | ${report.aggregate.pi.totalTokens} | ${report.aggregate.pi.p50PerTurn} | ${report.aggregate.pi.p90PerTurn} |`,
-    `| codex | ${report.aggregate.codex.totalTokens} | ${report.aggregate.codex.p50PerTurn} | ${report.aggregate.codex.p90PerTurn} |`,
-    `| delta | ${formatPercent(report.aggregate.deltaPercent)} |  |  |`,
+    "| Runtime | Total tokens | p50 per turn | p90 per turn | Cost |",
+    "| --- | ---: | ---: | ---: | ---: |",
+    `| pi | ${report.aggregate.pi.totalTokens} | ${report.aggregate.pi.p50PerTurn} | ${report.aggregate.pi.p90PerTurn} | ${formatUsd(report.aggregate.pi.costUsd)} |`,
+    `| codex | ${report.aggregate.codex.totalTokens} | ${report.aggregate.codex.p50PerTurn} | ${report.aggregate.codex.p90PerTurn} | ${formatUsd(report.aggregate.codex.costUsd)} |`,
+    `| delta | ${formatPercent(report.aggregate.deltaPercent)} |  |  | ${formatOptionalPercent(report.aggregate.costDeltaPercent)} |`,
     "",
     "## Scenario Efficiency",
     "",
-    "| Scenario | Source | Pi in/out/total/tools | Codex in/out/total/tools | Pi prompt/project/skills/tool-summary/tool-schema/transcript chars | Codex prompt/project/skills/tool-summary/tool-schema/transcript chars | Delta | Flagged | Tools used |",
-    "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+    "| Scenario | Source | Pi in/out/total/tools | Codex in/out/total/tools | Pi cost | Codex cost | Pi prompt/project/skills/tool-summary/tool-schema/transcript chars | Codex prompt/project/skills/tool-summary/tool-schema/transcript chars | Token delta | Cost delta | Flagged | Tools used |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
   );
 
   for (const row of report.rows) {
     lines.push(
       `| ${escapeTableCell(row.scenarioId)} | ${escapeTableCell(row.usageSource)} | ${formatRuntimeUsage(row.pi)} | ${formatRuntimeUsage(
         row.codex,
-      )} | ${formatCharStats(row.pi)} | ${formatCharStats(
+      )} | ${formatUsd(row.pi.costUsd)} | ${formatUsd(row.codex.costUsd)} | ${formatCharStats(row.pi)} | ${formatCharStats(
         row.codex,
-      )} | ${formatPercent(row.deltaPercent)} | ${row.flagged ? "yes" : "no"} | ${escapeTableCell(
-        row.toolsUsed.join(", "),
-      )} |`,
+      )} | ${formatPercent(row.deltaPercent)} | ${formatOptionalPercent(row.costDeltaPercent)} | ${
+        row.flagged || row.costFlagged ? "yes" : "no"
+      } | ${escapeTableCell(row.toolsUsed.join(", "))} |`,
     );
   }
 

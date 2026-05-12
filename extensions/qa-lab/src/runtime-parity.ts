@@ -26,6 +26,7 @@ export type RuntimeParityUsage = {
   totalTokens: number;
   cacheRead?: number;
   cacheWrite?: number;
+  costUsd?: number;
 };
 
 export type RuntimeParitySystemPromptReport = {
@@ -146,6 +147,11 @@ function normalizeTextForParity(text: string) {
 
 function readFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readNonNegativeNumber(value: unknown): number | undefined {
+  const numeric = readFiniteNumber(value);
+  return numeric === undefined ? undefined : Math.max(0, numeric);
 }
 
 function readNonEmptyString(value: unknown): string | undefined {
@@ -298,12 +304,29 @@ function readUsageTotals(raw: unknown): RuntimeParityUsage {
     readFiniteNumber(usage.totalTokens) ??
     readFiniteNumber(usage.total_tokens) ??
     componentTotal;
+  const cost = usage.cost;
+  const costRecord = isMessageRecord(cost) ? cost : undefined;
+  const costUsd =
+    readNonNegativeNumber(cost) ??
+    readNonNegativeNumber(costRecord?.total) ??
+    ([
+      readNonNegativeNumber(costRecord?.input),
+      readNonNegativeNumber(costRecord?.output),
+      readNonNegativeNumber(costRecord?.cacheRead),
+      readNonNegativeNumber(costRecord?.cacheWrite),
+    ].some((entry) => entry !== undefined)
+      ? (readNonNegativeNumber(costRecord?.input) ?? 0) +
+        (readNonNegativeNumber(costRecord?.output) ?? 0) +
+        (readNonNegativeNumber(costRecord?.cacheRead) ?? 0) +
+        (readNonNegativeNumber(costRecord?.cacheWrite) ?? 0)
+      : undefined);
   return {
     inputTokens,
     outputTokens,
     totalTokens,
     ...(cacheRead !== undefined ? { cacheRead } : {}),
     ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+    ...(costUsd !== undefined ? { costUsd } : {}),
   };
 }
 
@@ -316,6 +339,9 @@ function addUsage(target: RuntimeParityUsage, next: RuntimeParityUsage) {
   }
   if (next.cacheWrite !== undefined) {
     target.cacheWrite = (target.cacheWrite ?? 0) + next.cacheWrite;
+  }
+  if (next.costUsd !== undefined) {
+    target.costUsd = (target.costUsd ?? 0) + next.costUsd;
   }
 }
 

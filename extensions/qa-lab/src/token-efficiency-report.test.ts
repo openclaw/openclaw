@@ -64,33 +64,41 @@ function makeLiveSummary(runtimeParity: RuntimeParityResult[]): TokenEfficiencyS
 }
 
 describe("token efficiency report", () => {
-  it("renders live side-by-side rows, flags large deltas, and unions tools used", () => {
+  it("renders live side-by-side rows, flags Codex token/cost increases, and unions tools used", () => {
     const report = buildTokenEfficiencyReport({
       generatedAt: "2026-05-10T00:00:00.000Z",
       summary: makeLiveSummary([
         makeRuntimeParity(
           "delta-low",
-          makeCell("pi", { inputTokens: 40, outputTokens: 60, totalTokens: 100 }, [
+          makeCell("pi", { inputTokens: 40, outputTokens: 60, totalTokens: 100, costUsd: 0.001 }, [
             makeToolCall("read_file"),
           ]),
-          makeCell("codex", { inputTokens: 55, outputTokens: 55, totalTokens: 110 }, [
-            makeToolCall("read_file"),
-          ]),
+          makeCell(
+            "codex",
+            { inputTokens: 55, outputTokens: 55, totalTokens: 110, costUsd: 0.0011 },
+            [makeToolCall("read_file")],
+          ),
         ),
         makeRuntimeParity(
           "flagged-delta",
-          makeCell("pi", { inputTokens: 45, outputTokens: 55, totalTokens: 100 }),
-          makeCell("codex", { inputTokens: 80, outputTokens: 50, totalTokens: 130 }),
+          makeCell("pi", { inputTokens: 45, outputTokens: 55, totalTokens: 100, costUsd: 0.001 }),
+          makeCell("codex", {
+            inputTokens: 80,
+            outputTokens: 50,
+            totalTokens: 130,
+            costUsd: 0.0013,
+          }),
         ),
         makeRuntimeParity(
           "tool-difference",
-          makeCell("pi", { inputTokens: 120, outputTokens: 80, totalTokens: 200 }, [
+          makeCell("pi", { inputTokens: 120, outputTokens: 80, totalTokens: 200, costUsd: 0.002 }, [
             makeToolCall("read_file"),
           ]),
-          makeCell("codex", { inputTokens: 100, outputTokens: 90, totalTokens: 190 }, [
-            makeToolCall("write_file"),
-            makeToolCall("read_file"),
-          ]),
+          makeCell(
+            "codex",
+            { inputTokens: 100, outputTokens: 90, totalTokens: 190, costUsd: 0.001 },
+            [makeToolCall("write_file"), makeToolCall("read_file")],
+          ),
         ),
       ]),
     });
@@ -102,11 +110,15 @@ describe("token efficiency report", () => {
       scenarioId: "flagged-delta",
       deltaPercent: 30,
       flagged: true,
+      costFlagged: true,
     });
+    expect(report.rows[1]?.costDeltaPercent).toBeCloseTo(30);
     expect(report.rows[2]).toMatchObject({
       scenarioId: "tool-difference",
       pi: expect.objectContaining({ toolCallCount: 1 }),
       codex: expect.objectContaining({ toolCallCount: 2 }),
+      flagged: false,
+      costFlagged: false,
       toolsUsed: ["read_file", "write_file"],
     });
     expect(renderTokenEfficiencyMarkdownReport(report)).toMatchInlineSnapshot(`
@@ -116,34 +128,85 @@ describe("token efficiency report", () => {
       - Provider mode: live-frontier
       - Verdict: fail
       - Usage source: live-usage
-      - Threshold: absolute delta > 15.0%
+      - Threshold: Codex token/cost increase > 15.0%
 
       ## Aggregate Metrics
 
-      | Runtime | Total tokens | p50 per turn | p90 per turn |
-      | --- | ---: | ---: | ---: |
-      | pi | 400 | 100 | 200 |
-      | codex | 430 | 130 | 190 |
-      | delta | +7.5% |  |  |
+      | Runtime | Total tokens | p50 per turn | p90 per turn | Cost |
+      | --- | ---: | ---: | ---: | ---: |
+      | pi | 400 | 100 | 200 | $0.0040 |
+      | codex | 430 | 130 | 190 | $0.0034 |
+      | delta | +7.5% |  |  | -15.0% |
 
       ## Scenario Efficiency
 
-      | Scenario | Source | Pi in/out/total/tools | Codex in/out/total/tools | Pi prompt/project/skills/tool-summary/tool-schema/transcript chars | Codex prompt/project/skills/tool-summary/tool-schema/transcript chars | Delta | Flagged | Tools used |
-      | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
-      | delta-low | live-usage | 40/60/100/1 | 55/55/110/1 | 0/0/0/0/0/21 | 0/0/0/0/0/21 | +10.0% | no | read_file |
-      | flagged-delta | live-usage | 45/55/100/0 | 80/50/130/0 | 0/0/0/0/0/21 | 0/0/0/0/0/21 | +30.0% | yes |  |
-      | tool-difference | live-usage | 120/80/200/1 | 100/90/190/2 | 0/0/0/0/0/21 | 0/0/0/0/0/21 | -5.0% | no | read_file, write_file |
+      | Scenario | Source | Pi in/out/total/tools | Codex in/out/total/tools | Pi cost | Codex cost | Pi prompt/project/skills/tool-summary/tool-schema/transcript chars | Codex prompt/project/skills/tool-summary/tool-schema/transcript chars | Token delta | Cost delta | Flagged | Tools used |
+      | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+      | delta-low | live-usage | 40/60/100/1 | 55/55/110/1 | $0.0010 | $0.0011 | 0/0/0/0/0/21 | 0/0/0/0/0/21 | +10.0% | +10.0% | no | read_file |
+      | flagged-delta | live-usage | 45/55/100/0 | 80/50/130/0 | $0.0010 | $0.0013 | 0/0/0/0/0/21 | 0/0/0/0/0/21 | +30.0% | +30.0% | yes |  |
+      | tool-difference | live-usage | 120/80/200/1 | 100/90/190/2 | $0.0020 | $0.0010 | 0/0/0/0/0/21 | 0/0/0/0/0/21 | -5.0% | -50.0% | no | read_file, write_file |
 
       ## Gate Failures
 
-      - flagged-delta delta=+30.0% exceeds 15.0% threshold
+      - flagged-delta token delta=+30.0%, cost delta=+30.0% exceeds 15.0% Codex increase threshold
 
       ## Notes
 
       - Token totals are read from RuntimeParityCell.usage, which is captured from normalized AssistantMessage.usage.
+      - Cost totals are read from AssistantMessage.usage.cost when present; rows without provider cost remain token-only.
       - The report does not inspect provider transport payload token counters.
       "
     `);
+  });
+
+  it("does not fail live reports solely because Codex uses fewer tokens or costs less", () => {
+    const report = buildTokenEfficiencyReport({
+      summary: makeLiveSummary([
+        makeRuntimeParity(
+          "codex-savings",
+          makeCell("pi", { inputTokens: 120, outputTokens: 80, totalTokens: 200, costUsd: 0.004 }),
+          makeCell("codex", {
+            inputTokens: 60,
+            outputTokens: 40,
+            totalTokens: 100,
+            costUsd: 0.001,
+          }),
+        ),
+      ]),
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.aggregate.flaggedScenarios).toEqual([]);
+    expect(report.rows[0]).toMatchObject({
+      deltaPercent: -50,
+      costDeltaPercent: -75,
+      flagged: false,
+      costFlagged: false,
+    });
+  });
+
+  it("fails live reports on cost-only Codex increases", () => {
+    const report = buildTokenEfficiencyReport({
+      summary: makeLiveSummary([
+        makeRuntimeParity(
+          "cost-only-regression",
+          makeCell("pi", { inputTokens: 50, outputTokens: 50, totalTokens: 100, costUsd: 0.001 }),
+          makeCell("codex", {
+            inputTokens: 50,
+            outputTokens: 50,
+            totalTokens: 100,
+            costUsd: 0.002,
+          }),
+        ),
+      ]),
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.aggregate.flaggedScenarios).toEqual(["cost-only-regression"]);
+    expect(report.aggregate.costFlaggedScenarios).toEqual(["cost-only-regression"]);
+    expect(report.failures).toEqual([
+      "cost-only-regression cost delta=+100.0% exceeds 15.0% Codex increase threshold",
+    ]);
   });
 
   it("computes aggregate totals and nearest-rank per-turn percentiles from cell usage", () => {

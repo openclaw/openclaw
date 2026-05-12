@@ -28,6 +28,10 @@ on:
         default: false
         type: boolean
 
+permissions:
+  contents: read
+  pull-requests: read
+
 concurrency:
   group: qa-runtime-confidence-proof-${{ inputs.expected_sha || inputs.target_ref }}
   cancel-in-progress: false
@@ -41,8 +45,108 @@ env:
   OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.5' }}
 
 jobs:
+  authorize_actor:
+    name: Authorize workflow actor
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require maintainer-level repository access
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            const permission = data.permission;
+            core.info(`Actor ${context.actor} permission: ${permission}`);
+            if (!allowed.has(permission)) {
+              core.setFailed(
+                `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
+              );
+            }
+
+  validate_selected_ref:
+    name: Validate selected ref
+    needs: authorize_actor
+    runs-on: ubuntu-24.04
+    outputs:
+      selected_revision: ${{ steps.validate.outputs.selected_revision }}
+      trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 0
+
+      - name: Validate selected ref
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_REF: ${{ inputs.target_ref }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          selected_revision="$(git rev-parse HEAD)"
+          trusted_reason=""
+
+          if [[ -n "${EXPECTED_SHA// }" && "${selected_revision,,}" != "${EXPECTED_SHA,,}" ]]; then
+            echo "target_ref resolved to ${selected_revision}; expected ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+          if git merge-base --is-ancestor "$selected_revision" refs/remotes/origin/main; then
+            trusted_reason="main-ancestor"
+          elif git tag --points-at "$selected_revision" | grep -Eq '^v'; then
+            trusted_reason="release-tag"
+          elif [[ "$INPUT_REF" =~ ^release/[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
+            git fetch --no-tags origin "+refs/heads/${INPUT_REF}:refs/remotes/origin/${INPUT_REF}"
+            release_branch_sha="$(git rev-parse "refs/remotes/origin/${INPUT_REF}")"
+            if [[ "$selected_revision" == "$release_branch_sha" ]]; then
+              trusted_reason="release-branch-head"
+            fi
+          elif [[ "$INPUT_REF" =~ ^[A-Za-z0-9._/-]+$ ]] &&
+            git fetch --no-tags origin "+refs/heads/${INPUT_REF}:refs/remotes/origin/${INPUT_REF}" 2>/dev/null; then
+            branch_sha="$(git rev-parse "refs/remotes/origin/${INPUT_REF}")"
+            if [[ "$selected_revision" == "$branch_sha" ]]; then
+              trusted_reason="same-repository-branch-head"
+            fi
+          else
+            pr_head_count="$(
+              gh api \
+                -H "Accept: application/vnd.github+json" \
+                "repos/${GITHUB_REPOSITORY}/commits/${selected_revision}/pulls" \
+                --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${selected_revision}"'")] | length'
+            )"
+            if [[ "$pr_head_count" != "0" ]]; then
+              trusted_reason="open-pr-head"
+            fi
+          fi
+
+          if [[ -z "$trusted_reason" ]]; then
+            echo "Ref '${INPUT_REF}' resolved to $selected_revision, which is not trusted for this secret-bearing QA run." >&2
+            echo "Allowed refs must be on main, point to a release tag, match a release branch head, match a branch head in ${GITHUB_REPOSITORY}, or match an open PR head in ${GITHUB_REPOSITORY}." >&2
+            exit 1
+          fi
+
+          echo "selected_revision=$selected_revision" >> "$GITHUB_OUTPUT"
+          echo "trusted_reason=$trusted_reason" >> "$GITHUB_OUTPUT"
+          {
+            echo "Validated ref: \`${INPUT_REF}\`"
+            echo "Resolved SHA: \`$selected_revision\`"
+            echo "Trust reason: \`$trusted_reason\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   static_unit:
     name: Static and targeted QA unit proof
+    needs: [validate_selected_ref]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -52,20 +156,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-          ref: ${{ inputs.target_ref }}
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 1
-
-      - name: Validate expected SHA
-        if: inputs.expected_sha != ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          actual="$(git rev-parse HEAD)"
-          expected="${{ inputs.expected_sha }}"
-          if [[ "${actual,,}" != "${expected,,}" ]]; then
-            echo "target_ref resolved to ${actual}; expected ${expected}" >&2
-            exit 1
-          fi
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -103,6 +195,7 @@ jobs:
 
   mock_confidence:
     name: Mock confidence proof bundle
+    needs: [validate_selected_ref]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
@@ -115,20 +208,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-          ref: ${{ inputs.target_ref }}
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 1
-
-      - name: Validate expected SHA
-        if: inputs.expected_sha != ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          actual="$(git rev-parse HEAD)"
-          expected="${{ inputs.expected_sha }}"
-          if [[ "${actual,,}" != "${expected,,}" ]]; then
-            echo "target_ref resolved to ${actual}; expected ${expected}" >&2
-            exit 1
-          fi
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -265,34 +346,22 @@ jobs:
   live_confidence:
     name: Live confidence proof lanes
     if: inputs.run_live
+    needs: [validate_selected_ref]
     runs-on: ubuntu-24.04
+    environment: qa-live-shared
     timeout-minutes: 90
     permissions:
       contents: read
     env:
       CI: "true"
       OPENCLAW_QA_SUITE_PROGRESS: "1"
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENCLAW_LIVE_OPENAI_KEY: ${{ secrets.OPENCLAW_LIVE_OPENAI_KEY }}
     steps:
       - name: Checkout target
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-          ref: ${{ inputs.target_ref }}
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 1
-
-      - name: Validate expected SHA
-        if: inputs.expected_sha != ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          actual="$(git rev-parse HEAD)"
-          expected="${{ inputs.expected_sha }}"
-          if [[ "${actual,,}" != "${expected,,}" ]]; then
-            echo "target_ref resolved to ${actual}; expected ${expected}" >&2
-            exit 1
-          fi
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -303,6 +372,9 @@ jobs:
 
       - name: Require live credentials
         shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_LIVE_OPENAI_KEY: ${{ secrets.OPENCLAW_LIVE_OPENAI_KEY }}
         run: |
           set -euo pipefail
           if [[ -z "${OPENAI_API_KEY// }" && -z "${OPENCLAW_LIVE_OPENAI_KEY// }" ]]; then
@@ -312,6 +384,9 @@ jobs:
 
       - name: Run live proof lanes
         shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_LIVE_OPENAI_KEY: ${{ secrets.OPENCLAW_LIVE_OPENAI_KEY }}
         run: |
           set -euo pipefail
           root=".artifacts/qa-e2e"
@@ -361,6 +436,7 @@ jobs:
   soak_confidence:
     name: Required soak-100 proof lane
     if: inputs.run_soak
+    needs: [validate_selected_ref]
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     permissions:
@@ -373,20 +449,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-          ref: ${{ inputs.target_ref }}
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 1
-
-      - name: Validate expected SHA
-        if: inputs.expected_sha != ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          actual="$(git rev-parse HEAD)"
-          expected="${{ inputs.expected_sha }}"
-          if [[ "${actual,,}" != "${expected,,}" ]]; then
-            echo "target_ref resolved to ${actual}; expected ${expected}" >&2
-            exit 1
-          fi
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -422,6 +486,7 @@ jobs:
     name: Final global confidence aggregation
     if: always()
     needs:
+      - validate_selected_ref
       - static_unit
       - mock_confidence
       - live_confidence
@@ -436,20 +501,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-          ref: ${{ inputs.target_ref }}
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 1
-
-      - name: Validate expected SHA
-        if: inputs.expected_sha != ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          actual="$(git rev-parse HEAD)"
-          expected="${{ inputs.expected_sha }}"
-          if [[ "${actual,,}" != "${expected,,}" ]]; then
-            echo "target_ref resolved to ${actual}; expected ${expected}" >&2
-            exit 1
-          fi
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env

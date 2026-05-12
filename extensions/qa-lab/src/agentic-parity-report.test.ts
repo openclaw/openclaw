@@ -818,6 +818,35 @@ status=done`,
     );
   });
 
+  it("preserves report-only runtime skips as non-blocking rows", () => {
+    const report = buildQaRuntimeParityReport({
+      summary: {
+        scenarios: [
+          {
+            name: "Tool defaults searchable report-only",
+            status: "skip",
+            details: "searchable mock limitation",
+          },
+        ],
+        run: {
+          providerMode: "mock-openai",
+          runtimePair: ["pi", "codex"],
+        },
+      },
+      comparedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.failures).toEqual([]);
+    expect(report.scenarios).toEqual([
+      expect.objectContaining({
+        name: "Tool defaults searchable report-only",
+        status: "skip",
+        drift: "missing",
+      }),
+    ]);
+  });
+
   it("renders a readable runtime parity markdown report", () => {
     const report = renderQaRuntimeParityMarkdownReport(
       buildQaRuntimeParityReport({
