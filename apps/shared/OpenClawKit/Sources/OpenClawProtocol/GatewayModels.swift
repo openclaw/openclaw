@@ -2090,6 +2090,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let spawndepth: AnyCodable?
     public let subagentrole: AnyCodable?
     public let subagentcontrolscope: AnyCodable?
+    public let inheritedtooldeny: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
 
@@ -2113,6 +2114,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         spawndepth: AnyCodable?,
         subagentrole: AnyCodable?,
         subagentcontrolscope: AnyCodable?,
+        inheritedtooldeny: AnyCodable?,
         sendpolicy: AnyCodable?,
         groupactivation: AnyCodable?)
     {
@@ -2135,6 +2137,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.spawndepth = spawndepth
         self.subagentrole = subagentrole
         self.subagentcontrolscope = subagentcontrolscope
+        self.inheritedtooldeny = inheritedtooldeny
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
     }
@@ -2159,6 +2162,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case spawndepth = "spawnDepth"
         case subagentrole = "subagentRole"
         case subagentcontrolscope = "subagentControlScope"
+        case inheritedtooldeny = "inheritedToolDeny"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
     }
