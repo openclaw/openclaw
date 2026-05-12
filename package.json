@@ -1392,6 +1392,7 @@
     "deps:pins:check": "node scripts/check-dependency-pins.mjs",
     "deps:sbom-risk": "node scripts/sbom-risk-report.mjs",
     "deps:sbom-risk:check": "node scripts/sbom-risk-report.mjs --check",
+    "deps:vuln:gate": "node scripts/dependency-vulnerability-gate.mjs",
     "dev": "node scripts/run-node.mjs",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:check-i18n-glossary": "node scripts/check-docs-i18n-glossary.mjs",
