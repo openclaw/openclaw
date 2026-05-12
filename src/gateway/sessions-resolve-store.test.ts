@@ -8,6 +8,106 @@ import { resolveSessionKeyFromResolveParams } from "./sessions-resolve.js";
 describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   const freshUpdatedAt = () => Date.now();
 
+  it("does not resolve another agent store when agentId is scoped", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-agent-scope-", async () => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      };
+      upsertSessionEntry({
+        agentId: "work",
+        sessionKey: "agent:work:target",
+        entry: {
+          sessionId: "sess-shared",
+          label: "shared-label",
+          updatedAt: freshUpdatedAt(),
+        },
+      });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { sessionId: "sess-shared", agentId: "main" },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: "No session found: sess-shared",
+        },
+      });
+
+      await expect(
+        resolveSessionKeyFromResolveParams({
+          cfg,
+          p: { label: "shared-label", agentId: "main" },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: "No session found with label: shared-label",
+        },
+      });
+    });
+  });
+
+  it("preserves cross-agent ambiguity when agentId is absent", async () => {
+    await withStateDirEnv("openclaw-sessions-resolve-cross-agent-", async () => {
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      };
+      const updatedAt = freshUpdatedAt();
+      upsertSessionEntry({
+        agentId: "main",
+        sessionKey: "main-target",
+        entry: {
+          sessionId: "sess-shared",
+          label: "shared-label",
+          updatedAt,
+        },
+      });
+      upsertSessionEntry({
+        agentId: "work",
+        sessionKey: "work-target",
+        entry: {
+          sessionId: "sess-shared",
+          label: "shared-label",
+          updatedAt,
+        },
+      });
+
+      const sessionIdResult = await resolveSessionKeyFromResolveParams({
+        cfg,
+        p: { sessionId: "sess-shared" },
+      });
+      expect(sessionIdResult.ok).toBe(false);
+      if (sessionIdResult.ok) {
+        throw new Error("expected ambiguous sessionId result");
+      }
+      expect(sessionIdResult.error.code).toBe(ErrorCodes.INVALID_REQUEST);
+      expect(sessionIdResult.error.message).toContain(
+        "Multiple sessions found for sessionId: sess-shared",
+      );
+      expect(sessionIdResult.error.message).toContain("agent:main:main-target");
+      expect(sessionIdResult.error.message).toContain("agent:work:work-target");
+
+      const labelResult = await resolveSessionKeyFromResolveParams({
+        cfg,
+        p: { label: "shared-label" },
+      });
+      expect(labelResult.ok).toBe(false);
+      if (labelResult.ok) {
+        throw new Error("expected ambiguous label result");
+      }
+      expect(labelResult.error.code).toBe(ErrorCodes.INVALID_REQUEST);
+      expect(labelResult.error.message).toContain(
+        "Multiple sessions found with label: shared-label",
+      );
+      expect(labelResult.error.message).toContain("agent:main:main-target");
+      expect(labelResult.error.message).toContain("agent:work:work-target");
+    });
+  });
+
   it("still rejects non-alias agent:main matches when main is no longer configured", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-stale-main-", async () => {
       const cfg = {

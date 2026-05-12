@@ -143,7 +143,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasSessionId) {
-    const { entries: store } = loadCombinedSessionEntriesForGateway(cfg);
+    const { entries: store } = loadCombinedSessionEntriesForGateway(cfg, { agentId: p.agentId });
     const matches = findVisibleSessionIdMatches({ store, p, sessionId });
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
     if (selection.kind === "none") {
@@ -177,7 +177,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { entries: store } = loadCombinedSessionEntriesForGateway(cfg);
+  const { entries: store } = loadCombinedSessionEntriesForGateway(cfg, { agentId: p.agentId });
   const list = listSessionsFromStore({
     cfg,
     store,
