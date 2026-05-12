@@ -234,6 +234,15 @@ async function writeUsageCostCacheLockAtomically(
   await fs.promises.writeFile(tempPath, `${JSON.stringify(lock)}\n`, { flag: "wx" });
   try {
     await fs.promises.link(tempPath, lockPath);
+  } catch (linkErr) {
+    // Hard links are unsupported on SMB/CIFS, NFS, virtiofs, exFAT, etc.
+    // Fall back to exclusive-create which provides the same mutual-exclusion
+    // guarantee: first writer wins, concurrent attempts receive EEXIST.
+    if ((linkErr as NodeJS.ErrnoException).code === "ENOTSUP") {
+      await fs.promises.writeFile(lockPath, `${JSON.stringify(lock)}\n`, { flag: "wx" });
+    } else {
+      throw linkErr;
+    }
   } finally {
     await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
   }
