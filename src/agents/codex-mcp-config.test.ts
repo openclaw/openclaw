@@ -1,0 +1,84 @@
+import { describe, expect, it, vi } from "vitest";
+import { buildCodexMcpServersConfig, loadCodexBundleMcpThreadConfig } from "./codex-mcp-config.js";
+
+const mocks = vi.hoisted(() => ({
+  bundleMcp: {
+    config: {
+      mcpServers: {},
+    },
+    diagnostics: [],
+  },
+}));
+
+vi.mock("../plugins/bundle-mcp.js", () => ({
+  loadEnabledBundleMcpConfig: () => mocks.bundleMcp,
+}));
+
+describe("buildCodexMcpServersConfig", () => {
+  it("normalizes OpenClaw MCP servers into Codex app-server mcp_servers shape", () => {
+    expect(
+      buildCodexMcpServersConfig({
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:23119/mcp",
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+              "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+              "x-static": "static-value",
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      openclaw: {
+        url: "http://127.0.0.1:23119/mcp",
+        default_tools_approval_mode: "approve",
+        bearer_token_env_var: "OPENCLAW_MCP_TOKEN",
+        http_headers: {
+          "x-static": "static-value",
+        },
+        env_http_headers: {
+          "x-session-key": "OPENCLAW_MCP_SESSION_KEY",
+        },
+      },
+    });
+  });
+});
+
+describe("loadCodexBundleMcpThreadConfig", () => {
+  it("loads configured OpenClaw MCP servers as a Codex thread config patch", () => {
+    const loaded = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            search: {
+              transport: "streamable-http",
+              url: "https://mcp.example.com/mcp",
+            },
+          },
+        },
+      },
+    });
+
+    expect(loaded.configPatch).toEqual({
+      mcp_servers: {
+        search: {
+          url: "https://mcp.example.com/mcp",
+        },
+      },
+    });
+    expect(loaded.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("omits the config patch when no MCP servers are configured", () => {
+    const loaded = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: {},
+    });
+
+    expect(loaded.configPatch).toBeUndefined();
+    expect(loaded.fingerprint).toBeUndefined();
+  });
+});

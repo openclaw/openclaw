@@ -73,6 +73,7 @@ export async function startOrResumeThread(params: {
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   config?: JsonObject;
+  mcpServersFingerprint?: string;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
 }): Promise<CodexAppServerThreadLifecycleBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
@@ -112,6 +113,13 @@ export async function startOrResumeThread(params: {
     await clearCodexAppServerBinding(params.params.sessionFile);
     binding = undefined;
   }
+  if (binding?.threadId && binding.mcpServersFingerprint !== params.mcpServersFingerprint) {
+    embeddedAgentLog.debug("codex app-server MCP config changed; starting a new thread", {
+      threadId: binding.threadId,
+    });
+    await clearCodexAppServerBinding(params.params.sessionFile);
+    binding = undefined;
+  }
   if (binding?.threadId) {
     let pluginBindingStale = isCodexPluginThreadBindingStale({
       codexPluginsEnabled: params.pluginThreadConfig?.enabled ?? false,
@@ -145,6 +153,13 @@ export async function startOrResumeThread(params: {
       await clearCodexAppServerBinding(params.params.sessionFile);
       binding = undefined;
     }
+  }
+  if (binding?.threadId && binding.mcpServersFingerprint !== params.mcpServersFingerprint) {
+    embeddedAgentLog.debug("codex app-server MCP config changed; starting a new thread", {
+      threadId: binding.threadId,
+    });
+    await clearCodexAppServerBinding(params.params.sessionFile);
+    binding = undefined;
   }
   if (binding?.threadId) {
     // `/codex resume <thread>` writes a binding before the next turn can know
@@ -209,6 +224,7 @@ export async function startOrResumeThread(params: {
             modelProvider: response.modelProvider ?? fallbackModelProvider,
             dynamicToolsFingerprint,
             userMcpServersFingerprint,
+            mcpServersFingerprint: params.mcpServersFingerprint,
             pluginAppsFingerprint: binding.pluginAppsFingerprint,
             pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
             pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -230,6 +246,7 @@ export async function startOrResumeThread(params: {
           modelProvider: response.modelProvider ?? fallbackModelProvider,
           dynamicToolsFingerprint,
           userMcpServersFingerprint,
+          mcpServersFingerprint: params.mcpServersFingerprint,
           pluginAppsFingerprint: binding.pluginAppsFingerprint,
           pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
           pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -287,6 +304,7 @@ export async function startOrResumeThread(params: {
         modelProvider: response.modelProvider ?? modelProvider,
         dynamicToolsFingerprint,
         userMcpServersFingerprint,
+        mcpServersFingerprint: params.mcpServersFingerprint,
         pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
         pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
         pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -310,6 +328,7 @@ export async function startOrResumeThread(params: {
     modelProvider: response.modelProvider ?? modelProvider,
     dynamicToolsFingerprint,
     userMcpServersFingerprint,
+    mcpServersFingerprint: params.mcpServersFingerprint,
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
