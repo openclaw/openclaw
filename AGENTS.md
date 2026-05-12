@@ -66,8 +66,8 @@ Skills own workflows; root owns hard policy and routing.
 
 ## GitHub / PRs
 
-- Use `$openclaw-pr-maintainer` immediately for maintainer-side OpenClaw issue/PR URLs/numbers, review, triage, duplicate search, close, labels, landing, comments, or maintainer evidence. Contributor PR creation/refresh follows the requested contributor workflow; a linked issue/PR alone does not require maintainer archive tooling.
-- PR refs: `gh pr view/diff` or `gh api`, not web search. Use REST `gh api` when structured `gh pr view --json` hits CLI GraphQL/project-field failures. Prefer `gitcrawl` for maintainer triage/discovery and optional local `gh` caching; unavailable `gitcrawl` is a quiet live-`gh` fallback, not contributor setup. Verify live with `gh` before mutation.
+- Use `$openclaw-pr-maintainer` immediately for maintainer-side OpenClaw issue/PR review, triage, duplicates, labels, comments, close, land, or evidence. Contributor PR creation/refresh follows the requested contributor workflow; linked refs alone do not require maintainer archive tooling.
+- PR refs: `gh pr view/diff` or `gh api`, not web search. Prefer `gitcrawl` for maintainer discovery; missing/stale `gitcrawl` falls through to live `gh`, not contributor setup. Verify live with `gh` before mutation.
 - Bare issue/PR URL/number means review/report in chat. Suggest comment/close/merge when appropriate; mutate only when asked.
 - No unsolicited PR comments/reviews/labels/retitles/rebases/fixups/landing. Exception: close/duplicate action that needs a reason comment after explicit close/sweep/landing request.
 - PR review answer: bug/behavior, URL(s), affected surface, best-fix judgment, evidence from code/tests/CI/current or shipped behavior.
