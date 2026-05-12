@@ -13,6 +13,7 @@ import {
   captureCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
   forkCompactionCheckpointTranscriptAsync,
+  listSessionCompactionCheckpointsWithFilesAsync,
   MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
   MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION,
   persistSessionCompactionCheckpoint,
@@ -263,7 +264,59 @@ describe("session-compaction-checkpoints", () => {
     }
   });
 
-  test("async capture scans bounded metadata without copying oversized transcripts", async () => {
+  test("discovers valid checkpoint transcript files when store metadata is missing", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-discover-"));
+    tempDirs.push(dir);
+
+    const session = SessionManager.create(dir, dir);
+    session.appendMessage({
+      role: "user",
+      content: "before disk discovery",
+      timestamp: Date.now(),
+    });
+    const leafId = requireNonEmptyString(session.getLeafId(), "session leaf id missing");
+    const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
+    const snapshot = await captureCompactionCheckpointSnapshotAsync({
+      sessionManager: session,
+      sessionFile,
+    });
+    const checkpointFile = requireNonEmptyString(
+      snapshot?.sessionFile,
+      "expected checkpoint snapshot file",
+    );
+    const checkpointId = requireNonEmptyString(
+      path.basename(checkpointFile).match(/\.checkpoint\.([^.]+)\.jsonl$/)?.[1],
+      "expected checkpoint id",
+    );
+
+    const checkpoints = await listSessionCompactionCheckpointsWithFilesAsync({
+      entry: {
+        sessionId: session.getSessionId(),
+        sessionFile,
+      },
+      sessionKey: "agent:main:main",
+      storePath: path.join(dir, "sessions.json"),
+    });
+
+    expect(checkpoints).toHaveLength(1);
+    expect(checkpoints[0]).toMatchObject({
+      checkpointId,
+      sessionKey: "agent:main:main",
+      sessionId: session.getSessionId(),
+      reason: "manual",
+      preCompaction: {
+        sessionId: snapshot?.sessionId,
+        sessionFile: checkpointFile,
+        leafId,
+      },
+      postCompaction: {
+        sessionId: session.getSessionId(),
+        sessionFile,
+      },
+    });
+  });
+
+  test("async capture skips oversized pre-compaction transcripts without sync copy", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-async-oversized-"));
     tempDirs.push(dir);
 

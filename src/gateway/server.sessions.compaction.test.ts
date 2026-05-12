@@ -1,6 +1,7 @@
 /**
  * Gateway session compaction RPC tests.
  */
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -383,6 +384,85 @@ test("sessions.compaction.* scopes selected global checkpoints to the requested 
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;
   testState.agentsConfig = undefined;
+});
+
+test("sessions.compaction.* discovers checkpoint transcript files when store metadata is missing", async () => {
+  const { dir } = await createSessionStoreDir();
+  const fixture = await createCheckpointFixture(dir);
+  const checkpointId = randomUUID();
+  const checkpointFile = path.join(
+    dir,
+    `${path.parse(fixture.sessionFile).name}.checkpoint.${checkpointId}.jsonl`,
+  );
+  await fs.copyFile(fixture.preCompactionSessionFile, checkpointFile);
+  const expectedCheckpointFile = await fs.realpath(checkpointFile);
+  const expectedSessionFile = await fs.realpath(fixture.sessionFile);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(fixture.sessionId, {
+        sessionFile: fixture.sessionFile,
+      }),
+    },
+  });
+
+  const { ws } = await openClient();
+  try {
+    const listedSessions = await rpcReq<{
+      sessions: Array<{
+        key: string;
+        compactionCheckpointCount?: number;
+        latestCompactionCheckpoint?: {
+          checkpointId: string;
+          createdAt: number;
+          reason: string;
+        };
+      }>;
+    }>(ws, "sessions.list", {});
+    const main = listedSessions.payload?.sessions.find(
+      (session) => session.key === "agent:main:main",
+    );
+    expect(main?.compactionCheckpointCount).toBe(1);
+    expect(main?.latestCompactionCheckpoint?.checkpointId).toBe(checkpointId);
+
+    const listedCheckpoints = await rpcReq<{
+      ok: true;
+      key: string;
+      checkpoints: Array<{ checkpointId: string; preCompaction: { sessionFile: string } }>;
+    }>(ws, "sessions.compaction.list", { key: "main" });
+    expect(listedCheckpoints.ok).toBe(true);
+    expect(listedCheckpoints.payload?.checkpoints).toHaveLength(1);
+    expect(listedCheckpoints.payload?.checkpoints[0]?.checkpointId).toBe(checkpointId);
+    expect(listedCheckpoints.payload?.checkpoints[0]?.preCompaction.sessionFile).toBe(
+      expectedCheckpointFile,
+    );
+
+    const checkpoint = await rpcReq<{
+      ok: true;
+      checkpoint: {
+        checkpointId: string;
+        preCompaction: { sessionId?: string; sessionFile?: string; leafId?: string };
+        postCompaction: { sessionId?: string; sessionFile?: string };
+      };
+    }>(ws, "sessions.compaction.get", {
+      key: "main",
+      checkpointId,
+    });
+    expect(checkpoint.ok).toBe(true);
+    expect(checkpoint.payload?.checkpoint).toMatchObject({
+      checkpointId,
+      preCompaction: {
+        sessionId: fixture.preCompactionSession.getSessionId(),
+        sessionFile: expectedCheckpointFile,
+        leafId: fixture.preCompactionLeafId,
+      },
+      postCompaction: {
+        sessionId: fixture.sessionId,
+        sessionFile: expectedSessionFile,
+      },
+    });
+  } finally {
+    ws.close();
+  }
 });
 
 test("sessions.compact without maxLines runs embedded manual compaction for checkpoint-capable flows", async () => {
