@@ -13,6 +13,14 @@ vi.mock("openclaw/plugin-sdk/text-utility-runtime", () => ({
   withTimeout: withTimeoutMock,
 }));
 
+function requireFirstTimeoutCall() {
+  const [call] = withTimeoutMock.mock.calls;
+  if (!call) {
+    throw new Error("expected withTimeout call");
+  }
+  return call;
+}
+
 describe("probeSlack", () => {
   beforeEach(() => {
     authTestMock.mockReset();
@@ -45,7 +53,10 @@ describe("probeSlack", () => {
       team: { id: "T123", name: "OpenClaw" },
     });
     expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxb-test");
-    expect(withTimeoutMock).toHaveBeenCalledWith(expect.any(Promise), 2500);
+    expect(withTimeoutMock).toHaveBeenCalledTimes(1);
+    const [promise, timeoutMs] = requireFirstTimeoutCall();
+    expect(promise).toBeInstanceOf(Promise);
+    expect(timeoutMs).toBe(2500);
   });
 
   it("keeps optional auth metadata fields undefined when Slack omits them", async () => {

@@ -8,6 +8,7 @@ import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
+  readLatestAssistantTextFromSessionTranscript,
 } from "./transcript.js";
 
 describe("appendAssistantMessageToSessionTranscript", () => {
@@ -17,6 +18,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   type ExactAssistantMessage = Parameters<
     typeof appendExactAssistantMessageToSessionTranscript
   >[0]["message"];
+  type TranscriptUpdateEmitterSpy = {
+    mock: {
+      calls: [string | SessionTranscriptUpdate][];
+    };
+  };
 
   function writeTranscriptStore() {
     fs.writeFileSync(
@@ -55,6 +61,18 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       stopReason: "stop",
       timestamp: Date.now(),
     };
+  }
+
+  function requireTranscriptUpdateCall(spy: TranscriptUpdateEmitterSpy): SessionTranscriptUpdate {
+    const call = spy.mock.calls.at(0);
+    if (!call) {
+      throw new Error("expected transcript update event");
+    }
+    const event = call[0];
+    if (typeof event === "string") {
+      throw new Error("expected structured transcript update event");
+    }
+    return event;
   }
 
   it("creates transcript file and appends message for valid session", async () => {
@@ -108,7 +126,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     expect(emitSpy).toHaveBeenCalledTimes(1);
-    const [event] = emitSpy.mock.calls[0] as [SessionTranscriptUpdate];
+    const event = requireTranscriptUpdateCall(emitSpy);
     const message = event.message as
       | {
           role?: string;
@@ -179,6 +197,51 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.provider).toBe("codex");
       expect(messageLine.message.model).toBe("gpt-5.4");
       expect(messageLine.message.content[0].text).toBe("Hello from Codex!");
+    }
+  });
+
+  it("dedupes against the latest assistant even when a large user entry follows it", async () => {
+    writeTranscriptStore();
+
+    const exactResult = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({ text: "Hello before the large user entry" }),
+    });
+
+    expect(exactResult.ok).toBe(true);
+    if (!exactResult.ok) {
+      return;
+    }
+
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "user", content: "x".repeat(5 * 1024 * 1024) },
+    });
+
+    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(sessionFile);
+    if (!latestAssistantText) {
+      throw new Error("expected latest assistant text");
+    }
+    expect(latestAssistantText.id).toBe(exactResult.messageId);
+    expect(latestAssistantText.text).toBe("Hello before the large user entry");
+
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello before the large user entry",
+      storePath: fixture.storePath(),
+    });
+
+    expect(mirrorResult.ok).toBe(true);
+    if (mirrorResult.ok) {
+      expect(mirrorResult.messageId).toBe(exactResult.messageId);
+      const records = fs
+        .readFileSync(sessionFile, "utf-8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
+      expect(records.filter((record) => record.type === "message")).toHaveLength(2);
     }
   });
 
@@ -421,6 +484,40 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     for (let index = 1; index < records.length; index += 1) {
       expect(records[index]?.parentId).toBe(records[index - 1]?.id);
     }
+  });
+
+  it("redacts structured message content before transcript persistence", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "redacted-transcript-session",
+      fixture.sessionsDir(),
+    );
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "standalone app password abcd-efgh-ijkl-mnop",
+          },
+          {
+            type: "text",
+            text: "tokens ya29.fake-access-token-with-enough-length",
+          },
+        ],
+        toolInput: {
+          apiKey: "AIzaSyD-very-real-looking-google-api-key-123",
+          refresh: "1//0fake-refresh-token-with-enough-length",
+        },
+      },
+    });
+
+    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(raw).not.toContain("ya29.fake-access-token");
+    expect(raw).not.toContain("abcd-efgh-ijkl-mnop");
+    expect(raw).not.toContain("AIzaSyD-very-real-looking");
+    expect(raw).not.toContain("1//0fake-refresh-token");
   });
 
   it("migrates small linear transcripts before appending", async () => {

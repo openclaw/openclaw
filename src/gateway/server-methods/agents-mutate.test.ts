@@ -251,7 +251,9 @@ function makeCall(method: keyof typeof agentsHandlers, params: Record<string, un
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -600,8 +602,15 @@ describe("agents.create", () => {
       rootDir: "/resolved/tmp/ws",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(
-      expect.stringMatching(/- Name: Fancy Agent[\s\S]*- Emoji: 🤖[\s\S]*- Avatar:/),
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: Fancy Agent",
+        "- Emoji: 🤖",
+        "- Avatar: https://example.com/avatar.png",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -772,10 +781,16 @@ describe("agents.update", () => {
       rootDir: "/workspace/test-agent",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(
-      expect.stringMatching(
-        /- Name: Current Agent[\s\S]*- Theme: steady[\s\S]*- Emoji: 🐢[\s\S]*- Avatar: https:\/\/example\.com\/avatar\.png/,
-      ),
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: Current Agent",
+        "- Theme: steady",
+        "- Emoji: 🐢",
+        "- Avatar: https://example.com/avatar.png",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -793,8 +808,15 @@ describe("agents.update", () => {
       rootDir: "/workspace/test-agent",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(
-      expect.stringMatching(/- Name: Current Agent[\s\S]*- Theme: steady[\s\S]*- Emoji: 🦀/),
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: Current Agent",
+        "- Theme: steady",
+        "- Emoji: 🦀",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -820,10 +842,16 @@ describe("agents.update", () => {
       rootDir: "/workspace/test-agent",
       relativePath: "IDENTITY.md",
     });
-    expect(write.data).toEqual(
-      expect.stringMatching(
-        /- Name: New Name[\s\S]*- Theme: steady[\s\S]*- Emoji: 🤖[\s\S]*- Avatar: https:\/\/example\.com\/new\.png/,
-      ),
+    expect(write.data).toBe(
+      [
+        "# IDENTITY.md - Agent Identity",
+        "",
+        "- Name: New Name",
+        "- Theme: steady",
+        "- Emoji: 🤖",
+        "- Avatar: https://example.com/new.png",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -1152,6 +1180,33 @@ describe("agents.files.list", () => {
       size: 17,
     });
     expect(rootOpen).not.toHaveBeenCalled();
+  });
+
+  it("falls back to fixed-path lstat when safe stat is unavailable", async () => {
+    const rootStat = vi.fn(async () => {
+      throw createErrnoError("helper-unavailable");
+    });
+    agentsTesting.setDepsForTests({ root: makeRootForTest({ stat: rootStat }) });
+    mocks.fsLstat.mockImplementation(async (filePath: unknown) => {
+      if (filePath === "/workspace/main/AGENTS.md") {
+        return makeFileStat({ size: 23, mtimeMs: 6789 });
+      }
+      throw createEnoentError();
+    });
+
+    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
+    await promise;
+
+    const [, result] = respond.mock.calls[0] ?? [];
+    const files = (result as { files: Array<{ name: string; missing: boolean; size?: number }> })
+      .files;
+    const file = files.find((entry) => entry.name === "AGENTS.md");
+    expectRecordFields(file, {
+      name: "AGENTS.md",
+      missing: false,
+      size: 23,
+    });
+    expect(rootStat).toHaveBeenCalled();
   });
 });
 

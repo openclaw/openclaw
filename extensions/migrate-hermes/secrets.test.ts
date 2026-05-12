@@ -6,6 +6,16 @@ import { HERMES_REASON_AUTH_PROFILE_EXISTS } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import { cleanupTempRoots, makeContext, makeTempRoot, writeFile } from "./test/provider-helpers.js";
 
+async function expectMissingPath(filePath: string): Promise<void> {
+  try {
+    await fs.access(filePath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected missing path: ${filePath}`);
+}
+
 describe("Hermes migration secret items", () => {
   afterEach(async () => {
     await cleanupTempRoots();
@@ -77,14 +87,19 @@ describe("Hermes migration secret items", () => {
     expect(result.summary.errors).toBe(0);
     const authStore = JSON.parse(
       await fs.readFile(path.join(customAgentDir, "auth-profiles.json"), "utf8"),
-    ) as { profiles?: Record<string, { key?: string; provider?: string }> };
-    expect(authStore.profiles?.["openai:hermes-import"]).toMatchObject({
+    ) as {
+      profiles?: Record<
+        string,
+        { displayName?: string; key?: string; provider?: string; type?: string }
+      >;
+    };
+    expect(authStore.profiles?.["openai:hermes-import"]).toEqual({
+      type: "api_key",
       provider: "openai",
       key: "sk-hermes",
+      displayName: "Hermes import",
     });
-    await expect(
-      fs.access(path.join(stateDir, "agents", "custom", "agent", "auth-profiles.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissingPath(path.join(stateDir, "agents", "custom", "agent", "auth-profiles.json"));
   });
 
   it("keeps secret conflict checks read-only during planning", async () => {
@@ -105,9 +120,7 @@ describe("Hermes migration secret items", () => {
     await provider.plan(makeContext({ source, stateDir, workspaceDir, includeSecrets: true }));
 
     await expect(fs.access(path.join(agentDir, "auth.json"))).resolves.toBeUndefined();
-    await expect(fs.access(path.join(agentDir, "auth-profiles.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectMissingPath(path.join(agentDir, "auth-profiles.json"));
   });
 
   it("reports late-created auth profiles as conflicts without overwriting", async () => {

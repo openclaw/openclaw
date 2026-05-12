@@ -89,8 +89,9 @@ type MockCallSource = {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -1219,20 +1220,19 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     const [, , , params] = editMessageTextSpy.mock.calls[0] ?? [];
-    const buttons = (
+    const inlineKeyboard = (
       params as {
         reply_markup?: {
           inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
         };
       }
-    ).reply_markup?.inline_keyboard?.flat();
+    ).reply_markup?.inline_keyboard;
 
-    expect(buttons).toContainEqual({
-      text: "GPT 4.1 Bridge",
-      callback_data: "mdl_sel_openai/gpt-4.1",
-    });
-    const gpt5Button = buttons?.find((button) => button.callback_data === "mdl_sel_openai/gpt-5");
-    expect(gpt5Button?.text?.replace(" ✓", "")).toBe("GPT Five Bridge");
+    expect(inlineKeyboard).toStrictEqual([
+      [{ text: "GPT 4.1 Bridge", callback_data: "mdl_sel_openai/gpt-4.1" }],
+      [{ text: "GPT Five Bridge ✓", callback_data: "mdl_sel_openai/gpt-5" }],
+      [{ text: "<< Back", callback_data: "mdl_back" }],
+    ]);
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-display-names-1");
   });
 
@@ -1679,6 +1679,103 @@ describe("createTelegramBot", () => {
     expect(messagesById.get("200")?.body).toBe("Lunch after standup?");
     expect(messagesById.get("201")?.sender).toBe("Riley");
     expect(messagesById.get("201")?.body).toBe("After the incident review.");
+  });
+
+  it("updates cached bot messages from Telegram edit updates", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const editedHandler = getOnHandler("edited_message") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    const baseCtx = {
+      me: { id: 999, username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+    const chat = { id: 42, type: "group", title: "Ops" };
+    const question = {
+      chat,
+      text: "/ask which bikes can reach 383kmph",
+      date: 1778474813,
+      message_id: 35014,
+      from: { id: 201, is_bot: false, first_name: "Kesava" },
+    };
+    const fullAnswer =
+      "Kawasaki Ninja H2R (claimed 400 km/h) and MTT 420RR turbine (claimed up to 439 km/h) exceed 383 km/h. Dodge Tomahawk reaches higher but is a 4-wheeled concept, not a standard bike.";
+
+    await handler({
+      ...baseCtx,
+      message: question,
+    });
+    await handler({
+      ...baseCtx,
+      message: {
+        chat,
+        text: "K",
+        date: 1778474823,
+        message_id: 35016,
+        from: { id: 777, is_bot: true, first_name: "Super Serious Bot" },
+        reply_to_message: question,
+      },
+    });
+
+    replySpy.mockClear();
+    await editedHandler({
+      ...baseCtx,
+      editedMessage: {
+        chat,
+        text: fullAnswer,
+        date: 1778474823,
+        edit_date: 1778474824,
+        message_id: 35016,
+        from: { id: 777, is_bot: true, first_name: "Super Serious Bot" },
+        reply_to_message: question,
+      },
+    });
+    expect(replySpy).not.toHaveBeenCalled();
+
+    await handler({
+      ...baseCtx,
+      message: {
+        chat,
+        text: "wtf",
+        date: 1778474850,
+        message_id: 35018,
+        from: { id: 202, is_bot: false, first_name: "Kesava" },
+      },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    const [conversationContext] = requireArray(
+      payload.UntrustedStructuredContext,
+      "structured context",
+    );
+    const contextRecord = requireRecord(conversationContext, "conversation context");
+    const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+    );
+    const messagesById = new Map(messages.map((message) => [message.message_id, message]));
+    expect(messagesById.get("35016")?.sender).toBe("Super Serious Bot");
+    expect(messagesById.get("35016")?.body).toBe(fullAnswer);
+    expect(messagesById.get("35016")?.body).not.toBe("K");
   });
 
   it("uses quote text when a Telegram partial reply is received", async () => {

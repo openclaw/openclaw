@@ -82,7 +82,9 @@ describe("perplexity web search provider", () => {
           apiKey: openRouterPerplexityApiKey,
           source: "openrouter_env",
         });
-        expect(__testing.resolvePerplexityTransport(undefined)).toMatchObject({
+        expect(__testing.resolvePerplexityTransport(undefined)).toEqual({
+          apiKey: openRouterPerplexityApiKey,
+          source: "openrouter_env",
           baseUrl: "https://openrouter.ai/api/v1",
           model: "perplexity/sonar-pro",
           transport: "chat_completions",
@@ -95,7 +97,9 @@ describe("perplexity web search provider", () => {
     withEnv(
       { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
       () => {
-        expect(__testing.resolvePerplexityTransport(undefined)).toMatchObject({
+        expect(__testing.resolvePerplexityTransport(undefined)).toEqual({
+          apiKey: directPerplexityApiKey,
+          source: "perplexity_env",
           baseUrl: "https://api.perplexity.ai",
           model: "perplexity/sonar-pro",
           transport: "search_api",
@@ -113,7 +117,9 @@ describe("perplexity web search provider", () => {
         apiKey: directPerplexityApiKey,
         model: "perplexity/sonar-reasoning-pro",
       }),
-    ).toMatchObject({
+    ).toEqual({
+      apiKey: directPerplexityApiKey,
+      source: "config",
       baseUrl: "https://api.perplexity.ai",
       model: "perplexity/sonar-reasoning-pro",
       transport: "chat_completions",
@@ -125,8 +131,11 @@ describe("perplexity web search provider", () => {
       __testing.resolvePerplexityTransport({
         apiKey: enterprisePerplexityApiKey,
       }),
-    ).toMatchObject({
+    ).toEqual({
+      apiKey: enterprisePerplexityApiKey,
+      source: "config",
       baseUrl: "https://api.perplexity.ai",
+      model: "perplexity/sonar-pro",
       transport: "search_api",
     });
   });
