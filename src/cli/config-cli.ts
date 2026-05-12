@@ -1816,13 +1816,12 @@ export async function runConfigUnset(opts: {
         );
       }
       // SecretRef fallout check: collect refs that might be affected by provider/default removal
-      // Check if unsetting secrets, secrets.providers, secrets.providers.<alias>, secrets.defaults, or secrets.defaults.<alias>
-      const isSecretsPath = pathStartsWith(parsedPath, parsePath("secrets"));
+      // Check if unsetting secrets.providers, secrets.providers.<alias>, secrets.defaults, or secrets.defaults.<alias>
       const isProviderPath = pathStartsWith(parsedPath, parsePath("secrets.providers"));
       const isDefaultsPath = pathStartsWith(parsedPath, parsePath("secrets.defaults"));
-      // Affects SecretRef resolution if removing providers or defaults
+      // Affects SecretRef resolution if removing providers or defaults (or top-level secrets)
       const affectsSecretResolution = isProviderPath || isDefaultsPath ||
-        (parsedPath.length === 1 && parsedPath[0] === "secrets"); // top-level secrets removal
+        (parsedPath.length === 1 && parsedPath[0] === "secrets");
       let skippedExecRefs: SecretRef[] = [];
       if (affectsSecretResolution) {
         let refs: SecretRef[];
@@ -1878,6 +1877,13 @@ export async function runConfigUnset(opts: {
           skippedExecRefs: skippedExecRefs.length,
         });
       } else {
+        if (skippedExecRefs.length > 0) {
+          runtime.log(
+            info(
+              `Dry run note: skipped ${skippedExecRefs.length} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
+            ),
+          );
+        }
         runtime.log(success(`Dry run successful: 1 update(s) validated against ${shortenHomePath(snapshot.path)}.`));
       }
       return;
