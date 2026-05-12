@@ -223,4 +223,93 @@ describe("pi tool definition adapter logging", () => {
     expect(execute).toHaveBeenCalledWith("call-edit-batch", payload, undefined, undefined);
     expect(logError).not.toHaveBeenCalled();
   });
+
+  it("propagates prepareArguments from the source tool to the ToolDefinition", () => {
+    const prepare = vi.fn((args: unknown) => ({ ...((args as object) ?? {}), prepared: true }));
+    const baseTool = {
+      name: "edit",
+      label: "Edit",
+      description: "edits files",
+      parameters: Type.Object({ path: Type.String() }),
+      prepareArguments: prepare,
+      execute: vi.fn(async () => ({ content: [], details: {} })),
+    } satisfies AgentTool;
+
+    const [def] = toToolDefinitions([baseTool]);
+    expect(typeof def?.prepareArguments).toBe("function");
+    const result = def?.prepareArguments?.({ path: "a.ts" });
+    expect(result).toMatchObject({ path: "a.ts", prepared: true });
+  });
+
+  it("forwards ToolDefinition with no prepareArguments when the source tool has none", () => {
+    const baseTool = {
+      name: "read",
+      label: "Read",
+      description: "reads files",
+      parameters: Type.Object({ path: Type.String() }),
+      execute: vi.fn(async () => ({ content: [], details: {} })),
+    } satisfies AgentTool;
+
+    const [def] = toToolDefinitions([baseTool]);
+    expect(def?.prepareArguments).toBeUndefined();
+  });
+
+  it("rejects JSON-string edits without prepareArguments and accepts them with it", async () => {
+    const execute = vi.fn(async (_id: string, params: unknown) => ({
+      content: [{ type: "text" as const, text: JSON.stringify(params) }],
+      details: {},
+    }));
+    const prepareArguments = (args: unknown): unknown => {
+      if (!args || typeof args !== "object") return args;
+      const record = args as Record<string, unknown>;
+      if (typeof record.edits === "string") {
+        try {
+          const parsed = JSON.parse(record.edits);
+          if (Array.isArray(parsed)) return { ...record, edits: parsed };
+        } catch {
+          // ignore
+        }
+      }
+      return args;
+    };
+    const baseTool = {
+      name: "edit",
+      label: "Edit",
+      description: "edits files",
+      parameters: Type.Object({
+        path: Type.String(),
+        edits: Type.Array(
+          Type.Object({
+            oldText: Type.String(),
+            newText: Type.String(),
+          }),
+        ),
+      }),
+      prepareArguments,
+      execute,
+    } satisfies AgentTool;
+
+    const tool = wrapToolParamValidation(baseTool, REQUIRED_PARAM_GROUPS.edit);
+    const [def] = toToolDefinitions([tool]);
+    if (!def) throw new Error("missing tool definition");
+
+    const rawArgs = { path: "notes.txt", edits: '[{"oldText":"hello","newText":"world"}]' };
+
+    // The agent-loop calls prepareArguments before execute. Simulate that here.
+    const preparedArgs = def.prepareArguments ? def.prepareArguments(rawArgs) : rawArgs;
+    expect(preparedArgs).toEqual({
+      path: "notes.txt",
+      edits: [{ oldText: "hello", newText: "world" }],
+    });
+
+    // With prepared args the execute wrapper now receives a valid edits array.
+    await def.execute("call-json-str", preparedArgs, undefined, undefined, extensionContext);
+    expect(execute).toHaveBeenCalledWith(
+      "call-json-str",
+      { path: "notes.txt", edits: [{ oldText: "hello", newText: "world" }] },
+      undefined,
+      undefined,
+    );
+    expect(logError).not.toHaveBeenCalled();
+  });
 });
