@@ -91,8 +91,11 @@ describe("cron store", () => {
     await saveCronStore(storeKey, payload);
 
     const loaded = await loadCronStore(storeKey);
+    expect(loaded.version).toBe(1);
+    expect(loaded.jobs).toHaveLength(1);
     expect(loaded.jobs[0]).toMatchObject({
       id: "job-1",
+      enabled: true,
       state: { nextRunAtMs: payload.jobs[0].createdAtMs + 60_000 },
     });
   });
