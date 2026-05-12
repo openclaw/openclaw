@@ -153,6 +153,16 @@ describe("resolveInlineCommandMatch", () => {
       expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 4 },
     },
     {
+      name: "skips PowerShell configuration name values before encoded-command prefixes",
+      argv: ["pwsh", "-config", "SomeConfig", "-ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 4 },
+    },
+    {
+      name: "skips PowerShell custom pipe name values before encoded-command prefixes",
+      argv: ["pwsh", "-cus", "pipe-name", "-ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
+      expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 4 },
+    },
+    {
       name: "extracts PowerShell slash switch forms before script file binding",
       argv: ["pwsh", "/ec", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
       expected: { command: "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA", valueTokenIndex: 2 },

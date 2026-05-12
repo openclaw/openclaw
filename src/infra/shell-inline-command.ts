@@ -24,12 +24,16 @@ function expandPowerShellSwitchForms(names: readonly string[]): string[] {
 
 const POWERSHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
   ...expandPowerShellSwitchPrefixForms("configurationfile", "conf"),
+  ...expandPowerShellSwitchPrefixForms("configurationname", "config"),
+  ...expandPowerShellSwitchPrefixForms("custompipename", "cus"),
   ...expandPowerShellSwitchPrefixForms("encodedarguments", "encodeda"),
   ...expandPowerShellSwitchPrefixForms("executionpolicy", "ex"),
   ...expandPowerShellSwitchPrefixForms("inputformat", "inp"),
   ...expandPowerShellSwitchPrefixForms("outputformat", "o"),
   ...expandPowerShellSwitchPrefixForms("psconsolefile", "pscf"),
   ...expandPowerShellSwitchPrefixForms("settingsfile", "settings"),
+  ...expandPowerShellSwitchPrefixForms("token", "to"),
+  ...expandPowerShellSwitchPrefixForms("utctimestamp", "utc"),
   ...expandPowerShellSwitchPrefixForms("version", "v"),
   ...expandPowerShellSwitchPrefixForms("windowstyle", "w"),
   ...expandPowerShellSwitchPrefixForms("workingdirectory", "w"),
