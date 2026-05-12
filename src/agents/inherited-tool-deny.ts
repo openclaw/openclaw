@@ -1,6 +1,18 @@
 import { normalizeToolName } from "./tool-policy-shared.js";
 
-const MAX_INHERITED_TOOL_DENY_ENTRIES = 128;
+const ACP_UNSUPPORTED_INHERITED_TOOL_DENY = new Set([
+  "apply_patch",
+  "edit",
+  "exec",
+  "fs_delete",
+  "fs_move",
+  "fs_write",
+  "process",
+  "read",
+  "shell",
+  "spawn",
+  "write",
+]);
 
 export function normalizeInheritedToolDenylist(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -18,9 +30,6 @@ export function normalizeInheritedToolDenylist(value: unknown): string[] {
     }
     seen.add(normalized);
     result.push(normalized);
-    if (result.length >= MAX_INHERITED_TOOL_DENY_ENTRIES) {
-      break;
-    }
   }
   return result;
 }
@@ -28,4 +37,14 @@ export function normalizeInheritedToolDenylist(value: unknown): string[] {
 export function inheritedToolDenyPatch(value: unknown): { inheritedToolDeny?: string[] } {
   const inheritedToolDeny = normalizeInheritedToolDenylist(value);
   return inheritedToolDeny.length > 0 ? { inheritedToolDeny } : {};
+}
+
+export function findAcpUnsupportedInheritedToolDeny(value: unknown): string | undefined {
+  return normalizeInheritedToolDenylist(value).find((tool) =>
+    ACP_UNSUPPORTED_INHERITED_TOOL_DENY.has(tool),
+  );
+}
+
+export function formatAcpInheritedToolDenyError(toolName: string): string {
+  return `runtime="acp" is unavailable because the requester denies ${toolName}. Use runtime="subagent".`;
 }

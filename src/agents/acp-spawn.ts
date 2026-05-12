@@ -71,7 +71,11 @@ import {
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
-import { inheritedToolDenyPatch } from "./inherited-tool-deny.js";
+import {
+  findAcpUnsupportedInheritedToolDeny,
+  formatAcpInheritedToolDenyError,
+  inheritedToolDenyPatch,
+} from "./inherited-tool-deny.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
@@ -1157,6 +1161,16 @@ export async function spawnAcpDirect(
       status: "forbidden",
       errorCode: "runtime_policy",
       error: runtimePolicyError,
+    });
+  }
+  const acpUnsupportedInheritedTool = findAcpUnsupportedInheritedToolDeny(
+    ctx.inheritedToolDenylist,
+  );
+  if (acpUnsupportedInheritedTool) {
+    return createAcpSpawnFailure({
+      status: "forbidden",
+      errorCode: "runtime_policy",
+      error: formatAcpInheritedToolDenyError(acpUnsupportedInheritedTool),
     });
   }
 

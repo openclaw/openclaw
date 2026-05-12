@@ -10,6 +10,10 @@ import { callGateway } from "../../gateway/call.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import {
+  findAcpUnsupportedInheritedToolDeny,
+  formatAcpInheritedToolDenyError,
+} from "../inherited-tool-deny.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
@@ -309,6 +313,17 @@ export function createSessionsSpawnTool(
         return jsonResult({
           status: "error",
           error: resolveAcpUnavailableMessage(opts),
+          ...roleContext,
+        });
+      }
+      const acpUnsupportedInheritedTool =
+        runtime === "acp"
+          ? findAcpUnsupportedInheritedToolDeny(opts?.inheritedToolDenylist)
+          : undefined;
+      if (acpUnsupportedInheritedTool) {
+        return jsonResult({
+          status: "forbidden",
+          error: formatAcpInheritedToolDenyError(acpUnsupportedInheritedTool),
           ...roleContext,
         });
       }

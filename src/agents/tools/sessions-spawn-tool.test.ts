@@ -522,7 +522,7 @@ describe("sessions_spawn tool", () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      inheritedToolDenylist: ["exec", "process"],
+      inheritedToolDenylist: ["custom_control_tool"],
     });
 
     await tool.execute("call-acp-inherited-deny", {
@@ -532,7 +532,25 @@ describe("sessions_spawn tool", () => {
     });
 
     const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
-    expect(spawnContext.inheritedToolDenylist).toEqual(["exec", "process"]);
+    expect(spawnContext.inheritedToolDenylist).toEqual(["custom_control_tool"]);
+  });
+
+  it("rejects ACP spawns when inherited denies include command tools", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      inheritedToolDenylist: ["exec"],
+    });
+
+    const result = await tool.execute("call-acp-inherited-command-deny", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+    });
+
+    expectDetailFields(result.details, { status: "forbidden", role: "codex" });
+    expect(JSON.stringify(result.details)).toContain("requester denies exec");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
   it("forwards model override to ACP runtime spawns", async () => {
