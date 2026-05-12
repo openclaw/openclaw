@@ -158,7 +158,7 @@ function samePermissions(
   }
   return leftEntries.every(([key, value], index) => {
     const rightEntry = rightEntries[index];
-    return Boolean(rightEntry && rightEntry[0] === key && rightEntry[1] === value);
+    return rightEntry !== undefined && rightEntry[0] === key && rightEntry[1] === value;
   });
 }
 
