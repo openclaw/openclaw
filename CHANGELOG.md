@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - fix(memory-wiki): require admin scope for ingest [AI]. (#80897) Thanks @pgondhi987.
 - memory-wiki: require write scope for Obsidian search [AI]. (#80904) Thanks @pgondhi987.
 - Build: skip copied metadata for bundled plugins that are excluded from build entries, preventing update/status rebuilds from advertising missing QQ Bot runtime files. (#80925)
+- Codex app-server: wait briefly for startup native hook relay bridge registration, preserve fallback timeout budget, and report precise bridge/gateway diagnostics when the relay is unavailable.
 - Control UI/sessions: nest subagent sessions under their parent session in the session picker dropdown using a visual `└─ ` prefix, making the parent-child relationship clear. Fixes #77628. (#78623) Thanks @chinar-amrutkar.
 - Auto-reply: surface a visible error when the configured model backend fails and fallback produces no visible reply, while preserving intentional silent turns and side-effect-only deliveries. (#80917) Thanks @dutifulbob.
 - Agents/exec: skip redundant heartbeat wake-ups for subagent session exec completions, preventing spurious LLM invocations on parent sessions. Fixes #66748. (#66749) Thanks @ggzeng.
