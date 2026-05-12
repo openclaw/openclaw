@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { optionalStringEnum } from "openclaw/plugin-sdk/channel-actions";
 import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
@@ -26,18 +27,14 @@ export const MemorySearchSchema = Type.Object({
   query: Type.String(),
   maxResults: Type.Optional(Type.Number()),
   minScore: Type.Optional(Type.Number()),
-  corpus: Type.Optional(
-    Type.Union([Type.Literal("memory"), Type.Literal("wiki"), Type.Literal("all")]),
-  ),
+  corpus: optionalStringEnum(["memory", "wiki", "all"] as const),
 });
 
 export const MemoryGetSchema = Type.Object({
   path: Type.String(),
   from: Type.Optional(Type.Number()),
   lines: Type.Optional(Type.Number()),
-  corpus: Type.Optional(
-    Type.Union([Type.Literal("memory"), Type.Literal("wiki"), Type.Literal("all")]),
-  ),
+  corpus: optionalStringEnum(["memory", "wiki", "all"] as const),
 });
 
 export function resolveMemoryToolContext(options: {

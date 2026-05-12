@@ -5,6 +5,7 @@ import {
   setMemorySearchImpl,
 } from "./memory-tool-manager-mock.js";
 import {
+  createMemoryGetToolOrThrow,
   createMemorySearchToolOrThrow,
   expectUnavailableMemorySearchDetails,
 } from "./tools.test-helpers.js";
@@ -102,5 +103,30 @@ describe("memory_search unavailable payloads", () => {
     expect((result.details as { debug?: { searchMs?: number } }).debug?.searchMs).toEqual(
       expect.any(Number),
     );
+  });
+});
+
+describe("memory tool schema regression", () => {
+  function assertNoCompositeKeywords(schema: unknown, path = "root"): void {
+    if (schema === null || typeof schema !== "object") {
+      return;
+    }
+    const keys = Object.keys(schema as Record<string, unknown>);
+    for (const key of ["anyOf", "oneOf", "allOf"]) {
+      expect(keys).not.toContain(key);
+    }
+    for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+      assertNoCompositeKeywords(value, `${path}.${key}`);
+    }
+  }
+
+  it("memory_search schema does not contain anyOf/oneOf/allOf", () => {
+    const tool = createMemorySearchToolOrThrow();
+    assertNoCompositeKeywords(tool.parameters);
+  });
+
+  it("memory_get schema does not contain anyOf/oneOf/allOf", () => {
+    const tool = createMemoryGetToolOrThrow();
+    assertNoCompositeKeywords(tool.parameters);
   });
 });
