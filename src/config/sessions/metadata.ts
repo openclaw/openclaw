@@ -8,7 +8,20 @@ import {
 } from "../../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
-import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
+import type { GroupKeyResolution, SessionEntry } from "./types.js";
+
+type SessionOrigin = {
+  label?: string;
+  provider?: string;
+  surface?: string;
+  chatType?: string;
+  from?: string;
+  to?: string;
+  nativeChannelId?: string;
+  nativeDirectUserId?: string;
+  accountId?: string;
+  threadId?: string | number;
+};
 
 export function deriveSessionOrigin(
   ctx: MsgContext,

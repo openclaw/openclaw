@@ -160,7 +160,6 @@ async function killSubagentRun(params: {
   }
   const childSessionKey = params.entry.childSessionKey;
   const resolved = resolveSessionEntryForKey({
-    cfg: params.cfg,
     key: childSessionKey,
     cache: params.cache,
   });
@@ -519,7 +518,6 @@ export async function steerControlledSubagentRun(params: {
   markSubagentRunForSteerRestart(params.entry.runId);
 
   const targetSession = resolveSessionEntryForKey({
-    cfg: params.cfg,
     key: params.entry.childSessionKey,
     cache: new Map<string, SessionEntry | undefined>(),
   });

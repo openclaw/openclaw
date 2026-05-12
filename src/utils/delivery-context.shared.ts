@@ -44,6 +44,10 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
 
 export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSource): {
   deliveryContext?: DeliveryContext;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
 } {
   if (!source) {
     return {
@@ -53,7 +57,10 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
 
   const merged = mergeDeliveryContext(
     normalizeDeliveryContext({
-      channel: source.channel,
+      channel: source.lastChannel ?? source.channel,
+      to: source.lastTo,
+      accountId: source.lastAccountId,
+      threadId: source.lastThreadId,
     }),
     normalizeDeliveryContext(source.deliveryContext),
   );
@@ -66,6 +73,10 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
 
   return {
     deliveryContext: merged,
+    lastChannel: merged.channel,
+    lastTo: merged.to,
+    lastAccountId: merged.accountId,
+    lastThreadId: merged.threadId,
   };
 }
 

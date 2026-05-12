@@ -13,7 +13,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
-import { type InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-path.js";
+import { type InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-options.js";
 import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   INSTALLED_PLUGIN_INDEX_VERSION,

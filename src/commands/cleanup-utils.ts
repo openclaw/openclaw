@@ -155,3 +155,5 @@ export async function listAgentSessionStatePaths(stateDir: string): Promise<stri
     return [];
   }
 }
+
+export const listAgentRuntimeStatePaths = listAgentSessionStatePaths;

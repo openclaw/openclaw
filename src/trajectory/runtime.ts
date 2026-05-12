@@ -1,7 +1,6 @@
 import type { AgentToolArtifactStore } from "../agents/filesystem/agent-filesystem.js";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { redactSecrets } from "../logging/redact.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";

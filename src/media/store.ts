@@ -23,6 +23,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveConfigDir } from "../utils.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
 
@@ -45,7 +46,7 @@ type MediaBlobRow = {
   subdir: string;
   content_type: string | null;
   size_bytes: number;
-  blob: Buffer;
+  blob: Uint8Array;
   created_at: number;
   updated_at: number;
 };
@@ -91,6 +92,10 @@ function resolveMediaScopedDir(subdir: string, caller: string): string {
   const safeSubdir = resolveMediaSubdir(subdir, caller);
   const dir = safeSubdir ? path.join(mediaDir, safeSubdir) : mediaDir;
   return dir;
+}
+
+function resolveLegacyMediaDir(env: NodeJS.ProcessEnv): string {
+  return path.join(resolveConfigDir(env), "media");
 }
 
 function resolveMediaRelativePath(id: string, subdir: string, caller: string): string {
@@ -274,7 +279,7 @@ export async function ensureMediaDir() {
 export async function legacyMediaFilesExist(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
-  const root = resolveMediaDir(env);
+  const root = resolveLegacyMediaDir(env);
   const candidates = await legacyMediaFileCandidates(root);
   return candidates.length > 0;
 }
@@ -282,7 +287,7 @@ export async function legacyMediaFilesExist(
 export async function importLegacyMediaFilesToSqlite(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<LegacyMediaImportResult> {
-  const root = resolveMediaDir(env);
+  const root = resolveLegacyMediaDir(env);
   const candidates = await legacyMediaFileCandidates(root);
   const result: LegacyMediaImportResult = {
     files: candidates.length,
@@ -672,6 +677,36 @@ export async function saveMediaBuffer(
   });
 }
 
+export async function saveMediaBufferWithId(params: {
+  subdir: string;
+  id: string;
+  buffer: Buffer;
+  contentType?: string;
+  maxBytes?: number;
+}): Promise<SavedMedia> {
+  const maxBytes = params.maxBytes ?? MAX_BYTES;
+  if (params.buffer.byteLength > maxBytes) {
+    throw new Error(`Media exceeds ${formatMediaLimitMb(maxBytes)} limit`);
+  }
+  const safeSubdir = resolveMediaSubdir(params.subdir, "saveMediaBufferWithId");
+  resolveMediaRelativePath(params.id, safeSubdir, "saveMediaBufferWithId");
+  const dir = resolveMediaScopedDir(safeSubdir, "saveMediaBufferWithId");
+  const mime = await detectMime({ buffer: params.buffer, headerMime: params.contentType });
+  const materializedPath = await writeSavedMediaBuffer({
+    subdir: safeSubdir,
+    id: params.id,
+    buffer: params.buffer,
+    contentType: mime,
+  });
+  return buildSavedMediaResult({
+    dir,
+    id: params.id,
+    size: params.buffer.byteLength,
+    contentType: mime,
+    path: materializedPath,
+  });
+}
+
 /**
  * Resolves a media ID saved by saveMediaBuffer to its absolute physical path.
  *
@@ -763,7 +798,7 @@ export async function readMediaBuffer(
  * @param id     The media ID as returned by SavedMedia.id.
  * @param subdir The subdirectory the file was saved into (default "inbound").
  */
-export async function deleteMediaBuffer(id: string, subdir: "inbound" = "inbound"): Promise<void> {
+export async function deleteMediaBuffer(id: string, subdir = "inbound"): Promise<void> {
   const safeSubdir = resolveMediaSubdir(subdir, "deleteMediaBuffer");
   resolveMediaRelativePath(id, subdir, "deleteMediaBuffer");
   runOpenClawStateWriteTransaction((database) => {

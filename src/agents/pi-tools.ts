@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
@@ -66,6 +67,7 @@ import {
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
+import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import {
   isSubagentEnvelopeSession,
@@ -115,6 +117,18 @@ type BashToolsModule = typeof import("./bash-tools.js");
 const bashToolsModuleLoader = createLazyImportLoader<BashToolsModule>(
   () => import("./bash-tools.js"),
 );
+
+function readOnlyAgentWorkspaceMount(
+  sandbox: SandboxContext,
+): readonly [{ containerRoot: string; hostRoot: string }] | undefined {
+  if (
+    sandbox.workspaceAccess !== "ro" ||
+    path.resolve(sandbox.agentWorkspaceDir) === path.resolve(sandbox.workspaceDir)
+  ) {
+    return undefined;
+  }
+  return [{ containerRoot: SANDBOX_AGENT_WORKSPACE_MOUNT, hostRoot: sandbox.agentWorkspaceDir }];
+}
 
 function loadBashToolsModule(): Promise<BashToolsModule> {
   return bashToolsModuleLoader.load();

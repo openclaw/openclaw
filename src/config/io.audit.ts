@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
-import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { resolveStateDir } from "./paths.js";
 

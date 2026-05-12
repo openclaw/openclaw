@@ -5,7 +5,7 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   isRetryableHeartbeatBusySkipReason,
 } from "../../infra/heartbeat-wake.js";
-import { DEFAULT_AGENT_ID, isSubagentSessionKey } from "../../routing/session-key.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,

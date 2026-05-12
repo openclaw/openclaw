@@ -30,6 +30,7 @@ type ChannelModelOverrideParams = {
   groupChatType?: string | null;
   groupChannel?: string | null;
   groupSubject?: string | null;
+  parentSessionKey?: string | null;
   parentConversationId?: string | null;
   parentConversationCandidates?: readonly (string | null | undefined)[];
 };

@@ -10,7 +10,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { resolveGroupSessionKey } from "./group.js";
-import { deriveSessionRouteMetadata } from "./metadata.js";
+import { deriveSessionOrigin } from "./metadata.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 
 export type ConversationKind = "channel" | "direct" | "group";
@@ -155,7 +155,7 @@ export function conversationIdentityFromMsgContext(params: {
   deliveryContext?: DeliveryContext;
   groupResolution?: GroupKeyResolution | null;
 }): ConversationIdentity | null {
-  const route = deriveSessionRouteMetadata(params.ctx);
+  const route = deriveSessionOrigin(params.ctx);
   const deliveryContext = mergeDeliveryContext(
     normalizeDeliveryContext(params.deliveryContext),
     normalizeDeliveryContext({

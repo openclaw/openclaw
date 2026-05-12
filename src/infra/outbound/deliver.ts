@@ -42,7 +42,7 @@ import { emitDiagnosticEvent, type DiagnosticMessageDeliveryKind } from "../diag
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
-import type { OutboundDeliveryResult } from "./deliver-types.js";
+import type { OutboundDeliveryResult, OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import {
   attachOutboundDeliveryCommitHook,
   runOutboundDeliveryCommitHooks,
@@ -67,7 +67,6 @@ import {
 import type { DeliveryMirror } from "./mirror.js";
 import {
   createOutboundPayloadPlan,
-  projectOutboundPayloadPlanForDelivery,
   summarizeOutboundPayloadForTransport,
   type NormalizedOutboundPayload,
   type OutboundPayloadPlan,
@@ -636,6 +635,7 @@ type DeliverOutboundPayloadsCoreParams = {
 
 type DeliverOutboundPayloadsCoreRuntimeParams = DeliverOutboundPayloadsCoreParams & {
   onPlatformSendStart?: () => Promise<void>;
+  onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
 };
 
 function collectPayloadMediaSources(plan: readonly OutboundPayloadPlan[]): string[] {
@@ -650,6 +650,7 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
   queuePolicy?: OutboundDeliveryQueuePolicy;
   renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
   onDeliveryIntent?: (intent: OutboundDeliveryIntent) => void;
+  onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
 };
 
 type MessageSentEvent = {
@@ -745,9 +746,10 @@ function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload |
 function normalizePayloadsForChannelDelivery(
   plan: readonly OutboundPayloadPlan[],
   handler: ChannelHandler,
-): ReplyPayload[] {
-  const normalizedPayloads: ReplyPayload[] = [];
-  for (const payload of projectOutboundPayloadPlanForDelivery(plan)) {
+): Array<{ sourceIndex: number; payload: ReplyPayload }> {
+  const normalizedPayloads: Array<{ sourceIndex: number; payload: ReplyPayload }> = [];
+  for (const entry of plan) {
+    const payload = entry.payload;
     let sanitizedPayload = stripInternalRuntimeScaffoldingFromPayload(payload);
     if (handler.sanitizeText && sanitizedPayload.text) {
       if (!handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)) {
@@ -766,7 +768,7 @@ function normalizePayloadsForChannelDelivery(
         )
       : null;
     if (normalized) {
-      normalizedPayloads.push(normalized);
+      normalizedPayloads.push({ sourceIndex: entry.sourceIndex, payload: normalized });
     }
   }
   return normalizedPayloads;
@@ -1159,6 +1161,12 @@ export async function deliverOutboundPayloads(
   return claimResult.value;
 }
 
+export async function deliverOutboundPayloadsInternal(
+  params: DeliverOutboundPayloadsParams,
+): Promise<OutboundDeliveryResult[]> {
+  return await deliverOutboundPayloads(params);
+}
+
 async function deliverOutboundPayloadsWithQueueCleanup(
   params: DeliverOutboundPayloadsParams,
   queueId: string | null,
@@ -1361,7 +1369,7 @@ async function deliverOutboundPayloadsCore(
       },
     );
   }
-  for (const payload of normalizedPayloads) {
+  for (const { sourceIndex, payload } of normalizedPayloads) {
     let payloadSummary = buildPayloadSummary(payload);
     let deliveryKind: DiagnosticMessageDeliveryKind = "other";
     let deliveryStartedAt = 0;
@@ -1420,6 +1428,11 @@ async function deliverOutboundPayloadsCore(
         threadId: params.threadId,
       });
       if (hookResult.cancelled) {
+        params.onPayloadDeliveryOutcome?.({
+          index: sourceIndex,
+          status: "suppressed",
+          reason: "cancelled_by_message_sending_hook",
+        });
         continue;
       }
       const renderedPayload = stripInternalRuntimeScaffoldingFromPayload(
@@ -1434,6 +1447,11 @@ async function deliverOutboundPayloadsCore(
           )
         : null;
       if (!effectivePayload) {
+        params.onPayloadDeliveryOutcome?.({
+          index: sourceIndex,
+          status: "suppressed",
+          reason: "empty_after_message_sending_hook",
+        });
         continue;
       }
       payloadSummary = buildPayloadSummary(effectivePayload);
@@ -1471,6 +1489,11 @@ async function deliverOutboundPayloadsCore(
         );
         if (!hasDeliveryResultIdentity(delivery)) {
           completeDeliveryDiagnostics(0);
+          params.onPayloadDeliveryOutcome?.({
+            index: sourceIndex,
+            status: "suppressed",
+            reason: "adapter_returned_no_identity",
+          });
           continue;
         }
         results.push(delivery);
@@ -1491,6 +1514,11 @@ async function deliverOutboundPayloadsCore(
           success: true,
           content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId: delivery.messageId,
+        });
+        params.onPayloadDeliveryOutcome?.({
+          index: sourceIndex,
+          status: "sent",
+          results: [delivery],
         });
         continue;
       }
@@ -1527,6 +1555,13 @@ async function deliverOutboundPayloadsCore(
           content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId,
         });
+        params.onPayloadDeliveryOutcome?.({
+          index: sourceIndex,
+          status: deliveredResults.length > 0 ? "sent" : "suppressed",
+          ...(deliveredResults.length > 0
+            ? { results: deliveredResults }
+            : { reason: "no_visible_payload" }),
+        } as OutboundPayloadDeliveryOutcome);
         continue;
       }
 
@@ -1568,6 +1603,13 @@ async function deliverOutboundPayloadsCore(
           content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId,
         });
+        params.onPayloadDeliveryOutcome?.({
+          index: sourceIndex,
+          status: deliveredResults.length > 0 ? "sent" : "suppressed",
+          ...(deliveredResults.length > 0
+            ? { results: deliveredResults }
+            : { reason: "no_visible_payload" }),
+        } as OutboundPayloadDeliveryOutcome);
         continue;
       }
 
@@ -1610,6 +1652,11 @@ async function deliverOutboundPayloadsCore(
         content: payloadSummary.hookContent ?? payloadSummary.text,
         messageId: lastMessageId,
       });
+      params.onPayloadDeliveryOutcome?.({
+        index: sourceIndex,
+        status: "sent",
+        results: results.slice(beforeCount),
+      });
     } catch (err) {
       errorDeliveryDiagnostics(err);
       emitMessageSent({
@@ -1620,6 +1667,13 @@ async function deliverOutboundPayloadsCore(
       if (!params.bestEffort) {
         throw err;
       }
+      params.onPayloadDeliveryOutcome?.({
+        index: sourceIndex,
+        status: "failed",
+        error: err,
+        sentBeforeError: results.length > 0,
+        stage: "platform_send",
+      });
       params.onError?.(err, payloadSummary);
     }
   }

@@ -398,7 +398,7 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
     const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
       sessionKey: childSessionKey,
     });
-    if (!acpEntry || acpEntry.readFailed) {
+    if (!acpEntry || acpEntry.storeReadFailed) {
       return true;
     }
     return Boolean(acpEntry.entry);
@@ -537,7 +537,7 @@ function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
     return false;
   }
   const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({ sessionKey });
-  if (!acpEntry || acpEntry.readFailed || !acpEntry.acp) {
+  if (!acpEntry || acpEntry.storeReadFailed || !acpEntry.acp) {
     return false;
   }
   if (!isParentOwnedAcpSessionTask(task, acpEntry)) {

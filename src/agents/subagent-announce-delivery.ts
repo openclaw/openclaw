@@ -446,7 +446,13 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
   const agentId = resolveAgentIdFromSessionKey(canonicalKey);
   const entry = getSessionEntry({ agentId, sessionKey: canonicalKey });
-  return { cfg, entry, canonicalKey };
+  const deliveryContext = normalizeDeliveryContext({
+    channel: entry?.lastChannel ?? entry?.deliveryContext?.channel,
+    to: entry?.lastTo ?? entry?.deliveryContext?.to,
+    accountId: entry?.lastAccountId ?? entry?.deliveryContext?.accountId,
+    threadId: entry?.lastThreadId ?? entry?.deliveryContext?.threadId,
+  });
+  return { cfg, entry, deliveryContext, canonicalKey };
 }
 
 export function loadSessionEntryByKey(sessionKey: string) {
@@ -487,7 +493,7 @@ async function maybeQueueSubagentAnnounce(params: {
 
   const queueSettings = resolveQueueSettings({
     cfg,
-    channel: entry?.lastChannel ?? entry?.deliveryContext?.channel ?? entry?.origin?.provider,
+    channel: entry?.lastChannel ?? entry?.deliveryContext?.channel,
     sessionEntry: entry,
   });
 

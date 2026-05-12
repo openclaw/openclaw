@@ -16,11 +16,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
-import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import type { AgentTool } from "../agent-core-contract.js";
-import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import type { ImageContent } from "../pi-ai-contract.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { detectImageReferences, loadImageFromRef } from "../pi-embedded-runner/run/images.js";

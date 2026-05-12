@@ -91,7 +91,6 @@ import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runt
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
-import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
 import {
   getOrCreateSessionMcpRuntime,

@@ -6,13 +6,7 @@ import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelCatalog } from "./models-config.js";
-import {
-  completeSimple,
-  getModel,
-  type Api,
-  type AssistantMessage,
-  type Model,
-} from "./pi-ai-contract.js";
+import { completeSimple, type Api, type AssistantMessage, type Model } from "./pi-ai-contract.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { buildAssistantMessageWithZeroUsage } from "./stream-message-shared.js";
 

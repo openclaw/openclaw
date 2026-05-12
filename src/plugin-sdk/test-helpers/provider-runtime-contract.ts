@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderRuntimeModel } from "../plugin-entry.js";
 import { registerProviderPlugin, requireRegisteredProvider } from "../plugin-test-runtime.js";
