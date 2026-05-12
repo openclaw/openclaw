@@ -257,7 +257,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
   const cachedRefreshFailures = new Map<
     string,
     {
-      credential: Pick<OAuthCredential, "access" | "refresh" | "expires">;
+      credentialFingerprint: string;
       error: unknown;
     }
   >();
@@ -266,17 +266,23 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     return `${provider}\u0000${profileId}`;
   }
 
+  function refreshFailureCredentialFingerprint(credential: OAuthCredential): string {
+    return JSON.stringify(
+      Object.entries(credential).sort(([left], [right]) => left.localeCompare(right)),
+    );
+  }
+
   function getCachedRefreshFailure(params: {
     provider: string;
     profileId: string;
-    credential: Pick<OAuthCredential, "access" | "refresh" | "expires">;
+    credential: OAuthCredential;
   }): unknown | null {
     const key = refreshQueueKey(params.provider, params.profileId);
     const cached = cachedRefreshFailures.get(key);
     if (!cached) {
       return null;
     }
-    if (hasOAuthCredentialChanged(cached.credential, params.credential)) {
+    if (cached.credentialFingerprint !== refreshFailureCredentialFingerprint(params.credential)) {
       cachedRefreshFailures.delete(key);
       return null;
     }
@@ -286,15 +292,11 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
   function rememberRefreshFailure(params: {
     provider: string;
     profileId: string;
-    credential: Pick<OAuthCredential, "access" | "refresh" | "expires">;
+    credential: OAuthCredential;
     error: unknown;
   }): void {
     cachedRefreshFailures.set(refreshQueueKey(params.provider, params.profileId), {
-      credential: {
-        access: params.credential.access,
-        refresh: params.credential.refresh,
-        expires: params.credential.expires,
-      },
+      credentialFingerprint: refreshFailureCredentialFingerprint(params.credential),
       error: params.error,
     });
   }
@@ -617,7 +619,11 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     } catch (error) {
       const refreshedStore = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
       const refreshed = refreshedStore.profiles[params.profileId];
-      if (refreshed?.type === "oauth" && hasUsableOAuthCredential(refreshed)) {
+      if (
+        refreshed?.type === "oauth" &&
+        hasUsableOAuthCredential(refreshed) &&
+        (!params.forceRefresh || hasOAuthCredentialChanged(params.credential, refreshed))
+      ) {
         return {
           apiKey: await adapter.buildApiKey(refreshed.provider, refreshed, {
             cfg: params.cfg,
