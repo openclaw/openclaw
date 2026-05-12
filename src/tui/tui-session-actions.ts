@@ -337,6 +337,14 @@ export function createSessionActions(context: SessionActionContext) {
           continue;
         }
         if (message.role === "assistant") {
+          // Skip error-stop turns in history — these are synthetic fallback entries
+          // written by session-file-repair when a stream attempt failed before
+          // producing content (e.g. gateway not yet connected at boot time).
+          // Displaying them as "[assistant turn failed before producing content]"
+          // spams the chat scroll on session reload with stale noise.
+          if (message.stopReason === "error") {
+            continue;
+          }
           const text = extractTextFromMessage(message, {
             includeThinking: state.showThinking,
           });

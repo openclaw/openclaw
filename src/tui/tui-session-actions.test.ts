@@ -415,4 +415,61 @@ describe("tui session actions", () => {
     expect(state.currentSessionId).toBe("session-main");
     expect(rememberSessionKey).toHaveBeenCalledWith("agent:main:main");
   });
+
+  it("suppresses error-stop assistant turns during history replay", async () => {
+    // Regression: stream-error fallback turns (stopReason: "error") accumulated
+    // in session files from failed boot-time connections were replayed verbatim
+    // as "[assistant turn failed before producing content]" chat lines, spamming
+    // the scroll on every session load. They must be silently skipped.
+    const finalizeAssistant = vi.fn();
+    const addSystem = vi.fn();
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "model not ready",
+          content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+        },
+        {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "gateway not connected",
+          content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+        },
+        {
+          role: "assistant",
+          stopReason: "end_turn",
+          content: [{ type: "text", text: "Hello! How can I help?" }],
+        },
+      ],
+    });
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn().mockResolvedValue({
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: {},
+          sessions: [{ key: "agent:main:main", sessionId: "session-main" }],
+        }),
+        loadHistory,
+      } as unknown as TuiBackend,
+      chatLog: {
+        addSystem,
+        clearAll: vi.fn(),
+        finalizeAssistant,
+      } as unknown as import("./components/chat-log.js").ChatLog,
+    });
+
+    await runLoadHistory();
+
+    // Only the non-error assistant turn should be rendered
+    expect(finalizeAssistant).toHaveBeenCalledTimes(1);
+    expect(finalizeAssistant).toHaveBeenCalledWith("Hello! How can I help?");
+    // The fallback error text must never appear in the chat log
+    expect(addSystem).not.toHaveBeenCalledWith("[assistant turn failed before producing content]");
+  });
 });
