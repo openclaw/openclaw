@@ -14,6 +14,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createMessageTool } from "../../../../src/agents/tools/message-tool.js";
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
   createCodexDynamicToolBridge,
@@ -316,6 +317,49 @@ describe("createCodexDynamicToolBridge", () => {
         threadId: "thread-ts-1",
         text: "hello from Codex",
         mediaUrls: ["/tmp/reply.png"],
+      },
+    ]);
+  });
+
+  it("treats same-session WebChat message sends as successful codex tool results", async () => {
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "webchat",
+      currentChannelId: "webchat-session-1",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runMessageAction: vi.fn(),
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "Visible reply from Codex.",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.contentItems).toHaveLength(1);
+    const content = result.contentItems[0];
+    expect(content?.type).toBe("inputText");
+    const details = JSON.parse(content?.type === "inputText" ? content.text : "{}") as Record<
+      string,
+      unknown
+    >;
+    expect(details).toMatchObject({
+      ok: true,
+      status: "ok",
+      deliveryStatus: "sent",
+      delivery: "webchat-session",
+    });
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+    expect(bridge.telemetry.messagingToolSentTexts).toEqual(["Visible reply from Codex."]);
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "message",
+        text: "Visible reply from Codex.",
       },
     ]);
   });

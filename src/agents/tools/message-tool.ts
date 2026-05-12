@@ -827,7 +827,8 @@ function resolveSameSessionWebchatSendResult(params: {
   const message = readMessageToolText(params.args);
   return jsonResult({
     ok: true,
-    status: "sent",
+    status: "ok",
+    deliveryStatus: "sent",
     delivery: "webchat-session",
     channel: INTERNAL_MESSAGE_CHANNEL,
     to: target ?? currentTarget ?? "current",

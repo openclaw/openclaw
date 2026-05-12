@@ -507,7 +507,8 @@ describe("message tool agent routing", () => {
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
     expect(result.details).toMatchObject({
       ok: true,
-      status: "sent",
+      status: "ok",
+      deliveryStatus: "sent",
       delivery: "webchat-session",
       channel: "webchat",
       to: "webchat-session-1",
