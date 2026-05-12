@@ -13,7 +13,7 @@ import {
 } from "../tasks/task-registry.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { tasksAuditCommand, tasksMaintenanceCommand } from "./tasks.js";
+import { tasksAuditCommand, tasksListCommand, tasksMaintenanceCommand } from "./tasks.js";
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -55,6 +55,52 @@ async function withTaskCommandStateDir(
 describe("tasks commands", () => {
   beforeEach(() => {
     vi.useRealTimers();
+  });
+
+  it("shows stale active tasks distinctly in the list view", async () => {
+    await withTaskCommandStateDir(async () => {
+      const now = Date.now();
+      vi.useFakeTimers();
+      vi.setSystemTime(now - 40 * 60_000);
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "stale-run",
+        status: "running",
+        task: "Long-running worker",
+      });
+      vi.setSystemTime(now);
+
+      const runtime = createRuntime();
+      await tasksListCommand({}, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n");
+      expect(output).toContain("1 running (1 stale)");
+      expect(output).toContain("stale-run");
+
+      const jsonRuntime = createRuntime();
+      await tasksListCommand({ json: true }, jsonRuntime);
+      const payload = JSON.parse(String(vi.mocked(jsonRuntime.log).mock.calls[0]?.[0])) as {
+        tasks: Array<{
+          health?: {
+            displayStatus: string;
+            stale: boolean;
+            auditCodes: string[];
+            maxAgeMs?: number;
+          };
+        }>;
+      };
+      expect(payload.tasks[0]?.health).toMatchObject({
+        displayStatus: "stale-run",
+        stale: true,
+        auditCodes: ["stale_running"],
+      });
+      expect(payload.tasks[0]?.health?.maxAgeMs).toBeGreaterThanOrEqual(40 * 60_000);
+    });
   });
 
   afterEach(() => {

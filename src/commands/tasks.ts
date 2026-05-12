@@ -241,13 +241,69 @@ function formatTaskStatusCell(status: string, rich: boolean) {
   if (status === "failed" || status === "lost" || status === "timed_out") {
     return theme.error(padded);
   }
+  if (status === "stale-run" || status === "stale-q") {
+    return theme.warn(padded);
+  }
   if (status === "running") {
     return theme.accentBright(padded);
   }
   return theme.muted(padded);
 }
 
-function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
+type TaskListHealth = {
+  displayStatus: string;
+  stale: boolean;
+  auditCodes: TaskAuditCode[];
+  maxAgeMs?: number;
+};
+
+function buildTaskListHealth(tasks: TaskRecord[]): Map<string, TaskListHealth> {
+  const healthByTaskId = new Map<string, TaskListHealth>();
+  for (const task of tasks) {
+    healthByTaskId.set(task.taskId, {
+      displayStatus: task.status,
+      stale: false,
+      auditCodes: [],
+    });
+  }
+  for (const finding of listTaskAuditFindings({ tasks })) {
+    const health = healthByTaskId.get(finding.task.taskId);
+    if (!health) {
+      continue;
+    }
+    health.auditCodes.push(finding.code);
+    if (typeof finding.ageMs === "number") {
+      health.maxAgeMs = Math.max(health.maxAgeMs ?? 0, finding.ageMs);
+    }
+    if (finding.code === "stale_running") {
+      health.displayStatus = "stale-run";
+      health.stale = true;
+    } else if (finding.code === "stale_queued") {
+      health.displayStatus = "stale-q";
+      health.stale = true;
+    }
+  }
+  return healthByTaskId;
+}
+
+function taskListHealthFor(
+  healthByTaskId: ReadonlyMap<string, TaskListHealth>,
+  task: TaskRecord,
+): TaskListHealth {
+  return (
+    healthByTaskId.get(task.taskId) ?? {
+      displayStatus: task.status,
+      stale: false,
+      auditCodes: [],
+    }
+  );
+}
+
+function formatTaskRows(
+  tasks: TaskRecord[],
+  rich: boolean,
+  healthByTaskId: ReadonlyMap<string, TaskListHealth> = new Map(),
+) {
   const header = [
     "Task".padEnd(ID_PAD),
     "Kind".padEnd(RUNTIME_PAD),
@@ -269,7 +325,7 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
     const line = [
       shortToken(task.taskId).padEnd(ID_PAD),
       task.runtime.padEnd(RUNTIME_PAD),
-      formatTaskStatusCell(task.status, rich),
+      formatTaskStatusCell(taskListHealthFor(healthByTaskId, task).displayStatus, rich),
       task.deliveryStatus.padEnd(DELIVERY_PAD),
       shortToken(task.runId, RUN_PAD).padEnd(RUN_PAD),
       truncate(normalizeOptionalString(task.childSessionKey) || "n/a", 36).padEnd(36),
@@ -280,9 +336,14 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
   return lines;
 }
 
-function formatTaskListSummary(tasks: TaskRecord[]) {
+function formatTaskListSummary(
+  tasks: TaskRecord[],
+  healthByTaskId: ReadonlyMap<string, TaskListHealth> = new Map(),
+) {
   const summary = summarizeTaskRecords(tasks);
-  return `${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${summary.failures} issues`;
+  const staleCount = [...healthByTaskId.values()].filter((health) => health.stale).length;
+  const staleSuffix = staleCount > 0 ? ` (${staleCount} stale)` : "";
+  return `${summary.byStatus.queued} queued · ${summary.byStatus.running} running${staleSuffix} · ${summary.failures} issues`;
 }
 
 function formatAgeMs(ageMs: number | undefined): string {
@@ -443,6 +504,8 @@ export async function tasksListCommand(
     return true;
   });
 
+  const healthByTaskId = buildTaskListHealth(tasks);
+
   if (opts.json) {
     runtime.log(
       JSON.stringify(
@@ -450,7 +513,10 @@ export async function tasksListCommand(
           count: tasks.length,
           runtime: runtimeFilter ?? null,
           status: statusFilter ?? null,
-          tasks,
+          tasks: tasks.map((task) => ({
+            ...task,
+            health: taskListHealthFor(healthByTaskId, task),
+          })),
         },
         null,
         2,
@@ -460,7 +526,7 @@ export async function tasksListCommand(
   }
 
   runtime.log(info(`Background tasks: ${tasks.length}`));
-  runtime.log(info(`Task pressure: ${formatTaskListSummary(tasks)}`));
+  runtime.log(info(`Task pressure: ${formatTaskListSummary(tasks, healthByTaskId)}`));
   if (runtimeFilter) {
     runtime.log(info(`Runtime filter: ${runtimeFilter}`));
   }
@@ -474,7 +540,7 @@ export async function tasksListCommand(
     return;
   }
   const rich = isRich();
-  for (const line of formatTaskRows(tasks, rich)) {
+  for (const line of formatTaskRows(tasks, rich, healthByTaskId)) {
     runtime.log(line);
   }
 }
