@@ -1,9 +1,10 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { clearHealthChecksForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearConfigCache } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { policyCheckCommand } from "./cli.js";
+import { policyCheckCommand, policyDiffCommand, policyWatchCommand } from "./cli.js";
 import { resetPolicyDoctorChecksForTest } from "./doctor/register.js";
 import {
   policyAttestationHash,
@@ -284,5 +285,114 @@ describe("policy commands", () => {
     expect(parsed.findings).toEqual([
       expect.objectContaining({ checkId: "policy/config-invalid", severity: "error" }),
     ]);
+  });
+
+  it("compares policy check outputs without treating checkedAt as drift", async () => {
+    const beforePath = join(workspaceDir, "before.json");
+    const afterPath = join(workspaceDir, "after.json");
+    const base = {
+      ok: true,
+      attestation: {
+        checkedAt: "2026-05-10T20:00:00.000Z",
+        policy: { path: "policy.jsonc", hash: "sha256:policy" },
+        workspace: { scope: "policy", hash: "sha256:evidence" },
+        findingsHash: "sha256:findings",
+        attestationHash: "sha256:attestation",
+      },
+      findings: [],
+    };
+    await fs.writeFile(beforePath, JSON.stringify(base), "utf-8");
+    await fs.writeFile(
+      afterPath,
+      JSON.stringify({
+        ...base,
+        attestation: {
+          ...base.attestation,
+          checkedAt: "2026-05-10T20:01:00.000Z",
+        },
+      }),
+      "utf-8",
+    );
+    const output: string[] = [];
+
+    const exitCode = await policyDiffCommand(
+      beforePath,
+      afterPath,
+      { json: true },
+      {
+        writeStdout(value) {
+          output.push(value);
+        },
+        error(value) {
+          output.push(value);
+        },
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      changed: [],
+      before: {
+        checkedAt: "2026-05-10T20:00:00.000Z",
+      },
+      after: {
+        checkedAt: "2026-05-10T20:01:00.000Z",
+      },
+    });
+  });
+
+  it("reports policy evidence drift between policy check outputs", async () => {
+    const beforePath = join(workspaceDir, "before.json");
+    const afterPath = join(workspaceDir, "after.json");
+    await fs.writeFile(
+      beforePath,
+      JSON.stringify({
+        ok: true,
+        attestation: {
+          workspace: { scope: "policy", hash: "sha256:evidence-before" },
+          findingsHash: "sha256:findings",
+          attestationHash: "sha256:attestation-before",
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      afterPath,
+      JSON.stringify({
+        ok: true,
+        attestation: {
+          workspace: { scope: "policy", hash: "sha256:evidence-after" },
+          findingsHash: "sha256:findings",
+          attestationHash: "sha256:attestation-after",
+        },
+      }),
+      "utf-8",
+    );
+    const output: string[] = [];
+
+    const exitCode = await policyDiffCommand(
+      beforePath,
+      afterPath,
+      { json: true },
+      {
+        writeStdout(value) {
+          output.push(value);
+        },
+        error(value) {
+          output.push(value);
+        },
+      },
+    );
+
+    expect(exitCode).toBe(1);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      changed: ["evidence", "attestation"],
+      before: {
+        evidenceHash: "sha256:evidence-before",
+      },
+      after: {
+        evidenceHash: "sha256:evidence-after",
+      },
+    });
   });
 });
