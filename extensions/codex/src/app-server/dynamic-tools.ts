@@ -279,7 +279,9 @@ function collectToolTelemetry(params: {
     return;
   }
   params.telemetry.didSendViaMessagingTool = true;
-  const text = readFirstString(params.args, ["text", "message", "body", "content"]);
+  const text =
+    readToolResultDetailString(params.result, ["text", "message", "body", "content"]) ??
+    readFirstString(params.args, ["text", "message", "body", "content"]);
   if (text) {
     params.telemetry.messagingToolSentTexts.push(text);
   }
@@ -370,6 +372,16 @@ function readFirstString(record: Record<string, unknown>, keys: string[]): strin
     }
   }
   return undefined;
+}
+
+function readToolResultDetailString(
+  result: AgentToolResult<unknown> | undefined,
+  keys: string[],
+): string | undefined {
+  if (!isRecord(result?.details)) {
+    return undefined;
+  }
+  return readFirstString(result.details, keys);
 }
 
 function collectMediaUrls(record: Record<string, unknown>): string[] {

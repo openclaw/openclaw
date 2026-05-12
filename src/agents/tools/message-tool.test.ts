@@ -516,6 +516,32 @@ describe("message tool agent routing", () => {
     });
   });
 
+  it("sanitizes same-session WebChat visible reply text", async () => {
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "webchat",
+      currentChannelId: "webchat-session-1",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    const result = await tool.execute("1", {
+      action: "send",
+      message: "<think>internal scratchpad</think>Actual visible reply after tools.",
+    });
+
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      ok: true,
+      status: "ok",
+      deliveryStatus: "sent",
+      delivery: "webchat-session",
+      channel: "webchat",
+      to: "webchat-session-1",
+      message: "Actual visible reply after tools.",
+    });
+  });
+
   it("keeps explicit external message-tool sends on the outbound path from WebChat", async () => {
     mockSendResult({ channel: "telegram", to: "telegram:123" });
 

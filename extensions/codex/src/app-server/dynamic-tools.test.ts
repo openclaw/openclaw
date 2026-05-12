@@ -354,6 +354,41 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
+  it("records sanitized message text from successful message tool result details", async () => {
+    const tool = createTool({
+      name: "message",
+      execute: vi.fn(async () =>
+        textToolResult("Sent.", {
+          ok: true,
+          status: "ok",
+          deliveryStatus: "sent",
+          delivery: "webchat-session",
+          message: "Visible reply from Codex.",
+        }),
+      ),
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "<think>internal scratchpad</think>Visible reply from Codex.",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+    expect(bridge.telemetry.messagingToolSentTexts).toEqual(["Visible reply from Codex."]);
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "message",
+        text: "Visible reply from Codex.",
+      },
+    ]);
+  });
+
   it("does not record messaging side effects when the send fails", async () => {
     const tool = createTool({
       name: "message",
