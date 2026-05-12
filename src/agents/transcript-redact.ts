@@ -1,12 +1,24 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
-import { redactSensitiveFieldValue, redactSensitiveText } from "../logging/redact.js";
+import {
+  getDefaultRedactPatterns,
+  redactSensitiveFieldValue,
+  redactSensitiveText,
+} from "../logging/redact.js";
+
+function resolveTranscriptRedactPatterns(
+  patterns: OpenClawConfig["logging"] extends { redactPatterns?: infer T } ? T : never,
+) {
+  return patterns && patterns.length > 0 ? [...patterns, ...getDefaultRedactPatterns()] : undefined;
+}
 
 function redactTranscriptOptions(cfg?: OpenClawConfig) {
   const configuredLogging = readLoggingConfig();
   const mode = cfg?.logging?.redactSensitive ?? configuredLogging?.redactSensitive;
-  const patterns = cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns;
+  const patterns = resolveTranscriptRedactPatterns(
+    cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns,
+  );
   if (mode === undefined && patterns === undefined) {
     return undefined;
   }

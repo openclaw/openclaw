@@ -335,11 +335,12 @@ describe("redactTranscriptMessage", () => {
     expect(summaryResult.summary).not.toContain("sk-abcdef1234567890xyz");
   });
 
-  it("redacts using custom pattern", () => {
-    const msg = textMessage("email peter@dc.io ok");
+  it("redacts using custom pattern without dropping default patterns", () => {
+    const msg = textMessage("email peter@dc.io and key sk-abcdef1234567890xyz ok");
     const result = redactTranscriptMessage(msg, cfg("tools", [EMAIL_PATTERN]));
     const text = (msgContent(result) as Array<{ text: string }>)[0].text;
     expect(text).not.toContain("peter@dc.io");
+    expect(text).not.toContain("sk-abcdef1234567890xyz");
     expect(text).toContain("ok");
   });
 

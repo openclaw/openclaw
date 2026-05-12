@@ -112,7 +112,7 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       transcriptPath: sessionFile,
       message: {
         role: "user",
-        content: [{ type: "text", text: "email peter@dc.io ok" }],
+        content: [{ type: "text", text: "email peter@dc.io and key sk-abcdef1234567890xyz ok" }],
       },
       config: {
         session: {
@@ -125,6 +125,7 @@ describe("appendSessionTranscriptMessage - redaction", () => {
 
     const raw = fs.readFileSync(sessionFile, "utf-8");
     expect(raw).not.toContain("peter@dc.io");
+    expect(raw).not.toContain("sk-abcdef1234567890xyz");
     expect(raw).toContain("ok");
   });
 
