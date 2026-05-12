@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EventLogEntry } from "./app-events.ts";
 import {
   recordControlUiPerformanceEvent,
+  recordControlUiRenderTiming,
   startControlUiResponsivenessObserver,
 } from "./control-ui-performance.ts";
 
@@ -52,7 +53,20 @@ function createHost() {
   };
 }
 
+function requireBufferedEvent(host: ReturnType<typeof createHost>, index = 0) {
+  const entry = host.eventLogBuffer[index];
+  if (!entry) {
+    throw new Error(`Expected buffered event ${index}`);
+  }
+  return entry;
+}
+
+function payloadOf(entry: EventLogEntry): Record<string, unknown> {
+  return entry.payload as Record<string, unknown>;
+}
+
 afterEach(() => {
+  vi.restoreAllMocks();
   Object.defineProperty(globalThis, "PerformanceObserver", {
     configurable: true,
     value: originalPerformanceObserver,
@@ -68,8 +82,43 @@ describe("recordControlUiPerformanceEvent", () => {
     }
 
     expect(host.eventLogBuffer).toHaveLength(250);
-    expect(host.eventLogBuffer[0]?.payload).toEqual({ i: 259 });
-    expect(host.eventLogBuffer.at(-1)?.payload).toEqual({ i: 10 });
+    const [newestEvent] = host.eventLogBuffer;
+    const oldestEvent = host.eventLogBuffer.at(-1);
+    if (!newestEvent || !oldestEvent) {
+      throw new Error("Expected bounded performance event buffer entries");
+    }
+    expect(newestEvent.payload).toEqual({ i: 259 });
+    expect(oldestEvent.payload).toEqual({ i: 10 });
+  });
+});
+
+describe("recordControlUiRenderTiming", () => {
+  it("records slow render timings after the current render turn", async () => {
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const host = createHost();
+
+    recordControlUiRenderTiming(host, "chat", { durationMs: 20, messageCount: 150 });
+
+    expect(host.eventLogBuffer).toHaveLength(0);
+    await Promise.resolve();
+
+    expect(host.eventLogBuffer).toHaveLength(1);
+    const entry = requireBufferedEvent(host);
+    const payload = payloadOf(entry);
+    expect(entry.event).toBe("control-ui.render");
+    expect(payload.surface).toBe("chat");
+    expect(payload.durationMs).toBe(20);
+    expect(payload.messageCount).toBe(150);
+    expect(payload.slow).toBe(true);
+  });
+
+  it("skips render timings that stay within budget", async () => {
+    const host = createHost();
+
+    recordControlUiRenderTiming(host, "config", { durationMs: 4 });
+    await Promise.resolve();
+
+    expect(host.eventLogBuffer).toHaveLength(0);
   });
 });
 
@@ -107,25 +156,22 @@ describe("startControlUiResponsivenessObserver", () => {
 
     expect(observe).toHaveBeenCalledWith({ type: "long-animation-frame", buffered: true });
     expect(mock.disconnect).toHaveBeenCalledOnce();
-    expect(host.eventLogBuffer).toEqual([
-      expect.objectContaining({
-        event: "control-ui.long-animation-frame",
-        payload: expect.objectContaining({
-          tab: "chat",
-          name: "long-frame",
-          startTimeMs: 12,
-          durationMs: 84,
-          blockingDurationMs: 42,
-          scriptCount: 2,
-          topScript: {
-            durationMs: 51,
-            invoker: "event-listener",
-            sourceUrl: "/assets/app.js",
-            sourceFunctionName: "renderApp",
-          },
-        }),
-      }),
-    ]);
+    expect(host.eventLogBuffer).toHaveLength(1);
+    const entry = requireBufferedEvent(host);
+    const payload = payloadOf(entry);
+    expect(entry.event).toBe("control-ui.long-animation-frame");
+    expect(payload.tab).toBe("chat");
+    expect(payload.name).toBe("long-frame");
+    expect(payload.startTimeMs).toBe(12);
+    expect(payload.durationMs).toBe(84);
+    expect(payload.blockingDurationMs).toBe(42);
+    expect(payload.scriptCount).toBe(2);
+    expect(payload.topScript).toEqual({
+      durationMs: 51,
+      invoker: "event-listener",
+      sourceUrl: "/assets/app.js",
+      sourceFunctionName: "renderApp",
+    });
   });
 
   it("falls back to long task entries when long animation frames are unavailable", () => {
@@ -151,15 +197,12 @@ describe("startControlUiResponsivenessObserver", () => {
     ]);
 
     expect(observe).toHaveBeenCalledWith({ type: "longtask", buffered: true });
-    expect(host.eventLogBuffer).toEqual([
-      expect.objectContaining({
-        event: "control-ui.longtask",
-        payload: expect.objectContaining({
-          name: "self",
-          durationMs: 51,
-        }),
-      }),
-    ]);
+    expect(host.eventLogBuffer).toHaveLength(1);
+    const entry = requireBufferedEvent(host);
+    const payload = payloadOf(entry);
+    expect(entry.event).toBe("control-ui.longtask");
+    expect(payload.name).toBe("self");
+    expect(payload.durationMs).toBe(51);
   });
 
   it("caps responsiveness events so gateway events stay visible", () => {
@@ -185,10 +228,14 @@ describe("startControlUiResponsivenessObserver", () => {
     }
 
     expect(host.eventLogBuffer).toHaveLength(250);
-    expect(
-      host.eventLogBuffer.filter((entry) => entry.event === "control-ui.longtask"),
-    ).toHaveLength(50);
-    expect(host.eventLogBuffer.some((entry) => entry.event === "gateway.event")).toBe(true);
+    const eventCounts = host.eventLogBuffer.reduce<Record<string, number>>((counts, entry) => {
+      counts[entry.event] = (counts[entry.event] ?? 0) + 1;
+      return counts;
+    }, {});
+    expect(eventCounts).toEqual({
+      "gateway.event": 200,
+      "control-ui.longtask": 50,
+    });
   });
 
   it("returns null when responsiveness entries are unsupported or observe fails", () => {

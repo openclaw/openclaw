@@ -1,3 +1,4 @@
+import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -38,6 +39,41 @@ export type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+
+function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown }>(payload: T): T {
+  const data = payload.data;
+  if (!data || typeof data !== "object") {
+    return payload;
+  }
+  const record = data as Record<string, unknown>;
+  if (record.name !== "tool_search_code") {
+    return payload;
+  }
+  const target = resolveToolSearchCodeDisplayTarget(record.args);
+  if (!target) {
+    return payload;
+  }
+  const projectedName = target.displayToolName ?? target.toolName;
+  if (!projectedName || projectedName === "tool_search_code") {
+    return payload;
+  }
+
+  // Channel/node subscribers render from event data, not the richer display
+  // helper used by Control UI. Project obvious bridge calls so verbose
+  // surfaces name the concrete tool while keeping the bridge identity available.
+  const projectedData: Record<string, unknown> = { ...record, name: projectedName };
+  if (target.displayArgs) {
+    projectedData.args = target.displayArgs;
+  } else if (target.detail) {
+    projectedData.args = { detail: target.detail };
+  }
+  if (target.bridgeVerb) {
+    projectedData.bridgeToolName = "tool_search_code";
+    projectedData.bridgeTargetToolName = target.toolName;
+    projectedData.bridgeVerb = target.bridgeVerb;
+  }
+  return { ...payload, data: projectedData };
+}
 
 function resolveHeartbeatAckMaxChars(): number {
   try {
@@ -596,7 +632,9 @@ export function createAgentEventHandler({
     const chatLink = chatRunState.registry.peek(evt.runId);
     const eventSessionKey =
       typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined;
-    const isControlUiVisible = getAgentRunContext(evt.runId)?.isControlUiVisible ?? true;
+    const runContext = getAgentRunContext(evt.runId);
+    const isControlUiVisible = runContext?.isControlUiVisible ?? true;
+    const isHeartbeat = runContext?.isHeartbeat;
     const sessionKey =
       chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
@@ -607,8 +645,16 @@ export function createAgentEventHandler({
     // Include sessionKey so Control UI can filter tool streams per session.
     const spawnedBy = sessionKey ? resolveSpawnedBy(sessionKey) : null;
     const agentPayload = sessionKey
-      ? { ...eventForClients, sessionKey, ...(spawnedBy && { spawnedBy }) }
-      : eventForClients;
+      ? {
+          ...eventForClients,
+          sessionKey,
+          ...(spawnedBy && { spawnedBy }),
+          ...(isHeartbeat !== undefined && { isHeartbeat }),
+        }
+      : {
+          ...eventForClients,
+          ...(isHeartbeat !== undefined && { isHeartbeat }),
+        };
     const last = agentRunSeq.get(evt.runId) ?? 0;
     const isToolEvent = evt.stream === "tool";
     const isItemEvent = evt.stream === "item";
@@ -621,9 +667,7 @@ export function createAgentEventHandler({
             const data = evt.data ? { ...evt.data } : {};
             delete data.result;
             delete data.partialResult;
-            return sessionKey
-              ? { ...eventForClients, sessionKey, data }
-              : { ...eventForClients, data };
+            return { ...agentPayload, data };
           })()
         : agentPayload;
     if (last > 0 && evt.seq !== last + 1 && isControlUiVisible) {
@@ -633,6 +677,7 @@ export function createAgentEventHandler({
         ts: Date.now(),
         sessionKey,
         ...(spawnedBy && { spawnedBy }),
+        ...(isHeartbeat !== undefined && { isHeartbeat }),
         data: {
           reason: "seq gap",
           expected: last + 1,
@@ -694,7 +739,10 @@ export function createAgentEventHandler({
           sessionKey,
           "agent",
           isToolEvent
-            ? { ...channelToolPayload, ...buildSessionEventSnapshot(sessionKey) }
+            ? projectToolSearchCodeEventForChannelPayload({
+                ...channelToolPayload,
+                ...buildSessionEventSnapshot(sessionKey),
+              })
             : agentPayload,
         );
       }

@@ -12,9 +12,16 @@ type SlackSocketModeConfig = Pick<
 >;
 type SlackSdkLogger = NonNullable<SlackSocketModeReceiverOptions["logger"]>;
 type SlackSdkLogLevel = ReturnType<SlackSdkLogger["getLevel"]>;
+type SlackSocketModeLogger = SlackSdkLogger & {
+  getLastMessage: () => string | undefined;
+};
+type SlackSocketDisconnect = Awaited<ReturnType<typeof waitForSlackSocketDisconnect>>;
 
 const OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS = 15_000;
+const OPENCLAW_SLACK_SOCKET_START_FAILED_EVENT = "unable_to_socket_mode_start";
+const OPENCLAW_SLACK_NATIVE_RECONNECT_OBSERVER_KEY = "__openclawNativeReconnectFailureObserver";
 const SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX = "A pong wasn't received from the server";
+const SLACK_SOCKET_PING_TIMEOUT_WARNING_PREFIX = "A ping wasn't received from the server";
 const SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE =
   /^The logLevel given to .+ was ignored as you also gave logger$/;
 
@@ -42,6 +49,66 @@ function isConstructorFunction<
   T extends Constructor,
 >(value: unknown): value is T {
   return typeof value === "function";
+}
+
+function installSlackNativeReconnectFailureObserver(receiver: unknown) {
+  if (!receiver || typeof receiver !== "object") {
+    return;
+  }
+  const client = Reflect.get(receiver, "client");
+  if (!client || typeof client !== "object") {
+    return;
+  }
+  if (Reflect.get(client, OPENCLAW_SLACK_NATIVE_RECONNECT_OBSERVER_KEY)) {
+    return;
+  }
+  const delayReconnectAttempt = Reflect.get(client, "delayReconnectAttempt");
+  const emit = Reflect.get(client, "emit");
+  if (typeof delayReconnectAttempt !== "function" || typeof emit !== "function") {
+    return;
+  }
+
+  Reflect.set(client, OPENCLAW_SLACK_NATIVE_RECONNECT_OBSERVER_KEY, true);
+  Reflect.set(
+    client,
+    "delayReconnectAttempt",
+    function patchedDelayReconnectAttempt(this: object, callback: unknown) {
+      if (typeof callback !== "function") {
+        return delayReconnectAttempt.call(this, callback);
+      }
+      const failureCount = Number(Reflect.get(this, "numOfConsecutiveReconnectionFailures") ?? 0);
+      const nextFailureCount = failureCount + 1;
+      Reflect.set(this, "numOfConsecutiveReconnectionFailures", nextFailureCount);
+      const pingTimeoutMs = Number(Reflect.get(this, "clientPingTimeoutMS"));
+      const delayMs =
+        (Number.isFinite(pingTimeoutMs) && pingTimeoutMs >= 0
+          ? pingTimeoutMs
+          : OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS) * nextFailureCount;
+      const logger = Reflect.get(this, "logger") as { debug?: (message: string) => void };
+      logger?.debug?.(
+        `Before trying to reconnect, this client will wait for ${delayMs} milliseconds`,
+      );
+      return new Promise((resolve, reject) => {
+        setTimeout(() => {
+          if (Reflect.get(this, "shuttingDown")) {
+            logger?.debug?.("Client shutting down, will not attempt reconnect.");
+            resolve(undefined);
+            return;
+          }
+          logger?.debug?.("Continuing with reconnect...");
+          emit.call(this, "reconnecting");
+          Promise.resolve(callback.call(this)).then(resolve, (error: unknown) => {
+            if (callback === Reflect.get(this, "start")) {
+              emit.call(this, OPENCLAW_SLACK_SOCKET_START_FAILED_EVENT, error);
+              resolve(undefined);
+              return;
+            }
+            reject(error);
+          });
+        }, delayMs);
+      });
+    },
+  );
 }
 
 function resolveSlackBoltModule(value: unknown): SlackBoltResolvedExports | null {
@@ -138,9 +205,11 @@ export function publishSlackDisconnectedStatus(
   });
 }
 
-function isSlackSocketPongTimeoutWarning(args: readonly unknown[]) {
+function isSlackSocketHeartbeatTimeoutWarning(args: readonly unknown[]) {
   return (
-    typeof args[0] === "string" && args[0].startsWith(SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX)
+    typeof args[0] === "string" &&
+    (args[0].startsWith(SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX) ||
+      args[0].startsWith(SLACK_SOCKET_PING_TIMEOUT_WARNING_PREFIX))
   );
 }
 
@@ -148,22 +217,43 @@ function isSlackSocketSelfInflictedLoggerWarning(args: readonly unknown[]) {
   return typeof args[0] === "string" && SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE.test(args[0]);
 }
 
+function formatSlackSdkLogArgs(args: readonly unknown[]) {
+  return args
+    .map((arg) => formatUnknownError(arg, ""))
+    .filter(Boolean)
+    .join(" ");
+}
+
 export function createSlackSocketModeLogger(
   sink: Pick<typeof console, "debug" | "info" | "warn" | "error"> = console,
-): SlackSdkLogger {
+): SlackSocketModeLogger {
   let level = "info" as SlackSdkLogLevel;
   let name = "socket-mode";
   const prefix = () => `socket-mode:${name}`;
+  let lastMessage: string | undefined;
+  const remember = (args: readonly unknown[]) => {
+    const message = formatSlackSdkLogArgs([prefix(), ...args]);
+    if (message) {
+      lastMessage = message;
+    }
+  };
   return {
     debug: () => {},
     info: () => {},
     warn: (...args: unknown[]) => {
-      if (isSlackSocketPongTimeoutWarning(args) || isSlackSocketSelfInflictedLoggerWarning(args)) {
+      if (
+        isSlackSocketHeartbeatTimeoutWarning(args) ||
+        isSlackSocketSelfInflictedLoggerWarning(args)
+      ) {
         return;
       }
+      remember(args);
       sink.warn(prefix(), ...args);
     },
-    error: (...args: unknown[]) => sink.error(prefix(), ...args),
+    error: (...args: unknown[]) => {
+      remember(args);
+      sink.error(prefix(), ...args);
+    },
     setLevel: (nextLevel) => {
       level = nextLevel;
     },
@@ -171,6 +261,7 @@ export function createSlackSocketModeLogger(
     setName: (nextName) => {
       name = nextName;
     },
+    getLastMessage: () => lastMessage,
   };
 }
 
@@ -217,12 +308,13 @@ export function createSlackBoltApp(params: {
   clientOptions: Record<string, unknown>;
   socketMode?: SlackSocketModeConfig;
 }) {
+  const socketModeLogger = createSlackSocketModeLogger();
   const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
     appToken: params.appToken ?? "",
-    autoReconnectEnabled: false,
+    autoReconnectEnabled: true,
     clientPingTimeout:
       params.socketMode?.clientPingTimeout ?? OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS,
-    logger: createSlackSocketModeLogger(),
+    logger: socketModeLogger,
     installerOptions: {
       clientOptions: params.clientOptions,
     },
@@ -241,6 +333,9 @@ export function createSlackBoltApp(params: {
           signingSecret: params.signingSecret ?? "",
           endpoints: params.slackWebhookPath,
         });
+  if (params.slackMode === "socket") {
+    installSlackNativeReconnectFailureObserver(receiver);
+  }
   const app = new params.interop.App({
     token: params.botToken,
     receiver,
@@ -257,15 +352,21 @@ export function createSlackBoltApp(params: {
     }
     await args.next();
   });
-  return { app, receiver };
+  return { app, receiver, socketModeLogger };
 }
 
 export function createSlackSocketDisconnectWaiter(app: unknown, abortSignal?: AbortSignal) {
   const waiterAbortController = new AbortController();
   const relayAbort = () => waiterAbortController.abort();
+  let latest: SlackSocketDisconnect | undefined;
   abortSignal?.addEventListener("abort", relayAbort, { once: true });
+  const promise = waitForSlackSocketDisconnect(app, waiterAbortController.signal).then((value) => {
+    latest = value;
+    return value;
+  });
   return {
-    promise: waitForSlackSocketDisconnect(app, waiterAbortController.signal),
+    promise,
+    getLatest: () => latest,
     cancel: () => {
       waiterAbortController.abort();
       abortSignal?.removeEventListener("abort", relayAbort);
@@ -293,7 +394,18 @@ export async function startSlackSocketAndWaitForDisconnect(params: {
     disconnectWaiter.complete();
     return disconnect;
   } catch (err) {
+    await Promise.resolve();
+    const disconnect = disconnectWaiter.getLatest();
     disconnectWaiter.cancel();
+    if ((err === undefined || err === null || err === "") && disconnect?.error !== undefined) {
+      throw disconnect.error;
+    }
+    if (err === undefined || err === null || err === "") {
+      const suffix = disconnect ? ` after ${disconnect.event}` : "";
+      throw new Error(`Slack Socket Mode start failed${suffix} without error detail`, {
+        cause: err,
+      });
+    }
     throw err;
   }
 }

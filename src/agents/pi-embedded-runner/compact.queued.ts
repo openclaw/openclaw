@@ -1,5 +1,8 @@
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
-import { resolveContextEngine } from "../../context-engine/registry.js";
+import {
+  resolveContextEngine,
+  resolveContextEngineOwnerPluginId,
+} from "../../context-engine/registry.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
@@ -14,8 +17,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { maybeCompactAgentHarnessSession } from "../harness/selection.js";
@@ -30,6 +32,7 @@ import {
   rotateTranscriptFileAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "./compaction-successor-transcript.js";
+import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -51,7 +54,11 @@ export async function compactEmbeddedPiSession(
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
   });
   ensureContextEnginesInitialized();
-  const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const agentIds = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+  });
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
   const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
   const contextEngine = await resolveContextEngine(params.config, {
     agentDir,
@@ -89,6 +96,7 @@ export async function compactEmbeddedPiSession(
     params,
     agentDir,
     contextTokenBudget,
+    contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
   });
   const harnessResult = await maybeCompactAgentHarnessSession({
     ...params,
@@ -299,8 +307,13 @@ export async function compactEmbeddedPiSession(
 function buildCompactionContextEngineRuntimeContext(params: {
   params: CompactEmbeddedPiSessionParams;
   agentDir: string;
+  contextEnginePluginId?: string;
   contextTokenBudget?: number;
 }): ContextEngineRuntimeContext {
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.params.sessionKey,
+    config: params.params.config,
+  });
   return {
     ...params.params,
     ...buildEmbeddedCompactionRuntimeContext({
@@ -327,6 +340,13 @@ function buildCompactionContextEngineRuntimeContext(params: {
       extraSystemPrompt: params.params.extraSystemPrompt,
       sourceReplyDeliveryMode: params.params.sourceReplyDeliveryMode,
       ownerNumbers: params.params.ownerNumbers,
+    }),
+    ...resolveContextEngineCapabilities({
+      config: params.params.config,
+      sessionKey: params.params.sessionKey,
+      agentId: sessionAgentId,
+      contextEnginePluginId: params.contextEnginePluginId,
+      purpose: "context-engine.compaction",
     }),
     tokenBudget: params.contextTokenBudget,
     currentTokenCount: params.params.currentTokenCount,

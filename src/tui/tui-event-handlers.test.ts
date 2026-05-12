@@ -49,6 +49,14 @@ function createMockBtwPresenter(): MockBtwPresenter & HandlerBtwPresenter {
   } as unknown as MockBtwPresenter & HandlerBtwPresenter;
 }
 
+function requireFinalizedAssistantText(chatLog: MockChatLog, index = 0): string {
+  const call = chatLog.finalizeAssistant.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected finalizeAssistant call ${index}`);
+  }
+  return String(call[0]);
+}
+
 describe("tui-event-handlers: handleAgentEvent", () => {
   const makeState = (overrides?: Partial<TuiStateAccess>): TuiStateAccess => ({
     agentDefaultId: "main",
@@ -529,6 +537,26 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
+  it("clears pendingChatRunId when an event for that runId arrives", () => {
+    const { state, handleChatEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        pendingOptimisticUserMessage: true,
+        pendingChatRunId: "run-pending",
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-pending",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hi" },
+    });
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.activeChatRunId).toBe("run-pending");
+  });
+
   function createConcurrentRunHarness(localContent = "partial") {
     const { state, chatLog, setActivityStatus, loadHistory, handleChatEvent } =
       createHandlersHarness({
@@ -748,9 +776,9 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
-    const [rendered] = chatLog.finalizeAssistant.mock.calls[0] ?? [];
-    expect(String(rendered)).toContain("HTTP 401");
-    expect(String(rendered)).toContain("Missing scopes: model.request");
+    const rendered = requireFinalizedAssistantText(chatLog);
+    expect(rendered).toContain("HTTP 401");
+    expect(rendered).toContain("Missing scopes: model.request");
     expect(chatLog.dropAssistant).not.toHaveBeenCalledWith("run-error-envelope");
   });
 
@@ -1206,7 +1234,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
     vi.advanceTimersByTime(10_000);
 
     const statusCalls = setActivityStatus.mock.calls.map((c) => c[0]);
-    expect(statusCalls.filter((s) => s === "idle").length).toBe(1);
+    expect(statusCalls.reduce((count, s) => count + (s === "idle" ? 1 : 0), 0)).toBe(1);
     expect(chatLog.addSystem).not.toHaveBeenCalledWith(expectedTimeoutMessage);
     expect(state.activeChatRunId).toBeNull();
 

@@ -46,6 +46,24 @@ describe("applyFinalEffectiveToolPolicy", () => {
     expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__fs_read"]);
   });
 
+  it("applies channel-normalized per-sender policy to bundled tools", () => {
+    const filtered = applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__exec"), makeTool("mcp__bundle__read")],
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:msteams:alice": { deny: ["mcp__bundle__exec"] },
+          },
+        },
+      },
+      messageProvider: "teams",
+      senderId: "alice",
+      warn: () => {},
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__read"]);
+  });
+
   it("applies owner-only filtering to bundled tools", () => {
     const filtered = applyFinalEffectiveToolPolicy({
       bundledTools: [makeTool("mcp__bundle__read"), makeTool("mcp__bundle__admin", true)],
@@ -63,7 +81,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: () => {},
     });
 
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 
   it("drops caller-provided groupId when it disagrees with session-derived group context", () => {
@@ -126,7 +144,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: (message) => warnings.push(message),
     });
 
-    expect(warnings.some((w) => w.includes("unknown entries"))).toBe(false);
+    expect(warnings.filter((message) => message.includes("unknown entries"))).toStrictEqual([]);
   });
 
   it("still warns on genuinely unknown entries in the bundled pass", () => {
@@ -137,7 +155,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: (message) => warnings.push(message),
     });
 
-    expect(warnings.some((w) => w.includes("totally-made-up-tool"))).toBe(true);
+    expect(warnings.filter((message) => message.includes("totally-made-up-tool"))).toHaveLength(1);
   });
 
   it("keeps bundle MCP tools in the coding profile via plugin metadata", () => {
@@ -163,6 +181,6 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: () => {},
     });
 
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 });

@@ -33,6 +33,25 @@ function syncMenuCommandsWithMocks(options: SyncMenuOptions): void {
   });
 }
 
+function setMyCommandsCall(setMyCommands: ReturnType<typeof vi.fn>, index: number): unknown[] {
+  const call = setMyCommands.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`Expected setMyCommands call ${index}`);
+  }
+  return call;
+}
+
+function setMyCommandsPayload(
+  setMyCommands: ReturnType<typeof vi.fn>,
+  index: number,
+): Array<unknown> {
+  const payload = setMyCommandsCall(setMyCommands, index).at(0);
+  if (!Array.isArray(payload)) {
+    throw new Error(`Expected setMyCommands call ${index} to include a command payload`);
+  }
+  return payload;
+}
+
 describe("bot-native-command-menu", () => {
   it("caps menu entries to Telegram limit", () => {
     const allCommands = Array.from({ length: 105 }, (_, i) => ({
@@ -69,8 +88,8 @@ describe("bot-native-command-menu", () => {
       0,
     );
     expect(totalText).toBeLessThanOrEqual(TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET);
-    expect(result.commandsToRegister.every((command) => command.description.length <= 56)).toBe(
-      true,
+    expect(result.commandsToRegister.filter((command) => command.description.length > 56)).toEqual(
+      [],
     );
   });
 
@@ -92,6 +111,24 @@ describe("bot-native-command-menu", () => {
     ]);
     expect(result.descriptionTrimmed).toBe(true);
     expect(result.textBudgetDropCount).toBe(1);
+  });
+
+  it("does not reuse cached capped results for delimiter-like descriptions", () => {
+    const first = buildCappedTelegramMenuCommands({
+      allCommands: [{ command: "a", description: "b\0c\0d" }],
+    });
+    const second = buildCappedTelegramMenuCommands({
+      allCommands: [
+        { command: "a", description: "b" },
+        { command: "c", description: "d" },
+      ],
+    });
+
+    expect(first.commandsToRegister).toEqual([{ command: "a", description: "b\0c\0d" }]);
+    expect(second.commandsToRegister).toEqual([
+      { command: "a", description: "b" },
+      { command: "c", description: "d" },
+    ]);
   });
 
   it("validates plugin command specs and reports conflicts", () => {
@@ -126,7 +163,7 @@ describe("bot-native-command-menu", () => {
     });
 
     expect(result.commands).toEqual([{ command: "agent_run", description: "Run agent" }]);
-    expect(result.issues).toEqual([]);
+    expect(result.issues).toStrictEqual([]);
   });
 
   it("ignores malformed plugin specs without crashing", () => {
@@ -219,16 +256,23 @@ describe("bot-native-command-menu", () => {
     expect(hashCommandList(a)).not.toBe(hashCommandList(b));
   });
 
+  it("produces different hashes for delimiter-like command lists", () => {
+    const a = [{ command: "a", description: "b\0c\0d" }];
+    const b = [
+      { command: "a", description: "b" },
+      { command: "c", description: "d" },
+    ];
+    expect(hashCommandList(a)).not.toBe(hashCommandList(b));
+  });
+
   it("skips sync when command hash is unchanged (#32017)", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi.fn(async () => undefined);
     const runtimeLog = vi.fn();
 
-    // Use a unique accountId so cached hashes from other tests don't interfere.
     const accountId = `test-skip-${Date.now()}`;
     const commands = [{ command: "skip_test", description: "Skip test command" }];
 
-    // First sync — no cached hash, should call setMyCommands.
     syncMenuCommandsWithMocks({
       deleteMyCommands,
       setMyCommands,
@@ -242,7 +286,6 @@ describe("bot-native-command-menu", () => {
       expect(setMyCommands).toHaveBeenCalledTimes(2);
     });
 
-    // Second sync with the same commands — hash is cached, should skip.
     syncMenuCommandsWithMocks({
       deleteMyCommands,
       setMyCommands,
@@ -252,7 +295,6 @@ describe("bot-native-command-menu", () => {
       botIdentity: "bot-a",
     });
 
-    // setMyCommands should NOT have been called again for either scope.
     expect(setMyCommands).toHaveBeenCalledTimes(2);
   });
 
@@ -339,13 +381,15 @@ describe("bot-native-command-menu", () => {
     await vi.waitFor(() => {
       expect(setMyCommands).toHaveBeenCalledTimes(3);
     });
-    const firstPayload = setMyCommands.mock.calls[0]?.[0] as Array<unknown>;
-    const secondPayload = setMyCommands.mock.calls[1]?.[0] as Array<unknown>;
-    const thirdPayload = setMyCommands.mock.calls[2]?.[0] as Array<unknown>;
+    const firstPayload = setMyCommandsPayload(setMyCommands, 0);
+    const secondPayload = setMyCommandsPayload(setMyCommands, 1);
+    const thirdPayload = setMyCommandsPayload(setMyCommands, 2);
     expect(firstPayload).toHaveLength(100);
     expect(secondPayload).toHaveLength(80);
     expect(thirdPayload).toHaveLength(80);
-    expect(setMyCommands.mock.calls[2]?.[1]).toEqual({ scope: { type: "all_group_chats" } });
+    expect(setMyCommandsCall(setMyCommands, 2).at(1)).toEqual({
+      scope: { type: "all_group_chats" },
+    });
     expect(runtimeLog).toHaveBeenCalledWith(
       "Telegram rejected 100 commands (BOT_COMMANDS_TOO_MUCH); retrying with 80.",
     );

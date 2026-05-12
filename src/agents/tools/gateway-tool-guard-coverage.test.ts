@@ -21,13 +21,13 @@ function expectAllowed(
   currentConfig: Record<string, unknown>,
   patch: Record<string, unknown>,
 ): void {
-  expect(() =>
+  expect(
     assertGatewayConfigMutationAllowedForTest({
       action: "config.patch",
       currentConfig,
       raw: JSON.stringify(patch),
     }),
-  ).not.toThrow();
+  ).toBeUndefined();
 }
 
 function expectBlockedApply(
@@ -47,30 +47,26 @@ function expectAllowedApply(
   currentConfig: Record<string, unknown>,
   nextConfig: Record<string, unknown>,
 ): void {
-  expect(() =>
+  expect(
     assertGatewayConfigMutationAllowedForTest({
       action: "config.apply",
       currentConfig,
       raw: JSON.stringify(nextConfig),
     }),
-  ).not.toThrow();
+  ).toBeUndefined();
 }
 
 describe("gateway config mutation guard coverage", () => {
   it("keeps a narrow allowlist of agent-tunable config paths", () => {
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toEqual(
-      expect.arrayContaining([
-        "agents.defaults.systemPromptOverride",
-        "agents.defaults.model",
-        "agents.defaults.subagents.thinking",
-        "agents.list[].id",
-        "agents.list[].model",
-        "agents.list[].subagents.thinking",
-        "channels.*.requireMention",
-        "messages.visibleReplies",
-        "messages.groupChat.visibleReplies",
-      ]),
-    );
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.systemPromptOverride");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.model");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.subagents.thinking");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].id");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].model");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].subagents.thinking");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("channels.*.requireMention");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("messages.visibleReplies");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("messages.groupChat.visibleReplies");
   });
 
   it("allows documented subagent thinking default edits via config.patch", () => {

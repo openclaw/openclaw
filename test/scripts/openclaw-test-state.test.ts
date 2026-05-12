@@ -37,19 +37,22 @@ describe("scripts/lib/openclaw-test-state", () => {
         "--json",
       ]);
       const payload = JSON.parse(stdout);
-      expect(payload).toMatchObject({
-        label: "script-test",
-        scenario: "update-stable",
-        home: expect.any(String),
-        stateDir: expect.any(String),
-        configPath: expect.any(String),
-        workspaceDir: expect.any(String),
-        env: {
-          HOME: expect.any(String),
-          OPENCLAW_HOME: expect.any(String),
-          OPENCLAW_STATE_DIR: expect.any(String),
-          OPENCLAW_CONFIG_PATH: expect.any(String),
-        },
+      expect(payload.label).toBe("script-test");
+      expect(payload.scenario).toBe("update-stable");
+      for (const field of ["root", "home", "stateDir", "configPath", "workspaceDir"] as const) {
+        expect(typeof payload[field]).toBe("string");
+        expect(payload[field].length).toBeGreaterThan(0);
+      }
+      expect(payload.home).toBe(path.join(payload.root, "home"));
+      expect(payload.stateDir).toBe(path.join(payload.home, ".openclaw"));
+      expect(payload.configPath).toBe(path.join(payload.stateDir, "openclaw.json"));
+      expect(payload.workspaceDir).toBe(path.join(payload.home, "workspace"));
+      expect(payload.env).toEqual({
+        HOME: payload.home,
+        USERPROFILE: payload.home,
+        OPENCLAW_HOME: payload.home,
+        OPENCLAW_STATE_DIR: payload.stateDir,
+        OPENCLAW_CONFIG_PATH: payload.configPath,
       });
       expect(payload.config).toEqual({
         update: {
@@ -146,33 +149,22 @@ describe("scripts/lib/openclaw-test-state", () => {
     const payload = JSON.parse(stdout);
     try {
       expect(payload.scenario).toBe("upgrade-survivor");
-      expect(payload.config).toMatchObject({
-        update: {
-          channel: "stable",
-        },
-        gateway: {
-          auth: {
-            token: {
-              id: "GATEWAY_AUTH_TOKEN_REF",
-              source: "env",
-            },
-          },
-        },
-        channels: {
-          discord: {
-            enabled: true,
-            dm: {
-              policy: "allowlist",
-            },
-          },
-          telegram: {
-            enabled: true,
-          },
-          whatsapp: {
-            enabled: true,
-          },
+      expect(payload.config.update).toStrictEqual({ channel: "stable" });
+      expect(payload.config.gateway.auth).toStrictEqual({
+        mode: "token",
+        token: {
+          id: "GATEWAY_AUTH_TOKEN_REF",
+          provider: "default",
+          source: "env",
         },
       });
+      expect(payload.config.channels.discord.enabled).toBe(true);
+      expect(payload.config.channels.discord.dm).toStrictEqual({
+        allowFrom: ["111111111111111111"],
+        policy: "allowlist",
+      });
+      expect(payload.config.channels.telegram.enabled).toBe(true);
+      expect(payload.config.channels.whatsapp.enabled).toBe(true);
     } finally {
       await fs.rm(payload.root, { recursive: true, force: true });
     }
@@ -198,7 +190,7 @@ describe("scripts/lib/openclaw-test-state", () => {
       expect(payload.home).toContain("/openclaw-onboard-case-minimal-home.");
       expect(payload.agentDir).toBeNull();
       expect(payload.workspace).toBe(`${payload.home}/workspace`);
-      expect(payload.config).toEqual({});
+      expect(payload.config).toStrictEqual({});
 
       const existingHome = path.join(tempRoot, "existing-home");
       const existingProbe = await execFileAsync("bash", [

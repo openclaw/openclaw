@@ -10,15 +10,17 @@ function expectSafeParseCases(
   safeParse: ((value: unknown) => unknown) | undefined,
   cases: ReadonlyArray<readonly [unknown, unknown]>,
 ) {
-  expect(safeParse).toBeDefined();
-  expect(cases.map(([value]) => safeParse?.(value))).toEqual(cases.map(([, expected]) => expected));
+  if (safeParse === undefined) {
+    throw new Error("expected config schema safeParse function");
+  }
+  expect(cases.map(([value]) => safeParse(value))).toEqual(cases.map(([, expected]) => expected));
 }
 
 function expectJsonSchema(
   result: ReturnType<typeof buildPluginConfigSchema>,
   expected: Record<string, unknown>,
 ) {
-  expect(result.jsonSchema).toMatchObject(expected);
+  expect(result.jsonSchema).toEqual(expected);
 }
 
 describe("buildPluginConfigSchema", () => {

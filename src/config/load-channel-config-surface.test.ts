@@ -141,9 +141,8 @@ describe("loadChannelConfigSurfaceModule", () => {
           typeof import("../../scripts/load-channel-config-surface.ts")
         >(import.meta.url, "../../scripts/load-channel-config-surface.ts?scope=prefer-jiti");
 
-        await expect(
-          imported.loadChannelConfigSurfaceModule(modulePath, { repoRoot }),
-        ).resolves.toMatchObject(expectedOkSchema("string"));
+        const surface = await imported.loadChannelConfigSurfaceModule(modulePath, { repoRoot });
+        expect(surface).toStrictEqual(expectedOkSchema("string"));
         expect(spawnSync).not.toHaveBeenCalled();
       } finally {
         vi.doUnmock("node:child_process");
@@ -158,9 +157,8 @@ describe("loadChannelConfigSurfaceModule", () => {
       const { loadChannelConfigSurfaceModule: loadWithMissingBun, spawnSync } =
         await importLoaderWithMissingBun();
 
-      await expect(loadWithMissingBun(modulePath, { repoRoot })).resolves.toMatchObject(
-        expectedOkSchema("string"),
-      );
+      const surface = await loadWithMissingBun(modulePath, { repoRoot });
+      expect(surface).toStrictEqual(expectedOkSchema("string"));
       expect(spawnSync).not.toHaveBeenCalled();
     });
   });
@@ -169,17 +167,19 @@ describe("loadChannelConfigSurfaceModule", () => {
     await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
       const { modulePath } = createDemoConfigSchemaModule(repoRoot, ["export const = ;"]);
 
-      const {
-        loadChannelConfigSurfaceModule: loadWithFailingJiti,
-        spawnSync,
-        createJiti,
-      } = await importLoaderWithFailingJitiAndWorkingBun();
+      const { loadChannelConfigSurfaceModule: loadWithFailingJiti, spawnSync } =
+        await importLoaderWithFailingJitiAndWorkingBun();
 
-      await expect(loadWithFailingJiti(modulePath, { repoRoot })).resolves.toMatchObject(
-        expectedOkSchema("number"),
-      );
-      expect(createJiti).toHaveBeenCalled();
-      expect(spawnSync).toHaveBeenCalledWith("bun", expect.any(Array), expect.any(Object));
+      const surface = await loadWithFailingJiti(modulePath, { repoRoot });
+      expect(surface).toStrictEqual(expectedOkSchema("number"));
+
+      const spawnCalls = spawnSync.mock.calls as unknown as Array<
+        [string, string[], Record<string, unknown>]
+      >;
+      const spawnCall = spawnCalls[0];
+      expect(spawnCall?.[0]).toBe("bun");
+      expect(Array.isArray(spawnCall?.[1])).toBe(true);
+      expect(typeof spawnCall?.[2]).toBe("object");
     });
   });
 });

@@ -27,16 +27,16 @@ function createNonInteractiveMigrationPrompter(runtime: RuntimeEnv): WizardPromp
     async note(message, title) {
       runtime.log(title ? `${title}\n${message}` : message);
     },
-    select(params) {
+    async select(params) {
       return unavailable(params.message);
     },
-    multiselect(params) {
+    async multiselect(params) {
       return unavailable(params.message);
     },
-    text(params) {
+    async text(params) {
       return unavailable(params.message);
     },
-    confirm(params) {
+    async confirm(params) {
       return unavailable(params.message);
     },
     progress(label) {
@@ -63,7 +63,9 @@ async function runNonInteractiveMigrationImport(params: {
 }) {
   const providerId = params.opts.importFrom?.trim();
   if (!providerId) {
-    params.runtime.error("--import-from is required for non-interactive migration import.");
+    params.runtime.error(
+      `--import-from is required for non-interactive migration import. Run ${formatCliCommand("openclaw migrate list")} to choose a provider.`,
+    );
     params.runtime.exit(1);
     return;
   }
@@ -111,7 +113,9 @@ export async function runNonInteractiveSetup(
     : {};
   const mode = opts.mode ?? "local";
   if (mode !== "local" && mode !== "remote") {
-    runtime.error(`Invalid --mode "${String(mode)}" (use local|remote).`);
+    runtime.error(
+      `Invalid --mode "${String(mode)}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
+    );
     runtime.exit(1);
     return;
   }

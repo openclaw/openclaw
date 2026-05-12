@@ -51,7 +51,17 @@ let resolveAcpSpawnStreamLogPath: typeof import("./acp-spawn-parent-stream.js").
 let startAcpSpawnParentStreamRelay: typeof import("./acp-spawn-parent-stream.js").startAcpSpawnParentStreamRelay;
 
 function collectedTexts() {
-  return enqueueSystemEventMock.mock.calls.map((call) => String(call[0] ?? ""));
+  return enqueueSystemEventMock.mock.calls.map((call) =>
+    typeof call[0] === "string" ? call[0] : (JSON.stringify(call[0]) ?? ""),
+  );
+}
+
+function expectTextWithFragment(texts: string[], fragment: string): void {
+  expect(texts.some((text) => text.includes(fragment))).toBe(true);
+}
+
+function expectNoTextWithFragment(texts: string[], fragment: string): void {
+  expect(texts.every((text) => !text.includes(fragment))).toBe(true);
 }
 
 describe("startAcpSpawnParentStreamRelay", () => {
@@ -113,28 +123,72 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("Started codex session"))).toBe(true);
-    expect(texts.some((text) => text.includes("codex: hello from child"))).toBe(true);
-    expect(texts.some((text) => text.includes("codex run completed in 2s"))).toBe(true);
+    expectTextWithFragment(texts, "Started codex session");
+    expectTextWithFragment(texts, "codex: hello from child");
+    expectTextWithFragment(texts, "codex run completed in 2s");
     expect(
       enqueueSystemEventMock.mock.calls.every(
         (call) => (call[1] as { trusted?: boolean } | undefined)?.trusted === false,
       ),
     ).toBe(true);
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        deliveryContext,
-        trusted: false,
-      }),
+    const systemEventCalls = enqueueSystemEventMock.mock.calls as Array<
+      [string, { sessionKey?: string; deliveryContext?: unknown; trusted?: boolean }]
+    >;
+    expect(
+      systemEventCalls.some(
+        ([, options]) =>
+          options.sessionKey === "agent:main:main" &&
+          options.deliveryContext === deliveryContext &&
+          options.trusted === false,
+      ),
+    ).toBe(true);
+    const heartbeatCalls = requestHeartbeatMock.mock.calls as Array<
+      [{ reason?: string; sessionKey?: string }]
+    >;
+    expect(
+      heartbeatCalls.some(
+        ([options]) =>
+          options.reason === "acp:spawn:stream" && options.sessionKey === "agent:main:main",
+      ),
+    ).toBe(true);
+    relay.dispose();
+  });
+
+  it("remaps cron-run parent session keys while relaying stream events", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-cron",
+      parentSessionKey: "agent:ops:cron:nightly:run:run-1:subagent:worker",
+      childSessionKey: "agent:codex:acp:child-cron",
+      agentId: "codex",
+      mainKey: "primary",
+      sessionScope: "global",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-cron",
+      stream: "assistant",
+      data: {
+        delta: "hello from child",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    const progressEvent = enqueueSystemEventMock.mock.calls.find(
+      ([text]) => typeof text === "string" && text.includes("codex: hello from child"),
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reason: "acp:spawn:stream",
-        sessionKey: "agent:main:main",
-      }),
-    );
+    expect(progressEvent?.[0]).toContain("codex: hello from child");
+    const progressOptions = progressEvent?.[1] as
+      | { contextKey?: unknown; sessionKey?: unknown; trusted?: unknown }
+      | undefined;
+    expect(progressOptions?.contextKey).toBe("acp-spawn:run-cron:progress");
+    expect(progressOptions?.sessionKey).toBe("global");
+    expect(progressOptions?.trusted).toBe(false);
+    const heartbeatOptions = requestHeartbeatMock.mock.calls.at(0)?.[0];
+    expect(heartbeatOptions?.agentId).toBe("ops");
+    expect(heartbeatOptions?.reason).toBe("acp:spawn:stream");
+    expect(requestHeartbeatMock.mock.calls.at(0)?.[0]).not.toHaveProperty("sessionKey");
     relay.dispose();
   });
 
@@ -150,9 +204,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     vi.advanceTimersByTime(1_500);
-    expect(collectedTexts().some((text) => text.includes("has produced no output for 1s"))).toBe(
-      true,
-    );
+    expectTextWithFragment(collectedTexts(), "has produced no output for 1s");
 
     emitAgentEvent({
       runId: "run-2",
@@ -164,8 +216,8 @@ describe("startAcpSpawnParentStreamRelay", () => {
     vi.advanceTimersByTime(5);
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("resumed output."))).toBe(true);
-    expect(texts.some((text) => text.includes("codex: resumed output"))).toBe(true);
+    expectTextWithFragment(texts, "resumed output.");
+    expectTextWithFragment(texts, "codex: resumed output");
 
     emitAgentEvent({
       runId: "run-2",
@@ -175,7 +227,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         error: "boom",
       },
     });
-    expect(collectedTexts().some((text) => text.includes("run failed: boom"))).toBe(true);
+    expectTextWithFragment(collectedTexts(), "run failed: boom");
     relay.dispose();
   });
 
@@ -191,9 +243,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     vi.advanceTimersByTime(1_001);
-    expect(collectedTexts().some((text) => text.includes("stream relay timed out after 1s"))).toBe(
-      true,
-    );
+    expectTextWithFragment(collectedTexts(), "stream relay timed out after 1s");
 
     const before = enqueueSystemEventMock.mock.calls.length;
     emitAgentEvent({
@@ -218,11 +268,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
       emitStartNotice: false,
     });
 
-    expect(collectedTexts().some((text) => text.includes("Started codex session"))).toBe(false);
+    expectNoTextWithFragment(collectedTexts(), "Started codex session");
 
     relay.notifyStarted();
 
-    expect(collectedTexts().some((text) => text.includes("Started codex session"))).toBe(true);
+    expectTextWithFragment(collectedTexts(), "Started codex session");
     relay.dispose();
   });
 
@@ -254,7 +304,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
       },
     });
 
-    expect(collectedTexts()).toEqual([]);
+    expect(collectedTexts()).toStrictEqual([]);
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
     relay.dispose();
   });
@@ -286,7 +336,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     vi.advanceTimersByTime(15);
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("codex: hello world"))).toBe(true);
+    expectTextWithFragment(texts, "codex: hello world");
     relay.dispose();
   });
 
@@ -311,8 +361,8 @@ describe("startAcpSpawnParentStreamRelay", () => {
     vi.advanceTimersByTime(15);
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("checking thread context"))).toBe(false);
-    expect(texts.some((text) => text.includes("post a tight progress reply here"))).toBe(false);
+    expectNoTextWithFragment(texts, "checking thread context");
+    expectNoTextWithFragment(texts, "post a tight progress reply here");
     relay.dispose();
   });
 
@@ -345,8 +395,8 @@ describe("startAcpSpawnParentStreamRelay", () => {
     vi.advanceTimersByTime(15);
 
     const texts = collectedTexts();
-    expect(texts.some((text) => text.includes("checking thread context"))).toBe(false);
-    expect(texts.some((text) => text.includes("codex: final answer ready"))).toBe(true);
+    expectNoTextWithFragment(texts, "checking thread context");
+    expectTextWithFragment(texts, "codex: final answer ready");
     relay.dispose();
   });
 
@@ -370,14 +420,14 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expect(readAcpSessionEntryMock).toHaveBeenCalledWith({
       sessionKey: "agent:codex:acp:child-1",
     });
-    expect(resolveSessionFilePathMock).toHaveBeenCalledWith(
-      "sess-123",
-      expect.objectContaining({
-        sessionId: "sess-123",
-      }),
-      expect.objectContaining({
-        storePath: "/tmp/openclaw/agents/codex/sessions/sessions.json",
-      }),
-    );
+    expect(resolveSessionFilePathMock).toHaveBeenCalledTimes(1);
+    const [sessionId, entry, options] = resolveSessionFilePathMock.mock.calls.at(0) as [
+      string,
+      { sessionId?: unknown },
+      { storePath?: unknown },
+    ];
+    expect(sessionId).toBe("sess-123");
+    expect(entry.sessionId).toBe("sess-123");
+    expect(options.storePath).toBe("/tmp/openclaw/agents/codex/sessions/sessions.json");
   });
 });

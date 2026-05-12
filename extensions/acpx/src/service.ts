@@ -1,4 +1,6 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { inspect } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
@@ -9,11 +11,18 @@ import type {
 } from "../runtime-api.js";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../runtime-api.js";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
+import { DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
 import {
   resolveAcpxPluginConfig,
   toAcpMcpServers,
   type ResolvedAcpxPluginConfig,
 } from "./config.js";
+import { createAcpxProcessLeaseStore, type AcpxProcessLeaseStore } from "./process-lease.js";
+import {
+  cleanupOpenClawOwnedAcpxProcessTree,
+  reapStaleOpenClawOwnedAcpxOrphans,
+  type AcpxProcessCleanupDeps,
+} from "./process-reaper.js";
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
@@ -26,6 +35,7 @@ type AcpxRuntimeLike = AcpRuntime & {
 };
 
 const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
+const SKIP_RUNTIME_PROBE_ENV = "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE";
 const ACPX_BACKEND_ID = "acpx";
 
 type AcpxRuntimeModule = typeof import("./runtime.js");
@@ -33,12 +43,16 @@ let runtimeModulePromise: Promise<AcpxRuntimeModule> | null = null;
 
 type AcpxRuntimeFactoryParams = {
   pluginConfig: ResolvedAcpxPluginConfig;
+  gatewayInstanceId: string;
+  processLeaseStore: AcpxProcessLeaseStore;
+  wrapperRoot: string;
   logger?: PluginLogger;
 };
 
 type CreateAcpxRuntimeServiceParams = {
   pluginConfig?: unknown;
   runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike | Promise<AcpxRuntimeLike>;
+  processCleanupDeps?: AcpxProcessCleanupDeps;
 };
 
 function loadRuntimeModule(): Promise<AcpxRuntimeModule> {
@@ -57,6 +71,9 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
     runtimePromise ??= loadRuntimeModule().then((module) => {
       runtime = new module.AcpxRuntime({
         cwd: params.pluginConfig.cwd,
+        openclawGatewayInstanceId: params.gatewayInstanceId,
+        openclawProcessLeaseStore: params.processLeaseStore,
+        openclawWrapperRoot: params.wrapperRoot,
         sessionStore: module.createFileSessionStore({
           stateDir: params.pluginConfig.stateDir,
         }),
@@ -185,7 +202,105 @@ function resolveAllowedAgentsProbeAgent(ctx: OpenClawPluginServiceContext): stri
 }
 
 function shouldRunStartupProbe(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env[ENABLE_STARTUP_PROBE_ENV] === "1";
+  return env[ENABLE_STARTUP_PROBE_ENV] !== "0";
+}
+
+function shouldProbeRuntimeAtStartup(env: NodeJS.ProcessEnv = process.env): boolean {
+  return shouldRunStartupProbe(env) && env[SKIP_RUNTIME_PROBE_ENV] !== "1";
+}
+
+async function withStartupProbeTimeout<T>(params: {
+  promise: Promise<T>;
+  timeoutSeconds: number;
+}): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutMs = Math.max(1, params.timeoutSeconds * 1_000);
+  try {
+    return await Promise.race([
+      params.promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(
+            new Error(
+              `embedded acpx runtime backend startup probe timed out after ${params.timeoutSeconds}s`,
+            ),
+          );
+        }, timeoutMs);
+        (timeout as { unref?: () => void }).unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function resolveGatewayInstanceId(stateDir: string): Promise<string> {
+  const filePath = path.join(stateDir, "gateway-instance-id");
+  try {
+    const existing = (await fs.readFile(filePath, "utf8")).trim();
+    if (existing) {
+      return existing;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  const next = randomUUID();
+  await fs.mkdir(stateDir, { recursive: true });
+  await fs.writeFile(filePath, `${next}\n`, { mode: 0o600 });
+  return next;
+}
+
+async function reapOpenAcpxProcessLeases(params: {
+  gatewayInstanceId: string;
+  leaseStore: AcpxProcessLeaseStore;
+  deps?: AcpxProcessCleanupDeps;
+}): Promise<{ inspectedPids: number[]; terminatedPids: number[] }> {
+  const leases = await params.leaseStore.listOpen(params.gatewayInstanceId);
+  const inspectedPids: number[] = [];
+  const terminatedPids: number[] = [];
+  const pendingLeaseRootResults = new Map<
+    string,
+    { inspectedPids: number[]; terminatedPids: number[] }
+  >();
+  for (const lease of leases) {
+    if (lease.rootPid <= 0) {
+      await params.leaseStore.markState(lease.leaseId, "closing");
+      let result = pendingLeaseRootResults.get(lease.wrapperRoot);
+      if (!result) {
+        result = await reapStaleOpenClawOwnedAcpxOrphans({
+          wrapperRoot: lease.wrapperRoot,
+          deps: params.deps,
+        });
+        pendingLeaseRootResults.set(lease.wrapperRoot, result);
+        inspectedPids.push(...result.inspectedPids);
+        terminatedPids.push(...result.terminatedPids);
+      }
+      await params.leaseStore.markState(
+        lease.leaseId,
+        result.terminatedPids.length > 0 ? "closed" : "lost",
+      );
+      continue;
+    }
+    await params.leaseStore.markState(lease.leaseId, "closing");
+    const result = await cleanupOpenClawOwnedAcpxProcessTree({
+      rootPid: lease.rootPid,
+      expectedLeaseId: lease.leaseId,
+      expectedGatewayInstanceId: lease.gatewayInstanceId,
+      wrapperRoot: lease.wrapperRoot,
+      deps: params.deps,
+    });
+    inspectedPids.push(...result.inspectedPids);
+    terminatedPids.push(...result.terminatedPids);
+    await params.leaseStore.markState(
+      lease.leaseId,
+      result.terminatedPids.length > 0 ? "closed" : "lost",
+    );
+  }
+  return { inspectedPids, terminatedPids };
 }
 
 export function createAcpxRuntimeService(
@@ -215,7 +330,21 @@ export function createAcpxRuntimeService(
         stateDir: ctx.stateDir,
         logger: ctx.logger,
       });
+      const wrapperRoot = path.join(ctx.stateDir, "acpx");
       await fs.mkdir(pluginConfig.stateDir, { recursive: true });
+      await fs.mkdir(wrapperRoot, { recursive: true });
+      const gatewayInstanceId = await resolveGatewayInstanceId(ctx.stateDir);
+      const processLeaseStore = createAcpxProcessLeaseStore({ stateDir: wrapperRoot });
+      const startupReap = await reapOpenAcpxProcessLeases({
+        gatewayInstanceId,
+        leaseStore: processLeaseStore,
+        deps: params.processCleanupDeps,
+      });
+      if (startupReap.terminatedPids.length > 0) {
+        ctx.logger.info(
+          `reaped ${startupReap.terminatedPids.length} stale OpenClaw-owned ACPX process${startupReap.terminatedPids.length === 1 ? "" : "es"}`,
+        );
+      }
       warnOnIgnoredLegacyCompatibilityConfig({
         pluginConfig,
         logger: ctx.logger,
@@ -224,50 +353,60 @@ export function createAcpxRuntimeService(
       runtime = params.runtimeFactory
         ? await params.runtimeFactory({
             pluginConfig,
+            gatewayInstanceId,
+            processLeaseStore,
+            wrapperRoot,
             logger: ctx.logger,
           })
         : createLazyDefaultRuntime({
             pluginConfig,
+            gatewayInstanceId,
+            processLeaseStore,
+            wrapperRoot,
             logger: ctx.logger,
           });
 
+      const shouldProbeRuntime = shouldProbeRuntimeAtStartup();
       registerAcpRuntimeBackend({
         id: ACPX_BACKEND_ID,
         runtime,
-        ...(shouldRunStartupProbe() ? { healthy: () => runtime?.isHealthy() ?? false } : {}),
+        ...(shouldProbeRuntime ? { healthy: () => runtime?.isHealthy() ?? false } : {}),
       });
       ctx.logger.info(`embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd})`);
 
-      if (!shouldRunStartupProbe() || process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE === "1") {
+      if (!shouldProbeRuntime) {
         return;
       }
 
       lifecycleRevision += 1;
       const currentRevision = lifecycleRevision;
-      void (async () => {
-        try {
-          await runtime?.probeAvailability();
-          if (currentRevision !== lifecycleRevision) {
-            return;
-          }
-          if (runtime?.isHealthy()) {
-            ctx.logger.info("embedded acpx runtime backend ready");
-            return;
-          }
-          const doctorReport = await runtime?.doctor?.();
-          if (currentRevision !== lifecycleRevision) {
-            return;
-          }
-          ctx.logger.warn(
-            `embedded acpx runtime backend probe failed: ${doctorReport ? formatDoctorFailureMessage(doctorReport) : "backend remained unhealthy after probe"}`,
-          );
-        } catch (err) {
-          if (currentRevision !== lifecycleRevision) {
-            return;
-          }
-          ctx.logger.warn(`embedded acpx runtime setup failed: ${formatErrorMessage(err)}`);
+      try {
+        if (runtime) {
+          await withStartupProbeTimeout({
+            promise: runtime.probeAvailability(),
+            timeoutSeconds: pluginConfig.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
+          });
         }
-      })();
+        if (currentRevision !== lifecycleRevision) {
+          return;
+        }
+        if (runtime?.isHealthy()) {
+          ctx.logger.info("embedded acpx runtime backend ready");
+          return;
+        }
+        const doctorReport = await runtime?.doctor?.();
+        if (currentRevision !== lifecycleRevision) {
+          return;
+        }
+        ctx.logger.warn(
+          `embedded acpx runtime backend probe failed: ${doctorReport ? formatDoctorFailureMessage(doctorReport) : "backend remained unhealthy after probe"}`,
+        );
+      } catch (err) {
+        if (currentRevision !== lifecycleRevision) {
+          return;
+        }
+        ctx.logger.warn(`embedded acpx runtime setup failed: ${formatErrorMessage(err)}`);
+      }
     },
     async stop(_ctx: OpenClawPluginServiceContext): Promise<void> {
       lifecycleRevision += 1;

@@ -15,6 +15,54 @@ import {
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "./run-wait.js";
 
+type AgentWaitGatewayRequest = {
+  method?: string;
+  params?: {
+    runId?: string;
+    timeoutMs?: unknown;
+  };
+  timeoutMs?: unknown;
+};
+
+function expectNumber(value: unknown, label: string): number {
+  expect(typeof value).toBe("number");
+  if (typeof value !== "number") {
+    throw new Error(`expected ${label} to be a number`);
+  }
+  return value;
+}
+
+function gatewayWaitRequests(): AgentWaitGatewayRequest[] {
+  return callGatewayMock.mock.calls.map(([request]) => request as AgentWaitGatewayRequest);
+}
+
+function requireRequestAt(
+  requests: readonly AgentWaitGatewayRequest[],
+  index: number,
+): AgentWaitGatewayRequest {
+  const request = requests.at(index);
+  if (!request) {
+    throw new Error(`expected gateway request at index ${index}`);
+  }
+  return request;
+}
+
+function expectAgentWaitRequest(
+  request: AgentWaitGatewayRequest,
+  runId: string,
+  maxParamTimeoutMs: number,
+): void {
+  expect(request.method).toBe("agent.wait");
+  expect(request.params?.runId).toBe(runId);
+
+  const paramTimeoutMs = expectNumber(request.params?.timeoutMs, `${runId} param timeoutMs`);
+  const requestTimeoutMs = expectNumber(request.timeoutMs, `${runId} request timeoutMs`);
+  expect(requestTimeoutMs).toBe(paramTimeoutMs + 2_000);
+  expect(requestTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs + 2_000);
+  expect(paramTimeoutMs).toBeGreaterThanOrEqual(1);
+  expect(paramTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs);
+}
+
 describe("readLatestAssistantReply", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
@@ -172,6 +220,22 @@ describe("waitForAgentRun", () => {
     expect(result).toEqual({ status: "pending" });
   });
 
+  it("normalizes wait timeouts before sending agent.wait", async () => {
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+
+    const result = await waitForAgentRun({ runId: "run-clamped", timeoutMs: 0.8 });
+
+    expect(result).toEqual({ status: "ok" });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "agent.wait",
+      params: {
+        runId: "run-clamped",
+        timeoutMs: 1,
+      },
+      timeoutMs: 2_001,
+    });
+  });
+
   it("preserves timing metadata from agent.wait", async () => {
     callGatewayMock.mockResolvedValue({
       status: "ok",
@@ -287,29 +351,14 @@ describe("waitForAgentRunsToDrain", () => {
       getPendingRunIds: () => activeRunIds,
     });
 
-    expect(result).toEqual({
-      timedOut: false,
-      pendingRunIds: [],
-      deadlineAtMs: expect.any(Number),
-    });
-    expect(callGatewayMock.mock.calls.map((call) => call[0])).toEqual([
-      {
-        method: "agent.wait",
-        params: {
-          runId: "run-1",
-          timeoutMs: expect.any(Number),
-        },
-        timeoutMs: expect.any(Number),
-      },
-      {
-        method: "agent.wait",
-        params: {
-          runId: "run-2",
-          timeoutMs: expect.any(Number),
-        },
-        timeoutMs: expect.any(Number),
-      },
-    ]);
+    expect(result.timedOut).toBe(false);
+    expect(result.pendingRunIds).toStrictEqual([]);
+    expectNumber(result.deadlineAtMs, "deadlineAtMs");
+
+    const requests = gatewayWaitRequests();
+    expect(requests).toHaveLength(2);
+    expectAgentWaitRequest(requireRequestAt(requests, 0), "run-1", 1_000);
+    expectAgentWaitRequest(requireRequestAt(requests, 1), "run-2", 1_000);
   });
 
   it("deduplicates and trims pending run ids", async () => {
@@ -344,15 +393,9 @@ describe("waitForAgentRunsToDrain", () => {
     });
 
     expect(result.timedOut).toBe(false);
-    expect(callGatewayMock.mock.calls.map((call) => call[0])).toEqual([
-      expect.objectContaining({
-        method: "agent.wait",
-        params: expect.objectContaining({ runId: "run-1" }),
-      }),
-      expect.objectContaining({
-        method: "agent.wait",
-        params: expect.objectContaining({ runId: "run-2" }),
-      }),
-    ]);
+    const requests = gatewayWaitRequests();
+    expect(requests).toHaveLength(2);
+    expectAgentWaitRequest(requireRequestAt(requests, 0), "run-1", 1_000);
+    expectAgentWaitRequest(requireRequestAt(requests, 1), "run-2", 1_000);
   });
 });

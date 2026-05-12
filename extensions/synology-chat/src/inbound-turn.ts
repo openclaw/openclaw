@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sendMessage } from "./client.js";
 import type { SynologyInboundMessage } from "./inbound-context.js";
 import { getSynologyRuntime } from "./runtime.js";
@@ -42,17 +42,18 @@ async function deliverSynologyChatReply(params: {
   account: ResolvedSynologyChatAccount;
   sendUserId: string;
   payload: { text?: string; body?: string };
-}): Promise<void> {
+}): Promise<{ visibleReplySent: boolean }> {
   const text = params.payload.text ?? params.payload.body;
   if (!text) {
-    return;
+    return { visibleReplySent: false };
   }
-  await sendMessage(
+  const ok = await sendMessage(
     params.account.incomingUrl,
     text,
     params.sendUserId,
     params.account.allowInsecureSsl,
   );
+  return { visibleReplySent: ok };
 }
 
 export async function dispatchSynologyChatInboundTurn(params: {
@@ -144,8 +145,11 @@ export async function dispatchSynologyChatInboundTurn(params: {
           dispatchReplyWithBufferedBlockDispatcher:
             resolved.rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
           delivery: {
+            durable: () => ({
+              to: sendUserId,
+            }),
             deliver: async (payload) => {
-              await deliverSynologyChatReply({
+              return await deliverSynologyChatReply({
                 account: params.account,
                 sendUserId,
                 payload,

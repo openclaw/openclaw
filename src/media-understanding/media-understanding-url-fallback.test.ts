@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { MediaAttachmentCache } from "./attachments.js";
 
@@ -14,14 +15,33 @@ vi.mock("../media/fetch.js", async () => {
   };
 });
 
+function requireFetchRemoteMediaInput(): {
+  url?: unknown;
+  fetchImpl?: unknown;
+  maxBytes?: unknown;
+  ssrfPolicy?: unknown;
+} {
+  const [call] = fetchRemoteMediaMock.mock.calls;
+  if (!call) {
+    throw new Error("expected fetchRemoteMedia call");
+  }
+  const [input] = call;
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new Error("expected fetchRemoteMedia input to be an object");
+  }
+  return input;
+}
+
 async function withBlockedLocalAttachmentFallback(
   prefix: string,
   run: (params: { cache: MediaAttachmentCache; fallbackUrl: string }) => Promise<void>,
 ) {
   await withTempDir({ prefix }, async (base) => {
+    const attachmentRoot = path.join(base, "attachment");
     const allowedRoot = path.join(base, "allowed");
-    const attachmentPath = path.join(allowedRoot, "voice-note.m4a");
+    const attachmentPath = path.join(attachmentRoot, "voice-note.m4a");
     const fallbackUrl = "https://example.com/fallback.jpg";
+    await fs.mkdir(attachmentRoot, { recursive: true });
     await fs.mkdir(allowedRoot, { recursive: true });
     await fs.writeFile(attachmentPath, "ok");
 
@@ -31,18 +51,10 @@ async function withBlockedLocalAttachmentFallback(
         localPathRoots: [allowedRoot],
       },
     );
-    const originalRealpath = fs.realpath.bind(fs);
     fetchRemoteMediaMock.mockResolvedValue({
       buffer: Buffer.from("fallback-buffer"),
       contentType: "image/jpeg",
       fileName: "fallback.jpg",
-    });
-
-    vi.spyOn(fs, "realpath").mockImplementation(async (candidatePath) => {
-      if (String(candidatePath) === attachmentPath) {
-        throw new Error("EACCES");
-      }
-      return await originalRealpath(candidatePath);
     });
 
     await run({ cache, fallbackUrl });
@@ -66,11 +78,19 @@ describe("media understanding attachment URL fallback", () => {
         });
         // getPath should fall through to getBuffer URL fetch, write a temp file,
         // and return a path to that temp file instead of throwing.
-        expect(result.path).toBeTruthy();
+        expect(path.dirname(result.path)).toBe(resolvePreferredOpenClawTmpDir());
+        expect(path.basename(result.path).startsWith("openclaw-media-")).toBe(true);
+        expect(path.extname(result.path)).toBe(".jpg");
         expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
-        expect(fetchRemoteMediaMock).toHaveBeenCalledWith(
-          expect.objectContaining({ url: fallbackUrl, maxBytes: 1024 }),
-        );
+        const fetchInput = requireFetchRemoteMediaInput();
+        const fetchImpl = fetchInput.fetchImpl;
+        expect(fetchInput).toStrictEqual({
+          url: fallbackUrl,
+          fetchImpl,
+          maxBytes: 1024,
+          ssrfPolicy: undefined,
+        });
+        expect(typeof fetchImpl).toBe("function");
         // Clean up the temp file
         if (result.cleanup) {
           await result.cleanup();
@@ -90,9 +110,15 @@ describe("media understanding attachment URL fallback", () => {
         });
         expect(result.buffer.toString()).toBe("fallback-buffer");
         expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
-        expect(fetchRemoteMediaMock).toHaveBeenCalledWith(
-          expect.objectContaining({ url: fallbackUrl, maxBytes: 1024 }),
-        );
+        const fetchInput = requireFetchRemoteMediaInput();
+        const fetchImpl = fetchInput.fetchImpl;
+        expect(fetchInput).toStrictEqual({
+          url: fallbackUrl,
+          fetchImpl,
+          maxBytes: 1024,
+          ssrfPolicy: undefined,
+        });
+        expect(typeof fetchImpl).toBe("function");
       },
     );
   });

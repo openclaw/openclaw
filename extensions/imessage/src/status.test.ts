@@ -1,7 +1,7 @@
 import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as setupRuntime from "openclaw/plugin-sdk/setup";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveIMessageAccount } from "./accounts.js";
 import * as channelRuntimeModule from "./channel.runtime.js";
 import * as clientModule from "./client.js";
@@ -27,6 +27,16 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+afterAll(() => {
+  vi.doUnmock("node:child_process");
+  vi.resetModules();
+});
+
 describe("createIMessageRpcClient", () => {
   beforeEach(() => {
     spawnMock.mockClear();
@@ -39,6 +49,22 @@ describe("createIMessageRpcClient", () => {
       /Refusing to start imsg rpc in test environment/i,
     );
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("promotes Full Disk Access rpc banners to the public probe error", async () => {
+    const { IMessageRpcClient, PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR } =
+      await import("./client.js");
+    const client = new IMessageRpcClient();
+    const internals = client as unknown as {
+      handleLine: (line: string) => void;
+      buildCloseError: (code: number | null, signal: NodeJS.Signals | null) => Error;
+    };
+
+    internals.handleLine(
+      "imsg cannot access /Users/alice/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
+
+    expect(internals.buildCloseError(1, null).message).toBe(PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR);
   });
 });
 
@@ -156,6 +182,24 @@ describe("probeIMessage", () => {
     expect(result.ok).toBe(false);
     expect(result.fatal).toBe(true);
     expect(result.error).toMatch(/rpc/i);
+    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+
+  it("fails fast for default local imsg probes on non-mac hosts", async () => {
+    const createIMessageRpcClientMock = vi
+      .spyOn(clientModule, "createIMessageRpcClient")
+      .mockResolvedValue({
+        request: vi.fn(),
+        stop: vi.fn(),
+      } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    const result = await probeIMessage(1000, { cliPath: "imsg", platform: "linux" });
+
+    expect(result.ok).toBe(false);
+    expect(result.fatal).toBe(true);
+    expect(result.error).toMatch(/macOS/i);
+    expect(result.error).toMatch(/SSH wrapper/i);
+    expect(setupRuntime.detectBinary).not.toHaveBeenCalled();
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
   });
 

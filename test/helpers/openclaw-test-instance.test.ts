@@ -3,6 +3,16 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`Expected missing path: ${targetPath}`);
+}
+
 describe("openclaw test instance", () => {
   it("creates isolated config and spawn env without mutating process env", async () => {
     const previousHome = process.env.HOME;
@@ -31,7 +41,7 @@ describe("openclaw test instance", () => {
       expect(inst.env.OPENCLAW_SKIP_CRON).toBe("0");
 
       const config = JSON.parse(await fs.readFile(inst.configPath, "utf8"));
-      expect(config).toMatchObject({
+      expect(config).toStrictEqual({
         gateway: {
           bind: "loopback",
           port: inst.port,
@@ -53,6 +63,6 @@ describe("openclaw test instance", () => {
       await inst.cleanup();
     }
 
-    await expect(fs.stat(inst.state.root)).rejects.toThrow();
+    await expectPathMissing(inst.state.root);
   });
 });

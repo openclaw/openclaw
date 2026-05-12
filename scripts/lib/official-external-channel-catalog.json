@@ -76,35 +76,48 @@
           }
         },
         "install": {
-          "npmSpec": "openclaw-plugin-yuanbao@2.11.0",
+          "npmSpec": "openclaw-plugin-yuanbao@2.13.1",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-lYmBrU71ox3v7dzRqaltvzTXPcMjjgYrNqpBj5HIBkXgEFkXRRG8wplXg9Fub41/FjsSPn3WAbYpdTc+k+jsHg=="
+          "expectedIntegrity": "sha512-lH2I9/nsmrg7l0YJJSQhOSpWMEFBAa6FwKbZcRLDFHDT2+mOZkHa44XE+8KYN4VmorlUdAxHzpZQmVr7C98IuA=="
         }
       }
     },
     {
-      "name": "@openclaw/bluebubbles",
-      "description": "OpenClaw BlueBubbles channel plugin",
-      "source": "official",
+      "name": "@tencent-weixin/openclaw-weixin",
+      "description": "OpenClaw Weixin channel plugin by the Tencent Weixin team.",
+      "source": "external",
       "kind": "channel",
       "openclaw": {
+        "plugin": {
+          "id": "openclaw-weixin",
+          "label": "Weixin"
+        },
         "channel": {
-          "id": "bluebubbles",
-          "label": "BlueBubbles",
-          "selectionLabel": "BlueBubbles (macOS app)",
-          "detailLabel": "BlueBubbles",
-          "docsPath": "/channels/bluebubbles",
-          "docsLabel": "bluebubbles",
-          "blurb": "iMessage via the BlueBubbles mac app + REST API.",
-          "aliases": ["bb"],
-          "preferOver": ["imessage"],
-          "systemImage": "bubble.left.and.text.bubble.right",
+          "id": "openclaw-weixin",
+          "label": "Weixin",
+          "selectionLabel": "Weixin（微信）",
+          "detailLabel": "Weixin",
+          "docsPath": "/channels/wechat",
+          "docsLabel": "weixin",
+          "blurb": "Personal WeChat messaging via QR-code login.",
+          "aliases": ["weixin", "wechat", "微信"],
           "order": 75
         },
+        "channelConfigs": {
+          "openclaw-weixin": {
+            "label": "Weixin",
+            "description": "Personal WeChat conversation channel.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
         "install": {
-          "npmSpec": "@openclaw/bluebubbles",
+          "npmSpec": "@tencent-weixin/openclaw-weixin@2.4.1",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.10"
+          "expectedIntegrity": "sha512-FZnUVMQRpKGTKezeplr/DYal+5RSif2tXE51pljIFrO8rn7bVnnvpbj81/i9UMrYbuGiom1sl8OeSDzWRDKGhQ==",
+          "minHostVersion": ">=2026.3.22"
         }
       }
     },
@@ -230,6 +243,59 @@
           "npmSpec": "@openclaw/line",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/matrix",
+      "description": "OpenClaw Matrix channel plugin",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "matrix",
+          "label": "Matrix",
+          "selectionLabel": "Matrix (plugin)",
+          "docsPath": "/channels/matrix",
+          "docsLabel": "matrix",
+          "blurb": "open protocol; install the plugin to enable.",
+          "order": 70,
+          "quickstartAllowFrom": true,
+          "doctorCapabilities": {
+            "dmAllowFromMode": "nestedOnly",
+            "groupModel": "sender",
+            "groupAllowFromFallbackToAllowFrom": false,
+            "warnOnEmptyGroupSenderAllowlist": true
+          },
+          "cliAddOptions": [
+            {
+              "flags": "--homeserver <url>",
+              "description": "Matrix homeserver URL"
+            },
+            {
+              "flags": "--user-id <id>",
+              "description": "Matrix user ID"
+            },
+            {
+              "flags": "--access-token <token>",
+              "description": "Matrix access token"
+            },
+            {
+              "flags": "--device-name <name>",
+              "description": "Matrix device name"
+            },
+            {
+              "flags": "--initial-sync-limit <n>",
+              "description": "Matrix initial sync limit"
+            }
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/matrix",
+          "npmSpec": "@openclaw/matrix",
+          "defaultChoice": "clawhub",
+          "minHostVersion": ">=2026.4.10",
+          "allowInvalidConfigRecovery": true
         }
       }
     },

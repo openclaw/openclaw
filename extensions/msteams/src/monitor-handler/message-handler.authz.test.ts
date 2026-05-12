@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../runtime-api.js";
+import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
 import { _resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
 import "./message-handler-mock-support.test-support.js";
@@ -80,7 +80,12 @@ vi.mock("../graph-thread.js", () => {
 });
 
 describe("msteams monitor handler authz", () => {
-  function createDeps(cfg: OpenClawConfig) {
+  function createDeps(
+    cfg: OpenClawConfig,
+    options: {
+      hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
+    } = {},
+  ) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
     const upsertPairingRequest = vi.fn(async () => null);
     const recordInboundSession = vi.fn(async () => undefined);
@@ -94,6 +99,7 @@ describe("msteams monitor handler authz", () => {
         agentId: "default",
         accountId: "default",
       })),
+      hasControlCommand: options.hasControlCommand,
     });
   }
 
@@ -262,8 +268,41 @@ describe("msteams monitor handler authz", () => {
     const { deps } = createDeps(createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }));
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createChannelThreadActivity({ attachments: [createQuoteAttachment()] }));
-    return runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0]
-      ?.ctxPayload;
+    return firstSettledDispatch().ctxPayload;
+  }
+
+  function recordFromMockCall(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== "object") {
+      throw new Error("Expected mock call record");
+    }
+    return value as Record<string, unknown>;
+  }
+
+  function mockCallArg(mocked: unknown, callIndex: number, argIndex: number): unknown {
+    const calls = (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls;
+    const call = calls?.[callIndex];
+    if (!call) {
+      throw new Error(`Expected mock call at index ${callIndex}`);
+    }
+    return call[argIndex];
+  }
+
+  function firstSettledDispatch(): { ctxPayload?: unknown } {
+    const dispatched = mockCallArg(
+      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+      0,
+      0,
+    );
+    return recordFromMockCall(dispatched) as { ctxPayload?: unknown };
+  }
+
+  function logMeta(logFn: unknown, message: string): Record<string, unknown> {
+    const calls = (logFn as { mock?: { calls?: Array<[unknown, unknown?]> } }).mock?.calls ?? [];
+    const call = calls.find(([loggedMessage]) => loggedMessage === message);
+    if (!call) {
+      throw new Error(`Expected log message: ${message}`);
+    }
+    return recordFromMockCall(call[1]);
   }
 
   it("does not treat DM pairing-store entries as group allowlist entries", async () => {
@@ -281,10 +320,7 @@ describe("msteams monitor handler authz", () => {
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createAttackerGroupActivity({ text: "" }));
 
-    expect(readAllowFromStore).toHaveBeenCalledWith({
-      channel: "msteams",
-      accountId: "default",
-    });
+    expect(readAllowFromStore).not.toHaveBeenCalled();
     expect(conversationStore.upsert).not.toHaveBeenCalled();
   });
 
@@ -450,20 +486,17 @@ describe("msteams monitor handler authz", () => {
       sendActivity: vi.fn(async () => undefined),
     } as unknown as Parameters<typeof handler>[0]);
 
-    expect(conversationStore.upsert).toHaveBeenCalledWith(
-      "19:team-channel@thread.tacv2",
-      expect.objectContaining({
-        tenantId: "tenant-from-channel-data",
-        aadObjectId: "sender-aad",
-        conversation: expect.objectContaining({
-          id: "19:team-channel@thread.tacv2",
-          tenantId: "tenant-from-channel-data",
-        }),
-      }),
-    );
+    expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(conversationStore.upsert, 0, 0)).toBe("19:team-channel@thread.tacv2");
+    const storedRef = recordFromMockCall(mockCallArg(conversationStore.upsert, 0, 1));
+    expect(storedRef.tenantId).toBe("tenant-from-channel-data");
+    expect(storedRef.aadObjectId).toBe("sender-aad");
+    const storedConversation = recordFromMockCall(storedRef.conversation);
+    expect(storedConversation.id).toBe("19:team-channel@thread.tacv2");
+    expect(storedConversation.tenantId).toBe("tenant-from-channel-data");
   });
 
-  it("does not crash when channelData.tenant is missing and stores no tenantId", async () => {
+  it("stores no tenantId when channelData.tenant is missing", async () => {
     const { conversationStore, deps } = createDeps({
       channels: {
         msteams: {
@@ -504,14 +537,10 @@ describe("msteams monitor handler authz", () => {
 
     expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
     // Top-level tenantId must not be present when no source is available.
-    expect(conversationStore.upsert).toHaveBeenCalledWith(
-      "19:no-tenant@thread.tacv2",
-      expect.not.objectContaining({ tenantId: expect.anything() }),
-    );
-    expect(conversationStore.upsert).toHaveBeenCalledWith(
-      "19:no-tenant@thread.tacv2",
-      expect.objectContaining({ aadObjectId: "sender-aad" }),
-    );
+    expect(mockCallArg(conversationStore.upsert, 0, 0)).toBe("19:no-tenant@thread.tacv2");
+    const storedRef = recordFromMockCall(mockCallArg(conversationStore.upsert, 0, 1));
+    expect("tenantId" in storedRef).toBe(false);
+    expect(storedRef.aadObjectId).toBe("sender-aad");
   });
 
   it("logs an info drop reason when dmPolicy allowlist rejects a sender", async () => {
@@ -527,14 +556,10 @@ describe("msteams monitor handler authz", () => {
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createAttackerPersonalActivity("msg-drop-dm"));
 
-    expect(deps.log.info).toHaveBeenCalledWith(
-      "dropping dm (not allowlisted)",
-      expect.objectContaining({
-        sender: "attacker-aad",
-        dmPolicy: "allowlist",
-        reason: "dmPolicy=allowlist (not allowlisted)",
-      }),
-    );
+    const meta = logMeta(deps.log.info, "dropping dm (not allowlisted)");
+    expect(meta.sender).toBe("attacker-aad");
+    expect(meta.dmPolicy).toBe("allowlist");
+    expect(meta.reason).toBe("dmPolicy=allowlist (not allowlisted)");
   });
 
   it("logs an info drop reason when group policy has an empty allowlist", async () => {
@@ -552,12 +577,63 @@ describe("msteams monitor handler authz", () => {
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createAttackerGroupActivity());
 
-    expect(deps.log.info).toHaveBeenCalledWith(
-      "dropping group message (groupPolicy: allowlist, no allowlist)",
-      expect.objectContaining({
-        conversationId: "19:group@thread.tacv2",
-      }),
+    expect(
+      logMeta(deps.log.info, "dropping group message (groupPolicy: allowlist, no allowlist)")
+        .conversationId,
+    ).toBe("19:group@thread.tacv2");
+  });
+
+  it("blocks unauthorized text control commands through shared ingress", async () => {
+    resetThreadMocks();
+    const hasControlCommand = vi.fn(() => true);
+    const { conversationStore, deps } = createDeps(
+      {
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      { hasControlCommand },
     );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(createAttackerGroupActivity({ text: "/config set foo bar" }));
+
+    expect(hasControlCommand).toHaveBeenCalledWith("/config set foo bar", deps.cfg);
+    expect(conversationStore.upsert).not.toHaveBeenCalled();
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("authorizes text control commands from static access groups", async () => {
+    resetThreadMocks();
+    const hasControlCommand = vi.fn(() => true);
+    const { conversationStore, deps } = createDeps(
+      {
+        accessGroups: {
+          operators: {
+            type: "message.senders",
+            members: { msteams: ["attacker-aad"] },
+          },
+        },
+        channels: {
+          msteams: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["accessGroup:operators"],
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      { hasControlCommand },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(createAttackerGroupActivity({ text: "/config set foo bar" }));
+
+    expect(conversationStore.upsert).toHaveBeenCalled();
+    const dispatched = firstSettledDispatch();
+    expect(recordFromMockCall(dispatched?.ctxPayload).CommandAuthorized).toBe(true);
   });
 
   it("filters non-allowlisted thread messages out of BodyForAgent", async () => {
@@ -586,20 +662,18 @@ describe("msteams monitor handler authz", () => {
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createChannelThreadActivity());
 
-    const dispatched =
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
-    expect(dispatched).toBeTruthy();
-    expect(dispatched?.ctxPayload).toMatchObject({
-      BodyForAgent:
-        "[Thread history]\nAlice: Allowed context\n[/Thread history]\n\nCurrent message",
-      GroupSpace: "team123",
-    });
-    expect(
-      String((dispatched?.ctxPayload as { BodyForAgent?: string }).BodyForAgent),
-    ).not.toContain("Mallory");
-    expect(
-      String((dispatched?.ctxPayload as { BodyForAgent?: string }).BodyForAgent),
-    ).not.toContain("<<<END_EXTERNAL_UNTRUSTED_CONTENT");
+    const dispatched = firstSettledDispatch();
+    const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
+    expect(ctxPayload.BodyForAgent).toBe(
+      "[Thread history]\nAlice: Allowed context\n[/Thread history]\n\nCurrent message",
+    );
+    expect(ctxPayload.GroupSpace).toBe("team123");
+    expect(String((dispatched.ctxPayload as { BodyForAgent?: string }).BodyForAgent)).not.toContain(
+      "Mallory",
+    );
+    expect(String((dispatched.ctxPayload as { BodyForAgent?: string }).BodyForAgent)).not.toContain(
+      "<<<END_EXTERNAL_UNTRUSTED_CONTENT",
+    );
   });
 
   it("keeps thread messages when allowlist name matching applies without a sender id", async () => {
@@ -628,12 +702,10 @@ describe("msteams monitor handler authz", () => {
     const handler = createMSTeamsMessageHandler(deps);
     await handler(createChannelThreadActivity());
 
-    const dispatched =
-      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock.calls[0]?.[0];
-    expect(dispatched?.ctxPayload).toMatchObject({
-      BodyForAgent:
-        "[Thread history]\nAlice: Allowlisted by display name\n[/Thread history]\n\nCurrent message",
-    });
+    const dispatched = firstSettledDispatch();
+    expect(recordFromMockCall(dispatched?.ctxPayload).BodyForAgent).toBe(
+      "[Thread history]\nAlice: Allowlisted by display name\n[/Thread history]\n\nCurrent message",
+    );
   });
 
   it("keeps quote context when the parent sender id is allowlisted", async () => {
@@ -645,10 +717,9 @@ describe("msteams monitor handler authz", () => {
       }),
     );
 
-    expect(ctxPayload).toMatchObject({
-      ReplyToBody: "Quoted body",
-      ReplyToSender: "Alice",
-    });
+    const ctx = recordFromMockCall(ctxPayload);
+    expect(ctx.ReplyToBody).toBe("Quoted body");
+    expect(ctx.ReplyToSender).toBe("Alice");
   });
 
   it("drops quote context when attachment metadata disagrees with a blocked parent sender", async () => {
@@ -660,10 +731,9 @@ describe("msteams monitor handler authz", () => {
       }),
     );
 
-    expect(ctxPayload).toMatchObject({
-      ReplyToBody: undefined,
-      ReplyToSender: undefined,
-      BodyForAgent: "Current message",
-    });
+    const ctx = recordFromMockCall(ctxPayload);
+    expect(ctx.ReplyToBody).toBeUndefined();
+    expect(ctx.ReplyToSender).toBeUndefined();
+    expect(ctx.BodyForAgent).toBe("Current message");
   });
 });

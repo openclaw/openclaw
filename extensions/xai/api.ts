@@ -1,13 +1,15 @@
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  getModelProviderHint,
-  normalizeNativeXaiModelId,
-  normalizeProviderId,
-} from "openclaw/plugin-sdk/provider-model-shared";
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyXaiModelCompat,
+  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
+  normalizeNativeXaiModelId,
   resolveXaiModelCompatPatch,
-} from "openclaw/plugin-sdk/provider-tools";
-import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
+  XAI_TOOL_SCHEMA_PROFILE,
+} from "./model-compat.js";
 
 export { buildXaiProvider } from "./provider-catalog.js";
 export { applyXaiConfig, applyXaiProviderConfig } from "./onboard.js";
@@ -25,12 +27,9 @@ export {
   XAI_IMAGE_MODELS,
 } from "./model-definitions.js";
 export { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
-export {
-  applyXaiModelCompat,
-  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
-  XAI_TOOL_SCHEMA_PROFILE,
-  resolveXaiModelCompatPatch,
-} from "openclaw/plugin-sdk/provider-tools";
+export { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
+export { applyXaiModelCompat, HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING, XAI_TOOL_SCHEMA_PROFILE };
+export { resolveXaiModelCompatPatch };
 
 const XAI_NATIVE_ENDPOINT_HOSTS = new Set(["api.x.ai", "api.grok.x.ai"]);
 
@@ -53,6 +52,18 @@ export function isXaiModelHint(modelId: string): boolean {
 }
 
 export { normalizeNativeXaiModelId as normalizeXaiModelId };
+
+function getModelProviderHint(modelId: string): string | null {
+  const trimmed = normalizeOptionalLowercaseString(modelId);
+  if (!trimmed) {
+    return null;
+  }
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex <= 0) {
+    return null;
+  }
+  return trimmed.slice(0, slashIndex) || null;
+}
 
 function shouldUseXaiResponsesTransport(params: {
   provider: string;

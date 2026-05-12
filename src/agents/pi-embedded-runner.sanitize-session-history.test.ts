@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, UserMessage, Usage } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage, UserMessage, Usage } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
@@ -270,6 +270,20 @@ describe("sanitizeSessionHistory", () => {
       | undefined;
   };
 
+  const expectAssistantUsageSnapshot = (assistant: unknown) => {
+    const usage = (assistant as { usage?: Usage } | undefined)?.usage;
+    expect(typeof usage?.input).toBe("number");
+    expect(typeof usage?.output).toBe("number");
+    expect(typeof usage?.cacheRead).toBe("number");
+    expect(typeof usage?.cacheWrite).toBe("number");
+    expect(typeof usage?.totalTokens).toBe("number");
+    expect(typeof usage?.cost?.input).toBe("number");
+    expect(typeof usage?.cost?.output).toBe("number");
+    expect(typeof usage?.cost?.cacheRead).toBe("number");
+    expect(typeof usage?.cost?.cacheWrite).toBe("number");
+    expect(typeof usage?.cost?.total).toBe("number");
+  };
+
   beforeAll(async () => {
     const harness = await loadSanitizeSessionHistoryWithCleanMocks();
     sanitizeSessionHistory = harness.sanitizeSessionHistory;
@@ -315,10 +329,8 @@ describe("sanitizeSessionHistory", () => {
       sessionId: TEST_SESSION_ID,
     });
 
-    expect(result[0]).toMatchObject({
-      role: "user",
-      content: "(session bootstrap)",
-    });
+    expect(result[0]?.role).toBe("user");
+    expect((result[0] as { content?: unknown } | undefined)?.content).toBe("(session bootstrap)");
     expect(
       sessionEntries.some((entry) => entry.customType === "google-turn-ordering-bootstrap"),
     ).toBe(true);
@@ -472,7 +484,6 @@ describe("sanitizeSessionHistory", () => {
     const staleAssistant = result.find((message) => message.role === "assistant") as
       | (AgentMessage & { usage?: unknown })
       | undefined;
-    expect(staleAssistant).toBeDefined();
     expect(staleAssistant?.usage).toEqual(makeZeroUsageSnapshot());
   });
 
@@ -497,7 +508,7 @@ describe("sanitizeSessionHistory", () => {
     const assistants = getAssistantMessages(result);
     expect(assistants).toHaveLength(2);
     expect(assistants[0]?.usage).toEqual(makeZeroUsageSnapshot());
-    expect(assistants[1]?.usage).toBeDefined();
+    expectAssistantUsageSnapshot(assistants[1]);
   });
 
   it("adds a zeroed assistant usage snapshot when usage is missing", async () => {
@@ -655,7 +666,7 @@ describe("sanitizeSessionHistory", () => {
       JSON.stringify(message.content).includes("fresh answer"),
     );
     expect(keptAssistant?.usage).toEqual(makeZeroUsageSnapshot());
-    expect(freshAssistant?.usage).toBeDefined();
+    expectAssistantUsageSnapshot(freshAssistant);
   });
 
   it("keeps reasoning-only assistant messages for openai-responses", async () => {
@@ -780,8 +791,10 @@ describe("sanitizeSessionHistory", () => {
       "user",
     ]);
     expect(
-      extractToolCallsFromAssistant(result[0] as Extract<AgentMessage, { role: "assistant" }>),
-    ).toMatchObject([
+      extractToolCallsFromAssistant(result[0] as Extract<AgentMessage, { role: "assistant" }>).map(
+        (call) => ({ id: call.id, name: call.name }),
+      ),
+    ).toEqual([
       { id: "call1", name: "read" },
       { id: "call2", name: "exec" },
       { id: "call3", name: "write" },
@@ -920,7 +933,7 @@ describe("sanitizeSessionHistory", () => {
       allowedToolNames: ["read"],
     });
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("downgrades orphaned openai reasoning even when the model has not changed", async () => {
@@ -941,7 +954,7 @@ describe("sanitizeSessionHistory", () => {
       sessionManager,
     });
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("downgrades orphaned openai reasoning when the model changes too", async () => {
@@ -981,7 +994,7 @@ describe("sanitizeSessionHistory", () => {
 
     expect(result).toEqual([
       {
-        ...(messages[0] as Record<string, unknown>),
+        ...(messages[0] as unknown as Record<string, unknown>),
         usage: makeZeroUsageSnapshot(),
       },
     ]);
@@ -1164,19 +1177,16 @@ describe("sanitizeSessionHistory", () => {
       modelId: "claude-sonnet-4-6",
       sessionId: TEST_SESSION_ID,
     });
-    expect(validated).toEqual([
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "First" },
-          { type: "text", text: "Second" },
-        ],
-        timestamp: expect.any(Number),
-      },
+    expect(validated).toHaveLength(1);
+    expect(validated[0]?.role).toBe("user");
+    expect((validated[0] as Extract<AgentMessage, { role: "user" }>).content).toEqual([
+      { type: "text", text: "First" },
+      { type: "text", text: "Second" },
     ]);
+    expect(typeof (validated[0] as { timestamp?: unknown }).timestamp).toBe("number");
   });
 
-  it("strips prior assistant reasoning for Gemma 4 OpenAI-compatible replay", async () => {
+  it("strips prior assistant reasoning for Qwen-style OpenAI-compatible replay", async () => {
     setNonGoogleModelApi();
 
     const messages = castAgentMessages([
@@ -1195,8 +1205,8 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeSessionHistory({
       messages,
       modelApi: "openai-completions",
-      provider: "lmstudio",
-      modelId: "google/gemma-4-26b-a4b-it",
+      provider: "vllm",
+      modelId: "Qwen3.6-27B",
       sessionManager: makeMockSessionManager(),
       sessionId: TEST_SESSION_ID,
     });
@@ -1206,7 +1216,7 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
-  it("preserves current Gemma 4 tool-call reasoning during tool continuation replay", async () => {
+  it("preserves current OpenAI-compatible tool-call reasoning during tool continuation replay", async () => {
     setNonGoogleModelApi();
 
     const messages = castAgentMessages([
@@ -1231,8 +1241,8 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeSessionHistory({
       messages,
       modelApi: "openai-completions",
-      provider: "lmstudio",
-      modelId: "google/gemma-4-26b-a4b-it",
+      provider: "vllm",
+      modelId: "Qwen3.6-27B",
       sessionManager: makeMockSessionManager(),
       sessionId: TEST_SESSION_ID,
     });
@@ -1526,10 +1536,8 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      role: "user",
-      content: "retry",
-    });
+    expect(result[0]?.role).toBe("user");
+    expect((result[0] as { content?: unknown } | undefined)?.content).toBe("retry");
   });
 
   it("uses immutable thinking replay for amazon-bedrock claude providers when policy preserves signatures", async () => {
@@ -1554,10 +1562,8 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      role: "user",
-      content: "retry",
-    });
+    expect(result[0]?.role).toBe("user");
+    expect((result[0] as { content?: unknown } | undefined)?.content).toBe("retry");
   });
 
   it.each([

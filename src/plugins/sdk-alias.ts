@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
@@ -37,15 +38,13 @@ function readPluginSdkPackageJson(packageRoot: string): PluginSdkPackageJson | n
   if (pluginSdkPackageJsonByRoot.has(cacheKey)) {
     return pluginSdkPackageJsonByRoot.get(cacheKey) ?? null;
   }
-  try {
-    const pkgRaw = fs.readFileSync(path.join(packageRoot, "package.json"), "utf-8");
-    const parsed = JSON.parse(pkgRaw) as PluginSdkPackageJson;
-    pluginSdkPackageJsonByRoot.set(cacheKey, parsed);
-    return parsed;
-  } catch {
+  const parsed = tryReadJsonSync<PluginSdkPackageJson>(path.join(packageRoot, "package.json"));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     pluginSdkPackageJsonByRoot.set(cacheKey, null);
     return null;
   }
+  pluginSdkPackageJsonByRoot.set(cacheKey, parsed);
+  return parsed;
 }
 
 function isSafePluginSdkSubpathSegment(subpath: string): boolean {
@@ -266,6 +265,7 @@ const cachedPluginSdkScopedAliasMaps = new PluginLruCache<Record<string, string>
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
+const CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH = "codex-native-task-runtime";
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".ts",
   ".mts",
@@ -306,29 +306,19 @@ function isUsableDistPluginSdkArtifact(candidate: string): boolean {
 }
 
 function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
-  try {
-    const raw = fs.readFileSync(
-      path.join(packageRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
-      "utf-8",
-    );
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath));
-  } catch {
+  const parsed = tryReadJsonSync(
+    path.join(packageRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
+  );
+  if (!Array.isArray(parsed)) {
     return [];
   }
+  return parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath));
 }
 
 function readBundledPluginPackageName(packageJsonPath: string): string | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as { name?: unknown };
-    const name = typeof parsed.name === "string" ? parsed.name.trim() : "";
-    return name.startsWith("@openclaw/") ? name : null;
-  } catch {
-    return null;
-  }
+  const parsed = tryReadJsonSync<{ name?: unknown }>(packageJsonPath);
+  const name = typeof parsed?.name === "string" ? parsed.name.trim() : "";
+  return name.startsWith("@openclaw/") ? name : null;
 }
 
 function isBundledPluginPublicSurfaceSourceBasename(params: {
@@ -464,6 +454,34 @@ function shouldIncludePrivateLocalOnlyPluginSdkSubpaths() {
   return process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1";
 }
 
+function isBundledCodexPluginModulePath(params: { packageRoot: string; modulePath: string }) {
+  const normalizedModulePath = path.resolve(params.modulePath);
+  const roots = [
+    path.join(params.packageRoot, "extensions", "codex"),
+    path.join(params.packageRoot, "dist", "extensions", "codex"),
+    path.join(params.packageRoot, "dist-runtime", "extensions", "codex"),
+  ];
+  return roots.some(
+    (root) =>
+      normalizedModulePath === root || normalizedModulePath.startsWith(`${root}${path.sep}`),
+  );
+}
+
+function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
+  packageRoot: string;
+  modulePath: string;
+  subpath: string;
+}) {
+  return (
+    shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ||
+    (params.subpath === CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH &&
+      isBundledCodexPluginModulePath({
+        packageRoot: params.packageRoot,
+        modulePath: params.modulePath,
+      }))
+  );
+}
+
 function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
   const distPath = path.join(packageRoot, "dist", "plugin-sdk", `${subpath}.js`);
   if (isUsableDistPluginSdkArtifact(distPath)) {
@@ -489,12 +507,14 @@ function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
   }
 }
 
-function listPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
-  if (!shouldIncludePrivateLocalOnlyPluginSdkSubpaths()) {
-    return [];
-  }
-  return readPrivateLocalOnlyPluginSdkSubpaths(packageRoot).filter((subpath) =>
-    hasPluginSdkSubpathArtifact(packageRoot, subpath),
+function listPrivateLocalOnlyPluginSdkSubpaths(params: {
+  packageRoot: string;
+  modulePath: string;
+}): string[] {
+  return readPrivateLocalOnlyPluginSdkSubpaths(params.packageRoot).filter(
+    (subpath) =>
+      shouldIncludePrivateLocalOnlyPluginSdkSubpath({ ...params, subpath }) &&
+      hasPluginSdkSubpathArtifact(params.packageRoot, subpath),
   );
 }
 
@@ -515,7 +535,8 @@ export function listPluginSdkExportedSubpaths(
   if (!packageRoot) {
     return [];
   }
-  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}`;
+  const includeCodexPrivateRuntime = isBundledCodexPluginModulePath({ packageRoot, modulePath });
+  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::codexPrivate=${includeCodexPrivateRuntime ? "1" : "0"}`;
   const cached = cachedPluginSdkExportedSubpaths.get(cacheKey);
   if (cached) {
     return cached;
@@ -523,7 +544,7 @@ export function listPluginSdkExportedSubpaths(
   const subpaths = [
     ...new Set([
       ...(readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? []),
-      ...listPrivateLocalOnlyPluginSdkSubpaths(packageRoot),
+      ...listPrivateLocalOnlyPluginSdkSubpaths({ packageRoot, modulePath }),
     ]),
   ].toSorted();
   cachedPluginSdkExportedSubpaths.set(cacheKey, subpaths);
@@ -552,7 +573,8 @@ export function resolvePluginSdkScopedAliasMap(
     isProduction: process.env.NODE_ENV === "production",
     pluginSdkResolution: params.pluginSdkResolution,
   });
-  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}`;
+  const includeCodexPrivateRuntime = isBundledCodexPluginModulePath({ packageRoot, modulePath });
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::codexPrivate=${includeCodexPrivateRuntime ? "1" : "0"}`;
   const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
   if (cached) {
     return cached;

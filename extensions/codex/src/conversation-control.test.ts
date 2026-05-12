@@ -53,12 +53,11 @@ describe("codex conversation controls", () => {
       "Codex permissions set to default.",
     );
 
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-1",
-      serviceTier: "fast",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-    });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-1");
+    expect(binding?.serviceTier).toBe("priority");
+    expect(binding?.approvalPolicy).toBe("on-request");
+    expect(binding?.sandbox).toBe("workspace-write");
   });
 
   it("does not persist public OpenAI provider after model changes on native auth bindings", async () => {
@@ -95,11 +94,30 @@ describe("codex conversation controls", () => {
     const raw = await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8");
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(raw).not.toContain('"modelProvider": "openai"');
-    expect(binding).toMatchObject({
-      threadId: "thread-1",
-      authProfileId: "work",
-      model: "gpt-5.5",
-    });
+    expect(binding?.threadId).toBe("thread-1");
+    expect(binding?.authProfileId).toBe("work");
+    expect(binding?.model).toBe("gpt-5.5");
     expect(binding?.modelProvider).toBeUndefined();
+  });
+
+  it("escapes model names returned from Codex before chat display", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      model: "gpt-5.4",
+      modelProvider: "openai",
+    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async () => ({
+        thread: { id: "thread-1", cwd: tempDir },
+        model: "gpt-5.5 <@U123> [trusted](https://evil)",
+        modelProvider: "openai",
+      })),
+    });
+
+    await expect(setCodexConversationModel({ sessionFile, model: "gpt-5.5" })).resolves.toBe(
+      "Codex model set to gpt-5.5 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09.",
+    );
   });
 });

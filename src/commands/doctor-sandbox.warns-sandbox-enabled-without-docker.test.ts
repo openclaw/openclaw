@@ -86,7 +86,10 @@ describe("maybeRepairSandboxImages", () => {
 
     // The warning should clearly indicate sandbox is enabled but won't work
     expect(note).toHaveBeenCalled();
-    const noteCall = note.mock.calls[0];
+    const noteCall = note.mock.calls.at(0);
+    if (noteCall === undefined) {
+      throw new Error("expected sandbox warning note");
+    }
     const message = noteCall[0] as string;
 
     // The message should warn that sandbox mode won't function, not just "skipping checks"
@@ -99,7 +102,10 @@ describe("maybeRepairSandboxImages", () => {
     await runSandboxRepair({ mode: "all", dockerAvailable: false });
 
     expect(note).toHaveBeenCalled();
-    const noteCall = note.mock.calls[0];
+    const noteCall = note.mock.calls.at(0);
+    if (noteCall === undefined) {
+      throw new Error("expected sandbox warning note");
+    }
     const message = noteCall[0] as string;
 
     // Should warn about the impact on sandbox functionality
@@ -151,7 +157,14 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     await maybeRepairSandboxRegistryFiles(mockPrompter);
 
     expect(migrateLegacySandboxRegistryFiles).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"), "Sandbox");
+    expect(note).toHaveBeenCalledWith(
+      [
+        "Legacy sandbox registry files detected.",
+        "- containers: /tmp/openclaw/sandbox/containers.json (2 entries)",
+        "Run openclaw doctor --fix to migrate them to sharded registry files.",
+      ].join("\n"),
+      "Sandbox",
+    );
   });
 
   it("migrates legacy registry files during doctor --fix", async () => {
@@ -182,7 +195,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
 
     expect(migrateLegacySandboxRegistryFiles).toHaveBeenCalledTimes(1);
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Migrated containers"),
+      "- Migrated containers registry from /tmp/openclaw/sandbox/containers.json into 2 shards.",
       "Doctor changes",
     );
   });

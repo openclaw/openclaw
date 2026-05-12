@@ -11,6 +11,7 @@ import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfigWithResolver } from "./config-policy.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import type {
@@ -46,6 +47,8 @@ import { checkMinHostVersion } from "./min-host-version.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
+  resolveOfficialExternalPluginId,
+  resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
@@ -140,6 +143,7 @@ export type PluginManifestRecord = {
   packageOptionalDependencies?: PluginDependencySpecMap;
   packageChannel?: PluginPackageChannel;
   packageInstall?: PluginPackageInstall;
+  trustedOfficialInstall?: boolean;
   qaRunners?: PluginManifestQaRunner[];
   skills: string[];
   settingsFiles?: string[];
@@ -365,6 +369,7 @@ function buildRecord(params: {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
+  trustedOfficialInstall?: boolean;
 }): PluginManifestRecord {
   const manifestChannelConfigs =
     params.candidate.origin === "bundled" && params.bundledChannelConfigCollector
@@ -408,11 +413,15 @@ function buildRecord(params: {
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
-    providerDiscoverySource: params.manifest.providerDiscoveryEntry
-      ? resolvePluginSourcePath(
-          path.resolve(params.candidate.rootDir, params.manifest.providerDiscoveryEntry),
-        )
-      : undefined,
+    providerDiscoverySource:
+      (params.manifest.providerCatalogEntry ?? params.manifest.providerDiscoveryEntry)
+        ? resolvePluginSourcePath(
+            path.resolve(
+              params.candidate.rootDir,
+              params.manifest.providerCatalogEntry ?? params.manifest.providerDiscoveryEntry!,
+            ),
+          )
+        : undefined,
     modelSupport: params.manifest.modelSupport,
     modelCatalog: params.manifest.modelCatalog,
     modelPricing: params.manifest.modelPricing,
@@ -434,6 +443,7 @@ function buildRecord(params: {
     packageOptionalDependencies: params.candidate.packageOptionalDependencies,
     packageChannel: params.candidate.packageManifest?.channel,
     packageInstall: params.candidate.packageManifest?.install,
+    trustedOfficialInstall: params.trustedOfficialInstall === true ? true : undefined,
     qaRunners: params.manifest.qaRunners,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
@@ -634,7 +644,7 @@ function matchesInstalledPluginRecord(params: {
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
 }): boolean {
-  if (params.candidate.origin !== "global") {
+  if (params.candidate.origin !== "global" && params.candidate.origin !== "config") {
     return false;
   }
   const record = params.installRecords[params.pluginId];
@@ -651,6 +661,72 @@ function matchesInstalledPluginRecord(params: {
   return trackedPaths.some((trackedPath) => {
     return candidateSource === trackedPath || isPathInside(trackedPath, candidateSource);
   });
+}
+
+function npmSpecMatchesPackage(value: string | undefined, packageName: string): boolean {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized === packageName) {
+    return true;
+  }
+  return normalized.startsWith(`${packageName}@`);
+}
+
+function isTrustedOfficialPluginInstall(params: {
+  pluginId: string;
+  candidate: PluginCandidate;
+  env: NodeJS.ProcessEnv;
+  installRecords: Record<string, PluginInstallRecord>;
+}): boolean {
+  if (
+    (params.candidate.origin !== "global" && params.candidate.origin !== "config") ||
+    !matchesInstalledPluginRecord({
+      pluginId: params.pluginId,
+      candidate: params.candidate,
+      env: params.env,
+      installRecords: params.installRecords,
+    })
+  ) {
+    return false;
+  }
+  const packageName = params.candidate.packageName?.trim();
+  if (!packageName) {
+    return false;
+  }
+  const catalogEntry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
+  if (!catalogEntry || resolveOfficialExternalPluginId(catalogEntry) !== params.pluginId) {
+    return false;
+  }
+  const officialInstall = resolveOfficialExternalPluginInstall(catalogEntry);
+  const installRecord = params.installRecords[params.pluginId];
+  if (!installRecord) {
+    return false;
+  }
+  if (
+    installRecord.source === "npm" &&
+    officialInstall?.npmSpec === packageName &&
+    [
+      installRecord.resolvedName,
+      installRecord.spec,
+      installRecord.resolvedSpec,
+      params.candidate.packageName,
+    ].some((value) => npmSpecMatchesPackage(value, packageName))
+  ) {
+    return true;
+  }
+  if (
+    installRecord.source === "clawhub" &&
+    officialInstall?.clawhubSpec &&
+    installRecord.clawhubChannel === "official" &&
+    (installRecord.clawhubPackage === packageName ||
+      installRecord.spec === officialInstall.clawhubSpec ||
+      installRecord.resolvedSpec === officialInstall.clawhubSpec)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function resolveDuplicatePrecedenceRank(params: {
@@ -772,7 +848,12 @@ export function loadPluginManifestRegistry(
   const currentHostVersion = resolveCompatibilityHostVersion(env);
 
   for (const candidate of candidates) {
-    const rejectHardlinks = candidate.origin !== "bundled";
+    const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+      origin: candidate.origin,
+      rootDir: candidate.rootDir,
+      env,
+      realpathCache,
+    });
     const isBundleRecord = (candidate.format ?? "openclaw") === "bundle";
     const manifestRes:
       | ReturnType<typeof loadPluginManifest>
@@ -858,6 +939,12 @@ export function loadPluginManifestRegistry(
           manifestPath: manifestRes.manifestPath,
           schemaCacheKey,
           configSchema,
+          trustedOfficialInstall: isTrustedOfficialPluginInstall({
+            pluginId: manifest.id,
+            candidate,
+            env,
+            installRecords: getInstallRecords(),
+          }),
           ...(params.bundledChannelConfigCollector
             ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
             : {}),

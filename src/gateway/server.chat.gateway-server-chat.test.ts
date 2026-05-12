@@ -38,6 +38,10 @@ describe("gateway server chat", () => {
     dispatchInboundMessageMock.mockReset();
   });
 
+  const removeTempDir = async (dir: string): Promise<void> => {
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  };
+
   const buildNoReplyHistoryFixture = (includeMixedAssistant = false) => [
     {
       role: "user",
@@ -109,7 +113,7 @@ describe("gateway server chat", () => {
       return await run(dir);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await removeTempDir(dir);
     }
   };
 
@@ -125,6 +129,23 @@ describe("gateway server chat", () => {
         return extractFirstTextBlock(message);
       })
       .filter((value): value is string => typeof value === "string");
+
+  const expectRecordFields = (value: unknown, expected: Record<string, unknown>) => {
+    if (!value || typeof value !== "object") {
+      throw new Error("Expected record");
+    }
+    const actual = value as Record<string, unknown>;
+    for (const [key, expectedValue] of Object.entries(expected)) {
+      expect(actual[key]).toEqual(expectedValue);
+    }
+    return actual;
+  };
+
+  const expectStringRunId = (payload: unknown) => {
+    const actual = expectRecordFields(payload, {});
+    expect(typeof actual.runId).toBe("string");
+    return actual.runId as string;
+  };
 
   const expectAgentWaitTimeout = (res: Awaited<ReturnType<typeof rpcReq>>) => {
     expect(res.ok).toBe(true);
@@ -223,7 +244,7 @@ describe("gateway server chat", () => {
       expect(res.payload?.messageSeq).toBe(1);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -250,7 +271,7 @@ describe("gateway server chat", () => {
       expect(res.payload?.messageSeq).toBe(1);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -304,7 +325,7 @@ describe("gateway server chat", () => {
       if (abortRes.payload?.status === "aborted") {
         expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-1");
         const cancelledEvent = await cancelledEventP;
-        expect(cancelledEvent.payload?.data).toMatchObject({
+        expectRecordFields(cancelledEvent.payload?.data, {
           phase: "end",
           status: "cancelled",
           aborted: true,
@@ -315,7 +336,7 @@ describe("gateway server chat", () => {
           timeoutMs: 0,
         });
         expect(waitRes.ok).toBe(true);
-        expect(waitRes.payload).toMatchObject({
+        expectRecordFields(waitRes.payload, {
           runId: "idem-sessions-abort-1",
           status: "timeout",
           stopReason: "rpc",
@@ -325,7 +346,7 @@ describe("gateway server chat", () => {
       }
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -360,7 +381,7 @@ describe("gateway server chat", () => {
       }
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -535,7 +556,7 @@ describe("gateway server chat", () => {
         CHAT_RESPONSE_TIMEOUT_MS,
       );
       expect(imgRes.ok).toBe(true);
-      expect(imgRes.payload?.runId).toBeDefined();
+      expectStringRunId(imgRes.payload);
       const reqIdOnly = "chat-img-only";
       ws.send(
         JSON.stringify({
@@ -564,7 +585,7 @@ describe("gateway server chat", () => {
         CHAT_RESPONSE_TIMEOUT_MS,
       );
       expect(imgOnlyRes.ok).toBe(true);
-      expect(imgOnlyRes.payload?.runId).toBeDefined();
+      expectStringRunId(imgOnlyRes.payload);
 
       const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(historyDir);
@@ -606,7 +627,7 @@ describe("gateway server chat", () => {
       if (webchatWs) {
         webchatWs.close();
       }
-      await Promise.all(tempDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+      await Promise.all(tempDirs.map((dir) => removeTempDir(dir)));
     }
   });
 
@@ -800,14 +821,14 @@ describe("gateway server chat", () => {
       });
       const sideResult = await sideResultPromise;
       const finalEvent = await finalPromise;
-      expect(sideResult.payload).toMatchObject({
+      expectRecordFields(sideResult.payload, {
         kind: "btw",
         runId: "idem-btw-1",
         sessionKey: "agent:main:main",
         question: "what is 17 * 19?",
         text: "323",
       });
-      expect(finalEvent.payload).toMatchObject({
+      expectRecordFields(finalEvent.payload, {
         runId: "idem-btw-1",
         sessionKey: "agent:main:main",
         state: "final",
@@ -882,7 +903,7 @@ describe("gateway server chat", () => {
         expect(dispatchInboundMessageMock).toHaveBeenCalled();
       });
       const sideResult = await sideResultPromise;
-      expect(sideResult.payload).toMatchObject({
+      expectRecordFields(sideResult.payload, {
         kind: "btw",
         runId: "idem-btw-block-1",
         question: "what changed?",
@@ -940,7 +961,7 @@ describe("gateway server chat", () => {
         await finalPromise;
 
         let assistantMessage: Record<string, unknown> | undefined;
-        for (let attempt = 0; attempt < 50; attempt += 1) {
+        await vi.waitFor(async () => {
           const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
             sessionKey: "main",
           });
@@ -952,26 +973,22 @@ describe("gateway server chat", () => {
               message !== null &&
               (message as { role?: unknown }).role === "assistant",
           );
-          if (assistantMessage) {
-            break;
+          if (!assistantMessage) {
+            throw new Error("Expected assistant history message");
           }
-          await new Promise((resolve) => setTimeout(resolve, 100));
-        }
-
-        expect(assistantMessage).toBeTruthy();
+        });
         const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
-        expect(assistantContent).toEqual([
-          { type: "text", text: "Image reply" },
-          expect.objectContaining({
-            type: "image",
-            url: expect.stringContaining("/api/chat/media/outgoing/"),
-            openUrl: expect.stringContaining("/full"),
-            alt: "Generated image 1",
-            mimeType: "image/png",
-            width: 1,
-            height: 1,
-          }),
-        ]);
+        expect(assistantContent).toHaveLength(2);
+        expect(assistantContent[0]).toEqual({ type: "text", text: "Image reply" });
+        const imageBlock = expectRecordFields(assistantContent[1], {
+          type: "image",
+          alt: "Generated image 1",
+          mimeType: "image/png",
+          width: 1,
+          height: 1,
+        });
+        expect(String(imageBlock.url)).toContain("/api/chat/media/outgoing/");
+        expect(String(imageBlock.openUrl)).toContain("/full");
         const serializedAssistant = JSON.stringify(assistantMessage);
         expect(serializedAssistant).not.toContain("data:image/png;base64");
         expect(serializedAssistant).not.toContain(pngB64);
@@ -1049,7 +1066,7 @@ describe("gateway server chat", () => {
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -1189,7 +1206,7 @@ describe("gateway server chat", () => {
     } finally {
       resolveAgentRun?.();
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
     }
   });
 
@@ -1403,7 +1420,7 @@ describe("gateway server chat", () => {
       }
     } finally {
       webchatWs.close();
-      await fs.rm(dir, { recursive: true, force: true });
+      await removeTempDir(dir);
       testState.sessionStorePath = undefined;
     }
   });

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { buildDeepInfraSpeechProvider } from "./speech-provider.js";
 
 const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
@@ -18,6 +18,19 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   postJsonRequest: postJsonRequestMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/provider-http");
+  vi.resetModules();
+});
+
+function requireFirstPostJsonRequest(): unknown {
+  const [call] = postJsonRequestMock.mock.calls;
+  if (!call) {
+    throw new Error("expected DeepInfra speech request");
+  }
+  return call[0];
+}
 
 describe("deepinfra speech provider", () => {
   afterEach(() => {
@@ -86,26 +99,45 @@ describe("deepinfra speech provider", () => {
       timeoutMs: 12_345,
     });
 
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "deepinfra",
-        capability: "audio",
-        baseUrl: "https://api.deepinfra.com/v1/openai",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.deepinfra.com/v1/openai/audio/speech",
-        timeoutMs: 12_345,
-        body: {
-          model: "hexgrad/Kokoro-82M",
-          input: "hello",
-          voice: "af_alloy",
-          response_format: "mp3",
-          speed: 1.2,
+    expect(resolveProviderHttpRequestConfigMock.mock.calls).toEqual([
+      [
+        {
+          baseUrl: "https://api.deepinfra.com/v1/openai",
+          defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
+          allowPrivateNetwork: false,
+          defaultHeaders: {
+            Authorization: "Bearer sk-deepinfra",
+            "Content-Type": "application/json",
+          },
+          provider: "deepinfra",
+          capability: "audio",
+          transport: "http",
         },
-      }),
-    );
+      ],
+    ]);
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    const postRequest = requireFirstPostJsonRequest();
+    const postRequestHeaders = Reflect.get(postRequest ?? {}, "headers");
+    expect(postRequestHeaders).toBeInstanceOf(Headers);
+    expect(Object.fromEntries((postRequestHeaders as Headers).entries())).toEqual({
+      authorization: "Bearer sk-deepinfra",
+      "content-type": "application/json",
+    });
+    expect(postRequest).toEqual({
+      url: "https://api.deepinfra.com/v1/openai/audio/speech",
+      headers: postRequestHeaders,
+      timeoutMs: 12_345,
+      body: {
+        model: "hexgrad/Kokoro-82M",
+        input: "hello",
+        voice: "af_alloy",
+        response_format: "mp3",
+        speed: 1.2,
+      },
+      fetchFn: fetch,
+      allowPrivateNetwork: false,
+      dispatcherPolicy: undefined,
+    });
     expect(result.audioBuffer).toEqual(Buffer.from([1, 2, 3]));
     expect(result.outputFormat).toBe("mp3");
     expect(result.fileExtension).toBe(".mp3");

@@ -11,6 +11,7 @@ import {
   evaluateSystemRunApprovalMatch,
   toSystemRunApprovalMismatchError,
 } from "./node-invoke-system-run-approval-match.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 type SystemRunParamsLike = {
   command?: unknown;
@@ -22,6 +23,10 @@ type SystemRunParamsLike = {
   needsScreenRecording?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
+  turnSourceChannel?: unknown;
+  turnSourceTo?: unknown;
+  turnSourceAccountId?: unknown;
+  turnSourceThreadId?: unknown;
   approved?: unknown;
   approvalDecision?: unknown;
   runId?: unknown;
@@ -35,11 +40,20 @@ type ApprovalLookup = {
 
 type ApprovalClient = {
   connId?: string | null;
+  isDeviceTokenAuth?: boolean;
   connect?: {
     scopes?: unknown;
+    client?: { id?: string | null; mode?: string | null } | null;
     device?: { id?: string | null } | null;
   } | null;
 };
+
+const BACKEND_BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS = new Set<string>([
+  GATEWAY_CLIENT_NAMES.CONTROL_UI,
+  GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+  GATEWAY_CLIENT_NAMES.WEBCHAT,
+  GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+]);
 
 function normalizeApprovalDecision(value: unknown): "allow-once" | "allow-always" | null {
   const s = normalizeNullableString(value);
@@ -49,6 +63,122 @@ function normalizeApprovalDecision(value: unknown): "allow-once" | "allow-always
 function clientHasApprovals(client: ApprovalClient | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client?.connect?.scopes : [];
   return scopes.includes("operator.admin") || scopes.includes("operator.approvals");
+}
+
+function isTrustedBackendApprovalClient(client: ApprovalClient | null): boolean {
+  return (
+    clientHasApprovals(client) &&
+    client?.connect?.client?.id === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+    client.connect.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+    client.isDeviceTokenAuth !== true
+  );
+}
+
+function canBridgeNoDeviceApprovalFromBackend(params: {
+  snapshot: ExecApprovalRecord;
+  client: ApprovalClient | null;
+}): boolean {
+  const requestedByClientId = normalizeNullableString(params.snapshot.requestedByClientId);
+  const request = params.snapshot.request;
+  return (
+    params.snapshot.requestedByDeviceId == null &&
+    params.snapshot.requestedByDeviceTokenAuth !== true &&
+    !hasChatApprovalReplayBinding(request) &&
+    requestedByClientId !== null &&
+    BACKEND_BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS.has(requestedByClientId) &&
+    isTrustedBackendApprovalClient(params.client)
+  );
+}
+
+function hasChatApprovalReplayBinding(request: ExecApprovalRecord["request"]): boolean {
+  return (
+    normalizeComparableString(request.turnSourceChannel, { lowercase: true }) !== null ||
+    normalizeComparableString(request.turnSourceTo) !== null ||
+    normalizeComparableString(request.turnSourceAccountId) !== null ||
+    normalizeComparableString(request.turnSourceThreadId) !== null
+  );
+}
+
+function normalizeComparableString(
+  value: unknown,
+  opts: { lowercase?: boolean } = {},
+): string | null {
+  const normalized =
+    typeof value === "number" && Number.isFinite(value)
+      ? String(value)
+      : normalizeNullableString(value);
+  if (!normalized) {
+    return null;
+  }
+  return opts.lowercase ? normalized.toLowerCase() : normalized;
+}
+
+function matchesRequiredString(params: {
+  expected: unknown;
+  actual: unknown;
+  lowercase?: boolean;
+}): boolean {
+  const expected = normalizeComparableString(params.expected, { lowercase: params.lowercase });
+  if (!expected) {
+    return false;
+  }
+  return expected === normalizeComparableString(params.actual, { lowercase: params.lowercase });
+}
+
+function matchesOptionalString(params: {
+  expected: unknown;
+  actual: unknown;
+  lowercase?: boolean;
+}): boolean {
+  const expected = normalizeComparableString(params.expected, { lowercase: params.lowercase });
+  if (!expected) {
+    return true;
+  }
+  return expected === normalizeComparableString(params.actual, { lowercase: params.lowercase });
+}
+
+function canBridgeNoDeviceChatApprovalFromBackend(params: {
+  snapshot: ExecApprovalRecord;
+  rawParams: SystemRunParamsLike;
+  client: ApprovalClient | null;
+}): boolean {
+  if (
+    params.snapshot.requestedByDeviceId != null ||
+    params.snapshot.requestedByDeviceTokenAuth === true ||
+    !isTrustedBackendApprovalClient(params.client)
+  ) {
+    return false;
+  }
+
+  const request = params.snapshot.request;
+  const plan = request.systemRunPlan ?? null;
+  return (
+    matchesRequiredString({
+      expected: request.turnSourceChannel,
+      actual: params.rawParams.turnSourceChannel,
+      lowercase: true,
+    }) &&
+    matchesRequiredString({
+      expected: request.turnSourceTo,
+      actual: params.rawParams.turnSourceTo,
+    }) &&
+    matchesRequiredString({
+      expected: plan?.sessionKey ?? request.sessionKey,
+      actual: params.rawParams.sessionKey,
+    }) &&
+    matchesOptionalString({
+      expected: plan?.agentId ?? request.agentId,
+      actual: params.rawParams.agentId,
+    }) &&
+    matchesOptionalString({
+      expected: request.turnSourceAccountId,
+      actual: params.rawParams.turnSourceAccountId,
+    }) &&
+    matchesOptionalString({
+      expected: request.turnSourceThreadId,
+      actual: params.rawParams.turnSourceThreadId,
+    })
+  );
 }
 
 function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unknown> {
@@ -190,7 +320,9 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     }
   } else if (
     snapshot.requestedByConnId &&
-    snapshot.requestedByConnId !== (opts.client?.connId ?? null)
+    snapshot.requestedByConnId !== (opts.client?.connId ?? null) &&
+    !canBridgeNoDeviceApprovalFromBackend({ snapshot, client: opts.client }) &&
+    !canBridgeNoDeviceChatApprovalFromBackend({ snapshot, rawParams: p, client: opts.client })
   ) {
     return systemRunApprovalGuardError({
       code: "APPROVAL_CLIENT_MISMATCH",

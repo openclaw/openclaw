@@ -1,14 +1,13 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 import {
   formatCommandArgMenuTitle,
   resolveStoredModelOverride,
   type ChatCommandDefinition,
-} from "openclaw/plugin-sdk/command-auth";
+} from "openclaw/plugin-sdk/command-auth-native";
 import {
   type CommandArgs,
-  resolveCommandAuthorizedFromAuthorizers,
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -21,15 +20,15 @@ import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
-  chunkItems,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
+import { formatSlackError } from "../errors.js";
 import { truncateSlackText } from "../truncate.js";
-import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "./allow-list.js";
-import { resolveSlackEffectiveAllowFrom } from "./auth.js";
+import { resolveSlackCommandIngress, resolveSlackEffectiveAllowFrom } from "./auth.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
 import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
@@ -436,12 +435,9 @@ export async function registerSlackMonitorSlashCommands(params: {
         return;
       }
 
-      const { allowFromLower: effectiveAllowFromLower } = await resolveSlackEffectiveAllowFrom(
-        ctx,
-        {
-          includePairingStore: isDirectMessage,
-        },
-      );
+      const effectiveAllowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
+        includePairingStore: isDirectMessage,
+      });
 
       // Privileged command surface: compute CommandAuthorized, don't assume true.
       // Keep this aligned with the Slack message path (message-handler/prepare.ts).
@@ -523,17 +519,21 @@ export async function registerSlackMonitorSlashCommands(params: {
 
       const sender = await ctx.resolveUserName(command.user_id);
       const senderName = sender?.name ?? command.user_name ?? command.user_id;
-      const channelUsersAllowlistConfigured =
-        isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
-      const channelUserAllowed = channelUsersAllowlistConfigured
-        ? resolveSlackUserAllowed({
-            allowList: channelConfig?.users,
-            userId: command.user_id,
-            userName: senderName,
-            allowNameMatching: ctx.allowNameMatching,
-          })
-        : false;
-      if (channelUsersAllowlistConfigured && !channelUserAllowed) {
+      const slashIngress = await resolveSlackCommandIngress({
+        ctx,
+        senderId: command.user_id,
+        senderName,
+        channelType: channelType ?? "channel",
+        channelId: command.channel_id,
+        ownerAllowFromLower: effectiveAllowFromLower,
+        channelUsers: isRoom ? channelConfig?.users : undefined,
+        allowTextCommands: false,
+        hasControlCommand: false,
+        eventKind: "slash-command",
+        modeWhenAccessGroupsOff: "configured",
+      });
+      const senderGate = slashIngress.senderAccess.gate;
+      if (isRoom && senderGate?.allowed === false) {
         await respond({
           text: "You are not authorized to use this command here.",
           response_type: "ephemeral",
@@ -541,28 +541,10 @@ export async function registerSlackMonitorSlashCommands(params: {
         return;
       }
 
-      const ownerAllowed = resolveSlackAllowListMatch({
-        allowList: effectiveAllowFromLower,
-        id: command.user_id,
-        name: senderName,
-        allowNameMatching: ctx.allowNameMatching,
-      }).allowed;
       // DMs: allow chatting in dmPolicy=open, but keep privileged command gating intact by setting
       // CommandAuthorized based on allowlists/access-groups (downstream decides which commands need it).
-      commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
-        useAccessGroups: ctx.useAccessGroups,
-        authorizers: [{ configured: effectiveAllowFromLower.length > 0, allowed: ownerAllowed }],
-        modeWhenAccessGroupsOff: "configured",
-      });
+      commandAuthorized = slashIngress.commandAccess.authorized;
       if (isRoomish) {
-        commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
-          useAccessGroups: ctx.useAccessGroups,
-          authorizers: [
-            { configured: effectiveAllowFromLower.length > 0, allowed: ownerAllowed },
-            { configured: channelUsersAllowlistConfigured, allowed: channelUserAllowed },
-          ],
-          modeWhenAccessGroupsOff: "configured",
-        });
         if (ctx.useAccessGroups && !commandAuthorized) {
           await respond({
             text: "You are not authorized to use this command.",
@@ -728,7 +710,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           ),
       });
 
-      const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+      const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
         cfg,
         agentId: route.agentId,
         channel: "slack",
@@ -758,7 +740,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           deliver: async (payload) => deliverSlashPayloads([payload]),
           onError: (err, info) => {
             runtime.error?.(
-              danger(`slack slash ${info.kind} reply failed: ${formatErrorMessage(err)}`),
+              danger(`slack slash ${info.kind} reply failed: ${formatSlackError(err)}`),
             );
           },
         },

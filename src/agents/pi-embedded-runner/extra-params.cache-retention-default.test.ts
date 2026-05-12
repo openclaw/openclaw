@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
 import { isOpenRouterAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
@@ -26,7 +26,9 @@ function applyAndExpectWrapped(params: {
     params.model,
   );
 
-  expect(agent.streamFn).toBeDefined();
+  if (!agent.streamFn) {
+    throw new Error("expected extra params to wrap streamFn");
+  }
 }
 
 // Mock the logger to avoid noise in tests
@@ -37,7 +39,7 @@ vi.mock("./logger.js", () => ({
   },
 }));
 
-vi.mock("@mariozechner/pi-ai", () => createPiAiStreamSimpleMock());
+vi.mock("@earendil-works/pi-ai", () => createPiAiStreamSimpleMock());
 
 beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({
@@ -131,9 +133,7 @@ describe("cacheRetention default behavior", () => {
 
     applyExtraParamsToAgent(agent, cfg, provider, modelId);
 
-    // For OpenAI, the streamFn might be wrapped for other reasons (like OpenAI responses store)
-    // but cacheRetention should not be applied
-    // This is implicitly tested by the lack of cacheRetention-specific wrapping
+    expect(resolveCacheRetention(cfg, provider, undefined, modelId)).toBeUndefined();
   });
 
   it("prefers explicit cacheRetention over default", () => {

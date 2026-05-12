@@ -69,6 +69,20 @@ describe("directive parsing", () => {
     expect(res.fastMode).toBe(true);
   });
 
+  it("parses default thinking and fast directives as override clears", () => {
+    const think = parseInlineDirectives("/think default");
+    expect(think.hasThinkDirective).toBe(true);
+    expect(think.thinkLevel).toBeUndefined();
+    expect(think.rawThinkLevel).toBe("default");
+    expect(think.clearThinkLevel).toBe(true);
+
+    const fast = parseInlineDirectives("/fast inherit");
+    expect(fast.hasFastDirective).toBe(true);
+    expect(fast.fastMode).toBeUndefined();
+    expect(fast.rawFastMode).toBe("inherit");
+    expect(fast.clearFastMode).toBe(true);
+  });
+
   it("matches elevated with leading space", () => {
     const res = extractElevatedDirective(" please /elevated on now");
     expect(res.hasDirective).toBe(true);
@@ -186,17 +200,15 @@ describe("directive parsing", () => {
   });
 
   it("strips inline /model and /think directives while keeping user text", () => {
-    expect(parseInlineDirectives("please sync /model openai/gpt-4.1-mini now")).toMatchObject({
-      cleaned: "please sync now",
-      hasModelDirective: true,
-      rawModelDirective: "openai/gpt-4.1-mini",
-    });
+    const model = parseInlineDirectives("please sync /model openai/gpt-4.1-mini now");
+    expect(model.cleaned).toBe("please sync now");
+    expect(model.hasModelDirective).toBe(true);
+    expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
 
-    expect(parseInlineDirectives("please sync /think:high now")).toMatchObject({
-      cleaned: "please sync now",
-      hasThinkDirective: true,
-      thinkLevel: "high",
-    });
+    const think = parseInlineDirectives("please sync /think:high now");
+    expect(think.cleaned).toBe("please sync now");
+    expect(think.hasThinkDirective).toBe(true);
+    expect(think.thinkLevel).toBe("high");
   });
 
   it("preserves spacing when stripping think directives before paths", () => {

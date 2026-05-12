@@ -1,9 +1,9 @@
 const TELEPHONY_SAMPLE_RATE = 8_000;
 const TELEPHONY_CHUNK_BYTES = 160;
 const TELEPHONY_CHUNK_MS = 20;
-const DEFAULT_SPEECH_RMS_THRESHOLD = 0.02;
-const DEFAULT_REQUIRED_LOUD_CHUNKS = 2;
-const DEFAULT_REQUIRED_QUIET_CHUNKS = 10;
+const DEFAULT_SPEECH_RMS_THRESHOLD = 0.035;
+const DEFAULT_REQUIRED_LOUD_CHUNKS = 4;
+const DEFAULT_REQUIRED_QUIET_CHUNKS = 12;
 const DEFAULT_MAX_QUEUED_AUDIO_BYTES = TELEPHONY_SAMPLE_RATE * 120;
 const PCM16_MAX_AMPLITUDE = 32768;
 const MULAW_LINEAR_SAMPLES = new Int16Array(256);
@@ -12,7 +12,7 @@ for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
   MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
 }
 
-type RealtimeTwilioAudioQueueItem =
+type RealtimeAudioQueueItem =
   | {
       chunk: Buffer;
       durationMs: number;
@@ -23,10 +23,16 @@ type RealtimeTwilioAudioQueueItem =
       type: "mark";
     };
 
-export type RealtimeTwilioAudioPacerSendJson = (message: unknown) => boolean;
+export type RealtimeAudioSend = (message: string) => boolean;
 
-export class RealtimeTwilioAudioPacer {
-  private queue: RealtimeTwilioAudioQueueItem[] = [];
+export interface RealtimeAudioSerializer {
+  media(payloadBase64: string): string;
+  clear(): string;
+  mark(name: string): string;
+}
+
+export class RealtimeAudioPacer {
+  private queue: RealtimeAudioQueueItem[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private queuedAudioBytes = 0;
   private closed = false;
@@ -35,8 +41,8 @@ export class RealtimeTwilioAudioPacer {
     private readonly params: {
       maxQueuedAudioBytes?: number;
       onBackpressure?: () => void;
-      sendJson: RealtimeTwilioAudioPacerSendJson;
-      streamSid: string;
+      send: RealtimeAudioSend;
+      serializer: RealtimeAudioSerializer;
     },
   ) {}
 
@@ -69,14 +75,16 @@ export class RealtimeTwilioAudioPacer {
     this.ensurePump();
   }
 
-  clearAudio(): void {
+  clearAudio(): number {
     if (this.closed) {
-      return;
+      return 0;
     }
+    const clearedAudioBytes = this.queuedAudioBytes;
     this.clearTimer();
     this.queue = [];
     this.queuedAudioBytes = 0;
-    this.params.sendJson({ event: "clear", streamSid: this.params.streamSid });
+    this.params.send(this.params.serializer.clear());
+    return clearedAudioBytes;
   }
 
   close(): void {
@@ -119,18 +127,10 @@ export class RealtimeTwilioAudioPacer {
     let sent = true;
     if (item.type === "audio") {
       this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
-      sent = this.params.sendJson({
-        event: "media",
-        streamSid: this.params.streamSid,
-        media: { payload: item.chunk.toString("base64") },
-      });
+      sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
       delayMs = item.durationMs || TELEPHONY_CHUNK_MS;
     } else {
-      sent = this.params.sendJson({
-        event: "mark",
-        streamSid: this.params.streamSid,
-        mark: { name: item.name },
-      });
+      sent = this.params.send(this.params.serializer.mark(item.name));
     }
 
     if (!sent) {

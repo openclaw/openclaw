@@ -127,6 +127,23 @@ describe("security audit sandbox docker config", () => {
           ],
         },
         {
+          name: "Windows drive-letter bind is absolute",
+          cfg: {
+            agents: {
+              defaults: {
+                sandbox: {
+                  mode: "all",
+                  docker: {
+                    binds: ["D:/data/openclaw/src:/src:ro"],
+                  },
+                },
+              },
+            },
+          } as OpenClawConfig,
+          expectedFindings: [],
+          expectedAbsent: ["sandbox.bind_mount_non_absolute"],
+        },
+        {
           name: "container namespace join network mode",
           cfg: {
             agents: {
@@ -156,12 +173,15 @@ describe("security audit sandbox docker config", () => {
             ...collectSandboxDockerNoopFindings(testCase.cfg),
             ...collectSandboxDangerousConfigFindings(testCase.cfg),
           ];
-          if (testCase.expectedFindings.length > 0) {
-            expect(findings, testCase.name).toEqual(
-              expect.arrayContaining(
-                testCase.expectedFindings.map((finding) => expect.objectContaining(finding)),
-              ),
-            );
+          for (const expectedFinding of testCase.expectedFindings) {
+            const finding = findings.find((entry) => entry.checkId === expectedFinding.checkId);
+            expect(finding?.checkId, testCase.name).toBe(expectedFinding.checkId);
+            if ("severity" in expectedFinding) {
+              expect(finding?.severity, testCase.name).toBe(expectedFinding.severity);
+            }
+            if ("title" in expectedFinding) {
+              expect(finding?.title, testCase.name).toBe(expectedFinding.title);
+            }
           }
           expectFindingSet({
             findings,

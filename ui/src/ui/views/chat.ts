@@ -77,6 +77,17 @@ export type ChatProps = {
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
   realtimeTalkTranscript?: string | null;
+  realtimeTalkOptionsOpen?: boolean;
+  realtimeTalkOptions?: {
+    provider: string;
+    model: string;
+    voice: string;
+    transport: string;
+    vadThreshold: string;
+    silenceDurationMs: string;
+    prefixPaddingMs: string;
+    reasoningEffort: string;
+  };
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -87,7 +98,7 @@ export type ChatProps = {
   sidebarContent?: SidebarContent | null;
   sidebarError?: string | null;
   splitRatio?: number;
-  canvasHostUrl?: string | null;
+  canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   assistantName: string;
@@ -111,6 +122,10 @@ export type ChatProps = {
   onCompact?: () => void | Promise<void>;
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
+  onToggleRealtimeTalkOptions?: () => void;
+  onRealtimeTalkOptionsChange?: (
+    next: Partial<NonNullable<ChatProps["realtimeTalkOptions"]>>,
+  ) => void;
   onDismissError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
@@ -152,6 +167,110 @@ function getDeletedMessages(sessionKey: string): DeletedMessages {
     sessionKey,
     () => new DeletedMessages(sessionKey),
   );
+}
+
+function renderRealtimeTalkOptions(props: ChatProps) {
+  const options = props.realtimeTalkOptions;
+  const onChange = props.onRealtimeTalkOptionsChange;
+  if (!props.realtimeTalkOptionsOpen || !options || !onChange) {
+    return nothing;
+  }
+  const update = (key: keyof NonNullable<ChatProps["realtimeTalkOptions"]>) => (event: Event) => {
+    const value = (event.currentTarget as HTMLInputElement | HTMLSelectElement).value;
+    onChange({ [key]: value });
+  };
+  return html`
+    <div class="agent-chat__talk-options" aria-label="Talk options">
+      <label>
+        <span>Provider</span>
+        <select .value=${options.provider} @change=${update("provider")}>
+          <option value="">Auto</option>
+          <option value="openai">OpenAI</option>
+          <option value="google">Google</option>
+        </select>
+      </label>
+      <label>
+        <span>Transport</span>
+        <select .value=${options.transport} @change=${update("transport")}>
+          <option value="">Auto</option>
+          <option value="webrtc">WebRTC</option>
+          <option value="gateway-relay">Gateway relay</option>
+          <option value="provider-websocket">Provider WebSocket</option>
+        </select>
+      </label>
+      <label>
+        <span>Model</span>
+        <input
+          .value=${options.model}
+          @input=${update("model")}
+          placeholder="gpt-realtime-2"
+          spellcheck="false"
+        />
+      </label>
+      <label>
+        <span>Voice</span>
+        <select .value=${options.voice} @change=${update("voice")}>
+          <option value="">Default</option>
+          ${[
+            "alloy",
+            "ash",
+            "ballad",
+            "coral",
+            "echo",
+            "sage",
+            "shimmer",
+            "verse",
+            "marin",
+            "cedar",
+          ].map((voice) => html`<option value=${voice}>${voice}</option>`)}
+        </select>
+      </label>
+      <label>
+        <span>Reasoning</span>
+        <select .value=${options.reasoningEffort} @change=${update("reasoningEffort")}>
+          <option value="">Default</option>
+          <option value="minimal">Minimal</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+        </select>
+      </label>
+      <label>
+        <span>VAD</span>
+        <input
+          type="number"
+          min="0"
+          max="1"
+          step="0.05"
+          .value=${options.vadThreshold}
+          @input=${update("vadThreshold")}
+          placeholder="0.5"
+        />
+      </label>
+      <label>
+        <span>Silence ms</span>
+        <input
+          type="number"
+          min="1"
+          step="50"
+          .value=${options.silenceDurationMs}
+          @input=${update("silenceDurationMs")}
+          placeholder="500"
+        />
+      </label>
+      <label>
+        <span>Prefix ms</span>
+        <input
+          type="number"
+          min="0"
+          step="50"
+          .value=${options.prefixPaddingMs}
+          @input=${update("prefixPaddingMs")}
+          placeholder="300"
+        />
+      </label>
+    </div>
+  `;
 }
 
 interface ChatEphemeralState {
@@ -807,9 +926,9 @@ export function renderChat(props: ChatProps) {
 
   const placeholder = props.connected
     ? hasAttachments
-      ? "Add a message or paste more images..."
-      : `Message ${props.assistantName || "agent"} (Enter to send)`
-    : "Connect to the gateway to start chatting...";
+      ? t("chat.composer.placeholderWithAttachments")
+      : t("chat.composer.placeholder", { name: props.assistantName || "agent" })
+    : t("chat.composer.placeholderDisconnected");
 
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
@@ -982,7 +1101,7 @@ export function renderChat(props: ChatProps) {
                 basePath: props.basePath,
                 localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
                 assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
-                canvasHostUrl: props.canvasHostUrl,
+                canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
                 embedSandboxMode: props.embedSandboxMode ?? "scripts",
                 allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
                 contextWindow:
@@ -1191,7 +1310,7 @@ export function renderChat(props: ChatProps) {
                 ${renderMarkdownSidebar({
                   content: props.sidebarContent ?? null,
                   error: props.sidebarError ?? null,
-                  canvasHostUrl: props.canvasHostUrl,
+                  canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
                   embedSandboxMode: props.embedSandboxMode ?? "scripts",
                   allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
                   onClose: props.onCloseSidebar!,
@@ -1244,6 +1363,7 @@ export function renderChat(props: ChatProps) {
           @change=${(e: Event) => handleFileSelect(e, props)}
         />
 
+        ${renderRealtimeTalkOptions(props)}
         ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
           ? html`
               <div class="agent-chat__stt-interim agent-chat__talk-status">
@@ -1291,8 +1411,8 @@ export function renderChat(props: ChatProps) {
               @click=${() => {
                 document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
               }}
-              title="Attach file"
-              aria-label="Attach file"
+              title=${t("chat.composer.attachFile")}
+              aria-label=${t("chat.composer.attachFile")}
               ?disabled=${!props.connected}
             >
               ${icons.paperclip}
@@ -1305,11 +1425,26 @@ export function renderChat(props: ChatProps) {
                       ? "agent-chat__input-btn--talk"
                       : ""}"
                     @click=${props.onToggleRealtimeTalk}
-                    title=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
-                    aria-label=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
+                    title=${props.realtimeTalkActive
+                      ? t("chat.composer.stopTalk")
+                      : t("chat.composer.startTalk")}
+                    aria-label=${props.realtimeTalkActive
+                      ? t("chat.composer.stopTalk")
+                      : t("chat.composer.startTalk")}
                     ?disabled=${!props.connected}
                   >
                     ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
+                  </button>
+                  <button
+                    class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
+                      ? "agent-chat__input-btn--active"
+                      : ""}"
+                    @click=${props.onToggleRealtimeTalkOptions}
+                    title="Talk options"
+                    aria-label="Talk options"
+                    ?disabled=${!props.connected || props.realtimeTalkActive}
+                  >
+                    ${icons.settings}
                   </button>
                 `
               : nothing}

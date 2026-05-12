@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultLoadOverrideModule, startLazyPluginServiceModule } from "./lazy-service-module.js";
 
+type LazyPluginServiceHandle = NonNullable<
+  Awaited<ReturnType<typeof startLazyPluginServiceModule>>
+>;
+
 function createAsyncHookMock() {
   return vi.fn(async () => {});
 }
@@ -38,6 +42,16 @@ async function expectLifecycleStarted(params: {
   });
 }
 
+function expectLazyServiceHandle(
+  handle: Awaited<ReturnType<typeof startLazyPluginServiceModule>>,
+): LazyPluginServiceHandle {
+  if (handle === null) {
+    throw new Error("Expected lazy plugin service handle");
+  }
+  expect(handle.stop).toBeTypeOf("function");
+  return handle;
+}
+
 describe("startLazyPluginServiceModule", () => {
   afterEach(() => {
     delete process.env.OPENCLAW_LAZY_SERVICE_SKIP;
@@ -54,8 +68,7 @@ describe("startLazyPluginServiceModule", () => {
     });
 
     expect(lifecycle.start).toHaveBeenCalledTimes(1);
-    expect(handle).not.toBeNull();
-    await handle?.stop();
+    await expectLazyServiceHandle(handle).stop();
     expect(lifecycle.stop).toHaveBeenCalledTimes(1);
   });
 

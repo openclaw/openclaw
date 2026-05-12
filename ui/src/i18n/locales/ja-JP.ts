@@ -207,13 +207,34 @@ export const ja_JP: TranslationMap = {
     autoThreshold: "自動しきい値",
     overflowRetry: "オーバーフロー時に再試行",
     timeoutRetry: "タイムアウト時に再試行",
-    tokenRange: "{before} → {after} トークン",
+    tokenRange: "{before} to {after} トークン",
     tokensBefore: "前: {count} トークン",
     tokenDeltaUnavailable: "トークン差分を利用できません",
     checkpoints: "{count} 個のチェックポイント",
     checkpoint: "{count} 個のチェックポイント",
-    showCheckpoints: "チェックポイントを表示",
-    hideCheckpoints: "チェックポイントを非表示",
+    showSessionDetails: "{count} のセッション詳細を表示",
+    hideSessionDetails: "{count} のセッション詳細を非表示",
+    sessionDetails: "セッション詳細",
+    compactionHistory: "圧縮履歴",
+    status: "ステータス",
+    statusLive: "ライブ",
+    statusIdle: "アイドル",
+    statusUnknown: "不明",
+    statusRunning: "実行中",
+    statusDone: "完了",
+    statusFailed: "失敗",
+    statusKilled: "強制終了",
+    statusTimeout: "タイムアウトしました",
+    model: "モデル",
+    provider: "プロバイダー",
+    runtime: "ランタイム",
+    surface: "サーフェス",
+    subject: "件名",
+    room: "ルーム",
+    space: "スペース",
+    sessionId: "セッション ID",
+    activeRun: "アクティブな実行",
+    archived: "アーカイブ済み",
     loadingCheckpoints: "チェックポイントを読み込み中…",
     noCheckpoints: "このセッションには圧縮チェックポイントが記録されていません。",
     noSummary: "要約は取得されていません。",
@@ -695,6 +716,16 @@ export const ja_JP: TranslationMap = {
       today: "今日",
       last7d: "7日",
       last30d: "30日",
+      last90d: "90d",
+      last1y: "1y",
+      all: "すべて",
+    },
+    scope: {
+      instance: "現在のインスタンス",
+      instanceHint: "各論理セッションについて、アクティブなセッション ID のみを表示します。",
+      family: "履歴系譜",
+      familyHint: "既知のローテーション済みトランスクリプト基盤のセッション ID を集計します。",
+      familyIncluded: "履歴系譜には {count} 件のセッションインスタンスが含まれます。",
     },
     filters: {
       title: "フィルター",
@@ -917,6 +948,96 @@ export const ja_JP: TranslationMap = {
     showPassword: "パスワードを表示",
     hidePassword: "パスワードを非表示",
     togglePasswordVisibility: "パスワードの表示/非表示を切り替え",
+    failure: {
+      rawError: "生のエラー",
+      docsAuth: "Control UI 認証ドキュメント",
+      docsPairing: "デバイスペアリングのドキュメント",
+      docsInsecure: "安全でない HTTP のドキュメント",
+      authRequired: {
+        title: "認証が必要です",
+        summary:
+          "Gateway には到達できますが、このブラウザーが接続する前に一致するトークンまたはパスワードが必要です。",
+        stepPaste:
+          "openclaw dashboard --no-open のトークンを貼り付けるか、構成済みのパスワードを入力します。",
+        stepGenerate:
+          "トークンが構成されていない場合は、Gateway ホストで openclaw doctor --generate-gateway-token を実行します。",
+        stepConnect: "認証情報を更新したら、もう一度 Connect をクリックします。",
+      },
+      authFailed: {
+        title: "認証が一致しません",
+        summary:
+          "指定された認証情報は拒否されました。最も一般的な原因は、古いトークン、または別の Gateway URL からコピーしたトークンです。",
+        stepDashboard:
+          "openclaw dashboard --no-open を実行し、新しい URL を開くか、そのトークンを貼り付けます。",
+        stepReplace:
+          "古いトークン/パスワード値を置き換えてください。別の Gateway URL のトークンは再利用しないでください。",
+        stepMode:
+          "一致する認証モードを一度に 1 つだけ使用します。トークンモードでは gateway token、パスワードモードではパスワードを使います。",
+      },
+      rateLimited: {
+        title: "失敗した試行が多すぎます",
+        summary: "Gateway はこのクライアントの認証試行を一時的に制限しています。",
+        stepStop: "このタブからの再試行をしばらく停止します。",
+        stepWait: "認証リミッターが落ち着くのを待ってから、修正した認証情報で再接続します。",
+        stepCheckClients:
+          "共有ホストの場合は、他のクライアントが誤った再試行を繰り返していないか確認します。",
+      },
+      pairing: {
+        title: "デバイスペアリングが必要です",
+        scopeTitle: "スコープのアップグレードが保留中です",
+        roleTitle: "ロールのアップグレードが保留中です",
+        metadataTitle: "デバイス更新が保留中です",
+        summary:
+          "このブラウザーで Control UI を使用するには、Gateway ホストからの一度限りの承認が必要です。",
+        upgradeSummary:
+          "このブラウザーは既に認識されていますが、要求されたアクセスが変わったため、新しい承認が必要です。",
+        stepList: "Gateway ホストで openclaw devices list を実行します。",
+        stepApproveId: "このリクエストを承認します: openclaw devices approve {requestId}.",
+        stepApprove: "その一覧から保留中のブラウザー/デバイスリクエストを承認します。",
+        stepReconnect: "承認が完了したら再接続します。",
+      },
+      insecure: {
+        title: "安全なブラウザーコンテキストが必要です",
+        summary:
+          "このページは通常の HTTP で実行されているため、ブラウザーは Gateway が期待するデバイス ID を作成できません。",
+        stepHttps:
+          "HTTPS/Tailscale Serve を使用するか、Gateway ホストで http://127.0.0.1:18789 を開きます。",
+        stepLocalCompat:
+          "ローカルのトークンのみの互換性には、gateway.controlUi.allowInsecureAuth: true を設定します。",
+        stepAvoidDisable:
+          "リモート HTTP アクセスのためにデバイス認証を無効にすることは避けてください。",
+      },
+      origin: {
+        title: "ブラウザーオリジンは許可されていません",
+        summary: "Gateway は Control UI 接続を受け入れる前に、このページのオリジンを拒否しました。",
+        stepAllowedOrigins:
+          "このブラウザーオリジンを gateway.controlUi.allowedOrigins に追加します。",
+        stepFullOrigin:
+          "http://localhost:5173 のような完全なオリジンを使用し、ワイルドカードパターンは使わないでください。",
+        stepRestart: "許可オリジンを変更した後、Gateway を再起動または再読み込みします。",
+      },
+      protocol: {
+        title: "プロトコルが一致しません",
+        summary:
+          "提供された Control UI と実行中の Gateway で、サポートされる接続プロトコルが一致していません。",
+        stepDashboard:
+          "openclaw dashboard で提供元の dashboard を開き直し、UI と Gateway が同じインストールから来るようにします。",
+        stepDevUi:
+          "pnpm ui:dev を使用している場合は、現在の checkout に対して開発 UI を再ビルドまたは再起動します。",
+        stepRestart: "OpenClaw 更新後に Gateway を再起動し、現在のプロトコルを提供させます。",
+      },
+      network: {
+        title: "接続できません",
+        summary:
+          "ブラウザーは Gateway 接続を完了できませんでした。認証情報を再試行する前に、ターゲットとトランスポートを確認してください。",
+        stepGateway:
+          "openclaw status または openclaw gateway run で Gateway が実行中であることを確認します。",
+        stepUrl:
+          "WebSocket URL を確認し、Gateway が HTTPS/Tailscale Serve の背後にある場合は wss:// を使用します。",
+        stepDashboard:
+          "openclaw dashboard --no-open で dashboard を開き直し、現在の URL と認証詳細を再コピーします。",
+      },
+    },
   },
   chat: {
     disconnected: "Gateway から切断されました。",
@@ -939,6 +1060,42 @@ export const ja_JP: TranslationMap = {
     updateNow: "今すぐ更新",
     dismissUpdateBanner: "更新バナーを閉じる",
     switchedSession: "{session} に切り替えました",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "エクスポート",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "エージェントでセッションを絞り込む",
+      session: "Chat session",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "英語",

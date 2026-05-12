@@ -24,6 +24,7 @@ export type NodeSession = {
 
 type PendingInvoke = {
   nodeId: string;
+  connId: string;
   command: string;
   resolve: (value: NodeInvokeResult) => void;
   reject: (err: Error) => void;
@@ -36,6 +37,30 @@ type NodeInvokeResult = {
   payloadJSON?: string | null;
   error?: { code?: string; message?: string } | null;
 };
+
+const SERIALIZED_EVENT_PAYLOAD = Symbol("openclaw.serializedEventPayload");
+
+export type SerializedEventPayload = {
+  readonly json: string;
+  readonly [SERIALIZED_EVENT_PAYLOAD]: true;
+};
+
+export function serializeEventPayload(payload: unknown): SerializedEventPayload | null {
+  if (!payload) {
+    return null;
+  }
+  const json = JSON.stringify(payload);
+  return typeof json === "string" ? { json, [SERIALIZED_EVENT_PAYLOAD]: true } : null;
+}
+
+function isSerializedEventPayload(value: unknown): value is SerializedEventPayload {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { [SERIALIZED_EVENT_PAYLOAD]?: unknown })[SERIALIZED_EVENT_PAYLOAD] === true &&
+    typeof (value as { json?: unknown }).json === "string"
+  );
+}
 
 export class NodeRegistry {
   private nodesById = new Map<string, NodeSession>();
@@ -88,16 +113,19 @@ export class NodeRegistry {
       return null;
     }
     this.nodesByConn.delete(connId);
-    this.nodesById.delete(nodeId);
+    const unregistersCurrentNode = this.nodesById.get(nodeId)?.connId === connId;
+    if (unregistersCurrentNode) {
+      this.nodesById.delete(nodeId);
+    }
     for (const [id, pending] of this.pendingInvokes.entries()) {
-      if (pending.nodeId !== nodeId) {
+      if (pending.connId !== connId) {
         continue;
       }
       clearTimeout(pending.timer);
       pending.reject(new Error(`node disconnected (${pending.command})`));
       this.pendingInvokes.delete(id);
     }
-    return nodeId;
+    return unregistersCurrentNode ? nodeId : null;
   }
 
   listConnected(): NodeSession[] {
@@ -150,6 +178,7 @@ export class NodeRegistry {
       }, timeoutMs);
       this.pendingInvokes.set(requestId, {
         nodeId: params.nodeId,
+        connId: node.connId,
         command: params.command,
         resolve,
         reject,
@@ -161,6 +190,7 @@ export class NodeRegistry {
   handleInvokeResult(params: {
     id: string;
     nodeId: string;
+    connId: string | undefined;
     ok: boolean;
     payload?: unknown;
     payloadJSON?: string | null;
@@ -170,7 +200,7 @@ export class NodeRegistry {
     if (!pending) {
       return false;
     }
-    if (pending.nodeId !== params.nodeId) {
+    if (pending.nodeId !== params.nodeId || pending.connId !== params.connId) {
       return false;
     }
     clearTimeout(pending.timer);
@@ -192,6 +222,18 @@ export class NodeRegistry {
     return this.sendEventToSession(node, event, payload);
   }
 
+  sendEventRaw(
+    nodeId: string,
+    event: string,
+    payloadJSON?: SerializedEventPayload | null,
+  ): boolean {
+    const node = this.nodesById.get(nodeId);
+    if (!node) {
+      return false;
+    }
+    return this.sendEventRawInternal(node, event, payloadJSON);
+  }
+
   private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {
     try {
       node.client.socket.send(
@@ -200,6 +242,29 @@ export class NodeRegistry {
           event,
           payload,
         }),
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private sendEventRawInternal(
+    node: NodeSession,
+    event: string,
+    payloadJSON?: SerializedEventPayload | null,
+  ): boolean {
+    if (
+      payloadJSON !== null &&
+      payloadJSON !== undefined &&
+      !isSerializedEventPayload(payloadJSON)
+    ) {
+      return false;
+    }
+    try {
+      const payloadFragment = payloadJSON ? `,"payload":${payloadJSON.json}` : "";
+      node.client.socket.send(
+        `{"type":"event","event":${JSON.stringify(event)}${payloadFragment}}`,
       );
       return true;
     } catch {

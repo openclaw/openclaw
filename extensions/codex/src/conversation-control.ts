@@ -1,5 +1,6 @@
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
+  isCodexFastServiceTier,
   resolveCodexAppServerRuntimeOptions,
   type CodexAppServerApprovalPolicy,
   type CodexAppServerSandboxMode,
@@ -10,6 +11,7 @@ import {
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.js";
 import { getSharedCodexAppServerClient } from "./app-server/shared-client.js";
+import { formatCodexDisplayText } from "./command-formatters.js";
 
 type ActiveTurn = {
   sessionFile: string;
@@ -128,7 +130,7 @@ export async function setCodexConversationModel(params: {
     sandbox: binding.sandbox,
     serviceTier: binding.serviceTier ?? runtime.serviceTier,
   });
-  return `Codex model set to ${response.model ?? model}.`;
+  return `Codex model set to ${formatCodexDisplayText(response.model ?? model)}.`;
 }
 
 export async function setCodexConversationFastMode(params: {
@@ -138,9 +140,9 @@ export async function setCodexConversationFastMode(params: {
 }): Promise<string> {
   const binding = await requireThreadBinding(params.sessionFile);
   if (params.enabled == null) {
-    return `Codex fast mode: ${binding.serviceTier === "fast" ? "on" : "off"}.`;
+    return `Codex fast mode: ${isCodexFastServiceTier(binding.serviceTier) ? "on" : "off"}.`;
   }
-  const serviceTier: CodexServiceTier = params.enabled ? "fast" : "flex";
+  const serviceTier: CodexServiceTier = params.enabled ? "priority" : "flex";
   // Fast mode is sent on each later turn; do not require Codex to accept an
   // immediate thread/resume control request just to persist the preference.
   await writeCodexAppServerBinding(params.sessionFile, {

@@ -26,6 +26,33 @@ describe("compileMemoryWikiVault", () => {
     return path.join(suiteRoot, `case-${caseId++}`);
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    let error: unknown;
+    try {
+      await fs.access(targetPath);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+  }
+
+  function expectDigestPage<T extends { path: string }>(pages: T[], pagePath: string): T {
+    const page = pages.find((candidate) => candidate.path === pagePath);
+    if (!page) {
+      throw new Error(`Expected digest page ${pagePath}`);
+    }
+    return page;
+  }
+
+  function expectDigestCluster<T extends { key: string }>(clusters: T[], key: string): T {
+    const cluster = clusters.find((candidate) => candidate.key === key);
+    if (!cluster) {
+      throw new Error(`Expected digest contradiction cluster ${key}`);
+    }
+    return cluster;
+  }
+
   it("writes root and directory indexes for native markdown", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
@@ -73,13 +100,11 @@ describe("compileMemoryWikiVault", () => {
       pages: Array<{ path: string; claimCount: number; topClaims: Array<{ text: string }> }>;
     };
     expect(agentDigest.claimCount).toBe(1);
-    expect(agentDigest.pages).toContainEqual(
-      expect.objectContaining({
-        path: "sources/alpha.md",
-        claimCount: 1,
-        topClaims: [expect.objectContaining({ text: "Alpha is the canonical source page." })],
-      }),
-    );
+    const alphaPage = expectDigestPage(agentDigest.pages, "sources/alpha.md");
+    expect(alphaPage.claimCount).toBe(1);
+    expect(alphaPage.topClaims.map((claim) => claim.text)).toEqual([
+      "Alpha is the canonical source page.",
+    ]);
     await expect(
       fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
     ).resolves.toContain('"text":"Alpha is the canonical source page."');
@@ -168,6 +193,24 @@ describe("compileMemoryWikiVault", () => {
     await expect(fs.readFile(path.join(rootDir, "sources", "alpha.md"), "utf8")).resolves.toContain(
       "[Gamma](concepts/gamma.md)",
     );
+  });
+
+  it("does not rewrite empty source pages into related-only stubs", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+    const emptySourcePath = path.join(rootDir, "sources", "empty.md");
+    const whitespaceSourcePath = path.join(rootDir, "sources", "whitespace.md");
+    await fs.writeFile(emptySourcePath, "", "utf8");
+    await fs.writeFile(whitespaceSourcePath, " \n\t", "utf8");
+
+    const result = await compileMemoryWikiVault(config);
+
+    await expect(fs.readFile(emptySourcePath, "utf8")).resolves.toBe("");
+    await expect(fs.readFile(whitespaceSourcePath, "utf8")).resolves.toBe(" \n\t");
+    expect(result.updatedFiles).not.toContain(emptySourcePath);
+    expect(result.updatedFiles).not.toContain(whitespaceSourcePath);
   });
 
   it("does not relate every page through a broad shared source", async () => {
@@ -319,8 +362,8 @@ describe("compileMemoryWikiVault", () => {
     };
     expect(agentDigest.claimHealth.missingEvidence).toBeGreaterThanOrEqual(1);
     expect(agentDigest.claimHealth.freshness.unknown).toBeGreaterThanOrEqual(1);
-    expect(agentDigest.contradictionClusters).toContainEqual(
-      expect.objectContaining({ key: "claim.alpha.db" }),
+    expect(expectDigestCluster(agentDigest.contradictionClusters, "claim.alpha.db").key).toBe(
+      "claim.alpha.db",
     );
   });
 
@@ -350,7 +393,7 @@ describe("compileMemoryWikiVault", () => {
 
     await compileMemoryWikiVault(config);
 
-    await expect(fs.access(path.join(rootDir, "reports", "open-questions.md"))).rejects.toThrow();
+    await expectPathMissing(path.join(rootDir, "reports", "open-questions.md"));
   });
 
   it("writes agent directory, relationship, provenance, and privacy reports", async () => {
@@ -434,15 +477,11 @@ describe("compileMemoryWikiVault", () => {
         relationshipCount?: number;
       }>;
     };
-    expect(agentDigest.pages).toContainEqual(
-      expect.objectContaining({
-        path: "entities/brad.md",
-        canonicalId: "maintainer.brad-groux",
-        aliases: ["brad"],
-        personCard: expect.objectContaining({ lane: "Microsoft Teams" }),
-        relationshipCount: 1,
-      }),
-    );
+    const bradPage = expectDigestPage(agentDigest.pages, "entities/brad.md");
+    expect(bradPage.canonicalId).toBe("maintainer.brad-groux");
+    expect(bradPage.aliases).toEqual(["brad"]);
+    expect(bradPage.personCard?.lane).toBe("Microsoft Teams");
+    expect(bradPage.relationshipCount).toBe(1);
     await expect(
       fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
     ).resolves.toContain('"evidenceKinds":["maintainer-whois"]');
@@ -474,7 +513,7 @@ describe("compileMemoryWikiVault", () => {
     await compileMemoryWikiVault(config);
     const second = await compileMemoryWikiVault(config);
 
-    expect(second.updatedFiles).toEqual([]);
+    expect(second.updatedFiles).toStrictEqual([]);
     await expect(fs.readFile(path.join(rootDir, "entities", "beta.md"), "utf8")).resolves.toContain(
       "[Gamma](concepts/gamma.md)",
     );

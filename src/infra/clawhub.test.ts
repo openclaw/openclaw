@@ -20,6 +20,19 @@ import {
   searchClawHubSkills,
 } from "./clawhub.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  if (statError === undefined) {
+    throw new Error(`Expected ${targetPath} to be missing`);
+  }
+  expect((statError as { code?: unknown }).code).toBe("ENOENT");
+}
+
 describe("clawhub helpers", () => {
   const originalHome = process.env.HOME;
 
@@ -98,6 +111,12 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("2026.3.22", ">=2026.3.22")).toBe(true);
     expect(satisfiesPluginApiRange("2026.3.21", ">=2026.3.22")).toBe(false);
     expect(satisfiesPluginApiRange("invalid", "^1.2.0")).toBe(false);
+  });
+
+  it("treats OpenClaw CalVer correction versions as stable plugin API hosts", () => {
+    expect(satisfiesPluginApiRange("2026.5.3-1", ">=2026.5.3")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.5.3-2", ">=2026.5.3")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.5.3-beta.1", ">=2026.5.3")).toBe(false);
   });
 
   it("accepts legacy bare major.minor plugin api ranges as lower bounds", () => {
@@ -231,7 +250,7 @@ describe("clawhub helpers", () => {
       });
     };
 
-    await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
+    await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toStrictEqual([]);
   });
 
   it("fetches typed package readiness reports", async () => {
@@ -353,7 +372,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 
@@ -392,7 +411,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 
@@ -491,7 +510,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 });

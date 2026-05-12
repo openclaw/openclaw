@@ -1,5 +1,9 @@
-import { deliverFinalizableDraftPreview } from "openclaw/plugin-sdk/channel-lifecycle";
+import {
+  defineFinalizableLivePreviewAdapter,
+  deliverWithFinalizableLivePreviewAdapter,
+} from "openclaw/plugin-sdk/channel-message";
 import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-streaming";
+import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
@@ -7,7 +11,7 @@ import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   resolveMattermostAccount,
@@ -41,9 +45,8 @@ import {
 } from "./model-picker.js";
 import {
   authorizeMattermostCommandInvocation,
-  isMattermostSenderAllowed,
   normalizeMattermostAllowEntry,
-  normalizeMattermostAllowList,
+  resolveMattermostMonitorInboundAccess,
 } from "./monitor-auth.js";
 import {
   evaluateMattermostMentionGate,
@@ -77,20 +80,15 @@ import {
   buildModelsProviderData,
   buildPendingHistoryContextFromMap,
   createChannelPairingController,
-  createChannelReplyPipeline,
+  createChannelMessageReplyPipeline,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  DM_GROUP_ACCESS_REASON,
-  isDangerousNameMatchingEnabled,
   logInboundDrop,
   logTypingFailure,
-  readStoreAllowFromForDmPolicy,
   recordPendingHistoryEntryIfEnabled,
   registerPluginHttpRoute,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveChannelMediaMaxBytes,
-  resolveControlCommandGate,
   resolveDefaultGroupPolicy,
-  resolveDmGroupAccessWithLists,
   warnMissingProviderGroupPolicyFallbackOnce,
   type HistoryEntry,
 } from "./runtime-api.js";
@@ -143,10 +141,6 @@ type MattermostReaction = {
 };
 const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
-
-function isLoopbackHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-}
 
 function normalizeInteractionSourceIps(values?: string[]): string[] {
   return (values ?? [])
@@ -337,48 +331,50 @@ export async function deliverMattermostReplyWithDraftPreview(
     return;
   }
 
-  await deliverFinalizableDraftPreview({
+  await deliverWithFinalizableLivePreviewAdapter({
     kind: params.info.kind,
     payload: params.payload,
-    draft: {
-      flush: params.draftStream.flush,
-      clear: params.draftStream.clear,
-      discardPending: params.draftStream.discardPending,
-      seal: params.draftStream.seal,
-      id: params.draftStream.postId,
-    },
-    buildFinalEdit: (payload) => {
-      const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-      const previewFinalText = params.resolvePreviewFinalText(payload.text);
+    adapter: defineFinalizableLivePreviewAdapter<ReplyPayload, string, { message: string }>({
+      draft: {
+        flush: params.draftStream.flush,
+        clear: params.draftStream.clear,
+        discardPending: params.draftStream.discardPending,
+        seal: params.draftStream.seal,
+        id: params.draftStream.postId,
+      },
+      buildFinalEdit: (payload) => {
+        const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+        const previewFinalText = params.resolvePreviewFinalText(payload.text);
 
-      if (
-        hasMedia ||
-        typeof previewFinalText !== "string" ||
-        payload.isError ||
-        !canFinalizeMattermostPreviewInPlace({
-          kind: params.kind,
-          previewRootId: params.effectiveReplyToId,
-          threadRootId: params.effectiveReplyToId,
-          replyToId: payload.replyToId,
-        })
-      ) {
-        return undefined;
-      }
-      return { message: previewFinalText };
-    },
-    editFinal: async (previewPostId, edit) => {
-      await updateMattermostPost(params.client, previewPostId, edit);
-    },
+        if (
+          hasMedia ||
+          typeof previewFinalText !== "string" ||
+          payload.isError ||
+          !canFinalizeMattermostPreviewInPlace({
+            kind: params.kind,
+            previewRootId: params.effectiveReplyToId,
+            threadRootId: params.effectiveReplyToId,
+            replyToId: payload.replyToId,
+          })
+        ) {
+          return undefined;
+        }
+        return { message: previewFinalText };
+      },
+      editFinal: async (previewPostId, edit) => {
+        await updateMattermostPost(params.client, previewPostId, edit);
+      },
+      onPreviewFinalized: () => {
+        params.previewState.finalizedViaPreviewPost = true;
+      },
+      logPreviewEditFailure: (err) => {
+        params.logVerboseMessage(
+          `mattermost preview final edit failed; falling back to normal send (${String(err)})`,
+        );
+      },
+    }),
     deliverNormally: async () => {
       await params.deliverFinal();
-    },
-    onPreviewFinalized: () => {
-      params.previewState.finalizedViaPreviewPost = true;
-    },
-    logPreviewEditFailure: (err) => {
-      params.logVerboseMessage(
-        `mattermost preview final edit failed; falling back to normal send (${String(err)})`,
-      );
     },
   });
 }
@@ -478,7 +474,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     channel: "mattermost",
     accountId: account.accountId,
   });
-  const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
   const botToken =
     normalizeOptionalString(opts.botToken) ?? normalizeOptionalString(account.botToken);
   if (!botToken) {
@@ -590,26 +585,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       handleInteraction: handleModelPickerInteraction,
       authorizeButtonClick: async ({ payload, post }) => {
         const channelInfo = await resolveChannelInfo(payload.channel_id);
-        const isDirect = channelInfo?.type?.trim().toUpperCase() === "D";
         const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
           cfg,
           surface: "mattermost",
         });
-        const decision = authorizeMattermostCommandInvocation({
+        const decision = await authorizeMattermostCommandInvocation({
           account,
           cfg,
           senderId: payload.user_id,
           senderName: payload.user_name ?? "",
           channelId: payload.channel_id,
           channelInfo,
-          storeAllowFrom: isDirect
-            ? await readStoreAllowFromForDmPolicy({
-                provider: "mattermost",
-                accountId: account.accountId,
-                dmPolicy: account.config.dmPolicy ?? "pairing",
-                readStore: pairing.readStoreForDmPolicy,
-              })
-            : undefined,
+          readStoreAllowFrom: pairing.readAllowFromStore,
           allowTextCommands,
           hasControlCommand: false,
         });
@@ -721,23 +708,24 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           channel: "mattermost",
           accountId: account.accountId,
         });
-        const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
-          cfg,
-          agentId: route.agentId,
-          channel: "mattermost",
-          accountId: account.accountId,
-          typing: {
-            start: () => sendTypingIndicator(opts.channelId, threadContext.effectiveReplyToId),
-            onStartError: (err) => {
-              logTypingFailure({
-                log: (message) => logger.debug?.(message),
-                channel: "mattermost",
-                target: opts.channelId,
-                error: err,
-              });
+        const { onModelSelected, typingCallbacks, ...replyPipeline } =
+          createChannelMessageReplyPipeline({
+            cfg,
+            agentId: route.agentId,
+            channel: "mattermost",
+            accountId: account.accountId,
+            typing: {
+              start: () => sendTypingIndicator(opts.channelId, threadContext.effectiveReplyToId),
+              onStartError: (err) => {
+                logTypingFailure({
+                  log: (message) => logger.debug?.(message),
+                  channel: "mattermost",
+                  target: opts.channelId,
+                  error: err,
+                });
+              },
             },
-          },
-        });
+          });
         const { dispatcher, replyOptions, markDispatchIdle } =
           core.channel.reply.createReplyDispatcherWithTyping({
             ...replyPipeline,
@@ -807,6 +795,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy, providerMissingFallbackApplied } =
     resolveAllowlistProviderRuntimeGroupPolicy({
       providerConfigPresent: cfg.channels?.mattermost !== undefined,
@@ -915,25 +904,26 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       },
     );
     const shouldDeliverReplies = params.deliverReplies === true;
-    const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
-      cfg,
-      agentId: params.route.agentId,
-      channel: "mattermost",
-      accountId: account.accountId,
-      typing: shouldDeliverReplies
-        ? {
-            start: () => sendTypingIndicator(params.channelId, params.effectiveReplyToId),
-            onStartError: (err) => {
-              logTypingFailure({
-                log: (message) => logger.debug?.(message),
-                channel: "mattermost",
-                target: params.channelId,
-                error: err,
-              });
-            },
-          }
-        : undefined,
-    });
+    const { onModelSelected, typingCallbacks, ...replyPipeline } =
+      createChannelMessageReplyPipeline({
+        cfg,
+        agentId: params.route.agentId,
+        channel: "mattermost",
+        accountId: account.accountId,
+        typing: shouldDeliverReplies
+          ? {
+              start: () => sendTypingIndicator(params.channelId, params.effectiveReplyToId),
+              onStartError: (err) => {
+                logTypingFailure({
+                  log: (message) => logger.debug?.(message),
+                  channel: "mattermost",
+                  target: params.channelId,
+                  error: err,
+                });
+              },
+            }
+          : undefined,
+      });
     const capturedTexts: string[] = [];
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
@@ -1032,23 +1022,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       surface: "mattermost",
     });
     const hasControlCommand = core.channel.text.hasControlCommand(pickerCommandText, cfg);
-    const dmPolicy = account.config.dmPolicy ?? "pairing";
-    const storeAllowFrom = normalizeMattermostAllowList(
-      await readStoreAllowFromForDmPolicy({
-        provider: "mattermost",
-        accountId: account.accountId,
-        dmPolicy,
-        readStore: pairing.readStoreForDmPolicy,
-      }),
-    );
-    const auth = authorizeMattermostCommandInvocation({
+    const auth = await authorizeMattermostCommandInvocation({
       account,
       cfg,
       senderId: params.payload.user_id,
       senderName: params.userName,
       channelId: params.payload.channel_id,
       channelInfo,
-      storeAllowFrom,
+      readStoreAllowFrom: pairing.readAllowFromStore,
       allowTextCommands,
       hasControlCommand,
     });
@@ -1264,77 +1245,35 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           normalizeOptionalString((await resolveUserInfo(senderId))?.username) ??
           senderId;
         const rawText = normalizeOptionalString(post.message) ?? "";
-        const dmPolicy = account.config.dmPolicy ?? "pairing";
-        const normalizedAllowFrom = normalizeMattermostAllowList(account.config.allowFrom ?? []);
-        const normalizedGroupAllowFrom = normalizeMattermostAllowList(
-          account.config.groupAllowFrom ?? [],
-        );
-        const storeAllowFrom = normalizeMattermostAllowList(
-          await readStoreAllowFromForDmPolicy({
-            provider: "mattermost",
-            accountId: account.accountId,
-            dmPolicy,
-            readStore: pairing.readStoreForDmPolicy,
-          }),
-        );
-        const accessDecision = resolveDmGroupAccessWithLists({
-          isGroup: kind !== "direct",
-          dmPolicy,
-          groupPolicy,
-          allowFrom: normalizedAllowFrom,
-          groupAllowFrom: normalizedGroupAllowFrom,
-          storeAllowFrom,
-          isSenderAllowed: (allowFrom) =>
-            isMattermostSenderAllowed({
-              senderId,
-              senderName,
-              allowFrom,
-              allowNameMatching,
-            }),
-        });
-        const effectiveAllowFrom = accessDecision.effectiveAllowFrom;
-        const effectiveGroupAllowFrom = accessDecision.effectiveGroupAllowFrom;
         const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
           cfg,
           surface: "mattermost",
         });
         const hasControlCommand = core.channel.text.hasControlCommand(rawText, cfg);
         const isControlCommand = allowTextCommands && hasControlCommand;
-        const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-        const commandDmAllowFrom = kind === "direct" ? effectiveAllowFrom : normalizedAllowFrom;
-        const senderAllowedForCommands = isMattermostSenderAllowed({
+        const accessDecision = await resolveMattermostMonitorInboundAccess({
+          account,
+          cfg,
           senderId,
           senderName,
-          allowFrom: commandDmAllowFrom,
-          allowNameMatching,
-        });
-        const groupAllowedForCommands = isMattermostSenderAllowed({
-          senderId,
-          senderName,
-          allowFrom: effectiveGroupAllowFrom,
-          allowNameMatching,
-        });
-        const commandGate = resolveControlCommandGate({
-          useAccessGroups,
-          authorizers: [
-            { configured: commandDmAllowFrom.length > 0, allowed: senderAllowedForCommands },
-            {
-              configured: effectiveGroupAllowFrom.length > 0,
-              allowed: groupAllowedForCommands,
-            },
-          ],
+          channelId,
+          kind,
+          groupPolicy,
+          readStoreAllowFrom: pairing.readAllowFromStore,
           allowTextCommands,
           hasControlCommand,
+          eventKind: "message",
+          mayPair: true,
         });
-        const commandAuthorized = commandGate.commandAuthorized;
+        const commandAuthorized = accessDecision.commandAccess.authorized;
 
-        if (accessDecision.decision !== "allow") {
+        if (accessDecision.ingress.decision !== "allow") {
           if (kind === "direct") {
-            if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED) {
+            if (accessDecision.ingress.reasonCode === "dm_policy_disabled") {
               logVerboseMessage(`mattermost: drop dm (dmPolicy=disabled sender=${senderId})`);
               return;
             }
-            if (accessDecision.decision === "pairing") {
+            if (accessDecision.ingress.decision === "pairing") {
               const { code, created } = await pairing.upsertPairingRequest({
                 id: senderId,
                 meta: { name: senderName },
@@ -1365,25 +1304,25 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             logVerboseMessage(`mattermost: drop dm sender=${senderId} (dmPolicy=${dmPolicy})`);
             return;
           }
-          if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED) {
+          if (accessDecision.ingress.reasonCode === "group_policy_disabled") {
             logVerboseMessage("mattermost: drop group message (groupPolicy=disabled)");
             return;
           }
-          if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST) {
+          if (accessDecision.ingress.reasonCode === "group_policy_empty_allowlist") {
             logVerboseMessage("mattermost: drop group message (no group allowlist)");
             return;
           }
-          if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED) {
+          if (accessDecision.ingress.reasonCode === "group_policy_not_allowlisted") {
             logVerboseMessage(`mattermost: drop group sender=${senderId} (not in groupAllowFrom)`);
             return;
           }
           logVerboseMessage(
-            `mattermost: drop group message (groupPolicy=${groupPolicy} reason=${accessDecision.reason})`,
+            `mattermost: drop group message (groupPolicy=${groupPolicy} reason=${accessDecision.senderAccess.reasonCode})`,
           );
           return;
         }
 
-        if (kind !== "direct" && commandGate.shouldBlock) {
+        if (kind !== "direct" && accessDecision.commandAccess.shouldBlockControlCommand) {
           logInboundDrop({
             log: logVerboseMessage,
             channel: "mattermost",
@@ -1635,23 +1574,24 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           accountId: account.accountId,
         });
 
-        const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
-          cfg,
-          agentId: route.agentId,
-          channel: "mattermost",
-          accountId: account.accountId,
-          typing: {
-            start: () => sendTypingIndicator(channelId, effectiveReplyToId),
-            onStartError: (err) => {
-              logTypingFailure({
-                log: (message) => logger.debug?.(message),
-                channel: "mattermost",
-                target: channelId,
-                error: err,
-              });
+        const { onModelSelected, typingCallbacks, ...replyPipeline } =
+          createChannelMessageReplyPipeline({
+            cfg,
+            agentId: route.agentId,
+            channel: "mattermost",
+            accountId: account.accountId,
+            typing: {
+              start: () => sendTypingIndicator(channelId, effectiveReplyToId),
+              onStartError: (err) => {
+                logTypingFailure({
+                  log: (message) => logger.debug?.(message),
+                  channel: "mattermost",
+                  target: channelId,
+                  error: err,
+                });
+              },
             },
-          },
-        });
+          });
         const draftPreviewEnabled = account.streamingMode !== "off";
         const draftToolProgressEnabled = shouldUpdateMattermostDraftToolProgress(account);
         const suppressDefaultToolProgressMessages =
@@ -1963,39 +1903,29 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
     const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
 
-    // Enforce DM/group policy and allowlist checks (same as normal messages)
-    const dmPolicy = account.config.dmPolicy ?? "pairing";
-    const storeAllowFrom = normalizeMattermostAllowList(
-      await readStoreAllowFromForDmPolicy({
-        provider: "mattermost",
-        accountId: account.accountId,
-        dmPolicy,
-        readStore: pairing.readStoreForDmPolicy,
-      }),
-    );
-    const reactionAccess = resolveDmGroupAccessWithLists({
-      isGroup: kind !== "direct",
-      dmPolicy,
+    // Enforce DM/group policy and allowlist checks (same as normal messages).
+    const reactionAccess = await resolveMattermostMonitorInboundAccess({
+      account,
+      cfg,
+      senderId: userId,
+      senderName,
+      channelId,
+      kind,
       groupPolicy,
-      allowFrom: normalizeMattermostAllowList(account.config.allowFrom ?? []),
-      groupAllowFrom: normalizeMattermostAllowList(account.config.groupAllowFrom ?? []),
-      storeAllowFrom,
-      isSenderAllowed: (allowFrom) =>
-        isMattermostSenderAllowed({
-          senderId: userId,
-          senderName,
-          allowFrom,
-          allowNameMatching,
-        }),
+      readStoreAllowFrom: pairing.readAllowFromStore,
+      allowTextCommands: false,
+      hasControlCommand: false,
+      eventKind: "reaction",
+      mayPair: false,
     });
-    if (reactionAccess.decision !== "allow") {
+    if (reactionAccess.ingress.decision !== "allow") {
       if (kind === "direct") {
         logVerboseMessage(
-          `mattermost: drop reaction (dmPolicy=${dmPolicy} sender=${userId} reason=${reactionAccess.reason})`,
+          `mattermost: drop reaction (dmPolicy=${dmPolicy} sender=${userId} reason=${reactionAccess.senderAccess.reasonCode})`,
         );
       } else {
         logVerboseMessage(
-          `mattermost: drop reaction (groupPolicy=${groupPolicy} sender=${userId} reason=${reactionAccess.reason} channel=${channelId})`,
+          `mattermost: drop reaction (groupPolicy=${groupPolicy} sender=${userId} reason=${reactionAccess.senderAccess.reasonCode} channel=${channelId})`,
         );
       }
       return;

@@ -11,7 +11,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   extractCites,
-  isDmAllowed,
+  resolveTlonCommandAuthorizationWithIngress,
+  isDmAllowedWithIngress,
   isGroupInviteAllowed,
   isBotMentioned,
   extractMessageText,
@@ -19,41 +20,76 @@ import {
 } from "./monitor/utils.js";
 import { normalizeShip } from "./targets.js";
 
-describe("Security: DM Allowlist", () => {
-  describe("isDmAllowed", () => {
-    it("rejects DMs when allowlist is empty", () => {
-      expect(isDmAllowed("~zod", [])).toBe(false);
-      expect(isDmAllowed("~sampel-palnet", [])).toBe(false);
-    });
+const allowlistShipMatchingCases = [
+  { label: "DM allowlist", isAllowed: isDmAllowedWithIngress },
+  { label: "group invite allowlist", isAllowed: isGroupInviteAllowed },
+] satisfies Array<{
+  label: string;
+  isAllowed: (ship: string, allowlist: string[] | undefined) => boolean | Promise<boolean>;
+}>;
 
-    it("rejects DMs when allowlist is undefined", () => {
-      expect(isDmAllowed("~zod", undefined)).toBe(false);
-    });
+async function expectAllowed(
+  isAllowed: (ship: string, allowlist: string[] | undefined) => boolean | Promise<boolean>,
+  ship: string,
+  allowlist: string[] | undefined,
+  expected: boolean,
+) {
+  await expect(Promise.resolve(isAllowed(ship, allowlist))).resolves.toBe(expected);
+}
 
-    it("allows DMs from ships on the allowlist", () => {
-      const allowlist = ["~zod", "~bus"];
-      expect(isDmAllowed("~zod", allowlist)).toBe(true);
-      expect(isDmAllowed("~bus", allowlist)).toBe(true);
-    });
+async function expectDmAllowed(ship: string, allowlist: string[] | undefined, expected: boolean) {
+  await expect(isDmAllowedWithIngress(ship, allowlist)).resolves.toBe(expected);
+}
 
-    it("rejects DMs from ships NOT on the allowlist", () => {
-      const allowlist = ["~zod", "~bus"];
-      expect(isDmAllowed("~nec", allowlist)).toBe(false);
-      expect(isDmAllowed("~sampel-palnet", allowlist)).toBe(false);
-      expect(isDmAllowed("~random-ship", allowlist)).toBe(false);
-    });
-
-    it("normalizes ship names (with/without ~ prefix)", () => {
+describe("Security: allowlist ship matching", () => {
+  it.each(allowlistShipMatchingCases)(
+    "$label normalizes ship names with and without ~ prefix",
+    async ({ isAllowed }) => {
       const allowlist = ["~zod"];
-      expect(isDmAllowed("zod", allowlist)).toBe(true);
-      expect(isDmAllowed("~zod", allowlist)).toBe(true);
+      await expectAllowed(isAllowed, "zod", allowlist, true);
+      await expectAllowed(isAllowed, "~zod", allowlist, true);
 
       const allowlistWithoutTilde = ["zod"];
-      expect(isDmAllowed("~zod", allowlistWithoutTilde)).toBe(true);
-      expect(isDmAllowed("zod", allowlistWithoutTilde)).toBe(true);
+      await expectAllowed(isAllowed, "~zod", allowlistWithoutTilde, true);
+      await expectAllowed(isAllowed, "zod", allowlistWithoutTilde, true);
+    },
+  );
+
+  it.each(allowlistShipMatchingCases)(
+    "$label rejects partial ship matches",
+    async ({ isAllowed }) => {
+      const allowlist = ["~zod"];
+      await expectAllowed(isAllowed, "~zod-extra", allowlist, false);
+      await expectAllowed(isAllowed, "~extra-zod", allowlist, false);
+    },
+  );
+});
+
+describe("Security: DM Allowlist", () => {
+  describe("DM ingress allowlist", () => {
+    it("rejects DMs when allowlist is empty", async () => {
+      await expectDmAllowed("~zod", [], false);
+      await expectDmAllowed("~sampel-palnet", [], false);
     });
 
-    it("handles galaxy, star, planet, and moon names", () => {
+    it("rejects DMs when allowlist is undefined", async () => {
+      await expectDmAllowed("~zod", undefined, false);
+    });
+
+    it("allows DMs from ships on the allowlist", async () => {
+      const allowlist = ["~zod", "~bus"];
+      await expectDmAllowed("~zod", allowlist, true);
+      await expectDmAllowed("~bus", allowlist, true);
+    });
+
+    it("rejects DMs from ships NOT on the allowlist", async () => {
+      const allowlist = ["~zod", "~bus"];
+      await expectDmAllowed("~nec", allowlist, false);
+      await expectDmAllowed("~sampel-palnet", allowlist, false);
+      await expectDmAllowed("~random-ship", allowlist, false);
+    });
+
+    it("handles galaxy, star, planet, and moon names", async () => {
       const allowlist = [
         "~zod", // galaxy
         "~marzod", // star
@@ -61,38 +97,53 @@ describe("Security: DM Allowlist", () => {
         "~dozzod-dozzod-dozzod-dozzod", // moon
       ];
 
-      expect(isDmAllowed("~zod", allowlist)).toBe(true);
-      expect(isDmAllowed("~marzod", allowlist)).toBe(true);
-      expect(isDmAllowed("~sampel-palnet", allowlist)).toBe(true);
-      expect(isDmAllowed("~dozzod-dozzod-dozzod-dozzod", allowlist)).toBe(true);
+      await expectDmAllowed("~zod", allowlist, true);
+      await expectDmAllowed("~marzod", allowlist, true);
+      await expectDmAllowed("~sampel-palnet", allowlist, true);
+      await expectDmAllowed("~dozzod-dozzod-dozzod-dozzod", allowlist, true);
 
       // Similar but different ships should be rejected
-      expect(isDmAllowed("~nec", allowlist)).toBe(false);
-      expect(isDmAllowed("~wanzod", allowlist)).toBe(false);
-      expect(isDmAllowed("~sampel-palned", allowlist)).toBe(false);
+      await expectDmAllowed("~nec", allowlist, false);
+      await expectDmAllowed("~wanzod", allowlist, false);
+      await expectDmAllowed("~sampel-palned", allowlist, false);
     });
 
     // NOTE: Ship names in Urbit are always lowercase by convention.
     // This test documents current behavior - strict equality after normalization.
     // If case-insensitivity is desired, normalizeShip should lowercase.
-    it("uses strict equality after normalization (case-sensitive)", () => {
+    it("uses strict equality after normalization (case-sensitive)", async () => {
       const allowlist = ["~zod"];
-      expect(isDmAllowed("~zod", allowlist)).toBe(true);
+      await expectDmAllowed("~zod", allowlist, true);
       // Different case would NOT match with current implementation
-      expect(isDmAllowed("~Zod", ["~Zod"])).toBe(true); // exact match works
+      await expectDmAllowed("~Zod", ["~Zod"], true); // exact match works
     });
 
-    it("does not allow partial matches", () => {
-      const allowlist = ["~zod"];
-      expect(isDmAllowed("~zod-extra", allowlist)).toBe(false);
-      expect(isDmAllowed("~extra-zod", allowlist)).toBe(false);
-    });
-
-    it("handles whitespace in ship names (normalized)", () => {
+    it("handles whitespace in ship names (normalized)", async () => {
       // Ships with leading/trailing whitespace are normalized by normalizeShip
       const allowlist = [" ~zod ", "~bus"];
-      expect(isDmAllowed("~zod", allowlist)).toBe(true);
-      expect(isDmAllowed(" ~zod ", allowlist)).toBe(true);
+      await expectDmAllowed("~zod", allowlist, true);
+      await expectDmAllowed(" ~zod ", allowlist, true);
+    });
+
+    it("uses the ingress command gate for owner-only command authorization", async () => {
+      const authorized = await resolveTlonCommandAuthorizationWithIngress({
+        senderShip: "~zod",
+        ownerShip: "zod",
+        useAccessGroups: true,
+      });
+      expect(authorized.commandAccess.requested).toBe(true);
+      expect(authorized.commandAccess.authorized).toBe(true);
+      expect(authorized.commandAccess.shouldBlockControlCommand).toBe(false);
+      expect(authorized.commandAccess.reasonCode).toBe("command_authorized");
+
+      const unauthorized = await resolveTlonCommandAuthorizationWithIngress({
+        senderShip: "~nec",
+        ownerShip: "~zod",
+        useAccessGroups: true,
+      });
+      expect(unauthorized.commandAccess.requested).toBe(true);
+      expect(unauthorized.commandAccess.authorized).toBe(false);
+      expect(unauthorized.commandAccess.shouldBlockControlCommand).toBe(false);
     });
   });
 });
@@ -123,21 +174,6 @@ describe("Security: Group Invite Allowlist", () => {
       expect(isGroupInviteAllowed("~random-attacker", allowlist)).toBe(false);
       expect(isGroupInviteAllowed("~malicious-ship", allowlist)).toBe(false);
       expect(isGroupInviteAllowed("~zod", allowlist)).toBe(false);
-    });
-
-    it("normalizes ship names (with/without ~ prefix)", () => {
-      const allowlist = ["~nocsyx-lassul"];
-      expect(isGroupInviteAllowed("nocsyx-lassul", allowlist)).toBe(true);
-      expect(isGroupInviteAllowed("~nocsyx-lassul", allowlist)).toBe(true);
-
-      const allowlistWithoutTilde = ["nocsyx-lassul"];
-      expect(isGroupInviteAllowed("~nocsyx-lassul", allowlistWithoutTilde)).toBe(true);
-    });
-
-    it("does not allow partial matches", () => {
-      const allowlist = ["~zod"];
-      expect(isGroupInviteAllowed("~zod-moon", allowlist)).toBe(false);
-      expect(isGroupInviteAllowed("~pinser-botter-zod", allowlist)).toBe(false);
     });
 
     it("handles whitespace in allowlist entries", () => {
@@ -316,29 +352,29 @@ describe("Security: Channel Authorization Logic", () => {
 });
 
 describe("Security: Authorization Edge Cases", () => {
-  it("empty strings are not valid ships", () => {
-    expect(isDmAllowed("", ["~zod"])).toBe(false);
-    expect(isDmAllowed("~zod", [""])).toBe(false);
+  it("empty strings are not valid ships", async () => {
+    await expectDmAllowed("", ["~zod"], false);
+    await expectDmAllowed("~zod", [""], false);
   });
 
-  it("handles very long ship-like strings", () => {
+  it("handles very long ship-like strings", async () => {
     const longName = "~" + "a".repeat(1000);
-    expect(isDmAllowed(longName, ["~zod"])).toBe(false);
+    await expectDmAllowed(longName, ["~zod"], false);
   });
 
-  it("handles special characters that could break regex", () => {
+  it("handles special characters that could break regex", async () => {
     // These should not cause regex injection
     const maliciousShip = "~zod.*";
-    expect(isDmAllowed("~zodabc", [maliciousShip])).toBe(false);
+    await expectDmAllowed("~zodabc", [maliciousShip], false);
 
     const allowlist = ["~zod"];
-    expect(isDmAllowed("~zod.*", allowlist)).toBe(false);
+    await expectDmAllowed("~zod.*", allowlist, false);
   });
 
-  it("protects against prototype pollution-style keys", () => {
+  it("protects against prototype pollution-style keys", async () => {
     const suspiciousShip = "__proto__";
-    expect(isDmAllowed(suspiciousShip, ["~zod"])).toBe(false);
-    expect(isDmAllowed("~zod", [suspiciousShip])).toBe(false);
+    await expectDmAllowed(suspiciousShip, ["~zod"], false);
+    await expectDmAllowed("~zod", [suspiciousShip], false);
   });
 });
 

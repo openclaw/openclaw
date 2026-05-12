@@ -14,7 +14,10 @@ import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-captu
 
 const mockReadConfigFileSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
 const mockWriteConfigFile = vi.fn<
-  (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) => Promise<void>
+  (
+    cfg: OpenClawConfig,
+    options?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] },
+  ) => Promise<void>
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
@@ -24,11 +27,13 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
-    writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
-      mockWriteConfigFile(cfg, options),
+    writeConfigFile: (
+      cfg: OpenClawConfig,
+      options?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] },
+    ) => mockWriteConfigFile(cfg, options),
     replaceConfigFile: (params: {
       nextConfig: OpenClawConfig;
-      writeOptions?: { unsetPaths?: string[][] };
+      writeOptions?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] };
     }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
   };
 });
@@ -138,6 +143,55 @@ async function runValidateJsonAndGetPayload() {
   };
 }
 
+function firstWrittenConfig(): OpenClawConfig {
+  const written = mockWriteConfigFile.mock.calls.at(0)?.[0];
+  if (!written) {
+    throw new Error("expected written config");
+  }
+  return written;
+}
+
+function firstWriteConfigOptions():
+  | { unsetPaths?: string[][]; explicitSetPaths?: string[][] }
+  | undefined {
+  return mockWriteConfigFile.mock.calls.at(0)?.[1];
+}
+
+function requireWriteOptions(): { unsetPaths?: string[][]; explicitSetPaths?: string[][] } {
+  const options = firstWriteConfigOptions();
+  if (!options) {
+    throw new Error("expected write options");
+  }
+  return options;
+}
+
+function expectLogIncludes(text: string) {
+  expect(mockLog.mock.calls.some((call) => String(call[0]).includes(text))).toBe(true);
+}
+
+function expectLogExcludes(text: string) {
+  expect(mockLog.mock.calls.some((call) => String(call[0]).includes(text))).toBe(false);
+}
+
+function expectErrorIncludes(text: string) {
+  expect(mockError.mock.calls.some((call) => String(call[0]).includes(text))).toBe(true);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireResolveSecretRefCall(index: number): [unknown, unknown] {
+  const call = mockResolveSecretRefValue.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected SecretRef resolver call ${index}`);
+  }
+  return call as [unknown, unknown];
+}
+
 let registerConfigCli: typeof import("./config-cli.js").registerConfigCli;
 let sharedProgram: Command;
 
@@ -211,13 +265,71 @@ describe("config cli", () => {
       await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.gateway?.auth).toEqual({ mode: "token" });
       expect(written.gateway?.port).toBe(18789);
       expect(written.agents).toEqual(resolved.agents);
       expect(written.tools).toEqual(resolved.tools);
       expect(written.logging).toEqual(resolved.logging);
       expect(written.agents).not.toHaveProperty("defaults");
+    });
+
+    it("marks set paths explicit so default-equal writes persist", async () => {
+      const resolved: OpenClawConfig = {
+        channels: {
+          telegram: {
+            botToken: "tok-abc",
+          },
+        },
+      };
+      const runtimeMerged = {
+        ...resolved,
+        channels: {
+          telegram: {
+            botToken: "tok-abc",
+            dmPolicy: "pairing",
+          },
+        },
+      } as OpenClawConfig;
+      setSnapshot(resolved, runtimeMerged);
+
+      await runConfigCommand(["config", "set", "channels.telegram.dmPolicy", "pairing"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      expect(requireWriteOptions().explicitSetPaths).toEqual([
+        ["channels", "telegram", "dmPolicy"],
+      ]);
+    });
+
+    it("marks object set paths explicit so nested default-equal writes persist", async () => {
+      const resolved: OpenClawConfig = {
+        channels: {
+          telegram: {
+            botToken: "tok-abc",
+          },
+        },
+      };
+      const runtimeMerged = {
+        ...resolved,
+        channels: {
+          telegram: {
+            botToken: "tok-abc",
+            dmPolicy: "pairing",
+          },
+        },
+      } as OpenClawConfig;
+      setSnapshot(resolved, runtimeMerged);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "channels.telegram",
+        '{"botToken":"tok-abc","dmPolicy":"pairing"}',
+        "--strict-json",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      expect(requireWriteOptions().explicitSetPaths).toEqual([["channels", "telegram"]]);
     });
 
     it("does not inject runtime defaults into the written config", async () => {
@@ -241,7 +353,7 @@ describe("config cli", () => {
       await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written).not.toHaveProperty("agents.defaults.model");
       expect(written).not.toHaveProperty("agents.defaults.contextWindow");
       expect(written).not.toHaveProperty("agents.defaults.maxTokens");
@@ -272,7 +384,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.agents?.defaults?.model).toBe("openai/gpt-5.4");
       expect(written.agents?.defaults?.imageGenerationModel).toEqual({
         primary: "openai/gpt-image-1",
@@ -280,6 +392,68 @@ describe("config cli", () => {
       expect(written.agents?.defaults?.videoGenerationModel).toEqual({
         primary: "qwen/wan2.6-t2v",
       });
+    });
+
+    it("normalizes retired Google Gemini model refs before writing config mutations", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+            models: {
+              "google/gemini-3-pro-preview": { alias: "gemini" },
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.defaults.model.primary",
+        "google/gemini-3-pro-preview",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig();
+      expect(written.agents?.defaults?.model).toEqual({
+        primary: "google/gemini-3.1-pro-preview",
+        fallbacks: ["google/gemini-3.1-pro-preview"],
+      });
+      expect(written.agents?.defaults?.models).toEqual({
+        "google/gemini-3.1-pro-preview": { alias: "gemini" },
+      });
+    });
+
+    it("normalizes explicit model-map paths before writing config mutations", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "google/gemini-3-pro-preview": {},
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.defaults.models.google/gemini-3-pro-preview.alias",
+        "gemini",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig();
+      expect(written.agents?.defaults?.models).toEqual({
+        "google/gemini-3.1-pro-preview": { alias: "gemini" },
+      });
+      expect(requireWriteOptions().explicitSetPaths).toEqual([
+        ["agents", "defaults", "models", "google/gemini-3.1-pro-preview", "alias"],
+      ]);
     });
 
     it("rejects plugin install record config updates", async () => {
@@ -295,12 +469,8 @@ describe("config cli", () => {
       ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("openclaw plugins install <spec>"),
-      );
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("openclaw plugins update <plugin-id>"),
-      );
+      expectErrorIncludes("openclaw plugins install <spec>");
+      expectErrorIncludes("openclaw plugins update <plugin-id>");
     });
 
     it("rejects protected model map replacement unless explicitly requested", async () => {
@@ -327,9 +497,7 @@ describe("config cli", () => {
       ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("Refusing to replace agents.defaults.models"),
-      );
+      expectErrorIncludes("Refusing to replace agents.defaults.models");
     });
 
     it("merges protected model map values with --merge", async () => {
@@ -354,7 +522,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.agents?.defaults?.models).toEqual({
         "openai/gpt-5.4": { alias: "GPT" },
         "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
@@ -387,7 +555,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.models?.providers?.ollama?.models).toEqual([
         { id: "llama3.2", name: "Llama 3.2 latest", contextWindow: 131072 },
         { id: "qwen3", name: "Qwen 3" },
@@ -411,17 +579,13 @@ describe("config cli", () => {
       await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.gateway?.auth).toEqual({
         mode: "token",
         token: "token-keep",
         allowTailscale: true,
       });
-      expect(mockLog).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Removed inactive gateway.auth.password for gateway.auth.mode=token",
-        ),
-      );
+      expectLogIncludes("Removed inactive gateway.auth.password for gateway.auth.mode=token");
     });
 
     it("drops gateway.auth.token when switching mode to password", async () => {
@@ -439,16 +603,12 @@ describe("config cli", () => {
       await runConfigCommand(["config", "set", "gateway.auth.mode", "password"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.gateway?.auth).toEqual({
         mode: "password",
         password: "password-keep", // pragma: allowlist secret
       });
-      expect(mockLog).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Removed inactive gateway.auth.token for gateway.auth.mode=password",
-        ),
-      );
+      expectLogIncludes("Removed inactive gateway.auth.token for gateway.auth.mode=password");
     });
 
     it("applies mode-based credential cleanup using the final batch result", async () => {
@@ -471,16 +631,12 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.gateway?.auth).toEqual({
         mode: "token",
         token: "token-keep",
       });
-      expect(mockLog).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Removed inactive gateway.auth.password for gateway.auth.mode=token",
-        ),
-      );
+      expectLogIncludes("Removed inactive gateway.auth.password for gateway.auth.mode=token");
     });
   });
 
@@ -512,7 +668,7 @@ describe("config cli", () => {
 
       expect(mockExit).not.toHaveBeenCalled();
       expect(mockError).not.toHaveBeenCalled();
-      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining("Config valid:"));
+      expectLogIncludes("Config valid:");
     });
 
     it("prints issues and exits 1 when config is invalid", async () => {
@@ -529,10 +685,8 @@ describe("config cli", () => {
 
       await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
 
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Config invalid at"));
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("agents.defaults.suppressToolErrorWarnings"),
-      );
+      expectErrorIncludes("config is invalid");
+      expectErrorIncludes("agents.defaults.suppressToolErrorWarnings");
       expect(mockLog).not.toHaveBeenCalled();
     });
 
@@ -594,7 +748,7 @@ describe("config cli", () => {
       });
 
       await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Config file not found:"));
+      expectErrorIncludes("Config file not found:");
       expect(mockLog).not.toHaveBeenCalled();
     });
   });
@@ -625,24 +779,19 @@ describe("config cli", () => {
         | { title?: string; description?: string }
         | undefined;
       expect(payload.properties?.$schema).toEqual({ type: "string" });
-      expect(gatewayPort).toMatchObject({
-        title: "Gateway Port",
-        description: expect.stringContaining("TCP port used by the gateway listener"),
-      });
-      expect(payload.properties?.channels).toMatchObject({
-        title: "Channels",
-        properties: {},
-        additionalProperties: true,
-      });
-      expect(payload.properties?.plugins).toMatchObject({
-        title: "Plugins",
-        description: expect.stringContaining("Plugin system controls"),
-        properties: {
-          entries: {
-            title: "Plugin Entries",
-          },
-        },
-      });
+      expect(gatewayPort?.title).toBe("Gateway Port");
+      expect(gatewayPort?.description).toContain("TCP port used by the gateway listener");
+      const channels = requireRecord(payload.properties?.channels, "schema channels");
+      expect(channels.title).toBe("Channels");
+      expect(channels.properties).toEqual({});
+      expect(channels.additionalProperties).toBe(true);
+      const plugins = requireRecord(payload.properties?.plugins, "schema plugins");
+      expect(plugins.title).toBe("Plugins");
+      expect(plugins.description).toContain("Plugin system controls");
+      const pluginProperties = requireRecord(plugins.properties, "schema plugin properties");
+      expect(requireRecord(pluginProperties.entries, "schema plugin entries").title).toBe(
+        "Plugin Entries",
+      );
     });
 
     it("falls back cleanly when best-effort schema loading returns channel-only data", async () => {
@@ -673,7 +822,9 @@ describe("config cli", () => {
         properties?: Record<string, unknown>;
       };
       expect(payload.properties?.$schema).toEqual({ type: "string" });
-      expect(payload.properties?.channels).toBeTruthy();
+      const channels = requireRecord(payload.properties?.channels, "schema channels");
+      expect(channels.type).toBe("object");
+      expect(channels.properties).toEqual({ telegram: { type: "object" } });
       expect(payload.properties?.plugins).toBeUndefined();
       expect(mockError).not.toHaveBeenCalled();
     });
@@ -687,7 +838,7 @@ describe("config cli", () => {
       await runConfigCommand(["config", "set", "gateway.auth.mode", "{bad"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.gateway?.auth).toEqual({ mode: "{bad" });
     });
 
@@ -698,6 +849,8 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expectErrorIncludes('Could not parse "{bad" as JSON for --strict-json.');
+      expectErrorIncludes("For plain strings, omit --strict-json.");
     });
 
     it("keeps --json as a strict parsing alias", async () => {
@@ -731,11 +884,11 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.gateway?.auth).toEqual({ mode: "token" });
     });
 
-    it("shows --strict-json and keeps --json as a legacy alias in help", async () => {
+    it("shows --strict-json and keeps --json as a legacy alias in help", () => {
       const program = new Command();
       registerConfigCli(program);
 
@@ -787,7 +940,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.channels?.discord?.token).toEqual({
         source: "env",
         provider: "default",
@@ -816,10 +969,8 @@ describe("config cli", () => {
       ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("Config policy validation failed: unsupported SecretRef usage"),
-      );
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("hooks.token"));
+      expectErrorIncludes("Config policy validation failed: unsupported SecretRef usage");
+      expectErrorIncludes("hooks.token");
     });
 
     it("fails early when parent-object writes include unsupported SecretRef objects", async () => {
@@ -839,10 +990,8 @@ describe("config cli", () => {
       ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("Config policy validation failed: unsupported SecretRef usage"),
-      );
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("hooks.token"));
+      expectErrorIncludes("Config policy validation failed: unsupported SecretRef usage");
+      expectErrorIncludes("hooks.token");
     });
 
     it("supports provider builder mode under secrets.providers.<alias>", async () => {
@@ -865,7 +1014,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.secrets?.providers?.vaultfile).toEqual({
         source: "file",
         path: "/tmp/vault.json",
@@ -900,16 +1049,13 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockResolveSecretRefValue).toHaveBeenCalledTimes(1);
-      expect(mockResolveSecretRefValue).toHaveBeenCalledWith(
-        {
-          source: "env",
-          provider: "default",
-          id: "DISCORD_BOT_TOKEN",
-        },
-        expect.objectContaining({
-          env: expect.any(Object),
-        }),
-      );
+      const [secretRef, resolveOptions] = requireResolveSecretRefCall(0);
+      expect(secretRef).toEqual({
+        source: "env",
+        provider: "default",
+        id: "DISCORD_BOT_TOKEN",
+      });
+      expect(requireRecord(resolveOptions, "resolve options").env).toBeTypeOf("object");
     });
 
     it("requires schema validation in JSON dry-run mode", async () => {
@@ -930,9 +1076,7 @@ describe("config cli", () => {
       ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("Dry run failed: config schema validation failed."),
-      );
+      expectErrorIncludes("Dry run failed: config schema validation failed.");
     });
 
     it("fails dry-run when unsupported mutable paths receive SecretRef objects in value/json mode", async () => {
@@ -958,10 +1102,8 @@ describe("config cli", () => {
       ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("Dry run failed: config schema validation failed."),
-      );
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("hooks.token"));
+      expectErrorIncludes("Dry run failed: config schema validation failed.");
+      expectErrorIncludes("hooks.token");
     });
 
     it("aggregates policy failures across batch entries", async () => {
@@ -981,10 +1123,8 @@ describe("config cli", () => {
       ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("hooks.token"));
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("commands.ownerDisplaySecret"),
-      );
+      expectErrorIncludes("hooks.token");
+      expectErrorIncludes("commands.ownerDisplaySecret");
     });
 
     it("does not duplicate policy errors in --dry-run --json mode for parent-object writes", async () => {
@@ -1032,14 +1172,8 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
-      expect(mockLog).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Dry run note: value mode does not run schema/resolvability checks.",
-        ),
-      );
-      expect(mockLog).toHaveBeenCalledWith(
-        expect.stringContaining("Dry run successful: 1 update(s) validated"),
-      );
+      expectLogIncludes("Dry run note: value mode does not run schema/resolvability checks.");
+      expectLogIncludes("Dry run successful: 1 update(s) validated");
     });
 
     it("supports batch mode for refs/providers in dry-run", async () => {
@@ -1095,10 +1229,8 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
-      expect(mockLog).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Dry run note: skipped 1 exec SecretRef resolvability check(s). Re-run with --allow-exec",
-        ),
+      expectLogIncludes(
+        "Dry run note: skipped 1 exec SecretRef resolvability check(s). Re-run with --allow-exec",
       );
     });
 
@@ -1133,17 +1265,13 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockResolveSecretRefValue).toHaveBeenCalledTimes(1);
-      expect(mockResolveSecretRefValue).toHaveBeenCalledWith(
-        expect.objectContaining({
-          source: "exec",
-          provider: "runner",
-          id: "openai",
-        }),
-        expect.any(Object),
-      );
-      expect(mockLog).not.toHaveBeenCalledWith(
-        expect.stringContaining("Dry run note: skipped 1 exec SecretRef resolvability check(s)."),
-      );
+      const [secretRef, resolveOptions] = requireResolveSecretRefCall(0);
+      const secretRefRecord = requireRecord(secretRef, "exec SecretRef");
+      expect(secretRefRecord.source).toBe("exec");
+      expect(secretRefRecord.provider).toBe("runner");
+      expect(secretRefRecord.id).toBe("openai");
+      expect(resolveOptions).toBeTypeOf("object");
+      expectLogExcludes("Dry run note: skipped 1 exec SecretRef resolvability check(s).");
     });
 
     it("rejects --allow-exec without --dry-run", async () => {
@@ -1157,9 +1285,7 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("config set mode error: --allow-exec requires --dry-run."),
-      );
+      expectErrorIncludes("config set mode error: --allow-exec requires --dry-run.");
     });
 
     it("fails dry-run when skipped exec refs use an unconfigured provider", async () => {
@@ -1187,9 +1313,7 @@ describe("config cli", () => {
       ).rejects.toThrow("__exit__:1");
 
       expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining('Secret provider "runner" is not configured'),
-      );
+      expectErrorIncludes('Secret provider "runner" is not configured');
     });
 
     it("fails dry-run when skipped exec refs use a provider with mismatched source", async () => {
@@ -1221,11 +1345,7 @@ describe("config cli", () => {
       ).rejects.toThrow("__exit__:1");
 
       expect(mockResolveSecretRefValue).not.toHaveBeenCalled();
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining(
-          'Secret provider "runner" has source "env" but ref requests "exec".',
-        ),
-      );
+      expectErrorIncludes('Secret provider "runner" has source "env" but ref requests "exec".');
     });
 
     it("writes sibling SecretRef paths when target uses sibling-ref shape", async () => {
@@ -1252,7 +1372,7 @@ describe("config cli", () => {
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.channels?.googlechat?.serviceAccountRef).toEqual({
         source: "file",
         provider: "vaultfile",
@@ -1278,9 +1398,7 @@ describe("config cli", () => {
         ]),
       ).rejects.toThrow("__exit__:1");
 
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("config set mode error: choose exactly one mode"),
-      );
+      expectErrorIncludes("config set mode error: choose exactly one mode");
     });
 
     it("rejects mixing batch mode with builder flags", async () => {
@@ -1299,10 +1417,8 @@ describe("config cli", () => {
         ]),
       ).rejects.toThrow("__exit__:1");
 
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "config set mode error: batch mode (--batch-json/--batch-file) cannot be combined",
-        ),
+      expectErrorIncludes(
+        "config set mode error: batch mode (--batch-json/--batch-file) cannot be combined",
       );
     });
 
@@ -1322,7 +1438,7 @@ describe("config cli", () => {
       }
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.gateway?.auth).toEqual({ mode: "token" });
     });
 
@@ -1365,7 +1481,7 @@ describe("config cli", () => {
       }
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.agents?.defaults?.models).toEqual(resolved.agents?.defaults?.models);
       expect(written.agents?.defaults?.model).toEqual(resolved.agents?.defaults?.model);
       expect(written.agents?.defaults?.memorySearch).toEqual({
@@ -1391,9 +1507,7 @@ describe("config cli", () => {
         fs.rmSync(pathname, { force: true });
       }
 
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("--batch-file must be a JSON array."),
-      );
+      expectErrorIncludes("--batch-file must be a JSON array.");
     });
 
     it("patches config from one object in one write", async () => {
@@ -1453,7 +1567,7 @@ describe("config cli", () => {
       }
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+      const written = firstWrittenConfig() as Record<string, unknown>;
       expect(
         ((written.agents as Record<string, unknown>).defaults as Record<string, unknown>).models,
       ).toEqual({
@@ -1501,7 +1615,7 @@ describe("config cli", () => {
         fs.rmSync(pathname, { force: true });
       }
 
-      const written = mockWriteConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+      const written = firstWrittenConfig() as Record<string, unknown>;
       expect(
         ((written.agents as Record<string, unknown>).defaults as Record<string, unknown>).models,
       ).toEqual({
@@ -1532,7 +1646,7 @@ describe("config cli", () => {
         fs.rmSync(pathname, { force: true });
       }
 
-      const written = mockWriteConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+      const written = firstWrittenConfig() as Record<string, unknown>;
       expect((written.channels as Record<string, unknown>).slack).toEqual({
         enabled: true,
         mode: "socket",
@@ -1572,10 +1686,9 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockResolveSecretRefValue).toHaveBeenCalledTimes(1);
-      expect(mockResolveSecretRefValue).toHaveBeenCalledWith(
-        { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-        expect.any(Object),
-      );
+      const [secretRef, resolveOptions] = requireResolveSecretRefCall(0);
+      expect(secretRef).toEqual({ source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" });
+      expect(resolveOptions).toBeTypeOf("object");
     });
 
     it("schema-validates SecretRef-only config patch operations", async () => {
@@ -1613,11 +1726,9 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockResolveSecretRefValue).toHaveBeenCalledTimes(1);
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("Dry run failed: config schema validation failed."),
-      );
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("gateway"));
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining('"typo"'));
+      expectErrorIncludes("Dry run failed: config schema validation failed.");
+      expectErrorIncludes("gateway");
+      expectErrorIncludes('"typo"');
     });
 
     it("dry-runs nested SecretRefs inside config patch replacements", async () => {
@@ -1674,18 +1785,14 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockResolveSecretRefValue).toHaveBeenCalledTimes(2);
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("Dry run failed: 2 SecretRef assignment(s) could not be resolved."),
-      );
+      expectErrorIncludes("Dry run failed: 2 SecretRef assignment(s) could not be resolved.");
     });
 
     it("rejects config patch --json without dry-run", async () => {
       await expect(runConfigCommand(["config", "patch", "--stdin", "--json"])).rejects.toThrow(
         "__exit__:1",
       );
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("config patch mode error: --json requires --dry-run."),
-      );
+      expectErrorIncludes("config patch mode error: --json requires --dry-run.");
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
@@ -1745,7 +1852,7 @@ describe("config cli", () => {
         fs.rmSync(pathname, { force: true });
       }
 
-      const written = mockWriteConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+      const written = firstWrittenConfig() as Record<string, unknown>;
       const channels = (written.channels as Record<string, unknown>).discord as Record<
         string,
         unknown
@@ -1755,9 +1862,7 @@ describe("config cli", () => {
           .channels as Record<string, unknown>,
       ).toEqual({ maintainers: { enabled: true, requireMention: true } });
       expect((written.channels as Record<string, unknown>).slack).not.toHaveProperty("appToken");
-      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toEqual({
-        unsetPaths: [["channels", "slack", "appToken"]],
-      });
+      expect(requireWriteOptions().unsetPaths).toEqual([["channels", "slack", "appToken"]]);
     });
 
     it("rejects unused config patch replace paths", async () => {
@@ -1793,10 +1898,8 @@ describe("config cli", () => {
         fs.rmSync(pathname, { force: true });
       }
 
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "config patch mode error: --replace-path channels.discord.guilds did not match any value in the input patch.",
-        ),
+      expectErrorIncludes(
+        "config patch mode error: --replace-path channels.discord.guilds did not match any value in the input patch.",
       );
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
@@ -1811,9 +1914,7 @@ describe("config cli", () => {
         ]),
       ).rejects.toThrow("__exit__:1");
 
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("must include exactly one of: value, ref, provider"),
-      );
+      expectErrorIncludes("must include exactly one of: value, ref, provider");
     });
 
     it("fails dry-run when a builder-assigned SecretRef is unresolved", async () => {
@@ -1843,9 +1944,7 @@ describe("config cli", () => {
         ]),
       ).rejects.toThrow("__exit__:1");
 
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("Dry run failed: 1 SecretRef assignment(s) could not be resolved."),
-      );
+      expectErrorIncludes("Dry run failed: 1 SecretRef assignment(s) could not be resolved.");
     });
 
     it("emits structured JSON for --dry-run --json success", async () => {
@@ -1972,10 +2071,10 @@ describe("config cli", () => {
         errors?: Array<{ kind: string; message: string; ref?: string }>;
       };
       expect(payload.ok).toBe(false);
-      expect(payload.errors?.some((entry) => entry.kind === "resolvability")).toBe(true);
-      expect(
-        payload.errors?.some((entry) => entry.ref?.includes("default:DISCORD_BOT_TOKEN")),
-      ).toBe(true);
+      const errorKinds = (payload.errors ?? []).map((entry) => entry.kind);
+      expect(errorKinds).toContain("resolvability");
+      const errorRefs = (payload.errors ?? []).map((entry) => entry.ref ?? "");
+      expect(errorRefs).toContain("env:default:DISCORD_BOT_TOKEN");
     });
 
     it("keeps distinct resolvability failures when messages are identical but refs differ", async () => {
@@ -2048,11 +2147,11 @@ describe("config cli", () => {
         errors?: Array<{ kind: string; message: string; ref?: string }>;
       };
       expect(payload.ok).toBe(false);
-      expect(payload.errors?.some((entry) => entry.kind === "schema")).toBe(true);
-      expect(payload.errors?.some((entry) => entry.kind === "resolvability")).toBe(true);
-      expect(
-        payload.errors?.some((entry) => entry.ref?.includes("default:DISCORD_BOT_TOKEN")),
-      ).toBe(true);
+      const errorKinds = (payload.errors ?? []).map((entry) => entry.kind);
+      expect(errorKinds).toContain("schema");
+      expect(errorKinds).toContain("resolvability");
+      const errorRefs = (payload.errors ?? []).map((entry) => entry.ref ?? "");
+      expect(errorRefs).toContain("env:default:DISCORD_BOT_TOKEN");
     });
 
     it("fails dry-run when provider updates make existing refs unresolvable", async () => {
@@ -2092,10 +2191,8 @@ describe("config cli", () => {
         ]),
       ).rejects.toThrow("__exit__:1");
 
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("Dry run failed: 1 SecretRef assignment(s) could not be resolved."),
-      );
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("provider mismatch"));
+      expectErrorIncludes("Dry run failed: 1 SecretRef assignment(s) could not be resolved.");
+      expectErrorIncludes("provider mismatch");
     });
 
     it("fails dry-run for nested provider edits that make existing refs unresolvable", async () => {
@@ -2135,17 +2232,13 @@ describe("config cli", () => {
         ]),
       ).rejects.toThrow("__exit__:1");
 
-      expect(mockResolveSecretRefValue).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "vaultfile",
-          id: "/providers/search/apiKey",
-        }),
-        expect.any(Object),
-      );
-      expect(mockError).toHaveBeenCalledWith(
-        expect.stringContaining("Dry run failed: 1 SecretRef assignment(s) could not be resolved."),
-      );
-      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("provider mismatch"));
+      const [secretRef, resolveOptions] = requireResolveSecretRefCall(0);
+      const secretRefRecord = requireRecord(secretRef, "existing SecretRef");
+      expect(secretRefRecord.provider).toBe("vaultfile");
+      expect(secretRefRecord.id).toBe("/providers/search/apiKey");
+      expect(resolveOptions).toBeTypeOf("object");
+      expectErrorIncludes("Dry run failed: 1 SecretRef assignment(s) could not be resolved.");
+      expectErrorIncludes("provider mismatch");
     });
   });
 
@@ -2197,14 +2290,14 @@ describe("config cli", () => {
       await runConfigCommand(["config", "unset", "tools.alsoAllow"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.tools).not.toHaveProperty("alsoAllow");
       expect(written.agents).not.toHaveProperty("defaults");
       expect(written.agents?.list).toEqual(resolved.agents?.list);
       expect(written.gateway).toEqual(resolved.gateway);
       expect(written.tools?.profile).toBe("coding");
       expect(written.logging).toEqual(resolved.logging);
-      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toEqual({
+      expect(firstWriteConfigOptions()).toEqual({
         unsetPaths: [["tools", "alsoAllow"]],
       });
     });
@@ -2223,9 +2316,9 @@ describe("config cli", () => {
       await runConfigCommand(["config", "unset", "agents.list[1]"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      const written = firstWrittenConfig();
       expect(written.agents?.list).toEqual([{ id: "agent-a" }, { id: "agent-c" }]);
-      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toBeUndefined();
+      expect(firstWriteConfigOptions()).toBeUndefined();
     });
 
     it("preserves write-level unset handling for numeric object keys", async () => {
@@ -2244,13 +2337,13 @@ describe("config cli", () => {
       await runConfigCommand(["config", "unset", "channels.discord.guilds.123"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0] as {
+      const written = firstWrittenConfig() as {
         channels?: { discord?: { guilds?: Record<string, unknown> } };
       };
       expect(written.channels?.discord?.guilds).toEqual({
         "456": { channels: ["alerts"] },
       });
-      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toEqual({
+      expect(firstWriteConfigOptions()).toEqual({
         unsetPaths: [["channels", "discord", "guilds", "123"]],
       });
     });

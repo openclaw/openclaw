@@ -40,6 +40,20 @@ vi.mock("./app-scroll.ts", () => ({
 }));
 
 import { handleConnected } from "./app-lifecycle.ts";
+import { startNodesPolling } from "./app-polling.ts";
+
+const startNodesPollingMock = vi.mocked(startNodesPolling);
+
+function createDeferred() {
+  let resolve: (() => void) | undefined;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  if (!resolve) {
+    throw new Error("Expected bootstrap deferred resolver to be initialized");
+  }
+  return { promise, resolve };
+}
 
 function createHost() {
   return {
@@ -71,36 +85,29 @@ describe("handleConnected", () => {
     applySettingsFromUrlMock.mockReset();
     connectGatewayMock.mockReset();
     loadBootstrapMock.mockReset();
+    startNodesPollingMock.mockReset();
     vi.stubGlobal("window", {
       addEventListener: vi.fn(),
     });
   });
 
   it("waits for bootstrap load before first gateway connect", async () => {
-    let resolveBootstrap!: () => void;
-    loadBootstrapMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveBootstrap = resolve;
-      }),
-    );
+    const bootstrap = createDeferred();
+    loadBootstrapMock.mockReturnValueOnce(bootstrap.promise);
     connectGatewayMock.mockReset();
     const host = createHost();
 
     handleConnected(host as never);
     expect(connectGatewayMock).not.toHaveBeenCalled();
 
-    resolveBootstrap();
+    bootstrap.resolve();
     await Promise.resolve();
     expect(connectGatewayMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips deferred connect when disconnected before bootstrap resolves", async () => {
-    let resolveBootstrap!: () => void;
-    loadBootstrapMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveBootstrap = resolve;
-      }),
-    );
+    const bootstrap = createDeferred();
+    loadBootstrapMock.mockReturnValueOnce(bootstrap.promise);
     connectGatewayMock.mockReset();
     const host = createHost();
 
@@ -108,7 +115,7 @@ describe("handleConnected", () => {
     expect(connectGatewayMock).not.toHaveBeenCalled();
 
     host.connectGeneration += 1;
-    resolveBootstrap();
+    bootstrap.resolve();
     await Promise.resolve();
 
     expect(connectGatewayMock).not.toHaveBeenCalled();
@@ -125,5 +132,18 @@ describe("handleConnected", () => {
     expect(applySettingsFromUrlMock.mock.invocationCallOrder[0]).toBeLessThan(
       loadBootstrapMock.mock.invocationCallOrder[0],
     );
+  });
+
+  it("starts Nodes polling only when the Nodes tab is active on connect", () => {
+    loadBootstrapMock.mockResolvedValue(undefined);
+    const chatHost = createHost();
+
+    handleConnected(chatHost as never);
+    expect(startNodesPollingMock).not.toHaveBeenCalled();
+
+    const nodesHost = createHost();
+    nodesHost.tab = "nodes";
+    handleConnected(nodesHost as never);
+    expect(startNodesPollingMock).toHaveBeenCalledWith(nodesHost);
   });
 });

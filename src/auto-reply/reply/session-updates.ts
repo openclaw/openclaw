@@ -18,6 +18,10 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  forgetActiveSessionForShutdown,
+  noteActiveSessionForShutdown,
+} from "../../gateway/active-sessions-shutdown-tracker.js";
 import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
 import { logVerbose } from "../../globals.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
@@ -60,6 +64,19 @@ function emitCompactionSessionLifecycleHooks(params: {
   previousEntry: SessionEntry;
   nextEntry: SessionEntry;
 }) {
+  if (params.previousEntry.sessionId) {
+    forgetActiveSessionForShutdown(params.previousEntry.sessionId);
+  }
+  if (params.nextEntry.sessionId && params.storePath) {
+    noteActiveSessionForShutdown({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      sessionId: params.nextEntry.sessionId,
+      storePath: params.storePath,
+      sessionFile: params.nextEntry.sessionFile,
+      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+    });
+  }
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner) {
     return;
@@ -278,6 +295,10 @@ export async function incrementCompactionCount(params: {
         storePath,
         newSessionId,
       });
+    updates.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
+    updates.usageFamilySessionIds = Array.from(
+      new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
+    );
   } else if (sessionFileChanged && explicitNewSessionFile) {
     updates.sessionFile = explicitNewSessionFile;
   }
