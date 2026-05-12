@@ -479,6 +479,10 @@ export type AgentCompactionConfig = {
   reserveTokensFloor?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
   maxHistoryShare?: number;
+  /** Soft context-overflow threshold ratio for Pi tool-loop preemptive checks (0–1 exclusive, default 0.9). */
+  preemptiveOverflowRatio?: number;
+  /** Maximum automatic compaction retries after Pi context-overflow errors (default 3). */
+  maxOverflowAttempts?: number;
   /** Additional compaction-summary instructions that can preserve language or persona continuity. */
   customInstructions?: string;
   /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */

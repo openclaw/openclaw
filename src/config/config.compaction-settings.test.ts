@@ -75,6 +75,16 @@ describe("config compaction settings", () => {
     expect(compaction?.reserveTokensFloor).toBe(9000);
   });
 
+  it("preserves overflow runtime knob values during materialization", () => {
+    const compaction = materializeCompactionConfig({
+      preemptiveOverflowRatio: 0.7,
+      maxOverflowAttempts: 1,
+    });
+
+    expect(compaction?.preemptiveOverflowRatio).toBe(0.7);
+    expect(compaction?.maxOverflowAttempts).toBe(1);
+  });
+
   it("preserves recent turn safeguard values during materialization", () => {
     const compaction = materializeCompactionConfig({
       mode: "safeguard",
