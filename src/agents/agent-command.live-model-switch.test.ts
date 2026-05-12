@@ -873,7 +873,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       thinking: "xhigh",
     });
 
-    expect(state.loadManifestModelCatalogMock).toHaveBeenCalled();
+    expect(state.loadManifestModelCatalogMock).toHaveBeenCalledTimes(1);
     const thinkingArgs = requireRecord(
       mockCallArg(state.isThinkingLevelSupportedMock),
       "thinking args",
@@ -921,7 +921,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       fallbackStepChainPosition: 1,
       fallbackStepFinalOutcome: "next_fallback",
     });
-    expect(state.trajectoryFlushMock).toHaveBeenCalled();
+    expect(state.trajectoryFlushMock).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses duplicate user persistence only after the current turn has flushed", async () => {

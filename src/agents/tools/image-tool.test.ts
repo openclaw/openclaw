@@ -1608,7 +1608,7 @@ describe("image tool data URL support", () => {
     const out = __testing.decodeDataUrl(`data:image/png;base64,${pngB64}`);
     expect(out.kind).toBe("image");
     expect(out.mimeType).toBe("image/png");
-    expect(out.buffer.length).toBeGreaterThan(0);
+    expect(out.buffer).toEqual(Buffer.from(pngB64, "base64"));
   });
 
   it("rejects non-image data URLs", () => {

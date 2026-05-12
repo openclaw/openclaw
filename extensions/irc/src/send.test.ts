@@ -134,18 +134,29 @@ describe("sendMessageIrc cfg threading", () => {
     expect(result.target).toBe("#room");
     expect(result.messageId).toBeTypeOf("string");
     expect(result.messageId.length).toBeGreaterThan(0);
-    expect(result.receipt).toMatchObject({
+    expect(result.receipt.sentAt).toBeTypeOf("number");
+    expect(result.receipt.sentAt).toBeGreaterThan(0);
+    expect({ ...result.receipt, sentAt: 123 }).toEqual({
       primaryPlatformMessageId: "irc-msg-1",
       platformMessageIds: ["irc-msg-1"],
       parts: [
         {
           platformMessageId: "irc-msg-1",
           kind: "text",
+          index: 0,
           raw: {
             channel: "irc",
             conversationId: "#room",
             messageId: "irc-msg-1",
           },
+        },
+      ],
+      sentAt: 123,
+      raw: [
+        {
+          channel: "irc",
+          conversationId: "#room",
+          messageId: "irc-msg-1",
         },
       ],
     });
@@ -216,12 +227,31 @@ describe("sendMessageIrc cfg threading", () => {
     });
 
     expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello\n\n[reply:irc-parent-1]");
-    expect(result.receipt).toMatchObject({
+    expect(result.receipt.sentAt).toBeTypeOf("number");
+    expect(result.receipt.sentAt).toBeGreaterThan(0);
+    expect({ ...result.receipt, sentAt: 123 }).toEqual({
+      primaryPlatformMessageId: "irc-msg-1",
+      platformMessageIds: ["irc-msg-1"],
       replyToId: "irc-parent-1",
       parts: [
         {
           platformMessageId: "irc-msg-1",
+          kind: "text",
+          index: 0,
           replyToId: "irc-parent-1",
+          raw: {
+            channel: "irc",
+            conversationId: "#room",
+            messageId: "irc-msg-1",
+          },
+        },
+      ],
+      sentAt: 123,
+      raw: [
+        {
+          channel: "irc",
+          conversationId: "#room",
+          messageId: "irc-msg-1",
         },
       ],
     });

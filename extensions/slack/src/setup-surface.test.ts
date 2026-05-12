@@ -29,6 +29,14 @@ const baseCfg = {
   },
 } as OpenClawConfig;
 
+function requireFirstStringArg(mock: ReturnType<typeof vi.fn>, label: string): string {
+  const [call] = mock.mock.calls;
+  if (!call || typeof call[0] !== "string") {
+    throw new Error(`expected ${label}`);
+  }
+  return call[0];
+}
+
 describe("slackSetupWizard.finalize", () => {
   it("prompts to enable interactive replies for newly configured Slack accounts", async () => {
     const confirm = vi.fn(async () => true);
@@ -95,15 +103,14 @@ describe("slackSetupWizard.prepare", () => {
       cfg: { channels: { slack: {} } } as OpenClawConfig,
       prompter: createTestWizardPrompter({
         plain,
-        note: note as WizardPrompter["note"],
+        note,
       }),
     });
 
     expect(plain).toHaveBeenCalledTimes(1);
     expect(note).not.toHaveBeenCalled();
-    const manifest = plain.mock.calls[0]?.[0];
-    expect(typeof manifest).toBe("string");
-    expect(JSON.parse(String(manifest))).toEqual({
+    const manifest = requireFirstStringArg(plain, "Slack manifest plain text");
+    expect(JSON.parse(manifest)).toEqual({
       display_information: {
         name: "OpenClaw",
         description: "OpenClaw connector for OpenClaw",
