@@ -122,6 +122,13 @@ export type ArtifactsDownloadResult = {
 
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
 
+export type TaskHealth = {
+  displayStatus: string;
+  stale: boolean;
+  auditCodes: string[];
+  maxAgeMs?: number;
+};
+
 export type TaskSummary = {
   id: string;
   taskId?: string;
@@ -144,6 +151,7 @@ export type TaskSummary = {
   progressSummary?: string;
   terminalSummary?: string;
   error?: string;
+  health?: TaskHealth;
 };
 
 export type TasksListParams = {

@@ -2,6 +2,7 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js";
 import { getTaskById, listTaskRecords } from "../../tasks/runtime-internal.js";
+import { listTaskAuditFindings, type TaskAuditCode } from "../../tasks/task-registry.audit.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import {
   TASK_STATUS_DETAIL_MAX_CHARS,
@@ -59,7 +60,54 @@ function sanitizeOptionalTaskText(
   return sanitized || undefined;
 }
 
-function mapTaskSummary(task: TaskRecord): TaskSummary {
+type TaskHealth = NonNullable<TaskSummary["health"]>;
+
+function buildTaskHealth(tasks: TaskRecord[]): Map<string, TaskHealth> {
+  const healthByTaskId = new Map<string, TaskHealth>();
+  for (const task of tasks) {
+    healthByTaskId.set(task.taskId, {
+      displayStatus: TASK_STATUS_TO_LEDGER_STATUS[task.status],
+      stale: false,
+      auditCodes: [],
+    });
+  }
+  for (const finding of listTaskAuditFindings({ tasks })) {
+    const health = healthByTaskId.get(finding.task.taskId);
+    if (!health) {
+      continue;
+    }
+    health.auditCodes.push(finding.code as TaskAuditCode);
+    if (typeof finding.ageMs === "number") {
+      health.maxAgeMs = Math.max(health.maxAgeMs ?? 0, finding.ageMs);
+    }
+    if (finding.code === "stale_running") {
+      health.displayStatus = "stale-run";
+      health.stale = true;
+    } else if (finding.code === "stale_queued") {
+      health.displayStatus = "stale-q";
+      health.stale = true;
+    }
+  }
+  return healthByTaskId;
+}
+
+function taskHealthFor(
+  healthByTaskId: ReadonlyMap<string, TaskHealth>,
+  task: TaskRecord,
+): TaskHealth {
+  return (
+    healthByTaskId.get(task.taskId) ?? {
+      displayStatus: TASK_STATUS_TO_LEDGER_STATUS[task.status],
+      stale: false,
+      auditCodes: [],
+    }
+  );
+}
+
+function mapTaskSummary(
+  task: TaskRecord,
+  healthByTaskId?: ReadonlyMap<string, TaskHealth>,
+): TaskSummary {
   const progressSummary = sanitizeOptionalTaskText(task.progressSummary);
   const terminalSummary = sanitizeOptionalTaskText(task.terminalSummary, { errorContext: true });
   const error = sanitizeOptionalTaskText(task.error, { errorContext: true });
@@ -85,6 +133,7 @@ function mapTaskSummary(task: TaskRecord): TaskSummary {
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),
+    health: taskHealthFor(healthByTaskId ?? new Map(), task),
   };
 }
 
@@ -161,9 +210,10 @@ export const tasksHandlers: GatewayRequestHandlers = {
       return taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey);
     });
     const page = filtered.slice(cursor, cursor + limit);
+    const healthByTaskId = buildTaskHealth(page);
     const nextOffset = cursor + page.length;
     respond(true, {
-      tasks: page.map((task) => mapTaskSummary(task)),
+      tasks: page.map((task) => mapTaskSummary(task, healthByTaskId)),
       ...(nextOffset < filtered.length ? { nextCursor: String(nextOffset) } : {}),
     });
   },
@@ -189,7 +239,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    respond(true, { task: mapTaskSummary(task) });
+    respond(true, { task: mapTaskSummary(task, buildTaskHealth([task])) });
   },
   "tasks.cancel": async ({ params, respond, context }) => {
     if (!validateTasksCancelParams(params)) {
@@ -214,7 +264,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
       found: result.found,
       cancelled: result.cancelled,
       ...(result.reason ? { reason: result.reason } : {}),
-      ...(result.task ? { task: mapTaskSummary(result.task) } : {}),
+      ...(result.task ? { task: mapTaskSummary(result.task, buildTaskHealth([result.task])) } : {}),
     });
   },
 };

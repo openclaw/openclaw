@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTaskRecord,
   markTaskTerminalById,
@@ -28,6 +28,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   resetTaskRegistryForTests();
   if (ORIGINAL_STATE_DIR === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -105,6 +106,42 @@ describe("tasks gateway handlers", () => {
     expect(listedTask?.sessionKey).toBe("agent:main:main");
     expect(listedTask?.childSessionKey).toBe("agent:worker:subagent:child");
     expect(listedTask?.runId).toBe("run-running");
+  });
+
+  it("exposes task health for stale running tasks", async () => {
+    const now = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(now - 40 * 60_000);
+    const task = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      runId: "run-stale",
+      task: "Old worker",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    vi.setSystemTime(now);
+
+    const { calls, respond } = captureRespond();
+    await tasksHandlers["tasks.list"]({
+      req: { type: "req", id: "req-health", method: "tasks.list" },
+      params: { status: "running" },
+      respond,
+      context: createContext(),
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(calls[0]?.[0]).toBe(true);
+    const payload = calls[0]?.[1] as TaskResponsePayload | undefined;
+    expect(payload?.tasks?.[0]?.id).toBe(task.taskId);
+    expect(payload?.tasks?.[0]?.health).toMatchObject({
+      displayStatus: "stale-run",
+      stale: true,
+      auditCodes: ["stale_running"],
+    });
   });
 
   it("gets completed tasks with stable completed status", async () => {
