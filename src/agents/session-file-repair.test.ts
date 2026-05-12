@@ -49,6 +49,7 @@ function requireFirstLogMessage(log: ReturnType<typeof vi.fn>): string {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -91,6 +92,25 @@ describe("repairSessionFileIfNeeded", () => {
       expect(result.droppedLines).toBe(1);
       await expectNoRetainedBackup(file, result);
     }
+  });
+
+  it("reports retained backup path when successful repair backup cleanup fails", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const content = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n{"type":"message"`;
+    await fs.writeFile(file, content, "utf-8");
+    vi.spyOn(fs, "unlink").mockRejectedValueOnce(new Error("simulated cleanup failure"));
+
+    const debug = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
+
+    expect(result.repaired).toBe(true);
+    expect(result.backupPath).toMatch(/session\.jsonl\.bak-/);
+    expect(debug.mock.calls.some(([message]) => String(message).includes("cleanup failed"))).toBe(
+      true,
+    );
+    const siblings = await fs.readdir(path.dirname(file));
+    expect(siblings.filter((name) => name.includes(".bak-"))).toHaveLength(1);
   });
 
   it("does not drop CRLF-terminated JSONL lines", async () => {
