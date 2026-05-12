@@ -19,7 +19,6 @@ RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/
     jq \
     novnc \
     python3 \
-    socat \
     websockify \
     x11vnc \
     xvfb
