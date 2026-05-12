@@ -144,7 +144,9 @@ function resolveShellPositionalCarrierPlan(command: string): ShellPositionalCarr
     if (positional.kind === "all") {
       return { kind: "all" };
     }
-    indexes.push(positional.index);
+    if (positional.kind === "index") {
+      indexes.push(positional.index);
+    }
   }
   return { kind: "indexes", indexes };
 }
