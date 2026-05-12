@@ -77,6 +77,7 @@ DATABASE_URL="$tmp_db" pnpm dlx \
   --package better-sqlite3 \
   kysely-codegen \
   --dialect sqlite \
+  --type-mapping '{"blob":"Uint8Array"}' \
   --out-file src/path/to/db.generated.d.ts
 ```
 
@@ -98,6 +99,9 @@ Rules:
   review the diff.
 - Use the same command with `--verify` in CI or a local check when generated
   types are committed.
+- Map SQLite `blob` columns to `Uint8Array` for native `node:sqlite` stores.
+  `node:sqlite` returns BLOB values as `Uint8Array`; wrap them in
+  `Buffer.from(...)` at API boundaries that need `Buffer` helpers.
 - For OpenClaw's native `node:sqlite` runtime, keep codegen as a dev-time tool.
   The codegen command uses `better-sqlite3` only because `kysely-codegen`'s
   SQLite introspector loads that driver. The runtime adapter remains
@@ -129,6 +133,19 @@ Keep helpers composable:
 - Accept a transaction-capable database object when work may run inside a
   transaction.
 - Alias computed selections explicitly.
+- Kysely reference strings such as `"host"`, `"path"`, and
+  `"flow_id as flowId"` are acceptable when they are compile-time literals. They
+  are checked against the `DB` type and usually read better than column constant
+  indirection.
+- Let Kysely carry selected row shapes through builder queries. Avoid passing a
+  broad row generic to a sync execution helper when the builder already knows
+  the result type; use exact boundary types or a mapper instead.
+- Do not call `executeSqliteQuerySync<Row>(db, builder)` or
+  `executeSqliteQueryTakeFirstSync<Row>(db, builder)` for normal builders. The
+  generic can widen or lie about selected columns. Let the builder's
+  `CompiledQuery<Row>` type flow into the sync helper.
+- For finite public query presets, prefer a preset-to-row type map and exported
+  union over a generic `Record<string, ...>` row shape.
 
 ## Raw SQL
 
@@ -147,8 +164,36 @@ Rules:
 - Interpolate values through `${value}` so the driver receives parameters.
 - Use identifier helpers only for validated, closed-set identifiers. Prefer
   normal builder methods when the table or column is known at compile time.
+- Do not pass unconstrained runtime `string` values as table, column, `groupBy`,
+  `orderBy`, `sql.ref`, or `sql.table` identifiers. Narrow them to a local union
+  or a `keyof` generated table type first.
 - Raw snippets are fine for SQLite pragmas, virtual tables, FTS, JSON functions,
   and migrations, but wrap repeated raw expressions in typed helpers.
+- Direct `node:sqlite` runtime access needs an owner reason in
+  `scripts/check-kysely-guardrails.mjs`. Prefer small boundary helpers such as
+  `assertSqliteIntegrityOk(db, message)` over repeated `db.prepare(...)` casts.
+- Prefer `eb.fn.countAll`, `eb.fn.count`, `eb.fn.max`, `eb.fn.coalesce`,
+  `eb.lit`, expression callbacks, and `eb.ref` substitutions before raw SQL for
+  scalar expressions and constant selections.
+- Run `pnpm lint:kysely` after touching Kysely-backed stores. It rejects raw
+  identifier helpers, unreviewed typed raw SQL, `db.dynamic`, sync-helper row
+  generics at builder call sites, persisted string casts in SQLite stores, and
+  new direct `node:sqlite` runtime access outside explicit owner allowlists.
+
+## Helper Extraction
+
+Extract helpers when they protect a boundary or carry a reusable typed concept:
+
+- closed-set PRAGMA readers for tests, for example
+  `readSqliteNumberPragma(db, "busy_timeout")`
+- raw SQLite expression helpers that take Kysely expressions or `eb.ref(...)`
+  values, not loose column strings
+- public preset-to-row maps for finite query APIs
+- JSON/BLOB/timestamp mappers at store boundaries
+- direct SQLite boundary helpers for repeated PRAGMA or maintenance checks
+
+Avoid helpers that hide a single clear builder chain, replace every checked
+literal with a constant, or accept generic table/column/order strings.
 
 ## Transactions
 
@@ -197,14 +242,15 @@ Adapter rules:
 
 - Reuse Kysely's SQLite pieces: `SqliteAdapter`, `SqliteQueryCompiler`, and
   `SqliteIntrospector`.
-- Keep the Node floor high enough for the `node:sqlite` APIs we call. The
-  adapter relies on `StatementSync.columns()`, available in Node 22.16+ and
-  Node 24+.
+- Keep the Node floor high enough for the `node:sqlite` APIs we call. OpenClaw's
+  database-first runtime requires Node 24+.
 - Use `stmt.columns().length > 0` to distinguish row-returning statements from
   mutations. This is more robust than parsing SQL verbs because `RETURNING`,
   pragmas, CTEs, and raw SQL make verb heuristics brittle.
 - Execute row-returning statements with `all()` or `iterate()`, and mutations
   with `run()`.
+- Preserve the row type from `CompiledQuery<Row>` in sync execution helpers so
+  native stores keep Kysely's inferred result shape after compilation.
 - Do not blindly map `lastInsertRowid` to Kysely `insertId`. In `node:sqlite`,
   that value is connection-scoped and can be stale for updates or ignored
   inserts. Only return `insertId` for insert statements that changed rows.
@@ -232,6 +278,9 @@ a real in-memory SQLite database when feasible.
 Minimum coverage for the native adapter:
 
 - builder `select`
+- sync helper type inference for aliases, aggregates, and driver-specific values
+- negative type assertions for important column/preset mistakes using
+  `@ts-expect-error`
 - raw row-returning SQL
 - non-returning insert metadata
 - `INSERT ... RETURNING`
@@ -243,6 +292,57 @@ Minimum coverage for the native adapter:
 
 For store-level tests, assert behavior through public store methods first and
 query internals only when the storage invariant itself is the contract.
+
+## Persisted Strings
+
+Do not cast persisted text columns directly into exported unions:
+
+```ts
+// Bad: a corrupt row now has a typed but invalid status.
+status: row.status as TaskStatus;
+```
+
+Use a closed parser at the storage boundary:
+
+```ts
+const TASK_STATUSES = new Set<TaskStatus>(["queued", "running", "succeeded"]);
+
+export function parseTaskStatus(value: unknown): TaskStatus {
+  if (typeof value === "string" && TASK_STATUSES.has(value as TaskStatus)) {
+    return value as TaskStatus;
+  }
+  throw new Error(`Invalid persisted task status: ${JSON.stringify(value)}`);
+}
+```
+
+Rules:
+
+- Generated DB row types may say `string` for enum-like SQLite columns. That is
+  correct; SQLite does not enforce TypeScript unions.
+- Parse runtime/preset/status/kind/direction/mode columns into closed unions at
+  the module boundary.
+- Keep selected row types honest. If a persisted column can be corrupt on disk,
+  keep the row field as `string` and let `rowToRecord`/`rowToEntry` parse it.
+- Throw on corrupt values instead of silently widening to a default unless the
+  store owns a documented legacy fallback.
+- Keep compatibility rewrites in migrations or doctor/fix paths when the shape
+  has shipped. If it has not shipped, clean the schema/code and skip migrations.
+- Add at least one corruption-path test for public store behavior when a new
+  parser protects persisted data.
+
+## Benchmark Before Caching
+
+Kysely builder construction and compilation are usually small next to SQLite IO.
+Before adding statement/query caches:
+
+- benchmark the hot path with a real `DatabaseSync` and representative rows
+- compare builder+compile+execute against any proposed prepared/compiled reuse
+- include JSON/BLOB parsing if that is part of the public store method
+- keep caches local to a measured bottleneck, with invalidation/close behavior
+  tested
+
+Prefer clearer Kysely builders until measurement proves prepare/compile overhead
+is material.
 
 ## Upstream References
 

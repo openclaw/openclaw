@@ -52,7 +52,7 @@ export interface MemoryEmbeddingCache {
 }
 
 export interface MemoryIndexChunks {
-  embedding: Uint8Array | null;
+  embedding: Uint8Array;
   embedding_dims: number | null;
   end_line: number;
   hash: string;

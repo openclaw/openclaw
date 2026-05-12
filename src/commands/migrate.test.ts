@@ -186,7 +186,7 @@ function codexPluginPlan(overrides: Partial<MigrationPlan> = {}): MigrationPlan 
           config: {
             codexPlugins: {
               enabled: true,
-              allow_destructive_actions: true,
+              allow_destructive_actions: false,
               plugins: {
                 "google-calendar": {
                   enabled: true,

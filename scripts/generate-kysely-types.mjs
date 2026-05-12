@@ -21,16 +21,10 @@ const SCHEMAS = [
     schemaOutFile: "src/state/openclaw-agent-schema.generated.ts",
     schemaExport: "OPENCLAW_AGENT_SCHEMA_SQL",
   },
-  {
-    name: "proxy-capture",
-    schema: "src/proxy-capture/schema.sql",
-    outFile: "src/proxy-capture/db.generated.d.ts",
-    schemaOutFile: "src/proxy-capture/schema.generated.ts",
-    schemaExport: "PROXY_CAPTURE_SCHEMA_SQL",
-  },
 ];
 
 const verify = process.argv.includes("--verify") || process.argv.includes("--check");
+let codegenTempDir;
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -38,6 +32,7 @@ function run(command, args, options = {}) {
     input: options.input,
     encoding: "utf8",
     env: { ...process.env, ...options.env },
+    cwd: options.cwd,
   });
   if (result.error) {
     throw result.error;
@@ -45,6 +40,18 @@ function run(command, args, options = {}) {
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }
+}
+
+function resolveCodegenBin() {
+  if (!codegenTempDir) {
+    codegenTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-kysely-codegen-"));
+    run(
+      "pnpm",
+      ["add", "--allow-build=better-sqlite3", "kysely-codegen", "typescript", "better-sqlite3"],
+      { cwd: codegenTempDir },
+    );
+  }
+  return path.join(codegenTempDir, "node_modules", ".bin", "kysely-codegen");
 }
 
 function readUtf8(file) {
@@ -75,18 +82,12 @@ function generate(schema) {
   try {
     run("sqlite3", [tmpDb], { input: readUtf8(schema.schema) });
     run(
-      "pnpm",
+      resolveCodegenBin(),
       [
-        "dlx",
-        "--package",
-        "kysely-codegen",
-        "--package",
-        "typescript",
-        "--package",
-        "better-sqlite3",
-        "kysely-codegen",
         "--dialect",
         "sqlite",
+        "--type-mapping",
+        '{"BLOB":"Uint8Array","blob":"Uint8Array"}',
         "--out-file",
         tmpOut,
       ],
@@ -108,6 +109,12 @@ function generate(schema) {
   }
 }
 
-for (const schema of SCHEMAS) {
-  generate(schema);
+try {
+  for (const schema of SCHEMAS) {
+    generate(schema);
+  }
+} finally {
+  if (codegenTempDir) {
+    fs.rmSync(codegenTempDir, { recursive: true, force: true });
+  }
 }
