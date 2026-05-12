@@ -384,6 +384,65 @@ describe("deviceHandlers", () => {
     );
   });
 
+  it("allows pairing-scoped device sessions to manage their own operator token", async () => {
+    rotateDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: {
+        token: "rotated-token",
+        role: "operator",
+        scopes: ["operator.pairing"],
+        createdAtMs: 456,
+        rotatedAtMs: 789,
+      },
+    });
+    revokeDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: { role: "operator", revokedAtMs: 987 },
+    });
+
+    const rotateOpts = createOptions(
+      "device.token.rotate",
+      { deviceId: "device-1", role: "operator", scopes: ["operator.pairing"] },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+    const revokeOpts = createOptions(
+      "device.token.revoke",
+      { deviceId: "device-1", role: "operator" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+
+    await deviceHandlers["device.token.rotate"](rotateOpts);
+    await deviceHandlers["device.token.revoke"](revokeOpts);
+
+    expect(rotateDeviceTokenMock).toHaveBeenCalledWith({
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.pairing"],
+      callerScopes: ["operator.pairing"],
+    });
+    expect(revokeDeviceTokenMock).toHaveBeenCalledWith({
+      deviceId: "device-1",
+      role: "operator",
+      callerScopes: ["operator.pairing"],
+    });
+    expect(rotateOpts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        deviceId: "device-1",
+        role: "operator",
+        token: "rotated-token",
+        scopes: ["operator.pairing"],
+        rotatedAtMs: 789,
+      },
+      undefined,
+    );
+    expect(revokeOpts.respond).toHaveBeenCalledWith(
+      true,
+      { deviceId: "device-1", role: "operator", revokedAtMs: 987 },
+      undefined,
+    );
+  });
+
   it("omits rotated tokens when an admin rotates another device token", async () => {
     mockPairedOperatorDevice();
     mockRotateOperatorTokenSuccess();
@@ -413,6 +472,26 @@ describe("deviceHandlers", () => {
       },
       undefined,
     );
+  });
+
+  it("rejects rotating a token for a role that was never approved", async () => {
+    rotateDeviceTokenMock.mockResolvedValue({ ok: false, reason: "unknown-device-or-role" });
+    const opts = createOptions(
+      "device.token.rotate",
+      { deviceId: "device-1", role: "node" },
+      { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
+    );
+
+    await deviceHandlers["device.token.rotate"](opts);
+
+    expect(rotateDeviceTokenMock).toHaveBeenCalledWith({
+      deviceId: "device-1",
+      role: "node",
+      scopes: undefined,
+      callerScopes: ["operator.admin"],
+    });
+    expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device token rotation denied");
   });
 
   it("rejects rotating node tokens without admin scope", async () => {

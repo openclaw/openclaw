@@ -132,29 +132,43 @@ function deniesDeviceTokenRoleManagement(
   return normalizedTargetRole !== "operator";
 }
 
-function requestsNonOperatorDeviceRole(pending: {
-  role?: string;
-  roles?: string[];
-  tokens?: Record<string, DeviceAuthToken>;
-}): boolean {
+function hasNonOperatorDeviceRole(input: { role?: string; roles?: string[] }): boolean {
   const roles = new Set<string>();
-  const role = pending.role?.trim();
+  const role = input.role?.trim();
   if (role) {
     roles.add(role);
   }
-  for (const entry of pending.roles ?? []) {
+  for (const entry of input.roles ?? []) {
     const normalized = entry.trim();
     if (normalized) {
       roles.add(normalized);
     }
   }
-  for (const token of Object.values(pending.tokens ?? {})) {
+  return [...roles].some((entry) => entry !== "operator");
+}
+
+function hasNonOperatorDeviceTokenRole(
+  tokens: Record<string, DeviceAuthToken> | undefined,
+): boolean {
+  for (const token of Object.values(tokens ?? {})) {
     const normalized = token.role.trim();
-    if (normalized) {
-      roles.add(normalized);
+    if (normalized && normalized !== "operator") {
+      return true;
     }
   }
-  return [...roles].some((entry) => entry !== "operator");
+  return false;
+}
+
+function requestsNonOperatorDeviceRole(pending: { role?: string; roles?: string[] }): boolean {
+  return hasNonOperatorDeviceRole(pending);
+}
+
+function pairedDeviceHasNonOperatorRole(device: {
+  role?: string;
+  roles?: string[];
+  tokens?: Record<string, DeviceAuthToken>;
+}): boolean {
+  return hasNonOperatorDeviceRole(device) || hasNonOperatorDeviceTokenRole(device.tokens);
 }
 
 export const deviceHandlers: GatewayRequestHandlers = {
@@ -353,7 +367,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     }
     if (authz.callerDeviceId && !authz.isAdminCaller) {
       const paired = await getPairedDevice(authz.normalizedTargetDeviceId);
-      if (paired && requestsNonOperatorDeviceRole(paired)) {
+      if (paired && pairedDeviceHasNonOperatorRole(paired)) {
         context.logGateway.warn(
           `device pairing removal denied device=${deviceId} reason=role-management-requires-admin`,
         );
