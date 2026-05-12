@@ -27,10 +27,16 @@ function redactTranscriptStructuredFieldValue(
   return redactSensitiveFieldValue(key, value, redactTranscriptOptions(cfg));
 }
 
+function isPlainTranscriptObject(value: object): value is Record<string, unknown> {
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
 function redactTranscriptStructuredValue(
   value: unknown,
   cfg?: OpenClawConfig,
   fieldKey?: string,
+  seen: WeakSet<object> = new WeakSet<object>(),
 ): unknown {
   if (typeof value === "string") {
     if (fieldKey) {
@@ -39,31 +45,47 @@ function redactTranscriptStructuredValue(
     return redactTranscriptText(value, cfg);
   }
   if (Array.isArray(value)) {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
     let changed = false;
     const redacted = value.map((item) => {
-      const next = redactTranscriptStructuredValue(item, cfg, fieldKey);
+      const next = redactTranscriptStructuredValue(item, cfg, fieldKey, seen);
       changed ||= next !== item;
       return next;
     });
+    seen.delete(value);
     return changed ? redacted : value;
   }
   if (!value || typeof value !== "object") {
     return value;
   }
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  if (!isPlainTranscriptObject(value)) {
+    return value;
+  }
 
-  const source = value as Record<string, unknown>;
+  seen.add(value);
+  const source = value;
   let next: Record<string, unknown> | null = null;
   for (const [key, item] of Object.entries(source)) {
-    const redacted = redactTranscriptStructuredValue(item, cfg, key);
+    const redacted = redactTranscriptStructuredValue(item, cfg, key, seen);
     if (redacted === item) {
       continue;
     }
     next ??= { ...source };
     next[key] = redacted;
   }
+  seen.delete(value);
   return next ?? value;
 }
 
 export function redactTranscriptMessage(message: AgentMessage, cfg?: OpenClawConfig): AgentMessage {
+  if (cfg?.logging?.redactSensitive === "off") {
+    return message;
+  }
   return redactTranscriptStructuredValue(message, cfg) as AgentMessage;
 }

@@ -225,6 +225,28 @@ describe("redactTranscriptMessage", () => {
     expect(serializedBlock).toContain("visible");
   });
 
+  it("redacts circular structured payloads without throwing", () => {
+    const details: Record<string, unknown> = {
+      apiKey: "plainsecretvalue123",
+    };
+    details.self = details;
+    const msg = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "send_request",
+      content: [{ type: "text", text: "result" }],
+      details,
+      isError: false,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      details: Record<string, unknown>;
+    };
+    expect(result.details.apiKey).toBe("plains…e123");
+    expect(result.details.self).toBe("[Circular]");
+  });
+
   it("redacts structured secret fields in tool-result details", () => {
     const msg = {
       role: "toolResult",
