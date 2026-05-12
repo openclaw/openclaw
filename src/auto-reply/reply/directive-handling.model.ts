@@ -74,9 +74,15 @@ async function resolveStatusAuthLabel(params: {
     config: params.cfg,
     agentId: params.activeAgentId,
   });
+  // Display-only: keep `isOpenAICodexProvider` strict so selectAgentHarness's
+  // support/priority probing keeps treating bare `codex` as a normal provider,
+  // but route this auth label through the codex runtime so an existing
+  // openai-codex profile shows up instead of `auth: missing`.
+  const statusHarnessRuntime =
+    harnessPolicy.runtime === "auto" && provider === "codex" ? "codex" : harnessPolicy.runtime;
   const harnessRuntime = resolveStatusHarnessRuntime({
     sessionEntry: params.sessionEntry,
-    defaultRuntime: harnessPolicy.runtime,
+    defaultRuntime: statusHarnessRuntime,
   });
   const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
     provider,

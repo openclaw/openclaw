@@ -640,6 +640,47 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("openai-codex:patrick@example.test=OAuth");
   });
 
+  it("reports Codex runtime auth for bare codex status rows (#79131)", async () => {
+    setAuthProfiles({
+      "openai-codex:patrick@example.test": {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "access-token",
+        refresh: "refresh-token",
+        expires: Date.now() + 60_000,
+      },
+    });
+
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model status"),
+      provider: "openai",
+      model: "gpt-5.5",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      cfg: {
+        commands: { text: true },
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex" },
+            model: { primary: "openai/gpt-5.5" },
+            models: {
+              "codex/gpt-5.5": {},
+              "openai/gpt-5.5": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      allowedModelCatalog: [
+        { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
+        { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+      ],
+    });
+
+    expect(reply?.text).toContain("[codex] endpoint: default auth:");
+    expect(reply?.text).not.toContain("[codex] endpoint: default auth: missing");
+    expect(reply?.text).toContain("via codex runtime / openai-codex");
+  });
+
   it("keeps direct provider auth labels when OpenAI API key auth exists", async () => {
     setAuthProfiles({
       "openai:api-key": {
