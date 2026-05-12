@@ -157,6 +157,20 @@ function expectOAuthProfile(
   return profile;
 }
 
+async function writeCodexCliAuthFile(codexHome: string): Promise<void> {
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(
+    path.join(codexHome, "auth.json"),
+    `${JSON.stringify({
+      tokens: {
+        access_token: "cli-access-token",
+        refresh_token: "cli-refresh-token",
+        account_id: "account-cli",
+      },
+    })}\n`,
+  );
+}
+
 describe("bridgeCodexAppServerStartOptions", () => {
   it("sets agent-owned CODEX_HOME and HOME for local app-server launches", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));

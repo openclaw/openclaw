@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -38,6 +38,27 @@ function writeRawCodexAppServerBinding(key: string, value: unknown): void {
   }).register(key, value);
 }
 
+function readRawCodexAppServerBinding(key: string): unknown {
+  return createPluginStateSyncKeyedStore<unknown>(CODEX_APP_SERVER_BINDING_PLUGIN_ID, {
+    namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+    maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+  }).lookup(key);
+}
+
+async function writeCodexCliAuthFile(codexHome: string): Promise<void> {
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(
+    path.join(codexHome, "auth.json"),
+    `${JSON.stringify({
+      tokens: {
+        access_token: "cli-access-token",
+        refresh_token: "cli-refresh-token",
+        account_id: "account-cli",
+      },
+    })}\n`,
+  );
+}
+
 describe("codex app-server session binding", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-"));
@@ -46,6 +67,7 @@ describe("codex app-server session binding", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -262,14 +284,14 @@ describe("codex app-server session binding", () => {
   });
 
   it("normalizes Codex CLI OAuth bindings even without a local auth profile slot", async () => {
-    const sessionFile = path.join(tempDir, "session.json");
+    const sessionId = "session";
     const codexHome = path.join(tempDir, "codex-cli");
     const agentDir = path.join(tempDir, "agent");
     vi.stubEnv("CODEX_HOME", codexHome);
     await writeCodexCliAuthFile(codexHome);
 
     await writeCodexAppServerBinding(
-      sessionFile,
+      sessionId,
       {
         threadId: "thread-123",
         cwd: tempDir,
@@ -280,10 +302,10 @@ describe("codex app-server session binding", () => {
       { agentDir },
     );
 
-    const raw = await fs.readFile(resolveCodexAppServerBindingPath(sessionFile), "utf8");
-    const binding = await readCodexAppServerBinding(sessionFile, { agentDir });
+    const raw = readRawCodexAppServerBinding(sessionId) as { modelProvider?: unknown };
+    const binding = await readCodexAppServerBinding(sessionId, { agentDir });
 
-    expect(raw).not.toContain('"modelProvider": "openai"');
+    expect(raw.modelProvider).toBeUndefined();
     expect(binding?.authProfileId).toBe("openai-codex:default");
     expect(binding?.modelProvider).toBeUndefined();
   });
