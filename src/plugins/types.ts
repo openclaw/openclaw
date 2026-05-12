@@ -2010,7 +2010,23 @@ export type PluginCommandContext = {
 /**
  * Result returned by a plugin command handler.
  */
-export type PluginCommandResult = ReplyPayload & { continueAgent?: boolean };
+export type PluginCommandResult = ReplyPayload & {
+  /** When true, allows the agent session to continue processing after the command */
+  continueAgent?: boolean;
+  /**
+   * When true, the channel adapter should not send a fallback reply.
+   * Use this when the plugin command handler delivers its own response
+   * directly via the channel API (e.g. Telegram Bot API with custom
+   * retry logic or transport guarantees) instead of returning a payload
+   * for OpenClaw to deliver.
+   */
+  suppressReply?: boolean;
+};
+
+export type PluginCommandSuppressReply = {
+  /** When true, the channel adapter should not send a fallback reply for this command */
+  suppressReply: true;
+};
 
 /**
  * Handler function for plugin commands.
