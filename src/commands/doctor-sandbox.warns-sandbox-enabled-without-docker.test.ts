@@ -163,7 +163,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
       [
         "Legacy sandbox registry files detected.",
         "- containers: /tmp/openclaw/sandbox/containers.json (2 entries)",
-        "Run openclaw doctor --fix to migrate them to sharded registry files.",
+        "Run openclaw doctor --fix to migrate them into SQLite.",
       ].join("\n"),
       "Sandbox",
     );
@@ -197,7 +197,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
 
     expect(migrateLegacySandboxRegistryFiles).toHaveBeenCalledTimes(1);
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Migrated 2 containers registry entries"),
+      "- Migrated 2 containers registry entries from /tmp/openclaw/sandbox/containers.json into SQLite.",
       "Doctor changes",
     );
   });
