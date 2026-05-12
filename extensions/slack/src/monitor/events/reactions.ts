@@ -46,6 +46,12 @@ export function registerSlackReactionEvents(params: {
       if (!item || item.type !== "message") {
         return;
       }
+      if (ctx.reactionMode === "off") {
+        return;
+      }
+      if (ctx.reactionMode === "own" && (!ctx.botUserId || event.item_user !== ctx.botUserId)) {
+        return;
+      }
       trackEvent?.();
 
       const ingressContext = await authorizeAndResolveSlackSystemEventContext({

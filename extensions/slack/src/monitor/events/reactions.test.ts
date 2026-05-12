@@ -176,6 +176,18 @@ describe("registerSlackReactionEvents", () => {
       expectedCalls: 0,
     },
     {
+      name: "blocks allowlist-mode reactions when the reaction allowlist is empty",
+      input: {
+        overrides: {
+          dmPolicy: "open",
+          reactionMode: "allowlist",
+          reactionAllowlist: [],
+        },
+        event: buildReactionEvent({ user: "U1" }),
+      },
+      expectedCalls: 0,
+    },
+    {
       name: "allows reactions from senders inside the reaction allowlist",
       input: {
         overrides: {
@@ -210,6 +222,55 @@ describe("registerSlackReactionEvents", () => {
     await executeReactionCase({ trackEvent });
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops off-mode reactions before resolving Slack context", async () => {
+    reactionQueueMock.mockClear();
+    const harness = createSlackSystemEventTestHarness({ reactionMode: "off" });
+    const resolveChannelName = vi.fn(harness.ctx.resolveChannelName);
+    const resolveUserName = vi.fn(harness.ctx.resolveUserName);
+    harness.ctx.resolveChannelName = resolveChannelName;
+    harness.ctx.resolveUserName = resolveUserName;
+    registerSlackReactionEvents({ ctx: harness.ctx });
+    const handler = requireReactionHandler(
+      harness.getHandler("reaction_added") as ReactionHandler | null,
+      "added",
+    );
+
+    await handler({
+      event: buildReactionEvent({ user: "U777", channel: "D123" }),
+      body: {},
+    });
+
+    expect(resolveChannelName).not.toHaveBeenCalled();
+    expect(resolveUserName).not.toHaveBeenCalled();
+    expect(reactionQueueMock).not.toHaveBeenCalled();
+  });
+
+  it("drops own-mode reactions on non-bot messages before resolving Slack context", async () => {
+    reactionQueueMock.mockClear();
+    const harness = createSlackSystemEventTestHarness({ reactionMode: "own" });
+    const resolveChannelName = vi.fn(harness.ctx.resolveChannelName);
+    const resolveUserName = vi.fn(harness.ctx.resolveUserName);
+    harness.ctx.resolveChannelName = resolveChannelName;
+    harness.ctx.resolveUserName = resolveUserName;
+    registerSlackReactionEvents({ ctx: harness.ctx });
+    const handler = requireReactionHandler(
+      harness.getHandler("reaction_added") as ReactionHandler | null,
+      "added",
+    );
+
+    await handler({
+      event: {
+        ...buildReactionEvent({ user: "U777", channel: "D123" }),
+        item_user: "U_OTHER",
+      },
+      body: {},
+    });
+
+    expect(resolveChannelName).not.toHaveBeenCalled();
+    expect(resolveUserName).not.toHaveBeenCalled();
+    expect(reactionQueueMock).not.toHaveBeenCalled();
   });
 
   it("passes sender context when resolving reaction session keys", async () => {
