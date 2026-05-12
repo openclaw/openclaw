@@ -1654,6 +1654,104 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
+  it("sends a single long-turn progress ack for slow Telegram forum turns", async () => {
+    setNoAbort();
+    const previousAckMs = process.env.OPENCLAW_LONG_TURN_PROGRESS_ACK_MS;
+    process.env.OPENCLAW_LONG_TURN_PROGRESS_ACK_MS = "5";
+    try {
+      const cfg = {
+        ...emptyConfig,
+        messages: automaticGroupReplyConfig.messages,
+      } satisfies OpenClawConfig;
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+        IsForum: true,
+        MessageThreadId: 99,
+        To: "telegram:-1001",
+      });
+      let resolverStarted = false;
+      let finishResolver: (() => void) | undefined;
+      const replyResolver = async () => {
+        resolverStarted = true;
+        await new Promise<void>((resolve) => {
+          finishResolver = resolve;
+        });
+        return { text: "done" } satisfies ReplyPayload;
+      };
+
+      const pending = dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(resolverStarted).toBe(true);
+
+      expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+      expect(dispatcher.sendToolResult).toHaveBeenCalledWith({
+        text: "Still working — I’ll update here.",
+      });
+
+      finishResolver?.();
+      await pending;
+
+      expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+    } finally {
+      if (previousAckMs === undefined) {
+        delete process.env.OPENCLAW_LONG_TURN_PROGRESS_ACK_MS;
+      } else {
+        process.env.OPENCLAW_LONG_TURN_PROGRESS_ACK_MS = previousAckMs;
+      }
+    }
+  });
+
+  it("does not send long-turn progress acks when the rollback env disables them", async () => {
+    setNoAbort();
+    const previousAckMs = process.env.OPENCLAW_LONG_TURN_PROGRESS_ACK_MS;
+    process.env.OPENCLAW_LONG_TURN_PROGRESS_ACK_MS = "0";
+    try {
+      const cfg = {
+        ...emptyConfig,
+        messages: automaticGroupReplyConfig.messages,
+      } satisfies OpenClawConfig;
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+        IsForum: true,
+        MessageThreadId: 99,
+        To: "telegram:-1001",
+      });
+      let resolverStarted = false;
+      let finishResolver: (() => void) | undefined;
+      const replyResolver = async () => {
+        resolverStarted = true;
+        await new Promise<void>((resolve) => {
+          finishResolver = resolve;
+        });
+        return { text: "done" } satisfies ReplyPayload;
+      };
+
+      const pending = dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(resolverStarted).toBe(true);
+      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+
+      finishResolver?.();
+      await pending;
+
+      expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+    } finally {
+      if (previousAckMs === undefined) {
+        delete process.env.OPENCLAW_LONG_TURN_PROGRESS_ACK_MS;
+      } else {
+        process.env.OPENCLAW_LONG_TURN_PROGRESS_ACK_MS = previousAckMs;
+      }
+    }
+  });
+
   it("renders concise patch summaries when verbose is enabled", async () => {
     setNoAbort();
     const cfg = {

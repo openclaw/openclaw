@@ -176,6 +176,26 @@ function formatAgentTaskCountsLine(agentId: string): string | undefined {
   return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
 }
 
+function formatReplyTurnStatusLine(sessionEntry?: SessionEntry): string | undefined {
+  if (!sessionEntry?.replyTurnState || sessionEntry.replyTurnState === "completed") {
+    return undefined;
+  }
+  const updatedAt = sessionEntry.replyTurnUpdatedAt ?? sessionEntry.replyTurnStartedAt;
+  const age = typeof updatedAt === "number" ? formatDurationCompact(Date.now() - updatedAt) : null;
+  const stale =
+    sessionEntry.replyTurnState === "running" && typeof updatedAt === "number"
+      ? Date.now() - updatedAt > 2 * 60 * 1000
+      : false;
+  const parts = [`🧵 Turn: ${sessionEntry.replyTurnState}${stale ? " (stale)" : ""}`];
+  if (age) {
+    parts.push(`updated ${age} ago`);
+  }
+  if (sessionEntry.replyTurnLastError) {
+    parts.push(sessionEntry.replyTurnLastError);
+  }
+  return parts.join(" · ");
+}
+
 function formatStatusUptimeDuration(ms: number): string {
   return formatDurationCompact(ms, { spaced: true }) ?? "0s";
 }
@@ -352,6 +372,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       pendingDescendantsForRun: (entry) => countPendingDescendantRuns(entry.childSessionKey),
     });
   }
+  const replyTurnLine = formatReplyTurnStatusLine(sessionEntry);
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
@@ -423,7 +444,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       showDetails: queueOverrides,
     },
     subagentsLine,
-    taskLine,
+    taskLine: [taskLine, replyTurnLine].filter(Boolean).join("\n") || undefined,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: params.includeTranscriptUsage ?? true,
   });
