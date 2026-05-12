@@ -741,7 +741,7 @@ export async function resolveIMessageInboundDecision(params: {
       ? true
       : replyContext?.sender
         ? isAllowedIMessageReplyContextSender({
-            allowFrom: effectiveGroupAllowFrom,
+            allowFrom: params.groupAllowFrom,
             sender: replyContext.sender,
             chatId,
             chatGuid,
