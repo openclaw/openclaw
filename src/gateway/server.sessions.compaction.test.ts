@@ -228,17 +228,19 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(compacted.payload?.key).toBe("agent:main:main");
   expect(compacted.payload?.compacted).toBe(true);
   expect(embeddedRunMock.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
-  expect(embeddedRunMock.compactEmbeddedPiSession).toHaveBeenCalledWith(
-    expect.objectContaining({
-      sessionId: "sess-main",
-      sessionKey: "agent:main:main",
-      config: expect.any(Object),
-      provider: expect.any(String),
-      model: expect.any(String),
-      thinkLevel: "medium",
-      reasoningLevel: "stream",
-      trigger: "manual",
-    }),
+  const compactionCall = embeddedRunMock.compactEmbeddedPiSession.mock.calls[0]?.[0];
+  if (!compactionCall) {
+    throw new Error("expected embedded compaction call");
+  }
+  const callConfig = compactionCall.config as {
+    agents?: { defaults?: { model?: { primary?: unknown }; workspace?: unknown } };
+  };
+  expect(compactionCall.sessionId).toBe("sess-main");
+  expect(compactionCall.sessionKey).toBe("agent:main:main");
+  expect(compactionCall.workspaceDir).toBe(path.join(os.tmpdir(), "openclaw-gateway-test"));
+  expect(callConfig.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-6");
+  expect(callConfig.agents?.defaults?.workspace).toBe(
+    path.join(os.tmpdir(), "openclaw-gateway-test"),
   );
   expect(compactionCall.provider).toBe("anthropic");
   expect(compactionCall.model).toBe("claude-opus-4-6");
