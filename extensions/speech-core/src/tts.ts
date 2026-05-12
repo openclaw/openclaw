@@ -1111,18 +1111,15 @@ export async function textToSpeech(params: {
   agentId?: string;
   accountId?: string;
 }): Promise<TtsResult> {
-    const result = await synthesizeSpeech(params);
-    if (!result.success || !result.audioBuffer || !result.fileExtension) {
-      return {
-        success: false,
-        error: result.error ?? "TTS conversion failed",
-        persona: result.persona,
-        attemptedProviders: result.attemptedProviders,
-        attempts: result.attempts,
-      };
-    }
-    return result;
-
+  const synthesis = await synthesizeSpeech(params);
+  if (!synthesis.success || !synthesis.audioBuffer || !synthesis.fileExtension) {
+    return {
+      success: false,
+      error: synthesis.error ?? "TTS conversion failed",
+      persona: synthesis.persona,
+      attemptedProviders: synthesis.attemptedProviders,
+      attempts: synthesis.attempts,
+    };
   }
 
   let audioBuffer = synthesis.audioBuffer;
@@ -1167,6 +1164,7 @@ export async function textToSpeech(params: {
       outputFormat,
     }),
     target: synthesis.target,
+    wordTimestamps: synthesis.wordTimestamps,
   };
 }
 
