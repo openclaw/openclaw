@@ -1,0 +1,90 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveMcpTransport } from "./mcp-transport.js";
+
+type StreamableTransportOptions = {
+  requestInit?: RequestInit;
+  fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+};
+
+const { runtimeFetchMock, streamableTransportConstructorMock } = vi.hoisted(() => ({
+  runtimeFetchMock: vi.fn(),
+  streamableTransportConstructorMock: vi.fn(),
+}));
+
+vi.mock("../infra/net/undici-runtime.js", () => ({
+  loadUndiciRuntimeDeps: () => ({
+    fetch: runtimeFetchMock,
+  }),
+}));
+
+vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+  StreamableHTTPClientTransport: class MockStreamableHTTPClientTransport {
+    constructor(url: URL, options?: StreamableTransportOptions) {
+      streamableTransportConstructorMock(url, options);
+    }
+  },
+}));
+
+function redirectResponse(location: string): Response {
+  return new Response(null, {
+    status: 302,
+    headers: { location },
+  });
+}
+
+function latestStreamableTransportOptions(): StreamableTransportOptions {
+  const options = streamableTransportConstructorMock.mock.calls.at(-1)?.[1];
+  if (!options || typeof options !== "object") {
+    throw new Error("Expected streamable HTTP transport options");
+  }
+  return options as StreamableTransportOptions;
+}
+
+describe("resolveMcpTransport", () => {
+  beforeEach(() => {
+    runtimeFetchMock.mockReset();
+    streamableTransportConstructorMock.mockClear();
+  });
+
+  it("scrubs custom headers when streamable HTTP follows a cross-origin redirect", async () => {
+    runtimeFetchMock
+      .mockResolvedValueOnce(redirectResponse("https://redirect.example/next"))
+      .mockResolvedValueOnce(new Response("ok"));
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+      headers: {
+        "X-Api-Key": "secret",
+      },
+    });
+
+    const options = latestStreamableTransportOptions();
+    expect(options.requestInit).toEqual({
+      headers: {
+        "X-Api-Key": "secret",
+      },
+    });
+    expect(options.fetch).toBeTypeOf("function");
+
+    await options.fetch?.("https://mcp.example.com/mcp", {
+      method: "GET",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "user-agent": "node",
+        "x-api-key": "secret",
+      },
+    });
+
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
+    expect(runtimeFetchMock.mock.calls[0]?.[0]).toBe("https://mcp.example.com/mcp");
+    expect(runtimeFetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
+    expect(runtimeFetchMock.mock.calls[1]?.[0]).toBe("https://redirect.example/next");
+    expect(runtimeFetchMock.mock.calls[1]?.[1]?.redirect).toBe("manual");
+
+    const redirectedHeaders = new Headers(runtimeFetchMock.mock.calls[1]?.[1]?.headers);
+    expect(redirectedHeaders.get("x-api-key")).toBeNull();
+    expect(redirectedHeaders.get("accept")).toBe("application/json, text/event-stream");
+    expect(redirectedHeaders.get("user-agent")).toBe("node");
+  });
+});
