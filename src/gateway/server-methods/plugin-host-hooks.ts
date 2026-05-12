@@ -60,14 +60,20 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     // that share the same (priority, pluginId, id) keep their registration
     // order (in practice the (pluginId, id) tuple is unique within a registry).
     const entries = getActivePluginRegistry()?.controlUiDescriptors ?? [];
-    const sortedEntries = entries.slice().sort((a, b) => {
+    const sortedEntries = entries.toSorted((a, b) => {
       const ap = a.descriptor.priority ?? Number.POSITIVE_INFINITY;
       const bp = b.descriptor.priority ?? Number.POSITIVE_INFINITY;
-      if (ap !== bp) return ap - bp;
-      if (a.pluginId !== b.pluginId) return a.pluginId < b.pluginId ? -1 : 1;
+      if (ap !== bp) {
+        return ap - bp;
+      }
+      if (a.pluginId !== b.pluginId) {
+        return a.pluginId < b.pluginId ? -1 : 1;
+      }
       const aid = a.descriptor.id;
       const bid = b.descriptor.id;
-      if (aid === bid) return 0;
+      if (aid === bid) {
+        return 0;
+      }
       return aid < bid ? -1 : 1;
     });
     const descriptors = sortedEntries.map((entry) =>

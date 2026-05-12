@@ -35,7 +35,9 @@ function createOptions(
 
 function getRespondResult(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const call = respond.mock.calls.at(0);
-  if (!call) throw new Error("expected respond call");
+  if (!call) {
+    throw new Error("expected respond call");
+  }
   const [ok, result] = call;
   expect(ok).toBe(true);
   if (!result || typeof result !== "object") {
@@ -59,16 +61,18 @@ describe("plugins.uiDescriptors projection ordering", () => {
     vi.resetAllMocks();
   });
 
-  it("returns an empty list when no registry is active", () => {
+  it("returns an empty list when no registry is active", async () => {
     mocks.getActivePluginRegistry.mockReturnValue(undefined);
     const options = createOptions({});
     const handler = pluginHostHookHandlers["plugins.uiDescriptors"];
-    if (!handler) throw new Error("handler missing");
-    handler(options);
+    if (!handler) {
+      throw new Error("handler missing");
+    }
+    await handler(options);
     expect(getDescriptors(options.respond as ReturnType<typeof vi.fn>)).toEqual([]);
   });
 
-  it("sorts descriptors by priority ascending, with pluginId then descriptor id as tiebreakers", () => {
+  it("sorts descriptors by priority ascending, with pluginId then descriptor id as tiebreakers", async () => {
     const rows: DescriptorRow[] = [
       {
         pluginId: "z-plugin",
@@ -100,8 +104,10 @@ describe("plugins.uiDescriptors projection ordering", () => {
 
     const options = createOptions({});
     const handler = pluginHostHookHandlers["plugins.uiDescriptors"];
-    if (!handler) throw new Error("handler missing");
-    handler(options);
+    if (!handler) {
+      throw new Error("handler missing");
+    }
+    await handler(options);
     const descriptors = getDescriptors(options.respond as ReturnType<typeof vi.fn>);
     expect(
       descriptors.map((d) => ({
@@ -122,7 +128,7 @@ describe("plugins.uiDescriptors projection ordering", () => {
     ]);
   });
 
-  it("preserves a deterministic order when all descriptors omit priority", () => {
+  it("preserves a deterministic order when all descriptors omit priority", async () => {
     const rows: DescriptorRow[] = [
       {
         pluginId: "beta",
@@ -144,8 +150,10 @@ describe("plugins.uiDescriptors projection ordering", () => {
 
     const options = createOptions({});
     const handler = pluginHostHookHandlers["plugins.uiDescriptors"];
-    if (!handler) throw new Error("handler missing");
-    handler(options);
+    if (!handler) {
+      throw new Error("handler missing");
+    }
+    await handler(options);
     const descriptors = getDescriptors(options.respond as ReturnType<typeof vi.fn>);
     expect(descriptors.map((d) => `${d.pluginId}/${d.id}`)).toEqual([
       "alpha/x",
@@ -154,7 +162,7 @@ describe("plugins.uiDescriptors projection ordering", () => {
     ]);
   });
 
-  it("attaches pluginId and pluginName to each projected descriptor", () => {
+  it("attaches pluginId and pluginName to each projected descriptor", async () => {
     const rows: DescriptorRow[] = [
       {
         pluginId: "plan-mode",
@@ -172,8 +180,10 @@ describe("plugins.uiDescriptors projection ordering", () => {
 
     const options = createOptions({});
     const handler = pluginHostHookHandlers["plugins.uiDescriptors"];
-    if (!handler) throw new Error("handler missing");
-    handler(options);
+    if (!handler) {
+      throw new Error("handler missing");
+    }
+    await handler(options);
     const [descriptor] = getDescriptors(options.respond as ReturnType<typeof vi.fn>);
     expect(descriptor).toMatchObject({
       pluginId: "plan-mode",
