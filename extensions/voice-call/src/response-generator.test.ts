@@ -213,13 +213,10 @@ describe("generateVoiceResponse", () => {
         sessionKey: "voice:15550001111",
       }),
     );
-    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        model: "gpt-4.1-nano",
-        sessionKey: "voice:15550001111",
-      }),
-    );
+    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    expect(args.provider).toBe("openai");
+    expect(args.model).toBe("gpt-4.1-nano");
+    expect(args.sessionKey).toBe("voice:15550001111");
   });
 
   it("uses the persisted per-call session key for classic responses", async () => {
