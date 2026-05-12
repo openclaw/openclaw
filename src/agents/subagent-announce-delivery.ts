@@ -444,6 +444,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
         sourceTool: item.sourceTool ?? "subagent_announce",
       },
       idempotencyKey,
+      spawnedByRunId: item.requesterRunId,
     },
     timeoutMs: announceTimeoutMs,
   });
@@ -486,6 +487,7 @@ async function maybeQueueSubagentAnnounce(params: {
   sourceChannel?: string;
   sourceTool?: string;
   internalEvents?: AgentInternalEvent[];
+  requesterRunId?: string;
   signal?: AbortSignal;
 }): Promise<"steered" | "queued" | "none" | "dropped"> {
   if (params.signal?.aborted) {
@@ -538,6 +540,7 @@ async function maybeQueueSubagentAnnounce(params: {
         sourceSessionKey: params.sourceSessionKey,
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
+        requesterRunId: params.requesterRunId,
       },
       settings: queueSettings,
       send: sendAnnounce,
@@ -614,6 +617,7 @@ async function sendSubagentAnnounceDirectly(params: {
   sourceChannel?: string;
   sourceTool?: string;
   requesterIsSubagent: boolean;
+  requesterRunId?: string;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
@@ -767,6 +771,7 @@ async function sendSubagentAnnounceDirectly(params: {
                 sourceTool: params.sourceTool ?? "subagent_announce",
               },
               idempotencyKey: params.directIdempotencyKey,
+              spawnedByRunId: params.requesterRunId,
             },
             expectFinal: true,
             timeoutMs: announceTimeoutMs,
@@ -872,6 +877,7 @@ export async function deliverSubagentAnnouncement(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
         internalEvents: params.internalEvents,
+        requesterRunId: params.requesterRunId,
         signal: params.signal,
       }),
     direct: async () =>
@@ -888,6 +894,7 @@ export async function deliverSubagentAnnouncement(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
         requesterIsSubagent: params.requesterIsSubagent,
+        requesterRunId: params.requesterRunId,
         expectsCompletionMessage: params.expectsCompletionMessage,
         signal: params.signal,
         bestEffortDeliver: params.bestEffortDeliver,
