@@ -172,6 +172,7 @@ describe("createOAuthManager", () => {
       refreshCredential: vi.fn(async () => null),
       readBootstrapCredential: () => null,
       isRefreshTokenReusedError: () => false,
+      shouldCacheRefreshFailure: () => false,
     });
 
     const result = await manager.resolveOAuthAccess({
@@ -263,6 +264,7 @@ describe("createOAuthManager", () => {
       refreshCredential,
       readBootstrapCredential: () => null,
       isRefreshTokenReusedError: () => false,
+      shouldCacheRefreshFailure: () => false,
     });
 
     const result = await manager.resolveOAuthAccess({
@@ -329,6 +331,7 @@ describe("createOAuthManager", () => {
           expires: Date.now() - 30_000,
         }),
       isRefreshTokenReusedError: () => false,
+      shouldCacheRefreshFailure: () => false,
     });
 
     const result = await manager.resolveOAuthAccess({
@@ -345,5 +348,144 @@ describe("createOAuthManager", () => {
     expect(result.credential.provider).toBe("minimax-portal");
     expect(result.credential.access).toBe("rotated-access");
     expect(result.credential.refresh).toBe("rotated-refresh");
+  });
+
+  it("reuses cached terminal refresh failures for an unchanged OAuth credential snapshot", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-failure-cache-"));
+    tempDirs.push(tempRoot);
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    const agentDir = path.join(tempRoot, "agents", "main", "agent");
+    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    await fs.mkdir(agentDir, { recursive: true });
+
+    const profileId = "openai-codex:default";
+    const credential = createCredential({
+      access: "expired-access",
+      refresh: "expired-refresh",
+      expires: Date.now() - 60_000,
+    });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: credential,
+        },
+      },
+      agentDir,
+      { filterExternalAuthProfiles: false },
+    );
+
+    const refreshCredential = vi.fn(async () => {
+      throw new Error("invalid_grant");
+    });
+    const manager = createOAuthManager({
+      buildApiKey: async (_provider, value) => value.access,
+      refreshCredential,
+      readBootstrapCredential: () => null,
+      isRefreshTokenReusedError: () => false,
+      shouldCacheRefreshFailure: () => true,
+    });
+    const resolveAccess = () =>
+      manager.resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: false,
+        }),
+        profileId,
+        credential,
+        agentDir,
+      });
+
+    await expect(resolveAccess()).rejects.toThrow("invalid_grant");
+    await expect(resolveAccess()).rejects.toThrow("invalid_grant");
+    expect(refreshCredential).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries after the cached refresh-failure credential snapshot changes", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-failure-cache-"));
+    tempDirs.push(tempRoot);
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    const agentDir = path.join(tempRoot, "agents", "main", "agent");
+    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    await fs.mkdir(agentDir, { recursive: true });
+
+    const profileId = "openai-codex:default";
+    const staleCredential = createCredential({
+      access: "stale-access",
+      refresh: "stale-refresh",
+      expires: Date.now() - 60_000,
+    });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: staleCredential,
+        },
+      },
+      agentDir,
+      { filterExternalAuthProfiles: false },
+    );
+
+    const refreshCredential = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("invalid_grant"))
+      .mockResolvedValueOnce({
+        access: "fresh-access",
+        refresh: "fresh-refresh",
+        expires: Date.now() + 60_000,
+      });
+    const manager = createOAuthManager({
+      buildApiKey: async (_provider, value) => value.access,
+      refreshCredential,
+      readBootstrapCredential: () => null,
+      isRefreshTokenReusedError: () => false,
+      shouldCacheRefreshFailure: () => true,
+    });
+
+    await expect(
+      manager.resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: false,
+        }),
+        profileId,
+        credential: staleCredential,
+        agentDir,
+      }),
+    ).rejects.toThrow("invalid_grant");
+
+    const rotatedCredential = createCredential({
+      access: "rotated-stale-access",
+      refresh: "rotated-stale-refresh",
+      expires: Date.now() - 30_000,
+    });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: rotatedCredential,
+        },
+      },
+      agentDir,
+      { filterExternalAuthProfiles: false },
+    );
+
+    await expect(
+      manager.resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: false,
+        }),
+        profileId,
+        credential: rotatedCredential,
+        agentDir,
+      }),
+    ).resolves.toMatchObject({
+      apiKey: "fresh-access",
+      credential: {
+        access: "fresh-access",
+        refresh: "fresh-refresh",
+      },
+    });
+    expect(refreshCredential).toHaveBeenCalledTimes(2);
   });
 });

@@ -21,6 +21,7 @@ import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { readManagedExternalCliCredential } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
+import { classifyOAuthRefreshFailureReason } from "./oauth-refresh-failure.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "./store.js";
@@ -128,11 +129,16 @@ export function isRefreshTokenReusedError(error: unknown): boolean {
   );
 }
 
+export function shouldCacheOAuthRefreshFailure(error: unknown): boolean {
+  return classifyOAuthRefreshFailureReason(extractErrorMessage(error)) !== null;
+}
+
 type ResolveApiKeyForProfileParams = {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
+  forceOAuthRefresh?: boolean;
 };
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
@@ -184,6 +190,7 @@ const oauthManager = createOAuthManager({
       credential,
     }),
   isRefreshTokenReusedError,
+  shouldCacheRefreshFailure: shouldCacheOAuthRefreshFailure,
 });
 
 export function resetOAuthRefreshQueuesForTest(): void {
@@ -215,6 +222,7 @@ async function tryResolveOAuthProfile(
     credential: cred,
     agentDir: params.agentDir,
     cfg,
+    forceRefresh: params.forceOAuthRefresh,
   });
   if (!resolved) {
     return null;
@@ -354,6 +362,7 @@ export async function resolveApiKeyForProfile(
       profileId,
       credential: cred,
       cfg,
+      forceRefresh: params.forceOAuthRefresh,
     });
     if (!resolved) {
       return null;

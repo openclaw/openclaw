@@ -4,7 +4,7 @@ import {
   randomAsciiString as randomJunk,
   randomlyCased,
 } from "./oauth-test-utils.js";
-import { isRefreshTokenReusedError } from "./oauth.js";
+import { isRefreshTokenReusedError, shouldCacheOAuthRefreshFailure } from "./oauth.js";
 
 // Direct tests for the refresh_token_reused classifier. This is the gate that
 // triggers the retry/adoption recovery path; a false negative here means we
@@ -133,5 +133,14 @@ describe("isRefreshTokenReusedError", () => {
         expect(isRefreshTokenReusedError(new Error(msg))).toBe(false);
       }
     });
+  });
+});
+
+describe("shouldCacheOAuthRefreshFailure", () => {
+  it("matches terminal refresh failures without caching transient ones", () => {
+    expect(shouldCacheOAuthRefreshFailure(new Error("invalid_grant"))).toBe(true);
+    expect(shouldCacheOAuthRefreshFailure(new Error("expired or revoked"))).toBe(true);
+    expect(shouldCacheOAuthRefreshFailure(new Error("network timeout"))).toBe(false);
+    expect(shouldCacheOAuthRefreshFailure(new Error("HTTP 500 Internal Server Error"))).toBe(false);
   });
 });

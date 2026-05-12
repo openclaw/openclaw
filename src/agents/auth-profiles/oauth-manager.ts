@@ -46,6 +46,7 @@ export type OAuthManagerAdapter = {
     credential: OAuthCredential;
   }) => OAuthCredential | null;
   isRefreshTokenReusedError: (error: unknown) => boolean;
+  shouldCacheRefreshFailure: (error: unknown) => boolean;
 };
 
 export type ResolvedOAuthAccess = {
@@ -253,9 +254,53 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
   }
 
   const refreshQueues = new Map<string, Promise<unknown>>();
+  const cachedRefreshFailures = new Map<
+    string,
+    {
+      credential: Pick<OAuthCredential, "access" | "refresh" | "expires">;
+      error: unknown;
+    }
+  >();
 
   function refreshQueueKey(provider: string, profileId: string): string {
     return `${provider}\u0000${profileId}`;
+  }
+
+  function getCachedRefreshFailure(params: {
+    provider: string;
+    profileId: string;
+    credential: Pick<OAuthCredential, "access" | "refresh" | "expires">;
+  }): unknown | null {
+    const key = refreshQueueKey(params.provider, params.profileId);
+    const cached = cachedRefreshFailures.get(key);
+    if (!cached) {
+      return null;
+    }
+    if (hasOAuthCredentialChanged(cached.credential, params.credential)) {
+      cachedRefreshFailures.delete(key);
+      return null;
+    }
+    return cached.error;
+  }
+
+  function rememberRefreshFailure(params: {
+    provider: string;
+    profileId: string;
+    credential: Pick<OAuthCredential, "access" | "refresh" | "expires">;
+    error: unknown;
+  }): void {
+    cachedRefreshFailures.set(refreshQueueKey(params.provider, params.profileId), {
+      credential: {
+        access: params.credential.access,
+        refresh: params.credential.refresh,
+        expires: params.credential.expires,
+      },
+      error: params.error,
+    });
+  }
+
+  function clearCachedRefreshFailure(provider: string, profileId: string): void {
+    cachedRefreshFailures.delete(refreshQueueKey(provider, profileId));
   }
 
   async function withRefreshCallTimeout<T>(
@@ -324,6 +369,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     provider: string;
     agentDir?: string;
     cfg?: OpenClawConfig;
+    forceRefresh?: boolean;
   }): Promise<ResolvedOAuthAccess | null> {
     const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir(params);
     const authPath = resolveAuthStorePath(ownerAgentDir);
@@ -340,7 +386,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           }
           let credentialToRefresh = cred;
 
-          if (hasUsableOAuthCredential(cred)) {
+          if (!params.forceRefresh && hasUsableOAuthCredential(cred)) {
             return {
               apiKey: await adapter.buildApiKey(cred.provider, cred, {
                 cfg: params.cfg,
@@ -431,23 +477,46 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             }
           }
 
-          const refreshedCredentials = await withRefreshCallTimeout(
-            `refreshOAuthCredential(${cred.provider})`,
-            OAUTH_REFRESH_CALL_TIMEOUT_MS,
-            async () => {
-              const refreshed = await adapter.refreshCredential(credentialToRefresh);
-              return refreshed
-                ? ({
-                    ...credentialToRefresh,
-                    ...refreshed,
-                    type: "oauth",
-                  } satisfies OAuthCredential)
-                : null;
-            },
-          );
+          const cachedFailure = getCachedRefreshFailure({
+            provider: credentialToRefresh.provider,
+            profileId: params.profileId,
+            credential: credentialToRefresh,
+          });
+          if (cachedFailure) {
+            throw cachedFailure;
+          }
+
+          let refreshedCredentials: OAuthCredential | null;
+          try {
+            refreshedCredentials = await withRefreshCallTimeout(
+              `refreshOAuthCredential(${cred.provider})`,
+              OAUTH_REFRESH_CALL_TIMEOUT_MS,
+              async () => {
+                const refreshed = await adapter.refreshCredential(credentialToRefresh);
+                return refreshed
+                  ? ({
+                      ...credentialToRefresh,
+                      ...refreshed,
+                      type: "oauth",
+                    } satisfies OAuthCredential)
+                  : null;
+              },
+            );
+          } catch (error) {
+            if (adapter.shouldCacheRefreshFailure(error)) {
+              rememberRefreshFailure({
+                provider: credentialToRefresh.provider,
+                profileId: params.profileId,
+                credential: credentialToRefresh,
+                error,
+              });
+            }
+            throw error;
+          }
           if (!refreshedCredentials) {
             return null;
           }
+          clearCachedRefreshFailure(credentialToRefresh.provider, params.profileId);
           store.profiles[params.profileId] = refreshedCredentials;
           saveAuthProfileStore(store, ownerAgentDir);
           if (ownerAgentDir) {
@@ -485,6 +554,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     provider: string;
     agentDir?: string;
     cfg?: OpenClawConfig;
+    forceRefresh?: boolean;
   }): Promise<ResolvedOAuthAccess | null> {
     const key = refreshQueueKey(params.provider, params.profileId);
     const prev = refreshQueues.get(key) ?? Promise.resolve();
@@ -510,6 +580,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     credential: OAuthCredential;
     agentDir?: string;
     cfg?: OpenClawConfig;
+    forceRefresh?: boolean;
   }): Promise<ResolvedOAuthAccess | null> {
     const adoptedCredential =
       adoptNewerMainOAuthCredential({
@@ -524,7 +595,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       readBootstrapCredential: adapter.readBootstrapCredential,
     });
 
-    if (hasUsableOAuthCredential(effectiveCredential)) {
+    if (!params.forceRefresh && hasUsableOAuthCredential(effectiveCredential)) {
       return {
         apiKey: await adapter.buildApiKey(effectiveCredential.provider, effectiveCredential, {
           cfg: params.cfg,
@@ -540,6 +611,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         provider: params.credential.provider,
         agentDir: params.agentDir,
         cfg: params.cfg,
+        forceRefresh: params.forceRefresh,
       });
       return refreshed;
     } catch (error) {
@@ -582,6 +654,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             provider: params.credential.provider,
             agentDir: params.agentDir,
             cfg: params.cfg,
+            forceRefresh: params.forceRefresh,
           });
           if (retried) {
             return retried;
@@ -632,6 +705,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
 
   function resetRefreshQueuesForTest(): void {
     refreshQueues.clear();
+    cachedRefreshFailures.clear();
   }
 
   return {

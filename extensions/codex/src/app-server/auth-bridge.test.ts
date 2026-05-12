@@ -74,7 +74,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
         return null;
       }
       let oauthCredential = credential;
-      if ((oauthCredential.expires ?? 0) <= Date.now()) {
+      if (params.forceOAuthRefresh || (oauthCredential.expires ?? 0) <= Date.now()) {
         const refreshed = await providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin({
           provider: oauthCredential.provider,
           context: oauthCredential,
@@ -1095,6 +1095,42 @@ describe("bridgeCodexAppServerStartOptions", () => {
         chatgptAccountId: "account-789",
         chatgptPlanType: null,
       });
+      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("refresh-token");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a persisted OAuth expiry when a forced app-server refresh fails", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const expires = Date.now() + 60_000;
+    oauthMocks.refreshOpenAICodexToken.mockRejectedValueOnce(new Error("invalid_grant"));
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:work",
+        credential: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "current-access-token",
+          refresh: "refresh-token",
+          expires,
+          accountId: "account-123",
+          email: "codex@example.test",
+        },
+      });
+
+      await expect(
+        refreshCodexAppServerAuthTokens({
+          agentDir,
+          authProfileId: "openai-codex:work",
+        }),
+      ).rejects.toThrow("invalid_grant");
+
+      const profile = expectOAuthProfile(
+        loadAuthProfileStoreForSecretsRuntime(agentDir).profiles["openai-codex:work"],
+      );
+      expect(profile?.expires).toBe(expires);
       expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("refresh-token");
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
