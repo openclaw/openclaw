@@ -712,9 +712,9 @@ describe("Discord model picker interactions", () => {
     const entry = getSessionEntry({ agentId: "worker", sessionKey });
     expect(entry?.providerOverride).toBeUndefined();
     expect(entry?.modelOverride).toBeUndefined();
-    expect(JSON.stringify(submitInteraction.followUp.mock.calls[0]?.[0])).toContain(
-      "❌ Failed to apply openai/gpt-4o.",
-    );
+    expect(
+      JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
+    ).toContain("❌ Failed to apply openai/gpt-4o.");
   });
 
   it("loads model picker data from the effective bound route", async () => {
