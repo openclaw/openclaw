@@ -205,6 +205,7 @@ export type {
   PluginAgentEventSubscriptionRegistration,
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
+  PluginControlUiActiveWhen,
   PluginControlUiDescriptor,
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
