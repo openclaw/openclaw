@@ -3446,6 +3446,70 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.timedOut).toBe(false);
   });
 
+  it("records canonical OpenAI models as Codex-runtime when app-server owns the turn", async () => {
+    vi.stubEnv("OPENCLAW_TRAJECTORY", "1");
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "openai";
+    params.modelId = "gpt-5.5";
+    params.model = {
+      ...createCodexTestModel("openai"),
+      id: "gpt-5.5",
+      name: "gpt-5.5",
+      api: "openai-responses",
+    } as EmbeddedRunAttemptParams["model"];
+    params.runtimePlan = {
+      ...createCodexRuntimePlanFixture(),
+      observability: {
+        resolvedRef: "openai/gpt-5.5",
+        provider: "openai",
+        modelId: "gpt-5.5",
+        harnessId: "codex",
+      },
+    };
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/start") {
+        return {
+          ...threadStartResult(),
+          model: "gpt-5.5",
+        };
+      }
+      if (method === "turn/start") {
+        return {
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "msg-1", text: "done from codex" }],
+          },
+        };
+      }
+      return {};
+    });
+
+    const result = await runCodexAppServerAttempt(params);
+
+    expect(harness.requests.map((entry) => entry.method)).toContain("turn/start");
+    expect(result.lastAssistant?.provider).toBe("openai-codex");
+    expect(result.lastAssistant?.api).toBe("openai-codex-responses");
+    expect(result.lastAssistant?.model).toBe("gpt-5.5");
+    expect(result.assistantTexts).toEqual(["done from codex"]);
+
+    const trajectory = await fs.readFile(
+      `${sessionFile.slice(0, -".jsonl".length)}.trajectory.jsonl`,
+      "utf8",
+    );
+    const events = trajectory
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { provider?: string; modelApi?: string; type?: string });
+    expect(events.some((event) => event.type === "session.started")).toBe(true);
+    for (const event of events) {
+      expect(event.provider).toBe("openai-codex");
+      expect(event.modelApi).toBe("openai-codex-responses");
+    }
+  });
+
   it("surfaces Codex-native image generation saved paths as reply media", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
