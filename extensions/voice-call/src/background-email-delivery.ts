@@ -21,6 +21,7 @@ export type BackgroundEmailDeliveryParams = {
   provider?: string;
   model?: string;
   timeoutMs?: number;
+  toolsAllow?: string[];
 };
 
 const EMAIL_DELIVERY_SYSTEM_PROMPT_BASE = [
@@ -73,10 +74,11 @@ export function spawnEmailDeliveryAgent(params: BackgroundEmailDeliveryParams): 
     provider,
     model,
     timeoutMs,
+    toolsAllow,
   } = params;
 
   logger.info(
-    `[voice-call] Spawning email delivery agent for session=${sessionKey}, agent=${agentId}, question="${question.slice(0, 80)}", consultResult="${consultResult.slice(0, 120)}"`,
+    `[voice-call] Spawning email delivery agent for session=${sessionKey}, agent=${agentId}`,
   );
 
   const promptParts = [
@@ -116,6 +118,7 @@ export function spawnEmailDeliveryAgent(params: BackgroundEmailDeliveryParams): 
         fallbackText: "",
         provider,
         model,
+        toolsAllow,
       });
       logger.info(`[voice-call] Background email delivery completed for session ${sessionKey}`);
     } catch (err) {
