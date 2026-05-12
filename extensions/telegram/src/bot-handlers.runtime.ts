@@ -99,6 +99,7 @@ import {
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
+import { resolveTelegramGroupRequireMention } from "./group-policy.js";
 import {
   resolveTelegramCommandIngressAuthorization,
   resolveTelegramEventIngressAuthorization,
@@ -2402,16 +2403,21 @@ export const registerTelegramHandlers = ({
       );
 
       recordMessageForReplyChain(event.msg, resolvedThreadId ?? dmThreadId);
-      // For groups (TelegramGroupConfig has `requireMention?: boolean`; the
-      // union TelegramGroupConfig | TelegramDirectConfig is opaque on this
-      // field for DMs, so guard with `'requireMention' in ...`).
-      const groupRequireMention =
-        topicConfig && "requireMention" in topicConfig
-          ? Boolean(topicConfig.requireMention)
-          : groupConfig && "requireMention" in groupConfig
-            ? Boolean(groupConfig.requireMention)
-            : false;
-      const effectiveRequireMention = event.isGroup && groupRequireMention;
+      // Use the canonical resolver so wildcard ("*") group entries, topic
+      // inheritance, and runtime activation-override paths are honored — a
+      // direct `groupConfig.requireMention` lookup misses chats that get
+      // their mention-only behavior from the wildcard default or a runtime
+      // override. (Codex P1 follow-up on #81195.)
+      const effectiveRequireMention =
+        event.isGroup &&
+        resolveTelegramGroupRequireMention({
+          cfg,
+          accountId,
+          groupId:
+            resolvedThreadId !== undefined
+              ? `${event.chatId}:topic:${resolvedThreadId}`
+              : `${event.chatId}`,
+        }) === true;
       await processInboundMessage({
         ctx: event.ctx,
         msg: event.msg,
