@@ -561,7 +561,7 @@ function saveAuthProfileStoreInTransaction(
   agentDir?: string,
 ): void {
   const updatedAt = Date.now();
-  const payload = buildPersistedAuthProfileSecretsStore(localStore);
+  const payload = buildPersistedAuthProfileSecretsStore(localStore, undefined, { agentDir });
   savePersistedAuthProfileSecretsStoreInTransaction(database, payload, agentDir, updatedAt);
   savePersistedAuthProfileStateInTransaction(database, localStore, agentDir, updatedAt);
 }

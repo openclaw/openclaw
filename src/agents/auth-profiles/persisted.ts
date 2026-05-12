@@ -1,4 +1,11 @@
+import { execFileSync } from "node:child_process";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { resolveOAuthDir, resolveStateDir } from "../../config/paths.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
+import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { normalizeProviderId } from "../provider-id.js";
@@ -30,6 +37,7 @@ import type {
   AuthProfileSecretsStore,
   AuthProfileStore,
   OAuthCredential,
+  OAuthCredentialRef,
   ProfileUsageStats,
 } from "./types.js";
 
@@ -71,8 +79,7 @@ type OAuthProfileSecretPayload = OAuthProfileSecretMaterial & {
   encrypted?: OAuthProfileEncryptedSecretPayload;
 };
 
-type LoadPersistedAuthProfileStoreOptions = {
-  rewriteInlineOAuthSecrets?: boolean;
+type LoadPersistedAuthProfileStoreOptions = OpenClawStateDatabaseOptions & {
   repairOAuthSecretPayloads?: boolean;
 };
 
@@ -116,7 +123,7 @@ function shouldPersistOAuthWithoutInlineSecrets(
 
 function resolveOAuthProfileSecretId(params: { agentDir?: string; profileId: string }): string {
   return createHash("sha256")
-    .update(`${resolveAuthStorePath(params.agentDir)}\0${params.profileId}`)
+    .update(`${authProfileStoreKey(params.agentDir)}\0${params.profileId}`)
     .digest("hex")
     .slice(0, 32);
 }
@@ -289,14 +296,6 @@ function resolveFallbackOAuthProfileSecretKeyFilePath(): string | undefined {
   );
 }
 
-function readFallbackOAuthProfileSecretKeyFile(): string | undefined {
-  const keyPath = resolveFallbackOAuthProfileSecretKeyFilePath();
-  if (!keyPath) {
-    return undefined;
-  }
-  return readFallbackOAuthProfileSecretKeyFileAtPath(keyPath);
-}
-
 function readFallbackOAuthProfileSecretKeyFileAtPath(keyPath: string): string | undefined {
   try {
     const value = fs.readFileSync(keyPath, "utf8").trim();
@@ -304,6 +303,11 @@ function readFallbackOAuthProfileSecretKeyFileAtPath(keyPath: string): string | 
   } catch {
     return undefined;
   }
+}
+
+function readFallbackOAuthProfileSecretKeyFile(): string | undefined {
+  const keyPath = resolveFallbackOAuthProfileSecretKeyFilePath();
+  return keyPath ? readFallbackOAuthProfileSecretKeyFileAtPath(keyPath) : undefined;
 }
 
 function createFallbackOAuthProfileSecretKeyFile(): string | undefined {
@@ -360,21 +364,17 @@ function resolveOAuthProfileSecretKeySeed(options?: { create?: boolean }): strin
       return keychainKey;
     }
   }
-  const fileKey =
+  return (
     readFallbackOAuthProfileSecretKeyFile() ??
-    (options?.create === true ? createFallbackOAuthProfileSecretKeyFile() : undefined);
-  if (fileKey) {
-    return fileKey;
-  }
-  return undefined;
+    (options?.create === true ? createFallbackOAuthProfileSecretKeyFile() : undefined)
+  );
 }
 
 function buildOAuthProfileSecretKey(options?: { create?: boolean }): Buffer | null {
   const externalKey = resolveOAuthProfileSecretKeySeed(options);
-  if (!externalKey) {
-    return null;
-  }
-  return createHash("sha256").update(`openclaw:auth-profile-oauth:${externalKey}`).digest();
+  return externalKey
+    ? createHash("sha256").update(`openclaw:auth-profile-oauth:${externalKey}`).digest()
+    : null;
 }
 
 function encryptOAuthProfileSecretMaterial(params: {
@@ -414,11 +414,8 @@ function decryptOAuthProfileSecretMaterial(params: {
   provider: string;
   encrypted: OAuthProfileEncryptedSecretPayload;
 }): OAuthProfileSecretMaterial | null {
-  if (params.encrypted.algorithm !== OAUTH_PROFILE_SECRET_ALGORITHM) {
-    return null;
-  }
   const key = buildOAuthProfileSecretKey();
-  if (!key) {
+  if (!key || params.encrypted.algorithm !== OAUTH_PROFILE_SECRET_ALGORITHM) {
     return null;
   }
   try {
@@ -440,10 +437,9 @@ function decryptOAuthProfileSecretMaterial(params: {
       decipher.final(),
     ]).toString("utf8");
     const raw = JSON.parse(plaintext) as unknown;
-    if (!raw || typeof raw !== "object") {
-      return null;
-    }
-    return normalizeOAuthProfileSecretMaterial(raw as OAuthProfileSecretMaterial);
+    return raw && typeof raw === "object"
+      ? normalizeOAuthProfileSecretMaterial(raw as OAuthProfileSecretMaterial)
+      : null;
   } catch {
     return null;
   }
@@ -457,13 +453,12 @@ function writeOAuthProfileSecretMaterial(params: {
 }): void {
   const secretPath = resolveOAuthProfileSecretPath(params.ref);
   fs.mkdirSync(path.dirname(secretPath), { recursive: true, mode: 0o700 });
-  const payload: OAuthProfileSecretPayload = {
+  saveJsonFile(secretPath, {
     version: OAUTH_PROFILE_SECRET_VERSION,
     profileId: params.profileId,
     provider: params.provider,
     encrypted: encryptOAuthProfileSecretMaterial(params),
-  };
-  saveJsonFile(secretPath, payload);
+  } satisfies OAuthProfileSecretPayload);
   try {
     fs.chmodSync(secretPath, 0o600);
   } catch {
@@ -484,9 +479,6 @@ function persistOAuthProfileSecrets(params: {
     ? params.credential.oauthRef
     : undefined;
   const targetRef = existingRef?.id === expectedRef.id ? existingRef : expectedRef;
-  if (!hasInlineOAuthTokenMaterial(params.credential)) {
-    return existingRef?.id === expectedRef.id ? existingRef : undefined;
-  }
   const material = normalizeOAuthProfileSecretMaterial(params.credential);
   if (!material) {
     return existingRef?.id === expectedRef.id ? existingRef : undefined;
@@ -515,12 +507,6 @@ function omitInlineOAuthSecrets(params: {
   delete sanitized.idToken;
   sanitized.oauthRef = oauthRef;
   return sanitized as AuthProfileCredential;
-}
-
-function hasInlinePersistableOAuthSecrets(credential: AuthProfileCredential): boolean {
-  return (
-    shouldPersistOAuthWithoutInlineSecrets(credential) && hasInlineOAuthTokenMaterial(credential)
-  );
 }
 
 function parseCredentialEntry(
@@ -978,6 +964,118 @@ export function buildPersistedAuthProfileSecretsStore(
   };
 }
 
+function coerceOAuthProfileEncryptedSecretPayload(
+  raw: unknown,
+): OAuthProfileEncryptedSecretPayload | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const record = raw as Partial<OAuthProfileEncryptedSecretPayload>;
+  return record.algorithm === OAUTH_PROFILE_SECRET_ALGORITHM &&
+    typeof record.iv === "string" &&
+    typeof record.tag === "string" &&
+    typeof record.ciphertext === "string"
+    ? {
+        algorithm: record.algorithm,
+        iv: record.iv,
+        tag: record.tag,
+        ciphertext: record.ciphertext,
+      }
+    : null;
+}
+
+function hasEncryptedOAuthProfileSecretPayload(raw: unknown): boolean {
+  return (
+    !!raw &&
+    typeof raw === "object" &&
+    coerceOAuthProfileEncryptedSecretPayload(
+      (raw as Partial<OAuthProfileSecretPayload>).encrypted,
+    ) !== null
+  );
+}
+
+function coerceOAuthProfileSecretPayload(params: {
+  raw: unknown;
+  ref: OAuthCredentialRef;
+  profileId: string;
+  provider: string;
+}): OAuthProfileSecretMaterial | null {
+  const { raw, ref, profileId, provider } = params;
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const record = raw as Partial<OAuthProfileSecretPayload>;
+  if (
+    record.version !== OAUTH_PROFILE_SECRET_VERSION ||
+    record.profileId !== profileId ||
+    record.provider !== provider
+  ) {
+    return null;
+  }
+  const encrypted = coerceOAuthProfileEncryptedSecretPayload(record.encrypted);
+  if (encrypted) {
+    return decryptOAuthProfileSecretMaterial({
+      ref,
+      profileId,
+      provider,
+      encrypted,
+    });
+  }
+  return normalizeOAuthProfileSecretMaterial(record);
+}
+
+function resolvePersistedOAuthSecrets(
+  credential: OAuthCredential,
+  profileId: string,
+  options?: { repairOAuthSecretPayloads?: boolean },
+): OAuthCredential {
+  if (!isOAuthProfileSecretRef(credential.oauthRef)) {
+    return credential;
+  }
+  const raw = loadJsonFile(resolveOAuthProfileSecretPath(credential.oauthRef));
+  const secret = coerceOAuthProfileSecretPayload({
+    raw,
+    ref: credential.oauthRef,
+    profileId,
+    provider: credential.provider,
+  });
+  if (!secret) {
+    return credential;
+  }
+  if (options?.repairOAuthSecretPayloads === true && !hasEncryptedOAuthProfileSecretPayload(raw)) {
+    writeOAuthProfileSecretMaterial({
+      ref: credential.oauthRef,
+      profileId,
+      provider: credential.provider,
+      material: secret,
+    });
+  }
+  return {
+    ...credential,
+    ...(secret.access ? { access: secret.access } : {}),
+    ...(secret.refresh ? { refresh: secret.refresh } : {}),
+    ...(secret.idToken ? { idToken: secret.idToken } : {}),
+  } as OAuthCredential;
+}
+
+function resolvePersistedOAuthProfileSecrets(
+  store: AuthProfileStore,
+  options?: { repairOAuthSecretPayloads?: boolean },
+): AuthProfileStore {
+  const profiles = Object.fromEntries(
+    Object.entries(store.profiles).map(([profileId, credential]) => [
+      profileId,
+      credential.type === "oauth"
+        ? resolvePersistedOAuthSecrets(credential, profileId, options)
+        : credential,
+    ]),
+  ) as AuthProfileStore["profiles"];
+  return {
+    ...store,
+    profiles,
+  };
+}
+
 export type PersistedAuthProfileStoreEntry = {
   store: AuthProfileStore;
   updatedAt: number;
@@ -985,7 +1083,7 @@ export type PersistedAuthProfileStoreEntry = {
 
 export function loadPersistedAuthProfileStoreEntry(
   agentDir?: string,
-  options: OpenClawStateDatabaseOptions = {},
+  options: LoadPersistedAuthProfileStoreOptions = {},
 ): PersistedAuthProfileStoreEntry | null {
   const result = readAuthProfileStorePayloadResult(authProfileStoreKey(agentDir), options);
   if (!result.exists || result.value === undefined) {
@@ -996,14 +1094,14 @@ export function loadPersistedAuthProfileStoreEntry(
   if (!store) {
     return null;
   }
+  const merged = {
+    ...store,
+    ...mergeAuthProfileState(coerceAuthProfileState(raw), loadPersistedAuthProfileState(agentDir)),
+  };
   return {
-    store: {
-      ...store,
-      ...mergeAuthProfileState(
-        coerceAuthProfileState(raw),
-        loadPersistedAuthProfileState(agentDir),
-      ),
-    },
+    store: resolvePersistedOAuthProfileSecrets(merged, {
+      repairOAuthSecretPayloads: options.repairOAuthSecretPayloads,
+    }),
     updatedAt: result.updatedAt,
   };
   const canRepairPersistedSecrets =
@@ -1027,6 +1125,7 @@ export function loadPersistedAuthProfileStoreEntry(
 export function loadPersistedAuthProfileStoreEntryFromDatabase(
   database: OpenClawStateDatabase,
   agentDir?: string,
+  options: { repairOAuthSecretPayloads?: boolean } = {},
 ): PersistedAuthProfileStoreEntry | null {
   const result = readAuthProfileStorePayloadResultFromDatabase(
     database,
@@ -1040,21 +1139,24 @@ export function loadPersistedAuthProfileStoreEntryFromDatabase(
   if (!store) {
     return null;
   }
+  const merged = {
+    ...store,
+    ...mergeAuthProfileState(
+      coerceAuthProfileState(raw),
+      loadPersistedAuthProfileStateFromDatabase(database, agentDir),
+    ),
+  };
   return {
-    store: {
-      ...store,
-      ...mergeAuthProfileState(
-        coerceAuthProfileState(raw),
-        loadPersistedAuthProfileStateFromDatabase(database, agentDir),
-      ),
-    },
+    store: resolvePersistedOAuthProfileSecrets(merged, {
+      repairOAuthSecretPayloads: options.repairOAuthSecretPayloads,
+    }),
     updatedAt: result.updatedAt,
   };
 }
 
 export function loadPersistedAuthProfileStore(
   agentDir?: string,
-  options: OpenClawStateDatabaseOptions = {},
+  options: LoadPersistedAuthProfileStoreOptions = {},
 ): AuthProfileStore | null {
   return loadPersistedAuthProfileStoreEntry(agentDir, options)?.store ?? null;
 }
@@ -1064,9 +1166,12 @@ export function savePersistedAuthProfileSecretsStore(
   agentDir?: string,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
+  const payload = buildPersistedAuthProfileSecretsStore(store as AuthProfileStore, undefined, {
+    agentDir,
+  });
   writeAuthProfileStorePayload(
     authProfileStoreKey(agentDir),
-    store as unknown as AuthProfilePayloadValue,
+    payload as unknown as AuthProfilePayloadValue,
     options,
   );
 }
@@ -1077,10 +1182,13 @@ export function savePersistedAuthProfileSecretsStoreInTransaction(
   agentDir?: string,
   updatedAt: number = Date.now(),
 ): void {
+  const payload = buildPersistedAuthProfileSecretsStore(store as AuthProfileStore, undefined, {
+    agentDir,
+  });
   writeAuthProfileStorePayloadInTransaction(
     database,
     authProfileStoreKey(agentDir),
-    store as unknown as AuthProfilePayloadValue,
+    payload as unknown as AuthProfilePayloadValue,
     updatedAt,
   );
 }

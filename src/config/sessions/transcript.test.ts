@@ -470,6 +470,37 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("redacts structured message content before SQLite transcript persistence", async () => {
+    const targetSessionId = "redacted-transcript-session";
+    await appendSessionTranscriptMessage({
+      agentId: "main",
+      sessionId: targetSessionId,
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "standalone app password abcd-efgh-ijkl-mnop",
+          },
+          {
+            type: "text",
+            text: "tokens ya29.fake-access-token-with-enough-length",
+          },
+        ],
+        toolInput: {
+          apiKey: "AIzaSyD-very-real-looking-google-api-key-123",
+          refresh: "1//0fake-refresh-token-with-enough-length",
+        },
+      },
+    });
+
+    const raw = JSON.stringify(readEvents(targetSessionId));
+    expect(raw).not.toContain("ya29.fake-access-token");
+    expect(raw).not.toContain("abcd-efgh-ijkl-mnop");
+    expect(raw).not.toContain("AIzaSyD-very-real-looking");
+    expect(raw).not.toContain("1//0fake-refresh-token");
+  });
+
   it("appends to existing SQLite transcript chains", async () => {
     const targetSessionId = "small-linear-session";
     appendSqliteSessionTranscriptEvent({
