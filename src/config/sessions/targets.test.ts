@@ -15,7 +15,7 @@ import {
   resolveSessionDatabaseTargets,
 } from "./targets.js";
 
-function createCustomRootCfg(customRoot: string, defaultAgentId = "ops"): OpenClawConfig {
+function createAgentConfig(defaultAgentId = "ops"): OpenClawConfig {
   return {
     session: {},
     agents: {
@@ -131,8 +131,7 @@ describe("resolveAgentSessionDatabaseTargetsSync", () => {
   it("resolves configured and default targets for one requested agent", async () => {
     await withTempHome(async (home) => {
       const env = createEnv(home);
-      const customRoot = path.join(home, "custom-state");
-      const cfg = createCustomRootCfg(customRoot, "main");
+      const cfg = createAgentConfig("main");
 
       expect(resolveAgentSessionDatabaseTargetsSync(cfg, "codex", { env })).toEqual([
         expectedTarget({ agentId: "codex", env }),
