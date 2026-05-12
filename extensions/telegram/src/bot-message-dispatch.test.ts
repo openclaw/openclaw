@@ -1369,6 +1369,36 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("clears an ended reasoning preview before starting a split reasoning segment", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "<think>First</think>" });
+        await replyOptions?.onReasoningEnd?.();
+        await replyOptions?.onReasoningStream?.({ text: "<think>Second</think>" });
+        await dispatcherOptions.deliver({ text: "Answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    expect(reasoningDraftStream.update).toHaveBeenNthCalledWith(1, "Reasoning:\n_First_");
+    expect(reasoningDraftStream.update).toHaveBeenNthCalledWith(2, "Reasoning:\n_Second_");
+    expect(reasoningDraftStream.clear).toHaveBeenCalledTimes(2);
+    expect(reasoningDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    const splitClearOrder = reasoningDraftStream.clear.mock.invocationCallOrder[0];
+    const splitForceOrder = reasoningDraftStream.forceNewMessage.mock.invocationCallOrder[0];
+    const secondReasoningUpdateOrder = reasoningDraftStream.update.mock.invocationCallOrder[1];
+    expect(splitClearOrder).toBeLessThan(splitForceOrder);
+    expect(splitForceOrder).toBeLessThan(secondReasoningUpdateOrder);
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("streams reasoning from configured defaults", async () => {
     const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 2001,

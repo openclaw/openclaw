@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram: clear the previous `/reasoning stream` preview before starting a split reasoning segment, preventing stale reasoning messages from piling up while preserving final cleanup. Fixes #80862. Thanks @kyle20026.
 - Build: skip copied metadata for bundled plugins that are excluded from build entries, preventing update/status rebuilds from advertising missing QQ Bot runtime files. (#80925)
 - Control UI/sessions: nest subagent sessions under their parent session in the session picker dropdown using a visual `└─ ` prefix, making the parent-child relationship clear. Fixes #77628. (#78623) Thanks @chinar-amrutkar.
 
