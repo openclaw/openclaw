@@ -414,13 +414,19 @@ describe("openai tts", () => {
       });
 
       const store = getDebugProxyCaptureStore();
-      const events = store
-        .getSessionEvents("tts-patched-session", 10)
-        .filter((event) => event.host === "api.openai.com");
-      expect(events).toHaveLength(2);
-      const kinds = events.map((event) => String(event.kind)).toSorted();
-      expect(kinds).toEqual(["request", "response"]);
-      store.close();
+      let events: Array<Record<string, unknown>> = [];
+      try {
+        await vi.waitFor(() => {
+          events = store
+            .getSessionEvents("tts-patched-session", 10)
+            .filter((event) => event.host === "api.openai.com");
+          expect(events).toHaveLength(2);
+        });
+        const kinds = events.map((event) => String(event.kind)).toSorted();
+        expect(kinds).toEqual(["request", "response"]);
+      } finally {
+        finalizeDebugProxyCapture();
+      }
     });
   });
 });
