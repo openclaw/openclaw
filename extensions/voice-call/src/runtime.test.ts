@@ -199,6 +199,18 @@ function createSessionRuntimeMock(sessionStore: Record<string, unknown>) {
   };
 }
 
+function requireRealtimeConsultToolHandler(): RealtimeConsultToolHandler {
+  const registeredToolHandler = firstMockCall(
+    mocks.realtimeHandlerRegisterToolHandler.mock.calls,
+    "realtime tool handler registration",
+  );
+  expect(registeredToolHandler[0]).toBe("openclaw_agent_consult");
+  if (typeof registeredToolHandler[1] !== "function") {
+    throw new Error("expected realtime tool handler callback");
+  }
+  return registeredToolHandler[1] as RealtimeConsultToolHandler;
+}
+
 describe("createVoiceCallRuntime lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
