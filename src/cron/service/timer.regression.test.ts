@@ -25,6 +25,7 @@ import {
   applyJobResult,
   executeJob,
   executeJobCore,
+  executeJobCoreWithTimeout,
   onTimer,
   runMissedJobs,
 } from "./timer.js";
@@ -1512,6 +1513,87 @@ describe("cron service timer regressions", () => {
       const execution = requireRecord(cleanupArgs.execution);
       expect(execution.jobId).toBe("isolated-pre-model-timeout-74803");
       expect(execution.phase).toBe("context_engine");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears pre-model watchdog when attempt_dispatch phase is reached (#80888)", async () => {
+    vi.useFakeTimers();
+    try {
+      const scheduledAt = Date.parse("2026-05-12T03:00:00.000Z");
+      vi.setSystemTime(scheduledAt);
+      const started = createDeferred<void>();
+      let abortObserved = false;
+      const job = createIsolatedRegressionJob({
+        id: "isolated-attempt-dispatch-80888",
+        name: "attempt dispatch clears watchdog",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 120 },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: "/tmp/cron-80888.json",
+        log: noopLogger,
+        nowMs: () => scheduledAt,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(
+          async ({
+            abortSignal,
+            onExecutionStarted,
+            onExecutionPhase,
+          }: {
+            abortSignal?: AbortSignal;
+            onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+            onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
+          }) => {
+            // Yield so startSetupTimeout() in executeJobCoreWithTimeout fires
+            // before we call onExecutionStarted — matching real async runner behavior.
+            await Promise.resolve();
+            onExecutionStarted?.({
+              jobId: "isolated-attempt-dispatch-80888",
+              agentId: "main",
+              sessionId: "cron-run-session",
+              sessionKey: "agent:main:cron:isolated-attempt-dispatch-80888:run:cron-run-session",
+              phase: "runner_entered",
+            });
+            onExecutionPhase?.({
+              jobId: "isolated-attempt-dispatch-80888",
+              agentId: "main",
+              sessionId: "cron-run-session",
+              sessionKey: "agent:main:cron:isolated-attempt-dispatch-80888:run:cron-run-session",
+              phase: "attempt_dispatch",
+            });
+            started.resolve();
+            abortSignal?.addEventListener(
+              "abort",
+              () => {
+                abortObserved = true;
+              },
+              { once: true },
+            );
+            return await new Promise<never>(() => {});
+          },
+        ),
+      });
+
+      const corePromise = executeJobCoreWithTimeout(state, job);
+      await started.promise;
+      // Advance past the 60s pre-model watchdog — should NOT fire
+      // because attempt_dispatch cleared it
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(abortObserved).toBe(false);
+
+      // Advance to the 120s job timeout to settle
+      await vi.advanceTimersByTimeAsync(60_000);
+      const result = await corePromise;
+      expect(abortObserved).toBe(true);
+      expect(result.status).toBe("error");
+      expect(result.error).toContain("job execution timed out");
+      expect(result.error).not.toContain("stalled before first model call");
     } finally {
       vi.useRealTimers();
     }

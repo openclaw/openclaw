@@ -182,7 +182,11 @@ export async function executeJobCoreWithTimeout(
   const noteExecutionProgress = (info?: CronAgentExecutionStarted) => {
     if (info) {
       activeExecution = { ...activeExecution, ...info };
-      if (info.phase === "model_call_started" || info.firstModelCallStarted) {
+      if (
+        info.phase === "model_call_started" ||
+        info.phase === "attempt_dispatch" ||
+        info.firstModelCallStarted
+      ) {
         modelCallStarted = true;
         clearPreModelTimeout();
       }
