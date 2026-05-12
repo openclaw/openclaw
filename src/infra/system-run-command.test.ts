@@ -77,6 +77,10 @@ describe("system run command helpers", () => {
     },
     { argv: ["fish", "-c", "echo hi"], expected: "echo hi" },
     { argv: ["pwsh", "-Command", "Get-Date"], expected: "Get-Date" },
+    {
+      argv: ["pwsh", "-Command", "allowed.exe", ";", "unlisted.exe"],
+      expected: "allowed.exe ; unlisted.exe",
+    },
     { argv: ["pwsh", "-File", "script.ps1"], expected: "script.ps1" },
     { argv: ["powershell", "-f", "script.ps1"], expected: "script.ps1" },
     { argv: ["pwsh", "-ec", "ZQBjAGgAbwA="], expected: "ZQBjAGgAbwA=" },

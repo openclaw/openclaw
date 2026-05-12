@@ -484,6 +484,11 @@ describe("extractShellWrapperCommand", () => {
       expectedCommand: { isWrapper: true, command: "Get-Date" },
     },
     {
+      argv: ["pwsh", "-Command", "allowed.exe", ";", "unlisted.exe"],
+      expectedInline: "allowed.exe ; unlisted.exe",
+      expectedCommand: { isWrapper: true, command: "allowed.exe ; unlisted.exe" },
+    },
+    {
       argv: ["cmd.exe", "-c", "echo", "hi"],
       expectedInline: "echo hi",
       expectedCommand: { isWrapper: true, command: "echo hi" },

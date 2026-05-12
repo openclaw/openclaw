@@ -796,6 +796,35 @@ describe("exec approvals shell analysis", () => {
       }
     });
 
+    it("rejects PowerShell inline argv payloads with trailing command tokens", () => {
+      const dir = makeTempDir();
+      const allowedPath = path.join(dir, "allowed.exe");
+      fs.writeFileSync(allowedPath, "");
+      fs.chmodSync(allowedPath, 0o755);
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({
+          argv: ["pwsh", "-Command", "allowed.exe", ";", "unlisted.exe"],
+          cwd: dir,
+          env,
+        });
+        expect(analysis.ok).toBe(true);
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern: allowedPath }],
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(false);
+        expect(result.segmentAllowlistEntries).toEqual([null]);
+        expect(result.segmentSatisfiedBy).toEqual([null]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it("satisfies allowlist when bare * wildcard is present", () => {
       const dir = makeTempDir();
       const binPath = path.join(dir, "mybin");

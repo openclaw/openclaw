@@ -217,7 +217,16 @@ function extractCmdInlineCommand(argv: string[]): string | null {
 }
 
 function extractPowerShellInlineCommand(argv: string[]): string | null {
-  return extractInlineCommandByFlags(argv, POWERSHELL_INLINE_COMMAND_FLAGS);
+  const match = resolveInlineCommandMatch(argv, POWERSHELL_INLINE_COMMAND_FLAGS);
+  if (match.command === null || match.valueTokenIndex === null) {
+    return match.command;
+  }
+  const flag = normalizeLowercaseStringOrEmpty(argv[match.valueTokenIndex - 1]);
+  if (flag === "-command" || flag === "-c" || flag === "--command") {
+    const command = argv.slice(match.valueTokenIndex).join(" ").trim();
+    return command.length > 0 ? command : null;
+  }
+  return match.command;
 }
 
 function extractInlineCommandByFlags(
