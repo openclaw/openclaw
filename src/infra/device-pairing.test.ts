@@ -590,7 +590,7 @@ describe("device pairing tokens", () => {
     const issued = await issueDeviceBootstrapToken({
       baseDir,
       roles: ["operator"],
-      scopes: ["operator.read"],
+      scopes: ["operator.approvals", "operator.read", "operator.write"],
     });
 
     await expect(
@@ -620,10 +620,14 @@ describe("device pairing tokens", () => {
         deviceId: "device-1",
         publicKey: "public-key-1",
         role: "operator",
-        scopes: ["operator.admin"],
+        scopes: ["operator.write", "operator.approvals"],
         baseDir,
       }),
     ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+
+    const pending = await listDevicePairing(baseDir);
+    expect(pending.pending).toHaveLength(1);
+    expect(pending.pending[0]?.scopes).toEqual(["operator.read"]);
 
     await approveDevicePairing(
       first.request.requestId,

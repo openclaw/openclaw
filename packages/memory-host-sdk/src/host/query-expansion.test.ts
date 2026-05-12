@@ -1,27 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { expandQueryForFts, extractKeywords } from "./query-expansion.js";
 
-function countKeyword(keywords: readonly string[], keyword: string): number {
-  let count = 0;
-  for (const candidate of keywords) {
-    if (candidate === keyword) {
-      count++;
-    }
-  }
-  return count;
-}
-
 describe("extractKeywords", () => {
   it("extracts keywords from English conversational query", () => {
     const keywords = extractKeywords("that thing we discussed about the API");
-    expect(keywords).toContain("discussed");
-    expect(keywords).toContain("api");
-    // Should not include stop words
-    expect(keywords).not.toContain("that");
-    expect(keywords).not.toContain("thing");
-    expect(keywords).not.toContain("we");
-    expect(keywords).not.toContain("about");
-    expect(keywords).not.toContain("the");
+    expect(keywords).toStrictEqual(["discussed", "api"]);
   });
 
   it("extracts keywords from Chinese conversational query", () => {
@@ -43,25 +26,17 @@ describe("extractKeywords", () => {
 
   it("returns specific technical terms", () => {
     const keywords = extractKeywords("what was the solution for the CFR bug");
-    expect(keywords).toContain("solution");
-    expect(keywords).toContain("cfr");
-    expect(keywords).toContain("bug");
+    expect(keywords).toStrictEqual(["solution", "cfr", "bug"]);
   });
 
   it("extracts keywords from Korean conversational query", () => {
     const keywords = extractKeywords("어제 논의한 배포 전략");
-    expect(keywords).toContain("논의한");
-    expect(keywords).toContain("배포");
-    expect(keywords).toContain("전략");
-    // Should not include stop words
-    expect(keywords).not.toContain("어제");
+    expect(keywords).toStrictEqual(["논의한", "배포", "전략"]);
   });
 
   it("strips Korean particles to extract stems", () => {
     const keywords = extractKeywords("서버에서 발생한 에러를 확인");
-    expect(keywords).toContain("서버");
-    expect(keywords).toContain("에러");
-    expect(keywords).toContain("확인");
+    expect(keywords).toStrictEqual(["서버에서", "서버", "발생한", "에러를", "에러", "확인"]);
   });
 
   it("filters Korean stop words including inflected forms", () => {
@@ -88,14 +63,12 @@ describe("extractKeywords", () => {
 
   it("strips longest Korean trailing particles first", () => {
     const keywords = extractKeywords("기능으로 설명");
-    expect(keywords).toContain("기능");
-    expect(keywords).not.toContain("기능으");
+    expect(keywords).toStrictEqual(["기능으로", "기능", "설명"]);
   });
 
   it("keeps stripped ASCII stems for mixed Korean tokens", () => {
     const keywords = extractKeywords("API를 배포했다");
-    expect(keywords).toContain("api");
-    expect(keywords).toContain("배포했다");
+    expect(keywords).toStrictEqual(["api를", "api", "배포했다"]);
   });
 
   it("handles mixed Korean and English query", () => {
@@ -129,18 +102,12 @@ describe("extractKeywords", () => {
 
   it("extracts keywords from Spanish conversational query", () => {
     const keywords = extractKeywords("ayer hablamos sobre la estrategia de despliegue");
-    expect(keywords).toContain("estrategia");
-    expect(keywords).toContain("despliegue");
-    expect(keywords).not.toContain("ayer");
-    expect(keywords).not.toContain("sobre");
+    expect(keywords).toStrictEqual(["hablamos", "estrategia", "despliegue"]);
   });
 
   it("extracts keywords from Portuguese conversational query", () => {
     const keywords = extractKeywords("ontem falamos sobre a estratégia de implantação");
-    expect(keywords).toContain("estratégia");
-    expect(keywords).toContain("implantação");
-    expect(keywords).not.toContain("ontem");
-    expect(keywords).not.toContain("sobre");
+    expect(keywords).toStrictEqual(["falamos", "estratégia", "implantação"]);
   });
 
   it("filters Spanish and Portuguese question stop words", () => {
@@ -155,10 +122,7 @@ describe("extractKeywords", () => {
 
   it("extracts keywords from Arabic conversational query", () => {
     const keywords = extractKeywords("بالأمس ناقشنا استراتيجية النشر");
-    expect(keywords).toContain("ناقشنا");
-    expect(keywords).toContain("استراتيجية");
-    expect(keywords).toContain("النشر");
-    expect(keywords).not.toContain("بالأمس");
+    expect(keywords).toStrictEqual(["ناقشنا", "استراتيجية", "النشر"]);
   });
 
   it("filters Arabic question stop words", () => {
@@ -176,12 +140,12 @@ describe("extractKeywords", () => {
 
   it("handles query with only stop words", () => {
     const keywords = extractKeywords("the a an is are");
-    expect(keywords.length).toBe(0);
+    expect(keywords).toStrictEqual([]);
   });
 
   it("removes duplicate keywords", () => {
     const keywords = extractKeywords("test test testing");
-    expect(countKeyword(keywords, "test")).toBe(1);
+    expect(keywords).toStrictEqual(["test", "testing"]);
   });
 
   describe("with trigram tokenizer", () => {
@@ -233,21 +197,28 @@ describe("extractKeywords", () => {
 describe("expandQueryForFts", () => {
   it("returns original query and extracted keywords", () => {
     const result = expandQueryForFts("that API we discussed");
-    expect(result.original).toBe("that API we discussed");
-    expect(result.keywords).toContain("api");
-    expect(result.keywords).toContain("discussed");
+    expect(result).toStrictEqual({
+      original: "that API we discussed",
+      keywords: ["api", "discussed"],
+      expanded: "that API we discussed OR api OR discussed",
+    });
   });
 
   it("builds expanded OR query for FTS", () => {
     const result = expandQueryForFts("the solution for bugs");
-    expect(result.expanded).toContain("OR");
-    expect(result.expanded).toContain("solution");
-    expect(result.expanded).toContain("bugs");
+    expect(result).toStrictEqual({
+      original: "the solution for bugs",
+      keywords: ["solution", "bugs"],
+      expanded: "the solution for bugs OR solution OR bugs",
+    });
   });
 
   it("returns original query when no keywords extracted", () => {
     const result = expandQueryForFts("the");
-    expect(result.keywords.length).toBe(0);
-    expect(result.expanded).toBe("the");
+    expect(result).toStrictEqual({
+      original: "the",
+      keywords: [],
+      expanded: "the",
+    });
   });
 });
