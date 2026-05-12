@@ -1,12 +1,12 @@
 import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
-  resolveSessionAgentId,
+  resolveSessionAgentIds,
   type MemoryCorpusSearchResult,
   type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 
 type MemoryToolRuntime = typeof import("./tools.runtime.js");
@@ -16,6 +16,7 @@ type MemorySearchManagerResult = Awaited<
 type MemoryToolOptions = {
   config?: OpenClawConfig;
   getConfig?: () => OpenClawConfig | undefined;
+  agentId?: string;
   agentSessionKey?: string;
 };
 
@@ -49,14 +50,15 @@ export const MemoryGetSchema = Type.Object({
   ),
 });
 
-export function resolveMemoryToolContext(options: MemoryToolOptions) {
+function resolveMemoryToolContext(options: MemoryToolOptions) {
   const cfg = options.getConfig?.() ?? options.config;
   if (!cfg) {
     return null;
   }
-  const agentId = resolveSessionAgentId({
+  const { sessionAgentId: agentId } = resolveSessionAgentIds({
     sessionKey: options.agentSessionKey,
     config: cfg,
+    agentId: options.agentId,
   });
   if (!resolveMemorySearchConfig(cfg, agentId)) {
     return null;

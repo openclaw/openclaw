@@ -124,7 +124,6 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
   }
 
   for (const plugin of loadPluginManifestRegistry({
-    cache: false,
     ...(params?.config ? { config: params.config } : {}),
     ...(params?.env ? { env: params.env } : {}),
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),

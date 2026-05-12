@@ -19,6 +19,7 @@ describe("gateway handshake timeouts", () => {
     expect(clampConnectChallengeTimeoutMs(0)).toBe(MIN_CONNECT_CHALLENGE_TIMEOUT_MS);
     expect(clampConnectChallengeTimeoutMs(2_000)).toBe(2_000);
     expect(clampConnectChallengeTimeoutMs(20_000)).toBe(MAX_CONNECT_CHALLENGE_TIMEOUT_MS);
+    expect(clampConnectChallengeTimeoutMs(30_000, 30_000)).toBe(30_000);
   });
 
   test("prefers OPENCLAW_HANDSHAKE_TIMEOUT_MS and falls back on the test-only env", () => {
@@ -107,17 +108,38 @@ describe("gateway handshake timeouts", () => {
 
   test("resolveConnectChallengeTimeoutMs falls back to env override", () => {
     const original = process.env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS;
+    const originalHandshake = process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
     try {
       process.env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS = "5000";
       expect(resolveConnectChallengeTimeoutMs()).toBe(5_000);
       // Explicit value still takes precedence over env
       expect(resolveConnectChallengeTimeoutMs(3_000)).toBe(3_000);
+      process.env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS = "";
+      process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "30000";
+      expect(resolveConnectChallengeTimeoutMs()).toBe(30_000);
     } finally {
       if (original === undefined) {
         delete process.env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS;
       } else {
         process.env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS = original;
       }
+      if (originalHandshake === undefined) {
+        delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = originalHandshake;
+      }
     }
+  });
+
+  test("resolveConnectChallengeTimeoutMs follows configured preauth timeout", () => {
+    expect(
+      resolveConnectChallengeTimeoutMs(undefined, { env: {}, configuredTimeoutMs: 30_000 }),
+    ).toBe(30_000);
+    expect(resolveConnectChallengeTimeoutMs(45_000, { env: {}, configuredTimeoutMs: 30_000 })).toBe(
+      30_000,
+    );
+    expect(resolveConnectChallengeTimeoutMs(0, { env: {}, configuredTimeoutMs: 30_000 })).toBe(
+      MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
+    );
   });
 });

@@ -92,7 +92,7 @@ jobs:
             const excludedLockfiles = new Set(["pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lockb"]);
             const totalChangedLines = files.reduce((total, file) => {
               const path = file.filename ?? "";
-              if (path === "docs.acp.md" || path.startsWith("docs/") || excludedLockfiles.has(path)) {
+              if (path.startsWith("docs/") || excludedLockfiles.has(path)) {
                 return total;
               }
               return total + (file.additions ?? 0) + (file.deletions ?? 0);
@@ -274,10 +274,11 @@ jobs:
 
             const activePrLimitLabel = "r: too-many-prs";
             const activePrLimitOverrideLabel = "r: too-many-prs-override";
-            const activePrLimit = 10;
+            const activePrLimit = 20;
             const labelColor = "B60205";
             const labelDescription = `Author has more than ${activePrLimit} active PRs in this repo`;
             const authorLogin = pullRequest.user?.login;
+            const headRefName = pullRequest.head?.ref ?? "";
             if (!authorLogin) {
               return;
             }
@@ -294,6 +295,25 @@ jobs:
                 .map((label) => (typeof label === "string" ? label : label?.name))
                 .filter((name) => typeof name === "string"),
             );
+
+            if (pullRequest.user?.type === "Bot" || /\[bot\]$/i.test(authorLogin) || authorLogin.startsWith("app/")) {
+              if (labelNames.has(activePrLimitLabel)) {
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pullRequest.number,
+                    name: activePrLimitLabel,
+                  });
+                } catch (error) {
+                  if (error?.status !== 404) {
+                    throw error;
+                  }
+                }
+              }
+              core.info(`Skipping active PR limit for GitHub App author ${authorLogin}.`);
+              return;
+            }
 
             if (labelNames.has(activePrLimitOverrideLabel)) {
               if (labelNames.has(activePrLimitLabel)) {
@@ -374,7 +394,12 @@ jobs:
               return false;
             };
 
-            if (await isPrivilegedAuthor()) {
+            const automationPrHeadPrefixes = ["clawsweeper/", "clownfish/"];
+            const isAutomationPullRequest =
+              typeof headRefName === "string" &&
+              automationPrHeadPrefixes.some((prefix) => headRefName.startsWith(prefix));
+
+            if ((await isPrivilegedAuthor()) || isAutomationPullRequest) {
               if (labelNames.has(activePrLimitLabel)) {
                 try {
                   await github.rest.issues.removeLabel({
@@ -581,7 +606,7 @@ jobs:
               const excludedLockfiles = new Set(["pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lockb"]);
               const totalChangedLines = files.reduce((total, file) => {
                 const path = file.filename ?? "";
-                if (path === "docs.acp.md" || path.startsWith("docs/") || excludedLockfiles.has(path)) {
+                if (path.startsWith("docs/") || excludedLockfiles.has(path)) {
                   return total;
                 }
                 return total + (file.additions ?? 0) + (file.deletions ?? 0);

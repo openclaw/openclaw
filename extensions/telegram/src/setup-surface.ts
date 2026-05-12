@@ -8,14 +8,13 @@ import {
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import {
   parseTelegramAllowFromId,
   TELEGRAM_TOKEN_HELP_LINES,
   TELEGRAM_USER_ID_HELP_LINES,
-  telegramSetupAdapter,
 } from "./setup-core.js";
 import {
   buildTelegramDmAccessWarningLines,
@@ -109,5 +108,3 @@ export const telegramSetupWizard: ChannelSetupWizard = {
   dmPolicy: telegramSetupDmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
-
-export { parseTelegramAllowFromId, telegramSetupAdapter };

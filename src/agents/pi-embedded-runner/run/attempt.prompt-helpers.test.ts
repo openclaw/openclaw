@@ -2,10 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 
 const musicGenerationTaskStatusMocks = vi.hoisted(() => ({
   buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(),
+  buildMusicGenerationTaskStatusDetails: vi.fn(() => ({})),
+  buildMusicGenerationTaskStatusText: vi.fn(() => "Music generation task status"),
+  findActiveMusicGenerationTaskForSession: vi.fn(),
+  MUSIC_GENERATION_TASK_KIND: "music_generation",
 }));
 
 const videoGenerationTaskStatusMocks = vi.hoisted(() => ({
   buildActiveVideoGenerationTaskPromptContextForSession: vi.fn(),
+  buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
+  buildVideoGenerationTaskStatusText: vi.fn(() => "Video generation task status"),
+  findActiveVideoGenerationTaskForSession: vi.fn(),
+  getVideoGenerationTaskProviderId: vi.fn(),
+  isActiveVideoGenerationTask: vi.fn(() => false),
+  VIDEO_GENERATION_TASK_KIND: "video_generation",
 }));
 
 const hostHookStateMocks = vi.hoisted(() => ({
@@ -18,7 +28,7 @@ vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
 import {
   forgetPromptBuildDrainCacheForRun,
-  hasPromptSubmissionContent,
+  resolvePromptSubmissionSkipReason,
   resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
 } from "./attempt.prompt-helpers.js";
@@ -73,42 +83,64 @@ describe("resolveAttemptPrependSystemContext", () => {
   });
 });
 
-describe("hasPromptSubmissionContent", () => {
-  it("rejects empty prompt submissions without history or images", () => {
+describe("resolvePromptSubmissionSkipReason", () => {
+  it("skips empty prompt submissions without history or images", () => {
     expect(
-      hasPromptSubmissionContent({
+      resolvePromptSubmissionSkipReason({
         prompt: "   ",
         messages: [],
         imageCount: 0,
       }),
-    ).toBe(false);
+    ).toBe("empty_prompt_history_images");
   });
 
-  it("allows blank prompt submissions when replay history has content", () => {
+  it("skips blank visible user prompt submissions even when replay history exists", () => {
     expect(
-      hasPromptSubmissionContent({
+      resolvePromptSubmissionSkipReason({
         prompt: "   ",
         messages: [{ role: "user", content: "previous turn", timestamp: 1 }],
         imageCount: 0,
       }),
-    ).toBe(true);
+    ).toBe("blank_user_prompt");
   });
 
   it("allows text or image prompt submissions", () => {
     expect(
-      hasPromptSubmissionContent({
+      resolvePromptSubmissionSkipReason({
         prompt: "hello",
         messages: [],
         imageCount: 0,
       }),
-    ).toBe(true);
+    ).toBeNull();
     expect(
-      hasPromptSubmissionContent({
+      resolvePromptSubmissionSkipReason({
         prompt: "   ",
         messages: [],
         imageCount: 1,
       }),
-    ).toBe(true);
+    ).toBeNull();
+  });
+
+  it("skips blank prompt on runtimeOnly turns", () => {
+    expect(
+      resolvePromptSubmissionSkipReason({
+        prompt: "",
+        messages: [],
+        runtimeOnly: true,
+        imageCount: 0,
+      }),
+    ).toBe("empty_prompt_history_images");
+  });
+
+  it("treats undefined runtimeOnly as a visible user submission", () => {
+    expect(
+      resolvePromptSubmissionSkipReason({
+        prompt: "",
+        messages: [],
+        runtimeOnly: undefined,
+        imageCount: 0,
+      }),
+    ).toBe("empty_prompt_history_images");
   });
 });
 

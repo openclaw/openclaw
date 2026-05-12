@@ -23,6 +23,9 @@ export function createCodexAppServerAgentHarness(options?: {
   return {
     id: options?.id ?? "codex",
     label: options?.label ?? "Codex agent harness",
+    deliveryDefaults: {
+      sourceVisibleReplies: "message_tool",
+    },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
       if (providerIds.has(provider)) {
@@ -36,6 +39,10 @@ export function createCodexAppServerAgentHarness(options?: {
     runAttempt: async (params) => {
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runCodexAppServerAttempt(params, { pluginConfig: options?.pluginConfig });
+    },
+    runSideQuestion: async (params) => {
+      const { runCodexAppServerSideQuestion } = await import("./src/app-server/side-question.js");
+      return runCodexAppServerSideQuestion(params, { pluginConfig: options?.pluginConfig });
     },
     compact: async (params) => {
       const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");

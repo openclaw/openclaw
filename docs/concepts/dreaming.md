@@ -111,6 +111,8 @@ Light and REM phase hits add a small recency-decayed boost from `memory/.dreams/
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep. Each sweep runs phases in order: light → REM → deep.
 
+The sweep includes the primary runtime workspace and any configured agent workspaces, deduped by path, so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
+
 Default cadence behavior:
 
 | Setting              | Default       |
@@ -234,6 +236,10 @@ When enabled, the Gateway **Dreams** tab shows:
 - next scheduled run timing
 - a distinct grounded Scene lane for staged historical replay entries
 - an expandable Dream Diary reader backed by `doctor.memory.dreamDiary`
+
+## Dreaming never runs: status shows blocked
+
+If `openclaw memory status` reports `Dreaming status: blocked`, the managed cron exists but the default agent heartbeat is not firing. Check that heartbeat is enabled for the default agent and that its target is not `none`, then run `openclaw memory status --deep` again after the next heartbeat interval.
 
 ## Related
 

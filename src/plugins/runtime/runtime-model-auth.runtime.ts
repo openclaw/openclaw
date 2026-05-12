@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   getApiKeyForModel as resolveModelApiKey,
   resolveApiKeyForProvider as resolveProviderApiKey,
@@ -31,6 +31,7 @@ export async function getRuntimeAuthForModel(params: {
   const resolvedAuth = await resolveModelApiKey({
     model: params.model,
     cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
   });
 
   if (!resolvedAuth.apiKey || resolvedAuth.mode === "aws-sdk") {

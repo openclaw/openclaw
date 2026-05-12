@@ -3,7 +3,7 @@ import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type TelegramMediaMessage = Pick<
   Message,
@@ -19,7 +19,7 @@ type TelegramMediaFileRef =
   | NonNullable<Message["document"]>
   | NonNullable<Message["sticker"]>;
 
-export type TelegramPrimaryMedia = {
+type TelegramPrimaryMedia = {
   placeholder: string;
   fileRef: TelegramMediaFileRef;
 };

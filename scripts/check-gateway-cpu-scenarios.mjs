@@ -163,7 +163,7 @@ function collectObservations(params) {
   const observations = [];
   for (const result of params.startup?.results ?? []) {
     const cpuCoreMax = result.summary?.cpuCoreRatio?.max;
-    const wallMax = result.summary?.readyz?.max ?? result.summary?.healthz?.max;
+    const wallMax = result.summary?.readyzMs?.max ?? result.summary?.healthzMs?.max;
     if (
       typeof cpuCoreMax === "number" &&
       typeof wallMax === "number" &&

@@ -64,12 +64,11 @@ describe("qa agentic parity report", () => {
       ],
     };
 
-    expect(computeQaAgenticParityMetrics(summary)).toMatchObject({
-      totalScenarios: 3,
-      passedScenarios: 3,
-      validToolCallCount: 1,
-      validToolCallRate: 1,
-    });
+    const metrics = computeQaAgenticParityMetrics(summary);
+    expect(metrics.totalScenarios).toBe(3);
+    expect(metrics.passedScenarios).toBe(3);
+    expect(metrics.validToolCallCount).toBe(1);
+    expect(metrics.validToolCallRate).toBe(1);
   });
 
   it("fails the parity gate when the candidate regresses against baseline", () => {
@@ -198,7 +197,7 @@ describe("qa agentic parity report", () => {
     const regressionFailures = comparison.failures.filter((failure) =>
       failure.includes("completion rate"),
     );
-    expect(regressionFailures).toEqual([]);
+    expect(regressionFailures).toStrictEqual([]);
   });
 
   it("fails the parity gate when required parity scenarios are missing on both sides", () => {
@@ -277,7 +276,9 @@ describe("qa agentic parity report", () => {
     // Metric comparisons are relative, so a same-on-both-sides failure
     // must not appear as a relative metric failure. The required-scenario
     // failure line is the only thing keeping the gate honest here.
-    expect(comparison.failures.some((failure) => failure.includes("completion rate"))).toBe(false);
+    expect(comparison.failures.filter((failure) => failure.includes("completion rate"))).toEqual(
+      [],
+    );
   });
 
   it("fails the parity gate when a required parity scenario fails on the candidate only", () => {

@@ -32,6 +32,7 @@ vi.mock("./register.status-health-sessions.js", () => ({
     program.command("status");
     program.command("health");
     program.command("sessions");
+    program.command("commitments");
     const tasks = program.command("tasks");
     tasks.command("show");
   },
@@ -86,6 +87,7 @@ describe("command-registry", () => {
     expect(names).toContain("backup");
     expect(names).toContain("mcp");
     expect(names).toContain("sessions");
+    expect(names).toContain("commitments");
     expect(names).toContain("tasks");
     expect(names).not.toContain("agent");
     expect(names).not.toContain("crestodian");
@@ -97,11 +99,11 @@ describe("command-registry", () => {
     const program = createProgram();
     const found = await registerCoreCliByName(program, testProgramContext, "agents");
     expect(found).toBe(true);
-    const agentsCmd = program.commands.find((c) => c.name() === "agents");
-    expect(agentsCmd).toBeDefined();
     // The registrar also installs the singular "agent" command from the same entry.
-    const agentCmd = program.commands.find((c) => c.name() === "agent");
-    expect(agentCmd).toBeDefined();
+    expect(program.commands.map((command) => command.name()).toSorted()).toEqual([
+      "agent",
+      "agents",
+    ]);
   });
 
   it("registerCoreCliByName returns false for unknown commands", async () => {
@@ -159,7 +161,22 @@ describe("command-registry", () => {
     expect(names).toContain("status");
     expect(names).toContain("health");
     expect(names).toContain("sessions");
+    expect(names).toContain("commitments");
     expect(names).toContain("tasks");
+  });
+
+  it("can eagerly register the status/session command group repeatedly for completion", async () => {
+    const program = createProgram();
+
+    for (const name of ["status", "health", "sessions", "commitments", "tasks"]) {
+      await expect(registerCoreCliByName(program, testProgramContext, name)).resolves.toBe(true);
+    }
+
+    const names = namesOf(program);
+    const countName = (target: string) =>
+      names.reduce((count, name) => count + (name === target ? 1 : 0), 0);
+    expect(countName("commitments")).toBe(1);
+    expect(countName("tasks")).toBe(1);
   });
 
   it("replaces placeholders when loading a grouped entry by secondary command name", async () => {

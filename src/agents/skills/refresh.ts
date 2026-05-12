@@ -7,13 +7,9 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import {
-  type SkillsChangeEvent,
   bumpSkillsSnapshotVersion,
-  getSkillsSnapshotVersion,
-  registerSkillsChangeListener,
   resetSkillsRefreshStateForTest,
   setSkillsChangeListenerErrorHandler,
-  shouldRefreshSnapshotForVersion,
 } from "./refresh-state.js";
 export {
   bumpSkillsSnapshotVersion,
@@ -141,6 +137,8 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
 
   const watcher = chokidar.watch(watchTargets, {
     ignoreInitial: true,
+    // Skill discovery reads root skills, direct child skills, and one grouped skill level.
+    depth: 2,
     awaitWriteFinish: {
       stabilityThreshold: debounceMs,
       pollInterval: 100,

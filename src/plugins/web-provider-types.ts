@@ -14,7 +14,10 @@ export type WebFetchProviderId = string;
 export type WebSearchProviderToolDefinition = {
   description: string;
   parameters: TSchema;
-  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  execute: (
+    args: Record<string, unknown>,
+    context?: WebSearchProviderToolExecutionContext,
+  ) => Promise<Record<string, unknown>>;
 };
 
 export type WebFetchProviderToolDefinition = {
@@ -29,6 +32,10 @@ export type WebSearchProviderContext = {
   runtimeMetadata?: RuntimeWebSearchMetadata;
 };
 
+export type WebSearchProviderToolExecutionContext = {
+  signal?: AbortSignal;
+};
+
 export type WebFetchProviderContext = {
   config?: OpenClawConfig;
   fetchConfig?: Record<string, unknown>;
@@ -36,6 +43,11 @@ export type WebFetchProviderContext = {
 };
 
 export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
+
+export type WebSearchProviderConfiguredCredentialFallback = {
+  path: string;
+  value: unknown;
+};
 
 export type WebSearchRuntimeMetadataContext = {
   config?: OpenClawConfig;
@@ -73,13 +85,15 @@ export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
-  onboardingScopes?: Array<"text-inference">;
+  onboardingScopes?: readonly "text-inference"[];
   requiresCredential?: boolean;
   credentialLabel?: string;
   envVars: string[];
   placeholder: string;
   signupUrl: string;
   docsUrl?: string;
+  /** Optional note shown before credential collection for provider-specific prerequisites. */
+  credentialNote?: string;
   autoDetectOrder?: number;
   credentialPath: string;
   inactiveSecretPaths?: string[];
@@ -87,6 +101,9 @@ export type WebSearchProviderPlugin = {
   setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
   setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  getConfiguredCredentialFallback?: (
+    config?: OpenClawConfig,
+  ) => WebSearchProviderConfiguredCredentialFallback | undefined;
   applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
   runSetup?: (ctx: WebSearchProviderSetupContext) => OpenClawConfig | Promise<OpenClawConfig>;
   resolveRuntimeMetadata?: (

@@ -1,7 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
@@ -309,8 +309,3 @@ function safeHostForLog(url: string): string {
     return "invalid-url";
   }
 }
-
-/**
- * @deprecated Use `downloadMSTeamsAttachments` instead (supports all file types).
- */
-export const downloadMSTeamsImageAttachments = downloadMSTeamsAttachments;

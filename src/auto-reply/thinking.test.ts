@@ -7,28 +7,26 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderXHighThinking: vi.fn(),
 }));
 
-let listThinkingLevelLabels: typeof import("./thinking.js").listThinkingLevelLabels;
-let listThinkingLevelOptions: typeof import("./thinking.js").listThinkingLevelOptions;
-let listThinkingLevels: typeof import("./thinking.js").listThinkingLevels;
-let normalizeReasoningLevel: typeof import("./thinking.js").normalizeReasoningLevel;
-let normalizeThinkLevel: typeof import("./thinking.js").normalizeThinkLevel;
-let isThinkingLevelSupported: typeof import("./thinking.js").isThinkingLevelSupported;
-let formatThinkingLevels: typeof import("./thinking.js").formatThinkingLevels;
-let resolveSupportedThinkingLevel: typeof import("./thinking.js").resolveSupportedThinkingLevel;
-let resolveThinkingDefaultForModel: typeof import("./thinking.js").resolveThinkingDefaultForModel;
+vi.mock("../plugins/provider-thinking.js", () => ({
+  resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
+  resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
+  resolveProviderThinkingProfile: providerRuntimeMocks.resolveProviderThinkingProfile,
+  resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
+}));
 
-async function loadFreshThinkingModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../plugins/provider-thinking.js", () => ({
-    resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
-    resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
-    resolveProviderThinkingProfile: providerRuntimeMocks.resolveProviderThinkingProfile,
-    resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
-  }));
-  return await import("./thinking.js");
-}
+const {
+  listThinkingLevelLabels,
+  listThinkingLevelOptions,
+  listThinkingLevels,
+  normalizeReasoningLevel,
+  normalizeThinkLevel,
+  isThinkingLevelSupported,
+  formatThinkingLevels,
+  resolveSupportedThinkingLevel,
+  resolveThinkingDefaultForModel,
+} = await import("./thinking.js");
 
-beforeEach(async () => {
+beforeEach(() => {
   providerRuntimeMocks.resolveProviderBinaryThinking.mockReset();
   providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReset();
@@ -37,18 +35,6 @@ beforeEach(async () => {
   providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderXHighThinking.mockReset();
   providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(undefined);
-
-  ({
-    listThinkingLevelLabels,
-    listThinkingLevelOptions,
-    listThinkingLevels,
-    normalizeReasoningLevel,
-    normalizeThinkLevel,
-    isThinkingLevelSupported,
-    formatThinkingLevels,
-    resolveSupportedThinkingLevel,
-    resolveThinkingDefaultForModel,
-  } = await loadFreshThinkingModuleForTest());
 });
 
 describe("normalizeThinkLevel", () => {
@@ -203,6 +189,46 @@ describe("listThinkingLevels", () => {
         catalog,
       }),
     ).toBe("max");
+  });
+
+  it("uses catalog compat reasoning efforts to expose xhigh for configured custom models", () => {
+    const catalog = [
+      {
+        provider: "gmn",
+        id: "gpt-5.4",
+        name: "GPT 5.4 via GMN",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      },
+    ];
+
+    expect(listThinkingLevels("gmn", "gpt-5.4", catalog)).toContain("xhigh");
+    expect(formatThinkingLevels("gmn", "gpt-5.4", ", ", catalog)).toBe(
+      "off, minimal, low, medium, high, xhigh",
+    );
+    expect(
+      isThinkingLevelSupported({
+        provider: "gmn",
+        model: "gpt-5.4",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not let catalog xhigh compat override binary thinking providers", () => {
+    providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
+    const catalog = [
+      {
+        provider: "zai",
+        id: "glm-4.7",
+        name: "GLM 4.7",
+        compat: { supportedReasoningEfforts: ["xhigh"] },
+      },
+    ];
+
+    expect(listThinkingLevels("zai", "glm-4.7", catalog)).toEqual(["off", "low"]);
+    expect(listThinkingLevelLabels("zai", "glm-4.7", catalog)).toEqual(["off", "on"]);
   });
 
   it("maps stale unsupported levels to the largest profile level", () => {

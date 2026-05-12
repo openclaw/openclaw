@@ -4,6 +4,7 @@ const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForInstalledIndex: vi.fn(),
   loadPluginManifestRegistryForPluginRegistry: vi.fn(),
   loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+  loadPluginMetadataSnapshot: vi.fn(),
 }));
 
 vi.mock("./manifest-registry-installed.js", () => ({
@@ -21,6 +22,14 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry:
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
   loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
+}));
+
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
 }));
 
 vi.resetModules();
@@ -52,6 +61,10 @@ function setManifestPlugins(plugins: Array<Record<string, unknown>>) {
   });
   pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
     plugins,
+  });
+  pluginRegistryMocks.loadPluginMetadataSnapshot.mockReturnValue({
+    plugins,
+    manifestRegistry: { plugins },
   });
 }
 
@@ -88,6 +101,11 @@ describe("provider auth choice manifest helpers", () => {
     });
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+    pluginRegistryMocks.loadPluginMetadataSnapshot.mockReset();
+    pluginRegistryMocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [],
+      manifestRegistry: { plugins: [] },
+    });
     resetProviderAuthAliasMapCacheForTest();
   });
 
@@ -242,11 +260,16 @@ describe("provider auth choice manifest helpers", () => {
         includeUntrustedWorkspacePlugins: false,
       }),
     ).toEqual([
-      expect.objectContaining({
+      {
         pluginId: "openai",
         providerId: "openai",
+        methodId: "api-key",
         choiceId: "openai-api-key",
-      }),
+        choiceLabel: "OpenAI API key",
+        optionKey: "openaiApiKey",
+        cliFlag: "--openai-api-key",
+        cliOption: "--openai-api-key <key>",
+      },
     ]);
     expect(
       resolveManifestProviderAuthChoice("openai-api-key", {
@@ -391,7 +414,7 @@ describe("provider auth choice manifest helpers", () => {
       },
     ]);
 
-    expect(resolveManifestProviderAuthChoices()).toEqual([]);
+    expect(resolveManifestProviderAuthChoices()).toStrictEqual([]);
   });
 
   it("does not duplicate explicit provider auth choices with setup auth methods", () => {
@@ -476,11 +499,16 @@ describe("provider auth choice manifest helpers", () => {
     ]);
 
     expect(resolveManifestProviderAuthChoices()).toEqual([
-      expect.objectContaining({
+      {
         pluginId: "openai",
         providerId: "openai",
+        methodId: "api-key",
         choiceId: "openai-api-key",
-      }),
+        choiceLabel: "OpenAI API key",
+        optionKey: "openaiApiKey",
+        cliFlag: "--openai-api-key",
+        cliOption: "--openai-api-key <key>",
+      },
     ]);
     expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("openai");
     expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
@@ -531,11 +559,16 @@ describe("provider auth choice manifest helpers", () => {
     ]);
 
     expect(resolveManifestProviderAuthChoices()).toEqual([
-      expect.objectContaining({
+      {
         pluginId: "custom-openai",
         providerId: "custom-openai",
+        methodId: "api-key",
         choiceId: "openai-api-key",
-      }),
+        choiceLabel: "OpenAI API key",
+        optionKey: "openaiApiKey",
+        cliFlag: "--openai-api-key",
+        cliOption: "--openai-api-key <key>",
+      },
     ]);
     expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("custom-openai");
     expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
@@ -572,7 +605,7 @@ describe("provider auth choice manifest helpers", () => {
     ]);
 
     const resolvedProviderId = resolveProviderIdForAuth("fixture-provider-plan");
-    expect(pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalled();
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalled();
     expect(resolvedProviderId).toBe("fixture-provider");
     expect(
       resolveManifestProviderApiKeyChoice({

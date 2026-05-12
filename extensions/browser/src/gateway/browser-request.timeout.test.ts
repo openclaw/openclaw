@@ -61,13 +61,18 @@ describe("browser.request local timeout", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(withTimeoutMock).toHaveBeenCalledWith(expect.any(Function), 4321, "browser request");
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: "Error: browser request timed out",
-      }),
-    );
+    expect(withTimeoutMock).toHaveBeenCalledTimes(1);
+    const [call] = withTimeoutMock.mock.calls;
+    if (!call) {
+      throw new Error("expected withTimeout call");
+    }
+    const [dispatchTask, timeoutMs, timeoutLabel] = call;
+    expect(dispatchTask).toBeTypeOf("function");
+    expect(timeoutMs).toBe(4321);
+    expect(timeoutLabel).toBe("browser request");
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "UNAVAILABLE",
+      message: "Error: browser request timed out",
+    });
   });
 });

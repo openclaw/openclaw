@@ -66,6 +66,7 @@ vi.mock("../../channels/plugins/config-writes.js", () => ({
 }));
 
 vi.mock("../../channels/registry.js", () => ({
+  normalizeAnyChannelId: vi.fn((value?: string) => value),
   normalizeChannelId: vi.fn((value?: string) => value),
 }));
 
@@ -505,6 +506,9 @@ describe("command gating", () => {
     const setResult = await handleConfigCommand(setParams, true);
     expect(setResult?.shouldContinue).toBe(false);
     expect(setResult?.reply?.text).toContain("Config updated");
-    expect(replaceConfigFileMock).toHaveBeenCalled();
+    expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
+    expect(replaceConfigFileMock).toHaveBeenCalledWith(
+      expect.objectContaining({ afterWrite: { mode: "auto" } }),
+    );
   });
 });

@@ -16,7 +16,10 @@ import {
   loadChannelSetupPluginRegistrySnapshotForChannel,
 } from "../commands/channel-setup/plugin-install.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
-import { listTrustedChannelPluginCatalogEntries } from "../commands/channel-setup/trusted-catalog.js";
+import {
+  getTrustedChannelPluginCatalogEntry,
+  listTrustedChannelPluginCatalogEntries,
+} from "../commands/channel-setup/trusted-catalog.js";
 import type {
   ChannelSetupConfiguredResult,
   ChannelSetupResult,
@@ -28,6 +31,7 @@ import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveBundledPluginSources } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -40,7 +44,9 @@ import {
 } from "./channel-setup.prompts.js";
 import {
   collectChannelStatus,
+  findBundledSourceForCatalogChannel,
   noteChannelPrimer,
+  resolveCatalogChannelSelectionHint,
   resolveChannelSelectionNoteLines,
   resolveChannelSetupSelectionContributions,
   resolveQuickstartDefault,
@@ -153,7 +159,6 @@ export async function setupChannels(
     channel: ChannelChoice,
     pluginId?: string,
     setup?: {
-      installRuntimeDeps?: boolean;
       forceReload?: boolean;
       forceSetupOnlyChannelPlugins?: boolean;
     },
@@ -168,8 +173,7 @@ export async function setupChannels(
       channel,
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
-      installRuntimeDeps: setup?.installRuntimeDeps ?? false,
-      forceSetupOnlyChannelPlugins: setup?.forceSetupOnlyChannelPlugins,
+      forceSetupOnlyChannelPlugins: setup?.forceSetupOnlyChannelPlugins ?? true,
     });
     const plugin =
       snapshot.channelSetups.find((entry) => entry.plugin.id === channel)?.plugin ??
@@ -234,7 +238,7 @@ export async function setupChannels(
   const shouldConfigure = options?.skipConfirm
     ? true
     : await prompter.confirm({
-        message: "Configure chat channels now?",
+        message: "Set up a chat channel now?",
         initialValue: true,
       });
   if (!shouldConfigure) {
@@ -315,6 +319,43 @@ export async function setupChannels(
     };
   };
 
+  // Decorates the runtime status map with synthetic `selectionHint` entries for
+  // installable catalog channels (e.g. WeCom shipped via npm). In QuickStart we
+  // run with `deferStatusUntilSelection`, which leaves `statusByChannel` empty
+  // until the user picks a channel — without this overlay the selection menu
+  // would render those options without any "download from <npm-spec>" hint.
+  //
+  // Bundled channels (Signal / Tlon / Twitch / Slack ...) reach this code path
+  // too whenever their plugin is not yet enabled, because they share the same
+  // "installable catalog" bucket. For those we must NOT show "download from
+  // <npm-spec>" — the plugin already lives under `extensions/<id>` and the
+  // hint would mislead users into thinking the plugin is missing.
+  const buildStatusByChannelForSelection = (
+    catalogById: ReturnType<typeof getChannelEntries>["catalogById"],
+  ): Map<ChannelChoice, ChannelSetupStatus> => {
+    const decorated = new Map(statusByChannel);
+    if (catalogById.size === 0) {
+      return decorated;
+    }
+    const bundledSources = resolveBundledPluginSources({
+      workspaceDir: resolveWorkspaceDir(),
+    });
+    for (const [channel, entry] of catalogById) {
+      if (decorated.has(channel)) {
+        continue;
+      }
+      const bundledLocalPath =
+        findBundledSourceForCatalogChannel({ bundled: bundledSources, entry })?.localPath ?? null;
+      decorated.set(channel, {
+        channel,
+        configured: false,
+        statusLines: [],
+        selectionHint: resolveCatalogChannelSelectionHint(entry, { bundledLocalPath }),
+      });
+    }
+    return decorated;
+  };
+
   const refreshStatus = async (channel: ChannelChoice) => {
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (!adapter) {
@@ -332,7 +373,9 @@ export async function setupChannels(
     const disabledHint = resolveConfigDisabledHint(channel);
     if (disabledHint) {
       await prompter.note(
-        `${channel} cannot be configured while ${disabledHint}. Enable it before setup.`,
+        `${channel} cannot be configured while ${disabledHint}. Enable it, then run ${formatCliCommand(
+          "openclaw channels add",
+        )} again.`,
         "Channel setup",
       );
       return false;
@@ -341,7 +384,9 @@ export async function setupChannels(
     next = result.config;
     if (!result.enabled) {
       await prompter.note(
-        `Cannot enable ${channel}: ${result.reason ?? "plugin disabled"}.`,
+        `Cannot enable ${channel}: ${result.reason ?? "plugin disabled"}. Run ${formatCliCommand(
+          "openclaw plugins list",
+        )} to inspect plugin state.`,
         "Channel setup",
       );
       return false;
@@ -402,12 +447,16 @@ export async function setupChannels(
       await loadScopedChannelPlugin(channel, undefined, {
         forceReload: true,
         forceSetupOnlyChannelPlugins: true,
-        installRuntimeDeps: true,
       });
     }
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (!adapter) {
-      await prompter.note(`${channel} does not support guided setup yet.`, "Channel setup");
+      await prompter.note(
+        `${channel} does not have an interactive setup screen yet. Run ${formatCliCommand(
+          `openclaw channels add --channel ${channel} --help`,
+        )} for supported flags.`,
+        "Channel setup",
+      );
       return;
     }
     const result = await adapter.configure({
@@ -538,6 +587,7 @@ export async function setupChannels(
         prompter,
         runtime,
         workspaceDir,
+        autoConfirmSingleSource: true,
       });
       next = result.cfg;
       if (!result.installed) {
@@ -546,16 +596,99 @@ export async function setupChannels(
       await loadScopedChannelPlugin(channel, result.pluginId ?? catalogEntry.pluginId);
       await refreshStatus(channel);
     } else if (installedCatalogEntry) {
-      const plugin = await loadScopedChannelPlugin(channel, installedCatalogEntry.pluginId);
+      let plugin = await loadScopedChannelPlugin(channel, installedCatalogEntry.pluginId);
+      if (!plugin && installedCatalogEntry.install?.npmSpec) {
+        // The channel is recorded in the user's config (e.g. a stale
+        // `channels.<id>` entry left over from a previous install) but the
+        // plugin runtime cannot be loaded from disk — typically because the
+        // externalized npm package was uninstalled or pruned during an
+        // upgrade. Rather than dead-ending with "plugin not available", fall
+        // back to the catalog-driven install flow so onboard can recover by
+        // reinstalling the official external plugin.
+        //
+        // Preserve the same disabled-config guard used by
+        // `enableBundledPluginForSetup` so an operator-disabled channel
+        // cannot be silently reinstalled/re-enabled through this path.
+        const disabledHint = resolveConfigDisabledHint(channel);
+        if (disabledHint) {
+          await prompter.note(
+            `${channel} cannot be configured while ${disabledHint}. Enable it before setup.`,
+            "Channel setup",
+          );
+          return "done";
+        }
+        const workspaceDir = resolveWorkspaceDir();
+        const result = await ensureChannelSetupPluginInstalled({
+          cfg: next,
+          entry: installedCatalogEntry,
+          prompter,
+          runtime,
+          workspaceDir,
+          autoConfirmSingleSource: true,
+        });
+        next = result.cfg;
+        if (!result.installed) {
+          return "retry_selection";
+        }
+        plugin = await loadScopedChannelPlugin(
+          channel,
+          result.pluginId ?? installedCatalogEntry.pluginId,
+        );
+      }
       if (!plugin) {
         await prompter.note(`${channel} plugin not available.`, "Channel setup");
         return "done";
       }
       await refreshStatus(channel);
     } else {
-      const enabled = await enableBundledPluginForSetup(channel);
-      if (!enabled) {
-        return "done";
+      // Neither discovery bucket yielded an entry for this channel. This can
+      // happen when `channels.<id>` in user config carries stale fields (e.g.
+      // `appId`, tokens) left over from a previous install: `isStatically-
+      // ChannelConfigured` returns true, which removes the channel from the
+      // `installableCatalogEntries` bucket, while a missing/pruned plugin on
+      // disk keeps it out of `installedCatalogEntries`. Before falling back
+      // to the bundled-plugin enable path, consult the catalog directly so
+      // users with a stale config entry for an externalized channel (qqbot,
+      // imessage, discord, whatsapp, ...) still get auto-install instead
+      // of a dead-end "plugin not available" note.
+      const fallbackCatalogEntry = getTrustedChannelPluginCatalogEntry(channel, {
+        cfg: next,
+        workspaceDir: resolveWorkspaceDir(),
+      });
+      if (fallbackCatalogEntry?.install?.npmSpec) {
+        // Preserve the same disabled-config guard used by
+        // `enableBundledPluginForSetup` so an operator-disabled channel
+        // cannot be silently reinstalled/re-enabled through this path. This
+        // mirrors the guard that was previously enforced inside the
+        // bundled-enable fallback.
+        const disabledHint = resolveConfigDisabledHint(channel);
+        if (disabledHint) {
+          await prompter.note(
+            `${channel} cannot be configured while ${disabledHint}. Enable it before setup.`,
+            "Channel setup",
+          );
+          return "done";
+        }
+        const workspaceDir = resolveWorkspaceDir();
+        const result = await ensureChannelSetupPluginInstalled({
+          cfg: next,
+          entry: fallbackCatalogEntry,
+          prompter,
+          runtime,
+          workspaceDir,
+          autoConfirmSingleSource: true,
+        });
+        next = result.cfg;
+        if (!result.installed) {
+          return "retry_selection";
+        }
+        await loadScopedChannelPlugin(channel, result.pluginId ?? fallbackCatalogEntry.pluginId);
+        await refreshStatus(channel);
+      } else {
+        const enabled = await enableBundledPluginForSetup(channel);
+        if (!enabled) {
+          return "done";
+        }
       }
     }
 
@@ -591,13 +724,13 @@ export async function setupChannels(
 
   if (options?.quickstartDefaults) {
     while (true) {
-      const { entries } = getChannelEntries();
+      const { entries, catalogById } = getChannelEntries();
       const choice = await prompter.select({
         message: "Select channel (QuickStart)",
         options: [
           ...resolveChannelSetupSelectionContributions({
             entries,
-            statusByChannel,
+            statusByChannel: buildStatusByChannelForSelection(catalogById),
             resolveDisabledHint,
           }).map((contribution) => contribution.option),
           {
@@ -620,13 +753,13 @@ export async function setupChannels(
     const doneValue = "__done__" as const;
     const initialValue = options?.initialSelection?.[0] ?? quickstartDefault;
     while (true) {
-      const { entries } = getChannelEntries();
+      const { entries, catalogById } = getChannelEntries();
       const choice = await prompter.select({
         message: "Select a channel",
         options: [
           ...resolveChannelSetupSelectionContributions({
             entries,
-            statusByChannel,
+            statusByChannel: buildStatusByChannelForSelection(catalogById),
             resolveDisabledHint,
           }).map((contribution) => contribution.option),
           {

@@ -17,8 +17,6 @@ type CatalogEntryMeta = {
 function createCatalogFixtureEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     ...overrides,
   };
 }
@@ -143,6 +141,7 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
 
       expect(entry?.install.npmSpec).toBe(params.npmSpec);
       expect(entry?.pluginId).toBeUndefined();
+      expect(entry?.trustedSourceLinkedOfficialInstall).toBe(true);
     });
 
     it("lets external catalogs override shipped fallback channel metadata", () => {
@@ -219,6 +218,7 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
       expect(entry?.install.npmSpec).toBe(params.externalNpmSpec);
       expect(entry?.meta.label).toBe(params.externalLabel);
       expect(entry?.pluginId).toBeUndefined();
+      expect(entry?.trustedSourceLinkedOfficialInstall).toBeUndefined();
     });
 
     it("surfaces package-name drift in external channel catalog install metadata", () => {

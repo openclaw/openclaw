@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
@@ -10,7 +10,7 @@ import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 import { buildAgentTraceBase } from "./trace-base.js";
 
-export type CacheTraceStage =
+type CacheTraceStage =
   | "cache:result"
   | "cache:state"
   | "session:loaded"
@@ -22,7 +22,7 @@ export type CacheTraceStage =
   | "stream:context"
   | "session:after";
 
-export type CacheTraceEvent = {
+type CacheTraceEvent = {
   ts: string;
   seq: number;
   stage: CacheTraceStage;
@@ -47,7 +47,7 @@ export type CacheTraceEvent = {
   error?: string;
 };
 
-export type CacheTrace = {
+type CacheTrace = {
   enabled: true;
   filePath: string;
   recordStage: (stage: CacheTraceStage, payload?: Partial<CacheTraceEvent>) => void;

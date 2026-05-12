@@ -137,7 +137,9 @@ When you set `--url`, the CLI does not fall back to config or environment creden
 ## Notes
 
 - Token rotation returns a new token (sensitive). Treat it like a secret.
-- These commands require `operator.pairing` (or `operator.admin`) scope.
+- These commands require `operator.pairing` (or `operator.admin`) scope. Some
+  approvals also require the caller to hold the operator scopes that the target
+  device would mint or inherit; see [Operator scopes](/gateway/operator-scopes).
 - `gateway.nodes.pairing.autoApproveCidrs` is an opt-in Gateway policy for
   fresh node device pairing only; it does not change CLI approval authority.
 - Token rotation and revocation stay inside the approved pairing role set and
@@ -155,7 +157,7 @@ When you set `--url`, the CLI does not fall back to config or environment creden
 
 ## Token drift recovery checklist
 
-Use this when Control UI or other clients keep failing with `AUTH_TOKEN_MISMATCH` or `AUTH_DEVICE_TOKEN_MISMATCH`.
+Use this when Control UI or other clients keep failing with `AUTH_TOKEN_MISMATCH`, `AUTH_DEVICE_TOKEN_MISMATCH`, or `AUTH_SCOPE_MISMATCH`.
 
 1. Confirm current gateway token source:
 
@@ -189,6 +191,7 @@ Notes:
 
 - Normal reconnect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
 - Trusted `AUTH_TOKEN_MISMATCH` recovery can temporarily send both the shared token and the stored device token together for the one bounded retry.
+- `AUTH_SCOPE_MISMATCH` means the device token was recognized but does not carry the requested scope set; fix the pairing/scope approval contract before changing shared gateway auth.
 
 Related:
 

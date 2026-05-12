@@ -84,6 +84,18 @@ function createTestApprovalHandler(capability: ApprovalCapability) {
   });
 }
 
+type ApprovalHandlerRuntime = NonNullable<Awaited<ReturnType<typeof createTestApprovalHandler>>>;
+
+function expectApprovalRuntime(
+  runtime: Awaited<ReturnType<typeof createTestApprovalHandler>>,
+): ApprovalHandlerRuntime {
+  if (runtime === null) {
+    throw new Error("Expected approval handler runtime");
+  }
+  expect(typeof runtime.handleRequested).toBe("function");
+  return runtime;
+}
+
 describe("createChannelApprovalHandlerFromCapability", () => {
   it("returns null when the capability does not expose a native runtime", async () => {
     await expect(
@@ -116,7 +128,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       ...TEST_HANDLER_PARAMS,
     });
 
-    expect(runtime).not.toBeNull();
+    expectApprovalRuntime(runtime);
   });
 
   it("preserves the original request and resolved approval kind when stop-time cleanup unbinds", async () => {
@@ -128,7 +140,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       }),
     );
 
-    expect(runtime).not.toBeNull();
+    const approvalRuntime = expectApprovalRuntime(runtime);
     const request = {
       id: "custom:1",
       expiresAtMs: Date.now() + 60_000,
@@ -138,15 +150,13 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       },
     } as never;
 
-    await runtime?.handleRequested(request);
-    await runtime?.stop();
+    await approvalRuntime.handleRequested(request);
+    await approvalRuntime.stop();
 
-    expect(unbindPending).toHaveBeenCalledWith(
-      expect.objectContaining({
-        request,
-        approvalKind: "plugin",
-      }),
-    );
+    expect(unbindPending).toHaveBeenCalledOnce();
+    const stopUnbind = unbindPending.mock.calls[0]?.[0];
+    expect(stopUnbind?.request).toBe(request);
+    expect(stopUnbind?.approvalKind).toBe("plugin");
   });
 
   it("ignores duplicate pending request ids before finalization", async () => {
@@ -161,25 +171,22 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       }),
     );
 
-    expect(runtime).not.toBeNull();
+    const approvalRuntime = expectApprovalRuntime(runtime);
     const request = makeExecApprovalRequest("exec:1");
 
-    await runtime?.handleRequested(request);
-    await runtime?.handleRequested(request);
-    await runtime?.handleResolved({
+    await approvalRuntime.handleRequested(request);
+    await approvalRuntime.handleRequested(request);
+    await approvalRuntime.handleResolved({
       id: "exec:1",
       decision: "approved",
       resolvedBy: "operator",
     } as never);
 
     expect(unbindPending).toHaveBeenCalledTimes(1);
-    expect(unbindPending).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: { messageId: "1" },
-        binding: { bindingId: "bound-1" },
-        request,
-      }),
-    );
+    const unbind = unbindPending.mock.calls[0]?.[0];
+    expect(unbind?.entry).toEqual({ messageId: "1" });
+    expect(unbind?.binding).toEqual({ bindingId: "bound-1" });
+    expect(unbind?.request).toBe(request);
     expect(buildResolvedResult).toHaveBeenCalledTimes(1);
   });
 
@@ -207,9 +214,10 @@ describe("createChannelApprovalHandlerFromCapability", () => {
 
     const request = makeExecApprovalRequest("exec:2");
 
-    await runtime?.handleRequested(request);
+    const approvalRuntime = expectApprovalRuntime(runtime);
+    await approvalRuntime.handleRequested(request);
     await expect(
-      runtime?.handleResolved({
+      approvalRuntime.handleResolved({
         id: "exec:2",
         decision: "approved",
         resolvedBy: "operator",
@@ -218,11 +226,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
 
     expect(unbindPending).toHaveBeenCalledTimes(2);
     expect(buildResolvedResult).toHaveBeenCalledTimes(1);
-    expect(buildResolvedResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: { messageId: "2" },
-      }),
-    );
+    expect(buildResolvedResult.mock.calls[0]?.[0]?.entry).toEqual({ messageId: "2" });
   });
 
   it("continues stop-time unbind cleanup when one binding throws", async () => {
@@ -240,15 +244,16 @@ describe("createChannelApprovalHandlerFromCapability", () => {
 
     const request = makeExecApprovalRequest("exec:stop-1");
 
-    await runtime?.handleRequested(request);
-    await runtime?.handleRequested({
+    const approvalRuntime = expectApprovalRuntime(runtime);
+    await approvalRuntime.handleRequested(request);
+    await approvalRuntime.handleRequested({
       ...request,
       id: "exec:stop-2",
     });
 
-    await expect(runtime?.stop()).resolves.toBeUndefined();
+    await expect(approvalRuntime.stop()).resolves.toBeUndefined();
     expect(unbindPending).toHaveBeenCalledTimes(2);
-    await expect(runtime?.stop()).resolves.toBeUndefined();
+    await expect(approvalRuntime.stop()).resolves.toBeUndefined();
     expect(unbindPending).toHaveBeenCalledTimes(2);
   });
 });

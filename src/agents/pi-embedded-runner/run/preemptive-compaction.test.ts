@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../test-helpers/pi-coding-agent-token-mock.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
@@ -93,7 +93,7 @@ describe("preemptive-compaction", () => {
     expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
   });
 
-  it("uses the larger unwindowed message estimate when context engine assembly windows history", () => {
+  it("uses the larger unwindowed message estimate when explicitly provided", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [makeAssistantHistory("small assembled window")],
       unwindowedMessages: [makeAssistantHistory(verboseHistory.repeat(4))],

@@ -34,24 +34,28 @@ describe("live model turn probes", () => {
   it("builds a text file read probe", () => {
     const context = buildLiveModelFileProbeContext({ systemPrompt: "sys" });
     expect(context.systemPrompt).toBe("sys");
-    expect(context.messages[0]?.content).toEqual(
-      expect.stringContaining(`LIVE_LABEL=${LIVE_MODEL_FILE_PROBE_TOKEN}`),
+    expect(context.messages[0]?.content).toBe(
+      "Read this visible label and reply with only the value after LIVE_LABEL.\n\nLIVE_LABEL=opal",
     );
   });
 
   it("builds a stricter file read retry probe", () => {
     const context = buildLiveModelFileProbeRetryContext({});
-    expect(context.messages[0]?.content).toEqual(
-      expect.stringContaining(`Reply with exactly ${LIVE_MODEL_FILE_PROBE_TOKEN}`),
+    expect(context.messages[0]?.content).toBe(
+      "The visible label value is:\n\nopal\n\nReply with exactly opal.",
     );
   });
 
   it("builds an image probe with native image content", () => {
     const context = buildLiveModelImageProbeContext({});
-    expect(context.messages[0]?.content).toEqual([
-      expect.objectContaining({ type: "text" }),
-      expect.objectContaining({ type: "image", mimeType: "image/png" }),
-    ]);
+    const content = context.messages[0]?.content;
+    expect(Array.isArray(content)).toBe(true);
+    if (!Array.isArray(content)) {
+      throw new Error("Expected image probe content blocks");
+    }
+    expect(content[0]?.type).toBe("text");
+    expect(content[1]?.type).toBe("image");
+    expect(content[1]).toHaveProperty("mimeType", "image/png");
   });
 
   it("extracts assistant text blocks only", () => {
@@ -88,7 +92,7 @@ describe("live model turn probes", () => {
 
   it("skips known stale file probe routes", () => {
     expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "glm-5" })).toBe(true);
-    expect(shouldSkipLiveModelFileProbe({ provider: "google", id: "gemini-3-pro-preview" })).toBe(
+    expect(shouldSkipLiveModelFileProbe({ provider: "google", id: "gemini-3.1-pro-preview" })).toBe(
       true,
     );
     expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "mimo-v2-omni" })).toBe(

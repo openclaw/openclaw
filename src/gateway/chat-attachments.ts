@@ -30,7 +30,7 @@ export type OffloadedRef = {
   sizeBytes: number;
 };
 
-export type ParsedMessageWithImages = {
+type ParsedMessageWithImages = {
   message: string;
   images: ChatImageContent[];
   imageOrder: PromptImageOrderEntry[];
@@ -67,7 +67,7 @@ export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
   return Math.floor(mb * 1024 * 1024);
 }
 
-export type UnsupportedAttachmentReason =
+type UnsupportedAttachmentReason =
   | "empty-payload"
   | "text-only-image"
   | "unsupported-non-image"
@@ -83,7 +83,7 @@ export class UnsupportedAttachmentError extends Error {
 }
 
 export class MediaOffloadError extends Error {
-  readonly cause: unknown;
+  override readonly cause: unknown;
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "MediaOffloadError";

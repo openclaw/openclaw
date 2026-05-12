@@ -1,5 +1,5 @@
 export type BrowserTransport = "cdp" | "chrome-mcp";
-export type BrowserHeadlessSource =
+type BrowserHeadlessSource =
   | "request"
   | "env"
   | "profile"
@@ -15,6 +15,13 @@ export type BrowserStatus = {
   running: boolean;
   cdpReady?: boolean;
   cdpHttp?: boolean;
+  /**
+   * For Chrome MCP existing-session profiles, true only if a page-level tool
+   * round-trip (`list_pages`) completes; for managed CDP profiles, mirrors
+   * `cdpReady`. Distinguishes "transport handshake passed" from "page tools
+   * are actually usable".
+   */
+  pageReady?: boolean;
   pid: number | null;
   cdpPort: number | null;
   cdpUrl?: string | null;

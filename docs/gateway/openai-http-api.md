@@ -5,14 +5,14 @@ read_when:
 title: "OpenAI chat completions"
 ---
 
-OpenClaw’s Gateway can serve a small OpenAI-compatible Chat Completions endpoint.
+OpenClaw's Gateway can serve a small OpenAI-compatible Chat Completions endpoint.
 
 This endpoint is **disabled by default**. Enable it in config first.
 
 - `POST /v1/chat/completions`
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/chat/completions`
 
-When the Gateway’s OpenAI-compatible HTTP surface is enabled, it also serves:
+When the Gateway's OpenAI-compatible HTTP surface is enabled, it also serves:
 
 - `GET /v1/models`
 - `GET /v1/models/{id}`
@@ -190,6 +190,63 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 - `Content-Type: text/event-stream`
 - Each event line is `data: <json>`
 - Stream ends with `data: [DONE]`
+
+## Chat tool contract
+
+`/v1/chat/completions` supports a function-tool subset compatible with common OpenAI Chat clients.
+
+### Supported request fields
+
+- `tools`: array of `{ "type": "function", "function": { ... } }`
+- `tool_choice`: `"auto"`, `"none"`
+- `messages[*].role: "tool"` follow-up turns
+- `messages[*].tool_call_id` for binding tool results back to a prior tool call
+
+### Unsupported variants
+
+The endpoint returns `400 invalid_request_error` for unsupported tool variants, including:
+
+- non-array `tools`
+- non-function tool entries
+- missing `tool.function.name`
+- `tool_choice` variants such as `allowed_tools` and `custom`
+- `tool_choice: "required"` (not yet enforced at runtime; will be supported once hard enforcement is implemented)
+- `tool_choice: { "type": "function", "function": { "name": "..." } }` (same rationale as `required`)
+- `tool_choice.function.name` values that do not match provided `tools`
+
+### Non-streaming tool response shape
+
+When the agent decides to call tools, the response uses:
+
+- `choices[0].finish_reason = "tool_calls"`
+- `choices[0].message.tool_calls[]` entries with:
+  - `id`
+  - `type: "function"`
+  - `function.name`
+  - `function.arguments` (JSON string)
+
+Assistant commentary before the tool call is returned in `choices[0].message.content` (possibly empty).
+
+### Streaming tool response shape
+
+When `stream: true`, tool calls are emitted as incremental SSE chunks:
+
+- initial assistant role delta
+- optional assistant commentary deltas
+- one or more `delta.tool_calls` chunks carrying tool identity and argument fragments
+- final chunk with `finish_reason: "tool_calls"`
+- `data: [DONE]`
+
+If `stream_options.include_usage=true`, a trailing usage chunk is emitted before `[DONE]`.
+
+### Tool follow-up loop
+
+After receiving `tool_calls`, the client should execute the requested function(s) and send a follow-up request that includes:
+
+- prior assistant tool-call message
+- one or more `role: "tool"` messages with matching `tool_call_id`
+
+This allows the gateway agent run to continue the same reasoning loop and produce the final assistant answer.
 
 ## Open WebUI quick setup
 

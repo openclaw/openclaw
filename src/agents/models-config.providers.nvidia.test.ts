@@ -30,6 +30,7 @@ vi.mock("./model-auth-env-vars.js", () => {
     PROVIDER_ENV_API_KEY_CANDIDATES: candidates,
     listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
     resolveProviderEnvApiKeyCandidates: () => candidates,
+    resolveProviderEnvAuthEvidence: () => ({}),
   };
 });
 
@@ -103,7 +104,7 @@ describe("NVIDIA provider", () => {
       profileApiKey: undefined,
     });
     expect(provider.apiKey).toBe("NVIDIA_API_KEY");
-    expect(provider.models?.length).toBeGreaterThan(0);
+    expect(provider.models).toStrictEqual([createTestModel("nvidia/test-model")]);
   });
 
   it("resolves the nvidia api key value from env", () => {

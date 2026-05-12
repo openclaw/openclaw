@@ -1,8 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
-import { isSenderAllowed } from "./sender-allow.js";
 import {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
@@ -37,6 +36,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => {
 vi.mock("gaxios", () => ({
   Gaxios: class {
     defaults: unknown;
+    interceptors = {
+      request: { add: vi.fn() },
+      response: { add: vi.fn() },
+    };
 
     constructor(defaults?: unknown) {
       this.defaults = defaults;
@@ -75,6 +78,14 @@ vi.mock("./auth.js", async () => {
 
 const authActual = await vi.importActual<typeof import("./auth.js")>("./auth.js");
 const { __testing: authTesting, getGoogleChatAccessToken, verifyGoogleChatRequest } = authActual;
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.doUnmock("gaxios");
+  vi.doUnmock("google-auth-library");
+  vi.doUnmock("./auth.js");
+  vi.resetModules();
+});
 
 const account = {
   accountId: "default",
@@ -146,29 +157,6 @@ describe("googlechat group policy", () => {
   });
 });
 
-describe("isSenderAllowed", () => {
-  it("matches raw email entries only when dangerous name matching is enabled", () => {
-    expect(isSenderAllowed("users/123", "Jane@Example.com", ["jane@example.com"])).toBe(false);
-    expect(isSenderAllowed("users/123", "Jane@Example.com", ["jane@example.com"], true)).toBe(true);
-  });
-
-  it("does not treat users/<email> entries as email allowlist (deprecated form)", () => {
-    expect(isSenderAllowed("users/123", "Jane@Example.com", ["users/jane@example.com"])).toBe(
-      false,
-    );
-  });
-
-  it("still matches user id entries", () => {
-    expect(isSenderAllowed("users/abc", "jane@example.com", ["users/abc"])).toBe(true);
-  });
-
-  it("rejects non-matching raw email entries", () => {
-    expect(isSenderAllowed("users/123", "jane@example.com", ["other@example.com"], true)).toBe(
-      false,
-    );
-  });
-});
-
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
     authTesting.resetGoogleChatAuthForTests();
@@ -229,10 +217,12 @@ describe("sendGoogleChatMessage", () => {
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(String(url)).toContain("messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
-    expect(JSON.parse(String(init?.body))).toMatchObject({
-      text: "hello",
-      thread: { name: "spaces/AAA/threads/xyz" },
-    });
+    const body = JSON.parse(String(init?.body)) as {
+      text?: unknown;
+      thread?: { name?: unknown };
+    };
+    expect(body.text).toBe("hello");
+    expect(body.thread?.name).toBe("spaces/AAA/threads/xyz");
   });
 
   it("does not set messageReplyOption for non-thread sends", async () => {
@@ -286,19 +276,11 @@ describe("verifyGoogleChatRequest", () => {
     };
 
     expect(mocks.gaxiosCtor).toHaveBeenCalledOnce();
-    expect(googleAuthOptions).toMatchObject({
-      clientOptions: {
-        transporter: {
-          defaults: {
-            fetchImplementation: expect.any(Function),
-          },
-        },
-      },
-      credentials: {
-        client_email: "bot@example.iam.gserviceaccount.com",
-        token_uri: "https://oauth2.googleapis.com/token",
-      },
-    });
+    expect(googleAuthOptions.credentials?.client_email).toBe("bot@example.iam.gserviceaccount.com");
+    expect(googleAuthOptions.credentials?.token_uri).toBe("https://oauth2.googleapis.com/token");
+    expect(typeof googleAuthOptions.clientOptions?.transporter?.defaults?.fetchImplementation).toBe(
+      "function",
+    );
     expect(mocks.getAccessToken).toHaveBeenCalledOnce();
     expect("window" in globalThis).toBe(false);
   });
@@ -321,13 +303,7 @@ describe("verifyGoogleChatRequest", () => {
     const oauthOptions = mocks.oauthCtor.mock.calls[0]?.[0] as {
       transporter?: { defaults?: { fetchImplementation?: unknown } };
     };
-    expect(oauthOptions).toMatchObject({
-      transporter: {
-        defaults: {
-          fetchImplementation: expect.any(Function),
-        },
-      },
-    });
+    expect(typeof oauthOptions.transporter?.defaults?.fetchImplementation).toBe("function");
   });
 
   it("rejects add-on tokens when no principal binding is configured", async () => {

@@ -145,11 +145,22 @@ describe("searxng web search provider", () => {
     expect(resolveSearxngLanguage(config)).toBe("de");
   });
 
+  it("exposes a credentialNote with JSON format guidance", () => {
+    const provider = createSearxngWebSearchProvider();
+
+    expect(provider.credentialNote).toContain("json format enabled");
+    expect(provider.credentialNote).toContain("search.formats");
+  });
+
   it("persists base URL to plugin config via setConfiguredCredentialValue", () => {
     const provider = createSearxngWebSearchProvider();
     const config = {} as Record<string, unknown>;
+    const setConfiguredCredentialValue = provider.setConfiguredCredentialValue;
+    if (!setConfiguredCredentialValue) {
+      throw new Error("Expected SearXNG provider setConfiguredCredentialValue");
+    }
 
-    provider.setConfiguredCredentialValue!(config, "http://search.local:9000");
+    setConfiguredCredentialValue(config, "http://search.local:9000");
 
     expect(
       (

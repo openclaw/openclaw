@@ -21,7 +21,7 @@ describe("thread binding manager state", () => {
   });
 
   it("shares managers between ESM and alternate-loaded module instances", async () => {
-    const viaJiti = await loadThreadBindingsViaAlternateLoader();
+    const viaAlternateLoader = await loadThreadBindingsViaAlternateLoader();
 
     createThreadBindingManager({
       cfg: EMPTY_DISCORD_TEST_CONFIG,
@@ -30,7 +30,10 @@ describe("thread binding manager state", () => {
       enableSweeper: false,
     });
 
-    expect(getThreadBindingManager("work")).not.toBeNull();
-    expect(viaJiti.getThreadBindingManager("work")).not.toBeNull();
+    const direct = getThreadBindingManager("work");
+    if (!direct) {
+      throw new Error("expected direct thread binding manager");
+    }
+    expect(viaAlternateLoader.getThreadBindingManager("work")).toBe(direct);
   });
 });

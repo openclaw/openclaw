@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
 
+type WriteWideAreaGatewayZone = typeof import("../infra/widearea-dns.js").writeWideAreaGatewayZone;
+
 const mocks = vi.hoisted(() => ({
   pickPrimaryTailnetIPv4: vi.fn(() => "100.64.0.10"),
   pickPrimaryTailnetIPv6: vi.fn(() => undefined as string | undefined),
   resolveWideAreaDiscoveryDomain: vi.fn(() => "openclaw.internal."),
-  writeWideAreaGatewayZone: vi.fn(async () => ({
+  writeWideAreaGatewayZone: vi.fn<WriteWideAreaGatewayZone>(async () => ({
     changed: true,
     zonePath: "/tmp/openclaw.internal.db",
   })),
@@ -56,6 +58,7 @@ describe("startGatewayDiscovery", () => {
   const prevEnv = { ...process.env };
 
   afterEach(() => {
+    vi.useRealTimers();
     for (const key of Object.keys(process.env)) {
       if (!(key in prevEnv)) {
         delete process.env[key];
@@ -120,6 +123,40 @@ describe("startGatewayDiscovery", () => {
     expect(stopped).toEqual(["peer", "bonjour"]);
   });
 
+  it("continues startup when a local discovery service never settles", async () => {
+    vi.useFakeTimers();
+    process.env.NODE_ENV = "development";
+    delete process.env.VITEST;
+    process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS = "10";
+
+    const service = makeDiscoveryService({
+      id: "stuck-discovery",
+      advertise: vi.fn(() => new Promise<void>(() => {})),
+    });
+    const logs = makeLogs();
+
+    const resultPromise = startGatewayDiscovery({
+      machineDisplayName: "Lab Mac",
+      port: 18789,
+      wideAreaDiscoveryEnabled: false,
+      tailscaleMode: "off",
+      mdnsMode: "full",
+      gatewayDiscoveryServices: [service],
+      logDiscovery: logs,
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    const result = await resultPromise;
+
+    expect(result.bonjourStop).toBeTypeOf("function");
+    await result.bonjourStop?.();
+    expect(logs.warn.mock.calls).toContainEqual([
+      "gateway discovery service timed out after 10ms (stuck-discovery, plugin=stuck-discovery); continuing startup",
+    ]);
+
+    vi.useRealTimers();
+  });
+
   it("skips local discovery services when mDNS mode is off", async () => {
     process.env.NODE_ENV = "development";
     delete process.env.VITEST;
@@ -181,16 +218,18 @@ describe("startGatewayDiscovery", () => {
 
     expect(service.service.advertise).not.toHaveBeenCalled();
     expect(mocks.resolveTailnetDnsHint).toHaveBeenCalledWith({ enabled: true });
-    expect(mocks.writeWideAreaGatewayZone).toHaveBeenCalledWith(
-      expect.objectContaining({
-        domain: "openclaw.internal.",
-        gatewayPort: 18789,
-        displayName: "Lab Mac (OpenClaw)",
-        tailnetIPv4: "100.64.0.10",
-        tailnetDns: "gateway.tailnet.example.ts.net",
-      }),
-    );
-    expect(logs.info).toHaveBeenCalledWith(expect.stringContaining("wide-area DNS-SD updated"));
+    const [zoneParams] = mocks.writeWideAreaGatewayZone.mock.calls.at(-1) ?? [];
+    if (zoneParams === undefined) {
+      throw new Error("Expected wide-area gateway zone to be written");
+    }
+    expect(zoneParams.domain).toBe("openclaw.internal.");
+    expect(zoneParams.gatewayPort).toBe(18789);
+    expect(zoneParams.displayName).toBe("Lab Mac (OpenClaw)");
+    expect(zoneParams.tailnetIPv4).toBe("100.64.0.10");
+    expect(zoneParams.tailnetDns).toBe("gateway.tailnet.example.ts.net");
+    expect(logs.info.mock.calls).toContainEqual([
+      "wide-area DNS-SD updated (openclaw.internal. → /tmp/openclaw.internal.db)",
+    ]);
     expect(result.bonjourStop).toBeNull();
   });
 });

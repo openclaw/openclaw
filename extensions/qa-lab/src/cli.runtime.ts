@@ -474,6 +474,7 @@ export async function runQaSuiteCommand(opts: {
   scenarioIds?: string[];
   concurrency?: number;
   allowFailures?: boolean;
+  enabledPluginIds?: string[];
   image?: string;
   cpus?: number;
   memory?: string;
@@ -567,6 +568,7 @@ export async function runQaSuiteCommand(opts: {
     ...(thinkingDefault ? { thinkingDefault } : {}),
     ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
     scenarioIds,
+    ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
     ...(opts.concurrency !== undefined
       ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
       : {}),

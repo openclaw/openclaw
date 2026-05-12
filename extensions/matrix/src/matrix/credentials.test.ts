@@ -21,6 +21,20 @@ const DEFAULT_LEGACY_CREDENTIALS = {
   createdAt: "2026-03-01T10:00:00.000Z",
 };
 
+const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
+
+type MatrixCredentials = NonNullable<ReturnType<typeof loadMatrixCredentials>>;
+
+function expectMatrixCredentials(
+  credentials: ReturnType<typeof loadMatrixCredentials>,
+): MatrixCredentials {
+  if (credentials === null) {
+    throw new Error("Expected Matrix credentials");
+  }
+  expect(typeof credentials.createdAt).toBe("string");
+  return credentials;
+}
+
 describe("matrix credentials storage", () => {
   const tempDirs: string[] = [];
 
@@ -74,7 +88,9 @@ describe("matrix credentials storage", () => {
     expect(fs.existsSync(credPath)).toBe(true);
     expect(credPath).toBe(path.join(stateDir, "credentials", "matrix", "credentials-ops.json"));
     const mode = fs.statSync(credPath).mode & 0o777;
-    expect(mode).toBe(0o600);
+    if (EXPECTS_POSIX_PRIVATE_FILE_MODE) {
+      expect(mode).toBe(0o600);
+    }
   });
 
   it("touch updates lastUsedAt while preserving createdAt", async () => {
@@ -92,15 +108,15 @@ describe("matrix credentials storage", () => {
         "default",
       );
       const initial = loadMatrixCredentials({}, "default");
-      expect(initial).not.toBeNull();
+      const initialCredentials = expectMatrixCredentials(initial);
 
       vi.setSystemTime(new Date("2026-03-01T10:05:00.000Z"));
       await touchMatrixCredentials({}, "default");
       const touched = loadMatrixCredentials({}, "default");
-      expect(touched).not.toBeNull();
+      const touchedCredentials = expectMatrixCredentials(touched);
 
-      expect(touched?.createdAt).toBe(initial?.createdAt);
-      expect(touched?.lastUsedAt).toBe("2026-03-01T10:05:00.000Z");
+      expect(touchedCredentials.createdAt).toBe(initialCredentials.createdAt);
+      expect(touchedCredentials.lastUsedAt).toBe("2026-03-01T10:05:00.000Z");
     } finally {
       vi.useRealTimers();
     }
@@ -131,10 +147,9 @@ describe("matrix credentials storage", () => {
       ),
     ).resolves.toBe("saved");
 
-    expect(loadMatrixCredentials({}, "default")).toMatchObject({
-      accessToken: "tok-123",
-      deviceId: "DEVICE123",
-    });
+    const credentials = expectMatrixCredentials(loadMatrixCredentials({}, "default"));
+    expect(credentials.accessToken).toBe("tok-123");
+    expect(credentials.deviceId).toBe("DEVICE123");
   });
 
   it("backfill skips when newer credentials already changed the token", async () => {
@@ -163,10 +178,9 @@ describe("matrix credentials storage", () => {
       ),
     ).resolves.toBe("skipped");
 
-    expect(loadMatrixCredentials({}, "default")).toMatchObject({
-      accessToken: "tok-new",
-      deviceId: "DEVICE999",
-    });
+    const credentials = expectMatrixCredentials(loadMatrixCredentials({}, "default"));
+    expect(credentials.accessToken).toBe("tok-new");
+    expect(credentials.deviceId).toBe("DEVICE999");
   });
 
   it("serializes stale backfill writes behind newer credential saves", async () => {
@@ -228,16 +242,15 @@ describe("matrix credentials storage", () => {
       releaseFirstWrite?.();
       await Promise.all([staleBackfillPromise, newerSavePromise]);
 
-      expect(loadMatrixCredentials({}, "default")).toMatchObject({
-        accessToken: "tok-new",
-        deviceId: "DEVICE999",
-      });
+      const credentials = expectMatrixCredentials(loadMatrixCredentials({}, "default"));
+      expect(credentials.accessToken).toBe("tok-new");
+      expect(credentials.deviceId).toBe("DEVICE999");
     } finally {
       renameSpy.mockRestore();
     }
   });
 
-  it("migrates legacy matrix credential files on read", async () => {
+  it("migrates legacy matrix credential files on read", () => {
     const { legacyPath, currentPath } = setupLegacyCredentialsFile({
       cfg: {
         channels: {
@@ -352,16 +365,14 @@ describe("matrix credentials storage", () => {
 
       expect(loaded?.accessToken).toBe("current-token");
       expect(renameSpy).not.toHaveBeenCalled();
-      expect(
-        JSON.parse(fs.readFileSync(currentPath, "utf8")) as { accessToken: string },
-      ).toMatchObject({
-        accessToken: "current-token",
-      });
-      expect(
-        JSON.parse(fs.readFileSync(legacyPath, "utf8")) as { accessToken: string },
-      ).toMatchObject({
-        accessToken: "recreated-stale-legacy-token",
-      });
+      const currentFile = JSON.parse(fs.readFileSync(currentPath, "utf8")) as {
+        accessToken?: unknown;
+      };
+      const legacyFile = JSON.parse(fs.readFileSync(legacyPath, "utf8")) as {
+        accessToken?: unknown;
+      };
+      expect(currentFile.accessToken).toBe("current-token");
+      expect(legacyFile.accessToken).toBe("recreated-stale-legacy-token");
     } finally {
       readFileSpy.mockRestore();
       renameSpy.mockRestore();

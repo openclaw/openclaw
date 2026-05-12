@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { registerDiffsPlugin } from "./plugin.js";
@@ -21,6 +21,11 @@ vi.mock("playwright-core", () => ({
     launch: launchMock,
   },
 }));
+
+afterAll(() => {
+  vi.doUnmock("playwright-core");
+  vi.resetModules();
+});
 
 describe("PlaywrightDiffScreenshotter", () => {
   let rootDir: string;
@@ -76,12 +81,10 @@ describe("PlaywrightDiffScreenshotter", () => {
 
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(browser.newPage).toHaveBeenCalledTimes(2);
-    expect(browser.newPage).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        deviceScaleFactor: 2,
-      }),
-    );
+    const firstPageParams = (
+      browser.newPage.mock.calls as Array<[{ deviceScaleFactor?: number }?]>
+    )[0]?.[0];
+    expect(firstPageParams?.deviceScaleFactor).toBe(2);
     expect(pages).toHaveLength(2);
     expect(pages[0]?.close).toHaveBeenCalledTimes(1);
     expect(pages[1]?.close).toHaveBeenCalledTimes(1);
@@ -126,7 +129,9 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(pages).toHaveLength(1);
     expect(pages[0]?.pdf).toHaveBeenCalledTimes(1);
     const pdfCall = pages[0]?.pdf.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
-    expect(pdfCall).toBeDefined();
+    if (!pdfCall) {
+      throw new Error("expected PDF render call");
+    }
     expect(pdfCall).not.toHaveProperty("pageRanges");
     expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
     await expect(fs.readFile(pdfPath, "utf8")).resolves.toContain("%PDF-1.7");
@@ -402,9 +407,15 @@ describe("diffs plugin registration", () => {
     expect(on.mock.calls[0]?.[0]).toBe("before_prompt_build");
     const beforePromptBuild = on.mock.calls[0]?.[1];
     const promptResult = await beforePromptBuild?.({}, {});
-    expect(promptResult).toMatchObject({
-      prependSystemContext: expect.stringContaining("prefer the `diffs` tool"),
-    });
+    expect(promptResult?.prependSystemContext).toBe(
+      [
+        "When you need to show edits as a real diff, prefer the `diffs` tool instead of writing a manual summary.",
+        "It accepts either `before` + `after` text or a unified `patch`.",
+        "`mode=view` returns `details.viewerUrl` for canvas use; `mode=file` returns `details.filePath`; `mode=both` returns both.",
+        "If you need to send the rendered file, use the `message` tool with `path` or `filePath`.",
+        "Include `path` when you know the filename, and omit presentation overrides unless needed.",
+      ].join("\n"),
+    );
     expect(promptResult?.prependContext).toBeUndefined();
 
     const registeredTool = registeredToolFactory?.({
@@ -619,7 +630,7 @@ function createMockBrowser(
   options?: { boundingBox?: { x: number; y: number; width: number; height: number } },
 ) {
   const browser = {
-    newPage: vi.fn(async () => {
+    newPage: vi.fn(async (_options?: unknown) => {
       const page = createMockPage(options);
       pages.push(page);
       return page;

@@ -14,7 +14,7 @@ import {
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultGoogleChatAccountId, resolveGoogleChatAccount } from "./accounts.js";
 
 const channel = "googlechat" as const;
@@ -90,8 +90,6 @@ const googlechatDmPolicy: ChannelSetupDmPolicy = {
   },
   promptAllowFrom,
 };
-
-export { googlechatSetupAdapter } from "./setup-core.js";
 
 function createServiceAccountTextInput(params: {
   inputKey: GoogleChatTextInputKey;

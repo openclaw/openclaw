@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -73,7 +73,6 @@ function resolveInstalledIndexPluginIdsForProviderFilter(params: {
   const snapshot = loadPluginRegistrySnapshotWithMetadata({
     config: params.cfg,
     env: params.env,
-    cache: true,
   });
   if (snapshot.source !== "persisted" && snapshot.source !== "provided") {
     return undefined;

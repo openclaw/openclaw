@@ -1,19 +1,30 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { registerDnsCli } from "./dns-cli.js";
-import { parseCanvasSnapshotPayload } from "./nodes-canvas.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
-import { shouldSkipRespawnForArgv } from "./respawn-policy.js";
+import {
+  shouldSkipRespawnForArgv,
+  shouldSkipStartupEnvironmentRespawnForArgv,
+} from "./respawn-policy.js";
 import { waitForever } from "./wait.js";
 
 describe("waitForever", () => {
   it("creates an unref'ed interval and returns a pending promise", () => {
-    const setIntervalSpy = vi.spyOn(global, "setInterval");
-    const promise = waitForever();
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1_000_000);
-    expect(promise).toBeInstanceOf(Promise);
-    setIntervalSpy.mockRestore();
+    const unref = vi.fn();
+    const interval = { unref } as unknown as ReturnType<typeof setInterval>;
+    const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
+    try {
+      const promise = waitForever();
+      expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+      const [callback, delay] = setIntervalSpy.mock.calls[0] ?? [];
+      expect(typeof callback).toBe("function");
+      expect(delay).toBe(1_000_000);
+      expect(unref).toHaveBeenCalledTimes(1);
+      expect(promise).toBeInstanceOf(Promise);
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
   });
 });
 
@@ -21,6 +32,9 @@ describe("shouldSkipRespawnForArgv", () => {
   it.each([
     { argv: ["node", "openclaw", "--help"] },
     { argv: ["node", "openclaw", "-V"] },
+    { argv: ["node", "openclaw", "tui"] },
+    { argv: ["node", "openclaw", "terminal"] },
+    { argv: ["node", "openclaw", "chat"] },
     { argv: ["node", "openclaw", "gateway"] },
     { argv: ["node", "openclaw", "gateway", "--port", "14720", "--bind", "loopback"] },
     { argv: ["node", "openclaw", "gateway", "run", "--port=14720", "--bind", "loopback"] },
@@ -40,18 +54,22 @@ describe("shouldSkipRespawnForArgv", () => {
   });
 });
 
-describe("nodes canvas helpers", () => {
-  it("parses canvas.snapshot payload", () => {
-    expect(parseCanvasSnapshotPayload({ format: "png", base64: "aGk=" })).toEqual({
-      format: "png",
-      base64: "aGk=",
-    });
+describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
+  it.each([
+    { argv: ["node", "openclaw", "--help"] },
+    { argv: ["node", "openclaw", "gateway"] },
+    { argv: ["node", "openclaw", "gateway", "run", "--port=14720"] },
+  ] as const)("skips startup env respawn for argv %j", ({ argv }) => {
+    expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
   });
 
-  it("rejects invalid canvas.snapshot payload", () => {
-    expect(() => parseCanvasSnapshotPayload({ format: "png" })).toThrow(
-      /invalid canvas\.snapshot payload/i,
-    );
+  it.each([
+    { argv: ["node", "openclaw", "tui"] },
+    { argv: ["node", "openclaw", "terminal"] },
+    { argv: ["node", "openclaw", "chat"] },
+    { argv: ["node", "openclaw", "status"] },
+  ] as const)("allows startup env respawn for argv %j", ({ argv }) => {
+    expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
   });
 });
 
@@ -87,7 +105,7 @@ describe("parseByteSize", () => {
   });
 
   it.each(["", "nope", "-5kb"] as const)("rejects invalid value %j", (input) => {
-    expect(() => parseByteSize(input)).toThrow();
+    expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
   });
 });
 
@@ -106,7 +124,7 @@ describe("parseDurationMs", () => {
   });
 
   it("rejects invalid composite strings", () => {
-    expect(() => parseDurationMs("1h30")).toThrow();
-    expect(() => parseDurationMs("1h-30m")).toThrow();
+    expect(() => parseDurationMs("1h30")).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs("1h-30m")).toThrow(/Invalid duration/);
   });
 });

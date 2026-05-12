@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
 import { telegramApprovalCapability, telegramNativeApprovalAdapter } from "./approval-native.js";
@@ -40,8 +40,8 @@ describe("telegram native approval adapter", () => {
 
     expect(text).toContain("`channels.telegram.execApprovals.approvers`");
     expect(text).toContain("`commands.ownerAllowFrom`");
-    expect(text).toContain("`channels.telegram.allowFrom`");
-    expect(text).toContain("`channels.telegram.defaultTo`");
+    expect(text).not.toContain("`channels.telegram.allowFrom`");
+    expect(text).not.toContain("`channels.telegram.defaultTo`");
     expect(text).not.toContain("`channels.telegram.dm.allowFrom`");
   });
 
@@ -54,8 +54,8 @@ describe("telegram native approval adapter", () => {
 
     expect(text).toContain("`channels.telegram.accounts.work.execApprovals.approvers`");
     expect(text).toContain("`commands.ownerAllowFrom`");
-    expect(text).toContain("`channels.telegram.accounts.work.allowFrom`");
-    expect(text).toContain("`channels.telegram.accounts.work.defaultTo`");
+    expect(text).not.toContain("`channels.telegram.accounts.work.allowFrom`");
+    expect(text).not.toContain("`channels.telegram.accounts.work.defaultTo`");
     expect(text).not.toContain("`channels.telegram.allowFrom`");
   });
 

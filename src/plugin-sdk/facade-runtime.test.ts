@@ -4,11 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
-import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import {
   evaluateBundledPluginPublicSurfaceAccess,
-  resetFacadeActivationCheckRuntimeStateForTest,
   resolveBundledPluginPublicSurfaceAccess as resolveActivationCheckBundledPluginPublicSurfaceAccess,
   throwForBundledPluginPublicSurfaceAccess,
 } from "./facade-activation-check.runtime.js";
@@ -39,11 +36,15 @@ function createTrustedBundledFixtureRoot(prefix: string): string {
   return rootDir;
 }
 
-function writePluginPackageJson(pluginDir: string, name = "demo"): void {
+function writePluginPackageJson(
+  pluginDir: string,
+  name = "demo",
+  type: "commonjs" | "module" = "module",
+): void {
   writeJsonFile(path.join(pluginDir, "package.json"), {
     name: `@openclaw/plugin-${name}`,
     version: "0.0.0",
-    type: "module",
+    type,
   });
 }
 
@@ -69,7 +70,7 @@ function createThrowingPluginDir(prefix: string): string {
   const rootDir = createTrustedBundledFixtureRoot(prefix);
   const pluginDir = path.join(rootDir, "bad");
   fs.mkdirSync(pluginDir, { recursive: true });
-  writePluginPackageJson(pluginDir, "bad");
+  writePluginPackageJson(pluginDir, "bad", "commonjs");
   fs.writeFileSync(
     path.join(pluginDir, "api.js"),
     `throw new Error("plugin load failure");\n`,
@@ -91,10 +92,7 @@ afterEach(() => {
   }
   clearRuntimeConfigSnapshot();
   resetFacadeRuntimeStateForTest();
-  resetFacadeActivationCheckRuntimeStateForTest();
   setBundledPluginsDirOverrideForTest(undefined);
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
   vi.doUnmock("../plugins/manifest-registry.js");
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -244,7 +242,8 @@ describe("plugin-sdk facade runtime", () => {
 
     expect(loaded.marker).toBe("post-load-ok");
     expect(reentryMarkers.length).toBeGreaterThan(0);
-    expect(reentryMarkers.every((marker) => marker === "post-load-ok")).toBe(true);
+    const unexpectedReentryMarkers = reentryMarkers.filter((marker) => marker !== "post-load-ok");
+    expect(unexpectedReentryMarkers).toStrictEqual([]);
     expect(listImportedBundledPluginFacadeIds()).toEqual(["demo"]);
     expect(loader).toHaveBeenCalledTimes(1);
   });
@@ -259,7 +258,7 @@ describe("plugin-sdk facade runtime", () => {
       }),
     ).toThrow("plugin load failure");
 
-    expect(listImportedBundledPluginFacadeIds()).toEqual([]);
+    expect(listImportedBundledPluginFacadeIds()).toStrictEqual([]);
 
     // A second call must also throw (not return a stale empty sentinel).
     expect(() =>
@@ -291,7 +290,7 @@ describe("plugin-sdk facade runtime", () => {
 
     expect(access.allowed).toBe(false);
     expect(access.pluginId).toBe("discord");
-    expect(access.reason).toBeTruthy();
+    expect(access.reason).toMatch(/disabled|not enabled|not active/i);
     expect(() =>
       throwForBundledPluginPublicSurfaceAccess({
         access,

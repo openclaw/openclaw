@@ -64,6 +64,7 @@ type CapabilityProviderCandidate = {
   id: string;
   aliases?: readonly string[];
   defaultModel?: string | null;
+  models?: readonly string[];
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
 
@@ -162,6 +163,21 @@ function resolveAutoCapabilityFallbackRefs(params: {
   });
 }
 
+function resolveProviderModelOnlyRef(params: {
+  raw: string;
+  providers: CapabilityProviderCandidate[];
+}): ParsedProviderModelRef | null {
+  const model = normalizeOptionalString(params.raw);
+  if (!model) {
+    return null;
+  }
+  const provider = params.providers.find((candidate) => {
+    const models = [candidate.defaultModel, ...(candidate.models ?? [])];
+    return models.some((entry) => normalizeOptionalString(entry) === model);
+  });
+  return provider ? { provider: provider.id, model } : null;
+}
+
 export function resolveCapabilityModelCandidates(params: {
   cfg: OpenClawConfig;
   modelConfig: AgentModelConfig | undefined;
@@ -173,39 +189,59 @@ export function resolveCapabilityModelCandidates(params: {
 }): ParsedProviderModelRef[] {
   const candidates: ParsedProviderModelRef[] = [];
   const seen = new Set<string>();
-  const add = (raw: string | undefined) => {
+  let providers: CapabilityProviderCandidate[] | undefined;
+  const getProviders = (): CapabilityProviderCandidate[] => {
+    providers ??= params.listProviders?.(params.cfg) ?? [];
+    return providers;
+  };
+  const resolveCandidate = (raw: string | undefined, options: { useProviderMetadata: boolean }) => {
+    const trimmed = normalizeOptionalString(raw);
+    if (!trimmed) {
+      return null;
+    }
     const parsed = params.parseModelRef(raw);
-    if (!parsed) {
+    if (!options.useProviderMetadata) {
+      return parsed;
+    }
+    return resolveProviderModelOnlyRef({ raw: trimmed, providers: getProviders() }) ?? parsed;
+  };
+  const add = (raw: string | undefined, options: { useProviderMetadata: boolean }) => {
+    const candidate = resolveCandidate(raw, options);
+    if (!candidate) {
       return;
     }
-    const key = `${parsed.provider}/${parsed.model}`;
+    const key = `${candidate.provider}/${candidate.model}`;
     if (seen.has(key)) {
       return;
     }
     seen.add(key);
-    candidates.push(parsed);
+    candidates.push(candidate);
   };
 
-  const override = params.parseModelRef(params.modelOverride);
+  const override = (() => {
+    return resolveCandidate(params.modelOverride, { useProviderMetadata: true });
+  })();
   if (override) {
     return [override];
   }
 
-  add(params.modelOverride);
-  add(resolveAgentModelPrimaryValue(params.modelConfig));
-  for (const fallback of resolveAgentModelFallbackValues(params.modelConfig)) {
-    add(fallback);
-  }
   const autoProviderFallbackEnabled =
     params.autoProviderFallback ??
     params.cfg.agents?.defaults?.mediaGenerationAutoProviderFallback !== false;
+  add(params.modelOverride, { useProviderMetadata: true });
+  add(resolveAgentModelPrimaryValue(params.modelConfig), {
+    useProviderMetadata: autoProviderFallbackEnabled,
+  });
+  for (const fallback of resolveAgentModelFallbackValues(params.modelConfig)) {
+    add(fallback, { useProviderMetadata: autoProviderFallbackEnabled });
+  }
   if (autoProviderFallbackEnabled && params.listProviders) {
     for (const candidate of resolveAutoCapabilityFallbackRefs({
       cfg: params.cfg,
       agentDir: params.agentDir,
-      listProviders: params.listProviders,
+      listProviders: () => getProviders(),
     })) {
-      add(candidate);
+      add(candidate, { useProviderMetadata: false });
     }
   }
   return candidates;
@@ -493,17 +529,50 @@ export function throwCapabilityGenerationFailure(params: {
   if (params.attempts.length <= 1 && params.lastError) {
     throw params.lastError;
   }
-  const summary =
-    params.attempts.length > 0
-      ? params.attempts
-          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
-          .join(" | ")
-      : "unknown";
+  const summary = formatCapabilityFailureAttempts(params.attempts);
   throw new Error(
     `All ${params.capabilityLabel} models failed (${params.attempts.length}): ${summary}`,
     {
       cause: params.lastError instanceof Error ? params.lastError : undefined,
     },
+  );
+}
+
+function formatCapabilityFailureAttempts(attempts: FallbackAttempt[]): string {
+  if (attempts.length === 0) {
+    return "unknown";
+  }
+
+  const abortedAttempts = attempts.filter(isAbortLikeFallbackAttempt);
+  if (abortedAttempts.length === 0) {
+    return attempts.map(formatCapabilityFailureAttempt).join(" | ");
+  }
+  if (abortedAttempts.length === attempts.length) {
+    return `${abortedAttempts.length} fallback(s) aborted after the request was cancelled or timed out: ${abortedAttempts.map(formatCapabilityAttemptRef).join(", ")}`;
+  }
+
+  const primaryFailures = attempts.filter((attempt) => !isAbortLikeFallbackAttempt(attempt));
+  return [
+    primaryFailures.map(formatCapabilityFailureAttempt).join(" | "),
+    `${abortedAttempts.length} fallback(s) aborted after the request was cancelled or timed out: ${abortedAttempts.map(formatCapabilityAttemptRef).join(", ")}`,
+  ].join(" | ");
+}
+
+function formatCapabilityFailureAttempt(attempt: FallbackAttempt): string {
+  return `${formatCapabilityAttemptRef(attempt)}: ${attempt.error}`;
+}
+
+function formatCapabilityAttemptRef(attempt: FallbackAttempt): string {
+  return `${attempt.provider}/${attempt.model}`;
+}
+
+function isAbortLikeFallbackAttempt(attempt: FallbackAttempt): boolean {
+  const message = attempt.error.trim().toLowerCase();
+  return (
+    message === "this operation was aborted" ||
+    message === "operation was aborted" ||
+    message.includes("operation was aborted") ||
+    message.includes("request was aborted")
   );
 }
 

@@ -13,7 +13,7 @@ import {
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildTlonAccountFields, type TlonAccountFieldsInput } from "./account-fields.js";
 import { normalizeShip } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
@@ -23,7 +23,7 @@ function tlonChannelId() {
   return "tlon" as const;
 }
 
-export type TlonSetupInput = ChannelSetupInput & TlonAccountFieldsInput;
+type TlonSetupInput = ChannelSetupInput & TlonAccountFieldsInput;
 
 function isConfigured(account: TlonResolvedAccount): boolean {
   return Boolean(account.ship && account.url && account.code);
