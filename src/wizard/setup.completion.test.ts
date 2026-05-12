@@ -15,6 +15,7 @@ function createDeps() {
       shell: "zsh" as const,
       profileInstalled: false,
       usesRetiredCache: false,
+      retiredCachePath: null,
     })),
     installCompletion: vi.fn(async () => {}),
   };

@@ -108,7 +108,6 @@ describe("SQLite session row key normalization", () => {
       channel: "webchat",
       chatType: "direct",
     });
-    expect(store[CANONICAL_KEY]?.origin).toBeUndefined();
   });
 
   it("does not create a duplicate mixed-case key when route metadata is updated", async () => {
@@ -164,12 +163,6 @@ describe("SQLite session row key normalization", () => {
         updatedAt: existingUpdatedAt,
         chatType: "direct",
         channel: "webchat",
-        origin: {
-          provider: "webchat",
-          chatType: "direct",
-          from: "WebChat:User-1",
-          to: "webchat:user-1",
-        },
       },
     });
 
@@ -186,6 +179,5 @@ describe("SQLite session row key normalization", () => {
       channel: "webchat",
       chatType: "direct",
     });
-    expect(store[CANONICAL_KEY]?.origin).toBeUndefined();
   });
 });

@@ -5,7 +5,10 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvOverride } from "../config/test-helpers.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
-import { writeDiagnosticStabilityBundleSnapshotSync } from "../logging/diagnostic-stability-bundle.js";
+import {
+  type DiagnosticStabilityBundle,
+  writeDiagnosticStabilityBundleSnapshotSync,
+} from "../logging/diagnostic-stability-bundle.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
 type DiscoveredBeacon = Awaited<
@@ -189,8 +192,8 @@ describe("gateway-cli coverage", () => {
     callGateway.mockClear();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-cli-bundle-"));
     try {
-      const bundle = {
-        version: 1,
+      const bundle: DiagnosticStabilityBundle = {
+        version: 1 as const,
         generatedAt: "2026-04-22T12:00:00.000Z",
         reason: "gateway.restart_startup_failed",
         process: {

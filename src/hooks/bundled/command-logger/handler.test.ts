@@ -92,6 +92,6 @@ describe("command logger hook", () => {
       database.db,
       db.selectFrom("command_log_entries").select((eb) => eb.fn.countAll<number>().as("count")),
     );
-    expect(row.count).toBe(0);
+    expect(row?.count).toBe(0);
   });
 });

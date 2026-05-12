@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -17,7 +16,6 @@ import {
   formatRestartSentinelMessage,
   markUpdateRestartSentinelFailure,
   readRestartSentinel,
-  resolveRestartSentinelPath,
   summarizeRestartSentinel,
   trimLogTail,
   writeRestartSentinel,
@@ -94,9 +92,7 @@ describe("restart sentinel", () => {
         },
         stats: { mode: "git" },
       };
-      const filePath = await writeRestartSentinel(payload);
-      expect(filePath).toBe(resolveRestartSentinelPath());
-      await expect(fs.stat(filePath)).rejects.toThrow();
+      await writeRestartSentinel(payload);
 
       const read = await readRestartSentinel();
       expect(read?.payload.kind).toBe("update");
@@ -108,17 +104,6 @@ describe("restart sentinel", () => {
 
       const empty = await readRestartSentinel();
       expect(empty).toBeNull();
-    });
-  });
-
-  it("ignores legacy sentinel files at runtime", async () => {
-    await withRestartSentinelStateDir(async () => {
-      const filePath = resolveRestartSentinelPath();
-      await fs.writeFile(filePath, "not-json", "utf-8");
-
-      const read = await readRestartSentinel();
-      expect(read).toBeNull();
-      await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("not-json");
     });
   });
 

@@ -587,7 +587,7 @@ describe("skill upload gateway handlers", () => {
   });
 
   it("keeps the previous skill when force replacement publish fails", async () => {
-    const { handlers, workspaceDir } = await makeHarness();
+    const { handlers, stateDir, workspaceDir } = await makeHarness();
     const first = await uploadArchive(handlers, {
       archive: await makeSkillArchive({
         name: "Rollback Demo",

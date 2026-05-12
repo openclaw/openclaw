@@ -25,6 +25,7 @@ vi.mock("../channels/plugins/pairing.js", () => ({
 
 import {
   addChannelAllowFromStoreEntry,
+  type ChannelPairingState,
   clearPairingAllowFromReadCacheForTest,
   approveChannelPairingCode,
   listChannelPairingRequests,
@@ -39,11 +40,7 @@ import {
 let fixtureRoot = "";
 let caseId = 0;
 type RandomIntSync = (minOrMax: number, max?: number) => number;
-type ChannelPairingTestState = {
-  version: 1;
-  requests: Array<Record<string, unknown>>;
-  allowFrom?: Record<string, string[]>;
-};
+type ChannelPairingTestState = ChannelPairingState;
 type ChannelPairingTestDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "channel_pairing_requests" | "channel_pairing_allow_entries"

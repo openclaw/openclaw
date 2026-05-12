@@ -186,7 +186,7 @@ function expectDatedMemoryFile(files: string[], slug: string) {
 
 async function createSessionMemoryWorkspace(params?: {
   activeSession?: { name: string; content: string };
-}): Promise<{ tempDir: string; transcriptDir: string; activeTranscriptLocator?: string }> {
+}): Promise<{ tempDir: string }> {
   const tempDir = await createCaseWorkspace("workspace");
   return { tempDir };
 }

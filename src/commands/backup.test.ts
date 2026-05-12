@@ -9,6 +9,7 @@ import * as backupShared from "./backup-shared.js";
 import {
   buildBackupArchiveRoot,
   encodeAbsolutePathForBackupArchive,
+  type BackupAsset,
   resolveBackupPlanFromPaths,
   resolveBackupPlanFromDisk,
 } from "./backup-shared.js";

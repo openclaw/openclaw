@@ -284,15 +284,11 @@ describe("realtime voice agent consult runtime", () => {
       sessionId: "parent-session",
       updatedAt: 1,
     };
-    sqliteMocks.readSqliteSessionDeliveryContext.mockImplementation(({ sessionKey }) =>
-      sessionKey === "agent:main:discord:channel:123"
-        ? {
-            channel: "discord",
-            to: "channel:123",
-            accountId: "default",
-          }
-        : undefined,
-    );
+    sqliteMocks.readSqliteSessionDeliveryContext.mockReturnValueOnce({
+      channel: "discord",
+      to: "channel:123",
+      accountId: "default",
+    });
 
     await consultRealtimeVoiceAgent({
       cfg: {} as never,
@@ -336,16 +332,12 @@ describe("realtime voice agent consult runtime", () => {
       sessionId: "call-session",
       updatedAt: 1,
     };
-    sqliteMocks.readSqliteSessionDeliveryContext.mockImplementation(({ sessionKey }) =>
-      sessionKey === "voice:google-meet:meet-1"
-        ? {
-            channel: "discord",
-            to: "channel:123",
-            accountId: "default",
-            threadId: "thread-456",
-          }
-        : undefined,
-    );
+    sqliteMocks.readSqliteSessionDeliveryContext.mockReturnValueOnce({
+      channel: "discord",
+      to: "channel:123",
+      accountId: "default",
+      threadId: "thread-456",
+    });
 
     await consultRealtimeVoiceAgent({
       cfg: {} as never,

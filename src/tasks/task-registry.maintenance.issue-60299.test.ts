@@ -77,17 +77,17 @@ function createTaskRegistryMaintenanceHarness(params: {
             cfg: {} as never,
             agentId: "main",
             sessionKey: "",
-            rowSessionKey: "",
+            storeSessionKey: "",
             entry: acpEntry,
-            readFailed: false,
+            storeReadFailed: false,
           } satisfies AcpSessionStoreEntry)
         : ({
             cfg: {} as never,
             agentId: "main",
             sessionKey: "",
-            rowSessionKey: "",
+            storeSessionKey: "",
             entry: undefined,
-            readFailed: false,
+            storeReadFailed: false,
           } satisfies AcpSessionStoreEntry),
     getSessionEntry:
       params.getSessionEntry ??

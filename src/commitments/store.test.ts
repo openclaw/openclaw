@@ -9,7 +9,6 @@ import {
 } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
   listCommitments,
   listDueCommitmentsForSession,
@@ -93,7 +92,7 @@ describe("commitment store delivery selection", () => {
 
   it("does not surface due commitments unless inferred commitments are enabled", async () => {
     await useTempStateDir();
-    await saveCommitmentStore(undefined, {
+    await saveCommitmentStore({
       version: 1,
       commitments: [commitment()],
     });
@@ -110,7 +109,7 @@ describe("commitment store delivery selection", () => {
 
   it("limits delivered commitments per agent session in a rolling day", async () => {
     await useTempStateDir();
-    await saveCommitmentStore(undefined, {
+    await saveCommitmentStore({
       version: 1,
       commitments: [
         commitment({ id: "cm_sent", status: "sent", sentAtMs: nowMs - 60_000 }),
@@ -133,7 +132,7 @@ describe("commitment store delivery selection", () => {
 
   it("expires stale pending commitments instead of leaving them hidden forever", async () => {
     await useTempStateDir();
-    await saveCommitmentStore(undefined, {
+    await saveCommitmentStore({
       version: 1,
       commitments: [
         commitment({
@@ -160,31 +159,6 @@ describe("commitment store delivery selection", () => {
     expect(store.commitments[0]?.status).toBe("expired");
     expect(store.commitments[0]?.expiredAtMs).toBe(nowMs);
     expect(store.commitments[0]?.updatedAtMs).toBe(nowMs);
-  });
-
-  it("rewrites legacy source text fields when due commitments are listed", async () => {
-    await useTempStateDir();
-    writeOpenClawStateKvJson("commitments", "store", {
-      version: 1,
-      commitments: [commitment()],
-    });
-
-    const dueCommitments = await listDueCommitmentsForSession({
-      cfg: { commitments: { enabled: true } },
-      agentId: "main",
-      sessionKey,
-      nowMs,
-    });
-    expect(dueCommitments).toHaveLength(1);
-    expect(dueCommitments[0]?.id).toBe("cm_interview");
-
-    const store = await loadCommitmentStore();
-    expect(store.commitments[0]).not.toHaveProperty("sourceUserText");
-    expect(store.commitments[0]).not.toHaveProperty("sourceAssistantText");
-    const raw = readCommitmentRecordJson("cm_interview");
-    expect(raw).not.toContain("I have an interview tomorrow.");
-    expect(raw).not.toContain("sourceUserText");
-    expect(raw).not.toContain("sourceAssistantText");
   });
 
   it("loads commitments from typed SQLite columns, not the debug JSON copy", async () => {
@@ -231,7 +205,7 @@ describe("commitment store delivery selection", () => {
 
   it("lists expired commitments after expiry transition", async () => {
     await useTempStateDir();
-    await saveCommitmentStore(undefined, {
+    await saveCommitmentStore({
       version: 1,
       commitments: [
         commitment({

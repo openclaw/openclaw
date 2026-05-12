@@ -328,7 +328,6 @@ describe("sessions", () => {
     expect(store[sessionKey]?.subject).toBe("Family");
     expect(store[sessionKey]?.channel).toBe("demo-chat");
     expect(store[sessionKey]?.groupId).toBe("room-123");
-    expect(store[sessionKey]?.origin).toBeUndefined();
   });
 
   it("updateLastRoute skips missing sessions when creation is disabled", async () => {

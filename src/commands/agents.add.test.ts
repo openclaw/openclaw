@@ -9,8 +9,8 @@ import {
   loadPersistedAuthProfileStore,
   savePersistedAuthProfileSecretsStore,
 } from "../agents/auth-profiles/persisted.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { readAuthProfileStorePayloadResult } from "../agents/auth-profiles/sqlite-storage.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -187,9 +187,11 @@ describe("agents add command", () => {
       });
 
       expect(result).toEqual({ copied: 1, skipped: 0 });
-      const copiedRaw = JSON.stringify(
-        readAuthProfileStorePayloadResult(resolveAuthProfileStoreKey(destAgentDir)).value,
+      const copiedResult = readAuthProfileStorePayloadResult(
+        resolveAuthProfileStoreKey(destAgentDir),
       );
+      expect(copiedResult.exists).toBe(true);
+      const copiedRaw = JSON.stringify(copiedResult.exists ? copiedResult.value : undefined);
       expect(copiedRaw).not.toContain("codex-copy-access-token");
       expect(copiedRaw).not.toContain("codex-copy-refresh-token");
       const copied = JSON.parse(copiedRaw) as {

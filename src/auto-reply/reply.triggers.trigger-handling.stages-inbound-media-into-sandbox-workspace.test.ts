@@ -158,13 +158,16 @@ async function writeInboundMedia(
   _home: string,
   fileName: string,
   payload: string | Buffer,
+  maxBytes = MEDIA_MAX_BYTES,
 ): Promise<string> {
-  return await saveMediaBufferWithId({
+  const saved = await saveMediaBufferWithId({
     subdir: "inbound",
     id: fileName,
     buffer: Buffer.isBuffer(payload) ? payload : Buffer.from(payload),
     contentType: "image/jpeg",
+    maxBytes,
   });
+  return saved.path;
 }
 
 describe("stageSandboxMedia", () => {
@@ -280,6 +283,7 @@ describe("stageSandboxMedia", () => {
         home,
         "oversized.bin",
         Buffer.alloc(MEDIA_MAX_BYTES + 1, 0x41),
+        MEDIA_MAX_BYTES + 1,
       );
 
       const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);

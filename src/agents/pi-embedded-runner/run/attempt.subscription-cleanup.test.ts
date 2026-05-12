@@ -21,7 +21,7 @@ describe("cleanupEmbeddedAttemptResources", () => {
     vi.restoreAllMocks();
   });
 
-  it("waits for aborted prompt settlement before flushing, disposing, and releasing the lock", async () => {
+  it("waits for aborted prompt settlement before flushing and disposing", async () => {
     const order: string[] = [];
     const settle = createDeferred<void>();
 
@@ -39,11 +39,6 @@ describe("cleanupEmbeddedAttemptResources", () => {
         },
       },
       sessionManager: {},
-      sessionLock: {
-        release: async () => {
-          order.push("release");
-        },
-      },
       aborted: true,
       abortSettlePromise: settle.promise,
       runId: "run-1",
@@ -57,10 +52,10 @@ describe("cleanupEmbeddedAttemptResources", () => {
     settle.resolve();
     await cleanupPromise;
 
-    expect(order).toEqual(["guard", "flush", "dispose", "release"]);
+    expect(order).toEqual(["guard", "flush", "dispose"]);
   });
 
-  it("releases the lock after the aborted settle timeout", async () => {
+  it("continues cleanup after the aborted settle timeout", async () => {
     vi.useFakeTimers();
     vi.spyOn(log, "warn").mockImplementation(() => {});
     const order: string[] = [];
@@ -76,11 +71,6 @@ describe("cleanupEmbeddedAttemptResources", () => {
         },
       },
       sessionManager: {},
-      sessionLock: {
-        release: async () => {
-          order.push("release");
-        },
-      },
       aborted: true,
       abortSettlePromise: new Promise(() => {}),
       runId: "run-1",
@@ -93,26 +83,25 @@ describe("cleanupEmbeddedAttemptResources", () => {
     await vi.advanceTimersByTimeAsync(1);
     await cleanupPromise;
 
-    expect(order).toEqual(["flush", "dispose", "release"]);
+    expect(order).toEqual(["flush", "dispose"]);
   });
 
   it("does not wait for the settle promise on non-aborted cleanup", async () => {
-    const release = vi.fn(async () => {});
+    const dispose = vi.fn();
 
     await cleanupEmbeddedAttemptResources({
       flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
       session: {
         agent: {},
-        dispose: vi.fn(),
+        dispose,
       },
       sessionManager: {},
-      sessionLock: { release },
       aborted: false,
       abortSettlePromise: new Promise(() => {}),
       runId: "run-1",
       sessionId: "session-1",
     });
 
-    expect(release).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 });

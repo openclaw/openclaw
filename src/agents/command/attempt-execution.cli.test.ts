@@ -539,7 +539,6 @@ describe("CLI attempt execution", () => {
       agentId: "main",
       sessionId: sessionEntry.sessionId,
       cwd: tmpDir,
-      config: {},
       message: {
         role: "user",
         content: "next prompt",

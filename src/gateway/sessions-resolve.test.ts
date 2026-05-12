@@ -57,6 +57,7 @@ const { resolveSessionKeyFromResolveParams } = await import("./sessions-resolve.
 
 describe("resolveSessionKeyFromResolveParams", () => {
   const canonicalKey = "agent:main:canon";
+  const legacyKey = "Agent:Main:Canon";
   const databasePath = "/tmp/openclaw-agent.sqlite";
 
   beforeEach(() => {

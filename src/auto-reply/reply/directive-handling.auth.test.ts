@@ -86,7 +86,7 @@ async function resolveRefOnlyAuthLabel(params: {
   };
   mockOrder = [params.profileId];
 
-  return resolveAuthLabel(params.provider, {} as OpenClawConfig, undefined, params.mode);
+  return resolveAuthLabel(params.provider, {} as OpenClawConfig, "", undefined, params.mode);
 }
 
 describe("resolveAuthLabel ref-aware labels", () => {
@@ -162,6 +162,7 @@ describe("resolveAuthLabel ref-aware labels", () => {
           },
         },
       } as OpenClawConfig,
+      "",
       undefined,
       "compact",
     );
@@ -194,6 +195,7 @@ describe("resolveAuthLabel ref-aware labels", () => {
           },
         },
       } as OpenClawConfig,
+      "",
       undefined,
       "verbose",
     );
@@ -212,6 +214,7 @@ describe("resolveAuthLabel ref-aware labels", () => {
     const result = await resolveAuthLabel(
       "anthropic",
       cfg,
+      "",
       "/tmp/agent",
       "verbose",
       "/tmp/workspace",

@@ -3207,12 +3207,6 @@ describe("initSessionState internal channel routing preservation", () => {
           accountId: "default",
           threadId: "stale-root",
         },
-        origin: {
-          provider: "mattermost",
-          to: "channel:CHAN1",
-          accountId: "default",
-          threadId: "stale-root",
-        },
       },
     });
     const cfg = { session: {} } as OpenClawConfig;
@@ -3235,11 +3229,9 @@ describe("initSessionState internal channel routing preservation", () => {
       to: "channel:CHAN1",
       accountId: "default",
     });
-    expect(result.sessionEntry.origin).toBeUndefined();
 
     const persisted = readSessionRowsForFixtureTarget(sessionRowsTarget);
     expect(persisted[result.sessionKey]?.deliveryContext?.threadId).toBeUndefined();
-    expect(persisted[result.sessionKey]?.origin).toBeUndefined();
   });
 
   it("does not synthesize heartbeat routing on a session with no external route", async () => {
@@ -3266,7 +3258,6 @@ describe("initSessionState internal channel routing preservation", () => {
     });
 
     expect(result.sessionEntry.deliveryContext).toBeUndefined();
-    expect(result.sessionEntry.origin).toBeUndefined();
   });
 
   it("preserves the existing user route when a heartbeat targets a different chat on the shared session", async () => {
@@ -3280,12 +3271,6 @@ describe("initSessionState internal channel routing preservation", () => {
         lastTo: "user:ou_sender_1",
         deliveryContext: {
           channel: "feishu",
-          to: "user:ou_sender_1",
-          accountId: "default",
-        },
-        origin: {
-          provider: "feishu",
-          from: "user:ou_sender_1",
           to: "user:ou_sender_1",
           accountId: "default",
         },
@@ -3313,7 +3298,6 @@ describe("initSessionState internal channel routing preservation", () => {
       to: "user:ou_sender_1",
       accountId: "default",
     });
-    expect(result.sessionEntry.origin).toBeUndefined();
   });
 
   it("keeps persisted external route when OriginatingChannel is internal webchat", async () => {
@@ -3465,7 +3449,7 @@ describe("initSessionState internal channel routing preservation", () => {
       commandAuthorized: true,
     });
 
-    expect(result.sessionEntry.lastChannel).toBeUndefined();
+    expect(result.sessionEntry.lastChannel).toBe("webchat");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("webchat");
     expect(result.sessionEntry.deliveryContext?.to).toBeUndefined();
   });

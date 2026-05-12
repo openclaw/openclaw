@@ -204,8 +204,6 @@ describe("startAcpSpawnParentStreamRelay", () => {
       parentSessionKey: "agent:ops:cron:nightly:run:run-1:subagent:worker",
       childSessionKey: "agent:codex:acp:child-cron",
       agentId: "codex",
-      mainKey: "primary",
-      sessionScope: "global",
       streamFlushMs: 10,
       noOutputNoticeMs: 120_000,
     });

@@ -35,7 +35,6 @@ vi.mock("./constants.js", () => ({
 }));
 
 import {
-  migrateLegacySandboxRegistryFiles,
   readBrowserRegistry,
   readRegistry,
   readRegistryEntry,

@@ -207,11 +207,15 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
 
   const [endEvent, endContext] = (
-    sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<[unknown, unknown]>
-  )[0] ?? [undefined, undefined];
+    sessionLifecycleHookMocks.runSessionEnd.mock.calls as unknown as Array<
+      [HookEventRecord, HookEventRecord]
+    >
+  )[0] ?? [{}, {}];
   const [startEvent, startContext] = (
-    sessionLifecycleHookMocks.runSessionStart.mock.calls as unknown as Array<[unknown, unknown]>
-  )[0] ?? [undefined, undefined];
+    sessionLifecycleHookMocks.runSessionStart.mock.calls as unknown as Array<
+      [HookEventRecord, HookEventRecord]
+    >
+  )[0] ?? [{}, {}];
 
   expect(endEvent.sessionId).toBe("sess-main");
   expect(endEvent.sessionKey).toBe("agent:main:main");

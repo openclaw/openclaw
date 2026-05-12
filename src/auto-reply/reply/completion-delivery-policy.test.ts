@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   completionRequiresMessageToolDelivery,
   resolveCompletionChatType,
   shouldRouteCompletionThroughRequesterSession,
 } from "./completion-delivery-policy.js";
 
+type ResolveCompletionChatTypeCase = {
+  name: string;
+  requesterSessionKey: string;
+  requesterSessionOrigin: DeliveryContext;
+  expected: string;
+};
+
 describe("completion delivery policy", () => {
-  it.each([
+  it.each<ResolveCompletionChatTypeCase>([
     {
       name: "typed group origin",
       requesterSessionKey: "agent:main:telegram:group:-100123",

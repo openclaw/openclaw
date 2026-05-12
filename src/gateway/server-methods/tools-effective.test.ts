@@ -313,6 +313,7 @@ describe("tools.effective handler", () => {
       channel: "telegram",
       to: "channel-1",
       accountId: "acct-1",
+      threadId: "42",
     });
     runtimeMocks.readSqliteSessionRoutingInfo.mockReturnValueOnce({
       chatType: "group",

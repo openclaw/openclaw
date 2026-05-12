@@ -104,7 +104,7 @@ describe("resolveEffectiveReplyRoute", () => {
           lastChannel: "slack",
           lastTo: "last-to",
           lastAccountId: "last-account",
-        },
+        } as unknown as EffectiveReplyRouteEntry,
       }),
     ).toEqual({
       channel: undefined,

@@ -18,7 +18,6 @@ import { resolveLegacyChannelAllowFromPath } from "./legacy/channel-pairing-file
 import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-migrations.js";
 
 type DeliveryQueueTestDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
-type KvTestDatabase = Pick<OpenClawStateKyselyDatabase, "kv">;
 type CurrentConversationBindingsTestDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "current_conversation_bindings"
@@ -269,10 +268,10 @@ describe("state migrations", () => {
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toEqual([
-      `Canonicalized 2 orphaned session key(s) in ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
       `Migrated latest direct-chat session → agent:worker-1:desk`,
       "Imported 4 session index row(s) into SQLite for agent worker-1",
-      "Moved trace.jsonl → agents/worker-1/sessions",
+      "Canonicalized 2 legacy session key(s)",
+      "Imported trace.jsonl transcript (4 event(s)) into SQLite for agent worker-1",
       "Moved agent file settings.json → agents/worker-1/agent",
       `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
       `Moved MobileAuth auth pre-key-1.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "pre-key-1.json")}`,
@@ -294,9 +293,13 @@ describe("state migrations", () => {
       "generic-group-session",
     );
 
-    await expect(
-      fs.readFile(path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"), "utf8"),
-    ).resolves.toBe("{}\n");
+    const importedTranscriptEvents = loadSqliteSessionTranscriptEvents({
+      agentId: "worker-1",
+      sessionId: "legacy-trace",
+      env,
+    });
+    expect(importedTranscriptEvents).toHaveLength(4);
+    await expectMissingPath(path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"));
     await expectMissingPath(path.join(stateDir, "sessions", "sessions.json"));
     await expectMissingPath(path.join(stateDir, "sessions", "trace.jsonl"));
 
@@ -321,7 +324,7 @@ describe("state migrations", () => {
     await expect(
       fs.readFile(resolveLegacyChannelAllowFromPath("chatapp", env, "alpha"), "utf8"),
     ).resolves.toBe('["123","456"]\n');
-    await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "default"));
-    await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "beta"));
+    await expectMissingPath(resolveLegacyChannelAllowFromPath("chatapp", env, "default"));
+    await expectMissingPath(resolveLegacyChannelAllowFromPath("chatapp", env, "beta"));
   });
 });

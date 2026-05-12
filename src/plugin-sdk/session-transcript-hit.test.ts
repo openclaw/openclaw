@@ -42,12 +42,12 @@ describe("resolveTranscriptStemToSessionKeys", () => {
       "agent:main:s1": baseEntry({}),
       "agent:peer:s2": baseEntry({}),
     };
-    const keys = resolveTranscriptStemToSessionKeys({ store, stem: "stem-a" }).toSorted();
+    const keys = resolveTranscriptStemToSessionKeys({ entries: store, stem: "stem-a" }).toSorted();
     expect(keys).toEqual(["agent:main:s1", "agent:peer:s2"]);
   });
 
   it("does not synthesize keys when the live store has no matching transcript", () => {
-    const keys = resolveTranscriptStemToSessionKeys({ store: {}, stem: "deleted-stem" });
+    const keys = resolveTranscriptStemToSessionKeys({ entries: {}, stem: "deleted-stem" });
 
     expect(keys).toEqual([]);
   });

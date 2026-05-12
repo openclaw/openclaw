@@ -68,6 +68,7 @@ type EmbeddedPiAgentParams = {
 };
 
 type CompactEmbeddedPiSessionParams = {
+  agentId?: string;
   sessionKey?: string;
   sandboxSessionKey?: string;
   currentTokenCount?: number;

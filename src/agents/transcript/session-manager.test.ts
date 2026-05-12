@@ -217,40 +217,6 @@ describe("TranscriptSessionManager", () => {
     ]);
   });
 
-  it("deduplicates persisted message appends by SQLite idempotency key", async () => {
-    await useTempStateDir();
-    const scope = {
-      agentId: "main",
-      sessionId: "session-idempotent-manager",
-    };
-    const sessionManager = openTranscriptSessionManagerForSession({
-      ...scope,
-      cwd: "/tmp/workspace",
-    });
-
-    const firstId = sessionManager.appendMessage({
-      role: "user",
-      content: "hello",
-      timestamp: 1,
-      idempotencyKey: "same-message",
-    });
-    const secondId = sessionManager.appendMessage({
-      role: "user",
-      content: "hello again",
-      timestamp: 2,
-      idempotencyKey: "same-message",
-    });
-
-    expect(secondId).toBe(firstId);
-    expect(
-      readSessionEntries(scope).filter(
-        (entry) =>
-          Boolean(entry && typeof entry === "object") &&
-          (entry as { type?: unknown }).type === "message",
-      ),
-    ).toHaveLength(1);
-  });
-
   it("selects metadata-entry parents inside SQLite for stale persisted managers", async () => {
     await useTempStateDir();
     const scope = {

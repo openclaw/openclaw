@@ -4,7 +4,6 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../../config/paths.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
-import { resolveAuthStorePath } from "./paths.js";
 import { promoteAuthProfileInOrder } from "./profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -69,6 +68,10 @@ function readPersistedOAuthRefId(agentDir: string, profileId: string): string {
   expect(typeof refId).toBe("string");
   expect(refId?.length).toBeGreaterThan(0);
   return String(refId);
+}
+
+function resolveAuthStorePath(agentDir: string): string {
+  return path.join(agentDir, "auth-profiles.json");
 }
 
 function resolvePersistedOAuthSecretPath(refId: string): string {

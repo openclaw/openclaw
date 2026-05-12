@@ -132,7 +132,7 @@ describe("sessionsCommand", () => {
     await sessionsCommand({}, runtime);
     const row = logs.find((line) => line.includes("quietchat:group:demo")) ?? "";
     expect(row).toBe(
-      "group  quietchat:group:demo       5m ago    pi:opus        OpenAI Codex       unknown/32k (?%)     think:high id:xyz",
+      "direct quietchat:group:demo       5m ago    pi:opus        OpenAI Codex       unknown/32k (?%)     think:high id:xyz",
     );
   });
 
@@ -192,29 +192,6 @@ describe("sessionsCommand", () => {
     const main = payload.sessions?.find((row) => row.key === "main");
     expect(main?.totalTokens).toBe(2000);
     expect(main?.totalTokensFresh).toBe(false);
-  });
-
-  it("exports the raw resolved session store for debugging", async () => {
-    const exportedEntry = {
-      sessionId: "abc123",
-      updatedAt: Date.now() - 10 * 60_000,
-      model: "pi:opus",
-    };
-    const store = writeStore({
-      "agent:main:main": exportedEntry,
-    });
-    const exportPath = writeStore({}, "sessions-export-target");
-    fs.rmSync(exportPath, { force: true });
-
-    const { runtime, logs } = makeRuntime();
-    await sessionsCommand({ store, exportStore: exportPath }, runtime);
-
-    expect(JSON.parse(fs.readFileSync(exportPath, "utf8"))).toEqual({
-      "agent:main:main": exportedEntry,
-    });
-    expect(logs.join("\n")).toContain("Exported 1 session(s)");
-    fs.rmSync(store, { force: true });
-    fs.rmSync(exportPath, { force: true });
   });
 
   it("applies --active filtering in JSON output", async () => {

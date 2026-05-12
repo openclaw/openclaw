@@ -519,7 +519,6 @@ describe("doctor state integrity oauth dir checks", () => {
       sessionId: "session",
       updatedAt: 1,
       lastTo: "heartbeat",
-      origin: { label: "heartbeat" },
     };
     expect(resolveHeartbeatMainSessionRepairCandidate({ entry })).toBeNull();
   });
