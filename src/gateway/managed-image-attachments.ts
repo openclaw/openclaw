@@ -22,6 +22,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
 import {
   authorizeGatewayHttpRequestOrReply,
+  getBearerToken,
   resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
@@ -992,6 +993,7 @@ export async function handleManagedOutgoingImageHttpRequest(
     rateLimiter?: AuthRateLimiter;
     stateDir?: string;
     thumbnailMaxSide?: number;
+    authorizeControlUiDeviceReadToken?: (token: string) => Promise<boolean>;
   },
 ): Promise<boolean> {
   const requestUrl = new URL(req.url ?? "/", "http://localhost");
@@ -1030,32 +1032,40 @@ export async function handleManagedOutgoingImageHttpRequest(
     return true;
   }
 
-  const requestAuth = await authorizeGatewayHttpRequestOrReply({
-    req,
-    res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
-  });
-  if (!requestAuth) {
-    return true;
-  }
-
-  const privilegedAccess =
-    requestAuth.trustDeclaredOperatorScopes || requestAuth.authMethod === "device-token";
-
-  const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
-  const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
-  if (!scopeAuth.allowed) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: `missing scope: ${scopeAuth.missingScope}`,
-      },
+  const bearerToken = getBearerToken(req);
+  const isControlUiDeviceRead =
+    bearerToken && opts.authorizeControlUiDeviceReadToken
+      ? await opts.authorizeControlUiDeviceReadToken(bearerToken)
+      : false;
+  let privilegedAccess = Boolean(isControlUiDeviceRead);
+  if (!isControlUiDeviceRead) {
+    const requestAuth = await authorizeGatewayHttpRequestOrReply({
+      req,
+      res,
+      auth: opts.auth,
+      trustedProxies: opts.trustedProxies,
+      allowRealIpFallback: opts.allowRealIpFallback,
+      rateLimiter: opts.rateLimiter,
     });
-    return true;
+    if (!requestAuth) {
+      return true;
+    }
+
+    privilegedAccess =
+      requestAuth.trustDeclaredOperatorScopes || requestAuth.authMethod === "device-token";
+
+    const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
+    const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
+    if (!scopeAuth.allowed) {
+      sendJson(res, 403, {
+        ok: false,
+        error: {
+          type: "forbidden",
+          message: `missing scope: ${scopeAuth.missingScope}`,
+        },
+      });
+      return true;
+    }
   }
 
   const requesterSessionKey = resolveRequesterSessionKey(req);

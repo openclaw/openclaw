@@ -177,6 +177,10 @@ function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyPayload 
   return isTtsSupplementPayload(payload) ? { ...payload, text: undefined } : payload;
 }
 
+function stripVisibleTextFromMediaSupplement(payload: ReplyPayload): ReplyPayload {
+  return isMediaBearingPayload(payload) ? { ...payload, text: undefined } : payload;
+}
+
 async function buildWebchatAssistantMediaMessage(
   payloads: ReplyPayload[],
   options?: {
@@ -2553,7 +2557,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           sessionKey,
           agentId,
           accountId,
-          payloads: [stripVisibleTextFromTtsSupplement(payload)],
+          payloads: [stripVisibleTextFromMediaSupplement(payload)],
         });
         if (!transcriptPayload) {
           return;
@@ -2629,6 +2633,14 @@ export const chatHandlers: GatewayRequestHandlers = {
                 blocks: assistantContent,
               });
             }
+            if (replaced.message && resolvedTranscriptPath) {
+              emitSessionTranscriptUpdate({
+                sessionFile: resolvedTranscriptPath,
+                sessionKey,
+                message: replaced.message,
+                messageId: replaced.messageId,
+              });
+            }
             appendedWebchatAgentMedia = true;
             return;
           }
@@ -2649,6 +2661,14 @@ export const chatHandlers: GatewayRequestHandlers = {
             await attachManagedOutgoingImagesToMessage({
               messageId: appended.messageId,
               blocks: assistantContent,
+            });
+          }
+          if (appended.message && resolvedTranscriptPath) {
+            emitSessionTranscriptUpdate({
+              sessionFile: resolvedTranscriptPath,
+              sessionKey,
+              message: appended.message,
+              messageId: appended.messageId,
             });
           }
           appendedWebchatAgentMedia = true;
@@ -2809,23 +2829,28 @@ export const chatHandlers: GatewayRequestHandlers = {
                       );
                     },
                   });
-                  if (!hasAssistantDisplayMediaContent(assistantContent) && rawFinalPayloads.length) {
-                    const rawAssistantContent = await buildAssistantDisplayContentFromReplyPayloads({
-                      sessionKey,
-                      payloads: rawFinalPayloads,
-                      managedImageLocalRoots: mediaLocalRoots,
-                      includeSensitiveMedia: false,
-                      onLocalAudioAccessDenied: (message) => {
-                        context.logGateway.warn(
-                          `webchat audio embedding denied local path: ${message}`,
-                        );
+                  if (
+                    !hasAssistantDisplayMediaContent(assistantContent) &&
+                    rawFinalPayloads.length
+                  ) {
+                    const rawAssistantContent = await buildAssistantDisplayContentFromReplyPayloads(
+                      {
+                        sessionKey,
+                        payloads: rawFinalPayloads,
+                        managedImageLocalRoots: mediaLocalRoots,
+                        includeSensitiveMedia: false,
+                        onLocalAudioAccessDenied: (message) => {
+                          context.logGateway.warn(
+                            `webchat audio embedding denied local path: ${message}`,
+                          );
+                        },
+                        onManagedImagePrepareError: (message) => {
+                          context.logGateway.warn(
+                            `webchat image embedding skipped attachment: ${message}`,
+                          );
+                        },
                       },
-                      onManagedImagePrepareError: (message) => {
-                        context.logGateway.warn(
-                          `webchat image embedding skipped attachment: ${message}`,
-                        );
-                      },
-                    });
+                    );
                     if (hasAssistantDisplayMediaContent(rawAssistantContent)) {
                       assistantContent = rawAssistantContent;
                     }
@@ -2923,7 +2948,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                   }
                   if (
                     !message &&
-                    (transcriptReply || persistedContentForAppend?.length || assistantContent?.length)
+                    (transcriptReply ||
+                      persistedContentForAppend?.length ||
+                      assistantContent?.length)
                   ) {
                     const appended = await appendAssistantTranscriptMessage({
                       message: transcriptReply,

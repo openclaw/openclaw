@@ -383,7 +383,7 @@ async function authorizeControlUiReadRequest(
   return true;
 }
 
-async function authorizeControlUiDeviceReadToken(token: string): Promise<boolean> {
+export async function authorizeControlUiDeviceReadToken(token: string): Promise<boolean> {
   const pairing = await listDevicePairing();
   for (const device of pairing.paired) {
     const operatorToken = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
