@@ -111,7 +111,41 @@ describe("reconcileNodePairingOnConnect", () => {
       }),
     );
     expect(result.effectiveCommands).toEqual([]);
-    expect(result.effectivePermissions).toEqual({ camera: true });
+    expect(result.effectivePermissions).toEqual({ camera: true, notifications: false });
     expect(result.pendingPairing?.request.requestId).toBe("req-permissions");
+  });
+
+  it("applies declared capability and permission downgrades to the live surface", async () => {
+    const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
+      status: "pending" as const,
+      request: { ...input, requestId: "req-downgrade", ts: 1 },
+      created: true,
+    }));
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        caps: ["camera"],
+        commands: [],
+        permissions: { camera: false },
+      }),
+      pairedNode: makePairedNode({
+        caps: ["camera", "screen"],
+        commands: [],
+        permissions: { camera: true, notifications: true },
+      }),
+      requestPairing,
+    });
+
+    expect(requestPairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caps: ["camera"],
+        permissions: { camera: false },
+      }),
+    );
+    expect(result.effectiveCaps).toEqual(["camera"]);
+    expect(result.effectiveCommands).toEqual([]);
+    expect(result.effectivePermissions).toEqual({ camera: false });
+    expect(result.pendingPairing?.request.requestId).toBe("req-downgrade");
   });
 });

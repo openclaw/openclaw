@@ -81,6 +81,34 @@ function samePermissions(
   });
 }
 
+function intersectApprovalSurfaceList(params: {
+  approved: readonly string[] | undefined;
+  declared: readonly string[];
+}): string[] {
+  const approved = new Set(normalizeApprovalSurfaceList(params.approved));
+  return normalizeApprovalSurfaceList(params.declared).filter((entry) => approved.has(entry));
+}
+
+function intersectPermissionSurface(params: {
+  approved: Record<string, boolean> | undefined;
+  declared: Record<string, boolean> | undefined;
+}): Record<string, boolean> | undefined {
+  const entries = Object.entries(params.declared ?? {}).flatMap(([key, declaredValue]) => {
+    const approvedValue = params.approved?.[key];
+    if (declaredValue === false) {
+      return [[key, false] as const];
+    }
+    if (approvedValue === true) {
+      return [[key, true] as const];
+    }
+    if (approvedValue === false) {
+      return [[key, false] as const];
+    }
+    return [];
+  });
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
 function buildNodePairingRequestInput(params: {
   nodeId: string;
   connectParams: ConnectParams;
@@ -155,6 +183,18 @@ export async function reconcileNodePairingOnConnect(params: {
   const hasCommandUpgrade = declared.some((command) => !approvedCommands.includes(command));
   const hasCapabilityChange = !sameApprovalSurfaceSet(params.pairedNode.caps, declaredCaps);
   const hasPermissionChange = !samePermissions(params.pairedNode.permissions, declaredPermissions);
+  const effectiveApprovedDeclaredCaps = intersectApprovalSurfaceList({
+    approved: approvedCaps,
+    declared: declaredCaps,
+  });
+  const effectiveApprovedDeclaredCommands = intersectApprovalSurfaceList({
+    approved: approvedCommands,
+    declared,
+  });
+  const effectiveApprovedDeclaredPermissions = intersectPermissionSurface({
+    approved: approvedPermissions,
+    declared: declaredPermissions,
+  });
 
   if (hasCommandUpgrade || hasCapabilityChange || hasPermissionChange) {
     const pendingPairing = await params.requestPairing(
@@ -169,9 +209,9 @@ export async function reconcileNodePairingOnConnect(params: {
     );
     return {
       nodeId,
-      effectiveCaps: approvedCaps,
-      effectiveCommands: approvedCommands,
-      effectivePermissions: approvedPermissions,
+      effectiveCaps: effectiveApprovedDeclaredCaps,
+      effectiveCommands: effectiveApprovedDeclaredCommands,
+      effectivePermissions: effectiveApprovedDeclaredPermissions,
       pendingPairing,
     };
   }
