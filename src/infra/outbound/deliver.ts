@@ -1086,7 +1086,7 @@ async function applyMessageSendingHook(params: {
         channelId: params.channel,
         accountId: params.accountId ?? undefined,
         conversationId: params.to,
-        sessionKey: params.sessionKey,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       },
     );
     if (sendingResult?.cancel) {

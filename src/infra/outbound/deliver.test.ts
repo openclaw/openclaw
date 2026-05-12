@@ -2905,6 +2905,7 @@ describe("deliverOutboundPayloads", () => {
       sessionKey?: string;
     };
     expect(ctx?.sessionKey).toBeUndefined();
+    expect(ctx).not.toHaveProperty("sessionKey");
   });
 
   it("threads sessionKey into the message_sent hook context when session is provided", async () => {
