@@ -137,6 +137,25 @@ describe("agent event handler", () => {
     return harness;
   }
 
+  function emitRun1AssistantEvent(
+    harness: ReturnType<typeof createHarness>,
+    data: Record<string, unknown>,
+    seq = 1,
+  ): ReturnType<typeof createHarness> {
+    harness.chatRunState.registry.add("run-1", {
+      sessionKey: "session-1",
+      clientRunId: "client-1",
+    });
+    harness.handler({
+      runId: "run-1",
+      seq,
+      stream: "assistant",
+      ts: Date.now(),
+      data,
+    });
+    return harness;
+  }
+
   function chatBroadcastCalls(broadcast: ReturnType<typeof vi.fn>) {
     return broadcast.mock.calls.filter(([event]) => event === "chat");
   }
@@ -370,6 +389,89 @@ describe("agent event handler", () => {
     expect(payload.state).toBe("delta");
     expect(payload.message?.content?.[0]?.text).toBe("Hello world");
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("carries assistant mediaUrls into chat delta content alongside text (#73478)", () => {
+    const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantEvent(
+      createHarness({ now: 1_000 }),
+      { text: "Here is the poster:", mediaUrls: ["https://media.example/poster.png"] },
+    );
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ type?: string; text?: string; url?: string }> };
+    };
+    expect(payload.state).toBe("delta");
+    expect(payload.message?.content).toEqual([
+      { type: "text", text: "Here is the poster:" },
+      { type: "image", url: "https://media.example/poster.png" },
+    ]);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("emits chat delta for assistant events that carry only mediaUrls without text (#73478)", () => {
+    const { broadcast, nowSpy } = emitRun1AssistantEvent(createHarness({ now: 1_000 }), {
+      mediaUrls: ["https://media.example/silent.png"],
+    });
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      message?: { content?: Array<{ type?: string; url?: string }> };
+    };
+    expect(payload.message?.content).toEqual([
+      { type: "image", url: "https://media.example/silent.png" },
+    ]);
+    nowSpy?.mockRestore();
+  });
+
+  it("dedupes mediaUrls across multiple assistant deltas (#73478)", () => {
+    const harness = createHarness({ now: 1_000 });
+    emitRun1AssistantEvent(
+      harness,
+      { text: "first ", mediaUrls: ["https://media.example/a.png"] },
+      1,
+    );
+    // Second delta arrives later than the 150ms throttle window and reuses the
+    // same URL — it must still be in `content`, but only once.
+    harness.nowSpy?.mockReturnValue(1_500);
+    emitRun1AssistantEvent(
+      harness,
+      {
+        text: "first second",
+        mediaUrls: ["https://media.example/a.png", "https://media.example/b.png"],
+      },
+      2,
+    );
+    const chatCalls = chatBroadcastCalls(harness.broadcast);
+    expect(chatCalls).toHaveLength(2);
+    const lastPayload = chatCalls[1]?.[1] as {
+      message?: { content?: Array<{ type?: string; text?: string; url?: string }> };
+    };
+    expect(lastPayload.message?.content).toEqual([
+      { type: "text", text: "first second" },
+      { type: "image", url: "https://media.example/a.png" },
+      { type: "image", url: "https://media.example/b.png" },
+    ]);
+    harness.nowSpy?.mockRestore();
+  });
+
+  it("ignores non-string mediaUrls entries (#73478)", () => {
+    const { broadcast, nowSpy } = emitRun1AssistantEvent(createHarness({ now: 1_000 }), {
+      text: "mixed",
+      mediaUrls: ["https://media.example/ok.png", "", null, 42, "   "],
+    });
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      message?: { content?: Array<{ type?: string; text?: string; url?: string }> };
+    };
+    expect(payload.message?.content).toEqual([
+      { type: "text", text: "mixed" },
+      { type: "image", url: "https://media.example/ok.png" },
+    ]);
     nowSpy?.mockRestore();
   });
 
