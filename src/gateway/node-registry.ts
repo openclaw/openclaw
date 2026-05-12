@@ -35,12 +35,13 @@ type PendingInvoke = {
 type PendingSystemRunEvent = {
   runId: string;
   sessionKey: string;
+  timeoutMs?: number | null;
 };
 
 type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
   nodeId: string;
   connId: string;
-  expiresAtMs: number;
+  expiresAtMs: number | null;
 };
 
 type NodeInvokeResult = {
@@ -51,7 +52,7 @@ type NodeInvokeResult = {
 };
 
 const SERIALIZED_EVENT_PAYLOAD = Symbol("openclaw.serializedEventPayload");
-const AUTHORIZED_SYSTEM_RUN_EVENT_TTL_MS = 60 * 60 * 1000;
+const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
 
 export type SerializedEventPayload = {
   readonly json: string;
@@ -79,6 +80,17 @@ function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizeSystemRunTimeoutMs(value: unknown): number | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const timeoutMs = Math.trunc(value);
+  return timeoutMs > 0 ? timeoutMs : null;
+}
+
 function resolvePendingSystemRunEvent(params: {
   command: string;
   params?: unknown;
@@ -91,9 +103,11 @@ function resolvePendingSystemRunEvent(params: {
   if (!runId) {
     return undefined;
   }
+  const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
   return {
     runId,
     sessionKey: normalizeString(obj.sessionKey) || "node",
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   };
 }
 
@@ -278,9 +292,16 @@ export class NodeRegistry {
     this.pruneAuthorizedSystemRunEvents();
     const authorized: AuthorizedSystemRunEvent = {
       ...event,
-      expiresAtMs: Date.now() + AUTHORIZED_SYSTEM_RUN_EVENT_TTL_MS,
+      expiresAtMs: this.authorizedSystemRunEventExpiresAt(event.timeoutMs),
     };
     this.authorizedSystemRunEvents.set(this.authorizedSystemRunEventKey(authorized), authorized);
+  }
+
+  private authorizedSystemRunEventExpiresAt(timeoutMs: number | null | undefined): number | null {
+    if (typeof timeoutMs !== "number") {
+      return null;
+    }
+    return Date.now() + timeoutMs + AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS;
   }
 
   private matchAuthorizedSystemRunEvent(params: {
@@ -318,7 +339,7 @@ export class NodeRegistry {
 
   private pruneAuthorizedSystemRunEvents(now = Date.now()): void {
     for (const [key, event] of this.authorizedSystemRunEvents) {
-      if (event.expiresAtMs <= now) {
+      if (event.expiresAtMs !== null && event.expiresAtMs <= now) {
         this.authorizedSystemRunEvents.delete(key);
       }
     }

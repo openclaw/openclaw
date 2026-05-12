@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -127,30 +127,38 @@ describe("gateway/node-registry", () => {
     ).toBe(false);
   });
 
-  it("keeps system.run event authorization after invoke timeout", async () => {
+  it("keeps no-timeout system.run event authorization after invoke timeout", async () => {
+    vi.useFakeTimers();
     const registry = new NodeRegistry();
     const frames: string[] = [];
-    registry.register(makeClient("conn-1", "node-1", frames), {});
-    const invoke = registry.invoke({
-      nodeId: "node-1",
-      command: "system.run",
-      params: { runId: "run-timeout", sessionKey: "agent:main:main" },
-      timeoutMs: 1,
-    });
-
-    await expect(invoke).resolves.toEqual({
-      ok: false,
-      error: { code: "TIMEOUT", message: "node invoke timed out" },
-    });
-    expect(
-      registry.authorizeSystemRunEvent({
+    try {
+      registry.register(makeClient("conn-1", "node-1", frames), {});
+      const invoke = registry.invoke({
         nodeId: "node-1",
-        connId: "conn-1",
-        runId: "run-timeout",
-        sessionKey: "agent:main:main",
-        terminal: true,
-      }),
-    ).toBe(true);
+        command: "system.run",
+        params: { runId: "run-timeout", sessionKey: "agent:main:main", timeoutMs: 0 },
+        timeoutMs: 1,
+      });
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
+      expect(
+        registry.authorizeSystemRunEvent({
+          nodeId: "node-1",
+          connId: "conn-1",
+          runId: "run-timeout",
+          sessionKey: "agent:main:main",
+          terminal: true,
+        }),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("matches a single system.run event when legacy payload omits runId", () => {
