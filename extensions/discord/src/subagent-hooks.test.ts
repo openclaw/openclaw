@@ -174,6 +174,13 @@ async function runSubagentSpawning(
   return await handler(event, {});
 }
 
+function expectSubagentHookError(result: unknown): { status: "error"; error: string } {
+  expect((result as { status?: unknown } | undefined)?.status).toBe("error");
+  const error = (result as { error?: unknown } | undefined)?.error;
+  expect(typeof error).toBe("string");
+  return result as { status: "error"; error: string };
+}
+
 async function expectSubagentSpawningError(params?: {
   config?: Record<string, unknown>;
   errorContains?: string;
@@ -181,10 +188,9 @@ async function expectSubagentSpawningError(params?: {
 }) {
   const result = await runSubagentSpawning(params?.config, params?.event);
   expect(hookMocks.autoBindSpawnedDiscordSubagent).not.toHaveBeenCalled();
-  expect(result).toMatchObject({ status: "error" });
+  const errorResult = expectSubagentHookError(result);
   if (params?.errorContains) {
-    const errorText = (result as { error?: string }).error ?? "";
-    expect(errorText).toContain(params.errorContains);
+    expect(errorResult.error).toContain(params.errorContains);
   }
 }
 
@@ -228,7 +234,7 @@ describe("discord subagent hook handlers", () => {
       label: "banana",
       boundBy: "system",
     });
-    expect(result).toMatchObject({ status: "ok", threadBindingReady: true });
+    expect(result).toStrictEqual({ status: "ok", threadBindingReady: true });
   });
 
   it("returns error when thread-bound subagent spawn is disabled", async () => {
@@ -324,7 +330,7 @@ describe("discord subagent hook handlers", () => {
     });
 
     expect(hookMocks.autoBindSpawnedDiscordSubagent).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ status: "ok", threadBindingReady: true });
+    expect(result).toStrictEqual({ status: "ok", threadBindingReady: true });
   });
 
   it("defaults thread-bound subagent spawn to enabled when unset", async () => {
@@ -337,7 +343,7 @@ describe("discord subagent hook handlers", () => {
     });
 
     expect(hookMocks.autoBindSpawnedDiscordSubagent).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ status: "ok", threadBindingReady: true });
+    expect(result).toStrictEqual({ status: "ok", threadBindingReady: true });
   });
 
   it("no-ops when thread binding is requested on non-discord channel", async () => {
@@ -361,9 +367,8 @@ describe("discord subagent hook handlers", () => {
     hookMocks.autoBindSpawnedDiscordSubagent.mockResolvedValueOnce(null);
     const result = await runSubagentSpawning();
 
-    expect(result).toMatchObject({ status: "error" });
-    const errorText = (result as { error?: string }).error ?? "";
-    expect(errorText).toMatch(/unable to create or bind/i);
+    const errorResult = expectSubagentHookError(result);
+    expect(errorResult.error).toMatch(/unable to create or bind/i);
   });
 
   it("unbinds thread routing on subagent_ended", async () => {

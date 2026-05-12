@@ -161,7 +161,7 @@ describe("memory watcher config", () => {
     await expectWatcherManager(cfg);
 
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const [watchedPaths, options] = watchMock.mock.calls[0] as unknown as [
+    const [watchedPaths, options] = watchMock.mock.calls.at(0) as unknown as [
       string[],
       Record<string, unknown>,
     ];
@@ -170,7 +170,7 @@ describe("memory watcher config", () => {
       path.join(workspaceDir, "memory"),
       extraDir,
     ]);
-    expect(watchedPaths).not.toContainEqual(expect.stringContaining("*"));
+    expect(watchedPaths.every((watchedPath) => !watchedPath.includes("*"))).toBe(true);
     expect(options.ignoreInitial).toBe(true);
     expect(options.awaitWriteFinish).toEqual({ stabilityThreshold: 25, pollInterval: 100 });
 
@@ -217,7 +217,7 @@ describe("memory watcher config", () => {
     await expectWatcherManager(cfg);
 
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const [watchedPaths, options] = watchMock.mock.calls[0] as unknown as [
+    const [watchedPaths, options] = watchMock.mock.calls.at(0) as unknown as [
       string[],
       Record<string, unknown>,
     ];
@@ -226,7 +226,7 @@ describe("memory watcher config", () => {
       path.join(workspaceDir, "memory"),
       extraDir,
     ]);
-    expect(watchedPaths).not.toContainEqual(expect.stringContaining("*"));
+    expect(watchedPaths.every((watchedPath) => !watchedPath.includes("*"))).toBe(true);
 
     const ignored = options.ignored as WatchIgnoredFn | undefined;
     expect(ignored).toBeTypeOf("function");

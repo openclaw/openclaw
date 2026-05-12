@@ -22,8 +22,9 @@ type AgentDefaultsConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["de
 type HeartbeatConfig = NonNullable<AgentDefaultsConfig["heartbeat"]>;
 
 function expectReplyOptions(options: unknown, expected: Record<string, unknown>) {
-  expect(typeof options).toBe("object");
-  expect(options).not.toBeNull();
+  if (!options || typeof options !== "object") {
+    throw new Error("expected reply options");
+  }
   const actual = options as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -83,8 +84,8 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
 
     expect(params.replySpy).toHaveBeenCalledTimes(1);
     return {
-      ctx: params.replySpy.mock.calls[0]?.[0],
-      opts: params.replySpy.mock.calls[0]?.[1],
+      ctx: params.replySpy.mock.calls.at(0)?.[0],
+      opts: params.replySpy.mock.calls.at(0)?.[1],
       replySpy: params.replySpy,
     };
   }
@@ -166,9 +167,10 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       });
 
       expect(result.replySpy).toHaveBeenCalledTimes(1);
-      const [ctx, opts, passedConfig] = result.replySpy.mock.calls[0] ?? [];
-      expect(typeof ctx).toBe("object");
-      expect(ctx).not.toBeNull();
+      const [ctx, opts, passedConfig] = result.replySpy.mock.calls.at(0) ?? [];
+      if (!ctx || typeof ctx !== "object") {
+        throw new Error("expected heartbeat reply context");
+      }
       expectReplyOptions(opts, {
         isHeartbeat: true,
         ...params.expectedOptions,

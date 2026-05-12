@@ -32,12 +32,18 @@ describe("resolveVisibleModelCatalog", () => {
     });
 
     expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
-    const checkerOptions = createProviderAuthCheckerMock.mock.calls[0]?.[0];
-    expect(checkerOptions?.cfg).toBe(cfg);
-    expect(checkerOptions?.allowPluginSyntheticAuth).toBe(false);
-    expect(checkerOptions?.discoverExternalCliAuth).toBe(false);
-    expect(authChecker).toHaveBeenCalledWith("anthropic");
-    expect(authChecker).toHaveBeenCalledWith("openai");
+    const checkerOptions = createProviderAuthCheckerMock.mock.calls.at(0)?.[0];
+    expect(checkerOptions).toEqual({
+      cfg,
+      workspaceDir: undefined,
+      agentDir: undefined,
+      env: undefined,
+      allowPluginSyntheticAuth: false,
+      discoverExternalCliAuth: false,
+    });
+    expect(authChecker).toHaveBeenNthCalledWith(1, "anthropic");
+    expect(authChecker).toHaveBeenNthCalledWith(2, "openai");
+    expect(authChecker).toHaveBeenCalledTimes(2);
     expect(result).toEqual([{ provider: "openai", id: "gpt-test", name: "GPT Test" }]);
   });
 
@@ -51,24 +57,39 @@ describe("resolveVisibleModelCatalog", () => {
       { provider: "blocked", id: "blocked-test", name: "Blocked Test" },
     ];
 
-    const result = resolveVisibleModelCatalog({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "vllm/*": {},
-              "openai-codex/*": {},
-              "blocked/*": {},
-            },
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/*": {},
+            "openai-codex/*": {},
+            "blocked/*": {},
           },
         },
-      } as OpenClawConfig,
+      },
+    } as OpenClawConfig;
+
+    const result = resolveVisibleModelCatalog({
+      cfg,
       catalog,
       defaultProvider: "anthropic",
       runtimeAuthDiscovery: true,
     });
 
-    expect(createProviderAuthCheckerMock).toHaveBeenCalled();
+    expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
+    expect(createProviderAuthCheckerMock.mock.calls.at(0)?.[0]).toEqual({
+      cfg,
+      workspaceDir: undefined,
+      agentDir: undefined,
+      env: undefined,
+      allowPluginSyntheticAuth: true,
+      discoverExternalCliAuth: true,
+    });
+    expect(authChecker).toHaveBeenNthCalledWith(1, "anthropic");
+    expect(authChecker).toHaveBeenNthCalledWith(2, "openai-codex");
+    expect(authChecker).toHaveBeenNthCalledWith(3, "vllm");
+    expect(authChecker).toHaveBeenNthCalledWith(4, "blocked");
+    expect(authChecker).toHaveBeenCalledTimes(4);
     expect(result).toEqual([
       { provider: "openai-codex", id: "gpt-codex-test", name: "GPT Codex Test" },
       { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
@@ -79,22 +100,34 @@ describe("resolveVisibleModelCatalog", () => {
     const authChecker = vi.fn(() => true);
     createProviderAuthCheckerMock.mockReturnValue(authChecker);
 
-    const result = resolveVisibleModelCatalog({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "vllm/*": {},
-            },
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/*": {},
           },
         },
-      } as OpenClawConfig,
+      },
+    } as OpenClawConfig;
+
+    const result = resolveVisibleModelCatalog({
+      cfg,
       catalog: [{ provider: "anthropic", id: "claude-test", name: "Claude Test" }],
       defaultProvider: "anthropic",
       runtimeAuthDiscovery: true,
     });
 
-    expect(createProviderAuthCheckerMock).toHaveBeenCalled();
+    expect(createProviderAuthCheckerMock).toHaveBeenCalledTimes(1);
+    expect(createProviderAuthCheckerMock.mock.calls.at(0)?.[0]).toEqual({
+      cfg,
+      workspaceDir: undefined,
+      agentDir: undefined,
+      env: undefined,
+      allowPluginSyntheticAuth: true,
+      discoverExternalCliAuth: true,
+    });
+    expect(authChecker).toHaveBeenCalledWith("anthropic");
+    expect(authChecker).toHaveBeenCalledTimes(1);
     expect(result).toEqual([]);
   });
 });

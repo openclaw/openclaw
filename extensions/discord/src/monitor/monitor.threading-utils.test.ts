@@ -245,9 +245,11 @@ describe("resolveDiscordPresenceUpdate", () => {
 
   it("returns status-only presence when activity is omitted", () => {
     const presence = resolveDiscordPresenceUpdate({ status: "dnd" });
-    expect(presence).toMatchObject({
+    expect(presence).toEqual({
+      since: null,
       status: "dnd",
       activities: [],
+      afk: false,
     });
   });
 
@@ -341,7 +343,8 @@ describe("resolveDiscordAutoThreadContext", () => {
         continue;
       }
 
-      expect(context, testCase.name).toMatchObject({
+      expect(context, testCase.name).toEqual({
+        createdThreadId: "thread",
         To: "channel:thread",
         From: "discord:channel:thread",
         OriginatingTo: "channel:thread",
@@ -350,6 +353,10 @@ describe("resolveDiscordAutoThreadContext", () => {
           channel: "discord",
           peer: { kind: "channel", id: "thread" },
         }),
+        ModelParentSessionKey: testCase.expectedModelParentSessionKey,
+        ...(testCase.parentInheritanceEnabled
+          ? { ParentSessionKey: testCase.expectedParentSessionKey }
+          : {}),
       });
       expect(context?.ParentSessionKey, testCase.name).toBe(testCase.expectedParentSessionKey);
       expect(context?.ModelParentSessionKey, testCase.name).toBe(

@@ -26,6 +26,16 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
 
 let sendWebhookMessageDiscord: typeof import("./send.webhook.js").sendWebhookMessageDiscord;
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("sendWebhookMessageDiscord activity", () => {
   beforeAll(async () => {
     ({ sendWebhookMessageDiscord } = await import("./send.webhook.js"));
@@ -67,35 +77,35 @@ describe("sendWebhookMessageDiscord activity", () => {
       threadId: "thread-1",
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       messageId: "msg-1",
       channelId: "thread-1",
-    });
-    expect(result.receipt).toEqual({
-      primaryPlatformMessageId: "msg-1",
-      platformMessageIds: ["msg-1"],
-      parts: [
-        {
-          platformMessageId: "msg-1",
-          kind: "text",
-          index: 0,
-          threadId: "thread-1",
-          raw: {
+      receipt: {
+        primaryPlatformMessageId: "msg-1",
+        platformMessageIds: ["msg-1"],
+        parts: [
+          {
+            platformMessageId: "msg-1",
+            kind: "text",
+            index: 0,
+            threadId: "thread-1",
+            raw: {
+              channel: "discord",
+              messageId: "msg-1",
+              channelId: "thread-1",
+            },
+          },
+        ],
+        threadId: "thread-1",
+        sentAt: 1_700_000_000_000,
+        raw: [
+          {
             channel: "discord",
             messageId: "msg-1",
             channelId: "thread-1",
           },
-        },
-      ],
-      threadId: "thread-1",
-      sentAt: 1_700_000_000_000,
-      raw: [
-        {
-          channel: "discord",
-          messageId: "msg-1",
-          channelId: "thread-1",
-        },
-      ],
+        ],
+      },
     });
     expect(recordChannelActivityMock).toHaveBeenCalledWith({
       channel: "discord",
@@ -126,7 +136,7 @@ describe("sendWebhookMessageDiscord activity", () => {
 
     const fetchMock = vi.mocked(fetch);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]).toEqual([
+    expect(firstMockCall(fetchMock, "fetch")).toEqual([
       "https://discord.com/api/v10/webhooks/wh-1/tok-1?wait=true&thread_id=thread-1",
       {
         method: "POST",

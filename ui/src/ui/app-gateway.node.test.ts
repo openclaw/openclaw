@@ -364,9 +364,10 @@ describe("connectGateway", () => {
 
     await vi.waitFor(() => {
       expect(host.pendingUpdateExpectedVersion).toBeNull();
-      expect(host.updateStatusBanner?.text).toContain(
-        "Update installed but running version did not change",
-      );
+      expect(host.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: "Update installed but running version did not change — restart may have been blocked. Expected v2.0.0, running v1.0.0.",
+      });
     });
   });
 
@@ -450,6 +451,23 @@ describe("connectGateway", () => {
     ]);
   });
 
+  it("clears pending session reload timers when the active client closes", () => {
+    vi.useFakeTimers();
+    try {
+      const { host, client } = connectHostGateway();
+      const pendingReload = vi.fn();
+      host.sessionsChangedReloadTimer = globalThis.setTimeout(pendingReload, 1_000);
+
+      client.emitClose({ code: 1005 });
+
+      expect(host.sessionsChangedReloadTimer).toBeNull();
+      vi.advanceTimersByTime(1_000);
+      expect(pendingReload).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves pending approval requests across reconnect", () => {
     const host = createHost();
     host.execApprovalQueue = [
@@ -488,7 +506,7 @@ describe("connectGateway", () => {
     });
 
     expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH);
-    expect(host.lastError).toContain("gateway token mismatch");
+    expect(host.lastError).toBe("gateway token mismatch");
   });
 
   it("maps TypeError fetch failures to actionable auth rate-limit guidance", () => {
@@ -508,7 +526,7 @@ describe("connectGateway", () => {
     });
 
     expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.AUTH_RATE_LIMITED);
-    expect(host.lastError).toContain("too many failed authentication attempts");
+    expect(host.lastError).toBe("too many failed authentication attempts");
   });
 
   it("maps generic fetch failures to actionable device identity guidance", () => {
@@ -528,7 +546,9 @@ describe("connectGateway", () => {
     });
 
     expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED);
-    expect(host.lastError).toContain("device identity required");
+    expect(host.lastError).toBe(
+      "device identity required (use HTTPS/localhost or allow insecure auth explicitly)",
+    );
   });
 
   it("maps generic fetch failures to actionable origin guidance", () => {
@@ -548,7 +568,9 @@ describe("connectGateway", () => {
     });
 
     expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED);
-    expect(host.lastError).toContain("origin not allowed");
+    expect(host.lastError).toBe(
+      "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)",
+    );
   });
 
   it("preserves specific close errors even when auth detail codes are present", () => {
@@ -588,7 +610,9 @@ describe("connectGateway", () => {
       },
     });
 
-    expect(host.lastError).toContain("gateway token mismatch");
+    expect(host.lastError).toBe(
+      "unauthorized: gateway token mismatch (open the dashboard URL and paste the token in Control UI settings)",
+    );
     expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
   });
 
@@ -841,12 +865,13 @@ describe("connectGateway", () => {
       },
     });
 
-    expect(host.chatSideResult).toMatchObject({
-      kind: "btw",
-      runId: "btw-run-1",
-      question: "what changed?",
-      text: "Only the UI layer is missing support.",
-    });
+    const sideResult = host.chatSideResult as
+      | { kind?: string; runId?: string; question?: string; text?: string }
+      | undefined;
+    expect(sideResult?.kind).toBe("btw");
+    expect(sideResult?.runId).toBe("btw-run-1");
+    expect(sideResult?.question).toBe("what changed?");
+    expect(sideResult?.text).toBe("Only the UI layer is missing support.");
     expect(host.chatSideResultTerminalRuns.has("btw-run-1")).toBe(true);
   });
 

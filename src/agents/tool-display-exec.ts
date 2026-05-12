@@ -301,7 +301,9 @@ function normalizePathForDisplay(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/g, "");
 }
 
-function classifyWorkspacePath(path: string): "agent" | "repo" | "workspace" | undefined {
+function classifyWorkspacePath(
+  path: string,
+): "agent" | "repo" | "sandbox" | "workspace" | undefined {
   const normalized = normalizePathForDisplay(path);
   const segments = normalized.split("/").filter(Boolean);
   if (segments.length === 0) {
@@ -315,6 +317,9 @@ function classifyWorkspacePath(path: string): "agent" | "repo" | "workspace" | u
     }
     if (segment === ".openclaw" && segments[index + 1] === "workspace") {
       return "agent";
+    }
+    if (segment === ".openclaw" && segments[index + 1] === "sandboxes") {
+      return "sandbox";
     }
     if (/[-_]workspace$/i.test(segment) && segment.toLowerCase() !== "workspace") {
       return "agent";
@@ -335,8 +340,11 @@ function classifyWorkspacePath(path: string): "agent" | "repo" | "workspace" | u
   return undefined;
 }
 
-function formatCwdSuffix(cwd: string): string {
+function formatCwdSuffix(cwd: string): string | undefined {
   const workspace = classifyWorkspacePath(cwd);
+  if (workspace === "sandbox") {
+    return undefined;
+  }
   return workspace ? `(${workspace})` : `(in ${cwd})`;
 }
 
@@ -457,11 +465,12 @@ export function resolveExecDetail(
   const cwd = cwdRaw?.trim() || result?.chdirPath || undefined;
 
   const compact = compactRawCommand(unwrapped);
+  const cwdSuffix = cwd ? formatCwdSuffix(cwd) : undefined;
   if (result?.allGeneric !== false && isGenericSummary(summary)) {
-    return cwd ? `${compact} ${formatCwdSuffix(cwd)}` : compact;
+    return cwdSuffix ? `${compact} ${cwdSuffix}` : compact;
   }
 
-  const displaySummary = cwd ? `${summary} ${formatCwdSuffix(cwd)}` : summary;
+  const displaySummary = cwdSuffix ? `${summary} ${cwdSuffix}` : summary;
   if (
     options?.detailMode !== "explain" &&
     compact &&

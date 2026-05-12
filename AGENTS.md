@@ -66,14 +66,15 @@ Skills own workflows; root owns hard policy and routing.
 
 ## GitHub / PRs
 
-- Use `$openclaw-pr-maintainer` immediately for OpenClaw issue/PR URLs/numbers, review, triage, duplicate search, close, labels, landing, comments, or maintainer evidence.
-- PR refs: `gh pr view/diff`, not web search. Prefer `gitcrawl` for local candidate discovery; verify live with `gh` before mutation.
+- Use `$openclaw-pr-maintainer` immediately for maintainer-side OpenClaw issue/PR review, triage, duplicates, labels, comments, close, land, or evidence. Contributor PR creation/refresh follows the requested contributor workflow; linked refs alone do not require maintainer archive tooling.
+- PR refs: `gh pr view/diff` or `gh api`, not web search. Prefer `gitcrawl` for maintainer discovery; missing/stale `gitcrawl` falls through to live `gh`, not contributor setup. Verify live with `gh` before mutation.
 - Bare issue/PR URL/number means review/report in chat. Suggest comment/close/merge when appropriate; mutate only when asked.
 - No unsolicited PR comments/reviews/labels/retitles/rebases/fixups/landing. Exception: close/duplicate action that needs a reason comment after explicit close/sweep/landing request.
 - PR review answer: bug/behavior, URL(s), affected surface, best-fix judgment, evidence from code/tests/CI/current or shipped behavior.
 - Issue/PR final answer: last line is the full GitHub URL.
 - Changelog: PR landings/fixes need one unless pure test/internal. Do not mention missing changelog as a review finding; Codex handles it during fix/landing.
 - PR verification: before merge, post exact local commands, CI/Testbox run IDs, before/after proof when used, and known proof gaps.
+- Issue fixed on `main` with proof: comment proof + commit/PR, then close.
 - After landing or requested close/sweep: search duplicates; comment proof + canonical commit/PR/release before closing.
 - `ship` that fixes an issue: after push, comment proof + commit link, then close the issue.
 - GH comments with backticks, `$`, or shell snippets: use heredoc/body file, not inline double-quoted `--body`.
@@ -115,6 +116,7 @@ Skills own workflows; root owns hard policy and routing.
 - Codex harness upgrade (`extensions/codex/package.json` `@openai/codex`): refresh `docs/plugins/codex-harness.md` model snapshot from the new harness `model/list`.
 - Docs final answers: include relevant full `https://docs.openclaw.ai/...` URL(s). If issue/PR work too, GitHub URL last.
 - Changelog entries: active version `### Changes`/`### Fixes`; single-line bullets only.
+- Contributor PR authors should not edit `CHANGELOG.md`; maintainer/AI adds entries during landing/merge.
 - Contributor-facing changelog entries thank credited human `@author`. Never thank bots, `@openclaw`, `@clawsweeper`, or `@steipete`; if unknown, omit thanks.
 
 ## Git
@@ -133,7 +135,7 @@ Skills own workflows; root owns hard policy and routing.
 - Never commit real phone numbers, videos, credentials, live config.
 - Secrets: channel/provider creds in `~/.openclaw/credentials/`; model auth profiles in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
 - Env keys: check `~/.profile`; redact output.
-- Dependency patches/overrides/vendor changes need explicit approval. `pnpm.patchedDependencies` exact versions only.
+- Dependency patches/overrides/vendor changes need explicit approval. `pnpm-workspace.yaml` patched dependencies use exact versions only.
 - Carbon pins owner-only: do not change `@buape/carbon` unless Shadow (`@thewilloftheshadow`, verified by `gh`) asks.
 - Releases/publish/version bumps need explicit approval. Use `$openclaw-release-maintainer`.
 - GHSA/advisories: `$openclaw-ghsa-maintainer` / `$security-triage`. Secret scanning: `$openclaw-secret-scanning-maintainer`.

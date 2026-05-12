@@ -28,7 +28,7 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
 
 function deliveredMessage(deliver: ReturnType<typeof vi.fn>) {
   expect(deliver).toHaveBeenCalledTimes(1);
-  const message = deliver.mock.calls[0]?.[0] as
+  const message = deliver.mock.calls.at(0)?.[0] as
     | {
         accountId?: unknown;
         body?: unknown;
@@ -267,8 +267,6 @@ describe("createWebhookHandler", () => {
     });
     const responses = requests.map(() => makeRes());
     const runs = requests.map((req, index) => handler(req, responses[index]));
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
 
     // Default maxInFlightPerKey is 8; 12 total requests leaves 4 rejected with 429.
     expect(countMatching(responses, (res) => res._status === 0)).toBe(8);

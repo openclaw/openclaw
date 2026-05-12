@@ -42,7 +42,16 @@ describe("Slack missing thread_ts recovery", () => {
     const message = await runMissingThreadScenario({
       historyResponse: { messages: [{ ts: "456", thread_ts: "111.222" }] },
     });
-    expect(message).toMatchObject({ thread_ts: "111.222" });
+    expect(message).toEqual({
+      type: "message",
+      user: "U1",
+      text: "hello",
+      ts: "456",
+      parent_user_id: "U2",
+      channel: "C1",
+      channel_type: "channel",
+      thread_ts: "111.222",
+    });
   });
 
   it("continues without thread_ts when history lookup returns no thread result", async () => {

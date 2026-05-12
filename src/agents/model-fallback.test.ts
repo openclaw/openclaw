@@ -310,8 +310,8 @@ async function expectFallsBackToHaiku(params: {
 
   expect(result.result).toBe("ok");
   expect(run).toHaveBeenCalledTimes(2);
-  expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-  expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+  expect(run.mock.calls.at(1)?.[0]).toBe("anthropic");
+  expect(run.mock.calls.at(1)?.[1]).toBe("claude-haiku-3-5");
 }
 
 function createOverrideFailureRun(params: {
@@ -678,7 +678,7 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toEqual({ payloads: [{ text: "fallback ok" }] });
     expect(run).toHaveBeenCalledTimes(2);
-    expect(run.mock.calls[1]).toEqual(["anthropic", "claude-haiku-3-5"]);
+    expect(run.mock.calls.at(1)).toEqual(["anthropic", "claude-haiku-3-5"]);
     expect(result.attempts[0]?.provider).toBe("openai-codex");
     expect(result.attempts[0]?.model).toBe("gpt-5.4");
     expect(result.attempts[0]?.reason).toBe("format");
@@ -878,7 +878,7 @@ describe("runWithModelFallback", () => {
     });
 
     expect(onError).toHaveBeenCalledTimes(1);
-    const errorCall = requireRecord(onError.mock.calls[0]?.[0], "onError payload");
+    const errorCall = requireRecord(onError.mock.calls.at(0)?.[0], "onError payload");
     expect(errorCall.provider).toBe("openai");
     expect(errorCall.model).toBe("gpt-4.1-mini");
     expect(errorCall.attempt).toBe(1);
@@ -1029,7 +1029,7 @@ describe("runWithModelFallback", () => {
     });
   });
 
-  it("puts configured primary next when an override model is requested", () => {
+  it("puts configured fallbacks before the configured primary when an override model is requested", () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -1049,7 +1049,34 @@ describe("runWithModelFallback", () => {
       }),
     ).toEqual([
       { provider: "anthropic", model: "claude-opus-4-5" },
+      { provider: "anthropic", model: "claude-haiku-3-5" },
+      { provider: "openrouter", model: "openrouter/deepseek-chat" },
       { provider: "openai", model: "gpt-4.1-mini" },
+    ]);
+  });
+
+  it("keeps configured fallbacks before configured primary for duplicate provider model ids", () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "deepseek/deepseek-v4-flash",
+            fallbacks: ["minimax-portal/MiniMax-M2.7"],
+          },
+        },
+      },
+    });
+
+    expect(
+      __testing.resolveFallbackCandidates({
+        cfg,
+        provider: "qianfan",
+        model: "deepseek-v4-flash",
+      }),
+    ).toEqual([
+      { provider: "qianfan", model: "deepseek-v4-flash" },
+      { provider: "minimax-portal", model: "MiniMax-M2.7" },
+      { provider: "deepseek", model: "deepseek-v4-flash" },
     ]);
   });
 
@@ -1102,7 +1129,7 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
-  it("falls back to configured primary for override credential validation errors", async () => {
+  it("tries configured fallbacks before primary for override credential validation errors", async () => {
     const cfg = makeCfg();
     const run = createOverrideFailureRun({
       overrideProvider: "anthropic",
@@ -1122,6 +1149,7 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
       ["anthropic", "claude-opus-4"],
+      ["anthropic", "claude-haiku-3-5"],
       ["openai", "gpt-4.1-mini"],
     ]);
   });
@@ -1196,7 +1224,7 @@ describe("runWithModelFallback", () => {
         provider: "anthropic",
         model: "claude-opus-4-6",
         error: new Error("Unknown model: anthropic/claude-opus-4-6"),
-        expectedFallback: ["openai", "gpt-4.1-mini"],
+        expectedFallback: ["anthropic", "claude-haiku-3-5"],
       },
       {
         name: "openai model not found",
@@ -1229,7 +1257,7 @@ describe("runWithModelFallback", () => {
 
         expect(result.result).toBe("ok");
         expect(run).toHaveBeenCalledTimes(2);
-        expect(run.mock.calls[1]).toEqual(testCase.expectedFallback);
+        expect(run.mock.calls.at(1)).toEqual(testCase.expectedFallback);
         if (testCase.expectedReason) {
           expect(result.attempts).toHaveLength(1);
           expect(result.attempts[0]?.reason).toBe(testCase.expectedReason);
@@ -1329,7 +1357,7 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run.mock.calls[0]?.[0]).toBe("openrouter");
+    expect(run.mock.calls.at(0)?.[0]).toBe("openrouter");
     expect(result.attempts).toStrictEqual([]);
   });
 
@@ -1696,7 +1724,7 @@ describe("runWithModelFallback", () => {
           ],
         },
         {
-          name: "different provider skips configured fallbacks",
+          name: "different provider uses configured primary when no fallbacks exist",
           cfg: makeCfg({
             agents: {
               defaults: {

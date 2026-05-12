@@ -78,11 +78,11 @@ describe("handleQaInbound", () => {
     );
 
     expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(runtime.channel.turn.runAssembled).mock.calls[0]?.[0].replyPipeline).toEqual(
-      {},
-    );
     expect(
-      vi.mocked(runtime.channel.turn.runAssembled).mock.calls[0]?.[0].ctxPayload.WasMentioned,
+      vi.mocked(runtime.channel.turn.runAssembled).mock.calls.at(0)?.[0].replyPipeline,
+    ).toEqual({});
+    expect(
+      vi.mocked(runtime.channel.turn.runAssembled).mock.calls.at(0)?.[0].ctxPayload.WasMentioned,
     ).toBe(true);
   });
 
@@ -114,12 +114,11 @@ describe("handleQaInbound", () => {
     );
 
     expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
-    expect(
-      vi.mocked(runtime.channel.turn.runAssembled).mock.calls[0]?.[0].ctxPayload,
-    ).toMatchObject({
-      CommandAuthorized: true,
-      SenderId: "alice",
-    });
+    const ctxPayload = vi
+      .mocked(runtime.channel.turn.runAssembled)
+      .mock.calls.at(0)?.[0].ctxPayload;
+    expect(ctxPayload?.CommandAuthorized).toBe(true);
+    expect(ctxPayload?.SenderId).toBe("alice");
   });
 
   it("uses allowFrom as the group sender fallback for allowlist policy", async () => {

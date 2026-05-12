@@ -104,8 +104,9 @@ type MockCalls = {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value, label).toBe("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -125,7 +126,7 @@ function expectSingleCallFirstArg(
   label = "mock first argument",
 ): Record<string, unknown> {
   expect(mock.mock.calls).toHaveLength(1);
-  const [firstArg] = mock.mock.calls[0] ?? [];
+  const [firstArg] = mock.mock.calls.at(0) ?? [];
   return requireRecord(firstArg, label);
 }
 

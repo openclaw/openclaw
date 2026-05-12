@@ -11,7 +11,7 @@ import {
 import type { v2 } from "./protocol.js";
 
 describe("Codex plugin thread config", () => {
-  it("builds restrictive app config for accessible migrated plugin apps", async () => {
+  it("defaults destructive app access on for accessible migrated plugin apps", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
       key: "runtime",
@@ -26,7 +26,6 @@ describe("Codex plugin thread config", () => {
       pluginConfig: {
         codexPlugins: {
           enabled: true,
-          allow_destructive_actions: true,
           plugins: {
             "google-calendar": {
               marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -96,10 +95,11 @@ describe("Codex plugin thread config", () => {
     const disabledApps = pluginOverrideDisabled.configPatch?.apps as
       | Record<string, unknown>
       | undefined;
-    expect(disabledApps?.["google-calendar-app"]).toMatchObject({
+    expect(disabledApps?.["google-calendar-app"]).toEqual({
       enabled: true,
       destructive_enabled: false,
       open_world_enabled: true,
+      default_tools_approval_mode: "auto",
     });
     expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("default_tools_enabled");
     expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("tools");
@@ -124,9 +124,11 @@ describe("Codex plugin thread config", () => {
     const enabledApps = pluginOverrideEnabled.configPatch?.apps as
       | Record<string, unknown>
       | undefined;
-    expect(enabledApps?.["google-calendar-app"]).toMatchObject({
+    expect(enabledApps?.["google-calendar-app"]).toEqual({
       enabled: true,
       destructive_enabled: true,
+      open_world_enabled: true,
+      default_tools_approval_mode: "auto",
     });
     expect(
       pluginOverrideEnabled.policyContext.apps["google-calendar-app"]?.allowDestructiveActions,
@@ -251,14 +253,18 @@ describe("Codex plugin thread config", () => {
         },
         "google-calendar-app": {
           enabled: true,
-          destructive_enabled: false,
+          destructive_enabled: true,
           open_world_enabled: true,
           default_tools_approval_mode: "auto",
         },
       },
     });
-    expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
+    expect(config.policyContext.apps["google-calendar-app"]).toEqual({
+      configKey: "google-calendar",
+      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
+      allowDestructiveActions: true,
+      mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);
     expect(
@@ -321,7 +327,7 @@ describe("Codex plugin thread config", () => {
           marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
           pluginName: "google-calendar",
           enabled: true,
-          allowDestructiveActions: false,
+          allowDestructiveActions: true,
         },
         message: "google-calendar-app is not accessible or enabled for google-calendar.",
       },
@@ -388,15 +394,25 @@ describe("Codex plugin thread config", () => {
       request,
     });
 
-    expect(config.configPatch?.apps).toMatchObject({
+    expect(config.configPatch?.apps).toEqual({
+      _default: {
+        enabled: false,
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
       "google-calendar-app": {
         enabled: true,
-        destructive_enabled: false,
+        destructive_enabled: true,
         open_world_enabled: true,
+        default_tools_approval_mode: "auto",
       },
     });
-    expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
+    expect(config.policyContext.apps["google-calendar-app"]).toEqual({
+      configKey: "google-calendar",
+      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
+      allowDestructiveActions: true,
+      mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);
     expect(request.mock.calls.map(([method]) => method)).toContain("plugin/install");

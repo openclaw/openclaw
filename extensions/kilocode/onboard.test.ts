@@ -102,7 +102,7 @@ describe("Kilo Gateway provider config", () => {
     it("sets Kilo Gateway alias in agent default models", () => {
       const result = applyKilocodeProviderConfig(emptyCfg);
       const agentModel = result.agents?.defaults?.models?.[KILOCODE_DEFAULT_MODEL_REF];
-      expect(agentModel).toMatchObject({ alias: "Kilo Gateway" });
+      expect(agentModel).toEqual({ alias: "Kilo Gateway" });
     });
 
     it("preserves existing alias if already set", () => {
@@ -150,7 +150,7 @@ describe("Kilo Gateway provider config", () => {
 
       try {
         const result = resolveEnvApiKey("kilocode");
-        expect(result).toMatchObject({
+        expect(result).toEqual({
           apiKey: "test-kilo-key",
           source: "env: KILOCODE_API_KEY",
         });

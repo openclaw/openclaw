@@ -9,7 +9,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
-import type { EmbeddedRunTrigger } from "../pi-embedded-runner/run/params.js";
+import type {
+  CurrentTurnPromptContext,
+  EmbeddedRunTrigger,
+} from "../pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../skills.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
@@ -23,6 +26,8 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
+  /** Runtime-only current-turn context visible to the model but excluded from transcript text. */
+  currentTurnContext?: CurrentTurnPromptContext;
   inputProvenance?: InputProvenance;
   provider: string;
   model?: string;

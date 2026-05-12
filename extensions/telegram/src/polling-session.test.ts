@@ -79,9 +79,11 @@ function statusPatches(source: MockCallSource): Record<string, unknown>[] {
 }
 
 function expectPollingConnectedPatch(patch: Record<string, unknown> | undefined): void {
-  expect(patch).toBeDefined();
-  expect(patch?.connected).toBe(true);
-  expect(patch?.mode).toBe("polling");
+  if (!patch) {
+    throw new Error("Expected polling connected patch");
+  }
+  expect(patch.connected).toBe(true);
+  expect(patch.mode).toBe("polling");
 }
 
 function makeBot() {
@@ -139,8 +141,8 @@ function installPollingStallWatchdogHarness(
 
 function expectTelegramBotTransportSequence(firstTransport: unknown, secondTransport: unknown) {
   expect(createTelegramBotMock).toHaveBeenCalledTimes(2);
-  expect(createTelegramBotMock.mock.calls[0]?.[0]?.telegramTransport).toBe(firstTransport);
-  expect(createTelegramBotMock.mock.calls[1]?.[0]?.telegramTransport).toBe(secondTransport);
+  expect(createTelegramBotMock.mock.calls.at(0)?.[0]?.telegramTransport).toBe(firstTransport);
+  expect(createTelegramBotMock.mock.calls.at(1)?.[0]?.telegramTransport).toBe(secondTransport);
 }
 
 function makeTelegramTransport() {
