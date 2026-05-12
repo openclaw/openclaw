@@ -168,6 +168,7 @@ function hasSuccessfulSideEffectDelivery(params: {
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: unknown[];
   successfulCronAdds?: number;
+  didSendDeterministicApprovalPrompt?: boolean;
 }): boolean {
   return (
     (params.blockReplyPipeline?.didStream() && !params.blockReplyPipeline.isAborted()) ||
@@ -175,7 +176,8 @@ function hasSuccessfulSideEffectDelivery(params: {
     hasNonEmptyStringArray(params.messagingToolSentTexts) ||
     hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
     hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets) ||
-    (params.successfulCronAdds ?? 0) > 0
+    (params.successfulCronAdds ?? 0) > 0 ||
+    params.didSendDeterministicApprovalPrompt === true
   );
 }
 
@@ -1615,6 +1617,7 @@ export async function runReplyAgent(params: {
           messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
           messagingToolSentTargets: runResult.messagingToolSentTargets,
           successfulCronAdds: runResult.successfulCronAdds,
+          didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
         }),
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
         silentExpected: followupRun.run.silentExpected,
