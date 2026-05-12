@@ -270,6 +270,7 @@ export type ChatState = {
   currentSessionId?: string | null;
   chatLoading: boolean;
   chatMessages: unknown[];
+  chatMessagesBySession?: Record<string, unknown[]>;
   chatThinkingLevel: string | null;
   chatSending: boolean;
   chatMessage: string;
@@ -299,6 +300,24 @@ function maybeResetToolStream(state: ChatState) {
   ) {
     resetToolStream(toolHost as Parameters<typeof resetToolStream>[0]);
   }
+}
+
+function setCachedChatMessages(state: ChatState, sessionKey: string, messages: unknown[]) {
+  if (!state.chatMessagesBySession) {
+    return;
+  }
+  const messagesBySession = state.chatMessagesBySession;
+  if (messages.length > 0) {
+    messagesBySession[sessionKey] = [...messages];
+  } else {
+    delete messagesBySession[sessionKey];
+  }
+  state.chatMessagesBySession = { ...messagesBySession };
+}
+
+function appendCachedChatMessage(state: ChatState, sessionKey: string, message: unknown) {
+  const current = state.chatMessagesBySession?.[sessionKey] ?? [];
+  setCachedChatMessages(state, sessionKey, [...current, message]);
 }
 
 export async function loadChatHistory(state: ChatState) {
@@ -349,6 +368,7 @@ export async function loadChatHistory(state: ChatState) {
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
+    setCachedChatMessages(state, sessionKey, state.chatMessages);
     state.currentSessionId =
       typeof res.sessionId === "string" && res.sessionId.trim() ? res.sessionId : null;
     state.chatThinkingLevel = res.thinkingLevel ?? null;
@@ -668,6 +688,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     typeof payload.runId === "string" &&
     payload.runId === state.chatRunId;
   if (!sessionMatches && !activeRunMatches) {
+    if (payload.state === "final") {
+      const finalMessage = normalizeFinalAssistantMessage(payload.message);
+      if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+        appendCachedChatMessage(state, payload.sessionKey, finalMessage);
+      }
+    }
     return null;
   }
 

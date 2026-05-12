@@ -120,15 +120,33 @@ function restoreChatQueueForSession(state: AppViewState, sessionKey: string): Ch
   return [...(state.chatQueueBySession?.[sessionKey] ?? [])];
 }
 
+function saveChatMessagesForSession(state: AppViewState, sessionKey: string) {
+  const messagesBySession = (state.chatMessagesBySession ??= {});
+  if (state.chatMessages.length > 0) {
+    messagesBySession[sessionKey] = [...state.chatMessages];
+    state.chatMessagesBySession = { ...messagesBySession };
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(messagesBySession, sessionKey)) {
+    delete messagesBySession[sessionKey];
+    state.chatMessagesBySession = { ...messagesBySession };
+  }
+}
+
+function restoreChatMessagesForSession(state: AppViewState, sessionKey: string): unknown[] {
+  return [...(state.chatMessagesBySession?.[sessionKey] ?? [])];
+}
+
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
   const host = state as unknown as SessionSwitchHost;
   const previousSessionKey = state.sessionKey;
   saveChatQueueForSession(state, previousSessionKey);
+  saveChatMessagesForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
   (state as unknown as { currentSessionId?: string | null }).currentSessionId = null;
   state.chatMessage = "";
   state.chatAttachments = [];
-  state.chatMessages = [];
+  state.chatMessages = restoreChatMessagesForSession(state, sessionKey);
   state.chatToolMessages = [];
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;

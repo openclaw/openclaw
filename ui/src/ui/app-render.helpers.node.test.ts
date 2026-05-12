@@ -1036,6 +1036,56 @@ describe("switchChatSession", () => {
     expect(state.chatQueue).toEqual([{ id: "queued-1", text: "message B", createdAt: 1 }]);
   });
 
+  it("restores visible messages when switching back before history reloads", () => {
+    const settings = createSettings();
+    const mainMessages = [{ role: "assistant", content: [{ type: "text", text: "main report" }] }];
+    const otherMessages = [{ role: "assistant", content: [{ type: "text", text: "other reply" }] }];
+    const state = {
+      sessionKey: "main",
+      chatMessage: "",
+      chatAttachments: [],
+      chatMessages: mainMessages,
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      chatThinkingLevel: null,
+      chatStream: null,
+      chatSideResult: null,
+      lastError: null,
+      compactionStatus: null,
+      fallbackStatus: null,
+      chatAvatarUrl: null,
+      chatQueue: [],
+      chatQueueBySession: {},
+      chatMessagesBySession: {},
+      chatRunId: null,
+      sessionsShowArchived: false,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStreamStartedAt: null,
+      settings,
+      announceSessionSwitch: vi.fn(),
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "agent:main:other");
+    state.chatMessages = otherMessages;
+
+    switchChatSession(state, "main");
+
+    expect(state.chatMessages).toEqual(mainMessages);
+    expect(state.chatMessagesBySession["agent:main:other"]).toEqual(otherMessages);
+  });
+
   it("does not force agentId=main for plain session keys", async () => {
     const settings = createSettings();
     const state = {

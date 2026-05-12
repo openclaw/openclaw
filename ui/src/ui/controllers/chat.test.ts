@@ -113,6 +113,29 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe(null);
   });
 
+  it("caches final messages for a switched-away session", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "main visible" }] }],
+      chatMessagesBySession: {},
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "other",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "other final" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "main visible" }] },
+    ]);
+    expect(state.chatMessagesBySession?.other).toEqual([payload.message]);
+  });
+
   it("accepts delta events for the active run when gateway emits a canonical session key", () => {
     const state = createState({
       sessionKey: "main",
