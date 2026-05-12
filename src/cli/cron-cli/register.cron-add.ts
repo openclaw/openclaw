@@ -6,6 +6,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
@@ -206,6 +208,18 @@ export function registerCronAddCommand(cron: Command) {
             (!isIsolatedLikeSessionTarget || payload.kind !== "agentTurn")
           ) {
             throw new Error("--announce/--no-deliver require a non-main agentTurn session target.");
+          }
+          if (
+            hasAnnounce &&
+            typeof opts.channel === "string" &&
+            normalizeMessageChannel(opts.channel) === INTERNAL_MESSAGE_CHANNEL
+          ) {
+            throw new Error(
+              `Webchat is not a deliverable channel: --announce --channel webchat will always fail at fire time. ` +
+                `Use --session session:agent:<id>:main --message "<task>" --no-deliver to wake the agent's main ` +
+                `session at fire time and let the reply render in webchat naturally. ` +
+                `See docs/automation/cron-jobs.md “Webchat is not an announce target”.`,
+            );
           }
 
           const accountId = normalizeOptionalString(opts.account);

@@ -564,6 +564,46 @@ describe("cron cli", () => {
     ]);
   });
 
+  it("rejects --announce --channel webchat on cron add", async () => {
+    // Webchat is INTERNAL_MESSAGE_CHANNEL, not a deliverable channel plugin;
+    // an announce route to webchat always fails at fire time with
+    // "Channel is required (no configured channels detected)". The CLI rejects
+    // this misconfiguration at create time so it never lands in jobs.json.
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "announce-to-webchat",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--announce",
+      "--channel",
+      "webchat",
+    ]);
+  });
+
+  it("rejects --announce --channel WebChat (mixed-case) on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "announce-to-WebChat",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--announce",
+      "--channel",
+      "WebChat",
+    ]);
+  });
+
   it.each([
     { command: "enable" as const, expectedEnabled: true },
     { command: "disable" as const, expectedEnabled: false },
@@ -929,6 +969,17 @@ describe("cron cli", () => {
 
   it("rejects negative --thread-id on cron edit", async () => {
     await expectCronCommandExit(["cron", "edit", "job-1", "--thread-id", "-5"]);
+  });
+
+  it("rejects --announce --channel webchat on cron edit", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "edit",
+      "job-1",
+      "--announce",
+      "--channel",
+      "webchat",
+    ]);
   });
 
   it("supports --no-deliver on cron edit", async () => {

@@ -8,6 +8,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import {
   applyExistingCronSchedulePatch,
@@ -157,6 +159,18 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (opts.announce && typeof opts.deliver === "boolean") {
             throw new Error("Choose --announce or --no-deliver (not multiple).");
+          }
+          if (
+            Boolean(opts.announce) &&
+            typeof opts.channel === "string" &&
+            normalizeMessageChannel(opts.channel) === INTERNAL_MESSAGE_CHANNEL
+          ) {
+            throw new Error(
+              `Webchat is not a deliverable channel: --announce --channel webchat will always fail at fire time. ` +
+                `Use --session session:agent:<id>:main --message "<task>" --no-deliver to wake the agent's main ` +
+                `session at fire time and let the reply render in webchat naturally. ` +
+                `See docs/automation/cron-jobs.md “Webchat is not an announce target”.`,
+            );
           }
           const patch: Record<string, unknown> = {};
           if (typeof opts.name === "string") {

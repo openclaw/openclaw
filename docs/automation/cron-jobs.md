@@ -192,6 +192,47 @@ verify placeholders such as `{{language}}` are filled before the job runs. If
 the output mixes languages, make the rule explicit, for example: "Use Chinese
 for narrative text and keep technical terms in English."
 
+### Webchat is not an announce target
+
+Webchat is the internal session-bound surface (`INTERNAL_MESSAGE_CHANNEL`), not a channel plugin. It has no outbound `deliver(...)` path the cron runner can call — webchat receives replies live, through the session event broadcast over the connected WebSocket. A cron configured with `--announce --channel webchat` will always fail at fire time with `"Channel is required (no configured channels detected)"`, even when a webchat tab is open and listening on the targeted session.
+
+For cron output to land in a webchat session, use one of these two shapes instead. The runtime gates them sharply (see [`assertSupportedJobSpec`](https://github.com/openclaw/openclaw/blob/main/src/cron/jobs.ts) in source):
+
+| `sessionTarget`                             | required `payload.kind`              | who can use it                                                                  |
+| ------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------- |
+| `"main"`                                    | `"systemEvent"`                      | **default agent only** — non-default agents are rejected at job-spec validation |
+| `"isolated"`, `"current"`, `"session:<id>"` | `"agentTurn"` (systemEvent rejected) | all agents                                                                      |
+
+**Default agent, fixed-text reminder (no LLM cost):**
+
+```bash
+openclaw cron add \
+  --name "morning standup reminder" \
+  --cron "0 9 * * 1-5" --tz Asia/Dubai \
+  --session main \
+  --system-event "Morning standup at 9:30. Slides on the team drive."
+```
+
+`--session main --system-event` jobs never invoke the announce delivery path — they always append a `systemEvent` to the default agent's main session and let any subscribed webchat tab render it via the `sessions.changed` broadcast. `--no-deliver` and `--announce` are rejected on this shape by `cron add`; the only delivery mode for main-session systemEvent jobs is the implicit session broadcast.
+
+At fire time the gateway appends a `systemEvent` to the default agent's main session and broadcasts `sessions.changed` to any subscribed webchat tab. The reminder renders inline; no channel-plugin involvement.
+
+**Non-default agent (e.g. a personal assistant agent named `coli`), agent-turn reminder:**
+
+```bash
+openclaw cron add \
+  --name "revisit-architecture-decision" \
+  --at 2026-05-23T05:00Z \
+  --agent coli \
+  --session session:agent:coli:main \
+  --message "Reminder: revisit the SharePoint sync architecture decision. Read projects/coding-council/<date>-system-architecture/synthesis.md and ask Ehab whether to spec a webhook-primary build or stay with polling." \
+  --no-deliver
+```
+
+At fire time the gateway wakes session `agent:coli:main` with the message as a fresh user turn. The agent computes a reply and emits it into the session; any subscribed webchat tab renders the reply. No `sessions_send` is needed when the cron output should land in the agent's _own_ main session. Use `--session isolated` and have the agent call `sessions_send` from the turn when the output should cross sessions.
+
+A CLI-level guardrail (`cron add` / `cron edit`) and a runtime typed error (`WebchatNotDeliverableError` from `resolveMessageChannelSelection`) both reject `--announce --channel webchat` so the misconfiguration cannot reach the runtime delivery path. RPC and raw `jobs.json` callers hit the runtime error; the CLI surfaces an equivalent rejection at create time.
+
 Failure notifications follow a separate destination path:
 
 - `cron.failureDestination` sets a global default for failure notifications.

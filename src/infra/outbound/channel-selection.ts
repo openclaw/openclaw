@@ -12,6 +12,10 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  WebchatNotDeliverableError,
+} from "../../utils/message-channel-constants.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 
@@ -227,6 +231,13 @@ export async function resolveMessageChannelSelection(params: {
   source: MessageChannelSelectionSource;
 }> {
   const normalized = normalizeMessageChannel(params.channel);
+  if (normalized === INTERNAL_MESSAGE_CHANNEL) {
+    // Webchat is the internal session-bound surface, not a deliverable channel
+    // plugin. Throwing a typed error here catches RPC / API / raw-jobs.json
+    // callers that bypass the CLI guardrails. The CLI rejects the same shape
+    // at `cron add` / `cron edit` time so most users never reach this point.
+    throw new WebchatNotDeliverableError();
+  }
   if (normalized) {
     const availableExplicit = resolveAvailableKnownChannel({
       cfg: params.cfg,
