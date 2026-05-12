@@ -10,7 +10,9 @@ vi.mock("../agents/model-catalog.js", () => ({
 }));
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ version: 1, profiles: {} })));
-const listProfilesForProvider = vi.hoisted(() => vi.fn(() => []));
+const listProfilesForProvider = vi.hoisted(() =>
+  vi.fn<(store: AuthProfileStore, provider: string) => string[]>(() => []),
+);
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore,
   listProfilesForProvider,
