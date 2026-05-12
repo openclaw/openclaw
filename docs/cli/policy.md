@@ -260,10 +260,13 @@ Use this lifecycle when accepting policy state:
 4. Record `attestation.attestationHash` as `expectedAttestationHash`.
 5. Re-run `openclaw doctor --lint` in CI or release gates.
 
-The tool runtime gate also includes structured approval metadata on approval
-requests: policy path/hash, configured expected hash when present, the policy
-evidence hash, and the target tool reference. That keeps audit values separate
-from the human-readable approval message.
+The tool runtime gate also includes structured approval metadata on gateway
+approval requests: policy path/hash, configured expected hash when present, the
+policy evidence hash, and the target tool reference. Gateway approval request,
+list, and resolve events preserve that metadata so supervisors can audit the
+decision against the policy and workspace state that produced it. The UI and
+text approval surfaces summarize those values, but the audit trail remains
+structured.
 
 If policy rules change intentionally, update both accepted hashes from a clean
 check. If workspace settings change intentionally but policy stays the same,

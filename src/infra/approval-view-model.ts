@@ -18,6 +18,7 @@ import {
   resolvePluginApprovalRequestAllowedDecisions,
   type PluginApprovalRequest,
 } from "./plugin-approvals.js";
+import { policyApprovalMetadataEntries } from "./policy-approval-metadata.js";
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
@@ -54,6 +55,7 @@ function buildPluginMetadata(request: PluginApprovalRequest): ApprovalMetadataVi
   if (request.request.agentId) {
     metadata.push({ label: "Agent", value: request.request.agentId });
   }
+  metadata.push(...policyApprovalMetadataEntries(request.request.metadata));
   return metadata;
 }
 

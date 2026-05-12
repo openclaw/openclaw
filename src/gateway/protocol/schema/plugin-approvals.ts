@@ -28,6 +28,7 @@ export const PluginApprovalRequestParamsSchema = Type.Object(
     turnSourceTo: Type.Optional(Type.String()),
     turnSourceAccountId: Type.Optional(Type.String()),
     turnSourceThreadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+    metadata: Type.Optional(PluginJsonValueSchema),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_PLUGIN_APPROVAL_TIMEOUT_MS })),
     twoPhase: Type.Optional(Type.Boolean()),
   },

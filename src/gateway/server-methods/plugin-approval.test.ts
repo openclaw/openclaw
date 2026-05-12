@@ -470,6 +470,66 @@ describe("createPluginApprovalHandlers", () => {
       manager.resolve(approvalId, "deny");
       await handlerPromise;
     });
+
+    it("preserves structured approval metadata for policy audit trails", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const metadata = {
+        source: "policy",
+        policy: {
+          path: "policy.jsonc",
+          hash: "sha256:policy",
+          expectedHash: "sha256:expected-policy",
+        },
+        workspace: {
+          scope: "policy",
+          hash: "sha256:workspace",
+        },
+        target: "oc://TOOLS.md/tools/deploy",
+      };
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Policy approval required",
+          description: "Deploy touches a governed target",
+          metadata,
+          twoPhase: true,
+        },
+        { respond },
+      );
+
+      const handlerPromise = handlers["plugin.approval.request"](opts);
+      await vi.waitFor(() => {
+        const accepted = acceptedResult(respond as unknown as MockCallSource);
+        expect(accepted.status).toBe("accepted");
+      });
+
+      const approvalId = acceptedApprovalId(respond as unknown as MockCallSource);
+      expect(manager.getSnapshot(approvalId)?.request.metadata).toEqual(metadata);
+      const requestedBroadcast = broadcastCall(opts);
+      expect(
+        requireRecord(requestedBroadcast.payload.request, "broadcast request").metadata,
+      ).toEqual(metadata);
+
+      manager.resolve(approvalId, "allow-once");
+      await handlerPromise;
+    });
+
+    it("rejects non-JSON approval metadata", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const opts = createMockOptions("plugin.approval.request", {
+        title: "T",
+        description: "D",
+        metadata: { value: Number.NaN },
+      });
+
+      await handlers["plugin.approval.request"](opts);
+
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).message).toBe(
+        "metadata must be JSON-compatible",
+      );
+    });
   });
 
   describe("plugin.approval.list", () => {
