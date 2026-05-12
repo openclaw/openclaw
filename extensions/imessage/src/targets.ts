@@ -166,7 +166,7 @@ const isAllowedIMessageSenderMatcher = createAllowedChatSenderMatcher({
 });
 
 export function isAllowedIMessageSender(params: ChatSenderAllowParams): boolean {
-  return isAllowedIMessageSenderMatcher(params);
+  return isAllowedIMessageSenderMatcher({ ...params, allowConversationTargets: false });
 }
 
 const isAllowedIMessageReplyContextSenderMatcher = createAllowedChatSenderMatcher({

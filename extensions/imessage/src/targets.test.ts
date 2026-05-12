@@ -88,6 +88,15 @@ describe("imessage targets", () => {
         chatIdentifier: "team",
       }),
     ).toBe(false);
+
+    expect(
+      isAllowedIMessageSender({
+        allowFrom: ["chat_id:9"],
+        sender: "+1555",
+        chatId: 9,
+        allowConversationTargets: true,
+      }),
+    ).toBe(false);
   });
 
   it("checks allowFrom against handle", () => {

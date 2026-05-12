@@ -232,7 +232,7 @@ If SIP-disabled isn't acceptable for your threat model:
 
     `groupAllowFrom` entries can also reference static sender access groups (`accessGroup:<name>`).
 
-    Runtime fallback: if `groupAllowFrom` is unset, iMessage group sender checks fall back to `allowFrom` when available.
+    Runtime compatibility: legacy chat-target entries in `allowFrom` can admit matching groups, but sender handles for group admission belong in `groupAllowFrom` and `groups`.
     Runtime note: if `channels.imessage` is completely missing, runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 
     <Warning>
