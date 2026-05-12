@@ -439,41 +439,6 @@ jobs:
           ref: ${{ inputs.target_ref }}
           fetch-depth: 1
 
-      - name: Validate strict global inputs
-        if: inputs.strict_global
-        shell: bash
-        env:
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
-          RUN_LIVE: ${{ inputs.run_live }}
-          RUN_SOAK: ${{ inputs.run_soak }}
-          STATIC_RESULT: ${{ needs.static_unit.result }}
-          MOCK_RESULT: ${{ needs.mock_confidence.result }}
-          LIVE_RESULT: ${{ needs.live_confidence.result }}
-          SOAK_RESULT: ${{ needs.soak_confidence.result }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${EXPECTED_SHA// }" ]]; then
-            echo "strict_global requires expected_sha so the proof is pinned to an exact beta.5 commit." >&2
-            exit 1
-          fi
-          if [[ "${RUN_LIVE}" != "true" || "${RUN_SOAK}" != "true" ]]; then
-            echo "strict_global requires run_live=true and run_soak=true." >&2
-            exit 1
-          fi
-          for pair in \
-            "static_unit:${STATIC_RESULT}" \
-            "mock_confidence:${MOCK_RESULT}" \
-            "live_confidence:${LIVE_RESULT}" \
-            "soak_confidence:${SOAK_RESULT}"
-          do
-            job="${pair%%:*}"
-            result="${pair#*:}"
-            if [[ "${result}" != "success" ]]; then
-              echo "strict_global requires ${job} to succeed; result=${result}" >&2
-              exit 1
-            fi
-          done
-
       - name: Validate expected SHA
         if: inputs.expected_sha != ''
         shell: bash
@@ -515,6 +480,41 @@ jobs:
             args+=(--strict-global-pass)
           fi
           "${args[@]}"
+
+      - name: Validate strict global inputs
+        if: always() && inputs.strict_global
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RUN_LIVE: ${{ inputs.run_live }}
+          RUN_SOAK: ${{ inputs.run_soak }}
+          STATIC_RESULT: ${{ needs.static_unit.result }}
+          MOCK_RESULT: ${{ needs.mock_confidence.result }}
+          LIVE_RESULT: ${{ needs.live_confidence.result }}
+          SOAK_RESULT: ${{ needs.soak_confidence.result }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${EXPECTED_SHA// }" ]]; then
+            echo "strict_global requires expected_sha so the proof is pinned to an exact beta.5 commit." >&2
+            exit 1
+          fi
+          if [[ "${RUN_LIVE}" != "true" || "${RUN_SOAK}" != "true" ]]; then
+            echo "strict_global requires run_live=true and run_soak=true." >&2
+            exit 1
+          fi
+          for pair in \
+            "static_unit:${STATIC_RESULT}" \
+            "mock_confidence:${MOCK_RESULT}" \
+            "live_confidence:${LIVE_RESULT}" \
+            "soak_confidence:${SOAK_RESULT}"
+          do
+            job="${pair%%:*}"
+            result="${pair#*:}"
+            if [[ "${result}" != "success" ]]; then
+              echo "strict_global requires ${job} to succeed; result=${result}" >&2
+              exit 1
+            fi
+          done
 
       - name: Upload final confidence artifacts
         if: always()
