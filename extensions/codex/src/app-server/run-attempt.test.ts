@@ -1644,6 +1644,46 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
   });
 
+  it("does not count non-turn app-server requests as turn attempt progress", async () => {
+    const harness = createStartedThreadHarness();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 100;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 500,
+      turnAssistantCompletionIdleTimeoutMs: 500,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await harness.handleServerRequest({
+      id: "request-account-refresh",
+      method: "account/nonTurnRefresh",
+      params: {},
+    });
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    const warnCall = warn.mock.calls.find(
+      ([message]) => message === "codex app-server turn idle timed out waiting for progress",
+    );
+    const warnData = warnCall?.[1] as
+      | { lastActivityReason?: string; timeoutMs?: number }
+      | undefined;
+    expect(warnData?.timeoutMs).toBe(100);
+    expect(warnData?.lastActivityReason).toBe("turn:start");
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(true);
+  });
+
   it("does not count account rate-limit updates as turn completion activity", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let handleRequest:
