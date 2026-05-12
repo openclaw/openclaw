@@ -2638,7 +2638,11 @@ function isCompletedAssistantNotification(notification: CodexServerNotification)
     return false;
   }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
-  return Boolean(item && readString(item, "type") === "agentMessage");
+  return Boolean(
+    item &&
+    readString(item, "type") === "agentMessage" &&
+    readString(item, "phase") !== "commentary",
+  );
 }
 
 function shouldDisarmAssistantCompletionIdleWatch(notification: CodexServerNotification): boolean {
