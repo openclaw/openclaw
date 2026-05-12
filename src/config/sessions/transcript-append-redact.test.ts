@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
@@ -10,6 +10,18 @@ import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
 } from "./transcript.js";
+
+const readLoggingConfig = vi.hoisted(() => vi.fn());
+
+vi.mock("../../logging/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/config.js")>();
+  return {
+    ...actual,
+    readLoggingConfig,
+  };
+});
+
+const EMAIL_PATTERN = String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`;
 
 function readMessages(sessionFile: string) {
   return fs
@@ -24,6 +36,12 @@ function readMessages(sessionFile: string) {
 
 describe("appendSessionTranscriptMessage - redaction", () => {
   const fixture = useTempSessionsFixture("transcript-redact-test-");
+
+  beforeEach(() => {
+    readLoggingConfig.mockReset();
+    readLoggingConfig.mockReturnValue(undefined);
+  });
+
   it("masks secrets in message content before writing to disk", async () => {
     const sessionFile = resolveSessionTranscriptPathInDir("redact-on", fixture.sessionsDir());
     const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
@@ -78,6 +96,36 @@ describe("appendSessionTranscriptMessage - redaction", () => {
 
     const raw = fs.readFileSync(sessionFile, "utf-8");
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
+  });
+
+  it("uses configured custom patterns when cfg omits logging", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "redact-config-pattern-fallback",
+      fixture.sessionsDir(),
+    );
+    readLoggingConfig.mockReturnValue({
+      redactSensitive: "tools",
+      redactPatterns: [EMAIL_PATTERN],
+    });
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "email peter@dc.io ok" }],
+      },
+      config: {
+        session: {
+          writeLock: {
+            acquireTimeoutMs: 25_000,
+          },
+        },
+      },
+    });
+
+    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(raw).not.toContain("peter@dc.io");
+    expect(raw).toContain("ok");
   });
 
   it("masks secrets in assistant tool-call arguments before writing to disk", async () => {

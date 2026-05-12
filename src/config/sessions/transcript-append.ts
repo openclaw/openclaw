@@ -231,29 +231,36 @@ async function withTranscriptAppendQueue<T>(
   }
 }
 
-export async function appendSessionTranscriptMessage(params: {
+type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   transcriptPath: string;
-  message: unknown;
+  message: TMessage;
   now?: number;
   sessionId?: string;
   cwd?: string;
   useRawWhenLinear?: boolean;
   config?: OpenClawConfig;
-}): Promise<{ messageId: string; message: AgentMessage }> {
+};
+
+function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { role?: unknown }).role === "string"
+  );
+}
+
+export async function appendSessionTranscriptMessage<TMessage>(
+  params: AppendSessionTranscriptMessageParams<TMessage>,
+): Promise<{ messageId: string; message: TMessage }> {
   return await withTranscriptAppendQueue(params.transcriptPath, () =>
     appendSessionTranscriptMessageLocked(params),
   );
 }
 
-async function appendSessionTranscriptMessageLocked(params: {
-  transcriptPath: string;
-  message: unknown;
-  now?: number;
-  sessionId?: string;
-  cwd?: string;
-  useRawWhenLinear?: boolean;
-  config?: OpenClawConfig;
-}): Promise<{ messageId: string; message: AgentMessage }> {
+async function appendSessionTranscriptMessageLocked<TMessage>(
+  params: AppendSessionTranscriptMessageParams<TMessage>,
+): Promise<{ messageId: string; message: TMessage }> {
   const lock = await acquireSessionWriteLock({
     sessionFile: params.transcriptPath,
     timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
@@ -287,7 +294,11 @@ async function appendSessionTranscriptMessageLocked(params: {
         nonSessionEntryCount: leafInfo.nonSessionEntryCount,
       };
     }
-    const finalMessage = redactTranscriptMessage(params.message as AgentMessage, params.config);
+    const finalMessage = (
+      isTranscriptAgentMessage(params.message)
+        ? redactTranscriptMessage(params.message, params.config)
+        : params.message
+    ) as TMessage;
     const entry = {
       type: "message",
       id: messageId,
