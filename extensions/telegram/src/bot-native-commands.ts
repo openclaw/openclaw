@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Bot, Context } from "grammy";
 import {
+  buildConfiguredModelCatalog,
   loadModelCatalog,
   resolveAgentConfig,
   resolveDefaultModelForAgent,
@@ -256,11 +257,34 @@ async function resolveTelegramDefaultThinkingLevel(params: {
   provider: string;
   model: string;
 }): Promise<string> {
-  return resolveThinkingDefaultWithRuntimeCatalog({
+  const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
+  const configuredSelectedEntry = configuredCatalog.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
+  const shouldHydrateRuntimeCatalog =
+    configuredCatalog.length === 0 ||
+    !configuredSelectedEntry ||
+    configuredSelectedEntry.reasoning === undefined;
+  let runtimeCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | undefined;
+  if (shouldHydrateRuntimeCatalog) {
+    try {
+      runtimeCatalog = await loadModelCatalog({ config: params.cfg });
+    } catch {
+      runtimeCatalog = undefined;
+    }
+  }
+  const runtimeSelectedEntry = runtimeCatalog?.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
+  const catalog =
+    runtimeSelectedEntry || configuredCatalog.length === 0
+      ? (runtimeCatalog ?? configuredCatalog)
+      : configuredCatalog;
+  return resolveThinkingDefault({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
-    loadModelCatalog: () => loadModelCatalog({ config: params.cfg }),
+    catalog,
   });
 }
 

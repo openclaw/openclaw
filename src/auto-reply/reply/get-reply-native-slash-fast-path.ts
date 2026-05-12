@@ -1,6 +1,7 @@
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
-  resolveThinkingDefaultWithRuntimeCatalog,
+  buildConfiguredModelCatalog,
+  resolveThinkingDefault,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -9,7 +10,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
-import { normalizeThinkLevel, type ThinkLevel } from "../thinking.js";
+import type { ThinkLevel } from "../thinking.js";
 import { buildCommandContext } from "./commands-context.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -52,11 +53,34 @@ async function resolveNativeSlashDefaultThinkingLevel(params: {
   provider: string;
   model: string;
 }): Promise<ThinkLevel> {
-  return resolveThinkingDefaultWithRuntimeCatalog({
+  const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
+  const configuredSelectedEntry = configuredCatalog.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
+  const shouldHydrateRuntimeCatalog =
+    configuredCatalog.length === 0 ||
+    !configuredSelectedEntry ||
+    configuredSelectedEntry.reasoning === undefined;
+  let runtimeCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | undefined;
+  if (shouldHydrateRuntimeCatalog) {
+    try {
+      runtimeCatalog = await loadModelCatalog({ config: params.cfg });
+    } catch {
+      runtimeCatalog = undefined;
+    }
+  }
+  const runtimeSelectedEntry = runtimeCatalog?.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
+  const catalog =
+    runtimeSelectedEntry || configuredCatalog.length === 0
+      ? (runtimeCatalog ?? configuredCatalog)
+      : configuredCatalog;
+  return resolveThinkingDefault({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
-    loadModelCatalog: () => loadModelCatalog({ config: params.cfg }),
+    catalog,
   });
 }
 
@@ -102,16 +126,11 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   if (command.commandBodyNormalized === "/status") {
     const targetSessionEntry =
       sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry;
-    let resolvedDefaultThinkingLevel: ThinkLevel | undefined;
-    const resolveDefaultThinkingLevel = async () => {
-      resolvedDefaultThinkingLevel ??= await resolveNativeSlashDefaultThinkingLevel({
-        cfg: params.cfg,
-        provider: params.provider,
-        model: params.model,
-      });
-      return resolvedDefaultThinkingLevel;
-    };
-    const resolvedThinkLevel = normalizeThinkLevel(targetSessionEntry?.thinkingLevel);
+    const resolvedDefaultThinkingLevel = await resolveNativeSlashDefaultThinkingLevel({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+    });
     const { buildStatusReply } = await loadStatusCommandRuntime();
     return {
       handled: true,
@@ -125,11 +144,11 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         provider: params.provider,
         model: params.model,
         workspaceDir: params.workspaceDir,
-        resolvedThinkLevel,
+        resolvedThinkLevel: resolvedDefaultThinkingLevel,
         resolvedVerboseLevel: "off",
         resolvedReasoningLevel: "off",
         resolvedElevatedLevel: "off",
-        resolveDefaultThinkingLevel,
+        resolveDefaultThinkingLevel: async () => resolvedDefaultThinkingLevel,
         isGroup: sessionState.isGroup,
         defaultGroupActivation: () => "always",
         mediaDecisions: params.ctx.MediaUnderstandingDecisions,

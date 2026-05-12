@@ -556,6 +556,14 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     persistentBindingMocks.ensureConfiguredBindingRouteReady.mockClear();
     persistentBindingMocks.ensureConfiguredBindingRouteReady.mockResolvedValue({ ok: true });
     commandAuthMocks.resolveCommandArgMenu.mockClear();
+    agentRuntimeMocks.loadModelCatalog.mockClear().mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        reasoning: true,
+      },
+    ]);
     sessionMocks.sessionStore.value = {};
     sessionMocks.getSessionEntry.mockClear();
     sessionMocks.getSessionEntry.mockImplementation(
@@ -754,8 +762,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
         },
       },
     } as OpenClawConfig;
-    sessionMocks.loadSessionStore.mockReturnValue({});
-
     const { handler, sendMessage } = registerAndResolveCommandHandler({
       commandName: "think",
       cfg,
