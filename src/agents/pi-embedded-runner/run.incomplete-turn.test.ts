@@ -2303,6 +2303,11 @@ describe("resolvePlanningOnlyRetryInstruction actionable-prompt and active-narra
     "create a follow-up issue",
     "rewrite this paragraph",
     "pass this through the opus polish",
+    "I need you to create a follow-up issue",
+    "I want you to rewrite this paragraph",
+    "I would like you to generate release notes",
+    "I'd like you to polish this draft",
+    "we need you to publish the changelog",
   ])('treats "%s" as an actionable directive', (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,
@@ -2339,6 +2344,11 @@ describe("resolvePlanningOnlyRetryInstruction actionable-prompt and active-narra
     "I start to think this might already be fine",
     "let's continue this conversation tomorrow",
     "the build was already successful, no need to redo it",
+    "the finish looks good, no changes",
+    "I cannot create that here",
+    "the polish on this draft is fine",
+    "I do not want you to rewrite this",
+    "I don't want you to create that",
   ])('does not treat non-directive prompt "%s" as actionable', (prompt) => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       ...openaiParams,

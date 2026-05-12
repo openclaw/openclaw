@@ -213,9 +213,19 @@ const ACTIONABLE_PROMPT_PASS_RE =
 // stays intentionally narrow: only verbs that rarely appear in non-directive
 // prose. Adding short common verbs here (e.g. `do`, `start`, `continue`,
 // `proceed`) would falsely classify "I do not want you to X" or "I start to
-// think Y" as actionable directives.
+// think Y" as actionable directives. Verbs that commonly appear as nouns or
+// in declarative prose (`finish`, `create`, `polish`, `rewrite`, etc.) are
+// intentionally NOT in this fallback; the anchored DIRECTIVE_RE and the
+// can-you/please markers above already classify their request shapes.
 const ACTIONABLE_PROMPT_REQUEST_RE =
-  /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through|polish|rewrite|finish|create|generate|compose|publish)\b/i;
+  /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through)\b/i;
+// REQUEST_INTENT_RE catches non-anchored positive request shapes for verbs
+// excluded from REQUEST_RE because they double as nouns ("the finish looks
+// good"). Requires an explicit "i/we (need|want|require|would like|'d like)
+// you to X" frame so negations like "I do not want you to X" miss naturally
+// (the alternation never matches "do/cannot/don't" before the verb).
+const ACTIONABLE_PROMPT_REQUEST_INTENT_RE =
+  /\b(?:(?:i|we)\s+(?:need|want|require|would\s+like)|(?:i|we)'d\s+like)\s+you\s+to\s+(?:polish|rewrite|finish|create|generate|compose|publish)\b/i;
 
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. A blocker is ONLY an external technical obstacle outside your control - a missing file path, a failed API response, a denied permission, a tool that returns an error. Restating the task ('I haven't done it yet', 'I need to run X', 'I'm waiting to execute'), asking the user to confirm again, or describing what you intend to do is NOT a blocker and will be treated as another planning-only turn. Your reply this turn must contain either (a) a tool call, or (b) a single sentence naming a specific external obstacle with the exact error or resource that is blocking you.";
@@ -722,7 +732,8 @@ function isLikelyActionableUserPrompt(text: string): boolean {
   return (
     ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) ||
     ACTIONABLE_PROMPT_PASS_RE.test(trimmed) ||
-    ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed)
+    ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed) ||
+    ACTIONABLE_PROMPT_REQUEST_INTENT_RE.test(trimmed)
   );
 }
 
