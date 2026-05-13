@@ -42,13 +42,16 @@ describe("plugin registry runtime config scope", () => {
         writeScope = getPluginRuntimeGatewayRequestScope();
       }),
     } satisfies PluginRuntime["config"];
-    const pluginRegistry = createTestRegistry({ config: configRuntime } as PluginRuntime);
+    const pluginRegistry = createTestRegistry({
+      config: configRuntime,
+    } as unknown as PluginRuntime);
     const record = createPluginRecord({
       id: "legacy-plugin",
       name: "Legacy Plugin",
       source: "/plugins/legacy-plugin/index.js",
       origin: "global",
       enabled: true,
+      configSchema: true,
     });
     const api = pluginRegistry.createApi(record, { config });
 
