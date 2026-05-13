@@ -309,6 +309,7 @@ function isCronAgentExecutionStarted(info: CronAgentExecutionStarted): boolean {
     return true;
   }
   switch (info.phase) {
+    case "attempt_dispatch":
     case "turn_accepted":
     case "process_spawned":
     case "tool_execution_started":
