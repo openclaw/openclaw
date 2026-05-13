@@ -770,7 +770,7 @@ export function createAgentEventHandler({
       );
       return;
     }
-    flushBufferedAgentDeltaIfNeeded(clientRunId, stream);
+    flushBufferedAgentDeltaIfNeeded(clientRunId);
     sendAgentPayload(sessionKey, payload);
     chatRunState.agentDeltaSentAt.set(key, now);
   };

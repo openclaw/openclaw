@@ -528,6 +528,51 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
+  it("flushes older cross-stream agent deltas before immediate text", () => {
+    let now = 23_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-agent-cross-stream", {
+      sessionKey: "session-agent-cross-stream",
+      clientRunId: "client-agent-cross-stream",
+    });
+
+    handler({
+      runId: "run-agent-cross-stream",
+      seq: 1,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "Think", delta: "Think" },
+    });
+    now = 23_050;
+    handler({
+      runId: "run-agent-cross-stream",
+      seq: 2,
+      stream: "thinking",
+      ts: Date.now(),
+      data: { text: "Thinking", delta: "ing" },
+    });
+    now = 23_080;
+    handler({
+      runId: "run-agent-cross-stream",
+      seq: 3,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "Answer", delta: "Answer" },
+    });
+
+    const agentCalls = agentBroadcastCalls(broadcast);
+    expect(agentCalls.map(([, payload]) => (payload as { seq?: number }).seq)).toEqual([1, 2, 3]);
+    expect(agentCalls.map(([, payload]) => (payload as { stream?: string }).stream)).toEqual([
+      "thinking",
+      "thinking",
+      "assistant",
+    ]);
+    expect((agentCalls[1]?.[1] as { data?: { delta?: string } }).data?.delta).toBe("ing");
+    expect(sessionAgentCalls(nodeSendToSession)).toHaveLength(3);
+    nowSpy.mockRestore();
+  });
+
   it("does not let lifecycle start throttle the first assistant agent event", () => {
     let now = 25_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);

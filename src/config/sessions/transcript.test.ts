@@ -285,12 +285,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("does not insert delivery mirrors between assistant tool calls and results", async () => {
+  it("keeps delivery mirrors in transcripts while repair preserves real tool results", async () => {
     writeTranscriptStore();
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     const toolCallId = "call_maniple_list";
 
-    await appendSessionTranscriptMessage({
+    const toolCallResult = await appendSessionTranscriptMessage({
       transcriptPath: sessionFile,
       message: {
         role: "assistant",
@@ -316,8 +316,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     if (!mirrorResult.ok) {
       return;
     }
+    expect(mirrorResult.messageId).not.toBe(toolCallResult.messageId);
     const linesAfterMirror = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
-    expect(linesAfterMirror).toHaveLength(2);
+    expect(linesAfterMirror).toHaveLength(3);
+    const mirrorLine = JSON.parse(linesAfterMirror[2]);
+    expect(mirrorLine.message.model).toBe("delivery-mirror");
 
     await appendSessionTranscriptMessage({
       transcriptPath: sessionFile,
@@ -336,12 +339,22 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       .split("\n")
       .map((line) => JSON.parse(line) as { message?: TranscriptRepairMessage })
       .flatMap((entry) => (entry.message ? [entry.message] : []));
+    expect(messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "assistant",
+      "toolResult",
+    ]);
     const repair = repairToolUseResultPairing(messages, {
       missingToolResultText: "aborted",
     });
 
     expect(repair.added).toHaveLength(0);
-    expect(repair.messages.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
+    expect(repair.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect((repair.messages[2] as { model?: string }).model).toBe("delivery-mirror");
   });
 
   it("finds session entry using normalized (lowercased) key", async () => {
