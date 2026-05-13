@@ -77,7 +77,7 @@ function expectRecordFields(record: Record<string, unknown>, expected: Record<st
 }
 
 function expectSystemEventContaining(sessionKey: string, text: string) {
-  expect(peekSystemEvents(sessionKey).some((event) => event.includes(text))).toBe(true);
+  expect(peekSystemEvents(sessionKey).join("\n")).toContain(text);
 }
 
 vi.mock("./context-engine-capabilities.js", () => ({
@@ -324,7 +324,7 @@ describe("runContextEngineMaintenance", () => {
       bytesFreed: 0,
       rewrittenEntries: 0,
     });
-    const maintainParams = requireRecord(maintain.mock.calls[0]?.[0], "maintain params");
+    const maintainParams = requireRecord(maintain.mock.calls.at(0)?.[0], "maintain params");
     expectRecordFields(maintainParams, {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
@@ -507,7 +507,7 @@ describe("runContextEngineMaintenance", () => {
         }
         releaseForeground();
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
-        const maintainParams = requireRecord(maintain.mock.calls[0]?.[0], "maintain params");
+        const maintainParams = requireRecord(maintain.mock.calls.at(0)?.[0], "maintain params");
         expectRecordFields(maintainParams, {
           sessionId: "session-1",
           sessionKey,

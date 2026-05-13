@@ -74,6 +74,18 @@ function requireMockCallArg(
   return requireRecord(call[0], `mock call ${index} arg`);
 }
 
+function requireLastMockCallArg(
+  mock: { mock: { calls: unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error(`expected ${label} mock call`);
+  }
+  return requireRecord(call[0], `${label} mock call arg`);
+}
+
 function expectBlockReplyText(onBlockReply: { mock: { calls: unknown[][] } }, text: string): void {
   expect(
     onBlockReply.mock.calls.some(
@@ -567,12 +579,8 @@ describe("createFollowupRunner runtime config", () => {
       }),
     );
 
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
-      | {
-          config?: unknown;
-        }
-      | undefined;
-    expect(call?.config).toBe(runtimeConfig);
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.config).toBe(runtimeConfig);
   });
 
   it("resolves queued embedded followups before preflight helpers read config", async () => {
@@ -626,12 +634,8 @@ describe("createFollowupRunner runtime config", () => {
 
     expect(queued.run.config).toBe(runtimeConfig);
     expect(requireMockCallArg(runPreflightCompactionIfNeededMock, 0).cfg).toBe(runtimeConfig);
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
-      | {
-          config?: unknown;
-        }
-      | undefined;
-    expect(call?.config).toBe(runtimeConfig);
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.config).toBe(runtimeConfig);
   });
 
   it("passes queued origin scope into queued execution-config resolution", async () => {
@@ -691,14 +695,9 @@ describe("createFollowupRunner runtime config", () => {
       }),
     );
 
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
-      | {
-          images?: unknown;
-          imageOrder?: unknown;
-        }
-      | undefined;
-    expect(call?.images).toBe(images);
-    expect(call?.imageOrder).toBe(imageOrder);
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.images).toBe(images);
+    expect(call.imageOrder).toBe(imageOrder);
   });
 });
 
@@ -742,7 +741,7 @@ describe("createFollowupRunner compaction", () => {
 
     await runner(queued);
 
-    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(1);
@@ -794,7 +793,7 @@ describe("createFollowupRunner compaction", () => {
 
     await runner(queued);
 
-    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(2);
@@ -1108,16 +1107,10 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
 
     await runner(baseQueuedRun());
 
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
-      | {
-          allowGatewaySubagentBinding?: boolean;
-          bootstrapPromptWarningSignaturesSeen?: string[];
-          bootstrapPromptWarningSignature?: string;
-        }
-      | undefined;
-    expect(call?.allowGatewaySubagentBinding).toBe(true);
-    expect(call?.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
-    expect(call?.bootstrapPromptWarningSignature).toBe("sig-b");
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.allowGatewaySubagentBinding).toBe(true);
+    expect(call.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
+    expect(call.bootstrapPromptWarningSignature).toBe("sig-b");
   });
 });
 
@@ -1331,7 +1324,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     ).resolves.toBeUndefined();
 
     expect(requireMockCallArg(persistSpy, 0).providerUsed).toBe("anthropic");
-    expect(persistSpy.mock.calls[0]?.[0]?.usageIsContextSnapshot).toBeUndefined();
+    expect(requireMockCallArg(persistSpy, 0).usageIsContextSnapshot).toBeUndefined();
     persistSpy.mockRestore();
   });
 
@@ -1475,8 +1468,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
 
     expect(routeReplyMock).not.toHaveBeenCalled();
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses JSON NO_REPLY followups without origin or dispatcher delivery", async () => {
@@ -1494,8 +1487,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
 
     expect(routeReplyMock).not.toHaveBeenCalled();
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });
 
   it("keeps NO_REPLY followups with media deliverable", async () => {
@@ -1556,7 +1549,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       } as FollowupRun,
     });
 
-    expect(routeReplyMock).toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expectBlockReplyText(onBlockReply, "hello world!");
   });
@@ -1602,8 +1595,8 @@ describe("createFollowupRunner typing cleanup", () => {
   }
 
   function expectTypingCleanup(typing: ReturnType<typeof createMockTypingController>) {
-    expect(typing.markRunComplete).toHaveBeenCalled();
-    expect(typing.markDispatchIdle).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   }
 
   it("calls both markRunComplete and markDispatchIdle on NO_REPLY", async () => {
@@ -1649,7 +1642,7 @@ describe("createFollowupRunner typing cleanup", () => {
 
     await runner(baseQueuedRun());
 
-    expect(onBlockReply).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
     expectTypingCleanup(typing);
   });
 });
@@ -1680,7 +1673,7 @@ describe("createFollowupRunner agentDir forwarding", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as { agentDir?: string };
-    expect(call?.agentDir).toBe(agentDir);
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.agentDir).toBe(agentDir);
   });
 });

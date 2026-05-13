@@ -97,8 +97,12 @@ function expectDispatcherAttached(value: unknown): void {
   expect(getDispatcherClassName(value)).toMatch(/^(Agent|Mock)$/u);
 }
 
+function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
+  return mock.mock.calls[0];
+}
+
 function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
-  const [, secondInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
+  const [, secondInit] = fetchImpl.mock.calls.at(1) as [string, RequestInit];
   return new Headers(secondInit.headers);
 }
 
@@ -119,7 +123,7 @@ function getFirstRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
 }
 
 function getSecondRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
-  const [, secondInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
+  const [, secondInit] = fetchImpl.mock.calls.at(1) as [string, RequestInit];
   return secondInit;
 }
 
@@ -301,7 +305,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     ).rejects.toThrow(/private|internal|blocked/i);
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(logWarnMock).toHaveBeenCalledTimes(1);
-    const [warning] = logWarnMock.mock.calls[0] as [string];
+    const [warning] = firstMockCall(logWarnMock) as [string];
     expect(warning).toContain(
       "security: blocked URL fetch (qa-audit) targetOrigin=http://127.0.0.1:8080",
     );
@@ -602,9 +606,7 @@ describe("fetchWithSsrFGuard hardening", () => {
       },
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const fetchCall = fetchImpl.mock.calls[0] as unknown as
-      | [string, { dispatcher?: unknown }]
-      | undefined;
+    const fetchCall = firstMockCall(fetchImpl) as [string, { dispatcher?: unknown }] | undefined;
     expect(fetchCall?.[0]).toBe("https://public.example/resource");
     if (!fetchCall?.[1].dispatcher) {
       throw new Error("Expected proxy dispatcher");

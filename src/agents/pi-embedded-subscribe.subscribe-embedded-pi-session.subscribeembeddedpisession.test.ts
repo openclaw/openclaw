@@ -249,7 +249,7 @@ describe("subscribeEmbeddedPiSession", () => {
       await flushBlockReplyCallbacks();
 
       expect(onBlockReply).toHaveBeenCalledTimes(1);
-      expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
+      expect(onBlockReply.mock.calls.at(0)?.[0].text).toBe("Final answer");
 
       const streamTexts = onReasoningStream.mock.calls
         .map((call) => call[0]?.text)

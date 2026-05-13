@@ -222,7 +222,7 @@ describe("createTelegramBot command menu", () => {
 
     await commandsSynced;
 
-    const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
+    const registered = setMyCommandsSpy.mock.calls.at(0)?.[0] as Array<{
       command: string;
       description: string;
     }>;
@@ -231,6 +231,6 @@ describe("createTelegramBot command menu", () => {
       { command: "custom_generate", description: "Create an image" },
     ]);
     const reserved = new Set(listNativeCommandSpecs().map((command) => command.name));
-    expect(registered.some((command) => reserved.has(command.command))).toBe(false);
+    expect(registered.filter((command) => reserved.has(command.command))).toEqual([]);
   });
 });
