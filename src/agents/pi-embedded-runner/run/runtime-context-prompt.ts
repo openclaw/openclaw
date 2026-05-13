@@ -34,6 +34,8 @@ export function buildCurrentTurnPromptContextPrefix(
   return context?.text.trim() ?? "";
 }
 
+// CLI fallback for backends without hidden runtime-context delivery. Embedded
+// sessions should queue current-turn context via openclaw.runtime-context.
 export function buildCurrentTurnPrompt(params: {
   context: CurrentTurnPromptContext | undefined;
   prompt: string;
@@ -46,6 +48,14 @@ export function buildCurrentTurnPrompt(params: {
     return prefix;
   }
   return [prefix, params.prompt].join(params.context?.promptJoiner ?? "\n\n");
+}
+
+export function combineRuntimeContexts(...contexts: Array<string | undefined>): string | undefined {
+  const combined = contexts
+    .map((context) => context?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n\n");
+  return combined || undefined;
 }
 
 function removeLastPromptOccurrence(text: string, prompt: string): string | null {

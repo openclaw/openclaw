@@ -3,6 +3,7 @@ import {
   buildCurrentTurnPrompt,
   buildCurrentTurnPromptContextPrefix,
   buildRuntimeContextSystemContext,
+  combineRuntimeContexts,
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
@@ -96,6 +97,14 @@ describe("runtime context prompt submission", () => {
         prompt: "visible ask",
       }),
     ).toBe("Conversation context:\n\nvisible ask");
+  });
+
+  it("combines prompt-derived and current-turn runtime context blocks", () => {
+    expect(combineRuntimeContexts("secret runtime context", "Sender metadata")).toBe(
+      "secret runtime context\n\nSender metadata",
+    );
+    expect(combineRuntimeContexts(undefined, "  Sender metadata  ")).toBe("Sender metadata");
+    expect(combineRuntimeContexts("   ", undefined)).toBeUndefined();
   });
 
   it("queues runtime context as a hidden next-turn custom message", async () => {

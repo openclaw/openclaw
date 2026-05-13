@@ -548,8 +548,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(systemPrompt).toContain("Ask who I am before continuing.");
   });
 
-  it("adds current-turn context to the current model input without exposing internal runtime context", async () => {
-    let seenPrompt: string | undefined;
+  it("queues current-turn context as hidden runtime context without changing user prompt text", async () => {
+    const seen: { prompt?: string; messages?: unknown[] } = {};
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -582,7 +582,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         },
       },
       sessionPrompt: async (session, prompt) => {
-        seenPrompt = prompt;
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
@@ -590,16 +591,23 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenPrompt).toContain("what does this mean?");
-    expect(seenPrompt).toContain("Reply target of current user message (untrusted, for context):");
-    expect(seenPrompt).toContain('"sender_label": "Mike"');
-    expect(seenPrompt).toContain("WT daily plan - Sat May 2");
-    expect(seenPrompt).toContain("./quoted-secret.png");
-    expect(seenPrompt).toContain("media://inbound/quoted.png");
-    expect(seenPrompt).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
-    expect(seenPrompt).not.toContain("secret runtime context");
-    expect(seenPrompt?.trim().startsWith("Reply target of current user message")).toBe(true);
-    expect(result.finalPromptText).toBe(seenPrompt);
+    expect(seen.prompt).toBe("what does this mean?");
+    expect(result.finalPromptText).toBe("what does this mean?");
+    const runtimeContextMessage = findRecord(
+      requireRecords(seen.messages, "seen messages"),
+      (message) => message.customType === "openclaw.runtime-context",
+      "current-turn runtime context message",
+    );
+    const runtimeContextContent = String(runtimeContextMessage.content);
+    expect(runtimeContextContent).toContain("OPENCLAW_INTERNAL_CONTEXT");
+    expect(runtimeContextContent).toContain("secret runtime context");
+    expect(runtimeContextContent).toContain(
+      "Reply target of current user message (untrusted, for context):",
+    );
+    expect(runtimeContextContent).toContain('"sender_label": "Mike"');
+    expect(runtimeContextContent).toContain("WT daily plan - Sat May 2");
+    expect(runtimeContextContent).toContain("./quoted-secret.png");
+    expect(runtimeContextContent).toContain("media://inbound/quoted.png");
     expect(hoisted.detectAndLoadPromptImagesMock).toHaveBeenCalledTimes(1);
     expect(mockParams(hoisted.detectAndLoadPromptImagesMock, 0, "prompt image params").prompt).toBe(
       "what does this mean?",
@@ -611,9 +619,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       .split("\n")
       .map((line) => JSON.parse(line) as TrajectoryEvent);
     const promptSubmitted = trajectoryEvents.find((event) => event.type === "prompt.submitted");
-    expect(promptSubmitted?.data?.prompt).toBe(seenPrompt);
-    expect(promptSubmitted?.data?.prompt).toContain("WT daily plan - Sat May 2");
+    expect(promptSubmitted?.data?.prompt).toBe("what does this mean?");
+    expect(promptSubmitted?.data?.prompt).not.toContain("WT daily plan - Sat May 2");
     expect(promptSubmitted?.data?.prompt).not.toContain("secret runtime context");
+    expect(promptSubmitted?.data?.systemPrompt).toContain("WT daily plan - Sat May 2");
   });
 
   it("marks inter-session transcriptPrompt before submitting the visible prompt", async () => {
