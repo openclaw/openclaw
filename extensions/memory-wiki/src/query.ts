@@ -1234,6 +1234,24 @@ async function filterMemoryWikiSearchHitsBySessionVisibility(params: {
 
 type SessionMemoryPathVisibilityChecker = (relPath: string) => boolean;
 
+function filterSessionKeysByScopedAgent(params: {
+  cfg: OpenClawConfig;
+  keys: string[];
+  scopedAgentId: string | undefined;
+}): string[] {
+  const scopedAgentId = normalizeLowercaseStringOrEmpty(params.scopedAgentId);
+  if (!scopedAgentId) {
+    return params.keys;
+  }
+  return params.keys.filter((key) => {
+    const ownerAgentId = resolveSessionAgentId({
+      sessionKey: key,
+      config: params.cfg,
+    });
+    return normalizeLowercaseStringOrEmpty(ownerAgentId) === scopedAgentId;
+  });
+}
+
 async function createSessionMemoryPathVisibilityChecker(params: {
   cfg: OpenClawConfig;
   agentId: string | undefined;
@@ -1270,9 +1288,13 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     if (!stem) {
       return false;
     }
-    const keys = resolveTranscriptStemToSessionKeys({
-      store: combinedSessionStore,
-      stem,
+    const keys = filterSessionKeysByScopedAgent({
+      cfg: params.cfg,
+      scopedAgentId,
+      keys: resolveTranscriptStemToSessionKeys({
+        store: combinedSessionStore,
+        stem,
+      }),
     });
     if (!guard) {
       return Boolean(scopedAgentId && keys.length > 0);

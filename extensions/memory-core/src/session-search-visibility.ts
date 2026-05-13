@@ -16,6 +16,24 @@ function normalizeAgentIdForCompare(value: string | undefined): string | undefin
   return value?.trim().toLowerCase() || undefined;
 }
 
+function filterSessionKeysByScopedAgent(params: {
+  cfg: OpenClawConfig;
+  keys: string[];
+  scopedAgentId: string | undefined;
+}): string[] {
+  const scopedAgentId = normalizeAgentIdForCompare(params.scopedAgentId);
+  if (!scopedAgentId) {
+    return params.keys;
+  }
+  return params.keys.filter((key) => {
+    const ownerAgentId = resolveSessionAgentId({
+      sessionKey: key,
+      config: params.cfg,
+    });
+    return normalizeAgentIdForCompare(ownerAgentId) === scopedAgentId;
+  });
+}
+
 export async function filterMemorySearchHitsBySessionVisibility(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -70,10 +88,14 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
           normalizeAgentIdForCompare(scopedAgentId)),
     );
     const archivedOwnerAgentId = archivedOwnerMatchesScope ? identity.ownerAgentId : undefined;
-    const keys = resolveTranscriptStemToSessionKeys({
-      store: combinedSessionStore,
-      stem: identity.stem,
-      ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+    const keys = filterSessionKeysByScopedAgent({
+      cfg: params.cfg,
+      scopedAgentId,
+      keys: resolveTranscriptStemToSessionKeys({
+        store: combinedSessionStore,
+        stem: identity.stem,
+        ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+      }),
     });
     if (keys.length === 0) {
       continue;
