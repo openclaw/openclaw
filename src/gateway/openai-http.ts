@@ -75,6 +75,8 @@ type OpenAiChatCompletionRequest = {
   user?: unknown;
   max_tokens?: unknown;
   max_completion_tokens?: unknown;
+  temperature?: unknown;
+  top_p?: unknown;
 };
 
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
@@ -134,7 +136,7 @@ function buildAgentCommandInput(params: {
   messageChannel: string;
   senderIsOwner: boolean;
   abortSignal?: AbortSignal;
-  streamParams?: { maxTokens?: number };
+  streamParams?: { maxTokens?: number; temperature?: number; topP?: number };
 }) {
   return {
     message: params.prompt.message,
@@ -823,7 +825,16 @@ export async function handleOpenAiHttpRequest(
       : typeof payload.max_tokens === "number"
         ? payload.max_tokens
         : undefined;
-  const streamParams = maxTokens !== undefined ? { maxTokens } : undefined;
+  const temperature = typeof payload.temperature === "number" ? payload.temperature : undefined;
+  const topP = typeof payload.top_p === "number" ? payload.top_p : undefined;
+  const streamParams =
+    maxTokens !== undefined || temperature !== undefined || topP !== undefined
+      ? {
+          ...(maxTokens !== undefined ? { maxTokens } : {}),
+          ...(temperature !== undefined ? { temperature } : {}),
+          ...(topP !== undefined ? { topP } : {}),
+        }
+      : undefined;
 
   const { agentId, sessionKey, messageChannel } = resolveGatewayRequestContext({
     req,
