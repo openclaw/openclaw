@@ -16,6 +16,7 @@ const EXACT_NPM_ALIAS_PATTERN =
   /^npm:(?:@[^/\s]+\/)?[^@\s]+@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 const PINNED_GIT_PATTERN = /(?:#|\/commit\/)[0-9a-f]{40}$/iu;
 const EXOTIC_SPEC_PATTERN = /^(?:git\+|github:|gitlab:|bitbucket:|https?:)/iu;
+const RECENTLY_PUBLISHED_VERSION_TYPE = "recently-published-version";
 
 function isAllowedPinnedSpec(spec) {
   if (typeof spec !== "string") {
@@ -63,10 +64,72 @@ async function loadWorkspaceRiskSettings(rootDir) {
     return {
       minimumReleaseAgeMinutes:
         typeof workspace?.minimumReleaseAge === "number" ? workspace.minimumReleaseAge : null,
+      minimumReleaseAgeExclude: Array.isArray(workspace?.minimumReleaseAgeExclude)
+        ? workspace.minimumReleaseAgeExclude.filter((entry) => typeof entry === "string")
+        : [],
     };
   } catch {
-    return { minimumReleaseAgeMinutes: null };
+    return { minimumReleaseAgeMinutes: null, minimumReleaseAgeExclude: [] };
   }
+}
+
+function splitMinimumReleaseAgeExcludeSelector(selector) {
+  const trimmed = selector.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith("@")) {
+    const scopeSeparatorIndex = trimmed.indexOf("/");
+    const versionSeparatorIndex =
+      scopeSeparatorIndex === -1 ? -1 : trimmed.indexOf("@", scopeSeparatorIndex + 1);
+    if (versionSeparatorIndex === -1) {
+      return { packagePattern: trimmed, versionSelectors: [] };
+    }
+    return {
+      packagePattern: trimmed.slice(0, versionSeparatorIndex),
+      versionSelectors: trimmed
+        .slice(versionSeparatorIndex + 1)
+        .split("||")
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    };
+  }
+
+  const versionSeparatorIndex = trimmed.indexOf("@");
+  if (versionSeparatorIndex === -1) {
+    return { packagePattern: trimmed, versionSelectors: [] };
+  }
+  return {
+    packagePattern: trimmed.slice(0, versionSeparatorIndex),
+    versionSelectors: trimmed
+      .slice(versionSeparatorIndex + 1)
+      .split("||")
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  };
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function packagePatternMatches(pattern, packageName) {
+  const regex = new RegExp(`^${pattern.split("*").map(escapeRegExp).join(".*")}$`, "u");
+  return regex.test(packageName);
+}
+
+function matchesMinimumReleaseAgeExclude(selector, packageName, version) {
+  const parsed = splitMinimumReleaseAgeExcludeSelector(selector);
+  if (!parsed || !packagePatternMatches(parsed.packagePattern, packageName)) {
+    return false;
+  }
+  return parsed.versionSelectors.length === 0 || parsed.versionSelectors.includes(version);
+}
+
+function findMinimumReleaseAgeExcludeSelector(selectors, packageName, version) {
+  return selectors.find((selector) =>
+    matchesMinimumReleaseAgeExclude(selector, packageName, version),
+  );
 }
 
 function validateException(exception, index) {
@@ -181,8 +244,10 @@ function collectManifestFindings({
   publishedAt,
   now,
   minimumReleaseAgeMinutes,
+  minimumReleaseAgeExclude = [],
 }) {
   const findings = [];
+  const workspaceExcludedFindings = [];
   for (const section of ["dependencies", "optionalDependencies"]) {
     for (const [dependencyName, spec] of Object.entries(manifest[section] ?? {})) {
       if (!isAllowedPinnedSpec(spec)) {
@@ -217,17 +282,31 @@ function collectManifestFindings({
   } else if (typeof minimumReleaseAgeMinutes === "number") {
     const ageMs = now.getTime() - Date.parse(publishedAt);
     if (Number.isFinite(ageMs) && ageMs < minimumReleaseAgeMinutes * 60_000) {
-      findings.push({
-        type: "young-package",
+      const finding = {
+        type: RECENTLY_PUBLISHED_VERSION_TYPE,
         packageName,
         version,
         publishedAt,
         minimumReleaseAgeMinutes,
-      });
+      };
+      const exclusion = findMinimumReleaseAgeExcludeSelector(
+        minimumReleaseAgeExclude,
+        packageName,
+        version,
+      );
+      if (exclusion) {
+        workspaceExcludedFindings.push({
+          ...finding,
+          workspaceExcluded: true,
+          workspaceExclusion: exclusion,
+        });
+      } else {
+        findings.push(finding);
+      }
     }
   }
 
-  return findings;
+  return { findings, workspaceExcludedFindings };
 }
 
 async function fetchNpmManifest({ packageName, version, fetchImpl, registryBaseUrl }) {
@@ -252,8 +331,10 @@ export async function createTransitiveManifestRiskReport({
   manifestLoader,
   now = new Date(),
   minimumReleaseAgeMinutes = null,
+  minimumReleaseAgeExclude = [],
 }) {
   const findings = [];
+  const workspaceExcludedFindings = [];
   const metadataFailures = [];
   for (const { packageName, version } of packageVersions) {
     if (isExoticResolvedVersion(version)) {
@@ -267,16 +348,17 @@ export async function createTransitiveManifestRiskReport({
     }
     try {
       const { manifest, publishedAt } = await manifestLoader({ packageName, version });
-      findings.push(
-        ...collectManifestFindings({
-          packageName,
-          version,
-          manifest,
-          publishedAt,
-          now,
-          minimumReleaseAgeMinutes,
-        }),
-      );
+      const manifestFindings = collectManifestFindings({
+        packageName,
+        version,
+        manifest,
+        publishedAt,
+        now,
+        minimumReleaseAgeMinutes,
+        minimumReleaseAgeExclude,
+      });
+      findings.push(...manifestFindings.findings);
+      workspaceExcludedFindings.push(...manifestFindings.workspaceExcludedFindings);
     } catch (error) {
       metadataFailures.push({
         packageName,
@@ -303,6 +385,24 @@ export async function createTransitiveManifestRiskReport({
     knownFindingCount: annotated.findings.filter((finding) => finding.known).length,
     byType,
     knownByType,
+    workspacePolicy: {
+      minimumReleaseAgeMinutes,
+      minimumReleaseAgeExclude,
+    },
+    workspaceExcludedFindingCount: workspaceExcludedFindings.length,
+    workspaceExcludedByType: workspaceExcludedFindings.reduce((counts, finding) => {
+      counts[finding.type] = (counts[finding.type] ?? 0) + 1;
+      return counts;
+    }, {}),
+    workspaceExcludedFindings: workspaceExcludedFindings.toSorted((left, right) => {
+      if (left.type !== right.type) {
+        return left.type.localeCompare(right.type);
+      }
+      if (left.packageName !== right.packageName) {
+        return left.packageName.localeCompare(right.packageName);
+      }
+      return left.version.localeCompare(right.version);
+    }),
     metadataFailures,
     unusedExceptions: annotated.unusedExceptions,
     findings: annotated.findings.toSorted((left, right) => {
@@ -357,7 +457,7 @@ function collectMarkdownRollups(findings) {
   const packageFindings = new Map();
   const floatingTargets = new Map();
   const lifecyclePackages = new Map();
-  const youngPackages = [];
+  const recentlyPublishedVersions = [];
   const exoticSources = [];
 
   for (const finding of findings) {
@@ -384,8 +484,8 @@ function collectMarkdownRollups(findings) {
       lifecyclePackages.set(packageKey, scripts);
     }
 
-    if (finding.type === "young-package") {
-      youngPackages.push(finding);
+    if (finding.type === RECENTLY_PUBLISHED_VERSION_TYPE) {
+      recentlyPublishedVersions.push(finding);
     }
 
     if (finding.type === "exotic-source") {
@@ -397,7 +497,7 @@ function collectMarkdownRollups(findings) {
     packageFindings,
     floatingTargets,
     lifecyclePackages,
-    youngPackages,
+    recentlyPublishedVersions,
     exoticSources,
   };
 }
@@ -405,7 +505,7 @@ function collectMarkdownRollups(findings) {
 function renderCompleteEvidence(lines) {
   lines.push("## Complete Evidence", "");
   lines.push(
-    "The complete finding list is available in the JSON report, including every package, version, dependency, specifier, and known-risk annotation. The sections below summarize the same findings by package, dependency target, and finding class for human review.",
+    "The complete actionable finding list is available in the JSON report, including every package, version, dependency, specifier, and known-risk annotation. Recently published versions covered by pnpm workspace release-age exclusions are listed separately under workspaceExcludedFindings. The sections below summarize the same data by package, dependency target, and finding class for human review.",
   );
   lines.push("");
 }
@@ -470,22 +570,25 @@ function renderLifecycleScriptPackages(lines, lifecyclePackages) {
   lines.push("");
 }
 
-function renderYoungPackages(lines, youngPackages) {
-  if (youngPackages.length === 0) {
+function renderRecentlyPublishedVersions(lines, findings, heading) {
+  if (findings.length === 0) {
     return;
   }
 
-  lines.push("## Young Packages", "");
-  for (const finding of youngPackages.toSorted((left, right) => {
+  lines.push(`## ${heading}`, "");
+  for (const finding of findings.toSorted((left, right) => {
     const dateDelta = Date.parse(right.publishedAt ?? "") - Date.parse(left.publishedAt ?? "");
     if (Number.isFinite(dateDelta) && dateDelta !== 0) {
       return dateDelta;
     }
     return findingPackageKey(left).localeCompare(findingPackageKey(right));
   })) {
+    const suffix = finding.workspaceExclusion
+      ? `; workspace exclusion ${markdownCode(finding.workspaceExclusion)}`
+      : "";
     lines.push(
       `- ${markdownCode(findingPackageKey(finding))}: published ${finding.publishedAt}; ` +
-        `minimum release age ${finding.minimumReleaseAgeMinutes} minutes`,
+        `minimum release age ${finding.minimumReleaseAgeMinutes} minutes${suffix}`,
     );
   }
   lines.push("");
@@ -513,13 +616,14 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
     "",
     "## Scope",
     "",
-    "This report inspects published package manifests for resolved packages in the lockfile. It looks for supply-chain risk signals such as floating dependency specs, lifecycle scripts, exotic sources, young packages, and missing publish time metadata. It is report-only.",
+    "This report inspects published package manifests for resolved packages in the lockfile. It looks for supply-chain risk signals such as floating dependency specs, lifecycle scripts, exotic sources, recently published versions, and missing publish time metadata. It is report-only.",
     "",
     "## Summary",
     "",
     `- Resolved package versions inspected: ${report.packageVersions}`,
     `- Findings: ${report.findingCount}`,
     `- Known findings: ${report.knownFindingCount}`,
+    `- Findings covered by workspace policy exclusions: ${report.workspaceExcludedFindingCount ?? 0}`,
     `- Metadata failures: ${report.metadataFailures.length}`,
     `- Unused known-risk entries: ${report.unusedExceptions.length}`,
     "",
@@ -533,6 +637,16 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
   }
   lines.push("");
 
+  if (Object.keys(report.workspaceExcludedByType ?? {}).length > 0) {
+    lines.push("## Findings Covered By Workspace Policy Exclusions", "");
+    for (const [type, count] of Object.entries(report.workspaceExcludedByType ?? {}).toSorted(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
+      lines.push(`- ${type}: ${count}`);
+    }
+    lines.push("");
+  }
+
   renderCompleteEvidence(lines);
   renderKnownExceptionSummary(lines, report);
 
@@ -541,9 +655,19 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
     renderPackageFindingSummary(lines, rollups.packageFindings);
     renderFloatingDependencyTargets(lines, rollups.floatingTargets);
     renderLifecycleScriptPackages(lines, rollups.lifecyclePackages);
-    renderYoungPackages(lines, rollups.youngPackages);
+    renderRecentlyPublishedVersions(
+      lines,
+      rollups.recentlyPublishedVersions,
+      "Recently Published Versions Not Covered By Workspace Exclusions",
+    );
     renderExoticSources(lines, rollups.exoticSources);
   }
+
+  renderRecentlyPublishedVersions(
+    lines,
+    report.workspaceExcludedFindings ?? [],
+    "Recently Published Versions Covered By Workspace Exclusions",
+  );
 
   if (report.metadataFailures.length > 0) {
     lines.push("## Metadata Failures", "");
@@ -623,6 +747,7 @@ export async function runTransitiveManifestRiskReport({
     exceptions,
     now,
     minimumReleaseAgeMinutes: settings.minimumReleaseAgeMinutes,
+    minimumReleaseAgeExclude: settings.minimumReleaseAgeExclude,
     manifestLoader: ({ packageName, version }) =>
       fetchNpmManifest({
         packageName,

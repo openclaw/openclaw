@@ -36,7 +36,7 @@ describe("transitive-manifest-risk-report", () => {
     ).toEqual(["exceptions[0].reason must be a non-empty string."]);
   });
 
-  it("reports floating transitive specs, lifecycle scripts, exotic sources, and young packages", async () => {
+  it("reports floating transitive specs, lifecycle scripts, exotic sources, and recently published versions", async () => {
     const report = await createTransitiveManifestRiskReport({
       packageVersions: [
         { packageName: "parent", version: "1.0.0" },
@@ -71,9 +71,65 @@ describe("transitive-manifest-risk-report", () => {
       "exotic-source": 2,
       "floating-transitive-spec": 3,
       "lifecycle-script": 1,
-      "young-package": 1,
+      "recently-published-version": 1,
     });
+    expect(report.workspaceExcludedFindings).toEqual([]);
     expect(report.metadataFailures).toEqual([]);
+  });
+
+  it("uses pnpm minimum release age exclusions for recently published versions", async () => {
+    const report = await createTransitiveManifestRiskReport({
+      packageVersions: [
+        { packageName: "regular", version: "1.0.0" },
+        { packageName: "exact-package", version: "2.0.0" },
+        { packageName: "either-version", version: "5.102.1" },
+        { packageName: "@scope/native-linux-x64", version: "3.0.0" },
+      ],
+      now: new Date("2026-05-12T00:00:00Z"),
+      minimumReleaseAgeMinutes: 2_880,
+      minimumReleaseAgeExclude: [
+        "exact-package@2.0.0",
+        "either-version@4.47.0 || 5.102.1",
+        "@scope/native-*",
+      ],
+      manifestLoader: async () => ({
+        publishedAt: "2026-05-11T23:00:00Z",
+        manifest: {},
+      }),
+    });
+
+    expect(report.byType).toEqual({
+      "recently-published-version": 1,
+    });
+    expect(report.workspaceExcludedByType).toEqual({
+      "recently-published-version": 3,
+    });
+    expect(report.findings).toMatchObject([
+      {
+        packageName: "regular",
+        type: "recently-published-version",
+      },
+    ]);
+    expect(report.workspaceExcludedFindings).toMatchObject([
+      {
+        packageName: "@scope/native-linux-x64",
+        type: "recently-published-version",
+        workspaceExcluded: true,
+        workspaceExclusion: "@scope/native-*",
+      },
+      {
+        packageName: "either-version",
+        type: "recently-published-version",
+        workspaceExcluded: true,
+        workspaceExclusion: "either-version@4.47.0 || 5.102.1",
+      },
+      {
+        packageName: "exact-package",
+        type: "recently-published-version",
+        workspaceExcluded: true,
+        workspaceExclusion: "exact-package@2.0.0",
+      },
+    ]);
   });
 
   it("annotates matching known-risk exceptions and reports unused entries", async () => {
@@ -150,8 +206,11 @@ describe("transitive-manifest-risk-report", () => {
     expect(markdown).toContain("published package manifests for resolved packages");
     expect(markdown).toContain("It is report-only.");
     expect(markdown).toContain("Resolved package versions inspected");
+    expect(markdown).toContain("Findings covered by workspace policy exclusions");
     expect(markdown).toContain("## Complete Evidence");
-    expect(markdown).toContain("The complete finding list is available in the JSON report");
+    expect(markdown).toContain(
+      "The complete actionable finding list is available in the JSON report",
+    );
     expect(markdown).toContain("## Known Exception Summary");
     expect(markdown).toContain("## Published Package Manifests With Risk Findings");
     expect(markdown).toContain("`@earendil-works/pi-ai@0.74.0`: 1 manifest finding");
