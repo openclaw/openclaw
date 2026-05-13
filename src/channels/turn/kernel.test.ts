@@ -952,7 +952,7 @@ describe("channel turn kernel", () => {
     expect(result.admission).toEqual({ kind: "dispatch" });
     expect(result.dispatched).toBe(true);
     // The hook redirected the session
-    expect(hookMocks.runner.runBeforeRouteInboundMessage).toHaveBeenCalledOnce;
+    expect(hookMocks.runner.runBeforeRouteInboundMessage).toHaveBeenCalledOnce();
   });
 
   it("suppresses delivery when before_route_inbound_message hook returns suppressDelivery", async () => {

@@ -7,12 +7,6 @@ import {
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import type {
-  PluginHookBeforeRouteInboundMessageContext,
-  PluginHookBeforeRouteInboundMessageEvent,
-  PluginHookBeforeRouteInboundMessageResult,
-} from "../plugins/hook-message.types.js";
 import {
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
@@ -25,6 +19,12 @@ import {
 } from "../channels/turn/kernel.js";
 import type { DurableInboundReplyDeliveryOptions } from "../channels/turn/kernel.js";
 import type { PreparedChannelTurn, RunChannelTurnParams } from "../channels/turn/types.js";
+import type {
+  PluginHookBeforeRouteInboundMessageContext,
+  PluginHookBeforeRouteInboundMessageEvent,
+  PluginHookBeforeRouteInboundMessageResult,
+} from "../plugins/hook-message.types.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 export type { ChannelTurnRecordOptions } from "../channels/turn/types.js";
 export type { DurableInboundReplyDeliveryParams } from "../channels/turn/kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -162,10 +162,9 @@ export async function dispatchChannelMessageReplyWithBase(
   // can redirect to a different session or suppress delivery.
   const hookRunner = getGlobalHookRunner();
   if (hookRunner) {
-    const bodyText = String(params.ctxPayload.Body ?? params.ctxPayload.BodyForAgent ?? "");
+    const bodyText = params.ctxPayload.Body ?? params.ctxPayload.BodyForAgent ?? "";
     const isGroup =
-      params.ctxPayload.ChatType === "group" ||
-      params.ctxPayload.ChatType === "supergroup";
+      params.ctxPayload.ChatType === "group" || params.ctxPayload.ChatType === "supergroup";
 
     const hookCtx: PluginHookBeforeRouteInboundMessageContext = {
       channelId: params.channel,
@@ -188,10 +187,7 @@ export async function dispatchChannelMessageReplyWithBase(
       originalSessionKey: params.route.sessionKey,
     };
 
-    const hookResult = await hookRunner.runBeforeRouteInboundMessage(
-      hookEvent,
-      hookCtx,
-    );
+    const hookResult = await hookRunner.runBeforeRouteInboundMessage(hookEvent, hookCtx);
 
     if (hookResult?.handled) {
       // Redirect: override the route session key

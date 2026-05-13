@@ -467,19 +467,19 @@ export async function runChannelTurn<
   const hookRunner = getGlobalHookRunner();
   if (hookRunner) {
     const channelName = params.channel;
-    const bodyText = String(params.ctxPayload?.Body ?? "");
-    const isGroup =
-      String(params.ctxPayload?.ChatType ?? "") === "group" ||
-      String(params.ctxPayload?.ChatType ?? "") === "supergroup";
+    // ctxPayload is on resolved (ChannelTurnResolved), not params (RunChannelTurnParams)
+    const ctxPayload = "ctxPayload" in resolved ? resolved.ctxPayload : undefined;
+    const bodyText = ctxPayload?.Body ?? "";
+    const isGroup = ctxPayload?.ChatType === "group" || ctxPayload?.ChatType === "supergroup";
 
     const hookCtx: PluginHookBeforeRouteInboundMessageContext = {
       channelId: channelName,
       accountId: params.accountId,
-      conversationId: params.ctxPayload?.NativeChannelId ?? params.ctxPayload?.OriginatingTo,
-      parentConversationId: params.ctxPayload?.MessageThreadId
-        ? String(params.ctxPayload.MessageThreadId)
+      conversationId: ctxPayload?.NativeChannelId ?? ctxPayload?.OriginatingTo,
+      parentConversationId: ctxPayload?.MessageThreadId
+        ? String(ctxPayload.MessageThreadId)
         : undefined,
-      sessionKey: resolved.sessionKey ?? resolved.routeSessionKey,
+      sessionKey: resolved.routeSessionKey,
     };
 
     const hookEvent: PluginHookBeforeRouteInboundMessageEvent = {
@@ -489,33 +489,31 @@ export async function runChannelTurn<
       parentConversationId: hookCtx.parentConversationId,
       body: bodyText,
       isGroup,
-      senderId: params.ctxPayload?.From,
-      originalSessionKey: resolved.sessionKey ?? resolved.routeSessionKey,
+      senderId: ctxPayload?.From,
+      originalSessionKey: resolved.routeSessionKey,
     };
 
     const hookResult = await hookRunner.runBeforeRouteInboundMessage(hookEvent, hookCtx);
 
     if (hookResult?.handled) {
       // Redirect: update SessionKey in the payload that record/dispatch actually reads
-      // (runPreparedChannelTurnCore reads params.ctxPayload.SessionKey, not resolved values)
-      if (hookResult.redirectSessionKey) {
-        const originalKey = resolved.sessionKey ?? resolved.routeSessionKey;
-        if (hookResult.redirectSessionKey !== originalKey) {
-          // Update the SessionKey in ctxPayload — this is what record/dispatch reads
-          if (params.ctxPayload?.SessionKey) {
-            params.ctxPayload.SessionKey = hookResult.redirectSessionKey;
-          }
-          // Also update resolved values for any downstream code that reads them directly
-          resolved.sessionKey = hookResult.redirectSessionKey;
-          resolved.routeSessionKey = hookResult.redirectSessionKey;
+      if (
+        hookResult.redirectSessionKey &&
+        hookResult.redirectSessionKey !== resolved.routeSessionKey
+      ) {
+        // Update ctxPayload.SessionKey — this is what downstream code reads
+        if (ctxPayload) {
+          ctxPayload.SessionKey = hookResult.redirectSessionKey;
         }
+        // Also update resolved.routeSessionKey for any downstream code that reads it directly
+        (resolved as { routeSessionKey: string }).routeSessionKey = hookResult.redirectSessionKey;
       }
       // Suppress: drop the message entirely — return early after onFinalize
       if (hookResult.suppressDelivery) {
         const suppressedResult: ChannelTurnResult<TDispatchResult> = {
           admission: { kind: "drop", reason: "suppressed_by_hook" },
           dispatched: false,
-          ctxPayload: resolved.ctxPayload ?? params.ctxPayload,
+          ctxPayload,
           routeSessionKey: resolved.routeSessionKey,
         };
         try {
