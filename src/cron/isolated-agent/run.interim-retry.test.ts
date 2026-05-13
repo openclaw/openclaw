@@ -185,4 +185,58 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
       "agent:default:cron:test:run:test-session-id",
     );
   });
+
+  it("runs one no-tools repair pass when final cron output has no deliverable text", async () => {
+    usePayloadTextExtraction();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "   " }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "Morning report ready." }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      });
+
+    mockRunCronFallbackPassthrough();
+    await runTurnAndExpectOk(2, 2);
+
+    const repairCall = runEmbeddedPiAgentMock.mock.calls.at(1)?.[0] as
+      | { disableTools?: boolean; prompt?: string }
+      | undefined;
+    expect(repairCall?.disableTools).toBe(true);
+    expect(repairCall?.prompt).toContain("produced no deliverable user-visible text");
+    expect(repairCall?.prompt).toContain("Original cron task:");
+    expect(repairCall?.prompt).toContain("[cron:test-job Test Job] test");
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
+    expect(requireDeliveryRequest().deliveryPayloads).toEqual([{ text: "Morning report ready." }]);
+  });
+
+  it("fails explicitly when the no-tools repair pass still has no deliverable text", async () => {
+    usePayloadTextExtraction();
+    runEmbeddedPiAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "   " }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "\n\n" }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("repair pass did not recover a final reply");
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
+  });
 });
