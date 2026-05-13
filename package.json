@@ -1487,6 +1487,7 @@
     "moltbot:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "openclaw": "node scripts/run-node.mjs",
     "openclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
+    "perf:issue-78851": "node --import tsx scripts/perf/issue-78851-model-resolution.ts",
     "perf:kova:summary": "node scripts/kova-ci-summary.mjs",
     "perf:source:summary": "node scripts/openclaw-performance-source-summary.mjs",
     "plugin-sdk:api:check": "node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --check",
