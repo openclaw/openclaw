@@ -351,7 +351,8 @@ describe("renderAgents", () => {
       );
 
       expect(tabLabels).toEqual(["概览", "文件", "工具", "技能", "频道", "Cron Jobs"]);
-      expect(container.textContent).toContain("上次刷新：从未");
+      const cards = container.querySelectorAll("section.card");
+      expect(cards[1]?.querySelector(".muted")?.textContent?.trim()).toBe("上次刷新：从未");
     } finally {
       await i18n.setLocale("en");
       vi.unstubAllGlobals();

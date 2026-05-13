@@ -286,7 +286,6 @@ describe("context notice", () => {
     expect(lowNotice!.querySelector(".context-notice__detail")?.textContent).toBe("46k / 200k");
     expect(container.querySelectorAll(".context-notice__meter")).toHaveLength(1);
     expect(container.querySelector(".context-notice__icon")).toBeNull();
-    expect(container.textContent).not.toContain("757.3k / 200k");
 
     const session: GatewaySessionRow = {
       key: "main",
@@ -299,17 +298,14 @@ describe("context notice", () => {
     render(renderContextNotice(session, 200_000), container);
 
     expect(getContextNoticeViewModel(session, 200_000)?.compactRecommended).toBe(true);
-    expect(container.textContent).not.toContain("757.3k / 200k");
     const notice = container.querySelector<HTMLElement>(".context-notice");
     expect(notice).toBeInstanceOf(HTMLElement);
     expect(notice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("95% context used 190k / 200k");
     expect(notice!.querySelector(".context-notice__detail")?.textContent).toBe("190k / 200k");
     expect([...notice!.classList]).toEqual(["context-notice", "context-notice--warning"]);
     expect(notice!.getAttribute("title")).toBe("Session context usage: 190k / 200k (95%)");
-    expect(notice!.style.getPropertyValue("--ctx-color")).toContain("rgb(");
-    expect(notice!.style.getPropertyValue("--ctx-color")).toContain("4, 5, 6");
-    expect(notice!.style.getPropertyValue("--ctx-color")).not.toContain("NaN");
-    expect(notice!.style.getPropertyValue("--ctx-bg")).not.toContain("NaN");
+    expect(notice!.style.getPropertyValue("--ctx-color")).toBe("rgb(4, 5, 6)");
+    expect(notice!.style.getPropertyValue("--ctx-bg")).toBe("rgba(4, 5, 6, 0.15999999999999998)");
 
     const icon = container.querySelector<SVGElement>(".context-notice__icon");
     expect(icon).toBeInstanceOf(SVGElement);

@@ -115,11 +115,11 @@ function loggerMessages(spy: unknown): string[] {
 }
 
 function expectLoggerMessageContaining(spy: unknown, text: string): void {
-  expect(loggerMessages(spy).some((message) => message.includes(text))).toBe(true);
+  expect(loggerMessages(spy).join("\n")).toContain(text);
 }
 
 function expectNoLoggerMessageContaining(spy: unknown, text: string): void {
-  expect(loggerMessages(spy).some((message) => message.includes(text))).toBe(false);
+  expect(loggerMessages(spy).join("\n")).not.toContain(text);
 }
 
 function expectRecoveryCall(

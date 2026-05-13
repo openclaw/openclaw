@@ -52,6 +52,7 @@ import {
 } from "./io.audit.js";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
 import { throwInvalidConfig } from "./io.invalid-config.js";
+import { stampConfigWriteMetadata } from "./io.meta.js";
 import {
   promoteConfigSnapshotToLastKnownGood as promoteConfigSnapshotToLastKnownGoodWithDeps,
   recoverConfigFromLastKnownGood as recoverConfigFromLastKnownGoodWithDeps,
@@ -895,15 +896,7 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
 }
 
 function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
-  const now = new Date().toISOString();
-  return {
-    ...cfg,
-    meta: {
-      ...cfg.meta,
-      lastTouchedVersion: VERSION,
-      lastTouchedAt: now,
-    },
-  };
+  return stampConfigWriteMetadata(cfg);
 }
 
 function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {

@@ -679,7 +679,9 @@ describe("plugins cli install", () => {
 
     await runPluginsCommand(["plugins", "install", pluginId]);
 
-    const writtenConfig = writeConfigFile.mock.calls.at(-1)?.[0] as OpenClawConfig;
+    const writtenConfig = writeConfigFile.mock.calls[
+      writeConfigFile.mock.calls.length - 1
+    ]?.[0] as OpenClawConfig;
     expect(writtenConfig.plugins?.entries?.[pluginId]).toBeUndefined();
     expect(writtenConfig.plugins?.load?.paths).toEqual(["/existing/plugin"]);
     const record = persistedInstallRecord(pluginId);
