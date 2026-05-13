@@ -331,7 +331,7 @@ export function registerControlUiAndPairingSuite(): void {
     });
   });
 
-  test("preserves trusted-proxy control ui scopes for unpaired device identity", async () => {
+  test("requires pairing for trusted-proxy control ui device identity", async () => {
     const { replaceConfigFile } = await import("../config/config.js");
     testState.gatewayAuth = undefined;
     testState.gatewayControlUi = {
@@ -375,17 +375,11 @@ export function registerControlUiAndPairingSuite(): void {
           device,
           client: { ...CONTROL_UI_CLIENT },
         });
-        expect(res.ok).toBe(true);
-        const payload = res.payload as
-          | {
-              auth?: { scopes?: string[]; deviceToken?: string };
-            }
-          | undefined;
-        expect(payload?.auth?.scopes).toEqual(["operator.admin", "operator.read"]);
-        expect(payload?.auth?.deviceToken).toBeUndefined();
-
-        const admin = await rpcReq(ws, "set-heartbeats", { enabled: false });
-        expect(admin.ok).toBe(true);
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("pairing required");
+        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.PAIRING_REQUIRED,
+        );
       } finally {
         ws.close();
       }
@@ -419,6 +413,14 @@ export function registerControlUiAndPairingSuite(): void {
       afterWrite: { mode: "auto" },
     });
     await withControlUiGatewayServer(async ({ port }) => {
+      const seeded = await seedApprovedOperatorReadPairing({
+        identityPrefix: "openclaw-control-ui-trusted-proxy-bounded-",
+        clientId: CONTROL_UI_CLIENT.id,
+        clientMode: CONTROL_UI_CLIENT.mode,
+        displayName: "Control UI",
+        platform: "web",
+        scopes: ["operator.admin", "operator.read"],
+      });
       const ws = await openWs(port, {
         ...TRUSTED_PROXY_CONTROL_UI_HEADERS,
         "x-openclaw-scopes": "operator.read",
@@ -431,6 +433,7 @@ export function registerControlUiAndPairingSuite(): void {
           scopes: ["operator.admin", "operator.read"],
           clientId: CONTROL_UI_CLIENT.id,
           clientMode: CONTROL_UI_CLIENT.mode,
+          identityPath: seeded.identityPath,
           nonce: challengeNonce,
         });
         const res = await connectReq(ws, {
