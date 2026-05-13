@@ -869,7 +869,13 @@ function emitAnthropicUsageObservability(
 ): void {
   if (normalizeLowercaseStringOrEmpty(model.provider) !== "anthropic") return;
   const cached = usage?.cacheRead ?? 0;
-  const prompt = (usage?.input ?? 0) + cached;
+  // Anthropic prompt-side cost is the sum of uncached input + cache-read +
+  // cache-creation. cache_creation_input_tokens are tokens written to the
+  // prompt cache on first turn / new prefix; they bill at +25% (5-min) or
+  // +100% (1-hour) so omitting them would materially under-count prompt
+  // usage on cache-write turns. The dedicated `cached` channel tracks only
+  // cache-reads since cache-writes are not "free" the way reads are.
+  const prompt = (usage?.input ?? 0) + cached + (usage?.cacheWrite ?? 0);
   const completion = usage?.output ?? 0;
   recordLLMUsage("anthropic", { prompt, completion, cached });
   const messages = (context as { messages?: ReadonlyArray<{ role: string; content: unknown }> })
@@ -1185,8 +1191,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             calculateCost(model, output.usage);
           }
         }
-        emitAnthropicUsageObservability(model, context, output.usage);
         finalizeTransportStream({ stream, output, signal: transportOptions.signal });
+        // Emit after finalize so aborted/failed turns (finalize can throw when
+        // signal.aborted is true) don't count toward openclaw_llm_*_total. The
+        // failure path goes through failTransportStream in the catch block
+        // below and intentionally does not record usage.
+        emitAnthropicUsageObservability(model, context, output.usage);
       } catch (error) {
         failTransportStream({
           stream,
