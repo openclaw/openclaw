@@ -139,30 +139,84 @@ export async function deliverLineAutoReply(params: {
   if (chunks.length > 0) {
     const hasRichOrMedia = richMessages.length > 0 || mediaMessages.length > 0;
     if (hasQuickReplies && hasRichOrMedia) {
+      // Quick replies must attach to the LAST message in the reply batch.
+      // To keep them visible, the original flow sends rich/media on the Push
+      // API FIRST and then attaches the quick reply to the trailing text in
+      // the Reply API. Preserve that quick-reply ordering.
       try {
         await sendLineMessages([...richMessages, ...mediaMessages], false);
       } catch (err) {
         deps.onReplyError?.(err);
       }
-    }
-    const { replyTokenUsed: nextReplyTokenUsed } = await deps.sendLineReplyChunks({
-      to,
-      chunks,
-      quickReplies: lineData.quickReplies,
-      replyToken,
-      replyTokenUsed,
-      cfg: params.cfg,
-      accountId,
-      replyMessageLine: deps.replyMessageLine,
-      pushMessageLine: deps.pushMessageLine,
-      pushTextMessageWithQuickReplies: deps.pushTextMessageWithQuickReplies,
-      createTextMessageWithQuickReplies: deps.createTextMessageWithQuickReplies,
-    });
-    replyTokenUsed = nextReplyTokenUsed;
-    if (!hasQuickReplies || !hasRichOrMedia) {
-      await sendLineMessages(richMessages, false);
-      if (mediaMessages.length > 0) {
-        await sendLineMessages(mediaMessages, false);
+      const { replyTokenUsed: nextReplyTokenUsed } = await deps.sendLineReplyChunks({
+        to,
+        chunks,
+        quickReplies: lineData.quickReplies,
+        replyToken,
+        replyTokenUsed,
+        cfg: params.cfg,
+        accountId,
+        replyMessageLine: deps.replyMessageLine,
+        pushMessageLine: deps.pushMessageLine,
+        pushTextMessageWithQuickReplies: deps.pushTextMessageWithQuickReplies,
+        createTextMessageWithQuickReplies: deps.createTextMessageWithQuickReplies,
+      });
+      replyTokenUsed = nextReplyTokenUsed;
+    } else if (replyToken && !replyTokenUsed && hasRichOrMedia) {
+      // No quick replies, but we have rich/media + text. Pack everything that
+      // fits into the single 5-slot Reply API call (LINE max) before the
+      // reply token is consumed; push only the overflow. This avoids the
+      // free-plan 429 on Push API when text reaches via Reply and rich
+      // messages would otherwise fall to Push (#65656).
+      const REPLY_API_MAX = 5;
+      const richAndMedia: messagingApi.Message[] = [...richMessages, ...mediaMessages];
+      const textChunkMessages: messagingApi.Message[] = chunks.map((chunk) => ({
+        type: "text",
+        text: chunk,
+      }));
+      const replyBatch = [...richAndMedia, ...textChunkMessages].slice(0, REPLY_API_MAX);
+      const overflow = [...richAndMedia, ...textChunkMessages].slice(REPLY_API_MAX);
+      try {
+        await deps.replyMessageLine(replyToken, replyBatch, {
+          cfg: params.cfg,
+          accountId,
+        });
+        replyTokenUsed = true;
+        if (overflow.length > 0) {
+          await pushLineMessages(overflow);
+        }
+      } catch (err) {
+        deps.onReplyError?.(err);
+        // Fall back to the original split: reply-chunks for text, push for rich/media.
+        replyTokenUsed = true;
+        await pushLineMessages(replyBatch);
+        if (overflow.length > 0) {
+          await pushLineMessages(overflow);
+        }
+      }
+    } else {
+      // Either no rich/media (text-only) or reply token already used: keep
+      // the existing reply-chunks path. If rich/media exist when reply token
+      // is already used (e.g. error fallback), push them after the text.
+      const { replyTokenUsed: nextReplyTokenUsed } = await deps.sendLineReplyChunks({
+        to,
+        chunks,
+        quickReplies: lineData.quickReplies,
+        replyToken,
+        replyTokenUsed,
+        cfg: params.cfg,
+        accountId,
+        replyMessageLine: deps.replyMessageLine,
+        pushMessageLine: deps.pushMessageLine,
+        pushTextMessageWithQuickReplies: deps.pushTextMessageWithQuickReplies,
+        createTextMessageWithQuickReplies: deps.createTextMessageWithQuickReplies,
+      });
+      replyTokenUsed = nextReplyTokenUsed;
+      if (hasRichOrMedia) {
+        await sendLineMessages(richMessages, false);
+        if (mediaMessages.length > 0) {
+          await sendLineMessages(mediaMessages, false);
+        }
       }
     }
   } else {
