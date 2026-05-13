@@ -625,6 +625,15 @@ function inferDeliveryFromContext(context?: DeliveryContext): CronDelivery | nul
   return delivery;
 }
 
+function shouldStampCallerSessionKeyOnCronJob(job: Record<string, unknown>): boolean {
+  const payload = isRecord(job.payload) ? job.payload : null;
+  const sessionTarget = typeof job.sessionTarget === "string" ? job.sessionTarget : "";
+  if (payload?.kind === "systemEvent" && sessionTarget === "main") {
+    return false;
+  }
+  return true;
+}
+
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const callGateway = deps?.callGatewayTool ?? callGatewayTool;
   return {
@@ -699,6 +708,7 @@ CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
 - sessionTarget="isolated" | "current" | "session:xxx" REQUIRES payload.kind="agentTurn"
 - For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
+- Do not create main/systemEvent jobs for user-facing chat reminders or monitors; use isolated agentTurn with announce delivery so scheduled work cannot occupy the live chat session lane.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
 
 RESTRICTED CRON RUNS:
@@ -810,7 +820,11 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
                 (job as { agentId?: string }).agentId = agentId;
               }
             }
-            if (!("sessionKey" in job) && resolvedSessionKey) {
+            if (
+              !("sessionKey" in job) &&
+              resolvedSessionKey &&
+              shouldStampCallerSessionKeyOnCronJob(job as Record<string, unknown>)
+            ) {
               (job as { sessionKey?: string }).sessionKey = resolvedSessionKey;
             }
           }

@@ -607,7 +607,7 @@ describe("cron tool", () => {
     expect(params?.failureAlert).toEqual({ after: 3, cooldownMs: 60_000 });
   });
 
-  it("stamps cron.add with caller sessionKey when missing", async () => {
+  it("does not bind implicit main systemEvent jobs to the caller chat session", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
 
     const callerSessionKey = "agent:main:discord:channel:ops";
@@ -615,7 +615,22 @@ describe("cron tool", () => {
       callId: "call-session-key",
       agentSessionKey: callerSessionKey,
     });
-    expect(sessionKey).toBe(callerSessionKey);
+    expect(sessionKey).toBeUndefined();
+  });
+
+  it("stamps isolated agentTurn cron.add with caller sessionKey when missing", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const callerSessionKey = "agent:main:whatsapp:direct:+15550123456";
+    const tool = createTestCronTool({ agentSessionKey: callerSessionKey });
+    await tool.execute("call-agent-turn-session-key", {
+      action: "add",
+      job: buildReminderAgentTurnJob(),
+    });
+
+    const call = readGatewayCall();
+    const payload = call.params as { sessionKey?: string } | undefined;
+    expect(payload?.sessionKey).toBe(callerSessionKey);
   });
 
   it("preserves explicit job.sessionKey on add", async () => {
