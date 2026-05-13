@@ -45,7 +45,8 @@
         overflow: hidden;
       }
       button,
-      input {
+      input,
+      select {
         font: inherit;
       }
       .app {
@@ -106,6 +107,32 @@
       .page-select:focus {
         border-color: var(--accent);
         box-shadow: 0 0 0 3px var(--accent-soft);
+      }
+      .mode-toggle {
+        display: inline-flex;
+        width: fit-content;
+        margin-top: 4px;
+        border: 1px solid var(--border-strong);
+        border-radius: 999px;
+        background: #0b1019;
+        overflow: hidden;
+      }
+      .mode-button {
+        border: 0;
+        border-right: 1px solid var(--border);
+        background: transparent;
+        color: var(--muted);
+        padding: 7px 11px;
+        font-size: 12px;
+        line-height: 1.2;
+        cursor: pointer;
+      }
+      .mode-button:last-child {
+        border-right: 0;
+      }
+      .mode-button.active {
+        background: rgba(116, 183, 255, 0.24);
+        color: #d9ebff;
       }
       .meta {
         color: var(--muted);
@@ -258,6 +285,71 @@
         flex-wrap: wrap;
         gap: 5px;
         margin-top: 8px;
+      }
+      .doc-view {
+        margin: 0;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.025);
+        overflow: hidden;
+      }
+      .doc-file-title {
+        position: sticky;
+        top: -14px;
+        z-index: 2;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--border);
+        color: var(--faint);
+        background: rgba(13, 18, 28, 0.96);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .doc-line {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 54px minmax(0, 1fr);
+        gap: 10px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: inherit;
+        padding: 0 12px 0 0;
+        text-align: left;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.7;
+      }
+      button.doc-line {
+        cursor: pointer;
+      }
+      button.doc-line:hover {
+        background: rgba(116, 183, 255, 0.1);
+      }
+      .doc-line.active {
+        background: rgba(116, 183, 255, 0.2);
+      }
+      .doc-line-number {
+        color: #586274;
+        text-align: right;
+        user-select: none;
+      }
+      .doc-line-text {
+        overflow: hidden;
+        color: #c9d4e4;
+        white-space: pre;
+        text-overflow: ellipsis;
+      }
+      .doc-line.mapped .doc-line-text {
+        color: #dce8f6;
+      }
+      .doc-line.heading .doc-line-text {
+        color: #74b7ff;
+        font-weight: 800;
+      }
+      .doc-line.code .doc-line-text {
+        color: #67d391;
       }
       .main {
         min-width: 0;
@@ -449,6 +541,12 @@
             <h1 id="viewerTitle">Migration Map</h1>
             <select class="page-select" id="pageSelect" aria-label="Audit page"></select>
           </div>
+          <div class="mode-toggle" role="group" aria-label="Source view mode">
+            <button class="mode-button active" id="blockModeButton" type="button">
+              Block mode
+            </button>
+            <button class="mode-button" id="docModeButton" type="button">Doc mode</button>
+          </div>
           <div class="meta" id="datasetMeta"></div>
         </header>
         <section class="filters" aria-label="Filters">
@@ -511,14 +609,17 @@
                 };
               });
         const state = {
+          mode: "block",
           query: "",
           selectedId: units[0] ? units[0].id : null,
           selectedViewId: pageViews[0] ? pageViews[0].id : "",
         };
         const els = {
+          blockModeButton: document.getElementById("blockModeButton"),
           datasetMeta: document.getElementById("datasetMeta"),
           destinationCount: document.getElementById("destinationCount"),
           destinationPane: document.getElementById("destinationPane"),
+          docModeButton: document.getElementById("docModeButton"),
           legend: document.getElementById("legend"),
           pageSelect: document.getElementById("pageSelect"),
           search: document.getElementById("search"),
@@ -596,6 +697,43 @@
           });
         }
 
+        function ensureSelectedUnit() {
+          const viewUnits = unitsForView(currentView());
+          if (
+            !viewUnits.some(function (unit) {
+              return unit.id === state.selectedId;
+            })
+          ) {
+            state.selectedId = viewUnits[0]?.id || null;
+          }
+        }
+
+        function sourcePagesForView() {
+          const byPage = new Map();
+          unitsForView(currentView()).forEach(function (unit) {
+            if (!byPage.has(unit.page)) {
+              const sourcePage = data.pages.find(function (page) {
+                return page.page === unit.page;
+              });
+              if (sourcePage?.sourceDocument?.lines?.length) byPage.set(unit.page, sourcePage);
+            }
+          });
+          return Array.from(byPage.values());
+        }
+
+        function unitForLine(pagePath, lineNumber) {
+          return unitsForView(currentView()).find(function (unit) {
+            const ref = unit.source && unit.source.ref;
+            return ref && ref.path === pagePath && ref.start <= lineNumber && ref.end >= lineNumber;
+          });
+        }
+
+        function lineKind(text) {
+          if (/^\s*#+\s/.test(text)) return " heading";
+          if (/^\s*```/.test(text)) return " code";
+          return "";
+        }
+
         function searchable(unit) {
           return [
             unit.id,
@@ -654,7 +792,77 @@
           els.pageSelect.value = state.selectedViewId;
         }
 
+        function renderModeToggle() {
+          els.blockModeButton.classList.toggle("active", state.mode === "block");
+          els.docModeButton.classList.toggle("active", state.mode === "doc");
+          els.search.placeholder =
+            state.mode === "doc"
+              ? "Search headings or lines in this doc"
+              : "Search units, notes, destinations";
+        }
+
+        function renderDocList() {
+          const query = state.query.trim().toLowerCase();
+          const html = sourcePagesForView()
+            .map(function (page) {
+              const lines = page.sourceDocument.lines
+                .map(function (line) {
+                  const unit = unitForLine(page.page, line.number);
+                  const matchesQuery =
+                    !query ||
+                    line.text.toLowerCase().includes(query) ||
+                    (unit && searchable(unit).includes(query));
+                  if (!matchesQuery) return "";
+                  const active = unit && unit.id === state.selectedId ? " active" : "";
+                  const mapped = unit ? " mapped" : "";
+                  const tag = unit ? "button" : "div";
+                  const attrs = unit ? ' type="button" data-id="' + escapeHtml(unit.id) + '"' : "";
+                  return (
+                    "<" +
+                    tag +
+                    ' class="doc-line' +
+                    active +
+                    mapped +
+                    lineKind(line.text) +
+                    '"' +
+                    attrs +
+                    ">" +
+                    '<span class="doc-line-number">' +
+                    line.number +
+                    "</span>" +
+                    '<span class="doc-line-text">' +
+                    escapeHtml(line.text) +
+                    "</span></" +
+                    tag +
+                    ">"
+                  );
+                })
+                .join("");
+              return (
+                '<section class="doc-view"><div class="doc-file-title">' +
+                escapeHtml(page.page) +
+                "</div>" +
+                lines +
+                "</section>"
+              );
+            })
+            .join("");
+          els.unitList.innerHTML =
+            html ||
+            '<div class="empty"><strong>No matching source lines</strong><span>Try a different filter.</span></div>';
+          els.unitList.querySelectorAll("button.doc-line").forEach(function (button) {
+            button.addEventListener("click", function () {
+              state.selectedId = button.getAttribute("data-id");
+              render();
+            });
+          });
+        }
+
         function renderList() {
+          if (state.mode === "doc") {
+            renderDocList();
+            return;
+          }
           const query = state.query.trim().toLowerCase();
           const view = currentView();
           const pageUnits = unitsForView(view).filter(function (unit) {
@@ -804,7 +1012,9 @@
         }
 
         function render() {
+          ensureSelectedUnit();
           renderPageSelect();
+          renderModeToggle();
           renderMeta();
           renderLegend();
           renderList();
@@ -840,6 +1050,22 @@
         els.search.addEventListener("input", function () {
           state.query = els.search.value;
           renderList();
+        });
+
+        els.blockModeButton.addEventListener("click", function () {
+          state.mode = "block";
+          state.query = "";
+          els.search.value = "";
+          els.unitList.scrollTop = 0;
+          render();
+        });
+
+        els.docModeButton.addEventListener("click", function () {
+          state.mode = "doc";
+          state.query = "";
+          els.search.value = "";
+          els.unitList.scrollTop = 0;
+          render();
         });
 
         els.pageSelect.addEventListener("change", function () {

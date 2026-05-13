@@ -175,6 +175,29 @@ function getSourceLines(ref, sourceArchive, cwd, cache) {
   return linesForRange(cache.get(key), ref);
 }
 
+function getSourceDocumentLines(pagePath, sourceArchive, cwd, cache) {
+  if (!pagePath || !sourceArchive.gitRef) return [];
+  const key = `${sourceArchive.gitRef}:${pagePath}`;
+  if (!cache.has(key)) {
+    try {
+      cache.set(
+        key,
+        execFileSync("git", ["show", key], {
+          cwd,
+          encoding: "utf8",
+          maxBuffer: 50 * 1024 * 1024,
+        }).split(/\r?\n/),
+      );
+    } catch {
+      cache.set(key, []);
+    }
+  }
+  return cache.get(key).map((text, index) => ({
+    number: index + 1,
+    text,
+  }));
+}
+
 function getCurrentLines(ref, cwd) {
   if (!ref) return [];
   const filePath = path.join(cwd, ref.path);
@@ -367,7 +390,16 @@ function parseDetailedReport(reportPath, options) {
   }
 
   const pages = Array.from(pagesByName.values()).filter((page) => page.units.length > 0);
-  for (const page of pages) page.count = page.units.length;
+  for (const page of pages) {
+    page.count = page.units.length;
+    page.sourceDocument = {
+      lines: getSourceDocumentLines(page.page, sourceArchive, cwd, sourceCache),
+      ref: {
+        archive: sourceArchive.gitRef,
+        path: page.page,
+      },
+    };
+  }
   const title = options.title || frontmatter.title || "Docs Rewrite Audit";
   const changedPages = parseChangedPages(options.changedPages);
   return {

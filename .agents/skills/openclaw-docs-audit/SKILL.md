@@ -234,6 +234,10 @@ Use `--changed-pages` when reviewing a PR-sized migration. The viewer selector
 uses those pages as page views: source pages show original audit units, while
 destination pages show only units that landed on the selected page.
 
+The viewer has block and doc modes. Block mode lists audit rows as cards. Doc
+mode renders the pre-rewrite source Markdown from `source_ref`; clicking a
+mapped source block selects the audit unit and updates the destination preview.
+
 If JSON is the canonical source for a later edit, render from JSON instead:
 
 ```bash
