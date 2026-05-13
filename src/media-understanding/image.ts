@@ -144,7 +144,8 @@ async function resolveImageRuntime(params: {
       allowBundledStaticCatalogFallback: true,
     },
   );
-  const { authStorage, model } = resolved;
+  const { authStorage } = resolved;
+  let { model } = resolved;
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
@@ -179,8 +180,14 @@ async function resolveImageRuntime(params: {
         githubToken: apiKey,
       });
       apiKey = copilotToken.token;
+      // Apply the endpoint derived from the minted token so enterprise
+      // or proxy-routed Copilot deployments connect to the correct host.
+      const runtimeBaseUrl = copilotToken.baseUrl?.trim();
+      if (runtimeBaseUrl) {
+        model = { ...model, baseUrl: runtimeBaseUrl };
+      }
     } catch {
-      // fall through with the original OAuth token
+      // fall through with the original OAuth token and model baseUrl
     }
   }
   authStorage.setRuntimeApiKey(model.provider, apiKey);
@@ -214,6 +221,13 @@ function buildImageContext(
 }
 
 function shouldPlaceImagePromptInUserContent(model: Model<Api>): boolean {
+  // GitHub Copilot models (including Gemini 3.1 Pro Preview) require the
+  // prompt text to be in the user message alongside the image. Placing it
+  // in a separate system message produces "Request must contain at least
+  // one non-empty message" (400).
+  if (model.provider === "github-copilot") {
+    return true;
+  }
   const capabilities = resolveProviderRequestCapabilities({
     provider: model.provider,
     api: model.api,
