@@ -2,7 +2,7 @@ import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
 } from "openclaw/plugin-sdk/channel-message";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { lineConfigAdapter } from "./config-adapter.js";
@@ -14,6 +14,8 @@ import { createLineSendReceipt } from "./send-receipt.js";
 const ssrfMocks = vi.hoisted(() => ({
   resolvePinnedHostnameWithPolicy: vi.fn(),
 }));
+
+const FIXED_SENT_AT = 1_800_000_000_000;
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
@@ -45,6 +47,10 @@ beforeEach(() => {
     hostname: "example.com",
     addresses: ["93.184.216.34"],
   });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function lineResult(messageId: string, chatId = "c1") {
@@ -235,6 +241,8 @@ describe("line outbound sendPayload", () => {
   });
 
   it("sends quick-reply-only payloads with fallback text", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_SENT_AT);
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
@@ -290,7 +298,7 @@ describe("line outbound sendPayload", () => {
             meta: { messageCount: 1 },
           },
         ],
-        sentAt: 1_800_000_000_000,
+        sentAt: FIXED_SENT_AT,
         threadId: "c1",
       },
     });
