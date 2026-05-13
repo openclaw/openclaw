@@ -446,7 +446,7 @@ async function saveOkMediaResponse(params: {
           detectionFilePathHint,
         )
       : await saveMediaBuffer(
-          Buffer.from(await params.res.arrayBuffer()),
+          Buffer.alloc(0),
           contentType ?? undefined,
           params.subdir ?? "inbound",
           params.maxBytes,

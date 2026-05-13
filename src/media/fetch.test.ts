@@ -16,9 +16,11 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 type FetchModule = typeof import("./fetch.js");
 type ReadRemoteMediaBuffer = FetchModule["readRemoteMediaBuffer"];
 type SaveRemoteMedia = FetchModule["saveRemoteMedia"];
+type SaveResponseMedia = FetchModule["saveResponseMedia"];
 type LookupFn = NonNullable<Parameters<ReadRemoteMediaBuffer>[0]["lookupFn"]>;
 let readRemoteMediaBuffer: ReadRemoteMediaBuffer;
 let saveRemoteMedia: SaveRemoteMedia;
+let saveResponseMedia: SaveResponseMedia;
 let defaultFetchMediaMaxBytes: number;
 let tempHome: TempHomeEnv;
 
@@ -203,6 +205,7 @@ describe("readRemoteMediaBuffer", () => {
     const fetchModule = await import("./fetch.js");
     readRemoteMediaBuffer = fetchModule.readRemoteMediaBuffer;
     saveRemoteMedia = fetchModule.saveRemoteMedia;
+    saveResponseMedia = fetchModule.saveResponseMedia;
     defaultFetchMediaMaxBytes = fetchModule.DEFAULT_FETCH_MEDIA_MAX_BYTES;
   });
 
@@ -560,6 +563,17 @@ describe("readRemoteMediaBuffer", () => {
     expect(saved.path).toMatch(/[a-f0-9-]{36}\.png$/);
     expect(saved.path).not.toMatch(/photo---/);
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.from([1, 2, 3, 4]));
+  });
+
+  it("saves bodyless successful responses without unbounded buffering", async () => {
+    const saved = await saveResponseMedia(new Response(null, { status: 204 }), {
+      sourceUrl: "https://example.com/empty",
+      fallbackContentType: "application/octet-stream",
+      maxBytes: 8,
+    });
+
+    expect(saved.size).toBe(0);
+    await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.alloc(0));
   });
 
   it("uses caller filename hints for MIME detection without preserving storage basenames", async () => {
