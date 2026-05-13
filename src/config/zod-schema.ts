@@ -502,6 +502,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    strictToolMode: z.boolean().optional(),
     logging: z
       .object({
         level: LoggingLevelSchema.optional(),

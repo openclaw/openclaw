@@ -122,6 +122,8 @@ export type RunEmbeddedPiAgentParams = {
   agentHarnessId?: string;
   /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force PI. */
   agentHarnessRuntimeOverride?: string;
+  /** Per-run strict tool mode override. Takes precedence over config/env. */
+  strictToolMode?: boolean;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;

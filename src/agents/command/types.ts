@@ -54,6 +54,8 @@ export type AgentCommandOpts = {
   provider?: string;
   /** Per-run model override. */
   model?: string;
+  /** Per-run strict tool mode override. */
+  strictToolMode?: boolean;
   to?: string;
   sessionId?: string;
   sessionKey?: string;

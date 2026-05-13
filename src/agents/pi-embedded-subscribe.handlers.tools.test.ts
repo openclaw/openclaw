@@ -152,8 +152,12 @@ function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
 }
 
 describe("handleToolExecutionStart read path checks", () => {
+  afterEach(() => {
+    delete process.env.OPENCLAW_STRICT_TOOL_MODE;
+  });
   it("does not warn when read tool uses file_path alias", async () => {
     const { ctx, warn, onBlockReplyFlush, onExecutionPhase } = createTestContext();
+    ctx.params.strictToolMode = false;
 
     const evt: ToolExecutionStartEvent = {
       type: "tool_execution_start",
@@ -172,6 +176,36 @@ describe("handleToolExecutionStart read path checks", () => {
       source: "pi-embedded",
     });
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("prefers per-run strictness mode over env strictness", async () => {
+    process.env.OPENCLAW_STRICT_TOOL_MODE = "true";
+    const { ctx } = createTestContext();
+    ctx.params.strictToolMode = false;
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-off-over-env",
+      args: { file_path: "/tmp/example.txt" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+  });
+
+  it("throws in strict mode when read uses file_path alias", async () => {
+    process.env.OPENCLAW_STRICT_TOOL_MODE = "true";
+    const { ctx } = createTestContext();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-strict-alias",
+      args: { file_path: "/tmp/example.txt" },
+    };
+    expect(() => handleToolExecutionStart(ctx, evt)).toThrow(
+      "strict tool mode rejected read.file_path alias; expected path",
+    );
   });
 
   it("warns when read tool has neither path nor file_path", async () => {

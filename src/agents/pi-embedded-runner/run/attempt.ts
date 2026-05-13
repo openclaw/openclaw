@@ -290,6 +290,7 @@ import {
   resolveTerminalAssistantTexts,
 } from "./attempt-trajectory-status.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
+import { resolveStrictToolMode } from "../../tool-strictness.js";
 import {
   rotateTranscriptAfterCompaction,
   shouldRotateCompactionTranscript,
@@ -358,6 +359,7 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
 import {
+  type StrictToolReplayLogEvent,
   shouldApplyReplayToolCallIdSanitizer,
   sanitizeReplayToolCallIdsForStream,
   wrapStreamFnSanitizeMalformedToolCalls,
@@ -2606,6 +2608,26 @@ export async function runEmbeddedAttempt(
         }),
       );
 
+      // Resolve strict tool mode early so transport stream factories can capture it in closure.
+      // Priority: per-run override > config > env variable > default false.
+      const strictToolMode = resolveStrictToolMode({
+        env: process.env,
+        strict: params.strictToolMode ?? params.config?.strictToolMode,
+      });
+      const collectStrictToolReplayLog = (event: StrictToolReplayLogEvent) => {
+        if (!log.isEnabled("debug")) {
+          return;
+        }
+        if (event.kind === "blockTypeCompatibility") {
+          log.debug(
+            `tool strictness replay: kind=${event.kind} from=${event.from}`,
+          );
+          return;
+        }
+        log.debug(
+          `tool strictness replay: kind=${event.kind} reason=${event.reason} embedded=${event.hasEmbeddedToolResult} toolUses=${event.toolUseCount}`,
+        );
+      };
       // Rebuild each turn from the session's original stream base so prior-turn
       // wrappers do not pin us to stale provider/API transport behavior.
       const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
@@ -2860,12 +2882,17 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn,
         allowedToolNames,
         transcriptPolicy,
+        {
+          strictToolMode,
+          onStrictToolReplayLog: collectStrictToolReplayLog,
+        },
       );
       activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(
         activeSession.agent.streamFn,
         allowedToolNames,
         {
           unknownToolThreshold: resolveUnknownToolGuardThreshold(clientToolLoopDetection),
+          strictToolMode,
         },
       );
 
@@ -3234,6 +3261,7 @@ export async function runEmbeddedAttempt(
           enforceFinalTag: params.enforceFinalTag,
           silentExpected: params.silentExpected,
           config: params.config,
+          strictToolMode,
           sessionKey: sandboxSessionKey,
           sessionId: params.sessionId,
           agentId: sessionAgentId,
