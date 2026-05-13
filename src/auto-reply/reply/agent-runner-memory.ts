@@ -198,6 +198,9 @@ export type SessionTranscriptUsageSnapshot = {
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
 const TRANSCRIPT_TAIL_CHUNK_BYTES = 64 * 1024;
 const FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN = 4;
+const STALE_USAGE_ESTIMATE_MULTIPLIER = 2;
+const STALE_USAGE_ESTIMATE_BUFFER_TOKENS = 10_000;
+const STALE_USAGE_MIN_TRAILING_BYTES_TOKENS = 2_000;
 
 function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalizeUsage> | undefined {
   const trimmed = line.trim();
@@ -460,8 +463,20 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
       const outputTokens = snapshot.usage?.outputTokens;
       const usagePromptTokens = Math.ceil(promptTokens) + (trailingBytesTokens ?? 0);
+      const hasMeaningfulTrailingContent =
+        typeof trailingBytesTokens === "number" &&
+        Number.isFinite(trailingBytesTokens) &&
+        trailingBytesTokens >= STALE_USAGE_MIN_TRAILING_BYTES_TOKENS;
+      const boundedUsagePromptTokens =
+        typeof estimatedMessageTokens === "number" &&
+        hasMeaningfulTrailingContent &&
+        usagePromptTokens >
+          estimatedMessageTokens * STALE_USAGE_ESTIMATE_MULTIPLIER +
+            STALE_USAGE_ESTIMATE_BUFFER_TOKENS
+          ? estimatedMessageTokens
+          : usagePromptTokens;
       return {
-        promptTokens: Math.max(usagePromptTokens, estimatedMessageTokens ?? 0),
+        promptTokens: Math.max(boundedUsagePromptTokens, estimatedMessageTokens ?? 0),
         outputTokens:
           typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
             ? Math.ceil(outputTokens)

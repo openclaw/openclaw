@@ -663,6 +663,28 @@ describe("gateway server models + voicewake", () => {
     });
   });
 
+  test("models.list response includes new OpenAI allowlist IDs", async () => {
+    await expectAllowlistedModels({
+      primary: "openai/gpt-5.5",
+      models: {
+        "openai/gpt-5.5": {},
+        "openai/gpt-5.5-mini": {},
+      },
+      expected: [
+        {
+          id: "gpt-5.5",
+          name: "gpt-5.5",
+          provider: "openai",
+        },
+        {
+          id: "gpt-5.5-mini",
+          name: "gpt-5.5-mini",
+          provider: "openai",
+        },
+      ],
+    });
+  });
+
   test("models.list applies configured metadata and alias to synthetic allowlist entries", async () => {
     await withModelsConfig(
       {
