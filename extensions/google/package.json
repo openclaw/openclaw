@@ -12,6 +12,7 @@
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
+    "id": "google",
     "extensions": [
       "./index.ts"
     ]
