@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "../../../extensions/anthropic/cli-constants.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -271,8 +272,12 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("- anthropic (1)");
     expect(result?.reply?.text).toContain("- google (1)");
     expect(result?.reply?.text).toContain("- openai (1)");
-    // CLI runtime providers are first-class and remain user-addressable in the picker
-    expect(result?.reply?.text).toContain("- claude-cli (1)");
+    // CLI runtime providers are first-class and remain user-addressable in the picker.
+    // claude-cli is explicitly seeded from CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS regardless of
+    // catalog contents; codex-cli and google-gemini-cli still come from the catalog only.
+    expect(result?.reply?.text).toContain(
+      `- claude-cli (${CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.length})`,
+    );
     expect(result?.reply?.text).toContain("- codex-cli (1)");
     expect(result?.reply?.text).toContain("- google-gemini-cli (1)");
     // The bare `codex` alias is the only true legacy entry (no `-cli` suffix) and stays hidden
@@ -321,13 +326,12 @@ describe("handleModelsCommand", () => {
     );
 
     // Full claude-cli allowlist surfaces despite the narrow user config.
-    expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-7");
-    expect(result?.reply?.text).toContain("- claude-cli/claude-sonnet-4-6");
-    expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-6");
-    expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-5");
-    expect(result?.reply?.text).toContain("- claude-cli/claude-sonnet-4-5");
-    expect(result?.reply?.text).toContain("- claude-cli/claude-haiku-4-5");
-    expect(result?.reply?.text).toContain("of 6");
+    // Assert against CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS explicitly so that
+    // future additions to the allowlist constant are caught here.
+    for (const ref of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
+      expect(result?.reply?.text).toContain(`- ${ref}`);
+    }
+    expect(result?.reply?.text).toContain(`of ${CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.length}`);
 
     // For non-CLI configured providers (e.g. Minimax / LM Studio / custom
     // OpenAI-compatible endpoints), user config is still the source of truth.
@@ -347,6 +351,37 @@ describe("handleModelsCommand", () => {
     );
     expect(minimaxResult?.reply?.text).toContain("- minimax/abab-7");
     expect(minimaxResult?.reply?.text).not.toContain("- minimax/abab-6.5");
+  });
+
+  it("surfaces CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS even when the catalog has no claude-cli entries", async () => {
+    // Reproduces the production scenario reported by Cameron: on a fresh
+    // install the model catalog for `claude-cli` is sparse — sometimes empty,
+    // sometimes only the 2 refs that user config seeded — because
+    // `seedClaudeCliAllowlist` migration timing means the catalog hasn't yet
+    // absorbed the full CLI-supported set. Iterating the catalog alone is
+    // not sufficient; we must seed directly from the allowlist constant.
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      // No claude-cli entries in the catalog at all.
+      { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "claude-cli"]);
+
+    const result = await handleModelsCommand(
+      buildParams("/models claude-cli", {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+          },
+        },
+      }),
+      true,
+    );
+
+    // Picker still surfaces the full CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.
+    for (const ref of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
+      expect(result?.reply?.text).toContain(`- ${ref}`);
+    }
+    expect(result?.reply?.text).toContain(`of ${CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.length}`);
   });
 
   it("labels the default runtime choice as OpenClaw Pi", async () => {
@@ -378,6 +413,7 @@ describe("handleModelsCommand", () => {
       telegram: {
         buttons: [
           [{ text: "anthropic", callback_data: "models:anthropic" }],
+          [{ text: "claude-cli", callback_data: "models:claude-cli" }],
           [{ text: "google", callback_data: "models:google" }],
           [{ text: "openai", callback_data: "models:openai" }],
         ],
@@ -396,8 +432,13 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toBe("Select a provider:");
     expect(result?.reply?.channelData).toEqual({
       menuonly: {
-        providerIds: ["anthropic", "google", "openai"],
-        labels: ["anthropic:2", "google:1", "openai:2"],
+        providerIds: ["anthropic", "claude-cli", "google", "openai"],
+        labels: [
+          "anthropic:2",
+          `claude-cli:${CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.length}`,
+          "google:1",
+          "openai:2",
+        ],
       },
     });
   });

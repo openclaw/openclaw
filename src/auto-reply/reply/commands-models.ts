@@ -1,3 +1,4 @@
+import { CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "../../../extensions/anthropic/cli-constants.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -190,6 +191,24 @@ export async function buildModelsProviderData(
     if (isCliRuntimeProvider(entry.provider)) {
       add(entry.provider, entry.id);
     }
+  }
+
+  // Explicitly seed claude-cli from CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS. On
+  // fresh installs the model catalog for `claude-cli` is often sparse —
+  // `seedClaudeCliAllowlist` migration timing can leave it populated only by
+  // user config (often 2 entries) — so iterating the catalog alone is not
+  // sufficient to guarantee the full CLI-supported set surfaces. The
+  // allowlist constant is the source of truth for what the claude-cli binary
+  // supports, so we seed directly from it.
+  //
+  // Asymmetry: only `claude-cli` has a corresponding allowlist constant.
+  // `codex-cli` (extensions/openai/cli-backend.ts) and `google-gemini-cli`
+  // (extensions/google/cli-backend.ts) only define a default model ref, not
+  // an allowlist, so the catalog-iteration loop above is what we rely on for
+  // those runtimes — adequate as long as their plugin manifests contribute
+  // models to the catalog.
+  for (const ref of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
+    addRawModelRef(ref);
   }
 
   for (const raw of visibilityPolicy.exactModelRefs) {
