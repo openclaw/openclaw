@@ -734,6 +734,18 @@ function disableUpdatedPackageCompileCacheEnv(env: NodeJS.ProcessEnv): NodeJS.Pr
   };
 }
 
+function resolvePackageUpdateRestartHealthEnv(
+  env: NodeJS.ProcessEnv | undefined,
+): NodeJS.ProcessEnv {
+  return {
+    ...(env ?? process.env),
+    // Restart-health probes pass this env through gateway auth/config and service runtime reads.
+    // Mark only those checks as package-swap self-staleness; the actual restart command stays unmarked.
+    OPENCLAW_UPDATE_IN_PROGRESS: "1",
+    [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+  };
+}
+
 function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const resolvedEnv = { ...env };
   delete resolvedEnv.OPENCLAW_SERVICE_MARKER;
@@ -1490,6 +1502,10 @@ async function maybeRestartService(params: {
   invocationCwd?: string;
 }): Promise<boolean> {
   const verifyRestartedGateway = async (expectedGatewayVersion: string | undefined) => {
+    const restartHealthEnv =
+      isPackageManagerUpdateMode(params.result.mode) && expectedGatewayVersion
+        ? resolvePackageUpdateRestartHealthEnv(params.serviceEnv)
+        : params.serviceEnv;
     const restartAfterStaleCleanup = async () => {
       if (params.refreshServiceEnv && isPackageManagerUpdateMode(params.result.mode)) {
         await runUpdatedInstallGatewayRestart({
@@ -1509,7 +1525,7 @@ async function maybeRestartService(params: {
       service,
       port: params.gatewayPort,
       expectedVersion: expectedGatewayVersion,
-      env: params.serviceEnv,
+      env: restartHealthEnv,
     });
     if (!health.healthy && health.staleGatewayPids.length > 0) {
       if (!params.opts.json) {
@@ -1525,7 +1541,7 @@ async function maybeRestartService(params: {
         service,
         port: params.gatewayPort,
         expectedVersion: expectedGatewayVersion,
-        env: params.serviceEnv,
+        env: restartHealthEnv,
       });
     }
 
@@ -1534,7 +1550,7 @@ async function maybeRestartService(params: {
       service,
       port: params.gatewayPort,
       expectedVersion: expectedGatewayVersion,
-      env: params.serviceEnv,
+      env: restartHealthEnv,
     });
     health = recoveryVerification.health;
     const launchAgentRecovery = recoveryVerification.launchAgentRecovery;
@@ -1627,7 +1643,7 @@ async function maybeRestartService(params: {
             service: resolveGatewayService(),
             port: params.gatewayPort,
             expectedVersion: expectedGatewayVersion,
-            env: params.serviceEnv,
+            env: resolvePackageUpdateRestartHealthEnv(params.serviceEnv),
             attempts: POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS,
             delayMs: POST_REFRESH_ALREADY_HEALTHY_DELAY_MS,
           });

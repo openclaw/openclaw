@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
 import {
   defaultRuntime,
@@ -111,6 +112,30 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
     setConfigSnapshot({ exists: true, valid: true, lastTouchedVersion: "9999.1.1" });
 
     await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+
+    expect(service.restart).not.toHaveBeenCalled();
+    expectLatestRuntimeJson({
+      action: "restart",
+      ok: false,
+      error: `Gateway restart blocked: Refusing to restart the gateway service because this OpenClaw binary (${VERSION}) is older than the config last written by OpenClaw 9999.1.1.`,
+      hints: newerConfigHints,
+      hintItems: newerConfigHintItems,
+      warnings: undefined,
+    });
+  });
+
+  it("keeps blocking manual restart with update self-staleness env flags", async () => {
+    setConfigSnapshot({ exists: true, valid: true, lastTouchedVersion: "9999.1.1" });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      },
+      async () => {
+        await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+      },
+    );
 
     expect(service.restart).not.toHaveBeenCalled();
     expectLatestRuntimeJson({

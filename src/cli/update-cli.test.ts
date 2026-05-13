@@ -3232,6 +3232,70 @@ describe("update-cli", () => {
     ).toContain("- telegram: failed to load plugin dependency: ENOSPC");
   });
 
+  it.each(["npm", "pnpm", "bun"] as const)(
+    "marks %s restart health checks as update self-staleness",
+    async (mode) => {
+      const updatedRoot = createCaseDir("openclaw-updated-root");
+      const updatedEntrypoint = path.join(updatedRoot, "dist", "entry.js");
+      const futureConfigWarning =
+        "Your OpenClaw config was written by version 2026.5.12-beta.4, but this command is running 2026.5.12-beta.3.";
+      setupUpdatedRootRefresh({
+        entrypoints: [updatedEntrypoint],
+        gatewayUpdateImpl: async () =>
+          makeOkUpdateResult({
+            mode,
+            root: updatedRoot,
+            before: { version: "2026.5.12-beta.3" },
+            after: { version: "2026.5.12-beta.4" },
+          }),
+      });
+      serviceLoaded.mockResolvedValue(true);
+      probeGateway.mockImplementation(async (opts: { env?: NodeJS.ProcessEnv } = {}) => {
+        if (
+          opts.env?.OPENCLAW_UPDATE_IN_PROGRESS !== "1" ||
+          opts.env?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE !== "1"
+        ) {
+          defaultRuntime.log(futureConfigWarning);
+        }
+        return {
+          ok: true,
+          close: null,
+          server: {
+            version: "2026.5.12-beta.4",
+            connId: "updated-gateway",
+          },
+          auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+          health: null,
+          status: null,
+          presence: null,
+          configSnapshot: null,
+          connectLatencyMs: 1,
+          error: null,
+          url: "ws://127.0.0.1:18789",
+        };
+      });
+
+      await updateCommand({ yes: true });
+
+      expect(probeGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+          }),
+        }),
+      );
+      const output = [
+        ...vi.mocked(defaultRuntime.log).mock.calls,
+        ...vi.mocked(defaultRuntime.error).mock.calls,
+      ]
+        .map((call) => String(call[0]))
+        .join("\n");
+      expect(output).not.toContain(futureConfigWarning);
+      expect(output).not.toContain("older than the config last written by");
+    },
+  );
+
   it.each([
     {
       name: "updateCommand refreshes service env from updated install root when available",
