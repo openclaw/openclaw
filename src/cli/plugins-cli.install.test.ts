@@ -61,7 +61,7 @@ function cliInstallPath(pluginId: string): string {
 
 function useProfileExtensionsDir(): string {
   process.env.OPENCLAW_STATE_DIR = PROFILE_STATE_ROOT;
-  return path.join(PROFILE_STATE_ROOT, "extensions");
+  return path.resolve(PROFILE_STATE_ROOT, "extensions");
 }
 
 function createEnabledPluginConfig(pluginId: string): OpenClawConfig {
@@ -679,7 +679,9 @@ describe("plugins cli install", () => {
 
     await runPluginsCommand(["plugins", "install", pluginId]);
 
-    const writtenConfig = writeConfigFile.mock.calls.at(-1)?.[0] as OpenClawConfig;
+    const writtenConfig = writeConfigFile.mock.calls[
+      writeConfigFile.mock.calls.length - 1
+    ]?.[0] as OpenClawConfig;
     expect(writtenConfig.plugins?.entries?.[pluginId]).toBeUndefined();
     expect(writtenConfig.plugins?.load?.paths).toEqual(["/existing/plugin"]);
     const record = persistedInstallRecord(pluginId);
@@ -848,10 +850,10 @@ describe("plugins cli install", () => {
 
     await runPluginsCommand(["plugins", "install", "wecom"]);
 
-    expect(npmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.4.23");
+    expect(npmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.5.7");
     expect(npmInstallCall().expectedPluginId).toBe("wecom-openclaw-plugin");
     expect(npmInstallCall().expectedIntegrity).toBe(
-      "sha512-bnzfdIEEu1/LFvcdyjaTkyxt27w6c7dqhkPezU62OWaqmcdFsUGR3T55USK/O9pIKsNcnL1Tnu1pqKYCWHFgWQ==",
+      "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
     );
     expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
   });
@@ -894,15 +896,15 @@ describe("plugins cli install", () => {
     installHooksFromNpmSpec.mockResolvedValue({
       ok: false,
       error:
-        "aborted: npm package integrity drift detected for @wecom/wecom-openclaw-plugin@2026.4.23",
+        "aborted: npm package integrity drift detected for @wecom/wecom-openclaw-plugin@2026.5.7",
     });
 
     await expect(runPluginsCommand(["plugins", "install", "wecom"])).rejects.toThrow("__exit__:1");
 
     expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(hookNpmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.4.23");
+    expect(hookNpmInstallCall().spec).toBe("@wecom/wecom-openclaw-plugin@2026.5.7");
     expect(hookNpmInstallCall().expectedIntegrity).toBe(
-      "sha512-bnzfdIEEu1/LFvcdyjaTkyxt27w6c7dqhkPezU62OWaqmcdFsUGR3T55USK/O9pIKsNcnL1Tnu1pqKYCWHFgWQ==",
+      "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
     );
   });
 

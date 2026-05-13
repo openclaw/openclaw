@@ -380,6 +380,17 @@ export const tailLanes = [
     weight: 3,
   }),
   liveLane(
+    "live-subagent-announce",
+    liveDockerScriptCommand("test-live-subagent-announce-docker.sh"),
+    {
+      cacheKey: "subagent-announce",
+      provider: "openai",
+      resources: ["npm"],
+      timeoutMs: 25 * 60 * 1000,
+      weight: 3,
+    },
+  ),
+  liveLane(
     "live-codex-bind",
     liveDockerScriptCommand(
       "test-live-codex-harness-docker.sh",

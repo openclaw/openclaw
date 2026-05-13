@@ -1,7 +1,7 @@
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
-import { downloadMessageResourceFeishu, recoverUtf8FileNameFromLatin1Value } from "./media.js";
+import { recoverUtf8FileNameFromLatin1Value, saveMessageResourceFeishu } from "./media.js";
 import { isFeishuBroadcastMention } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -307,16 +307,20 @@ function parseMediaKeys(
     const parsed = JSON.parse(content);
     const imageKey = normalizeFeishuExternalKey(parsed.image_key);
     const fileKey = normalizeFeishuExternalKey(parsed.file_key);
+    const fileName =
+      typeof parsed.file_name === "string"
+        ? recoverUtf8FileNameFromLatin1Value(parsed.file_name)
+        : parsed.file_name;
     switch (messageType) {
       case "image":
-        return { imageKey, fileName: parsed.file_name };
+        return { imageKey, fileName };
       case "file":
       case "audio":
       case "sticker":
-        return { fileKey, fileName: parsed.file_name };
+        return { fileKey, fileName };
       case "video":
       case "media":
-        return { fileKey, imageKey, fileName: parsed.file_name };
+        return { fileKey, imageKey, fileName };
       default:
         return {};
     }
@@ -327,6 +331,28 @@ function parseMediaKeys(
 
 export function toMessageResourceType(messageType: string): "image" | "file" {
   return messageType === "image" ? "image" : "file";
+}
+
+async function resolveSavedFeishuMedia(params: {
+  result:
+    | Awaited<ReturnType<typeof saveMessageResourceFeishu>>
+    | { buffer: Buffer; contentType?: string; fileName?: string };
+  maxBytes: number;
+  originalFilename?: string;
+}) {
+  if ("saved" in params.result) {
+    return params.result.saved;
+  }
+  const core = getFeishuRuntime();
+  const contentType =
+    params.result.contentType ?? (await core.media.detectMime({ buffer: params.result.buffer }));
+  return await core.channel.media.saveMediaBuffer(
+    params.result.buffer,
+    contentType,
+    "inbound",
+    params.maxBytes,
+    params.result.fileName ?? params.originalFilename,
+  );
 }
 
 function inferPlaceholder(messageType: string): string {
@@ -363,8 +389,6 @@ export async function resolveFeishuMediaList(params: {
   }
 
   const out: FeishuMediaInfo[] = [];
-  const core = getFeishuRuntime();
-
   if (messageType === "post") {
     const { imageKeys, mediaKeys } = parsePostContent(content);
     if (imageKeys.length === 0 && mediaKeys.length === 0) {
@@ -379,21 +403,15 @@ export async function resolveFeishuMediaList(params: {
 
     for (const imageKey of imageKeys) {
       try {
-        const result = await downloadMessageResourceFeishu({
+        const result = await saveMessageResourceFeishu({
           cfg,
           messageId,
           fileKey: imageKey,
           type: "image",
           accountId,
-        });
-        const contentType =
-          result.contentType ?? (await core.media.detectMime({ buffer: result.buffer }));
-        const saved = await core.channel.media.saveMediaBuffer(
-          result.buffer,
-          contentType,
-          "inbound",
           maxBytes,
-        );
+        });
+        const saved = await resolveSavedFeishuMedia({ result, maxBytes });
         out.push({
           path: saved.path,
           contentType: saved.contentType,
@@ -407,21 +425,20 @@ export async function resolveFeishuMediaList(params: {
 
     for (const media of mediaKeys) {
       try {
-        const result = await downloadMessageResourceFeishu({
+        const result = await saveMessageResourceFeishu({
           cfg,
           messageId,
           fileKey: media.fileKey,
           type: "file",
           accountId,
-        });
-        const contentType =
-          result.contentType ?? (await core.media.detectMime({ buffer: result.buffer }));
-        const saved = await core.channel.media.saveMediaBuffer(
-          result.buffer,
-          contentType,
-          "inbound",
           maxBytes,
-        );
+          originalFilename: media.fileName,
+        });
+        const saved = await resolveSavedFeishuMedia({
+          result,
+          maxBytes,
+          originalFilename: media.fileName,
+        });
         out.push({
           path: saved.path,
           contentType: saved.contentType,
@@ -445,25 +462,20 @@ export async function resolveFeishuMediaList(params: {
     if (!fileKey) {
       return [];
     }
-    const result = await downloadMessageResourceFeishu({
+    const result = await saveMessageResourceFeishu({
       cfg,
       messageId,
       fileKey,
       type: toMessageResourceType(messageType),
       accountId,
-    });
-    const contentType =
-      result.contentType ?? (await core.media.detectMime({ buffer: result.buffer }));
-    const fallbackFileName = mediaKeys.fileName
-      ? recoverUtf8FileNameFromLatin1Value(mediaKeys.fileName)
-      : undefined;
-    const saved = await core.channel.media.saveMediaBuffer(
-      result.buffer,
-      contentType,
-      "inbound",
       maxBytes,
-      result.fileName || fallbackFileName,
-    );
+      originalFilename: mediaKeys.fileName,
+    });
+    const saved = await resolveSavedFeishuMedia({
+      result,
+      maxBytes,
+      originalFilename: mediaKeys.fileName,
+    });
     out.push({
       path: saved.path,
       contentType: saved.contentType,

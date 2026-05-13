@@ -211,7 +211,7 @@ function optionalString(value: unknown): string {
 }
 
 function requireFirstCallArg(mock: unknown, label: string): unknown {
-  const call = (mock as MockCallReader).mock.calls.at(0);
+  const call = (mock as MockCallReader).mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} to be called`);
   }

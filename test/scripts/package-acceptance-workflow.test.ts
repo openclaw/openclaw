@@ -367,6 +367,7 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker-xai-zai "full"');
     expect(workflow).toContain('add_profile_suite live-cli-backend-docker "stable full"');
+    expect(workflow).toContain('add_profile_suite live-subagent-announce-docker "stable full"');
     expect(workflow).toContain(
       "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
     );
@@ -375,6 +376,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-deepseek-fireworks");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-opencode-openrouter");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-xai-zai");
+    expect(workflow).toContain("suite_id: live-subagent-announce-docker");
     expect(workflow).toContain("suite_group: live-gateway-advisory-docker");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter");
@@ -483,6 +485,7 @@ describe("package artifact reuse", () => {
       readFileSync("scripts/test-live-gateway-models-docker.sh", "utf8"),
       readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8"),
       readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8"),
+      readFileSync("scripts/test-live-subagent-announce-docker.sh", "utf8"),
     ];
     const build = readFileSync("scripts/test-live-build-docker.sh", "utf8");
     const stage = readFileSync("scripts/lib/live-docker-stage.sh", "utf8");
@@ -502,6 +505,9 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
     );
+    expect(workflow).toContain(
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 20m bash .release-harness/scripts/test-live-subagent-announce-docker.sh',
+    );
     expect(scenarios).toContain("function liveDockerScriptCommand");
     expect(scenarios).toContain(
       "if [ -d .release-harness/scripts ]; then harness=.release-harness",
@@ -511,6 +517,9 @@ describe("package artifact reuse", () => {
     expect(scenarios).toMatch(/liveDockerScriptCommand\(\s*"test-live-cli-backend-docker\.sh"/u);
     expect(scenarios).toMatch(/liveDockerScriptCommand\(\s*"test-live-acp-bind-docker\.sh"/u);
     expect(scenarios).toMatch(/liveDockerScriptCommand\(\s*"test-live-codex-harness-docker\.sh"/u);
+    expect(scenarios).toMatch(
+      /liveDockerScriptCommand\(\s*"test-live-subagent-announce-docker\.sh"/u,
+    );
     expect(scheduler).toContain("function liveDockerHarnessScriptCommand");
     expect(scheduler).toContain('liveDockerHarnessScriptCommand("test-live-build-docker.sh")');
     expect(harness).toContain('source "$TRUSTED_HARNESS_DIR/scripts/lib/live-docker-auth.sh"');
