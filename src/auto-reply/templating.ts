@@ -1,4 +1,4 @@
-import type { InboundTurnKind } from "../channels/turn/types.js";
+import type { InboundTurnKind } from "../channels/turn/kind.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
