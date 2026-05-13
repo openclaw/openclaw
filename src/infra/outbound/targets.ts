@@ -289,6 +289,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     entry,
     resolvedTarget,
     plugin,
+    deliveryChatType,
   })
     ? resolvedTarget.lastThreadId
     : undefined;
@@ -470,33 +471,29 @@ function shouldReuseHeartbeatRouteThreadId(params: {
   entry?: SessionEntry;
   resolvedTarget: SessionDeliveryTarget;
   plugin?: ChannelPlugin;
+  deliveryChatType?: ChatType;
 }): boolean {
+  if (
+    params.resolvedTarget.threadId != null ||
+    params.target !== "last" ||
+    params.heartbeat?.to ||
+    params.turnSource?.threadId != null ||
+    params.resolvedTarget.channel !== params.resolvedTarget.lastChannel ||
+    !params.resolvedTarget.to ||
+    !params.resolvedTarget.lastTo ||
+    params.resolvedTarget.to !== params.resolvedTarget.lastTo
+  ) {
+    return false;
+  }
   const channel = params.resolvedTarget.channel;
   const messaging = params.plugin
     ? params.plugin.messaging
     : channel && resolveOutboundChannelPlugin({ channel, cfg: params.cfg })?.messaging;
   const routeChatType =
-    channel && params.resolvedTarget.to
-      ? (inferChatTypeFromTarget({
-          channel,
-          to: params.resolvedTarget.to,
-        }) ??
-        normalizeChatType(params.entry?.chatType) ??
-        normalizeChatType(params.entry?.origin?.chatType))
-      : (normalizeChatType(params.entry?.chatType) ??
-        normalizeChatType(params.entry?.origin?.chatType));
-  return (
-    messaging?.preserveHeartbeatThreadIdForGroupRoute === true &&
-    params.resolvedTarget.threadId == null &&
-    params.target === "last" &&
-    !params.heartbeat?.to &&
-    params.turnSource?.threadId == null &&
-    params.resolvedTarget.channel === params.resolvedTarget.lastChannel &&
-    Boolean(params.resolvedTarget.to) &&
-    Boolean(params.resolvedTarget.lastTo) &&
-    params.resolvedTarget.to === params.resolvedTarget.lastTo &&
-    routeChatType === "group"
-  );
+    params.deliveryChatType ??
+    normalizeChatType(params.entry?.chatType) ??
+    normalizeChatType(params.entry?.origin?.chatType);
+  return messaging?.preserveHeartbeatThreadIdForGroupRoute === true && routeChatType === "group";
 }
 
 function resolveHeartbeatSenderId(params: {
