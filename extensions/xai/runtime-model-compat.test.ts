@@ -35,4 +35,22 @@ describe("xai runtime model compat", () => {
       xhigh: null,
     });
   });
+
+  it("does not advertise configurable reasoning effort for older xAI reasoning models", () => {
+    const model = applyXaiRuntimeModelCompat({
+      id: "grok-4.20-beta-latest-reasoning",
+      provider: "xai",
+      reasoning: true,
+    });
+
+    expect(model.compat).toMatchObject({ supportsReasoningEffort: false });
+    expect(model.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: null,
+      low: null,
+      medium: null,
+      high: null,
+      xhigh: null,
+    });
+  });
 });
