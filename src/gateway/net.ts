@@ -61,14 +61,29 @@ export function isLoopbackAddress(ip: string | undefined): boolean {
 
 export function isLocalInterfaceAddress(
   ip: string | undefined,
-  snapshot: NetworkInterfacesSnapshot | undefined = safeNetworkInterfaces(),
+  snapshot?: NetworkInterfacesSnapshot,
 ): boolean {
+  return (
+    (arguments.length >= 2
+      ? resolveLocalInterfaceAddressMatch(ip, snapshot)
+      : resolveLocalInterfaceAddressMatch(ip)) === true
+  );
+}
+
+export function resolveLocalInterfaceAddressMatch(
+  ip: string | undefined,
+  snapshot?: NetworkInterfacesSnapshot,
+): boolean | undefined {
   const normalized = normalizeIp(ip);
-  if (!normalized || !snapshot) {
+  if (!normalized) {
     return false;
   }
+  const effectiveSnapshot = arguments.length >= 2 ? snapshot : safeNetworkInterfaces();
+  if (!effectiveSnapshot) {
+    return undefined;
+  }
 
-  for (const entries of Object.values(snapshot)) {
+  for (const entries of Object.values(effectiveSnapshot)) {
     for (const entry of entries ?? []) {
       if (normalizeIp(entry.address) === normalized) {
         return true;

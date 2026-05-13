@@ -13,6 +13,7 @@ import {
   isSecureWebSocketUrl,
   isTrustedProxyAddress,
   pickPrimaryLanIPv4,
+  resolveLocalInterfaceAddressMatch,
   resolveClientIp,
   resolveGatewayBindHost,
   resolveGatewayListenHosts,
@@ -262,6 +263,10 @@ describe("isLocalInterfaceAddress", () => {
 
   it("returns false when interface discovery is unavailable", () => {
     expect(isLocalInterfaceAddress("10.42.0.59", undefined)).toBe(false);
+  });
+
+  it("reports an indeterminate match when interface discovery is unavailable", () => {
+    expect(resolveLocalInterfaceAddressMatch("10.42.0.59", undefined)).toBeUndefined();
   });
 });
 
