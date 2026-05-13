@@ -83,6 +83,13 @@ function normalizeApprovalIdentity(value: string | null | undefined): string | n
   return normalizeOptionalString(value) ?? null;
 }
 
+const BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS = new Set<string>([
+  GATEWAY_CLIENT_IDS.CONTROL_UI,
+  GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+  GATEWAY_CLIENT_IDS.WEBCHAT,
+  GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+]);
+
 export function isApprovalRecordVisibleToClient<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   client: GatewayClient | null;
@@ -95,10 +102,15 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   const requestedByDeviceId = normalizeApprovalIdentity(params.record.requestedByDeviceId);
   const requestedByClientId = normalizeApprovalIdentity(params.record.requestedByClientId);
   const hasApprovalsScope = scopes.includes(APPROVALS_SCOPE);
+  const isBridgeableNoDeviceRequest =
+    requestedByDeviceId === null &&
+    requestedByClientId !== null &&
+    BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS.has(requestedByClientId);
   if (
     hasApprovalsScope &&
     (params.client?.internal?.approvalRuntime === true ||
-      requestedByClientId === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT)
+      requestedByClientId === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT ||
+      isBridgeableNoDeviceRequest)
   ) {
     return true;
   }

@@ -104,6 +104,34 @@ describe("handlePendingApprovalRequest", () => {
     ).toBe(true);
   });
 
+  it.each([
+    ["Control UI", GATEWAY_CLIENT_IDS.CONTROL_UI],
+    ["WebChat UI", GATEWAY_CLIENT_IDS.WEBCHAT_UI],
+    ["WebChat", GATEWAY_CLIENT_IDS.WEBCHAT],
+  ])("allows approval-scoped clients to see no-device %s approvals", (_label, clientId) => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      `approval-${clientId}-visible`,
+    );
+    record.requestedByConnId = "conn-browser-ui";
+    record.requestedByClientId = clientId;
+
+    expect(
+      isApprovalRecordVisibleToClient({
+        record,
+        client: createApprovalClient({
+          connId: "conn-mobile",
+          clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+          scopes: ["operator.approvals"],
+        }),
+      }),
+    ).toBe(true);
+  });
+
   it("allows approval-scoped clients to see device-bound gateway-client approvals", () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
@@ -445,6 +473,72 @@ describe("handlePendingApprovalRequest", () => {
     await requestPromise;
   });
 
+  it("targets no-device browser UI approvals to approval-scoped clients", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-control-ui-mobile",
+    );
+    record.requestedByConnId = "conn-control-ui";
+    record.requestedByClientId = GATEWAY_CLIENT_IDS.CONTROL_UI;
+    const decisionPromise = manager.register(record, 60_000);
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const visibleConnIds = new Set(["conn-mobile-approval"]);
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      decisionPromise,
+      respond,
+      context: {
+        broadcast,
+        broadcastToConnIds,
+        getApprovalClientConnIds: vi.fn(
+          createApprovalClientLookup([
+            createApprovalClient({
+              connId: "conn-control-ui",
+              clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+            }),
+            createApprovalClient({
+              connId: "conn-mobile-approval",
+              clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+              scopes: ["operator.approvals"],
+            }),
+          ]),
+        ),
+        hasExecApprovalClients: vi.fn(() => {
+          throw new Error("expected targeted approval client lookup");
+        }),
+      } as unknown as GatewayRequestContext,
+      clientConnId: "conn-control-ui",
+      requestEventName: "exec.approval.requested",
+      requestEvent: {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      },
+      twoPhase: true,
+      deliverRequest: () => false,
+    });
+
+    await Promise.resolve();
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "exec.approval.requested",
+      expect.objectContaining({ id: "approval-control-ui-mobile" }),
+      visibleConnIds,
+      { dropIfSlow: true },
+    );
+
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    await requestPromise;
+  });
+
   it("targets device-bound gateway-client approvals to approval-scoped clients", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
@@ -646,6 +740,57 @@ describe("handlePendingApprovalRequest", () => {
     );
     record.requestedByConnId = "conn-gateway";
     record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
+    void manager.register(record, 60_000);
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+
+    await handleApprovalResolve({
+      manager,
+      inputId: record.id,
+      decision: "allow-once",
+      respond,
+      context: {
+        broadcast,
+        broadcastToConnIds,
+        getApprovalClientConnIds: vi.fn(
+          createApprovalClientLookup([
+            createApprovalClient({
+              connId: "conn-mobile-approval",
+              clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+              scopes: ["operator.approvals"],
+            }),
+          ]),
+        ),
+      } as unknown as GatewayRequestContext,
+      client: createApprovalClient({
+        connId: "conn-mobile-approval",
+        clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+        scopes: ["operator.approvals"],
+      }),
+      resolvedEventName: "exec.approval.resolved",
+      buildResolvedEvent: ({ approvalId, decision, snapshot }) => ({
+        id: approvalId,
+        decision,
+        request: snapshot.request,
+      }),
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot(record.id)?.decision).toBe("allow-once");
+  });
+
+  it("allows approval-scoped clients to resolve no-device browser UI approvals", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-control-ui-resolve",
+    );
+    record.requestedByConnId = "conn-control-ui";
+    record.requestedByClientId = GATEWAY_CLIENT_IDS.CONTROL_UI;
     void manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
