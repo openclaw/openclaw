@@ -6,6 +6,8 @@ type PnpmBuildConfig = {
   allowBuilds?: Record<string, boolean>;
   blockExoticSubdeps?: boolean;
   ignoredBuiltDependencies?: string[];
+  minimumReleaseAgeIgnoreMissingTime?: boolean;
+  minimumReleaseAgeStrict?: boolean;
   onlyBuiltDependencies?: string[];
 };
 
@@ -36,5 +38,12 @@ describe("package manager build policy", () => {
     expect(workspace.allowBuilds?.["baileys"]).toBe(true);
     expect(workspace.allowBuilds?.["@whiskeysockets/libsignal-node"]).toBe(true);
     expect(workspace.blockExoticSubdeps).toBe(false);
+  });
+
+  it("keeps release-age installs working with incomplete registry publish metadata", () => {
+    const workspace = parse(fs.readFileSync("pnpm-workspace.yaml", "utf8")) as WorkspaceConfig;
+
+    expect(workspace.minimumReleaseAgeIgnoreMissingTime).toBe(true);
+    expect(workspace.minimumReleaseAgeStrict).toBe(false);
   });
 });

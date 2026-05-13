@@ -31,7 +31,6 @@ function lastEmbeddedAgentCall(): {
   prompt?: string;
   sessionKey?: string;
   workspaceDir?: string;
-  sessionFile?: string;
 } {
   const calls = runEmbeddedPiAgentMock.mock.calls;
   const call = calls[calls.length - 1];
@@ -47,7 +46,6 @@ function lastEmbeddedAgentCall(): {
     prompt?: string;
     sessionKey?: string;
     workspaceDir?: string;
-    sessionFile?: string;
   };
 }
 
