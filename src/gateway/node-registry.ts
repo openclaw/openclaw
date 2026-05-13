@@ -285,29 +285,30 @@ export class NodeRegistry {
     if (!params.connId || !params.sessionKey) {
       return false;
     }
+    const connId = params.connId;
     this.pruneAuthorizedSystemRunEvents();
     let match: { key: string; event: AuthorizedSystemRunEvent } | null = null;
     if (params.runId) {
       match = this.matchAuthorizedSystemRunEvent({
         nodeId: params.nodeId,
-        connId: params.connId,
+        connId,
         runId: params.runId,
         sessionKey: params.sessionKey,
       });
-      if (!match && this.allowsLegacyMacRunIdFallback(params)) {
+      if (!match && this.allowsLegacyMacRunIdFallback({ nodeId: params.nodeId, connId })) {
         match = this.matchSingleAuthorizedSystemRunEvent({
           nodeId: params.nodeId,
-          connId: params.connId,
+          connId,
           sessionKey: params.sessionKey,
         });
       }
     } else {
-      if (!this.allowsLegacyMacRunIdFallback(params)) {
+      if (!this.allowsLegacyMacRunIdFallback({ nodeId: params.nodeId, connId })) {
         return false;
       }
       match = this.matchSingleAuthorizedSystemRunEvent({
         nodeId: params.nodeId,
-        connId: params.connId,
+        connId,
         sessionKey: params.sessionKey,
       });
     }
