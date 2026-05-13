@@ -692,6 +692,55 @@ describe("installPluginFromNpmSpec e2e", () => {
     ).rejects.toHaveProperty("code", "ENOENT");
   });
 
+  it("rolls back the managed root when npm peer planning fails", async () => {
+    const rootDir = await makeTempDir("npm-plugin-peer-plan-rollback-e2e");
+    const npmRoot = path.join(rootDir, "managed-npm");
+    const blockedPlugin = `missing-peer-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const missingPeer = `missing-peer-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const registry = await startStaticRegistry([
+      {
+        packageName: blockedPlugin,
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            packageName: blockedPlugin,
+            peerDependencies: { [missingPeer]: "^1.0.0" },
+            peerDependenciesMeta: {},
+            pluginId: blockedPlugin,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+    ]);
+    process.env.NPM_CONFIG_REGISTRY = registry;
+    process.env.npm_config_registry = registry;
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${blockedPlugin}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+      timeoutMs: 120_000,
+    });
+
+    if (result.ok) {
+      throw new Error("expected npm peer planning to fail");
+    }
+    expect(result.error).toContain("npm peer dependency planning failed");
+    const rootManifest = JSON.parse(
+      await fs.readFile(path.join(npmRoot, "package.json"), "utf8"),
+    ) as {
+      dependencies?: Record<string, string>;
+      openclaw?: { managedPeerDependencies?: string[] };
+    };
+    expect(rootManifest.dependencies?.[blockedPlugin]).toBeUndefined();
+    expect(rootManifest.dependencies?.[missingPeer]).toBeUndefined();
+    expect(rootManifest.openclaw?.managedPeerDependencies ?? []).not.toContain(missingPeer);
+    await expect(
+      fs.lstat(path.join(npmRoot, "node_modules", blockedPlugin, "package.json")),
+    ).rejects.toHaveProperty("code", "ENOENT");
+  });
+
   it("does not take ownership of an existing root dependency observed as a peer", async () => {
     const rootDir = await makeTempDir("npm-plugin-peer-existing-root-e2e");
     const npmRoot = path.join(rootDir, "managed-npm");

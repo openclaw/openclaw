@@ -288,6 +288,10 @@ function isOptionalPeerDependency(manifest: Record<string, unknown>, peerName: s
   return isRecord(peerMetadata) && peerMetadata.optional === true;
 }
 
+function isDevOnlyLockPackage(value: unknown): boolean {
+  return isRecord(value) && value.dev === true;
+}
+
 function readLockPackageName(location: string, value: unknown): string | undefined {
   if (isRecord(value)) {
     const packageName = readOptionalString(value.name);
@@ -322,7 +326,7 @@ function findLockPackageVersion(params: {
   }
   const preferredLocation = `node_modules/${params.packageName}`;
   const preferredPackage = params.lockfile.packages[preferredLocation];
-  if (isRecord(preferredPackage)) {
+  if (isRecord(preferredPackage) && !isDevOnlyLockPackage(preferredPackage)) {
     const preferredVersion = readOptionalString(preferredPackage.version);
     if (preferredVersion) {
       return preferredVersion;
@@ -331,7 +335,11 @@ function findLockPackageVersion(params: {
   for (const [location, value] of Object.entries(params.lockfile.packages).toSorted(
     ([left], [right]) => left.localeCompare(right),
   )) {
-    if (readLockPackageName(location, value) !== params.packageName || !isRecord(value)) {
+    if (
+      readLockPackageName(location, value) !== params.packageName ||
+      !isRecord(value) ||
+      isDevOnlyLockPackage(value)
+    ) {
       continue;
     }
     const version = readOptionalString(value.version);
@@ -350,7 +358,7 @@ function collectNpmLockPeerDependencyPins(params: {
   for (const [location, value] of Object.entries(packages).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    if (location === "" || !isRecord(value)) {
+    if (location === "" || !isRecord(value) || isDevOnlyLockPackage(value)) {
       continue;
     }
     const packageName = readLockPackageName(location, value);
