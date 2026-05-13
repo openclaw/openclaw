@@ -9,6 +9,8 @@ import {
   type SimpleStreamOptions,
   type ThinkingLevel,
 } from "@mariozechner/pi-ai";
+import { extractCommandTag, recordLLMUsage } from "../logging/llm-metrics.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -854,6 +856,40 @@ function resolveAnthropicTransportOptions(
   return resolved;
 }
 
+const log = createSubsystemLogger("anthropic-transport");
+
+// Mirror of emitCodexUsageObservability in openai-transport-stream.ts — emits
+// per-request anthropic token usage to the shared openclaw_llm_* Prometheus
+// counter family with provider="anthropic" so dashboards stay populated even
+// when model fallback shifts traffic from codex to claude.
+function emitAnthropicUsageObservability(
+  model: AnthropicTransportModel,
+  context: Context,
+  usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } | undefined,
+): void {
+  if (normalizeLowercaseStringOrEmpty(model.provider) !== "anthropic") return;
+  const cached = usage?.cacheRead ?? 0;
+  const prompt = (usage?.input ?? 0) + cached;
+  const completion = usage?.output ?? 0;
+  recordLLMUsage("anthropic", { prompt, completion, cached });
+  const messages = (context as { messages?: ReadonlyArray<{ role: string; content: unknown }> })
+    .messages;
+  const lastUser = messages?.findLast?.((m) => m.role === "user");
+  const commandTag = extractCommandTag(lastUser?.content);
+  log.info(
+    `llm_usage provider=anthropic model=${model.id} prompt=${prompt} completion=${completion} cached=${cached}`,
+    {
+      event: "llm_usage",
+      provider: "anthropic",
+      model: model.id,
+      prompt_tokens: prompt,
+      completion_tokens: completion,
+      cached_tokens: cached,
+      command: commandTag,
+    },
+  );
+}
+
 export function createAnthropicMessagesTransportStreamFn(): StreamFn {
   return (rawModel, context, rawOptions) => {
     const model = rawModel as AnthropicTransportModel;
@@ -1149,6 +1185,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             calculateCost(model, output.usage);
           }
         }
+        emitAnthropicUsageObservability(model, context, output.usage);
         finalizeTransportStream({ stream, output, signal: transportOptions.signal });
       } catch (error) {
         failTransportStream({
