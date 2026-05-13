@@ -757,7 +757,7 @@
             id="search"
             class="search"
             type="search"
-            placeholder="Search units, notes, destinations"
+            placeholder="Search units, notes, justifications, destinations"
           />
           <div class="legend" id="legend"></div>
         </section>
@@ -1071,6 +1071,13 @@
             unit.destinations
               .map(function (dest) {
                 return [refLabel(dest.ref), refLabel(dest.generator), dest.note].join(" ");
+              })
+              .join(" "),
+            (unit.source?.lines || [])
+              .flatMap(function (line) {
+                return (line.targets || []).map(function (target) {
+                  return target.justification || "";
+                });
               })
               .join(" "),
           ]
@@ -1465,7 +1472,7 @@
           els.search.placeholder =
             state.mode === "doc"
               ? "Search headings or lines in this doc"
-              : "Search units, notes, destinations";
+              : "Search units, notes, justifications, destinations";
         }
 
         function renderDocList() {

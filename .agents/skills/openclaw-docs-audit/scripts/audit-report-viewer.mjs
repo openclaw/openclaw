@@ -28,6 +28,7 @@ const STATUSES = new Set([
 ]);
 const REMOVED_REASONS_REQUIRING_TARGETS = new Set(["generated-source", "redundant"]);
 const LOW_OVERLAP_MIN_TOKENS = 5;
+const CURRENT_SCHEMA_VERSION = 3;
 const BOOLEAN_ARGS = new Set(["changed-only"]);
 
 function usage() {
@@ -532,7 +533,9 @@ function destinationTargetFromDestination(destination) {
     ref: cloneRef(destination.ref),
   };
   if (destination.role) target.role = destination.role;
-  if (destination.notes || destination.note) target.notes = destination.notes || destination.note;
+  if (destination.justification || destination.notes || destination.note) {
+    target.justification = destination.justification || destination.notes || destination.note;
+  }
   return target;
 }
 
@@ -546,16 +549,51 @@ function isFormattingOnlyLine(text) {
   return !String(text || "").trim();
 }
 
+function compactText(text, maxLength = 120) {
+  const compact = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (compact.length <= maxLength) return compact;
+  return compact.slice(0, maxLength - 1).trimEnd() + "...";
+}
+
+function targetJustification(target, line, unit) {
+  const existing = target?.justification || target?.notes || target?.note;
+  if (existing && String(existing).trim()) return String(existing).trim();
+  const sourceLabel = `${unit?.id || "source"}:${line.number}`;
+  const sourceText = compactText(line.text);
+  if (target?.mapping === "auto-line-overlap") {
+    return `Auto line-overlap match for ${sourceLabel}: ${sourceText}`;
+  }
+  if (target?.mapping === "block-fallback") {
+    return `Fallback to the unit destination for ${sourceLabel}; review exact claim equivalence: ${sourceText}`;
+  }
+  if (target?.mapping === "manual-line" || target?.mapping === "semantic-confirmed") {
+    return `Manual claim mapping for ${sourceLabel}: ${sourceText}`;
+  }
+  return `Line target for ${sourceLabel}: ${sourceText}`;
+}
+
+function withTargetJustification(target, line, unit) {
+  const { note, notes, ...cleanTarget } = target || {};
+  return {
+    ...cleanTarget,
+    justification: targetJustification(target, line, unit),
+  };
+}
+
 function lineTargetsForUnit(unit, line) {
   if (line.action === "removed" && !REMOVED_REASONS_REQUIRING_TARGETS.has(line.reason)) {
     return [];
   }
   const narrowedTargets = autoLineTargetsForUnit(unit, line);
   if (narrowedTargets.length) return narrowedTargets;
-  return destinationTargetsFromUnit(unit).map((target) => ({
-    ...target,
-    mapping: "block-fallback",
-  }));
+  return destinationTargetsFromUnit(unit)
+    .map((target) => ({
+      ...target,
+      mapping: "block-fallback",
+    }))
+    .map((target) => withTargetJustification(target, line, unit));
 }
 
 function autoLineTargetsForUnit(unit, line) {
@@ -576,6 +614,7 @@ function autoLineTargetsForUnit(unit, line) {
     const groups = contiguousLineGroups(matched.map((candidate) => candidate.line.number));
     for (const group of groups) {
       targets.push({
+        justification: `Auto line-overlap match for ${unit.id}:${line.number}: ${compactText(line.text)}`,
         mapping: "auto-line-overlap",
         ref: {
           path: destination.ref.path,
@@ -602,7 +641,7 @@ function contiguousLineGroups(numbers) {
   return groups;
 }
 
-function migrateV1ToV2(v1Data) {
+function migrateV1ToV3(v1Data) {
   if (v1Data.schemaVersion !== 1) {
     throw new Error("migrate-v1 expects schemaVersion 1 input.");
   }
@@ -682,7 +721,7 @@ function migrateV1ToV2(v1Data) {
     frontmatter: v1Data.frontmatter || {},
     pageViews: v1Data.pageViews || buildPageViews(pages, v1Data.changedPages || []),
     pages,
-    schemaVersion: 2,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
     sourceArchive: {
       ...sourceArchive,
       ref:
@@ -839,7 +878,7 @@ function scaffoldV2(options) {
       status: "draft",
     },
     pages,
-    schemaVersion: 2,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
     sourceArchive: {
       ...sourceArchive,
       path: sourceArchive.path || sourcePages[0],
@@ -860,11 +899,11 @@ function sourceRangeExists(ref, sourceArchive, cwd, cache) {
   );
 }
 
-function hydrateTargets(targets, cwd) {
+function hydrateTargets(targets, cwd, line, unit) {
   return (targets || []).map((target) => {
     const ref = cloneRef(target.ref);
     const hydrated = {
-      ...target,
+      ...withTargetJustification(target, line, unit),
       ref,
     };
     if (ref) hydrated.lines = getCurrentLines(ref, cwd);
@@ -873,7 +912,9 @@ function hydrateTargets(targets, cwd) {
 }
 
 function hydrateV2(data, options) {
-  if (data.schemaVersion !== 2) throw new Error("hydrate expects schemaVersion 2 data.");
+  if (![2, 3].includes(data.schemaVersion)) {
+    throw new Error("hydrate expects schemaVersion 2 or 3 data.");
+  }
   const sourceArchive = sourceArchiveForData(data);
   const sourceCache = new Map();
   const changedFileCache = new Map();
@@ -951,13 +992,15 @@ function hydrateV2(data, options) {
               number: line.number,
               reason,
               status,
-              targets: hydrateTargets(existing.targets || [], options.cwd),
+              targets: hydrateTargets(existing.targets || [], options.cwd, existing, unit),
               text: line.text,
             };
             if (!draftLine.targets.length && !isFormattingOnlyLine(line.text)) {
               draftLine.targets = hydrateTargets(
                 lineTargetsForUnit(unitForTargets, draftLine),
                 options.cwd,
+                draftLine,
+                unitForTargets,
               );
             }
             return draftLine;
@@ -978,7 +1021,7 @@ function hydrateV2(data, options) {
     },
     pageViews: buildPageViews(pages, changedPages),
     pages,
-    schemaVersion: 2,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
     sourceArchive: {
       ...sourceArchive,
       path: sourceArchive.path || sourcePagesForData(data)[0] || null,
@@ -1045,6 +1088,23 @@ function tokenOverlapScore(sourceText, targetText) {
   if (!targetTokens.size) return 0;
   const matches = sourceTokens.filter((token) => targetTokens.has(token)).length;
   return matches / sourceTokens.length;
+}
+
+function isStrongFactLine(text) {
+  const value = String(text || "").trim();
+  if (!value) return false;
+  if (
+    /^[-*]?\s*(`[^`]+`|\w+(?:\.\w+)+|[A-Z0-9_]+)\s*[:=|]/.test(value) ||
+    /^\|/.test(value) ||
+    /^#{1,6}\s/.test(value) ||
+    /^<\/?[A-Z][A-Za-z]*(\s|>)/.test(value) ||
+    /^```/.test(value)
+  ) {
+    return false;
+  }
+  return /\b(default|enabled|disabled|enable|disable|deny|allow|wins|force-enable|auto-?activate|auto-?enable|preserved|preserves|re-enable|fails closed|skips|cleanup|exclusive|selected|opt-in|legacy|canonical|boundary|must|only|require|required)\b/i.test(
+    value,
+  );
 }
 
 function changedDestinationIndex(cwd, diffBase = "HEAD") {
@@ -1145,10 +1205,10 @@ function collectValidation(data, options = {}) {
       }
     : undefined;
   const pages = data.pages || [];
-  if (![1, 2].includes(data.schemaVersion)) {
+  if (![1, 2, 3].includes(data.schemaVersion)) {
     errors.push({
       code: "schema-version",
-      message: `Expected schemaVersion 1 or 2, got ${data.schemaVersion}.`,
+      message: `Expected schemaVersion 1, 2, or 3, got ${data.schemaVersion}.`,
     });
     return { errors, warnings };
   }
@@ -1241,7 +1301,7 @@ function collectValidation(data, options = {}) {
           });
         }
       }
-      if (data.schemaVersion === 2) {
+      if (data.schemaVersion >= 2) {
         const checked = validateSourceLineMappings(unit, {
           changedIndex,
           cwd: options.cwd,
@@ -1339,6 +1399,22 @@ function validateSourceLineMappings(unit, context) {
       });
     }
     for (const target of line.targets) {
+      if (target.note !== undefined || target.notes !== undefined) {
+        context.errors.push({
+          code: "line-target-legacy-notes",
+          line: line.number,
+          message: `${lineLabel} target uses legacy note/notes; use justification instead.`,
+          unit: unit.id,
+        });
+      }
+      if (!String(target.justification || "").trim()) {
+        context.errors.push({
+          code: "line-target-justification",
+          line: line.number,
+          message: `${lineLabel} target is missing required justification.`,
+          unit: unit.id,
+        });
+      }
       if (target.changedSinceSource !== undefined) {
         context.errors.push({
           code: "line-target-changed-since-source",
@@ -1358,6 +1434,24 @@ function validateSourceLineMappings(unit, context) {
           });
         }
       }
+    }
+    if (
+      material &&
+      line.status === "covered" &&
+      line.targets.length &&
+      line.targets.every((target) => target.mapping === "block-fallback")
+    ) {
+      const warning = {
+        code: isStrongFactLine(line.text)
+          ? "strong-fact-only-block-fallback"
+          : "covered-line-only-block-fallback",
+        line: line.number,
+        message: `${lineLabel} is covered but only has broad block-fallback targets; confirm exact claim coverage or mark the line partial/missing.`,
+        source: line.text,
+        targets: line.targets.map((target) => formatRef(target.ref)).filter(Boolean),
+        unit: unit.id,
+      };
+      context.warnings.push(warning);
     }
     if (material && line.targets.length && !intentionallyRemoved && context.cwd) {
       const affectedTargets = context.changedIndex
@@ -1673,7 +1767,7 @@ function main() {
       title: args.title,
     });
     validateData(legacyData, { cwd });
-    const data = migrateV1ToV2(legacyData);
+    const data = migrateV1ToV3(legacyData);
     data.validation = collectValidation(data, { cwd });
     writeJson(jsonOut, data);
     printSummary(data, { json: jsonOut }, data.validation);

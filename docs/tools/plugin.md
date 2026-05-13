@@ -154,7 +154,20 @@ Key policy rules:
 - `plugins.load.paths` adds explicit local plugin files or directories.
 - Workspace-origin plugins are disabled by default; explicitly enable or
   allowlist them before using local workspace code.
-- `plugins.slots` chooses one plugin for exclusive categories such as memory.
+- Bundled plugins follow their built-in default-on/default-off metadata unless
+  config explicitly overrides them.
+- `plugins.slots.<slot>` chooses one plugin for exclusive categories such as
+  memory and context engines. Slot selection counts as explicit activation for
+  that slot and can load the selected plugin even when it would otherwise be
+  opt-in; `plugins.deny` and `plugins.entries.<id>.enabled: false` still block
+  it.
+- Bundled opt-in plugins can auto-activate when config names one of their owned
+  surfaces, such as a provider/model ref, channel config, CLI backend, or agent
+  harness runtime.
+- OpenAI-family Codex routing keeps provider and runtime plugin boundaries
+  separate: `openai-codex/*` is legacy OpenAI-provider config, while the bundled
+  `codex` plugin owns Codex app-server runtime for canonical `openai/*` agent
+  refs, explicit `agentRuntime.id: "codex"`, and legacy `codex/*` refs.
 
 Run `openclaw doctor` or `openclaw doctor --fix` when config validation reports
 stale plugin ids, allowlist/tool mismatches, or legacy bundled plugin paths.

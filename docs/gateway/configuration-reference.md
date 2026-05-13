@@ -201,11 +201,25 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - Loaded from `~/.openclaw/extensions`, `<workspace>/.openclaw/extensions`, plus `plugins.load.paths`.
 - Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
 - **Config changes require a gateway restart.**
+- `enabled: false` disables all plugins and skips plugin discovery/load work.
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
 - `bundledDiscovery`: defaults to `"allowlist"` for new configs, so a non-empty
   `plugins.allow` also gates bundled provider plugins, including web-search
   runtime providers. Doctor writes `"compat"` for migrated legacy allowlist
   configs to preserve existing bundled provider behavior until you opt in.
+- Bundled plugins follow their built-in default-on/default-off metadata unless
+  config explicitly overrides them.
+- Bundled opt-in plugins can auto-activate when config names one of their owned
+  surfaces, such as a provider/model ref, channel config, CLI backend, or agent
+  harness runtime.
+- `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to
+  disable memory plugins.
+- `plugins.slots.contextEngine`: pick the active context engine plugin id;
+  defaults to `"legacy"` unless you install and select another engine.
+- A plugin selected by `plugins.slots.*` counts as explicit activation for that
+  slot and can load even when it would otherwise be opt-in; `plugins.deny` and
+  `plugins.entries.<id>.enabled: false` still block it.
+- `plugins.entries.<id>.enabled: false` disables one plugin.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
 - `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks `before_prompt_build` and ignores prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride`. Applies to native plugin hooks and supported bundle-provided hook directories.
@@ -338,8 +352,6 @@ restart after changing native plugin config.
   - `memory.qmd.*`
   - `plugins.entries.memory-core.config.dreaming`
 - Enabled Claude bundle plugins can also contribute embedded Pi defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
-- `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
-- `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.
 
 See [Plugins](/tools/plugin).
 

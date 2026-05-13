@@ -36,6 +36,62 @@ The command writes:
 .mem/main/specs/<spec-id>/report/<short-audit-name>-audit-viewer.html
 ```
 
+## Flow Diagram
+
+```mermaid
+flowchart TD
+    subgraph Inputs["Inputs"]
+        Report["Detailed Markdown report<br/>(--report)"]
+        Data["Existing audit JSON<br/>(--data)"]
+        SourceRef["Source archive<br/>(--source-ref or source_ref)"]
+        ChangedPages["Changed pages CSV<br/>(--changed-pages)"]
+    end
+
+    subgraph Script["audit-report-viewer.mjs"]
+        Args["Parse CLI args and paths"]
+        Load["Load report or JSON"]
+        SourceLines["Resolve source lines<br/>from source archive"]
+        DestLines["Resolve destination and generator lines<br/>from current repo"]
+        ChangedFlag["Compute changedSinceSource<br/>per destination file"]
+        PageViews["Build pageViews"]
+        Validate["Validate unit and line mappings"]
+        Render["Render outputs"]
+    end
+
+    subgraph Outputs["Outputs"]
+        Json["Audit JSON<br/>canonical data"]
+        Html["Static HTML viewer"]
+        Detailed["Normalized detailed Markdown<br/>(optional)"]
+    end
+
+    subgraph Browser["Browser viewer"]
+        Embedded["Read embedded audit JSON"]
+        Sidebar["Render page selector and sidebar<br/>block or doc mode"]
+        Detail["Render mapped source ranges<br/>and diff/reference panes"]
+        Fragment["Persist selected unit and view<br/>URL fragment"]
+    end
+
+    Report --> Load
+    Data --> Load
+    SourceRef --> SourceLines
+    ChangedPages --> PageViews
+    Args --> Load
+    Load --> SourceLines
+    SourceLines --> DestLines
+    DestLines --> ChangedFlag
+    ChangedFlag --> PageViews
+    PageViews --> Validate
+    Validate --> Render
+    Render --> Json
+    Render --> Html
+    Render --> Detailed
+    Html --> Embedded
+    Embedded --> Sidebar
+    Embedded --> Detail
+    Sidebar --> Fragment
+    Detail --> Fragment
+```
+
 ## Script Pipeline
 
 `audit-report-viewer.mjs` runs these stages:
@@ -51,7 +107,8 @@ The command writes:
 8. Resolve destination and generator lines from the current checkout.
 9. Mark each destination file as changed or unchanged relative to the source ref.
 10. Build page selector views.
-11. Validate required source coverage.
+11. Validate required source coverage, line target justifications, and weak
+    fallback mappings.
 12. Write JSON, HTML, and optionally normalized detailed Markdown.
 
 When using `--data`, the script reuses the existing JSON. It can rebuild
@@ -122,11 +179,12 @@ External-only destinations are kept as notes with no repo line.
 
 ## JSON Shape
 
-The generated JSON has this top-level shape:
+Hydrated audit JSON uses schema v3. Older v1/v2 inputs can still be migrated or
+hydrated, but regenerated data should use this top-level shape:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 3,
   "sourceArchive": {
     "ref": "4e020c21a5^:docs/tools/plugin.md",
     "gitRef": "4e020c21a5^",
@@ -150,7 +208,8 @@ Each page contains:
 Each unit contains:
 
 - `source.ref`: source line range from the pre-rewrite ref.
-- `source.lines`: resolved source lines for the source range.
+- `source.lines`: resolved source lines for the source range, including each
+  line's action, reason, status, and line-level destination targets.
 - `destinations`: current destination ranges, generator ranges, notes, and line
   data.
 
@@ -164,6 +223,22 @@ Each destination contains:
   `git diff --quiet <source-ref> -- <destination-file>`.
 - `external`: true when there is no repo destination range.
 - `note` and `raw`: normalized and original destination-cell text.
+
+Each `source.lines[].targets[]` entry contains:
+
+- `ref`: the smallest destination range that preserves the source line claim.
+- `mapping`: how the target was chosen, such as `auto-line-overlap`,
+  `manual-line`, `semantic-confirmed`, or `block-fallback`.
+- `justification`: required text explaining why this destination range preserves
+  the source line claim. Legacy target-level `note` or `notes` fields are invalid
+  in schema v3.
+- `lines`: hydrated current checkout lines for `ref`.
+
+`block-fallback` means the line inherited a broad unit-level destination because
+the script could not find or was not given a narrower target. Covered material
+lines that only have `block-fallback` targets remain warnings until an auditor
+replaces them with exact or manually justified targets, or marks the line
+partial/missing.
 
 `changedSinceSource` is intentionally file-level. A destination in an unchanged
 file is related reference context, not a diff, even when the audit row is marked

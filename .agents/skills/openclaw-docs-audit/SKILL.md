@@ -313,6 +313,14 @@ If the user asks for a chat-only audit, do not create a file.
   against the cited destination range. For multi-claim units, enumerate the
   claims mentally: commands, flags, failure modes, timing, defaults, compatibility
   aliases, side effects, and rollback behavior all need equivalent coverage.
+- For multi-claim units, record line-level targets in JSON before treating the
+  unit as covered. Every material source line should either map to the smallest
+  exact destination range, be manually confirmed with a target
+  `justification`, or be marked partial/missing/removed with a line note.
+- In schema v3 JSON, `source.lines[].targets[].justification` is required.
+  Target-level `note` and `notes` are legacy names and should be migrated to
+  `justification`. Treat `block-fallback` targets as review warnings, not proof
+  that the source claim is fully preserved.
 - Do not cite a broad related section as coverage when only one sentence or row
   is equivalent. Prefer the smallest exact destination range that proves the
   claim. If equivalent content exists elsewhere, cite that exact range instead.
