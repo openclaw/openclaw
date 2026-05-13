@@ -23,7 +23,8 @@ plugin; CLI command: [`openclaw policy`](/cli/policy)
 The Policy plugin contributes doctor health checks for policy-managed OpenClaw
 settings and governed workspace declarations. Policy currently covers channel
 conformance, governed tool metadata, MCP server posture, model-provider posture,
-private-network access posture, and accepted-attestation runtime audit.
+private-network access posture, runtime channel audit, and accepted-attestation
+runtime audit.
 
 Policy stores authored requirements in `policy.jsonc`, observes existing
 OpenClaw settings and workspace declarations as evidence, and reports drift

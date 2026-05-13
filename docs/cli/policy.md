@@ -284,29 +284,31 @@ only `expectedAttestationHash` usually changes.
 
 Policy currently verifies:
 
-| Check id                                 | Finding                                                               |
-| ---------------------------------------- | --------------------------------------------------------------------- |
-| `policy/policy-jsonc-missing`            | Policy is enabled but `policy.jsonc` is missing.                      |
-| `policy/policy-jsonc-invalid`            | Policy cannot be parsed or contains malformed rule entries.           |
-| `policy/policy-hash-mismatch`            | Policy does not match configured `expectedHash`.                      |
-| `policy/attestation-hash-mismatch`       | Current policy evidence no longer matches the accepted attestation.   |
-| `policy/channels-denied-provider`        | An enabled channel matches a channel deny rule.                       |
-| `policy/mcp-denied-server`               | A configured MCP server is denied by policy.                          |
-| `policy/mcp-unapproved-server`           | A configured MCP server is outside the allowlist.                     |
-| `policy/models-denied-provider`          | A configured model provider or model ref uses a denied provider.      |
-| `policy/models-unapproved-provider`      | A configured model provider or model ref is outside the allowlist.    |
-| `policy/network-private-access-enabled`  | A private-network SSRF escape hatch is enabled when policy denies it. |
-| `policy/tools-missing-risk-level`        | A governed tool declaration is missing risk metadata.                 |
-| `policy/tools-unknown-risk-level`        | A governed tool declaration uses an unknown risk value.               |
-| `policy/tools-missing-sensitivity-token` | A governed tool declaration is missing sensitivity metadata.          |
-| `policy/tools-missing-owner`             | A governed tool declaration is missing owner metadata.                |
-| `policy/tools-unknown-sensitivity-token` | A governed tool declaration uses an unknown sensitivity value.        |
+| Check id                                  | Finding                                                                 |
+| ----------------------------------------- | ----------------------------------------------------------------------- |
+| `policy/policy-jsonc-missing`             | Policy is enabled but `policy.jsonc` is missing.                        |
+| `policy/policy-jsonc-invalid`             | Policy cannot be parsed or contains malformed rule entries.             |
+| `policy/policy-hash-mismatch`             | Policy does not match configured `expectedHash`.                        |
+| `policy/attestation-hash-mismatch`        | Current policy evidence no longer matches the accepted attestation.     |
+| `policy/channels-denied-provider`         | An enabled channel matches a channel deny rule.                         |
+| `policy/channels-denied-provider-running` | A denied channel account is still running in supplied runtime evidence. |
+| `policy/mcp-denied-server`                | A configured MCP server is denied by policy.                            |
+| `policy/mcp-unapproved-server`            | A configured MCP server is outside the allowlist.                       |
+| `policy/models-denied-provider`           | A configured model provider or model ref uses a denied provider.        |
+| `policy/models-unapproved-provider`       | A configured model provider or model ref is outside the allowlist.      |
+| `policy/network-private-access-enabled`   | A private-network SSRF escape hatch is enabled when policy denies it.   |
+| `policy/tools-missing-risk-level`         | A governed tool declaration is missing risk metadata.                   |
+| `policy/tools-unknown-risk-level`         | A governed tool declaration uses an unknown risk value.                 |
+| `policy/tools-missing-sensitivity-token`  | A governed tool declaration is missing sensitivity metadata.            |
+| `policy/tools-missing-owner`              | A governed tool declaration is missing owner metadata.                  |
+| `policy/tools-unknown-sensitivity-token`  | A governed tool declaration uses an unknown sensitivity value.          |
 
 Policy findings can include both `target` and `requirement`. `target` is the
-observed workspace thing that does not conform. `requirement` is the authored
-policy rule that made it a finding. Both values are addresses today, usually
-`oc://` paths, but the field names describe their policy role rather than the
-address format.
+observed thing that does not conform. `requirement` is the authored policy rule
+that made it a finding. Config and workspace findings usually use `oc://`
+paths because they can point to resolvable documents. Runtime findings can use
+non-`oc://` evidence refs, such as `runtime:channels/...`, because they point
+to observed runtime state rather than an editable oc-path document.
 
 Example JSON finding:
 
