@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const FORBIDDEN_CHANGELOG_THANKS_HANDLES = ["codex", "openclaw", "steipete", "clawsweeper"];
+export const FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES = ["app/"];
 
 const THANKS_PATTERN = /\bThanks\b/iu;
 const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
@@ -12,7 +13,10 @@ const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
 export function isForbiddenChangelogThanksHandle(handle, options = {}) {
   const { strictBotHandle = false } = options;
   const normalized = handle.toLowerCase();
-  if (normalized === "null" || normalized.startsWith("app/")) {
+  if (normalized === "" || normalized === "null") {
+    return true;
+  }
+  if (FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
     return true;
   }
   if (strictBotHandle && normalized.includes("clawsweeper")) {

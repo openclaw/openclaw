@@ -96,8 +96,16 @@ describe("check-changelog-attributions", () => {
   });
 
   it("uses one attribution predicate for scanner and shell checks", () => {
+    expect(isForbiddenChangelogThanksHandle("")).toBe(true);
+    expect(isForbiddenChangelogThanksHandle("null")).toBe(true);
+    expect(isForbiddenChangelogThanksHandle("app/any-bot")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("codex")).toBe(true);
+    expect(isForbiddenChangelogThanksHandle("openclaw")).toBe(true);
+    expect(isForbiddenChangelogThanksHandle("steipete")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("app/clawsweeper")).toBe(true);
+    expect(isForbiddenChangelogThanksHandle("clawsweeper")).toBe(true);
+    expect(isForbiddenChangelogThanksHandle("clawsweeper[bot]")).toBe(true);
+    expect(isForbiddenChangelogThanksHandle("openclaw-clawsweeper")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("openclaw-clawsweeper[bot]")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("Ziy1-Tan")).toBe(false);
     expect(isForbiddenChangelogThanksHandle("human-clawsweeper-fan")).toBe(true);
