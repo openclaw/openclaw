@@ -706,10 +706,43 @@ function createMockAcpSessionManager() {
   };
 }
 
+function firstMockCall(mockFn: ReturnType<typeof vi.fn>, label: string, index = 0): unknown[] {
+  const call = mockFn.mock.calls[index] as unknown[] | undefined;
+  if (!call) {
+    throw new Error(`expected ${label} call #${index + 1}`);
+  }
+  return call;
+}
+
+function firstMockArg(
+  mockFn: ReturnType<typeof vi.fn>,
+  label: string,
+  index = 0,
+  argIndex = 0,
+): unknown {
+  return firstMockCall(mockFn, label, index)[argIndex];
+}
+
 function firstToolResultPayload(dispatcher: ReplyDispatcher): ReplyPayload | undefined {
-  return (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
-    | ReplyPayload
-    | undefined;
+  return firstMockArg(
+    dispatcher.sendToolResult as ReturnType<typeof vi.fn>,
+    "tool result",
+  ) as ReplyPayload;
+}
+
+function firstFinalReplyPayload(dispatcher: ReplyDispatcher): ReplyPayload | undefined {
+  return firstMockArg(
+    dispatcher.sendFinalReply as ReturnType<typeof vi.fn>,
+    "final reply",
+  ) as ReplyPayload;
+}
+
+function firstRouteReplyCall(): Record<string, unknown> {
+  const call = firstMockArg(mocks.routeReply, "route reply");
+  if (!call || typeof call !== "object") {
+    throw new Error("expected route reply params");
+  }
+  return call as Record<string, unknown>;
 }
 
 function requireToolResultHandler(
@@ -867,11 +900,12 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    const pluginLoadOptions = runtimePluginMocks.ensureRuntimePluginsLoaded.mock.calls[0]?.[0] as
-      | { config?: unknown; workspaceDir?: unknown }
-      | undefined;
-    expect(pluginLoadOptions?.config).toBe(cfg);
-    expect(typeof pluginLoadOptions?.workspaceDir).toBe("string");
+    const pluginLoadOptions = firstMockArg(
+      runtimePluginMocks.ensureRuntimePluginsLoaded,
+      "runtime plugin load",
+    ) as { config?: unknown; workspaceDir?: unknown };
+    expect(pluginLoadOptions.config).toBe(cfg);
+    expect(typeof pluginLoadOptions.workspaceDir).toBe("string");
     expect(runtimePluginMocks.ensureRuntimePluginsLoaded.mock.invocationCallOrder[0]).toBeLessThan(
       hookMocks.runner.hasHooks.mock.invocationCallOrder[0],
     );
@@ -922,7 +956,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = mocks.routeReply.mock.calls[0]?.[0] as
+    const routeCall = firstRouteReplyCall() as
       | {
           accountId?: unknown;
           channel?: unknown;
@@ -969,7 +1003,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = mocks.routeReply.mock.calls[0]?.[0] as
+    const routeCall = firstRouteReplyCall() as
       | { accountId?: unknown; channel?: unknown; to?: unknown }
       | undefined;
     expect(routeCall?.channel).toBe("telegram");
@@ -979,7 +1013,7 @@ describe("dispatchReplyFromConfig", () => {
       .calls[0]?.[0] as { accountId?: unknown; messageProvider?: unknown } | undefined;
     expect(normalizerOptions?.messageProvider).toBe("telegram");
     expect(normalizerOptions?.accountId).toBe("acc-1");
-    const replyDispatchCall = hookMocks.runner.runReplyDispatch.mock.calls[0] as
+    const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
       | [
           {
             originatingChannel?: unknown;
@@ -1018,7 +1052,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = mocks.routeReply.mock.calls[0]?.[0] as
+    const routeCall = firstRouteReplyCall() as
       | { accountId?: unknown; channel?: unknown; to?: unknown }
       | undefined;
     expect(routeCall?.channel).toBe("discord");
@@ -1064,7 +1098,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(result.queuedFinal).toBe(false);
-    const replyDispatchCall = hookMocks.runner.runReplyDispatch.mock.calls[0] as
+    const replyDispatchCall = firstMockCall(hookMocks.runner.runReplyDispatch, "reply dispatch") as
       | [
           {
             originatingChannel?: unknown;
@@ -1114,7 +1148,7 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    const routeCall = mocks.routeReply.mock.calls[0]?.[0] as
+    const routeCall = firstRouteReplyCall() as
       | { channel?: unknown; threadId?: unknown; to?: unknown }
       | undefined;
     expect(routeCall?.channel).toBe("discord");
@@ -1155,7 +1189,7 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    const routeCall = mocks.routeReply.mock.calls[0]?.[0] as
+    const routeCall = firstRouteReplyCall() as
       | { channel?: string; to?: string; threadId?: string | number }
       | undefined;
     expect(routeCall?.channel).toBe("mattermost");
@@ -1218,9 +1252,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = mocks.routeReply.mock.calls[0]?.[0] as
-      | { channel?: unknown; to?: unknown }
-      | undefined;
+    const routeCall = firstRouteReplyCall() as { channel?: unknown; to?: unknown } | undefined;
     expect(routeCall?.channel).toBe("telegram");
     expect(routeCall?.to).toBe("telegram:999");
   });
@@ -1241,9 +1273,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = mocks.routeReply.mock.calls[0]?.[0] as
-      | { channel?: unknown; to?: unknown }
-      | undefined;
+    const routeCall = firstRouteReplyCall() as { channel?: unknown; to?: unknown } | undefined;
     expect(routeCall?.channel).toBe("feishu");
     expect(routeCall?.to).toBe("ou_feishu_direct_123");
   });
@@ -1311,7 +1341,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = mocks.routeReply.mock.calls[0]?.[0] as
+    const routeCall = firstRouteReplyCall() as
       | { channel?: unknown; policyConversationType?: unknown; to?: unknown }
       | undefined;
     expect(routeCall?.channel).toBe("imessage");
@@ -1354,7 +1384,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(mocks.routeReply).toHaveBeenCalledTimes(1);
-    const routed = mocks.routeReply.mock.calls[0]?.[0] as { payload?: ReplyPayload } | undefined;
+    const routed = firstRouteReplyCall() as { payload?: ReplyPayload } | undefined;
     expect(routed?.payload?.mediaUrls).toEqual(["https://example.com/tts-routed.opus"]);
     expect(routed?.payload?.text).toBeUndefined();
   });
@@ -1576,9 +1606,13 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(2);
     expect(firstToolResultPayload(dispatcher)?.text).toBe("🔧 tools/sessions_send");
-    const sent = (dispatcher.sendToolResult as Mock).mock.calls[1]?.[0] as ReplyPayload | undefined;
-    expect(sent?.mediaUrl).toBe("https://example.com/tts-native.opus");
-    expect(sent?.text).toBeUndefined();
+    const sent = firstMockArg(
+      dispatcher.sendToolResult as ReturnType<typeof vi.fn>,
+      "tool result",
+      1,
+    ) as ReplyPayload;
+    expect(sent.mediaUrl).toBe("https://example.com/tts-native.opus");
+    expect(sent.text).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
@@ -1621,10 +1655,12 @@ describe("dispatchReplyFromConfig", () => {
     expect(firstToolResultPayload(dispatcher)?.text).toBe(
       "Inspect code, patch it, run tests.\n\n1. Inspect code\n2. Patch code\n3. Run tests",
     );
-    const secondToolPayload = (dispatcher.sendToolResult as Mock).mock.calls[1]?.[0] as
-      | ReplyPayload
-      | undefined;
-    expect(secondToolPayload?.text).toBe("Working: awaiting approval: pnpm test");
+    const secondToolPayload = firstMockArg(
+      dispatcher.sendToolResult as ReturnType<typeof vi.fn>,
+      "tool result",
+      1,
+    ) as ReplyPayload;
+    expect(secondToolPayload.text).toBe("Working: awaiting approval: pnpm test");
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(2);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
@@ -2061,7 +2097,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(replyResolver).not.toHaveBeenCalled();
-    const ensureSessionOptions = runtime.ensureSession.mock.calls[0]?.[0] as
+    const ensureSessionOptions = firstMockArg(runtime.ensureSession, "ensure session") as
       | { agent?: unknown; mode?: unknown; sessionKey?: unknown }
       | undefined;
     expect(ensureSessionOptions?.sessionKey).toBe("agent:codex-acp:session-1");
@@ -2072,9 +2108,7 @@ describe("dispatchReplyFromConfig", () => {
     const streamedText = blockCalls.map((call) => (call[0] as ReplyPayload).text ?? "").join("");
     expect(streamedText).toContain("hello");
     expect(streamedText).toContain("world");
-    const finalPayload = (dispatcher.sendFinalReply as Mock).mock.calls[0]?.[0] as
-      | ReplyPayload
-      | undefined;
+    const finalPayload = firstFinalReplyPayload(dispatcher);
     expect(finalPayload?.text).toBe("hello world");
   });
 
@@ -2407,7 +2441,10 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    const bindingLookup = sessionBindingMocks.resolveByConversation.mock.calls[0]?.[0];
+    const bindingLookup = firstMockArg(
+      sessionBindingMocks.resolveByConversation,
+      "conversation binding lookup",
+    ) as { accountId?: unknown; channel?: unknown; conversationId?: unknown } | undefined;
     expect(bindingLookup?.channel).toBe("discord");
     expect(bindingLookup?.accountId).toBe("work");
     expect(bindingLookup?.conversationId).toBe("thread-1");
@@ -2492,17 +2529,20 @@ describe("dispatchReplyFromConfig", () => {
       conversationId: "C123",
     });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-acp-current");
-    const ensureSessionOptions = runtime.ensureSession.mock.calls[0]?.[0] as
+    const ensureSessionOptions = firstMockArg(runtime.ensureSession, "ensure session") as
       | { agent?: unknown; sessionKey?: unknown }
       | undefined;
     expect(ensureSessionOptions?.sessionKey).toBe(boundSessionKey);
     expect(ensureSessionOptions?.agent).toBe("opencode");
-    const runTurnOptions = runtime.runTurn.mock.calls[0]?.[0] as { text?: unknown } | undefined;
+    const runTurnOptions = firstMockArg(runtime.runTurn, "run turn") as
+      | { text?: unknown }
+      | undefined;
     expect(runTurnOptions?.text).toBe("continue");
     expect(replyResolver).not.toHaveBeenCalled();
-    const blockPayload = (dispatcher.sendBlockReply as Mock).mock.calls[0]?.[0] as
-      | ReplyPayload
-      | undefined;
+    const blockPayload = firstMockArg(
+      dispatcher.sendBlockReply as ReturnType<typeof vi.fn>,
+      "block reply",
+    ) as ReplyPayload | undefined;
     expect(blockPayload?.text).toBe("Bound ACP reply");
   });
 
@@ -2563,9 +2603,7 @@ describe("dispatchReplyFromConfig", () => {
       }
     }
     expect(blockTexts).toEqual(["What do you want to work on?"]);
-    const finalPayload = (dispatcher.sendFinalReply as Mock).mock.calls[0]?.[0] as
-      | ReplyPayload
-      | undefined;
+    const finalPayload = firstFinalReplyPayload(dispatcher);
     expect(finalPayload?.text).toBe("What do you want to work on?");
   });
 
@@ -2648,9 +2686,7 @@ describe("dispatchReplyFromConfig", () => {
     const normalizerOptions = replyMediaPathMocks.createReplyMediaPathNormalizer.mock
       .calls[0]?.[0] as { messageProvider?: unknown } | undefined;
     expect(normalizerOptions?.messageProvider).toBe("feishu");
-    const finalPayload = (dispatcher.sendFinalReply as Mock).mock.calls[0]?.[0] as
-      | ReplyPayload
-      | undefined;
+    const finalPayload = firstFinalReplyPayload(dispatcher);
     expect(finalPayload?.mediaUrl).toBe("/tmp/openclaw-media/normalized-tts.ogg");
     expect(finalPayload?.mediaUrls).toStrictEqual(["/tmp/openclaw-media/normalized-tts.ogg"]);
     expect(finalPayload?.audioAsVoice).toBe(true);
@@ -2696,7 +2732,9 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
 
-    const closeOptions = runtime.close.mock.calls[0]?.[0] as { reason?: unknown } | undefined;
+    const closeOptions = firstMockArg(runtime.close, "runtime close") as
+      | { reason?: unknown }
+      | undefined;
     expect(closeOptions?.reason).toBe("oneshot-complete");
   });
 
@@ -2804,9 +2842,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(firstToolResultPayload(dispatcher)?.text).toBe("Approval required.");
-    expect(
-      ((dispatcher.sendFinalReply as Mock).mock.calls[0]?.[0] as ReplyPayload | undefined)?.text,
-    ).toBe("done");
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("done");
   });
 
   it("suppresses local discord exec approval tool prompts when the native runtime is active", async () => {
@@ -2854,9 +2890,7 @@ describe("dispatchReplyFromConfig", () => {
       await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
       expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-      expect(
-        ((dispatcher.sendFinalReply as Mock).mock.calls[0]?.[0] as ReplyPayload | undefined)?.text,
-      ).toBe("done");
+      expect(firstFinalReplyPayload(dispatcher)?.text).toBe("done");
     } finally {
       await reporter.stop();
     }
@@ -2921,7 +2955,10 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    const [event, hookContext] = hookMocks.runner.runMessageReceived.mock.calls[0] as
+    const [event, hookContext] = firstMockCall(
+      hookMocks.runner.runMessageReceived,
+      "message received hook",
+    ) as
       | [
           {
             content?: unknown;
@@ -2982,7 +3019,10 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
-    const [event, hookContext] = hookMocks.runner.runMessageReceived.mock.calls[0] as
+    const [event, hookContext] = firstMockCall(
+      hookMocks.runner.runMessageReceived,
+      "message received hook",
+    ) as
       | [
           { content?: unknown; from?: unknown; metadata?: Record<string, unknown> },
           { accountId?: unknown; channelId?: unknown; conversationId?: unknown },
@@ -3008,9 +3048,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookEvent?.action).toBe("received");
     expect(internalHookEvent?.sessionKey).toBe("agent:main:hook-test");
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(
-      ((dispatcher.sendFinalReply as Mock).mock.calls[0]?.[0] as ReplyPayload | undefined)?.text,
-    ).toBe("core reply");
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("core reply");
   });
 
   it("emits internal message:received hook when a session key is available", async () => {
@@ -3030,7 +3068,10 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    const createHookCall = internalHookMocks.createInternalHookEvent.mock.calls[0] as
+    const createHookCall = firstMockCall(
+      internalHookMocks.createInternalHookEvent,
+      "internal hook event",
+    ) as
       | [
           unknown,
           unknown,
@@ -3090,9 +3131,10 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = async () => ({ text: "reply" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    const createHookCall = internalHookMocks.createInternalHookEvent.mock.calls[0] as
-      | [unknown, unknown, unknown, { content?: unknown; messageId?: unknown }]
-      | undefined;
+    const createHookCall = firstMockCall(
+      internalHookMocks.createInternalHookEvent,
+      "internal hook event",
+    ) as [unknown, unknown, unknown, { content?: unknown; messageId?: unknown }] | undefined;
     expect(createHookCall?.[0]).toBe("message");
     expect(createHookCall?.[1]).toBe("received");
     expect(createHookCall?.[2]).toBe("agent:main:discord:guild:123");
@@ -3135,9 +3177,10 @@ describe("dispatchReplyFromConfig", () => {
       state: "processing",
       reason: "message_start",
     });
-    const processedEvent = diagnosticMocks.logMessageProcessed.mock.calls[0]?.[0] as
-      | { channel?: unknown; outcome?: unknown; sessionKey?: unknown }
-      | undefined;
+    const processedEvent = firstMockArg(
+      diagnosticMocks.logMessageProcessed,
+      "message processed",
+    ) as { channel?: unknown; outcome?: unknown; sessionKey?: unknown } | undefined;
     expect(processedEvent?.channel).toBe("slack");
     expect(processedEvent?.outcome).toBe("completed");
     expect(processedEvent?.sessionKey).toBe("agent:main:main");
@@ -3578,9 +3621,10 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    const notice = (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
-      | ReplyPayload
-      | undefined;
+    const notice = firstMockArg(
+      dispatcher.sendToolResult as ReturnType<typeof vi.fn>,
+      "tool result",
+    ) as ReplyPayload | undefined;
     expect(notice?.text).toContain("is not currently loaded.");
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
@@ -4174,7 +4218,10 @@ describe("before_dispatch hook", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher });
 
-    const beforeDispatchCall = hookMocks.runner.runBeforeDispatch.mock.calls[0] as
+    const beforeDispatchCall = firstMockCall(
+      hookMocks.runner.runBeforeDispatch,
+      "before dispatch hook",
+    ) as
       | [
           {
             body?: unknown;
@@ -4196,7 +4243,7 @@ describe("before_dispatch hook", () => {
     expect(beforeDispatchCall?.[1]?.channelId).toBe("telegram");
     expect(beforeDispatchCall?.[1]?.senderId).toBe("signal:user:alice");
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = mocks.routeReply.mock.calls[0]?.[0] as
+    const routeCall = firstRouteReplyCall() as
       | { channel?: unknown; payload?: ReplyPayload; to?: unknown }
       | undefined;
     expect(routeCall?.channel).toBe("telegram");
@@ -4865,9 +4912,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(true);
-    expect((dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.text).toBe(
-      "visible direct reply",
-    );
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible direct reply");
   });
 
   it("uses harness defaults for direct source delivery when config is unset", async () => {
@@ -4927,9 +4972,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(true);
-    expect((dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.text).toBe(
-      "visible fallback",
-    );
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible fallback");
   });
 
   it("falls back to automatic group/channel delivery when group tools remove the message tool", async () => {
@@ -4963,9 +5006,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(true);
-    expect((dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.text).toBe(
-      "group policy fallback",
-    );
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("group policy fallback");
   });
 
   it("falls back when a channel precomputed message-tool-only delivery but the message tool is unavailable", async () => {
@@ -4991,9 +5032,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(true);
-    expect((dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.text).toBe(
-      "requested fallback",
-    );
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("requested fallback");
   });
 
   it("keeps native command replies visible in group/channel turns", async () => {
@@ -5020,9 +5059,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(true);
-    expect((dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.text).toBe(
-      "status reply",
-    );
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("status reply");
   });
 
   it("allows config to keep group/channel source delivery automatic", async () => {
@@ -5046,8 +5083,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(true);
-    expect((dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.text).toBe(
-      "final reply",
-    );
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("final reply");
   });
 });

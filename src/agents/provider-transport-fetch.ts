@@ -77,18 +77,20 @@ function sanitizeOpenAISdkSseResponse(
       },
       async pull(controller) {
         try {
-          const chunk = await reader?.read();
-          if (!chunk || chunk.done) {
-            buffer += decoder.decode();
-            const data = buffer.trim();
-            if (data) {
-              controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+          for (;;) {
+            const chunk = await reader?.read();
+            if (!chunk || chunk.done) {
+              buffer += decoder.decode();
+              const data = buffer.trim();
+              if (data) {
+                controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+              }
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+              return;
             }
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-            controller.close();
-            return;
+            buffer += decoder.decode(chunk.value, { stream: true });
           }
-          buffer += decoder.decode(chunk.value, { stream: true });
         } catch (error) {
           controller.error(error);
         }
@@ -118,12 +120,13 @@ function sanitizeOpenAISdkSseResponse(
   const enqueueSanitized = (
     controller: ReadableStreamDefaultController<Uint8Array>,
     text: string,
-  ) => {
+  ): number => {
+    let enqueued = 0;
     buffer += text;
     for (;;) {
       const boundary = findSseEventBoundary(buffer);
       if (!boundary) {
-        return;
+        return enqueued;
       }
       const block = buffer.slice(0, boundary.index);
       const separator = buffer.slice(boundary.index, boundary.index + boundary.length);
@@ -132,6 +135,7 @@ function sanitizeOpenAISdkSseResponse(
       // messages. Drop those malformed keepalive-style blocks before it parses.
       if (hasReadableSseData(block)) {
         controller.enqueue(encoder.encode(`${block}${separator}`));
+        enqueued += 1;
       }
     }
   };
@@ -142,20 +146,28 @@ function sanitizeOpenAISdkSseResponse(
     },
     async pull(controller) {
       try {
-        const chunk = await reader?.read();
-        if (!chunk || chunk.done) {
-          const tail = decoder.decode();
-          if (tail) {
-            enqueueSanitized(controller, tail);
+        for (;;) {
+          const chunk = await reader?.read();
+          if (!chunk || chunk.done) {
+            const tail = decoder.decode();
+            if (tail) {
+              enqueueSanitized(controller, tail);
+            }
+            if (buffer && hasReadableSseData(buffer)) {
+              controller.enqueue(encoder.encode(buffer));
+            }
+            buffer = "";
+            controller.close();
+            return;
           }
-          if (buffer && hasReadableSseData(buffer)) {
-            controller.enqueue(encoder.encode(buffer));
+          const enqueued = enqueueSanitized(
+            controller,
+            decoder.decode(chunk.value, { stream: true }),
+          );
+          if (enqueued > 0) {
+            return;
           }
-          buffer = "";
-          controller.close();
-          return;
         }
-        enqueueSanitized(controller, decoder.decode(chunk.value, { stream: true }));
       } catch (error) {
         controller.error(error);
       }
@@ -170,6 +182,17 @@ function sanitizeOpenAISdkSseResponse(
     statusText: response.statusText,
     headers: response.headers,
   });
+}
+
+function shouldSanitizeOpenAISdkSseResponse(model: Model<Api>): boolean {
+  if (model.provider !== "openai") {
+    return true;
+  }
+  try {
+    return new URL(model.baseUrl).hostname.toLowerCase() !== "api.openai.com";
+  } catch {
+    return true;
+  }
 }
 
 async function requestBodyHasStreamTrue(
@@ -187,12 +210,7 @@ async function requestBodyHasStreamTrue(
   }
 
   let text: string | undefined;
-  if (request) {
-    text = await request
-      .clone()
-      .text()
-      .catch(() => undefined);
-  } else if (typeof init?.body === "string") {
+  if (typeof init?.body === "string") {
     text = init.body;
   }
   if (!text) {
@@ -534,7 +552,7 @@ export function buildGuardedModelFetch(
       result.refreshTimeout,
       localServiceLease,
     );
-    return options?.sanitizeSse === false
+    return options?.sanitizeSse === false || !shouldSanitizeOpenAISdkSseResponse(model)
       ? response
       : sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
   };

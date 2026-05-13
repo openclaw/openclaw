@@ -205,14 +205,14 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalled();
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(1);
     const options = mockParams(
       hoisted.createOpenClawCodingToolsMock,
       0,
       "createOpenClawCodingTools options",
     );
     expect(options.includeToolSearchControls).toBe(true);
-    expect(options.toolSearchCatalogRef).toBeTruthy();
+    expect(options.toolSearchCatalogRef).toEqual({});
   });
 
   it("sends transcriptPrompt visibly and queues runtime context as hidden custom context", async () => {
@@ -1045,13 +1045,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       prePromptMessageCount: 1,
     });
 
-    expect(ingest).toHaveBeenCalled();
-    expect(
-      ingest.mock.calls.every((call) => {
-        const params = call[0];
-        return params.sessionKey === sessionKey;
-      }),
-    ).toBe(true);
+    expect(ingest).toHaveBeenCalledTimes(1);
+    expect(ingest).toHaveBeenCalledWith({
+      message: doneMessage,
+      sessionId: embeddedSessionId,
+      sessionKey,
+    });
   });
 
   it("forwards silentExpected to the embedded subscription", () => {
@@ -1094,7 +1093,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
 
     await finalizeTurn(sessionKey, createTestContextEngine({ bootstrap, assemble, afterTurn }));
 
-    expect(afterTurn).toHaveBeenCalled();
+    expectCalledWithSessionKey(afterTurn, sessionKey);
     expect(
       hoisted.runContextEngineMaintenanceMock.mock.calls.some(
         ([params]) => requireRecord(params, "maintenance params").reason === "turn",
@@ -1294,7 +1293,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       prePromptMessageCount: 1,
     });
 
-    expect(ingestBatch).toHaveBeenCalled();
+    expectCalledWithSessionKey(ingestBatch, sessionKey);
     expect(
       hoisted.runContextEngineMaintenanceMock.mock.calls.some(
         ([params]) => requireRecord(params, "maintenance params").reason === "turn",

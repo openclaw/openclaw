@@ -260,7 +260,7 @@ jobs:
           while true; do
             blockers="$(
               for workflow in mantis-telegram-desktop-proof.yml mantis-telegram-live.yml; do
-                gh run list --workflow "$workflow" --limit 100 --json databaseId,status,createdAt,url \
+                gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --limit 100 --json databaseId,status,createdAt,url \
                   | jq -r \
                     --argjson current_id "$GITHUB_RUN_ID" \
                     --arg current_created "$current_created" \
