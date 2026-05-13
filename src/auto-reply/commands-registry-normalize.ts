@@ -83,7 +83,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
   const textAliasMap = getTextAliasMap();
   const exact = textAliasMap.get(lowered);
   if (exact) {
-    return exact.acceptsArgs ? withMultilineTail(exact.canonical) : exact.canonical;
+    return exact.key === "skill" ? withMultilineTail(exact.canonical) : exact.canonical;
   }
 
   const tokenMatch = commandBody.match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
@@ -97,13 +97,13 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     return withMultilineTail(commandBody);
   }
   if (rest && !tokenSpec.acceptsArgs) {
-    return withMultilineTail(commandBody);
+    return commandBody;
   }
   const normalizedRest = rest?.trimStart();
   const normalizedHead = normalizedRest
     ? `${tokenSpec.canonical} ${normalizedRest}`
     : tokenSpec.canonical;
-  return tokenSpec.acceptsArgs ? withMultilineTail(normalizedHead) : normalizedHead;
+  return tokenSpec.key === "skill" ? withMultilineTail(normalizedHead) : normalizedHead;
 }
 
 export function getCommandDetection(_cfg?: OpenClawConfig): CommandDetection {

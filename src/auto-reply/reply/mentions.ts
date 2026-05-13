@@ -178,7 +178,10 @@ export function matchesMentionWithExplicit(params: {
   return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
 }
 
-export function stripStructuralPrefixes(text: string): string {
+export function stripStructuralPrefixes(
+  text: string,
+  options?: { preserveLineBreaks?: boolean },
+): string {
   if (!text) {
     return "";
   }
@@ -188,12 +191,18 @@ export function stripStructuralPrefixes(text: string): string {
     ? text.slice(text.indexOf(CURRENT_MESSAGE_MARKER) + CURRENT_MESSAGE_MARKER.length).trimStart()
     : text;
 
-  return afterMarker
+  const cleaned = afterMarker
     .replace(/\[[^\]]+\]\s*/g, "")
-    .replace(/^[ \t]*[A-Za-z0-9+()\-_. ]+:\s*/gm, "")
-    .replace(/\\n/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/^[ \t]*[A-Za-z0-9+()\-_. ]+:\s*/gm, "");
+  if (options?.preserveLineBreaks) {
+    return cleaned
+      .replace(/\\n/g, "\n")
+      .replace(/[^\S\n]+/g, " ")
+      .replace(/ *\n */g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+  return cleaned.replace(/\\n/g, " ").replace(/\s+/g, " ").trim();
 }
 
 export function stripMentions(

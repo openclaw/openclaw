@@ -234,19 +234,18 @@ describe("commands registry", () => {
     expect(requireNativeSpec(listNativeCommandSpecs(), "side").acceptsArgs).toBe(true);
   });
 
-  it("preserves multiline args while normalizing arg-accepting command heads", () => {
-    expect(normalizeCommandBody("/side\nfirst line\nsecond line")).toBe(
-      "/btw\nfirst line\nsecond line",
-    );
-    expect(normalizeCommandBody("/side first line\nsecond line")).toBe(
-      "/btw first line\nsecond line",
-    );
+  it("preserves multiline args for skill command heads", () => {
     expect(normalizeCommandBody("/skill demo-skill\nfirst line\nsecond line")).toBe(
       "/skill demo-skill\nfirst line\nsecond line",
     );
     expect(normalizeCommandBody("/demo_skill\nfirst line\nsecond line")).toBe(
       "/demo_skill\nfirst line\nsecond line",
     );
+  });
+
+  it("keeps non-skill alias normalization single-line", () => {
+    expect(normalizeCommandBody("/side\nfirst line\nsecond line")).toBe("/btw");
+    expect(normalizeCommandBody("/side first line\nsecond line")).toBe("/btw first line");
   });
 
   it("keeps multiline args after telegram-style bot mention cleanup", () => {
