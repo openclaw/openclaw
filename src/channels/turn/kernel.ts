@@ -3,7 +3,6 @@ import { clearHistoryEntriesIfEnabled } from "../../auto-reply/reply/history.js"
 import type {
   PluginHookBeforeRouteInboundMessageContext,
   PluginHookBeforeRouteInboundMessageEvent,
-  PluginHookBeforeRouteInboundMessageResult,
 } from "../../plugins/hook-message.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";

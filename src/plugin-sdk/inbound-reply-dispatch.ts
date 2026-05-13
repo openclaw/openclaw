@@ -22,7 +22,6 @@ import type { PreparedChannelTurn, RunChannelTurnParams } from "../channels/turn
 import type {
   PluginHookBeforeRouteInboundMessageContext,
   PluginHookBeforeRouteInboundMessageEvent,
-  PluginHookBeforeRouteInboundMessageResult,
 } from "../plugins/hook-message.types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 export type { ChannelTurnRecordOptions } from "../channels/turn/types.js";
