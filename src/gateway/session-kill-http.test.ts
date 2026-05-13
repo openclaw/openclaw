@@ -130,7 +130,7 @@ describe("POST /sessions/:sessionKey/kill", () => {
     expect(response.status).toBe(401);
   });
 
-  it("returns 404 when the session key is not in the session store", async () => {
+  it("returns 404 when the session key has no SQLite session row", async () => {
     authMock.mockResolvedValueOnce({ ok: true, method: "trusted-proxy" });
     loadSessionEntryMock.mockReturnValue({ entry: undefined });
 

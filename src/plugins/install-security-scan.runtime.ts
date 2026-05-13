@@ -344,7 +344,7 @@ const DEFAULT_PACKAGE_MANIFEST_TRAVERSAL_LIMITS: PackageManifestTraversalLimits 
   maxDirectories: 10_000,
   maxManifests: 10_000,
 };
-const DEFAULT_INSTALLED_PACKAGE_CODE_SCAN_MAX_FILES = 10_000;
+const DEFAULT_INSTALLED_PACKAGE_CODE_SCAN_MAX_FILES = 25_000;
 
 function readPositiveIntegerEnv(name: string, fallback: number): number {
   const rawValue = process.env[name];

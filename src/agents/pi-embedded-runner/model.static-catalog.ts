@@ -1,4 +1,3 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planManifestModelCatalogRows } from "../../model-catalog/manifest-planner.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/types.js";
@@ -7,6 +6,7 @@ import {
   loadManifestMetadataSnapshot,
 } from "../../plugins/manifest-contract-eligibility.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
+import type { Api, Model } from "../pi-ai-contract.js";
 import { normalizeProviderId } from "../provider-id.js";
 
 function rowMatchesModel(params: {

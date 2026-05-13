@@ -1,5 +1,4 @@
-import fs from "node:fs/promises";
-import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 /** Default cooldown between reflections per session (5 minutes). */
 export const DEFAULT_COOLDOWN_MS = 300_000;
@@ -18,25 +17,21 @@ function encodeSessionKey(sessionKey: string): string {
   return Buffer.from(sessionKey, "utf8").toString("base64url");
 }
 
-function resolveLearningsFilePath(storePath: string, sessionKey: string): string {
-  return `${storePath}/${encodeSessionKey(sessionKey)}.learnings.json`;
+export function resolveLearningStoreKey(sessionKey: string): string {
+  return encodeSessionKey(sessionKey);
 }
 
-function resolveLegacyLearningsFilePath(storePath: string, sessionKey: string): string {
-  return `${storePath}/${legacySanitizeSessionKey(sessionKey)}.learnings.json`;
+export function resolveLegacyLearningStoreKey(sessionKey: string): string {
+  return legacySanitizeSessionKey(sessionKey);
 }
 
-async function readLearningsFile(
-  filePath: string,
-): Promise<{ exists: boolean; learnings: string[] }> {
-  try {
-    const content = await fs.readFile(filePath, "utf-8");
-    const parsed = JSON.parse(content);
-    return { exists: true, learnings: Array.isArray(parsed) ? parsed : [] };
-  } catch {
-    return { exists: false, learnings: [] };
-  }
-}
+const LEARNINGS_STORE = createPluginStateKeyedStore<{ learnings: string[]; updatedAt: number }>(
+  "msteams",
+  {
+    namespace: "feedback-learnings",
+    maxEntries: 50_000,
+  },
+);
 
 /** Prune expired cooldown entries to prevent unbounded memory growth. */
 function pruneExpiredCooldowns(cooldownMs: number): void {
@@ -72,42 +67,36 @@ export function clearReflectionCooldowns(): void {
   lastReflectionBySession.clear();
 }
 
-/** Store a learning derived from feedback reflection in a session companion file. */
+/** Store a learning derived from feedback reflection in plugin state. */
 export async function storeSessionLearning(params: {
-  storePath: string;
   sessionKey: string;
   learning: string;
 }): Promise<void> {
-  const learningsFile = resolveLearningsFilePath(params.storePath, params.sessionKey);
-  const legacyLearningsFile = resolveLegacyLearningsFilePath(params.storePath, params.sessionKey);
-  const { exists, learnings: existingLearnings } = await readLearningsFile(learningsFile);
-  const { learnings: legacyLearnings } =
-    exists || legacyLearningsFile === learningsFile
-      ? { learnings: [] as string[] }
-      : await readLearningsFile(legacyLearningsFile);
-
-  let learnings = exists ? existingLearnings : legacyLearnings;
+  const key = resolveLearningStoreKey(params.sessionKey);
+  const legacyKey = resolveLegacyLearningStoreKey(params.sessionKey);
+  const existing =
+    (await LEARNINGS_STORE.lookup(key)) ??
+    (legacyKey === key ? undefined : await LEARNINGS_STORE.lookup(legacyKey));
+  let learnings = existing?.learnings ?? [];
 
   learnings.push(params.learning);
   if (learnings.length > 10) {
     learnings = learnings.slice(-10);
   }
 
-  await writeJsonFileAtomically(learningsFile, learnings);
-  if (!exists && legacyLearningsFile !== learningsFile) {
-    await fs.rm(legacyLearningsFile, { force: true }).catch(() => undefined);
+  await LEARNINGS_STORE.register(key, { learnings, updatedAt: Date.now() });
+  if (legacyKey !== key) {
+    await LEARNINGS_STORE.delete(legacyKey);
   }
 }
 
 /** Load session learnings for injection into extraSystemPrompt. */
-export async function loadSessionLearnings(
-  storePath: string,
-  sessionKey: string,
-): Promise<string[]> {
-  const learningsFile = resolveLearningsFilePath(storePath, sessionKey);
-  const { exists, learnings } = await readLearningsFile(learningsFile);
-  if (exists) {
-    return learnings;
-  }
-  return (await readLearningsFile(resolveLegacyLearningsFilePath(storePath, sessionKey))).learnings;
+export async function loadSessionLearnings(sessionKey: string): Promise<string[]> {
+  const key = resolveLearningStoreKey(sessionKey);
+  const legacyKey = resolveLegacyLearningStoreKey(sessionKey);
+  return (
+    (await LEARNINGS_STORE.lookup(key))?.learnings ??
+    (legacyKey === key ? undefined : (await LEARNINGS_STORE.lookup(legacyKey))?.learnings) ??
+    []
+  );
 }

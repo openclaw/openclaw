@@ -58,7 +58,6 @@ function createRuntimeHarness() {
         })),
       },
       session: {
-        resolveStorePath: vi.fn(() => "/tmp/nostr-session-store"),
         readSessionUpdatedAt: vi.fn(() => undefined),
         recordInboundSession,
       },
@@ -102,11 +101,11 @@ async function startGatewayHarness(params: {
 }
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls.at(callIndex);
+  const call = mock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`Expected mock call ${callIndex}`);
   }
-  return call.at(argIndex);
+  return call[argIndex];
 }
 
 describe("nostr inbound gateway path", () => {
@@ -149,7 +148,7 @@ describe("nostr inbound gateway path", () => {
         config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
       }),
       cfg: {
-        session: { store: { type: "jsonl" } },
+        session: {},
         commands: { useAccessGroups: true },
       } as never,
     });

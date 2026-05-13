@@ -34,11 +34,11 @@ openclaw hooks enable bootstrap-extra-files
 
 ### 📝 command-logger
 
-Logs all command events to a centralized audit file.
+Logs all command events to the shared SQLite state database.
 
 **Events**: `command` (all commands)
-**What it does**: Appends JSONL entries to command log file.
-**Output**: `~/.openclaw/logs/commands.log`
+**What it does**: Inserts command audit rows into `command_log_entries`.
+**Output**: `~/.openclaw/state/openclaw.sqlite`
 
 **Enable**:
 

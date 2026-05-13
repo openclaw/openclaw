@@ -64,7 +64,7 @@ describe("createSessionAndRefresh", () => {
       if (method === "sessions.list") {
         return {
           ts: 2,
-          path: "(multiple)",
+          databasePath: "(multiple)",
           count: 1,
           defaults: {},
           sessions: [{ key: "agent:main:dashboard:abc", kind: "direct", updatedAt: 2 }],
@@ -142,11 +142,9 @@ describe("deleteSessionsAndRefresh", () => {
     expect(request).toHaveBeenCalledTimes(3);
     expect(request).toHaveBeenNthCalledWith(1, "sessions.delete", {
       key: "key-a",
-      deleteTranscript: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.delete", {
       key: "key-b",
-      deleteTranscript: true,
     });
     expect(request).toHaveBeenNthCalledWith(3, "sessions.list", {
       includeGlobal: true,
@@ -219,7 +217,7 @@ describe("deleteSessionsAndRefresh", () => {
       if (method === "sessions.list") {
         return {
           ts: 2,
-          path: "(multiple)",
+          databasePath: "(multiple)",
           count: 0,
           defaults: {},
           sessions: [],
@@ -260,7 +258,7 @@ describe("loadSessions", () => {
       }
       return {
         ts: 1,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 2,
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [
@@ -292,7 +290,7 @@ describe("loadSessions", () => {
       }
       return {
         ts: 1,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 2,
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [
@@ -325,7 +323,7 @@ describe("loadSessions", () => {
       }
       return {
         ts: 1,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 2,
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [
@@ -357,7 +355,7 @@ describe("loadSessions", () => {
       }
       return {
         ts: 1,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 0,
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [],
@@ -386,7 +384,7 @@ describe("loadSessions", () => {
       }
       return {
         ts: 1,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 0,
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [],
@@ -453,7 +451,7 @@ describe("loadSessions", () => {
         await firstBlocker;
         return {
           ts: 1,
-          path: "(multiple)",
+          databasePath: "(multiple)",
           count: 0,
           defaults: {},
           sessions: [],
@@ -461,7 +459,7 @@ describe("loadSessions", () => {
       }
       return {
         ts: 2,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 0,
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [],
@@ -501,7 +499,7 @@ describe("loadSessions", () => {
       if (method === "sessions.list") {
         return {
           ts: 1,
-          path: "(multiple)",
+          databasePath: "(multiple)",
           count: 1,
           defaults: {},
           sessions: [
@@ -539,7 +537,7 @@ describe("loadSessions", () => {
       sessionsExpandedCheckpointKey: "agent:main:main",
       sessionsResult: {
         ts: 0,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 1,
         defaults: {},
         sessions: [
@@ -589,7 +587,7 @@ describe("applySessionsChangedEvent", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
         ts: 1,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 2,
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [
@@ -616,7 +614,7 @@ describe("applySessionsChangedEvent", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
         ts: 1,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 0,
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [],
@@ -637,7 +635,7 @@ describe("applySessionsChangedEvent", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
         ts: 1,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 1,
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 1 }],
@@ -660,7 +658,7 @@ describe("applySessionsChangedEvent", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
         ts: 1,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 1,
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [{ key: "agent:main:subagent:done", kind: "direct", updatedAt: 1 }],
@@ -683,7 +681,7 @@ describe("applySessionsChangedEvent", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
         ts: 1,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 1,
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [{ key: "agent:main:subagent:done", kind: "direct", updatedAt: 1 }],
@@ -707,7 +705,7 @@ describe("applySessionsChangedEvent", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
         ts: 1,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 1,
         defaults: { modelProvider: "openai", model: "gpt-5.4", contextTokens: 200_000 },
         sessions: [
@@ -746,7 +744,7 @@ describe("applySessionsChangedEvent", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
         ts: 1,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 1,
         defaults: { modelProvider: null, model: null, contextTokens: 200_000 },
         sessions: [
@@ -778,7 +776,7 @@ describe("applySessionsChangedEvent", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
         ts: 1,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 2,
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [
@@ -813,7 +811,7 @@ describe("applySessionsChangedEvent", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
         ts: 1,
-        path: "(multiple)",
+        databasePath: "(multiple)",
         count: 0,
         defaults: { modelProvider: null, model: null, contextTokens: null },
         sessions: [],

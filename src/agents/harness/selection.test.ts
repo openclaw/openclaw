@@ -1,6 +1,6 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { Api, Model } from "../pi-ai-contract.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -45,7 +45,6 @@ function createAttemptParams(config?: OpenClawConfig): EmbeddedRunAttemptParams 
     prompt: "hello",
     sessionId: "session-1",
     runId: "run-1",
-    sessionFile: "/tmp/session.jsonl",
     workspaceDir: "/tmp/workspace",
     timeoutMs: 5_000,
     provider: "codex",
@@ -442,7 +441,6 @@ describe("selectAgentHarness", () => {
       maybeCompactAgentHarnessSession({
         sessionId: "session-1",
         sessionKey: "agent:main:main",
-        sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp/workspace",
         provider: "openai",
         model: "gpt-5.4",

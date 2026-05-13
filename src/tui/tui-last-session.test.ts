@@ -2,12 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   buildTuiLastSessionScopeKey,
+  clearTuiLastSessionPointers,
   isHeartbeatLikeTuiSession,
   readTuiLastSessionKey,
   resolveRememberedTuiSessionKey,
-  resolveTuiLastSessionStatePath,
   writeTuiLastSessionKey,
 } from "./tui-last-session.js";
 
@@ -19,7 +20,12 @@ async function makeTempStateDir() {
   return dir;
 }
 
+function legacyTuiLastSessionStatePath(stateDir: string): string {
+  return path.join(stateDir, "tui", "last-session.json");
+}
+
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -39,8 +45,103 @@ describe("tui last session state", () => {
     });
 
     await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe("agent:main:tui-123");
-    const raw = await fs.readFile(resolveTuiLastSessionStatePath(stateDir), "utf8");
-    expect(raw).not.toContain("127.0.0.1");
+    await expect(fs.access(legacyTuiLastSessionStatePath(stateDir))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("restores from SQLite", async () => {
+    const stateDir = await makeTempStateDir();
+    const scopeKey = buildTuiLastSessionScopeKey({
+      connectionUrl: "local",
+      agentId: "main",
+      sessionScope: "per-sender",
+    });
+
+    await writeTuiLastSessionKey({
+      scopeKey,
+      sessionKey: "agent:main:tui-sqlite",
+      stateDir,
+    });
+    await expect(fs.access(legacyTuiLastSessionStatePath(stateDir))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe(
+      "agent:main:tui-sqlite",
+    );
+  });
+
+  it("clears stale pointers from SQLite", async () => {
+    const stateDir = await makeTempStateDir();
+    const staleScope = buildTuiLastSessionScopeKey({
+      connectionUrl: "stale",
+      agentId: "main",
+      sessionScope: "per-sender",
+    });
+    const liveScope = buildTuiLastSessionScopeKey({
+      connectionUrl: "live",
+      agentId: "main",
+      sessionScope: "per-sender",
+    });
+    await writeTuiLastSessionKey({
+      scopeKey: staleScope,
+      sessionKey: "agent:main:main",
+      stateDir,
+    });
+    await writeTuiLastSessionKey({
+      scopeKey: liveScope,
+      sessionKey: "agent:main:tui-live",
+      stateDir,
+    });
+
+    await expect(
+      clearTuiLastSessionPointers({
+        stateDir,
+        sessionKeys: new Set(["agent:main:main"]),
+      }),
+    ).resolves.toBe(1);
+
+    await expect(readTuiLastSessionKey({ scopeKey: staleScope, stateDir })).resolves.toBeNull();
+    await expect(readTuiLastSessionKey({ scopeKey: liveScope, stateDir })).resolves.toBe(
+      "agent:main:tui-live",
+    );
+  });
+
+  it("clears stale pointers from SQLite only", async () => {
+    const stateDir = await makeTempStateDir();
+    const staleScope = buildTuiLastSessionScopeKey({
+      connectionUrl: "stale",
+      agentId: "main",
+      sessionScope: "per-sender",
+    });
+    const liveScope = buildTuiLastSessionScopeKey({
+      connectionUrl: "live",
+      agentId: "main",
+      sessionScope: "per-sender",
+    });
+    await writeTuiLastSessionKey({
+      scopeKey: staleScope,
+      sessionKey: "agent:main:main",
+      stateDir,
+    });
+    await writeTuiLastSessionKey({
+      scopeKey: liveScope,
+      sessionKey: "agent:main:tui-live",
+      stateDir,
+    });
+
+    await expect(
+      clearTuiLastSessionPointers({
+        stateDir,
+        sessionKeys: new Set(["agent:main:main"]),
+      }),
+    ).resolves.toBe(1);
+
+    await expect(readTuiLastSessionKey({ scopeKey: staleScope, stateDir })).resolves.toBeNull();
+    await expect(readTuiLastSessionKey({ scopeKey: liveScope, stateDir })).resolves.toBe(
+      "agent:main:tui-live",
+    );
   });
 
   it("restores only a remembered session that still belongs to the current agent", () => {
@@ -97,11 +198,11 @@ describe("tui last session state", () => {
     ).toBeNull();
   });
 
-  it("does not restore heartbeat-origin sessions when resolving a remembered key", () => {
+  it("does not restore heartbeat sessions when resolving a remembered key", () => {
     const sessions = [
       {
         key: "agent:main:main",
-        origin: { provider: "heartbeat", surface: "heartbeat" },
+        deliveryContext: { channel: "heartbeat", to: "main" },
       },
       { key: "agent:main:tui-123" },
     ];

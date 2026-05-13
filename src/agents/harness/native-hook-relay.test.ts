@@ -1,10 +1,10 @@
-import { statSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
+import { upsertSessionEntry } from "../../config/sessions/store.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -14,6 +14,11 @@ import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
+  restoreStateDirEnv,
+  setStateDirEnv,
+  snapshotStateDirEnv,
+} from "../../test-helpers/state-dir-env.js";
+import {
   __testing,
   buildNativeHookRelayCommand,
   invokeNativeHookRelay,
@@ -21,11 +26,28 @@ import {
   registerNativeHookRelay,
 } from "./native-hook-relay.js";
 
-afterEach(() => {
+let stateEnvSnapshot: ReturnType<typeof snapshotStateDirEnv> | undefined;
+let testStateRoot: string | undefined;
+
+beforeEach(async () => {
+  stateEnvSnapshot = snapshotStateDirEnv();
+  testStateRoot = await fs.mkdtemp(path.join(tmpdir(), "openclaw-native-relay-state-"));
+  setStateDirEnv(path.join(testStateRoot, "state"));
+});
+
+afterEach(async () => {
   vi.useRealTimers();
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
   __testing.clearNativeHookRelaysForTests();
+  if (stateEnvSnapshot) {
+    restoreStateDirEnv(stateEnvSnapshot);
+    stateEnvSnapshot = undefined;
+  }
+  if (testStateRoot) {
+    await fs.rm(testStateRoot, { recursive: true, force: true });
+    testStateRoot = undefined;
+  }
 });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -173,7 +195,7 @@ describe("native hook relay registry", () => {
     });
   });
 
-  it("keeps direct bridge registry files private and loopback-only", async () => {
+  it("keeps direct bridge records in SQLite and loopback-only", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
       relayId: "codex-private-bridge-session",
@@ -183,20 +205,11 @@ describe("native hook relay registry", () => {
     });
 
     const record = await waitForNativeHookRelayBridgeRecord(relay.relayId);
-    const bridgeDir = __testing.getNativeHookRelayBridgeDirForTests();
-    const registryPath = __testing.getNativeHookRelayBridgeRegistryPathForTests(relay.relayId);
-    expect(statSync(bridgeDir).mode & 0o077).toBe(0);
-    expect(statSync(registryPath).mode & 0o077).toBe(0);
-
-    writeFileSync(
-      registryPath,
-      `${JSON.stringify({
-        ...record,
-        hostname: "192.0.2.1",
-        expiresAtMs: Date.now() + 10_000,
-      })}\n`,
-      { mode: 0o600 },
-    );
+    __testing.setNativeHookRelayBridgeRecordForTests(relay.relayId, {
+      ...record,
+      hostname: "192.0.2.1",
+      expiresAtMs: Date.now() + 10_000,
+    });
 
     await expect(
       invokeNativeHookRelayBridge({
@@ -232,15 +245,11 @@ describe("native hook relay registry", () => {
 
     const firstRecord = await waitForNativeHookRelayBridgeRecord(first.relayId);
     await waitForNativeHookRelayBridgeRecord(second.relayId);
-    writeFileSync(
-      __testing.getNativeHookRelayBridgeRegistryPathForTests(second.relayId),
-      `${JSON.stringify({
-        ...firstRecord,
-        relayId: second.relayId,
-        expiresAtMs: Date.now() + 10_000,
-      })}\n`,
-      { mode: 0o600 },
-    );
+    __testing.setNativeHookRelayBridgeRecordForTests(second.relayId, {
+      ...firstRecord,
+      relayId: second.relayId,
+      expiresAtMs: Date.now() + 10_000,
+    });
 
     await expect(
       invokeNativeHookRelayBridge({
@@ -279,16 +288,12 @@ describe("native hook relay registry", () => {
       if (!address || typeof address === "string") {
         throw new Error("test bridge server address unavailable");
       }
-      writeFileSync(
-        __testing.getNativeHookRelayBridgeRegistryPathForTests(relay.relayId),
-        `${JSON.stringify({
-          ...record,
-          port: address.port,
-          token: "test-token",
-          expiresAtMs: Date.now() + 10_000,
-        })}\n`,
-        { mode: 0o600 },
-      );
+      __testing.setNativeHookRelayBridgeRecordForTests(relay.relayId, {
+        ...record,
+        port: address.port,
+        token: "test-token",
+        expiresAtMs: Date.now() + 10_000,
+      });
 
       await expect(
         invokeNativeHookRelayBridge({
@@ -691,8 +696,8 @@ describe("native hook relay registry", () => {
 
   it("passes config to trusted policies for native pre-tool session extension reads", async () => {
     const stateDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-native-relay-policy-"));
-    const storePath = path.join(stateDir, "sessions.json");
-    const config = { session: { store: storePath } };
+    const config = { session: {} };
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const seen: unknown[] = [];
     const registry = createEmptyPluginRegistry();
     registry.sessionExtensions = [
@@ -727,11 +732,14 @@ describe("native hook relay registry", () => {
     ];
     setActivePluginRegistry(registry);
     try {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:session-1"] = {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      upsertSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:session-1",
+        entry: {
           sessionId: "session-1",
           updatedAt: Date.now(),
-        } as SessionEntry;
+        } satisfies SessionEntry,
       });
       const patchResult = await patchPluginSessionExtension({
         cfg: config as never,
@@ -773,6 +781,11 @@ describe("native hook relay registry", () => {
       });
       expect(seen).toEqual([{ block: true }]);
     } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
@@ -1135,7 +1148,6 @@ describe("native hook relay registry", () => {
         session_id: "codex-session-1",
         turn_id: "turn-1",
         cwd: "/repo",
-        transcript_path: "/tmp/session.jsonl",
         model: "gpt-5.4",
         permission_mode: "workspace-write",
         stop_hook_active: true,
@@ -1160,10 +1172,10 @@ describe("native hook relay registry", () => {
       provider: "codex",
       model: "gpt-5.4",
       cwd: "/repo",
-      transcriptPath: "/tmp/session.jsonl",
       stopHookActive: true,
       lastAssistantMessage: "done",
     });
+    expect(event.transcriptPath).toBeUndefined();
     const context = getMockCallArg(beforeAgentFinalize, 0, 1, "before finalize context");
     expectRecordFields(context, {
       agentId: "agent-1",

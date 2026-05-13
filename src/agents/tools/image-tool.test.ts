@@ -1,16 +1,22 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import type {
   ImageDescriptionRequest,
   ImagesDescriptionRequest,
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import {
+  loadPersistedAuthProfileStore,
+  savePersistedAuthProfileSecretsStore,
+} from "../auth-profiles/persisted.js";
+import type { AuthProfileSecretsStore } from "../auth-profiles/types.js";
 import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
@@ -98,21 +104,13 @@ vi.mock("../auth-profiles.js", () => ({
     if (!agentDir) {
       return { version: 1, profiles: {} };
     }
-    const pathname = path.join(agentDir, "auth-profiles.json");
-    try {
-      return JSON.parse(fsSync.readFileSync(pathname, "utf8")) as {
-        version?: number;
-        profiles?: Record<string, { provider?: string }>;
-      };
-    } catch {
-      return { version: 1, profiles: {} };
-    }
+    return loadPersistedAuthProfileStore(agentDir) ?? { version: 1, profiles: {} };
   },
   hasAnyAuthProfileStoreSource: (agentDir?: string) => {
     if (!agentDir) {
       return false;
     }
-    return fsSync.existsSync(path.join(agentDir, "auth-profiles.json"));
+    return Boolean(loadPersistedAuthProfileStore(agentDir));
   },
   listProfilesForProvider: (
     store: { profiles?: Record<string, { provider?: string }> },
@@ -168,13 +166,9 @@ vi.mock("../openclaw-tools.js", async () => {
   };
 });
 
-async function writeAuthProfiles(agentDir: string, profiles: unknown) {
+async function writeAuthProfiles(agentDir: string, profiles: AuthProfileSecretsStore) {
   await fs.mkdir(agentDir, { recursive: true });
-  await fs.writeFile(
-    path.join(agentDir, "auth-profiles.json"),
-    `${JSON.stringify(profiles, null, 2)}\n`,
-    "utf8",
-  );
+  savePersistedAuthProfileSecretsStore(profiles, agentDir);
 }
 
 async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenClawCodingToolsArgs) {
@@ -1768,15 +1762,18 @@ describe("image tool managed inbound media", () => {
     run: (params: { stateDir: string; mediaId: string; mediaPath: string }) => Promise<void>,
   ) {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-managed-inbound-"));
-    const inboundDir = path.join(stateDir, "media", "inbound");
-    const mediaId = "claim-check-test.png";
-    const mediaPath = path.join(inboundDir, mediaId);
-    await fs.mkdir(inboundDir, { recursive: true });
-    await fs.writeFile(mediaPath, Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const saved = await saveMediaBuffer(
+      Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      "image/png",
+      "inbound",
+      undefined,
+      "claim-check-test.png",
+    );
     try {
-      await run({ stateDir, mediaId, mediaPath });
+      await run({ stateDir, mediaId: saved.id, mediaPath: saved.path });
     } finally {
+      closeOpenClawStateDatabaseForTest();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   }

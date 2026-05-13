@@ -9,10 +9,6 @@ export function resolveCanonicalRootMemoryPath(workspaceDir: string): string {
   return path.join(workspaceDir, CANONICAL_ROOT_MEMORY_FILENAME);
 }
 
-export function resolveLegacyRootMemoryPath(workspaceDir: string): string {
-  return path.join(workspaceDir, LEGACY_ROOT_MEMORY_FILENAME);
-}
-
 export function resolveRootMemoryRepairDir(workspaceDir: string): string {
   return path.join(workspaceDir, ".openclaw-repair", "root-memory");
 }

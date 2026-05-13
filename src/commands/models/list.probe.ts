@@ -24,10 +24,6 @@ import {
   parseModelRef,
 } from "../../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import {
-  resolveSessionTranscriptPath,
-  resolveSessionTranscriptsDirForAgent,
-} from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
@@ -69,7 +65,7 @@ export type AuthProbeResult = {
   model?: string;
   profileId?: string;
   label: string;
-  source: "profile" | "env" | "models.json";
+  source: "profile" | "env" | "model_catalog";
   mode?: string;
   status: AuthProbeStatus;
   reasonCode?: AuthProbeReasonCode;
@@ -82,7 +78,7 @@ type AuthProbeTarget = {
   model?: { provider: string; model: string } | null;
   profileId?: string;
   label: string;
-  source: "profile" | "env" | "models.json";
+  source: "profile" | "env" | "model_catalog";
   mode?: string;
 };
 
@@ -430,13 +426,13 @@ export async function buildProbeTargets(params: {
       config: cfg,
       workspaceDir,
     });
-    const hasUsableModelsJsonKey = hasUsableCustomProviderApiKey(cfg, providerKey);
-    if (!envKey && !hasUsableModelsJsonKey) {
+    const hasUsableModelCatalogKey = hasUsableCustomProviderApiKey(cfg, providerKey);
+    if (!envKey && !hasUsableModelCatalogKey) {
       continue;
     }
 
-    const label = envKey ? "env" : "models.json";
-    const source = envKey ? "env" : "models.json";
+    const label = envKey ? "env" : "model catalog";
+    const source = envKey ? "env" : "model_catalog";
     const mode = envKey?.source.includes("OAUTH_TOKEN") ? "oauth" : "api_key";
 
     if (!model) {
@@ -470,12 +466,11 @@ async function probeTarget(params: {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
-  sessionDir: string;
   target: AuthProbeTarget;
   timeoutMs: number;
   maxTokens: number;
 }): Promise<AuthProbeResult> {
-  const { cfg, agentId, agentDir, workspaceDir, sessionDir, target, timeoutMs, maxTokens } = params;
+  const { cfg, agentId, agentDir, workspaceDir, target, timeoutMs, maxTokens } = params;
   if (!target.model) {
     return {
       provider: target.provider,
@@ -492,8 +487,6 @@ async function probeTarget(params: {
   const model = target.model;
 
   const sessionId = `probe-${target.provider}-${crypto.randomUUID()}`;
-  const sessionFile = resolveSessionTranscriptPath(sessionId, agentId);
-  await fs.mkdir(sessionDir, { recursive: true });
 
   const start = Date.now();
   const buildResult = (status: AuthProbeResult["status"], error?: string): AuthProbeResult => ({
@@ -511,7 +504,6 @@ async function probeTarget(params: {
     const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
     await runEmbeddedPiAgent({
       sessionId,
-      sessionFile,
       agentId,
       workspaceDir,
       agentDir,
@@ -561,7 +553,6 @@ async function runTargetsWithConcurrency(params: {
     params.workspaceDir ??
     resolveAgentWorkspaceDir(cfg, agentId) ??
     resolveDefaultAgentWorkspaceDir();
-  const sessionDir = resolveSessionTranscriptsDirForAgent(agentId);
 
   await fs.mkdir(workspaceDir, { recursive: true });
 
@@ -587,7 +578,6 @@ async function runTargetsWithConcurrency(params: {
         agentId,
         agentDir,
         workspaceDir,
-        sessionDir,
         target,
         timeoutMs,
         maxTokens,

@@ -1,4 +1,7 @@
-import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  resolveAuthProfileStoreLocationForDisplay,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
 import { parseEnv, readText } from "./helpers.js";
@@ -34,13 +37,20 @@ const SECRET_MAPPINGS: readonly SecretMapping[] = [
   { envVar: "DEEPSEEK_API_KEY", provider: "deepseek", profileId: "deepseek:hermes-import" },
 ] as const;
 
+function buildStateEnv(ctx: MigrationProviderContext): NodeJS.ProcessEnv {
+  return { ...process.env, OPENCLAW_STATE_DIR: ctx.stateDir };
+}
+
 export async function buildSecretItems(params: {
   ctx: MigrationProviderContext;
   source: HermesSource;
   targets: PlannedTargets;
 }): Promise<MigrationItem[]> {
   const env = parseEnv(await readText(params.source.envPath));
-  const store = loadAuthProfileStoreWithoutExternalProfiles(params.targets.agentDir);
+  const stateEnv = buildStateEnv(params.ctx);
+  const store = loadAuthProfileStoreWithoutExternalProfiles(params.targets.agentDir, {
+    env: stateEnv,
+  });
   const seenProfiles = new Set<string>();
   const items: MigrationItem[] = [];
   for (const mapping of SECRET_MAPPINGS) {
@@ -54,7 +64,10 @@ export async function buildSecretItems(params: {
       createHermesSecretItem({
         id: `secret:${mapping.provider}`,
         source: params.source.envPath,
-        target: `${params.targets.agentDir}/auth-profiles.json#${mapping.profileId}`,
+        target: `${resolveAuthProfileStoreLocationForDisplay(
+          params.targets.agentDir,
+          stateEnv,
+        )}/${mapping.profileId}`,
         includeSecrets: params.ctx.includeSecrets,
         existsAlready: existsAlready && !params.ctx.overwrite,
         details: {
@@ -90,6 +103,7 @@ export async function applySecretItem(
   let wrote = false;
   const store = await updateAuthProfileStoreWithLock({
     agentDir: targets.agentDir,
+    env: buildStateEnv(ctx),
     updater: (freshStore) => {
       if (!ctx.overwrite && freshStore.profiles[details.profileId]) {
         conflicted = true;

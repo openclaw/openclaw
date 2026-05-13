@@ -161,10 +161,10 @@ function buildMatrixQaE2eeStoragePaths(params: {
   return {
     accountDir,
     cryptoDatabasePrefix: `qa-matrix-${runKey || "run"}-${actorKey || "actor"}`,
-    idbSnapshotPath: path.join(accountDir, "crypto-idb-snapshot.json"),
-    recoveryKeyPath: path.join(accountDir, "recovery-key.json"),
+    idbSnapshotStorageKey: accountDir,
+    recoveryKeyStorageKey: accountDir,
     rootDir,
-    storagePath: path.join(accountDir, "sync-store.json"),
+    syncStoreRootDir: accountDir,
   };
 }
 
@@ -176,12 +176,6 @@ async function prepareMatrixQaE2eeStorage(params: {
   const storage = buildMatrixQaE2eeStoragePaths(params);
   await fs.mkdir(storage.rootDir, { recursive: true });
   await fs.mkdir(storage.accountDir, { recursive: true });
-  await fs.mkdir(path.dirname(storage.storagePath), { recursive: true });
-  await fs.writeFile(storage.idbSnapshotPath, "[]\n", { flag: "wx" }).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-      throw error;
-    }
-  });
   return storage;
 }
 
@@ -197,12 +191,16 @@ async function createMatrixQaE2eeMatrixClient(params: MatrixQaE2eeClientParams) 
     cryptoDatabasePrefix: storage.cryptoDatabasePrefix,
     deviceId: params.deviceId,
     encryption: true,
-    idbSnapshotPath: storage.idbSnapshotPath,
+    idbSnapshotRef: {
+      storageKey: storage.idbSnapshotStorageKey,
+    },
     localTimeoutMs: Math.max(10_000, params.timeoutMs),
     password: params.password,
-    recoveryKeyPath: storage.recoveryKeyPath,
+    recoveryKeyRef: {
+      storageKey: storage.recoveryKeyStorageKey,
+    },
     ssrfPolicy: { allowPrivateNetwork: true },
-    storagePath: storage.storagePath,
+    storageRootDir: storage.syncStoreRootDir,
     syncFilter: MATRIX_QA_E2EE_SYNC_FILTER,
     userId: params.userId,
   });

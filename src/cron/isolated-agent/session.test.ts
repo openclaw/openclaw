@@ -1,14 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
-vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: vi.fn(),
-}));
-
-vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
-  resolveSessionFilePathOptions: vi.fn().mockReturnValue({ sessionsDir: "/tmp" }),
-  resolveSessionFilePath: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
+vi.mock("../../config/sessions/store.js", () => ({
+  getSessionEntry: vi.fn(),
 }));
 
 vi.mock("../../config/sessions/reset-policy.js", () => ({
@@ -27,13 +21,14 @@ vi.mock("../../agents/bootstrap-cache.js", () => ({
 
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { getSessionEntry } from "../../config/sessions/store.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
 
-type SessionStore = ReturnType<typeof loadSessionStore>;
-type SessionStoreEntry = SessionStore[string];
+type SessionStore = Record<string, SessionEntry>;
+type SessionStoreEntry = SessionEntry;
 type MockSessionStoreEntry = Partial<SessionStoreEntry>;
 
 function resolveWithStoredEntry(params?: {
@@ -46,7 +41,9 @@ function resolveWithStoredEntry(params?: {
   const store: SessionStore = params?.entry
     ? ({ [sessionKey]: params.entry as SessionStoreEntry } as SessionStore)
     : {};
-  vi.mocked(loadSessionStore).mockReturnValue(store);
+  vi.mocked(getSessionEntry).mockImplementation(
+    ({ sessionKey }: { sessionKey: string }) => store[sessionKey],
+  );
   vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: params?.fresh ?? true });
 
   return resolveCronSession({
@@ -61,6 +58,7 @@ function resolveWithStoredEntry(params?: {
 describe("resolveCronSession", () => {
   beforeEach(() => {
     vi.mocked(clearBootstrapSnapshot).mockReset();
+    vi.mocked(getSessionEntry).mockReset();
   });
 
   it("preserves modelOverride and providerOverride from existing session entry", () => {
@@ -175,24 +173,6 @@ describe("resolveCronSession", () => {
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
     });
 
-    it("clears stale sessionFile when forceNew rolls to a fresh session", () => {
-      const result = resolveWithStoredEntry({
-        entry: {
-          sessionId: "existing-session-id-456",
-          updatedAt: NOW_MS - 1000,
-          sessionFile: "/tmp/stale-session.jsonl",
-          modelOverride: "sonnet-4",
-        },
-        fresh: true,
-        forceNew: true,
-      });
-
-      expect(result.sessionEntry.sessionId).not.toBe("existing-session-id-456");
-      expect(result.isNewSession).toBe(true);
-      expect(result.sessionEntry.sessionFile).toBeUndefined();
-      expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
-    });
-
     it("clears delivery routing metadata and deliveryContext when forceNew is true", () => {
       const result = resolveWithStoredEntry({
         entry: {
@@ -243,9 +223,7 @@ describe("resolveCronSession", () => {
           modelProvider: "anthropic",
           agentHarnessId: "claude-cli",
           agentRuntimeOverride: "claude-cli",
-          cliSessionIds: { anthropic: "old-cli-session" },
-          cliSessionBindings: {},
-          claudeCliSessionId: "old-claude-session",
+          cliSessionBindings: { anthropic: { sessionId: "old-cli-session" } },
           liveModelSwitchPending: true,
           fallbackNoticeSelectedModel: "anthropic/claude-opus-4-6",
           fallbackNoticeActiveModel: "anthropic/claude-sonnet-4-6",
@@ -296,10 +274,6 @@ describe("resolveCronSession", () => {
           subject: "old subject",
           groupChannel: "ops",
           space: "team",
-          origin: {
-            provider: "telegram",
-            to: "old-chat",
-          },
           acp: {
             backend: "acpx",
             agent: "codex",
@@ -331,9 +305,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelProvider).toBeUndefined();
       expect(result.sessionEntry.agentHarnessId).toBeUndefined();
       expect(result.sessionEntry.agentRuntimeOverride).toBeUndefined();
-      expect(result.sessionEntry.cliSessionIds).toBeUndefined();
       expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
-      expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
       expect(result.sessionEntry.liveModelSwitchPending).toBeUndefined();
       expect(result.sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
       expect(result.sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
@@ -370,7 +342,6 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.subject).toBeUndefined();
       expect(result.sessionEntry.groupChannel).toBeUndefined();
       expect(result.sessionEntry.space).toBeUndefined();
-      expect(result.sessionEntry.origin).toBeUndefined();
       expect(result.sessionEntry.acp).toBeUndefined();
       expect(result.sessionEntry.authProfileOverride).toBeUndefined();
       expect(result.sessionEntry.authProfileOverrideSource).toBeUndefined();
@@ -414,7 +385,6 @@ describe("resolveCronSession", () => {
           sendPolicy: "deny",
           queueMode: "collect",
           channel: "discord" as never,
-          origin: { provider: "discord", to: "old-channel" },
         },
         fresh: false,
       });
@@ -424,7 +394,6 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.sendPolicy).toBe("deny");
       expect(result.sessionEntry.queueMode).toBe("collect");
       expect(result.sessionEntry.channel).toBe("discord");
-      expect(result.sessionEntry.origin).toEqual({ provider: "discord", to: "old-channel" });
     });
 
     it("clears delivery routing metadata when session is stale", () => {

@@ -270,14 +270,14 @@ describe("config schema", () => {
     expect(providerChild?.type).toBe("string");
   });
 
-  it("adds heartbeat target hints with dynamic channels", () => {
+  it("adds stable heartbeat target hints", () => {
     const res = buildConfigSchema(heartbeatChannelInput);
 
     const defaultsHint = res.uiHints["agents.defaults.heartbeat.target"];
     const listHint = res.uiHints["agents.list.*.heartbeat.target"];
-    expect(defaultsHint?.help).toContain("imessage");
+    expect(defaultsHint?.help).toContain("plugin channel id");
     expect(defaultsHint?.help).toContain("last");
-    expect(listHint?.help).toContain("imessage");
+    expect(listHint?.help).toBe(defaultsHint?.help);
   });
 
   it("caches merged schemas for identical plugin/channel metadata", () => {

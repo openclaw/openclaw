@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { ConfigMutationConflictError, mutateConfigFile, replaceConfigFile } from "./mutate.js";
 import { registerRuntimeConfigWriteListener, resetConfigRuntimeState } from "./runtime-snapshot.js";
+import { sourceBundledPluginTestEnv } from "./test-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 const ioMocks = vi.hoisted(() => ({
@@ -44,6 +45,8 @@ function createSnapshot(params: {
 describe("config mutate helpers", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-mutate-" });
   const originalNixMode = process.env.OPENCLAW_NIX_MODE;
+  const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
@@ -55,6 +58,16 @@ describe("config mutate helpers", () => {
     } else {
       process.env.OPENCLAW_NIX_MODE = originalNixMode;
     }
+    if (originalBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+    }
+    if (originalTrustBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
+    }
     await suiteRootTracker.cleanup();
   });
 
@@ -65,6 +78,7 @@ describe("config mutate helpers", () => {
       (snapshot: { hash?: string }) => snapshot.hash ?? null,
     );
     delete process.env.OPENCLAW_NIX_MODE;
+    Object.assign(process.env, sourceBundledPluginTestEnv());
   });
 
   it("mutates source config with optimistic hash protection", async () => {

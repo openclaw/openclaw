@@ -1,14 +1,16 @@
-import fs from "node:fs";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./agent-command.test-mocks.js";
 import * as acpManagerModule from "../acp/control-plane/manager.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import * as embeddedModule from "../agents/pi-embedded.js";
 import * as configIoModule from "../config/io.js";
+import { upsertSessionEntry } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { agentCommand } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -120,7 +122,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-acp-" });
 }
 
-function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig {
+function createAcpEnabledConfig(home: string): OpenClawConfig {
   return {
     acp: {
       enabled: true,
@@ -135,22 +137,21 @@ function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig
         workspace: path.join(home, "openclaw"),
       },
     },
-    session: { store: storePath, mainKey: "main" },
+    session: { mainKey: "main" },
   };
 }
 
-function mockConfig(home: string, storePath: string) {
-  const cfg = createAcpEnabledConfig(home, storePath);
+function mockConfig(home: string) {
+  const cfg = createAcpEnabledConfig(home);
   loadConfigSpy.mockReturnValue(cfg);
   configIoModule.setRuntimeConfigSnapshot(cfg, cfg);
 }
 
 function mockConfigWithAcpOverrides(
   home: string,
-  storePath: string,
   acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>,
 ) {
-  const cfg = createAcpEnabledConfig(home, storePath);
+  const cfg = createAcpEnabledConfig(home);
   cfg.acp = {
     ...cfg.acp,
     ...acpOverrides,
@@ -159,26 +160,25 @@ function mockConfigWithAcpOverrides(
   configIoModule.setRuntimeConfigSnapshot(cfg, cfg);
 }
 
-function writeAcpSessionStore(storePath: string, agent = "codex") {
+async function writeAcpSessionRows(agent = "codex") {
+  const agentId = "main";
   const sessionKey = `agent:${agent}:acp:test`;
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(
-    storePath,
-    JSON.stringify({
-      [sessionKey]: {
-        sessionId: "acp-session-1",
-        updatedAt: Date.now(),
-        acp: {
-          backend: "acpx",
-          agent,
-          runtimeSessionName: sessionKey,
-          mode: "oneshot",
-          state: "idle",
-          lastActivityAt: Date.now(),
-        },
+  upsertSessionEntry({
+    agentId,
+    sessionKey,
+    entry: {
+      sessionId: "acp-session-1",
+      updatedAt: Date.now(),
+      acp: {
+        backend: "acpx",
+        agent,
+        runtimeSessionName: sessionKey,
+        mode: "oneshot",
+        state: "idle",
+        lastActivityAt: Date.now(),
       },
-    }),
-  );
+    } satisfies SessionEntry,
+  });
 }
 
 function resolveReadySession(
@@ -218,21 +218,19 @@ function mockAcpManager(params: {
 
 async function withAcpSessionEnv(fn: () => Promise<void>) {
   await withTempHome(async (home) => {
-    const storePath = path.join(home, "sessions.json");
-    writeAcpSessionStore(storePath);
-    mockConfig(home, storePath);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
+    await writeAcpSessionRows();
+    mockConfig(home);
     await fn();
   });
 }
 
-async function withAcpSessionEnvInfo(
-  fn: (env: { home: string; storePath: string }) => Promise<void>,
-) {
+async function withAcpSessionEnvInfo(fn: (env: { home: string }) => Promise<void>) {
   await withTempHome(async (home) => {
-    const storePath = path.join(home, "sessions.json");
-    writeAcpSessionStore(storePath);
-    mockConfig(home, storePath);
-    await fn({ home, storePath });
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
+    await writeAcpSessionRows();
+    mockConfig(home);
+    await fn({ home });
   });
 }
 
@@ -316,9 +314,9 @@ async function runAcpSessionWithPolicyOverridesAndExpectBlocked(params: {
   resolveSession?: Parameters<typeof mockAcpManager>[0]["resolveSession"];
 }) {
   await withTempHome(async (home) => {
-    const storePath = path.join(home, "sessions.json");
-    writeAcpSessionStore(storePath);
-    mockConfigWithAcpOverrides(home, storePath, params.acpOverrides);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
+    await writeAcpSessionRows();
+    mockConfigWithAcpOverrides(home, params.acpOverrides);
 
     const runTurn = vi.fn(async (_params: unknown) => {});
     mockAcpManager({
@@ -359,6 +357,11 @@ describe("agentCommand ACP runtime routing", () => {
         durationMs: 5,
       },
     } as never);
+  });
+
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    vi.unstubAllEnvs();
   });
 
   it("routes ACP sessions and preserves exact transcript text", async () => {
@@ -407,18 +410,16 @@ describe("agentCommand ACP runtime routing", () => {
 
   it("fails closed for ACP-shaped session keys missing ACP metadata", async () => {
     await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      fs.mkdirSync(path.dirname(storePath), { recursive: true });
-      fs.writeFileSync(
-        storePath,
-        JSON.stringify({
-          "agent:codex:acp:stale": {
-            sessionId: "stale-1",
-            updatedAt: Date.now(),
-          },
-        }),
-      );
-      mockConfig(home, storePath);
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
+      upsertSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:codex:acp:stale",
+        entry: {
+          sessionId: "stale-1",
+          updatedAt: Date.now(),
+        } satisfies SessionEntry,
+      });
+      mockConfig(home);
 
       const runTurn = vi.fn(async (_params: unknown) => {});
       mockAcpManager({
@@ -456,9 +457,9 @@ describe("agentCommand ACP runtime routing", () => {
 
   it("blocks ACP turns when ACP agent is disallowed by policy", async () => {
     await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      writeAcpSessionStore(storePath);
-      mockConfigWithAcpOverrides(home, storePath, {
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
+      await writeAcpSessionRows();
+      mockConfigWithAcpOverrides(home, {
         allowedAgents: ["claude"],
       });
 
@@ -480,9 +481,9 @@ describe("agentCommand ACP runtime routing", () => {
 
   it("allows ACP turns for kimi when policy allowlists kimi", async () => {
     await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      writeAcpSessionStore(storePath, "kimi");
-      mockConfigWithAcpOverrides(home, storePath, {
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
+      await writeAcpSessionRows("kimi");
+      mockConfigWithAcpOverrides(home, {
         allowedAgents: ["kimi"],
       });
 

@@ -32,7 +32,6 @@ import type {
   ChannelDirectoryEntry,
   ChannelGroupContext,
   ChannelHeartbeatDeps,
-  ChannelLegacyStateMigrationPlan,
   ChannelLogSink,
   ChannelSecurityContext,
   ChannelSecurityDmPolicy,
@@ -555,22 +554,6 @@ export type ChannelLifecycleAdapter = {
     accountId: string;
     runtime: RuntimeEnv;
   }) => Promise<void> | void;
-  runStartupMaintenance?: (params: {
-    cfg: OpenClawConfig;
-    env?: NodeJS.ProcessEnv;
-    log: {
-      info?: (message: string) => void;
-      warn?: (message: string) => void;
-    };
-    trigger?: string;
-    logPrefix?: string;
-  }) => Promise<void> | void;
-  detectLegacyStateMigrations?: (params: {
-    cfg: OpenClawConfig;
-    env: NodeJS.ProcessEnv;
-    stateDir: string;
-    oauthDir: string;
-  }) => ChannelLegacyStateMigrationPlan[] | Promise<ChannelLegacyStateMigrationPlan[]>;
 };
 
 export type ChannelApprovalDeliveryAdapter = {

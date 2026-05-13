@@ -1,6 +1,6 @@
 ---
 name: crabbox
-description: Use Crabbox for OpenClaw remote Linux validation. Default to Blacksmith Testbox; includes direct Blacksmith and owned AWS/Hetzner fallback notes when Crabbox fails.
+description: Use Crabbox for OpenClaw remote validation across Linux, macOS, Windows, and WSL2. Default to Blacksmith Testbox for broad Linux proof; includes direct Blacksmith and owned AWS/Hetzner fallback notes when Crabbox fails.
 ---
 
 # Crabbox
@@ -31,13 +31,12 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 - Check `.crabbox.yaml` for repo defaults, but override provider explicitly.
   Even if config still says AWS, maintainer validation should normally pass
   `--provider blacksmith-testbox`.
-- For live/provider bugs, check keys on the local Mac before downgrading to
-  mocks: source local `~/.profile` and test only presence/length. If Crabbox
-  does not already have the key, copy only the exact needed key into the remote
-  process environment for that one command. Do not print it, do not sync it as a
-  repo file, and do not leave it in remote shell history or logs. If no
-  secret-safe injection path is available, say true live provider auth is
-  blocked instead of silently using a fake key.
+- For live/provider bugs, use the configured secret workflow before downgrading
+  to mocks. Copy only the exact needed key into the remote process environment
+  for that one command. Do not print it, do not sync it as a repo file, and do
+  not leave it in remote shell history or logs. If no secret-safe injection path
+  is available, say true live provider auth is blocked instead of silently using
+  a fake key.
 - Prefer local targeted tests for tight edit loops. Broad gates belong remote.
 - Do not treat inherited shell env as operator intent. In particular,
   `OPENCLAW_LOCAL_CHECK_MODE=throttled` from the local shell is not permission
@@ -64,7 +63,8 @@ Crabbox supports static SSH targets:
 - `target=macos` and `target=windows --windows-mode wsl2` use the POSIX SSH,
   bash, Git, rsync, and tar contract.
 - Native Windows uses OpenSSH, PowerShell, Git, and tar; sync is manifest tar
-  archive transfer into `static.workRoot`.
+  archive transfer into `static.workRoot`. Direct native Windows runs support
+  `--script*`, `--env-from-profile`, `--preflight`, and PowerShell `--shell`.
 - `crabbox actions hydrate/register` are Linux-only today; use plain
   `crabbox run` loops for static macOS and Windows hosts.
 - Live proof needs a reachable, operator-managed SSH host. Without one, verify
@@ -144,8 +144,16 @@ blacksmith testbox list
 Use these on debugging runs before inventing ad hoc logging:
 
 - `--preflight`: prints run context, workspace mode, SSH target, remote user/cwd,
-  sudo/apt, Node, pnpm, Docker, and bubblewrap. On `blacksmith-testbox`, this
-  prints a delegated-unsupported note because the workflow owns setup.
+  and target-specific tool probes. Defaults cover `git`, `tar`, `node`, `npm`,
+  `corepack`, `pnpm`, `yarn`, `bun`, `docker`, plus POSIX
+  `sudo`/`apt`/`bubblewrap` and native Windows
+  `powershell`/`execution_policy`/`longpaths`/`temp`/`pwsh`. Add
+  `--preflight-tools node,bun,docker`, `CRABBOX_PREFLIGHT_TOOLS`, or repo
+  `run.preflightTools` to replace the list. `default` expands built-ins; `none`
+  prints only the workspace summary. Preflight is diagnostic only; install
+  toolchains through Actions hydration, images, devcontainer/Nix/mise/asdf, or
+  the run script. On `blacksmith-testbox`, this prints a delegated-unsupported
+  note because the workflow owns setup.
 - `CRABBOX_ENV_ALLOW=NAME,...`: forwards only listed local env vars for direct
   providers and prints `set len=N secret=true` style summaries. On
   `blacksmith-testbox`, env forwarding is unsupported; put secrets in the
@@ -154,11 +162,13 @@ Use these on debugging runs before inventing ad hoc logging:
   `export NAME=value` / `NAME=value` lines from a local profile without
   executing it, then forwards only allowlisted names. `--allow-env` is
   repeatable and comma-separated. Profile values override ambient allowlisted
-  env values for that run.
+  env values for that run. Direct POSIX, WSL2, and native Windows runs are
+  supported; delegated providers are not.
 - `--script <file>` / `--script-stdin`: upload a local script into
   `.crabbox/scripts/` and execute it on the remote box. Shebang scripts execute
-  directly; scripts without a shebang run through `bash`. Arguments after `--`
-  become script args.
+  directly on POSIX; scripts without a shebang run through `bash`. Native
+  Windows uploads run through Windows PowerShell, and Crabbox appends `.ps1`
+  when needed. Arguments after `--` become script args.
 - `--fresh-pr owner/repo#123|URL|number`: skip dirty local sync and create a
   fresh remote checkout of the GitHub PR. Bare numbers use the current repo's
   GitHub origin. Add `--apply-local-patch` only when the current local
@@ -178,9 +188,9 @@ Live-provider debug template for direct AWS/Hetzner leases:
 
 ```sh
 mkdir -p .crabbox/logs
-pnpm crabbox:run -- --provider aws \
+CRABBOX_ENV_ALLOW=OPENAI_API_KEY,OPENAI_BASE_URL \
+  pnpm crabbox:run -- --provider aws \
   --preflight \
-  --env-from-profile ~/.profile \
   --allow-env OPENAI_API_KEY,OPENAI_BASE_URL \
   --timing-json \
   --capture-stdout .crabbox/logs/live-provider.stdout.log \
@@ -191,9 +201,8 @@ pnpm crabbox:run -- --provider aws \
 ```
 
 Do not pass `--capture-*`, `--download`, `--checksum`, `--force-sync-large`, or
-`--sync-only` to delegated providers. Also do not pass `--script*` or
-`--fresh-pr` there. Crabbox rejects these because the provider owns sync or
-command transport.
+`--sync-only` to delegated providers. Crabbox rejects them because the provider
+owns sync or command transport.
 
 ## Efficient Bug E2E Verification
 
@@ -206,8 +215,8 @@ Pick the lane by symptom:
 - Docker/setup/install bug: build a package tarball and run the matching
   `scripts/e2e/*-docker.sh` or package script. This proves npm packaging,
   install paths, runtime deps, config writes, and container behavior.
-- Provider/model/auth bug: prefer true live E2E. First source local Mac
-  `~/.profile`, then inject the single needed key into Crabbox if needed. Scrub
+- Provider/model/auth bug: prefer true live E2E. Use the configured secret
+  workflow, then inject the single needed key into Crabbox if needed. Scrub
   unrelated provider env vars in the child command so interactive defaults do
   not drift to another provider. If only a dummy key is used, label the proof
   narrowly, e.g. "UI/install path only; live provider auth not exercised."

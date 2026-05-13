@@ -211,7 +211,7 @@ class GatewayBootstrapAuthTest {
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
     val runtime = NodeRuntime(app, prefs)
     val deviceId = DeviceIdentityStore(app).loadOrCreate().deviceId
-    val authStore = DeviceAuthStore(prefs)
+    val authStore = DeviceAuthStore(app)
     prefs.setGatewayToken("stale-shared-token")
     prefs.setGatewayBootstrapToken("stale-bootstrap-token")
     prefs.setGatewayPassword("stale-password")

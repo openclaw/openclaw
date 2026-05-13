@@ -1,6 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   isSafeBinUsage,
@@ -8,7 +7,8 @@ import {
   normalizeExecApprovals,
   normalizeSafeBins,
   resolveExecApprovals,
-  resolveExecApprovalsFromFile,
+  resolveExecApprovalsDocument,
+  saveExecApprovals,
   type ExecApprovalsAgent,
   type ExecAllowlistEntry,
   type ExecApprovalsFile,
@@ -17,26 +17,20 @@ import {
 describe("exec approvals wildcard agent", () => {
   it("merges wildcard allowlist entries with agent entries", () => {
     const dir = makeTempDir();
+    const stateDir = makeTempDir();
     const prevOpenClawHome = process.env.OPENCLAW_HOME;
+    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
 
     try {
       process.env.OPENCLAW_HOME = dir;
-      const approvalsPath = path.join(dir, ".openclaw", "exec-approvals.json");
-      fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
-      fs.writeFileSync(
-        approvalsPath,
-        JSON.stringify(
-          {
-            version: 1,
-            agents: {
-              "*": { allowlist: [{ pattern: "/bin/hostname" }] },
-              main: { allowlist: [{ pattern: "/usr/bin/uname" }] },
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      saveExecApprovals({
+        version: 1,
+        agents: {
+          "*": { allowlist: [{ pattern: "/bin/hostname" }] },
+          main: { allowlist: [{ pattern: "/usr/bin/uname" }] },
+        },
+      });
 
       const resolved = resolveExecApprovals("main");
       expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual([
@@ -49,6 +43,12 @@ describe("exec approvals wildcard agent", () => {
       } else {
         process.env.OPENCLAW_HOME = prevOpenClawHome;
       }
+      if (prevStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
+      closeOpenClawStateDatabaseForTest();
     }
   });
 });
@@ -144,7 +144,7 @@ describe("exec approvals default agent migration", () => {
         default: { allowlist: [{ pattern: "/bin/legacy" }] },
       },
     };
-    const resolved = resolveExecApprovalsFromFile({ file });
+    const resolved = resolveExecApprovalsDocument({ document: file });
     expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/legacy"]);
     expect(resolved.file.agents?.default).toBeUndefined();
     expect(resolved.file.agents?.main?.allowlist?.[0]?.pattern).toBe("/bin/legacy");
@@ -158,7 +158,7 @@ describe("exec approvals default agent migration", () => {
         default: { ask: "off", allowlist: [{ pattern: "/bin/legacy" }] },
       },
     };
-    const resolved = resolveExecApprovalsFromFile({ file });
+    const resolved = resolveExecApprovalsDocument({ document: file });
     expect(resolved.agent.ask).toBe("always");
     expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/main", "/bin/legacy"]);
     expect(resolved.file.agents?.default).toBeUndefined();
@@ -167,8 +167,8 @@ describe("exec approvals default agent migration", () => {
 
 describe("exec approvals invalid explicit policy fallback", () => {
   it("treats invalid explicit agent fields as masked and falls back to defaults instead of wildcard", () => {
-    const resolved = resolveExecApprovalsFromFile({
-      file: {
+    const resolved = resolveExecApprovalsDocument({
+      document: {
         version: 1,
         defaults: {
           security: "deny",
@@ -207,8 +207,8 @@ describe("exec approvals invalid explicit policy fallback", () => {
   });
 
   it("treats null explicit agent fields as unset and still considers wildcard", () => {
-    const resolved = resolveExecApprovalsFromFile({
-      file: {
+    const resolved = resolveExecApprovalsDocument({
+      document: {
         version: 1,
         defaults: {
           security: "full",
@@ -427,7 +427,7 @@ describe("normalizeExecApprovals strips invalid security/ask enum values (#59006
         "*": { security: "none", ask: "off" },
       },
     } as unknown as ExecApprovalsFile;
-    const resolved = resolveExecApprovalsFromFile({ file });
+    const resolved = resolveExecApprovalsDocument({ document: file });
     // Invalid "none" in defaults is stripped, so fallback to DEFAULT_SECURITY ("full")
     expect(resolved.defaults.security).toBe("full");
     // Invalid "never" in defaults is stripped, so fallback to DEFAULT_ASK ("off")

@@ -20,7 +20,6 @@ const GATEWAY_RUN_VALUE_FLAGS = [
   "--password",
   "--password-file",
   "--port",
-  "--raw-stream-path",
   "--tailscale",
   "--token",
   "--ws-log",

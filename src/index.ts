@@ -2,7 +2,6 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { formatCliFailureLines } from "./cli/failure-output.js";
-import { assertNotRoot } from "./cli/root-guard.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -27,18 +26,19 @@ export let describePortOwner: LibraryExports["describePortOwner"];
 export let ensureBinary: LibraryExports["ensureBinary"];
 export let ensurePortAvailable: LibraryExports["ensurePortAvailable"];
 export let getReplyFromConfig: LibraryExports["getReplyFromConfig"];
+export let getSessionEntry: LibraryExports["getSessionEntry"];
 export let handlePortError: LibraryExports["handlePortError"];
+export let listSessionEntries: LibraryExports["listSessionEntries"];
 export let loadConfig: LibraryExports["loadConfig"];
-export let loadSessionStore: LibraryExports["loadSessionStore"];
 export let monitorWebChannel: LibraryExports["monitorWebChannel"];
 export let normalizeE164: LibraryExports["normalizeE164"];
+export let patchSessionEntry: LibraryExports["patchSessionEntry"];
 export let PortInUseError: LibraryExports["PortInUseError"];
 export let promptYesNo: LibraryExports["promptYesNo"];
 export let resolveSessionKey: LibraryExports["resolveSessionKey"];
-export let resolveStorePath: LibraryExports["resolveStorePath"];
 export let runCommandWithTimeout: LibraryExports["runCommandWithTimeout"];
 export let runExec: LibraryExports["runExec"];
-export let saveSessionStore: LibraryExports["saveSessionStore"];
+export let upsertSessionEntry: LibraryExports["upsertSessionEntry"];
 export let waitForever: LibraryExports["waitForever"];
 
 async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
@@ -51,14 +51,6 @@ export async function runLegacyCliEntry(
   argv: string[] = process.argv,
   deps?: LegacyCliDeps,
 ): Promise<void> {
-  // Block root execution on the legacy path too, matching src/entry.ts.
-  // Unlike entry.ts (which has fast-path help/version exits before startup),
-  // this path always calls runCli() which runs startup work (dotenv loading,
-  // debug capture init) before rendering help/version output.  Block
-  // unconditionally — the assertNotRoot error message already shows the
-  // OPENCLAW_ALLOW_ROOT=1 escape hatch.
-  assertNotRoot();
-
   const { runCli } = deps ?? (await loadLegacyCliDeps());
   await runCli(argv);
 }
@@ -76,18 +68,19 @@ if (!isMain) {
     ensureBinary,
     ensurePortAvailable,
     getReplyFromConfig,
+    getSessionEntry,
     handlePortError,
+    listSessionEntries,
     loadConfig,
-    loadSessionStore,
     monitorWebChannel,
     normalizeE164,
+    patchSessionEntry,
     PortInUseError,
     promptYesNo,
     resolveSessionKey,
-    resolveStorePath,
     runCommandWithTimeout,
     runExec,
-    saveSessionStore,
+    upsertSessionEntry,
     waitForever,
   } = await import("./library.js"));
 }

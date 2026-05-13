@@ -1,4 +1,3 @@
-import type { Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -7,6 +6,7 @@ import {
   GCP_VERTEX_CREDENTIALS_MARKER,
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
+import type { Model } from "./pi-ai-contract.js";
 
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginRegistrySnapshotWithMetadata: () => ({
@@ -398,7 +398,7 @@ describe("resolveUsableCustomProviderApiKey", () => {
     });
     expect(resolved).toEqual({
       apiKey: "sk-custom-runtime",
-      source: "models.json",
+      source: "stored model catalog",
     });
   });
 
@@ -420,7 +420,7 @@ describe("resolveUsableCustomProviderApiKey", () => {
     expect(resolved).toBeNull();
   });
 
-  it("does not treat the Vertex ADC marker as a usable models.json credential", () => {
+  it("does not treat the Vertex ADC marker as a usable model catalog credential", () => {
     const resolved = resolveUsableCustomProviderApiKey({
       cfg: {
         models: {
@@ -676,7 +676,7 @@ describe("resolveUsableCustomProviderApiKey", () => {
     }
   });
 
-  it("does not treat non-env SecretRefs as usable models.json credentials", () => {
+  it("does not treat non-env SecretRefs as usable model catalog credentials", () => {
     const resolved = resolveUsableCustomProviderApiKey({
       cfg: {
         models: {
@@ -878,7 +878,7 @@ describe("resolveApiKeyForProvider", () => {
 
     expectAuthFields(resolved, {
       apiKey: "sk-config-live",
-      source: "models.json",
+      source: "stored model catalog",
       mode: "api-key",
     });
   });
@@ -1019,7 +1019,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
 
     expectAuthFields(auth, {
       apiKey: "ollama-local",
-      source: "models.json (local marker)",
+      source: "stored model catalog (local marker)",
       mode: "api-key",
     });
   });
@@ -1088,7 +1088,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
 
     expectAuthFields(auth, {
       apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-      source: "models.json (local marker)",
+      source: "stored model catalog (local marker)",
       mode: "api-key",
     });
   });

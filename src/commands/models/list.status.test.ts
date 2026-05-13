@@ -51,8 +51,9 @@ const mocks = vi.hoisted(() => {
     }),
     loadPersistedAuthProfileStore: vi.fn().mockReturnValue(store),
     resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
-    resolveAuthStorePathForDisplay: vi.fn(
-      (agentDir?: string) => `${agentDir ?? "/tmp/openclaw-agent"}/auth-profiles.json`,
+    resolveAuthProfileStoreLocationForDisplay: vi.fn(
+      (agentDir?: string) =>
+        `/tmp/openclaw.sqlite#table/auth_profile_stores/${agentDir ?? "/tmp/openclaw-agent"}`,
     ),
     resolveProfileUnusableUntilForDisplay: vi.fn().mockReturnValue(undefined),
     resolveEnvApiKey: vi.fn((provider: string) => {
@@ -155,7 +156,7 @@ vi.mock("../../agents/auth-profiles/display.js", () => ({
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
 }));
 vi.mock("../../agents/auth-profiles/paths.js", () => ({
-  resolveAuthStorePathForDisplay: mocks.resolveAuthStorePathForDisplay,
+  resolveAuthProfileStoreLocationForDisplay: mocks.resolveAuthProfileStoreLocationForDisplay,
 }));
 vi.mock("../../agents/auth-profiles/persisted.js", () => ({
   loadPersistedAuthProfileStore: mocks.loadPersistedAuthProfileStore,
@@ -368,7 +369,6 @@ describe("modelsStatusCommand auth overview", () => {
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");
     expect(payload.configPath).toBe("/tmp/openclaw-dev/openclaw.json");
-    expect(payload.auth.storePath).toBe("/tmp/openclaw-agent/auth-profiles.json");
     expect(payload.auth.shellEnvFallback.enabled).toBe(true);
     expect(payload.auth.shellEnvFallback.appliedKeys).toContain("OPENAI_API_KEY");
     expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
@@ -431,7 +431,6 @@ describe("modelsStatusCommand auth overview", () => {
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-isolated-agent");
     const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-isolated-agent");
-    expect(payload.auth.storePath).toBe("/tmp/openclaw-isolated-agent/auth-profiles.json");
   });
 
   it("uses agent overrides and reports sources", async () => {
@@ -462,7 +461,7 @@ describe("modelsStatusCommand auth overview", () => {
         ).find((provider) => provider.provider === "openai-codex");
         expect(openAiCodex?.effective).toEqual({
           kind: "profiles",
-          detail: "/tmp/openclaw-agent-custom/auth-profiles.json",
+          detail: "/tmp/openclaw.sqlite#table/auth_profile_stores//tmp/openclaw-agent-custom",
         });
       },
     );
@@ -898,7 +897,7 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it("does fail --check when the only models.json auth is not resolvable", async () => {
+  it("does fail --check when the only model catalog auth is not resolvable", async () => {
     const localRuntime = createRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();
     const originalProfiles = { ...mocks.store.profiles };

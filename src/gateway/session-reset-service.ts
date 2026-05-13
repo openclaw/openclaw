@@ -1,7 +1,4 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
@@ -9,6 +6,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { retireSessionMcpRuntime } from "../agents/pi-bundle-mcp-tools.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
+import { CURRENT_SESSION_VERSION } from "../agents/transcript/session-transcript-contract.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -17,12 +15,18 @@ import {
 import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
-  snapshotSessionOrigin,
+  getSessionEntry,
+  listSessionEntries,
   type SessionEntry,
-  updateSessionStore,
+  upsertSessionEntry,
 } from "../config/sessions.js";
-import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
+import {
+  appendSqliteSessionTranscriptEvent,
+  deleteSqliteSessionTranscript,
+  hasSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptEvents,
+} from "../config/sessions/transcript-store.sqlite.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -44,15 +48,9 @@ import {
 } from "./active-sessions-shutdown-tracker.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import {
-  archiveSessionTranscriptsDetailed,
-  resolveStableSessionEndTranscript,
-  type ArchivedSessionTranscript,
-} from "./session-transcript-files.fs.js";
-import {
   loadSessionEntry,
-  migrateAndPruneGatewaySessionStoreKey,
   readSessionMessagesAsync,
-  resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionDatabaseTarget,
   resolveSessionModelRef,
 } from "./session-utils.js";
 
@@ -71,41 +69,10 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
   };
 }
 
-export function archiveSessionTranscriptsForSession(params: {
-  sessionId: string | undefined;
-  storePath: string;
-  sessionFile?: string;
-  agentId?: string;
-  reason: "reset" | "deleted";
-}): string[] {
-  return archiveSessionTranscriptsForSessionDetailed(params).map((entry) => entry.archivedPath);
-}
-
-export function archiveSessionTranscriptsForSessionDetailed(params: {
-  sessionId: string | undefined;
-  storePath: string;
-  sessionFile?: string;
-  agentId?: string;
-  reason: "reset" | "deleted";
-}): ArchivedSessionTranscript[] {
-  if (!params.sessionId) {
-    return [];
-  }
-  return archiveSessionTranscriptsDetailed({
-    sessionId: params.sessionId,
-    storePath: params.storePath,
-    sessionFile: params.sessionFile,
-    agentId: params.agentId,
-    reason: params.reason,
-  });
-}
-
 export function emitGatewaySessionEndPluginHook(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   sessionId?: string;
-  storePath: string;
-  sessionFile?: string;
   agentId?: string;
   reason:
     | "new"
@@ -117,7 +84,6 @@ export function emitGatewaySessionEndPluginHook(params: {
     | "shutdown"
     | "restart"
     | "unknown";
-  archivedTranscripts?: ArchivedSessionTranscript[];
   nextSessionId?: string;
   nextSessionKey?: string;
 }): void {
@@ -132,20 +98,11 @@ export function emitGatewaySessionEndPluginHook(params: {
   if (!hookRunner?.hasHooks("session_end")) {
     return;
   }
-  const transcript = resolveStableSessionEndTranscript({
-    sessionId: params.sessionId,
-    storePath: params.storePath,
-    sessionFile: params.sessionFile,
-    agentId: params.agentId,
-    archivedTranscripts: params.archivedTranscripts,
-  });
   const payload = buildSessionEndHookPayload({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     cfg: params.cfg,
     reason: params.reason,
-    sessionFile: transcript.sessionFile,
-    transcriptArchived: transcript.transcriptArchived,
     nextSessionId: params.nextSessionId,
     nextSessionKey: params.nextSessionKey,
   });
@@ -159,8 +116,6 @@ export function emitGatewaySessionStartPluginHook(params: {
   sessionKey: string;
   sessionId?: string;
   resumedFrom?: string;
-  storePath?: string;
-  sessionFile?: string;
   agentId?: string;
 }): void {
   if (!params.sessionId) {
@@ -172,16 +127,12 @@ export function emitGatewaySessionStartPluginHook(params: {
   // tracker is keyed by `sessionId`, so a session that is subsequently closed
   // via reset / delete / compaction is forgotten before the shutdown drain
   // ever runs (see #57790).
-  if (params.storePath) {
-    noteActiveSessionForShutdown({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      storePath: params.storePath,
-      sessionFile: params.sessionFile,
-      agentId: params.agentId,
-    });
-  }
+  noteActiveSessionForShutdown({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+  });
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("session_start")) {
     return;
@@ -242,19 +193,11 @@ export async function drainActiveSessionsForShutdown(params: {
         if (!hookRunner?.hasHooks("session_end")) {
           return;
         }
-        const transcript = resolveStableSessionEndTranscript({
-          sessionId: entry.sessionId,
-          storePath: entry.storePath,
-          sessionFile: entry.sessionFile,
-          agentId: entry.agentId,
-        });
         const payload = buildSessionEndHookPayload({
           sessionId: entry.sessionId,
           sessionKey: entry.sessionKey,
           cfg: entry.cfg,
           reason: params.reason,
-          sessionFile: transcript.sessionFile,
-          transcriptArchived: transcript.transcriptArchived,
         });
         await hookRunner.runSessionEnd(payload.event, payload.context);
       } catch (err) {
@@ -321,14 +264,13 @@ export async function emitSessionUnboundLifecycleEvent(params: {
 async function ensureSessionRuntimeCleanup(params: {
   cfg: OpenClawConfig;
   key: string;
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  target: ReturnType<typeof resolveGatewaySessionDatabaseTarget>;
   sessionId?: string;
 }) {
   const closeTrackedBrowserTabs = async () => {
     const closeKeys = new Set<string>([
       params.key,
       params.target.canonicalKey,
-      ...params.target.storeKeys,
       params.sessionId ?? "",
     ]);
     return await closeTrackedBrowserTabsForSessions({
@@ -337,8 +279,7 @@ async function ensureSessionRuntimeCleanup(params: {
     });
   };
 
-  const queueKeys = new Set<string>(params.target.storeKeys);
-  queueKeys.add(params.target.canonicalKey);
+  const queueKeys = new Set<string>([params.key, params.target.canonicalKey]);
   if (params.sessionId) {
     queueKeys.add(params.sessionId);
   }
@@ -358,7 +299,7 @@ async function ensureSessionRuntimeCleanup(params: {
       reason: "gateway-session-cleanup",
       onError: (error, sessionId) => {
         logVerbose(
-          `sessions cleanup: failed to dispose bundle MCP runtime for ${sessionId}: ${String(error)}`,
+          `session runtime cleanup: failed to dispose bundle MCP runtime for ${sessionId}: ${String(error)}`,
         );
       },
     });
@@ -524,10 +465,8 @@ async function ensureFreshAcpResetState(params: {
 export async function cleanupSessionBeforeMutation(params: {
   cfg: OpenClawConfig;
   key: string;
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
+  target: ReturnType<typeof resolveGatewaySessionDatabaseTarget>;
   entry: SessionEntry | undefined;
-  legacyKey?: string;
-  canonicalKey?: string;
   reason: "session-reset" | "session-delete";
 }) {
   const cleanupError = await ensureSessionRuntimeCleanup({
@@ -552,7 +491,7 @@ export async function cleanupSessionBeforeMutation(params: {
   }
   return await closeAcpRuntimeForSession({
     cfg: params.cfg,
-    sessionKey: params.legacyKey ?? params.canonicalKey ?? params.target.canonicalKey ?? params.key,
+    sessionKey: params.target.canonicalKey ?? params.key,
     entry: params.entry,
     reason: params.reason,
   });
@@ -561,8 +500,7 @@ export async function cleanupSessionBeforeMutation(params: {
 export async function emitGatewayBeforeResetPluginHook(params: {
   cfg: OpenClawConfig;
   key: string;
-  target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
-  storePath: string;
+  target: ReturnType<typeof resolveGatewaySessionDatabaseTarget>;
   entry?: SessionEntry;
   reason: "new" | "reset";
 }): Promise<void> {
@@ -573,15 +511,14 @@ export async function emitGatewayBeforeResetPluginHook(params: {
 
   const sessionKey = params.target.canonicalKey ?? params.key;
   const sessionId = params.entry?.sessionId;
-  const sessionFile = params.entry?.sessionFile;
   const agentId = normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg));
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   let messages: unknown[] = [];
   try {
     if (typeof sessionId === "string" && sessionId.trim().length > 0) {
-      messages = await readSessionMessagesAsync(sessionId, params.storePath, sessionFile, {
-        mode: "full",
-        reason: "before_reset hook payload",
+      messages = await readGatewayBeforeResetMessages({
+        agentId,
+        sessionId,
       });
     }
   } catch (err) {
@@ -593,7 +530,6 @@ export async function emitGatewayBeforeResetPluginHook(params: {
   void hookRunner
     .runBeforeReset(
       {
-        sessionFile,
         messages,
         reason: params.reason,
       },
@@ -609,6 +545,43 @@ export async function emitGatewayBeforeResetPluginHook(params: {
     });
 }
 
+async function readGatewayBeforeResetMessages(params: {
+  agentId: string;
+  sessionId: string;
+}): Promise<unknown[]> {
+  const scopedMessages = loadScopedGatewayBeforeResetMessages(params);
+  if (scopedMessages) {
+    return scopedMessages;
+  }
+  return await readSessionMessagesAsync(
+    {
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+    },
+    {
+      mode: "full",
+      reason: "before_reset hook payload",
+    },
+  );
+}
+
+function loadScopedGatewayBeforeResetMessages(params: {
+  agentId: string;
+  sessionId: string;
+}): unknown[] | undefined {
+  try {
+    if (!hasSqliteSessionTranscriptEvents(params)) {
+      return undefined;
+    }
+    return loadSqliteSessionTranscriptEvents(params).flatMap((entry) => {
+      const event = entry.event as { message?: unknown } | undefined;
+      return event && typeof event === "object" && "message" in event ? [event.message] : [];
+    });
+  } catch {
+    return undefined;
+  }
+}
+
 export async function performGatewaySessionReset(params: {
   key: string;
   reason: "new" | "reset";
@@ -617,12 +590,12 @@ export async function performGatewaySessionReset(params: {
   | { ok: true; key: string; entry: SessionEntry }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
-  const { cfg, target, storePath } = (() => {
+  const { cfg, target } = (() => {
     const cfg = getRuntimeConfig();
-    const target = resolveGatewaySessionStoreTarget({ cfg, key: params.key });
-    return { cfg, target, storePath: target.storePath };
+    const target = resolveGatewaySessionDatabaseTarget({ cfg, key: params.key });
+    return { cfg, target };
   })();
-  const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key);
+  const { entry } = loadSessionEntry(params.key);
   const hadExistingEntry = Boolean(entry);
   const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
@@ -644,8 +617,6 @@ export async function performGatewaySessionReset(params: {
     key: params.key,
     target,
     entry,
-    legacyKey,
-    canonicalKey,
     reason: "session-reset",
   });
   if (mutationCleanupError) {
@@ -653,16 +624,15 @@ export async function performGatewaySessionReset(params: {
   }
 
   let oldSessionId: string | undefined;
-  let oldSessionFile: string | undefined;
   let resetSourceEntry: SessionEntry | undefined;
-  const next = await updateSessionStore(storePath, (store) => {
-    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-      cfg,
-      key: params.key,
-      store,
-    });
-    const currentEntry = store[primaryKey];
-    resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
+  let deleteOldTranscript = false;
+  const currentEntry = getSessionEntry({
+    agentId: target.agentId,
+    sessionKey: target.canonicalKey,
+  });
+  resetSourceEntry = currentEntry ? { ...currentEntry } : undefined;
+  const next = (() => {
+    const primaryKey = target.canonicalKey;
     const parsed = parseAgentSessionKey(primaryKey);
     const sessionAgentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
     const resetPreservedSelection = resolveResetPreservedSelection({
@@ -680,20 +650,10 @@ export async function performGatewaySessionReset(params: {
     };
     const resolvedModel = resolveSessionModelRef(cfg, resetEntry, sessionAgentId);
     oldSessionId = currentEntry?.sessionId;
-    oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
     const nextSessionId = randomUUID();
-    const sessionFile = resolveSessionFilePath(
-      nextSessionId,
-      currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
-      resolveSessionFilePathOptions({
-        storePath,
-        agentId: sessionAgentId,
-      }),
-    );
     const nextEntry: SessionEntry = {
       sessionId: nextSessionId,
-      sessionFile,
       updatedAt: now,
       systemSent: false,
       abortedLastRun: false,
@@ -739,11 +699,8 @@ export async function performGatewaySessionReset(params: {
       subject: currentEntry?.subject,
       groupChannel: currentEntry?.groupChannel,
       space: currentEntry?.space,
-      origin: snapshotSessionOrigin(currentEntry),
       deliveryContext: currentEntry?.deliveryContext,
       cliSessionBindings: currentEntry?.cliSessionBindings,
-      cliSessionIds: currentEntry?.cliSessionIds,
-      claudeCliSessionId: currentEntry?.claudeCliSessionId,
       lastChannel: currentEntry?.lastChannel,
       lastTo: currentEntry?.lastTo,
       lastAccountId: currentEntry?.lastAccountId,
@@ -758,27 +715,29 @@ export async function performGatewaySessionReset(params: {
       totalTokens: 0,
       totalTokensFresh: true,
     };
-    store[primaryKey] = nextEntry;
+    upsertSessionEntry({
+      agentId: target.agentId,
+      sessionKey: primaryKey,
+      entry: nextEntry,
+    });
+    deleteOldTranscript = Boolean(
+      oldSessionId &&
+      oldSessionId !== nextSessionId &&
+      !listSessionEntries({ agentId: target.agentId }).some(
+        ({ entry }) => entry.sessionId === oldSessionId,
+      ),
+    );
     return nextEntry;
-  });
+  })();
   await emitGatewayBeforeResetPluginHook({
     cfg,
     key: params.key,
     target,
-    storePath,
     entry: resetSourceEntry,
     reason: params.reason,
   });
 
-  const archivedTranscripts = archiveSessionTranscriptsForSessionDetailed({
-    sessionId: oldSessionId,
-    storePath,
-    sessionFile: oldSessionFile,
-    agentId: target.agentId,
-    reason: "reset",
-  });
-  fs.mkdirSync(path.dirname(next.sessionFile as string), { recursive: true });
-  if (!fs.existsSync(next.sessionFile as string)) {
+  if (!hasSqliteSessionTranscriptEvents({ agentId: target.agentId, sessionId: next.sessionId })) {
     const header = {
       type: "session",
       version: CURRENT_SESSION_VERSION,
@@ -786,20 +745,18 @@ export async function performGatewaySessionReset(params: {
       timestamp: new Date().toISOString(),
       cwd: process.cwd(),
     };
-    fs.writeFileSync(next.sessionFile as string, `${JSON.stringify(header)}\n`, {
-      encoding: "utf-8",
-      mode: 0o600,
+    appendSqliteSessionTranscriptEvent({
+      agentId: target.agentId,
+      sessionId: next.sessionId,
+      event: header,
     });
   }
   emitGatewaySessionEndPluginHook({
     cfg,
     sessionKey: target.canonicalKey ?? params.key,
     sessionId: oldSessionId,
-    storePath,
-    sessionFile: oldSessionFile,
     agentId: target.agentId,
     reason: params.reason,
-    archivedTranscripts,
     nextSessionId: next.sessionId,
   });
   emitGatewaySessionStartPluginHook({
@@ -807,15 +764,23 @@ export async function performGatewaySessionReset(params: {
     sessionKey: target.canonicalKey ?? params.key,
     sessionId: next.sessionId,
     resumedFrom: oldSessionId,
-    storePath,
-    sessionFile: next.sessionFile,
     agentId: target.agentId,
   });
+  if (deleteOldTranscript && oldSessionId) {
+    deleteSqliteSessionTranscript({
+      agentId: target.agentId,
+      sessionId: oldSessionId,
+    });
+  }
   if (hadExistingEntry) {
     await emitSessionUnboundLifecycleEvent({
       targetSessionKey: target.canonicalKey ?? params.key,
       reason: "session-reset",
     });
   }
-  return { ok: true, key: target.canonicalKey, entry: next };
+  return {
+    ok: true,
+    key: target.canonicalKey,
+    entry: next,
+  };
 }

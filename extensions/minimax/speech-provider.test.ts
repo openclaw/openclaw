@@ -1,6 +1,10 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
@@ -16,6 +20,22 @@ function clearMinimaxAuthEnv() {
   delete process.env.MINIMAX_OAUTH_TOKEN;
   delete process.env.MINIMAX_CODE_PLAN_KEY;
   delete process.env.MINIMAX_CODING_API_KEY;
+}
+
+function seedMinimaxPortalAuthProfile(agentDir: string) {
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles: {
+        "minimax-portal:test": {
+          type: "token",
+          provider: "minimax-portal",
+          token: "portal-token",
+        },
+      },
+    },
+    agentDir,
+  );
 }
 
 describe("buildMinimaxSpeechProvider", () => {
@@ -82,6 +102,7 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     afterEach(async () => {
+      clearRuntimeAuthProfileStoreSnapshots();
       process.env = { ...savedEnv };
       await rm(tempStateDir, { recursive: true, force: true });
     });
@@ -107,19 +128,7 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     it("returns true when a MiniMax portal auth profile is available", async () => {
-      await writeFile(
-        path.join(tempAgentDir, "auth-profiles.json"),
-        JSON.stringify({
-          version: 1,
-          profiles: {
-            "minimax-portal:test": {
-              type: "token",
-              provider: "minimax-portal",
-              token: "portal-token",
-            },
-          },
-        }),
-      );
+      seedMinimaxPortalAuthProfile(tempAgentDir);
 
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     });
@@ -333,7 +342,7 @@ describe("buildMinimaxSpeechProvider", () => {
     });
 
     function firstFetchCall(): unknown[] {
-      const call = vi.mocked(globalThis.fetch).mock.calls.at(0);
+      const call = vi.mocked(globalThis.fetch).mock.calls[0];
       if (!call) {
         throw new Error("Expected MiniMax TTS fetch call");
       }
@@ -341,7 +350,7 @@ describe("buildMinimaxSpeechProvider", () => {
     }
 
     function firstFetchInit(): RequestInit | undefined {
-      return firstFetchCall().at(1) as RequestInit | undefined;
+      return firstFetchCall()[1] as RequestInit | undefined;
     }
 
     function firstFetchBody(): Record<string, unknown> {
@@ -376,7 +385,7 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(result.audioBuffer.toString()).toBe("fake-audio-data");
 
       expect(mockFetch).toHaveBeenCalledOnce();
-      const url = firstFetchCall().at(0);
+      const url = firstFetchCall()[0];
       expect(url).toBe("https://api.minimaxi.com/v1/t2a_v2");
       const body = firstFetchBody();
       expect(body.model).toBe("speech-2.8-hd");
@@ -473,19 +482,7 @@ describe("buildMinimaxSpeechProvider", () => {
 
     it("uses a minimax-portal auth profile before env API keys", async () => {
       process.env.MINIMAX_API_KEY = "sk-env";
-      await writeFile(
-        path.join(tempAgentDir, "auth-profiles.json"),
-        JSON.stringify({
-          version: 1,
-          profiles: {
-            "minimax-portal:test": {
-              type: "token",
-              provider: "minimax-portal",
-              token: "portal-token",
-            },
-          },
-        }),
-      );
+      seedMinimaxPortalAuthProfile(tempAgentDir);
       const hexAudio = Buffer.from("audio").toString("hex");
       vi.mocked(globalThis.fetch).mockResolvedValueOnce(
         new Response(JSON.stringify({ data: { audio: hexAudio } }), { status: 200 }),
@@ -505,7 +502,7 @@ describe("buildMinimaxSpeechProvider", () => {
         timeoutMs: 30000,
       });
 
-      const url = firstFetchCall().at(0);
+      const url = firstFetchCall()[0];
       const init = firstFetchInit();
       expect(url).toBe("https://api.minimaxi.com/v1/t2a_v2");
       expect(init?.headers).toEqual({

@@ -12,7 +12,6 @@ export type HandleDirectiveOnlyCoreParams = {
   sessionEntry: SessionEntry;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
-  storePath?: string;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
   elevatedFailures?: Array<{ gate: string; key: string }>;

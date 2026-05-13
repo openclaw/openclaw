@@ -1,6 +1,9 @@
-import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { createAsyncLock, type AsyncLock } from "./async-lock.js";
-import { loadMatrixCredentials, resolveMatrixCredentialsPath } from "./credentials-read.js";
+import {
+  loadMatrixCredentials,
+  resolveMatrixCredentialsStateKey,
+  saveMatrixCredentialsState,
+} from "./credentials-read.js";
 import type { MatrixStoredCredentials } from "./credentials-read.js";
 
 export {
@@ -14,19 +17,20 @@ export type { MatrixStoredCredentials } from "./credentials-read.js";
 
 const credentialWriteLocks = new Map<string, AsyncLock>();
 
-function withCredentialWriteLock<T>(credPath: string, fn: () => Promise<T>): Promise<T> {
-  let withLock = credentialWriteLocks.get(credPath);
+function withCredentialWriteLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
+  let withLock = credentialWriteLocks.get(lockKey);
   if (!withLock) {
     withLock = createAsyncLock();
-    credentialWriteLocks.set(credPath, withLock);
+    credentialWriteLocks.set(lockKey, withLock);
   }
   return withLock(fn);
 }
 
 async function writeMatrixCredentialsUnlocked(params: {
-  credPath: string;
   credentials: Omit<MatrixStoredCredentials, "createdAt" | "lastUsedAt">;
   existing: MatrixStoredCredentials | null;
+  env: NodeJS.ProcessEnv;
+  accountId?: string | null;
 }): Promise<void> {
   const now = new Date().toISOString();
   const toSave: MatrixStoredCredentials = {
@@ -34,7 +38,7 @@ async function writeMatrixCredentialsUnlocked(params: {
     createdAt: params.existing?.createdAt ?? now,
     lastUsedAt: now,
   };
-  await writeJsonFileAtomically(params.credPath, toSave);
+  saveMatrixCredentialsState(toSave, params.env, params.accountId);
 }
 
 export async function saveMatrixCredentials(
@@ -42,12 +46,13 @@ export async function saveMatrixCredentials(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
 ): Promise<void> {
-  const credPath = resolveMatrixCredentialsPath(env, accountId);
-  await withCredentialWriteLock(credPath, async () => {
+  const lockKey = resolveMatrixCredentialsStateKey(accountId);
+  await withCredentialWriteLock(lockKey, async () => {
     await writeMatrixCredentialsUnlocked({
-      credPath,
       credentials,
       existing: loadMatrixCredentials(env, accountId),
+      env,
+      accountId,
     });
   });
 }
@@ -57,8 +62,8 @@ export async function saveBackfilledMatrixDeviceId(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
 ): Promise<"saved" | "skipped"> {
-  const credPath = resolveMatrixCredentialsPath(env, accountId);
-  return await withCredentialWriteLock(credPath, async () => {
+  const lockKey = resolveMatrixCredentialsStateKey(accountId);
+  return await withCredentialWriteLock(lockKey, async () => {
     const existing = loadMatrixCredentials(env, accountId);
     if (
       existing &&
@@ -70,9 +75,10 @@ export async function saveBackfilledMatrixDeviceId(
     }
 
     await writeMatrixCredentialsUnlocked({
-      credPath,
       credentials,
       existing,
+      env,
+      accountId,
     });
     return "saved";
   });
@@ -82,14 +88,14 @@ export async function touchMatrixCredentials(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
 ): Promise<void> {
-  const credPath = resolveMatrixCredentialsPath(env, accountId);
-  await withCredentialWriteLock(credPath, async () => {
+  const lockKey = resolveMatrixCredentialsStateKey(accountId);
+  await withCredentialWriteLock(lockKey, async () => {
     const existing = loadMatrixCredentials(env, accountId);
     if (!existing) {
       return;
     }
 
     existing.lastUsedAt = new Date().toISOString();
-    await writeJsonFileAtomically(credPath, existing);
+    saveMatrixCredentialsState(existing, env, accountId);
   });
 }

@@ -32,7 +32,7 @@ export function pluginConfigTargetsChanged(
 ): boolean {
   const prefixes = Array.from(targetIds, (id) => [
     `plugins.entries.${id}`,
-    `plugins.installs.${id}`,
+    `installedPluginIndex.installRecords.${id}`,
   ]).flat();
   return changedPaths.some((path) =>
     prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}.`)),

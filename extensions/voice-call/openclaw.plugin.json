@@ -230,10 +230,6 @@
       "label": "Skip Signature Verification",
       "advanced": true
     },
-    "store": {
-      "label": "Call Log Store Path",
-      "advanced": true
-    },
     "sessionScope": {
       "label": "Session Scope",
       "help": "Use per-phone to preserve caller memory across calls, or per-call to isolate every call into a fresh voice session."
@@ -871,9 +867,6 @@
               "additionalProperties": true
             }
           },
-          "prefsPath": {
-            "type": "string"
-          },
           "maxTextLength": {
             "type": "integer",
             "minimum": 1
@@ -884,9 +877,6 @@
             "maximum": 120000
           }
         }
-      },
-      "store": {
-        "type": "string"
       },
       "sessionScope": {
         "type": "string",

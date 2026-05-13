@@ -39,9 +39,8 @@ type DirectDmRuntime = {
       }) => DirectDmRoute;
     };
     session: {
-      resolveStorePath: typeof import("../config/sessions.js").resolveStorePath;
       readSessionUpdatedAt: (params: {
-        storePath: string;
+        agentId?: string;
         sessionKey: string;
       }) => number | undefined;
       recordInboundSession: typeof import("../channels/session.js").recordInboundSession;
@@ -85,7 +84,6 @@ export async function dispatchInboundDirectDmWithRuntime(params: {
   onDispatchError: (err: unknown, info: { kind: string }) => void;
 }): Promise<{
   route: DirectDmRoute;
-  storePath: string;
   ctxPayload: FinalizedMsgContext;
 }> {
   const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
@@ -94,10 +92,9 @@ export async function dispatchInboundDirectDmWithRuntime(params: {
     accountId: params.accountId,
     peer: params.peer,
     runtime: params.runtime.channel,
-    sessionStore: params.cfg.session?.store,
   });
 
-  const { storePath, body } = buildEnvelope({
+  const { body } = buildEnvelope({
     channel: params.channelLabel,
     from: params.conversationLabel,
     body: params.rawBody,
@@ -133,7 +130,6 @@ export async function dispatchInboundDirectDmWithRuntime(params: {
     accountId: route.accountId ?? params.accountId,
     agentId: route.agentId,
     routeSessionKey: route.sessionKey,
-    storePath,
     ctxPayload,
     recordInboundSession: params.runtime.channel.session.recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher:
@@ -145,7 +141,6 @@ export async function dispatchInboundDirectDmWithRuntime(params: {
 
   return {
     route,
-    storePath,
     ctxPayload,
   };
 }

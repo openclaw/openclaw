@@ -3,8 +3,8 @@ import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 const hoisted = vi.hoisted(() => {
-  const loadSessionStoreMock = vi.fn();
-  return { loadSessionStoreMock };
+  const sessionRowsMock = vi.fn();
+  return { sessionRowsMock };
 });
 
 vi.mock("../../config/sessions.js", async () => {
@@ -13,9 +13,13 @@ vi.mock("../../config/sessions.js", async () => {
   );
   return {
     ...actual,
-    loadSessionStore: (...args: unknown[]) => hoisted.loadSessionStoreMock(...args),
+    sessionRows: (...args: unknown[]) => hoisted.sessionRowsMock(...args),
   };
 });
+
+vi.mock("../../config/sessions/store.js", () => ({
+  getSessionEntry: (params: { sessionKey: string }) => hoisted.sessionRowsMock()[params.sessionKey],
+}));
 
 const {
   createShouldEmitToolOutput,
@@ -27,7 +31,7 @@ const {
 describe("agent runner helpers", () => {
   beforeEach(() => {
     vi.useRealTimers();
-    hoisted.loadSessionStoreMock.mockReset();
+    hoisted.sessionRowsMock.mockReset();
   });
 
   it("detects audio payloads from mediaUrl/mediaUrls", () => {
@@ -44,17 +48,15 @@ describe("agent runner helpers", () => {
   });
 
   it("uses session verbose level when present", () => {
-    hoisted.loadSessionStoreMock.mockReturnValue({
+    hoisted.sessionRowsMock.mockReturnValue({
       "agent:main:main": { verboseLevel: "full" },
     });
     const shouldEmitResult = createShouldEmitToolResult({
       sessionKey: "agent:main:main",
-      storePath: "/tmp/store.json",
       resolvedVerboseLevel: "off",
     });
     const shouldEmitOutput = createShouldEmitToolOutput({
       sessionKey: "agent:main:main",
-      storePath: "/tmp/store.json",
       resolvedVerboseLevel: "off",
     });
     expect(shouldEmitResult()).toBe(true);
@@ -64,45 +66,42 @@ describe("agent runner helpers", () => {
   it("caches session verbose reads briefly while still refreshing live changes", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    hoisted.loadSessionStoreMock.mockReturnValue({
+    hoisted.sessionRowsMock.mockReturnValue({
       "agent:main:main": { verboseLevel: "full" },
     });
     const shouldEmitOutput = createShouldEmitToolOutput({
       sessionKey: "agent:main:main",
-      storePath: "/tmp/store.json",
       resolvedVerboseLevel: "off",
     });
 
     expect(shouldEmitOutput()).toBe(true);
-    hoisted.loadSessionStoreMock.mockReturnValue({
+    hoisted.sessionRowsMock.mockReturnValue({
       "agent:main:main": { verboseLevel: "off" },
     });
     expect(shouldEmitOutput()).toBe(true);
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledOnce();
+    expect(hoisted.sessionRowsMock).toHaveBeenCalledOnce();
 
     vi.setSystemTime(1_251);
     expect(shouldEmitOutput()).toBe(false);
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledTimes(2);
+    expect(hoisted.sessionRowsMock).toHaveBeenCalledTimes(2);
   });
 
   it("falls back when store read fails or session value is invalid", () => {
-    hoisted.loadSessionStoreMock.mockImplementation(() => {
+    hoisted.sessionRowsMock.mockImplementation(() => {
       throw new Error("boom");
     });
     const fallbackOn = createShouldEmitToolResult({
       sessionKey: "agent:main:main",
-      storePath: "/tmp/store.json",
       resolvedVerboseLevel: "on",
     });
     expect(fallbackOn()).toBe(true);
 
-    hoisted.loadSessionStoreMock.mockClear();
-    hoisted.loadSessionStoreMock.mockReturnValue({
+    hoisted.sessionRowsMock.mockClear();
+    hoisted.sessionRowsMock.mockReturnValue({
       "agent:main:main": { verboseLevel: "weird" },
     });
     const fallbackFull = createShouldEmitToolOutput({
       sessionKey: "agent:main:main",
-      storePath: "/tmp/store.json",
       resolvedVerboseLevel: "full",
     });
     expect(fallbackFull()).toBe(true);

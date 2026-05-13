@@ -81,7 +81,7 @@ export function createSessionsListResult(
 
   return {
     ts: 0,
-    path: "",
+    databasePath: "",
     count: omitSessionFromList ? 0 : 1,
     defaults: {
       modelProvider: defaultsProvider,
@@ -109,7 +109,7 @@ export function createResolvedModelPatch(
 ): SessionsPatchResult {
   return {
     ok: true,
-    path: "",
+    databasePath: "",
     key: "main",
     entry: {
       sessionId: "main",

@@ -1,9 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
-  const updateSessionStore = vi.fn();
-  const resolveStorePath = vi.fn(() => "/tmp/openclaw-sessions.json");
-  return { updateSessionStore, resolveStorePath };
+  const listSessionEntries = vi.fn();
+  const upsertSessionEntry = vi.fn();
+  return { listSessionEntries, upsertSessionEntry };
 });
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
@@ -12,16 +12,21 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   );
   return {
     ...actual,
-    updateSessionStore: hoisted.updateSessionStore,
-    resolveStorePath: hoisted.resolveStorePath,
+    listSessionEntries: hoisted.listSessionEntries,
+    upsertSessionEntry: hoisted.upsertSessionEntry,
   };
 });
 
 let closeDiscordThreadSessions: typeof import("./thread-session-close.js").closeDiscordThreadSessions;
 
 function setupStore(store: Record<string, { updatedAt: number }>) {
-  hoisted.updateSessionStore.mockImplementation(
-    async (_storePath: string, mutator: (s: typeof store) => unknown) => mutator(store),
+  hoisted.listSessionEntries.mockImplementation(() =>
+    Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+  );
+  hoisted.upsertSessionEntry.mockImplementation(
+    ({ sessionKey, entry }: { sessionKey: string; entry: { updatedAt: number } }) => {
+      store[sessionKey] = entry;
+    },
   );
 }
 
@@ -37,9 +42,9 @@ describe("closeDiscordThreadSessions", () => {
   });
 
   beforeEach(() => {
-    hoisted.updateSessionStore.mockClear();
-    hoisted.resolveStorePath.mockClear();
-    hoisted.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions.json");
+    hoisted.listSessionEntries.mockClear();
+    hoisted.listSessionEntries.mockReturnValue([]);
+    hoisted.upsertSessionEntry.mockClear();
   });
 
   it("resets updatedAt to 0 for sessions whose key contains the threadId", async () => {
@@ -142,7 +147,7 @@ describe("closeDiscordThreadSessions", () => {
     });
 
     expect(count).toBe(0);
-    expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
+    expect(hoisted.listSessionEntries).not.toHaveBeenCalled();
   });
 
   it("does not recount sessions that were already reset", async () => {
@@ -163,18 +168,16 @@ describe("closeDiscordThreadSessions", () => {
     expect(store[UNMATCHED_KEY].updatedAt).toBe(1_700_000_000_001);
   });
 
-  it("resolves the store path using cfg.session.store and accountId", async () => {
+  it("lists rows using the account id as the agent id", async () => {
     const store = {};
     setupStore(store);
 
     await closeDiscordThreadSessions({
-      cfg: { session: { store: "/custom/path/sessions.json" } },
+      cfg: { session: {} },
       accountId: "my-bot",
       threadId: THREAD_ID,
     });
 
-    expect(hoisted.resolveStorePath).toHaveBeenCalledWith("/custom/path/sessions.json", {
-      agentId: "my-bot",
-    });
+    expect(hoisted.listSessionEntries).toHaveBeenCalledWith({ agentId: "my-bot" });
   });
 });

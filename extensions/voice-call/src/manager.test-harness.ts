@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
+import { createMemoryCallRecordStore } from "./manager/store.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type {
+  CallRecord,
   GetCallStatusInput,
   GetCallStatusResult,
   HangupCallInput,
@@ -68,7 +70,7 @@ export class FakeProvider implements VoiceCallProvider {
   }
 }
 
-export function createTestStorePath(): string {
+export function createTestStoreKey(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-test-"));
 }
 
@@ -85,7 +87,7 @@ export async function createManagerHarness(
     fromNumber: "+15550000000",
     ...configOverrides,
   });
-  const manager = new CallManager(config, createTestStorePath());
+  const manager = new CallManager(config, createTestStoreKey());
   await manager.initialize(provider, "https://example.com/voice/webhook");
   return { manager, provider };
 }
@@ -100,11 +102,11 @@ export function markCallAnswered(manager: CallManager, callId: string, eventId: 
   });
 }
 
-export function writeCallsToStore(storePath: string, calls: Record<string, unknown>[]): void {
-  fs.mkdirSync(storePath, { recursive: true });
-  const logPath = path.join(storePath, "calls.jsonl");
-  const lines = calls.map((c) => JSON.stringify(c)).join("\n") + "\n";
-  fs.writeFileSync(logPath, lines);
+export function writeCallsToStore(storeKey: string, calls: Record<string, unknown>[]): void {
+  const store = createMemoryCallRecordStore(storeKey);
+  for (const call of calls as CallRecord[]) {
+    void store.register(call.callId, call);
+  }
 }
 
 export function makePersistedCall(

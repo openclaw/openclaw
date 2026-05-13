@@ -2,18 +2,6 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
 describe("config schema regressions", () => {
-  it("accepts session write-lock acquire timeout", () => {
-    const res = validateConfigObject({
-      session: {
-        writeLock: {
-          acquireTimeoutMs: 60_000,
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
       agents: {
@@ -157,12 +145,12 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts agents.defaults.compaction.truncateAfterCompaction", () => {
+  it("accepts agents.defaults.compaction.rotateAfterCompaction", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
           compaction: {
-            truncateAfterCompaction: true,
+            rotateAfterCompaction: true,
             maxActiveTranscriptBytes: "20mb",
           },
         },

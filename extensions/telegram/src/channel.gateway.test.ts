@@ -284,3 +284,91 @@ describe("telegramPlugin outbound attachments", () => {
     expect(sendMessageOptionsAt(0).textMode).toBe("html");
   });
 });
+
+describe("telegramPlugin outbound attachments", () => {
+  it("preserves default markdown rendering unless a parse mode is explicit", async () => {
+    installTelegramRuntime();
+    sendMessageTelegram.mockResolvedValue({ messageId: "tg-1", chatId: "12345" });
+    const sendText = telegramPlugin.outbound?.sendText;
+    expect(sendText).toBeDefined();
+
+    await sendText!({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "hi **boss**",
+    });
+    expect(sendMessageTelegram.mock.calls[0]?.[2]).not.toHaveProperty("textMode");
+
+    await sendText!({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "<b>hi boss</b>",
+      formatting: { parseMode: "HTML" },
+    });
+    expect(sendMessageTelegram.mock.calls[1]?.[2]).toMatchObject({ textMode: "html" });
+  });
+
+  it("preserves explicit HTML parse mode for payload media captions", async () => {
+    installTelegramRuntime();
+    sendMessageTelegram.mockResolvedValue({ messageId: "tg-payload", chatId: "12345" });
+    const sendPayload = telegramPlugin.outbound?.sendPayload;
+    expect(sendPayload).toBeDefined();
+
+    await sendPayload!({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "",
+      payload: {
+        text: "<b>report</b>",
+        mediaUrl: "https://example.com/report.png",
+      },
+      formatting: { parseMode: "HTML" },
+    });
+
+    expect(sendMessageTelegram.mock.calls[0]?.[2]).toMatchObject({ textMode: "html" });
+  });
+});
+
+describe("telegramPlugin outbound attachments", () => {
+  it("preserves default markdown rendering unless a parse mode is explicit", async () => {
+    installTelegramRuntime();
+    sendMessageTelegram.mockResolvedValue({ messageId: "tg-1", chatId: "12345" });
+    const sendText = telegramPlugin.outbound?.sendText;
+    expect(sendText).toBeDefined();
+
+    await sendText!({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "hi **boss**",
+    });
+    expect(sendMessageTelegram.mock.calls[0]?.[2]).not.toHaveProperty("textMode");
+
+    await sendText!({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "<b>hi boss</b>",
+      formatting: { parseMode: "HTML" },
+    });
+    expect(sendMessageTelegram.mock.calls[1]?.[2]).toMatchObject({ textMode: "html" });
+  });
+
+  it("preserves explicit HTML parse mode for payload media captions", async () => {
+    installTelegramRuntime();
+    sendMessageTelegram.mockResolvedValue({ messageId: "tg-payload", chatId: "12345" });
+    const sendPayload = telegramPlugin.outbound?.sendPayload;
+    expect(sendPayload).toBeDefined();
+
+    await sendPayload!({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "",
+      payload: {
+        text: "<b>report</b>",
+        mediaUrl: "https://example.com/report.png",
+      },
+      formatting: { parseMode: "HTML" },
+    });
+
+    expect(sendMessageTelegram.mock.calls[0]?.[2]).toMatchObject({ textMode: "html" });
+  });
+});

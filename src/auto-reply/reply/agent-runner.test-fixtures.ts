@@ -1,6 +1,9 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import type { SessionEntry } from "../../config/sessions.js";
+import {
+  getSessionEntry,
+  resolveAgentIdFromSessionKey,
+  type SessionEntry,
+  upsertSessionEntry,
+} from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 
 export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun {
@@ -14,7 +17,6 @@ export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {
       sessionId: "session",
       sessionKey: "main",
       messageProvider: "whatsapp",
-      sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       config: {},
       skillsSnapshot: {},
@@ -32,11 +34,24 @@ export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {
   } as unknown as FollowupRun;
 }
 
-export async function writeTestSessionStore(
-  storePath: string,
+export async function writeTestSessionRow(
   sessionKey: string,
   entry: SessionEntry,
+  agentId = resolveAgentIdFromSessionKey(sessionKey),
 ): Promise<void> {
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: entry }, null, 2), "utf8");
+  upsertSessionEntry({
+    agentId,
+    sessionKey,
+    entry,
+  });
+}
+
+export function readTestSessionRow(
+  sessionKey: string,
+  agentId = resolveAgentIdFromSessionKey(sessionKey),
+): SessionEntry | undefined {
+  return getSessionEntry({
+    agentId,
+    sessionKey,
+  });
 }

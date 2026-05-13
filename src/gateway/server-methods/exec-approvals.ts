@@ -118,7 +118,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "exec approvals file is required"),
+        errorShape(ErrorCodes.INVALID_REQUEST, "exec approvals document is required"),
       );
       return;
     }

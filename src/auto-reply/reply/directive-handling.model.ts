@@ -1,4 +1,4 @@
-import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
+import { resolveAuthProfileStoreLocationForDisplay } from "../../agents/auth-profiles.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import {
   type ModelAliasIndex,
@@ -404,7 +404,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
     };
   }
 
-  const modelsPath = `${params.agentDir}/models.json`;
+  const modelsPath = `SQLite model catalog for ${params.agentDir}`;
   const formatPath = (value: string) => shortenHomePath(value);
   const authMode: ModelAuthDetailMode = "verbose";
   if (pickerCatalog.length === 0) {
@@ -443,7 +443,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
     modelRefs.activeDiffers ? `Active: ${modelRefs.active.label} (runtime)` : null,
     `Default: ${defaultLabel}`,
     `Agent: ${params.activeAgentId}`,
-    `Auth file: ${formatPath(resolveAuthStorePathForDisplay(params.agentDir))}`,
+    `Auth store: ${formatPath(resolveAuthProfileStoreLocationForDisplay(params.agentDir))}`,
   ].filter((line): line is string => Boolean(line));
   if (params.resetModelOverride) {
     lines.push(`(previous selection reset to default)`);

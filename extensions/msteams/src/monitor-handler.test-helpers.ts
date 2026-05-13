@@ -16,14 +16,13 @@ type MSTeamsTestRuntimeOptions = {
   resolveAgentRoute?: (params: RuntimeRoutePeer) => unknown;
   hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
   resolveTextChunkLimit?: () => number;
-  resolveStorePath?: () => string;
 };
 
 export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {}): void {
   const runPrepared = vi.fn(
     async (turn: Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]) => {
       await turn.recordInboundSession({
-        storePath: turn.storePath,
+        agentId: turn.agentId,
         sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
         ctx: turn.ctxPayload,
         groupResolution: turn.record?.groupResolution,
@@ -108,7 +107,6 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
       },
       session: {
         recordInboundSession: options.recordInboundSession ?? vi.fn(async () => undefined),
-        ...(options.resolveStorePath ? { resolveStorePath: options.resolveStorePath } : {}),
       },
       turn: {
         run: run as unknown as PluginRuntime["channel"]["turn"]["run"],

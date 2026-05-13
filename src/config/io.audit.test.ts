@@ -1,15 +1,16 @@
 import fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   appendConfigAuditRecord,
   createConfigWriteAuditRecordBase,
   finalizeConfigWriteAuditRecord,
   formatConfigOverwriteLogMessage,
+  listConfigAuditRecordsForTests,
   redactConfigAuditArgv,
-  resolveConfigAuditLogPath,
   scrubConfigAuditLog,
 } from "./io.audit.js";
 
@@ -56,12 +57,10 @@ function createRenameAuditRecord(home: string) {
 }
 
 function readAuditLog(home: string): unknown[] {
-  const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
-  return fs
-    .readFileSync(auditPath, "utf-8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
+  return listConfigAuditRecordsForTests({
+    env: {} as NodeJS.ProcessEnv,
+    homedir: () => home,
+  });
 }
 
 function requireAuditRecord(value: unknown): Record<string, unknown> {
@@ -82,18 +81,8 @@ describe("config io audit helpers", () => {
     await suiteRootTracker.cleanup();
   });
 
-  it('ignores literal "undefined" home env values when choosing the audit log path', async () => {
-    const home = await suiteRootTracker.make("home");
-    const auditPath = resolveConfigAuditLogPath(
-      {
-        HOME: "undefined",
-        USERPROFILE: "null",
-        OPENCLAW_HOME: "undefined",
-      } as NodeJS.ProcessEnv,
-      () => home,
-    );
-    expect(auditPath).toBe(path.join(home, ".openclaw", "logs", "config-audit.jsonl"));
-    expect(auditPath.startsWith(path.resolve("undefined"))).toBe(false);
+  afterEach(() => {
+    resetPluginStateStoreForTests();
   });
 
   it("formats overwrite warnings with hash transition and backup path", () => {
@@ -185,7 +174,7 @@ describe("config io audit helpers", () => {
     expect(record.errorMessage).toBe("disk full");
   });
 
-  it("appends JSONL audit entries to the resolved audit path", async () => {
+  it("stores audit entries in SQLite plugin state", async () => {
     const home = await suiteRootTracker.make("append");
     const record = createRenameAuditRecord(home);
 
@@ -225,10 +214,7 @@ describe("config io audit helpers", () => {
       record,
     });
 
-    const raw = fs.readFileSync(
-      path.join(home, ".openclaw", "logs", "config-audit.jsonl"),
-      "utf-8",
-    );
+    const raw = JSON.stringify(readAuditLog(home));
     expect(raw).not.toContain("AIzaSyD-very-real-looking");
     expect(raw).not.toContain("ya29.fake-access-token");
     expect(raw).not.toContain("abcd-efgh-ijkl-mnop");
@@ -529,7 +515,11 @@ describe("config io audit helpers", () => {
     });
 
     expect(result).toEqual({ scanned: 2, rewritten: 1, skipped: 0, aborted: false });
-    const after = readAuditLog(home);
+    const after = fs
+      .readFileSync(auditPath, "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as unknown);
     expect(after).toHaveLength(2);
     const firstAfter = requireAuditRecord(after[0]);
     const secondAfter = requireAuditRecord(after[1]);

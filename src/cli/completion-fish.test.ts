@@ -38,11 +38,11 @@ describe("completion-fish helpers", () => {
     const line = buildFishOptionCompletionLine({
       rootCmd: "openclaw",
       condition: "__fish_seen_subcommand_from completion",
-      flags: "--write-state",
-      description: "Write cache",
+      flags: "--install",
+      description: "Install completion script",
     });
     expect(line).toBe(
-      `complete -c openclaw -n "__fish_seen_subcommand_from completion" -l write-state -d 'Write cache'\n`,
+      `complete -c openclaw -n "__fish_seen_subcommand_from completion" -l install -d 'Install completion script'\n`,
     );
   });
 });

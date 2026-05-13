@@ -1,10 +1,14 @@
 import "./isolated-agent.mocks.js";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import { makeCfg, makeJob, writeSessionStore } from "./isolated-agent.test-harness.js";
+import {
+  makeCfg,
+  makeJob,
+  seedMainRouteSession,
+  seedCronSessionRows,
+} from "./isolated-agent.test-harness.js";
 import {
   DEFAULT_AGENT_TURN_PAYLOAD,
   DEFAULT_MESSAGE,
@@ -27,7 +31,6 @@ function lastEmbeddedAgentCall(): {
   prompt?: string;
   sessionKey?: string;
   workspaceDir?: string;
-  sessionFile?: string;
 } {
   const calls = runEmbeddedPiAgentMock.mock.calls;
   const call = calls[calls.length - 1];
@@ -43,7 +46,6 @@ function lastEmbeddedAgentCall(): {
     prompt?: string;
     sessionKey?: string;
     workspaceDir?: string;
-    sessionFile?: string;
   };
 }
 
@@ -81,25 +83,21 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     });
   });
 
-  it("uses agentId for workspace, session key, and store paths", async () => {
+  it("uses agentId for workspace and session identity", async () => {
     await withTempHome(async (home) => {
       const deps = makeDeps();
       const opsWorkspace = path.join(home, "ops-workspace");
       mockEmbeddedOk();
 
-      const cfg = makeCfg(
-        home,
-        path.join(home, ".openclaw", "agents", "{agentId}", "sessions", "sessions.json"),
-        {
-          agents: {
-            defaults: { workspace: path.join(home, "default-workspace") },
-            list: [
-              { id: "main", default: true },
-              { id: "ops", workspace: opsWorkspace },
-            ],
-          },
+      const cfg = makeCfg(home, {
+        agents: {
+          defaults: { workspace: path.join(home, "default-workspace") },
+          list: [
+            { id: "main", default: true },
+            { id: "ops", workspace: opsWorkspace },
+          ],
         },
-      );
+      });
 
       const res = await runCronIsolatedAgentTurn({
         cfg,
@@ -119,30 +117,37 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       });
 
       expect(res.status).toBe("ok");
-      const call = lastEmbeddedAgentCall();
-      expect(call.sessionKey).toMatch(/^agent:ops:cron:job-ops:run:/);
-      expect(call.workspaceDir).toBe(opsWorkspace);
-      expect(call.sessionFile).toContain(path.join("agents", "ops"));
+      const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+        agentId?: string;
+        sessionId?: string;
+        sessionKey?: string;
+        workspaceDir?: string;
+      };
+      expect(call?.agentId).toBe("ops");
+      expect(call?.sessionId).toBe(res.sessionId);
+      expect(call?.sessionKey).toMatch(/^agent:ops:cron:job-ops:run:/);
+      expect(call?.workspaceDir).toBe(opsWorkspace);
     });
   });
 
-  it("passes sessionFile to isolated cron runs", async () => {
+  it("passes session identity to isolated cron runs", async () => {
     await withTempHome(async (home) => {
-      await runCronTurn(home, {
+      const { res } = await runCronTurn(home, {
         jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
       });
-      const call = lastEmbeddedAgentCall();
+      const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as {
+        agentId?: string;
+        sessionId?: string;
+      };
 
-      expect(call.sessionFile).toContain(
-        path.join(home, ".openclaw", "agents", "main", "sessions"),
-      );
-      expect(String(call.sessionFile).endsWith(".jsonl")).toBe(true);
+      expect(call?.agentId).toBe("main");
+      expect(call?.sessionId).toBe(res.sessionId);
     });
   });
 
   it("starts a fresh session id for each cron run", async () => {
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      await seedMainRouteSession(home, { lastChannel: "webchat", lastTo: "" });
       const deps = makeDeps();
       const runPingTurn = () =>
         runCronTurn(home, {
@@ -150,7 +155,6 @@ describe("runCronIsolatedAgentTurn session identity", () => {
           jobPayload: { kind: "agentTurn", message: "ping" },
           message: "ping",
           mockTexts: ["ok"],
-          storePath,
         });
 
       const first = (await runPingTurn()).res;
@@ -167,22 +171,25 @@ describe("runCronIsolatedAgentTurn session identity", () => {
 
   it("preserves an existing cron session label", async () => {
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-      const raw = await fs.readFile(storePath, "utf-8");
-      const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
-      store["agent:main:cron:job-1"] = {
-        sessionId: "old",
-        updatedAt: Date.now(),
-        label: "Nightly digest",
-      };
-      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await seedCronSessionRows(home, {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now(),
+          lastChannel: "webchat",
+          lastTo: "",
+        },
+        "agent:main:cron:job-1": {
+          sessionId: "old",
+          updatedAt: Date.now(),
+          label: "Nightly digest",
+        },
+      });
 
       await runCronTurn(home, {
         jobPayload: { kind: "agentTurn", message: "ping" },
         message: "ping",
-        storePath,
       });
-      const entry = await readSessionEntry(storePath, "agent:main:cron:job-1");
+      const entry = await readSessionEntry("main", "agent:main:cron:job-1");
 
       expect(entry?.label).toBe("Nightly digest");
     });

@@ -1,9 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  parseRawSessionConversationRef,
-  parseThreadSessionSuffix,
-} from "../sessions/session-key-utils.js";
-import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
@@ -16,10 +12,7 @@ import {
 } from "./channel-config.js";
 import { normalizeChatType } from "./chat-type.js";
 import { getChannelPlugin } from "./plugins/registry.js";
-import {
-  resolveSessionConversation,
-  resolveSessionConversationRef,
-} from "./plugins/session-conversation.js";
+import { resolveSessionConversation } from "./plugins/session-conversation.js";
 
 export type ChannelModelOverride = {
   channel: string;
@@ -38,6 +31,8 @@ type ChannelModelOverrideParams = {
   groupChannel?: string | null;
   groupSubject?: string | null;
   parentSessionKey?: string | null;
+  parentConversationId?: string | null;
+  parentConversationCandidates?: readonly (string | null | undefined)[];
 };
 
 function resolveProviderEntry(
@@ -61,28 +56,27 @@ function resolveProviderEntry(
 function buildChannelCandidates(
   params: Pick<
     ChannelModelOverrideParams,
-    "channel" | "groupId" | "groupChatType" | "groupChannel" | "groupSubject" | "parentSessionKey"
+    | "channel"
+    | "groupId"
+    | "groupChatType"
+    | "groupChannel"
+    | "groupSubject"
+    | "parentConversationId"
+    | "parentConversationCandidates"
   >,
 ): { keys: string[]; parentKeys: string[] } {
   const normalizedChannel =
     normalizeMessageChannel(params.channel ?? "") ??
     normalizeOptionalLowercaseString(params.channel);
   const groupId = normalizeOptionalString(params.groupId);
-  const rawParentConversation = parseRawSessionConversationRef(params.parentSessionKey);
+  const parentConversationId = normalizeOptionalString(params.parentConversationId);
   const channelPlugin = normalizedChannel ? getChannelPlugin(normalizedChannel) : undefined;
   const parentOverrideFallbacks =
     channelPlugin?.conversationBindings?.buildModelOverrideParentCandidates?.({
-      parentConversationId: rawParentConversation?.rawId,
+      parentConversationId,
     }) ?? [];
-  const sessionConversation = resolveSessionConversationRef(params.parentSessionKey, {
-    bundledFallback: parentOverrideFallbacks.length === 0,
-  });
   const groupConversationKind =
-    normalizeChatType(params.groupChatType ?? undefined) === "channel"
-      ? "channel"
-      : sessionConversation?.kind === "channel"
-        ? "channel"
-        : "group";
+    normalizeChatType(params.groupChatType ?? undefined) === "channel" ? "channel" : "group";
   const groupConversation = resolveSessionConversation({
     channel: normalizedChannel ?? "",
     kind: groupConversationKind,
@@ -98,9 +92,9 @@ function buildChannelCandidates(
   return {
     keys: buildChannelKeyCandidates(
       groupId,
-      sessionConversation?.rawId,
       ...(groupConversation?.parentConversationCandidates ?? []),
-      ...(sessionConversation?.parentConversationCandidates ?? []),
+      parentConversationId,
+      ...(params.parentConversationCandidates ?? []),
       ...parentOverrideFallbacks,
     ),
     parentKeys: buildChannelKeyCandidates(
@@ -114,24 +108,17 @@ function buildChannelCandidates(
   };
 }
 
-function buildGenericParentOverrideCandidates(sessionKey: string | null | undefined): string[] {
-  const raw = parseRawSessionConversationRef(sessionKey);
-  if (!raw) {
-    return [];
-  }
-  const { baseSessionKey, threadId } = parseThreadSessionSuffix(raw.rawId);
-  return buildChannelKeyCandidates(threadId ? baseSessionKey : raw.rawId);
-}
-
 function resolveDirectChannelModelMatch(params: {
   channel: string;
   providerEntries: Record<string, string>;
   groupId?: string | null;
-  parentSessionKey?: string | null;
+  parentConversationId?: string | null;
+  parentConversationCandidates?: readonly (string | null | undefined)[];
 }): { model: string; matchKey?: string; matchSource?: ChannelMatchSource } | null {
   const directKeys = buildChannelKeyCandidates(
     params.groupId,
-    ...buildGenericParentOverrideCandidates(params.parentSessionKey),
+    params.parentConversationId,
+    ...(params.parentConversationCandidates ?? []),
   );
   if (directKeys.length === 0) {
     return null;
@@ -175,7 +162,8 @@ export function resolveChannelModelOverride(
     channel,
     providerEntries,
     groupId: params.groupId,
-    parentSessionKey: params.parentSessionKey,
+    parentConversationId: params.parentConversationId,
+    parentConversationCandidates: params.parentConversationCandidates,
   });
   if (directMatch) {
     return {

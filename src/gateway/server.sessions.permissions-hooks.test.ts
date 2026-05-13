@@ -1,16 +1,13 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { getSessionEntry, upsertSessionEntry } from "../config/sessions.js";
 import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import {
   connectOk,
   rpcReq,
-  testState,
   trackConnectChallengeNonce,
-  writeSessionStore,
+  seedGatewaySessionEntries,
 } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -20,7 +17,7 @@ import {
   isInternalHookEvent,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient, getHarness } = setupGatewaySessionsTestHarness();
+const { createSessionFixtureDir, openClient, getHarness } = setupGatewaySessionsTestHarness();
 
 function requireRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -30,7 +27,7 @@ function requireRecord(value: unknown): Record<string, unknown> {
 }
 
 function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[])[] } }) {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error("Expected first mock call");
   }
@@ -38,13 +35,12 @@ function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[]
 }
 
 test("webchat clients cannot patch, delete, compact, or restore sessions", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { dir } = await createSessionFixtureDir();
   const fixture = await createCheckpointFixture(dir);
 
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry(fixture.sessionId, {
-        sessionFile: fixture.sessionFile,
         compactionCheckpoints: [
           {
             checkpointId: "checkpoint-1",
@@ -57,13 +53,11 @@ test("webchat clients cannot patch, delete, compact, or restore sessions", async
             summary: "checkpoint summary",
             firstKeptEntryId: fixture.preCompactionLeafId,
             preCompaction: {
-              sessionId: fixture.preCompactionSession.getSessionId(),
-              sessionFile: fixture.preCompactionSessionFile,
+              sessionId: fixture.preCompactionSessionId,
               leafId: fixture.preCompactionLeafId,
             },
             postCompaction: {
               sessionId: fixture.sessionId,
-              sessionFile: fixture.sessionFile,
               leafId: fixture.postCompactionLeafId,
               entryId: fixture.postCompactionLeafId,
             },
@@ -120,16 +114,12 @@ test("webchat clients cannot patch, delete, compact, or restore sessions", async
 });
 
 test("session:patch hook fires with correct context", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-patch-hook-"));
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
-
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-hook-test", {
-        label: "original-label",
-      }),
-    },
+  upsertSessionEntry({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    entry: sessionStoreEntry("sess-hook-test", {
+      label: "original-label",
+    }),
   });
 
   sessionHookMocks.triggerInternalHook.mockClear();
@@ -157,11 +147,7 @@ test("session:patch hook fires with correct context", async () => {
 });
 
 test("session:patch hook does not fire for webchat clients", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-webchat-hook-"));
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
-
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-webchat-test"),
     },
@@ -196,11 +182,7 @@ test("session:patch hook does not fire for webchat clients", async () => {
 });
 
 test("session:patch hook only fires after successful patch", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-success-hook-"));
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
-
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-success-test"),
     },
@@ -259,8 +241,8 @@ test("session:patch skips clone and dispatch when no hooks listen", async () => 
 });
 
 test("session:patch hook mutations cannot change the response path", async () => {
-  await createSessionStoreDir();
-  await writeSessionStore({
+  await createSessionFixtureDir();
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-cfg-isolation-test"),
     },
@@ -305,15 +287,15 @@ test("session:patch hook mutations cannot change the response path", async () =>
 });
 
 test("control-ui client can delete sessions even in webchat mode", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-control-ui-delete-"));
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
-
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main"),
-      "discord:group:dev": sessionStoreEntry("sess-group"),
-    },
+  upsertSessionEntry({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    entry: sessionStoreEntry("sess-main"),
+  });
+  upsertSessionEntry({
+    agentId: "main",
+    sessionKey: "agent:main:discord:group:dev",
+    entry: sessionStoreEntry("sess-group"),
   });
 
   const ws = new WebSocket(`ws://127.0.0.1:${getHarness().port}`, {
@@ -337,11 +319,9 @@ test("control-ui client can delete sessions even in webchat mode", async () => {
   expect(deleted.ok).toBe(true);
   expect(deleted.payload?.deleted).toBe(true);
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { sessionId?: string }
-  >;
-  expect(store["agent:main:discord:group:dev"]).toBeUndefined();
+  expect(
+    getSessionEntry({ agentId: "main", sessionKey: "agent:main:discord:group:dev" }),
+  ).toBeUndefined();
 
   ws.close();
 });

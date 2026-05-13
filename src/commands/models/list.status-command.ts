@@ -1,4 +1,3 @@
-import path from "node:path";
 import {
   resolveAgentDir,
   resolveAgentExplicitModelPrimary,
@@ -12,7 +11,7 @@ import {
   formatRemainingShort,
 } from "../../agents/auth-health.js";
 import { resolveAuthProfileOrder } from "../../agents/auth-profiles/order.js";
-import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
+import { resolveAuthProfileStoreLocationForDisplay } from "../../agents/auth-profiles/paths.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
@@ -238,7 +237,7 @@ export async function modelsStatusCommand(
   const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
 
   const store = ensureAuthProfileStore(agentDir);
-  const modelsPath = path.join(agentDir, "models.json");
+  const modelCatalogSource = `SQLite model catalog for ${agentDir}`;
 
   const providersFromStore = new Set(
     Object.values(store.profiles)
@@ -364,7 +363,7 @@ export async function modelsStatusCommand(
         provider,
         cfg,
         store,
-        modelsPath,
+        modelsPath: modelCatalogSource,
         agentDir,
         workspaceDir,
         syntheticAuth: syntheticAuthByProvider.get(provider),
@@ -374,7 +373,7 @@ export async function modelsStatusCommand(
       const hasAny =
         entry.profiles.count > 0 ||
         Boolean(entry.env) ||
-        Boolean(entry.modelsJson) ||
+        Boolean(entry.modelCatalog) ||
         Boolean(entry.syntheticAuth);
       return hasAny;
     });
@@ -621,7 +620,7 @@ export async function modelsStatusCommand(
       aliases,
       allowed,
       auth: {
-        storePath: resolveAuthStorePathForDisplay(agentDir),
+        store: resolveAuthProfileStoreLocationForDisplay(agentDir),
         shellEnvFallback: {
           enabled: shellFallbackEnabled,
           appliedKeys: applied,
@@ -733,7 +732,7 @@ export async function modelsStatusCommand(
     `${label("Auth store")}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
       theme.info,
-      shortenHomePath(resolveAuthStorePathForDisplay(agentDir)),
+      shortenHomePath(resolveAuthProfileStoreLocationForDisplay(agentDir)),
     )}`,
   );
   runtime.log(
@@ -792,11 +791,14 @@ export async function modelsStatusCommand(
         ),
       );
     }
-    if (entry.modelsJson) {
+    if (entry.modelCatalog) {
       bits.push(
         formatKeyValue(
-          "models.json",
-          `${entry.modelsJson.value}${separator}${formatKeyValue("source", entry.modelsJson.source)}`,
+          "model catalog",
+          `${entry.modelCatalog.value}${separator}${formatKeyValue(
+            "source",
+            entry.modelCatalog.source,
+          )}`,
         ),
       );
     }

@@ -4,7 +4,7 @@ import { readLoggingConfig } from "./config.js";
 import { replacePatternBounded } from "./redact-bounded.js";
 
 export type RedactSensitiveMode = "off" | "tools";
-type RedactPattern = string | RegExp;
+export type RedactPattern = string | RegExp;
 type LoggingConfig = OpenClawConfig["logging"];
 
 const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
@@ -85,7 +85,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
 ];
 
-type RedactOptions = {
+export type RedactOptions = {
   mode?: RedactSensitiveMode;
   patterns?: RedactPattern[];
 };
@@ -253,7 +253,11 @@ function redactSensitiveFieldValueWithOptions(
   value: string,
   options: RedactOptions,
 ): string {
-  const redacted = redactSensitiveText(value, options);
+  const resolved = resolveRedactOptions(options);
+  if (resolved.mode === "off") {
+    return value;
+  }
+  const redacted = redactText(value, resolved.patterns);
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
   if (shouldRedactAppPassword) {
     const appRedacted = redactAppSpecificPasswords(redacted);
@@ -270,8 +274,12 @@ function redactSensitiveFieldValueWithOptions(
   return value;
 }
 
-export function redactSensitiveFieldValue(key: string, value: string): string {
-  return redactSensitiveFieldValueWithConfig(key, value, readLoggingConfig());
+export function redactSensitiveFieldValue(
+  key: string,
+  value: string,
+  options?: RedactOptions,
+): string {
+  return redactSensitiveFieldValueWithOptions(key, value, options ?? resolveToolPayloadRedaction());
 }
 
 export function redactSensitiveFieldValueWithConfig(

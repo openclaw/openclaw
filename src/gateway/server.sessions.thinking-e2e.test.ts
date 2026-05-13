@@ -8,7 +8,7 @@
  */
 import { expect, test, vi } from "vitest";
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
-import { testState, writeSessionStore } from "./test-helpers.js";
+import { testState, seedGatewaySessionEntries } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
@@ -16,7 +16,7 @@ import {
   sessionStoreEntry,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionFixtureDir } = setupGatewaySessionsTestHarness();
 
 /**
  * Simulates the consumer-side resolution from session-controls.ts and
@@ -72,11 +72,11 @@ function firstResponseResult(respond: ReturnType<typeof vi.fn>) {
 }
 
 test("e2e #76482: session with different model gets its own thinking levels through gateway row + consumer fallback", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   testState.agentConfig = {
     model: { primary: "openai/gpt-5.5" },
   };
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
         modelProvider: "test-extended",
@@ -130,11 +130,11 @@ test("e2e #76482: session with different model gets its own thinking levels thro
 });
 
 test("e2e #76482: Anthropic session does not leak DeepSeek thinking levels from defaults", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   testState.agentConfig = {
     model: { primary: "deepseek/deepseek-v4-pro" },
   };
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
         modelProvider: "anthropic",
@@ -173,11 +173,11 @@ test("e2e #76482: Anthropic session does not leak DeepSeek thinking levels from 
 });
 
 test("e2e #76482: session matching default model inherits default thinking levels", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   testState.agentConfig = {
     model: { primary: "openai/gpt-5.5" },
   };
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
         modelProvider: "openai",

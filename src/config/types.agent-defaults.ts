@@ -527,18 +527,18 @@ export type AgentCompactionConfig = {
    */
   provider?: string;
   /**
-   * Rotate the active session JSONL file after compaction so the next turn
+   * Rotate the active SQLite transcript after compaction so the next turn
    * starts from the compaction summary and unsummarized tail while the old
-   * transcript stays archived.
+   * transcript stays available as a checkpoint snapshot.
    * Default: false (existing behavior preserved).
    */
-  truncateAfterCompaction?: boolean;
+  rotateAfterCompaction?: boolean;
   /**
-   * Trigger a normal local compaction when the active session JSONL reaches
+   * Trigger a normal local compaction when the active SQLite transcript reaches
    * this size (bytes, or byte-size string like "20mb"). Set to 0/unset to
-   * disable. Requires truncateAfterCompaction so successful compaction can
+   * disable. Requires rotateAfterCompaction so successful compaction can
    * rotate to a smaller successor transcript. This does not split raw
-   * transcript bytes.
+   * transcript events.
    */
   maxActiveTranscriptBytes?: number | string;
   /**
@@ -556,7 +556,7 @@ export type AgentCompactionMemoryFlushConfig = {
   /** Run the memory flush when context is within this many tokens of the compaction threshold. */
   softThresholdTokens?: number;
   /**
-   * Force a memory flush when transcript size reaches this threshold
+   * Force a memory flush when the active SQLite transcript reaches this threshold
    * (bytes, or byte-size string like "2mb"). Set to 0 to disable.
    */
   forceFlushTranscriptBytes?: number | string;

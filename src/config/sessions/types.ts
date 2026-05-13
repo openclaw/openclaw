@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { Skill } from "@earendil-works/pi-coding-agent";
+import type { Skill } from "../../agents/skills/skill-contract.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -11,19 +11,6 @@ export type SessionScope = "per-sender" | "global";
 export type SessionChannelId = ChannelId;
 
 export type SessionChatType = ChatType;
-
-export type SessionOrigin = {
-  label?: string;
-  provider?: string;
-  surface?: string;
-  chatType?: SessionChatType;
-  from?: string;
-  to?: string;
-  nativeChannelId?: string;
-  nativeDirectUserId?: string;
-  accountId?: string;
-  threadId?: string | number;
-};
 
 export type SessionAcpIdentitySource = "ensure" | "status" | "event";
 
@@ -90,7 +77,6 @@ export type SessionCompactionCheckpointReason =
 
 export type SessionCompactionTranscriptReference = {
   sessionId: string;
-  sessionFile?: string;
   leafId?: string;
   entryId?: string;
 };
@@ -195,7 +181,6 @@ export type SessionEntry = {
   pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;
   updatedAt: number;
-  sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
   /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
@@ -318,7 +303,7 @@ export type SessionEntry = {
   pendingFinalDeliveryIntentId?: string | null;
   /**
    * Whether totalTokens reflects a fresh context snapshot for the latest run.
-   * Undefined means legacy/unknown freshness; false forces consumers to treat
+   * Undefined means unknown freshness; false forces consumers to treat
    * totalTokens as stale/unknown for context-utilization displays.
    */
   totalTokensFresh?: boolean;
@@ -346,9 +331,7 @@ export type SessionEntry = {
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
   memoryFlushContextHash?: string;
-  cliSessionIds?: Record<string, string>;
   cliSessionBindings?: Record<string, CliSessionBinding>;
-  claudeCliSessionId?: string;
   label?: string;
   displayName?: string;
   channel?: string;
@@ -356,12 +339,15 @@ export type SessionEntry = {
   subject?: string;
   groupChannel?: string;
   space?: string;
-  origin?: SessionOrigin;
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionChannelId;
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
+  /** Provider-native conversation id, such as a Matrix room id. */
+  nativeChannelId?: string;
+  /** Provider-native direct peer id, such as a Matrix user id. */
+  nativeDirectUserId?: string;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
   /**
@@ -584,8 +570,8 @@ export type SessionSkillSnapshot = {
   /**
    * Runtime-only, never persisted. Carries the full parsed Skill[] (including
    * each SKILL.md body) so the embedded runner can skip a workspace skill
-   * scan within a turn. Stripped from sessions.json on every read and write
-   * via normalizeSessionStore — see store-load.ts. On a cold session resume
+   * scan within a turn. Stripped from persistent session entries on every
+   * read and write via normalizeSessionEntries in the SQLite row layer. On a cold session resume
    * this is undefined and src/agents/pi-embedded-runner/skills-runtime.ts
    * rebuilds it by reloading skill entries from disk.
    */

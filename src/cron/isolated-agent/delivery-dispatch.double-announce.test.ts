@@ -407,7 +407,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
-    const ttsCall = maybeApplyTtsToPayloadMock.mock.calls.at(0);
+    const ttsCall = maybeApplyTtsToPayloadMock.mock.calls[0];
     if (!ttsCall) {
       throw new Error("expected TTS payload call");
     }
@@ -654,7 +654,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       method: "sessions.delete",
       params: {
         key: "agent:main",
-        deleteTranscript: true,
         emitLifecycleHooks: false,
       },
       timeoutMs: 10_000,
@@ -677,7 +676,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       method: "sessions.delete",
       params: {
         key: "agent:main",
-        deleteTranscript: true,
         emitLifecycleHooks: false,
       },
       timeoutMs: 10_000,
@@ -1096,7 +1094,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       method: "sessions.delete",
       params: {
         key: "agent:main",
-        deleteTranscript: true,
         emitLifecycleHooks: false,
       },
       timeoutMs: 10_000,
@@ -1152,7 +1149,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       method: "sessions.delete",
       params: {
         key: "agent:main",
-        deleteTranscript: true,
         emitLifecycleHooks: false,
       },
       timeoutMs: 10_000,
@@ -1230,7 +1226,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       method: "sessions.delete",
       params: {
         key: "agent:main",
-        deleteTranscript: true,
         emitLifecycleHooks: false,
       },
       timeoutMs: 10_000,

@@ -19,6 +19,7 @@ const { buildStatusReplyMock, createOpenClawToolsMock, getChannelPluginMock, han
 type HandleInlineActionsInput = Parameters<
   typeof import("./get-reply-inline-actions.js").handleInlineActions
 >[0];
+const legacyStorePathProperty = ["store", "Path"].join("");
 
 vi.mock("./commands.runtime.js", () => ({
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
@@ -116,7 +117,7 @@ async function expectInlineActionSkipped(params: {
   expect(handleCommandsMock).not.toHaveBeenCalled();
 }
 
-async function runInlineStatusAction(storePath?: string) {
+async function runInlineStatusAction(legacyStore?: string) {
   const typing = createTypingController();
   const ctx = buildTestCtx({
     Body: "/status",
@@ -135,7 +136,7 @@ async function runInlineStatusAction(storePath?: string) {
       overrides: {
         allowTextCommands: true,
         inlineStatusRequested: true,
-        ...(storePath ? { storePath } : {}),
+        ...(legacyStore ? { [legacyStorePathProperty]: legacyStore } : {}),
       },
     }),
   );
@@ -282,18 +283,20 @@ describe("handleInlineActions", () => {
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
     expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
-    expect(mockObjectArg(buildStatusReplyMock, "buildStatusReply").storePath).toBeUndefined();
+    expect(buildStatusReplyMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        sessionKey: "s:main",
+      }),
+    );
     expect(handleCommandsMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves storePath when routing inline status through the shared status builder", async () => {
+  it("does not route the legacy store path through the shared status builder", async () => {
     const { result } = await runInlineStatusAction("/tmp/inline-status-store.json");
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(mockObjectArg(buildStatusReplyMock, "buildStatusReply").storePath).toBe(
-      "/tmp/inline-status-store.json",
-    );
+    expect(buildStatusReplyMock.mock.calls[0]?.[0]).not.toHaveProperty(legacyStorePathProperty);
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 

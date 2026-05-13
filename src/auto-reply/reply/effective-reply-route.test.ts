@@ -25,9 +25,6 @@ describe("resolveEffectiveReplyRoute", () => {
             to: "chat:persisted",
             accountId: "persisted-account",
           },
-          lastChannel: "whatsapp",
-          lastTo: "last-to",
-          lastAccountId: "last-account",
         }),
       }),
     ).toEqual({
@@ -47,9 +44,6 @@ describe("resolveEffectiveReplyRoute", () => {
             to: "chat:persisted",
             accountId: "persisted-account",
           },
-          lastChannel: "whatsapp",
-          lastTo: "last-to",
-          lastAccountId: "last-account",
         }),
       }),
     ).toEqual({
@@ -74,9 +68,6 @@ describe("resolveEffectiveReplyRoute", () => {
             to: "channel:persisted",
             accountId: "persisted-account",
           },
-          lastChannel: "slack",
-          lastTo: "last-to",
-          lastAccountId: "last-account",
         }),
       }),
     ).toEqual({
@@ -96,9 +87,6 @@ describe("resolveEffectiveReplyRoute", () => {
             to: "chat:persisted",
             accountId: "persisted-account",
           },
-          lastChannel: "slack",
-          lastTo: "last-to",
-          lastAccountId: "last-account",
         }),
       }),
     ).toEqual({
@@ -108,20 +96,20 @@ describe("resolveEffectiveReplyRoute", () => {
     });
   });
 
-  it("falls back to legacy last route fields for exec-event replies", () => {
+  it("does not fall back to compatibility last route fields for exec-event replies", () => {
     expect(
       resolveEffectiveReplyRoute({
         ctx: ctx({ Provider: "exec-event" }),
-        entry: entry({
+        entry: {
           lastChannel: "slack",
           lastTo: "last-to",
           lastAccountId: "last-account",
-        }),
+        } as unknown as EffectiveReplyRouteEntry,
       }),
     ).toEqual({
-      channel: "slack",
-      to: "last-to",
-      accountId: "last-account",
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
     });
   });
 

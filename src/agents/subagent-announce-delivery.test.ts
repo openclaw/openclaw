@@ -295,14 +295,15 @@ describe("resolveAnnounceOrigin threaded route targets", () => {
   it("preserves stored thread ids when requester origin omits one for the same chat", () => {
     expect(
       resolveAnnounceOrigin(
-        {
-          lastChannel: "topicchat",
-          lastTo: "topicchat:room-a:topic:99",
-          lastThreadId: 99,
-        },
+        undefined,
         {
           channel: "topicchat",
           to: "topicchat:room-a",
+        },
+        {
+          channel: "topicchat",
+          to: "topicchat:room-a:topic:99",
+          threadId: 99,
         },
       ),
     ).toEqual({
@@ -312,17 +313,45 @@ describe("resolveAnnounceOrigin threaded route targets", () => {
     });
   });
 
-  it("preserves stored thread ids for group-prefixed requester targets", () => {
+  it("prefers typed delivery context over compatibility session fields", () => {
     expect(
       resolveAnnounceOrigin(
         {
           lastChannel: "topicchat",
-          lastTo: "topicchat:room-a:topic:99",
+          lastTo: "topicchat:room-stale:topic:99",
           lastThreadId: 99,
         },
         {
           channel: "topicchat",
+          to: "topicchat:room-typed",
+        },
+        {
+          channel: "topicchat",
+          to: "topicchat:room-typed:topic:42",
+          accountId: "workspace-1",
+          threadId: 42,
+        },
+      ),
+    ).toEqual({
+      channel: "topicchat",
+      to: "topicchat:room-typed",
+      accountId: "workspace-1",
+      threadId: 42,
+    });
+  });
+
+  it("preserves stored thread ids for group-prefixed requester targets", () => {
+    expect(
+      resolveAnnounceOrigin(
+        undefined,
+        {
+          channel: "topicchat",
           to: "group:room-a",
+        },
+        {
+          channel: "topicchat",
+          to: "topicchat:room-a:topic:99",
+          threadId: 99,
         },
       ),
     ).toEqual({
@@ -335,14 +364,15 @@ describe("resolveAnnounceOrigin threaded route targets", () => {
   it("still strips stale thread ids when the stored route points at a different chat", () => {
     expect(
       resolveAnnounceOrigin(
-        {
-          lastChannel: "topicchat",
-          lastTo: "topicchat:room-b:topic:99",
-          lastThreadId: 99,
-        },
+        undefined,
         {
           channel: "topicchat",
           to: "topicchat:room-a",
+        },
+        {
+          channel: "topicchat",
+          to: "topicchat:room-b:topic:99",
+          threadId: 99,
         },
       ),
     ).toEqual({
@@ -1249,74 +1279,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
-
-  it.each([
-    {
-      name: "legacy Discord channel",
-      requesterSessionKey: "agent:main:discord:guild-123:channel-456",
-      origin: { channel: "discord", to: "channel:456", accountId: "acct-1" },
-    },
-    {
-      name: "legacy WhatsApp group",
-      requesterSessionKey: "agent:main:whatsapp:123@g.us",
-      origin: { channel: "whatsapp", to: "123@g.us", accountId: "acct-1" },
-    },
-  ])(
-    "requires message-tool delivery for generated media completions in $name sessions",
-    async ({ requesterSessionKey, origin }) => {
-      const callGateway = createGatewayMock({
-        result: {
-          payloads: [
-            {
-              text: "The track is ready.",
-            },
-          ],
-        },
-      });
-      const sendMessage = createSendMessageMock();
-      const result = await deliverSlackChannelAnnouncement({
-        callGateway,
-        sendMessage,
-        sessionId: "requester-session-legacy-group",
-        isActive: false,
-        expectsCompletionMessage: true,
-        directIdempotencyKey: `announce-legacy-media-message-tool-${origin.channel}`,
-        requesterSessionKey,
-        requesterOrigin: origin,
-        sourceTool: "music_generate",
-        internalEvents: [
-          {
-            type: "task_completion",
-            source: "music_generation",
-            childSessionKey: "music_generate:task-123",
-            childSessionId: "task-123",
-            announceType: "music generation task",
-            taskLabel: "night-drive synthwave",
-            status: "ok",
-            statusLabel: "completed successfully",
-            result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
-            mediaUrls: ["/tmp/generated-night-drive.mp3"],
-            replyInstruction:
-              "Tell the user the music is ready. If visible source delivery requires the message tool, send it there with the generated media attached.",
-          },
-        ],
-      });
-
-      expectRecordFields(result, {
-        delivered: false,
-        path: "direct",
-        error: "completion agent did not deliver through the message tool",
-      });
-      expectGatewayAgentParams(callGateway, {
-        deliver: false,
-        channel: origin.channel,
-        accountId: "acct-1",
-        to: origin.to,
-        threadId: undefined,
-      });
-      expect(sendMessage).not.toHaveBeenCalled();
-    },
-  );
 
   it("does not fallback for generated media group completions when message tool evidence exists", async () => {
     const callGateway = createGatewayMock({

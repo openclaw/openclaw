@@ -24,7 +24,7 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> 
     sessionKey: "main",
     sessionsResult: {
       ts: 0,
-      path: "",
+      databasePath: "",
       count: 1,
       defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
       sessions: [
@@ -295,7 +295,7 @@ describe("loadToolsEffective", () => {
     const sessionsResult = state.sessionsResult!;
     state.sessionsResult = {
       ts: sessionsResult.ts,
-      path: sessionsResult.path,
+      databasePath: sessionsResult.databasePath,
       count: 1,
       defaults: sessionsResult.defaults,
       sessions: [
@@ -325,7 +325,7 @@ describe("loadToolsEffective", () => {
     const sessionsResult = state.sessionsResult!;
     state.sessionsResult = {
       ts: sessionsResult.ts,
-      path: sessionsResult.path,
+      databasePath: sessionsResult.databasePath,
       count: 1,
       defaults: sessionsResult.defaults,
       sessions: [

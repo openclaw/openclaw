@@ -9,22 +9,14 @@ import {
 } from "../agents/subagent-recovery-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
-import {
-  formatSessionArchiveTimestamp,
-  isPrimarySessionTranscriptFileName,
-} from "../config/sessions/artifacts.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store.js";
 import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  resolveSessionTranscriptsDirForAgent,
-  resolveStorePath,
-} from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
-import { updateSessionStore } from "../config/sessions/store.js";
+  hasSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptEvents,
+} from "../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { resolveOpenClawAgentDir } from "../plugin-sdk/agent-dir-compat.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -48,15 +40,6 @@ type DoctorPrompterLike = {
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function formatFilePreview(paths: string[], limit = 3): string {
-  const names = paths.slice(0, limit).map((filePath) => path.basename(filePath));
-  const remaining = paths.length - names.length;
-  if (remaining > 0) {
-    return `${names.join(", ")}, and ${remaining} more`;
-  }
-  return names.join(", ");
 }
 
 function existsDir(dir: string): boolean {
@@ -86,10 +69,6 @@ function tryResolveNativeRealPath(targetPath: string): string | null {
   } catch {
     return null;
   }
-}
-
-function resolveComparableTranscriptPath(filePath: string): string {
-  return tryResolveNativeRealPath(filePath) ?? path.resolve(filePath);
 }
 
 function areComparablePathsEqual(leftPath: string, rightPath: string): boolean {
@@ -210,25 +189,22 @@ function addUserRwx(mode: number): number {
   return perms | 0o700;
 }
 
-function countJsonlLines(filePath: string): number {
-  try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    if (!raw) {
-      return 0;
-    }
-    let count = 0;
-    for (let i = 0; i < raw.length; i += 1) {
-      if (raw[i] === "\n") {
-        count += 1;
-      }
-    }
-    if (!raw.endsWith("\n")) {
-      count += 1;
-    }
-    return count;
-  } catch {
-    return 0;
-  }
+function resolveTranscriptSqliteScope(params: { agentId: string; sessionId: string }): {
+  agentId: string;
+  sessionId: string;
+} {
+  return {
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+  };
+}
+
+function hasSessionTranscript(params: { agentId: string; sessionId: string }): boolean {
+  return hasSqliteSessionTranscriptEvents(resolveTranscriptSqliteScope(params));
+}
+
+function countSessionTranscriptEvents(params: { agentId: string; sessionId: string }): number {
+  return loadSqliteSessionTranscriptEvents(resolveTranscriptSqliteScope(params)).length;
 }
 
 function findOtherStateDirs(stateDir: string): string[] {
@@ -593,7 +569,7 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if ([...withPersistedAuth].some((channelId) => !withoutPersistedAuth.has(channelId))) {
     return true;
   }
-  // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json.
+  // Pairing allowlists are persisted in the shared SQLite state database.
   for (const [channelId, channelCfg] of Object.entries(channels)) {
     if (channelId === "defaults" || channelId === "modelByChannel") {
       continue;
@@ -603,11 +579,6 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
     }
   }
   return false;
-}
-
-function shouldSuppressOrphanTranscriptWarning(cfg: OpenClawConfig, agentId: string): boolean {
-  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
-  return backendConfig?.backend === "qmd" && backendConfig.qmd?.sessions.enabled === true;
 }
 
 export async function noteStateIntegrity(
@@ -624,25 +595,17 @@ export async function noteStateIntegrity(
   const defaultStateDir = path.join(homedir(), ".openclaw");
   const oauthDir = resolveOAuthDir(env, stateDir);
   const agentId = resolveDefaultAgentId(cfg);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const storeDir = path.dirname(storePath);
-  const absoluteStorePath = path.resolve(storePath);
   const displayStateDir = shortenHomePath(stateDir);
   const displayOauthDir = shortenHomePath(oauthDir);
-  const displaySessionsDir = shortenHomePath(sessionsDir);
-  const displayStoreDir = shortenHomePath(storeDir);
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
-  const suppressOrphanTranscriptWarning = shouldSuppressOrphanTranscriptWarning(cfg, agentId);
-
   if (cloudSyncedStateDir) {
     warnings.push(
       [
         `- State directory is under macOS cloud-synced storage (${displayStateDir}; ${cloudSyncedStateDir.storage}).`,
-        "- This can cause slow I/O and sync/lock races for sessions and credentials.",
+        "- This can cause slow I/O and sync/lock races for credentials and legacy migration inputs.",
         "- Prefer a local non-synced state dir (for example: ~/.openclaw).",
         `  Set locally: OPENCLAW_STATE_DIR=~/.openclaw ${formatCliCommand("openclaw doctor")}`,
       ].join("\n"),
@@ -757,8 +720,6 @@ export async function noteStateIntegrity(
 
   if (stateDirExists) {
     const dirCandidates = new Map<string, string>();
-    dirCandidates.set(sessionsDir, "Sessions dir");
-    dirCandidates.set(storeDir, "Session store dir");
     if (requireOAuthDir) {
       dirCandidates.set(oauthDir, "OAuth dir");
     } else if (!existsDir(oauthDir)) {
@@ -767,12 +728,6 @@ export async function noteStateIntegrity(
       );
     }
     const displayDirFor = (dir: string) => {
-      if (dir === sessionsDir) {
-        return displaySessionsDir;
-      }
-      if (dir === storeDir) {
-        return displayStoreDir;
-      }
       if (dir === oauthDir) {
         return displayOauthDir;
       }
@@ -852,8 +807,10 @@ export async function noteStateIntegrity(
     );
   }
 
-  const store = loadSessionStore(storePath);
-  const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
+  const store = Object.fromEntries(
+    listSessionEntries({ agentId, env }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+  const sessionScopeOpts = { agentId };
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
     const recent = entries
@@ -870,16 +827,17 @@ export async function noteStateIntegrity(
       if (!sessionId) {
         return false;
       }
-      const transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
-      return !existsFile(transcriptPath);
+      return !hasSessionTranscript({
+        agentId,
+        sessionId,
+      });
     });
     if (missing.length > 0) {
       warnings.push(
         [
           `- ${missing.length}/${recentTranscriptCandidates.length} recent sessions are missing transcripts.`,
-          `  Verify sessions in store: ${formatCliCommand(`openclaw sessions --store "${absoluteStorePath}"`)}`,
-          `  Preview cleanup impact: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --dry-run`)}`,
-          `  Prune missing entries: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --enforce --fix-missing`)}`,
+          `  Run migration/import repair: ${formatCliCommand("openclaw doctor --fix")}`,
+          "  If the transcript sources are gone, reset or delete the affected sessions explicitly.",
         ].join("\n"),
       );
     }
@@ -907,15 +865,17 @@ export async function noteStateIntegrity(
       if (repairWedged) {
         let repaired = 0;
         const repairedAt = Date.now();
-        await updateSessionStore(absoluteStorePath, (currentStore) => {
-          for (const [key] of wedgedSubagentSessions) {
-            const current = currentStore[key];
-            if (current && clearWedgedSubagentRecoveryAbort(current, repairedAt)) {
+        for (const [key] of wedgedSubagentSessions) {
+          const current = store[key];
+          if (current) {
+            const next = structuredClone(current);
+            if (clearWedgedSubagentRecoveryAbort(next, repairedAt)) {
               repaired += 1;
-              currentStore[key] = current;
+              upsertSessionEntry({ agentId, env, sessionKey: key, entry: next });
+              store[key] = next;
             }
           }
-        });
+        }
         if (repaired > 0) {
           changes.push(
             `- Cleared aborted restart-recovery flags for ${countLabel(
@@ -938,7 +898,6 @@ export async function noteStateIntegrity(
     await runPluginSessionStateDoctorRepairs({
       cfg,
       store,
-      absoluteStorePath,
       prompter,
       env,
       warnings,
@@ -948,9 +907,8 @@ export async function noteStateIntegrity(
     await repairHeartbeatPoisonedMainSession({
       cfg,
       store,
-      absoluteStorePath,
       stateDir,
-      sessionPathOpts,
+      sessionScopeOpts,
       prompter,
       warnings,
       changes,
@@ -963,82 +921,18 @@ export async function noteStateIntegrity(
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
-      const transcriptPath = resolveSessionFilePath(
-        mainEntry.sessionId,
-        mainEntry,
-        sessionPathOpts,
-      );
-      if (!existsFile(transcriptPath)) {
+      if (!hasSessionTranscript({ agentId, sessionId: mainEntry.sessionId })) {
         warnings.push(
-          `- Main session transcript missing (${shortenHomePath(transcriptPath)}). History will appear to reset.`,
+          `- Main session transcript missing (${agentId}/${mainEntry.sessionId}). History will appear to reset.`,
         );
       } else {
-        const lineCount = countJsonlLines(transcriptPath);
-        if (lineCount <= 1) {
+        const eventCount = countSessionTranscriptEvents({
+          agentId,
+          sessionId: mainEntry.sessionId,
+        });
+        if (eventCount <= 1) {
           warnings.push(
-            `- Main session transcript has only ${lineCount} line. Session history may not be appending.`,
-          );
-        }
-      }
-    }
-  }
-
-  if (existsDir(sessionsDir)) {
-    const referencedTranscriptPaths = new Set<string>();
-    for (const [, entry] of entries) {
-      if (!entry?.sessionId) {
-        continue;
-      }
-      try {
-        referencedTranscriptPaths.add(
-          resolveComparableTranscriptPath(
-            resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
-          ),
-        );
-      } catch {
-        // ignore invalid legacy paths
-      }
-    }
-    const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
-    const orphanTranscriptPaths = sessionDirEntries
-      .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-      .map((entry) => path.join(sessionsDir, entry.name))
-      .filter(
-        (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
-      );
-    if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
-      const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
-      const orphanPreview = formatFilePreview(orphanTranscriptPaths);
-      warnings.push(
-        [
-          `- Found ${orphanCount} in ${displaySessionsDir}.`,
-          "  These .jsonl files are no longer referenced by sessions.json, so they are not part of any active session history.",
-          "  Doctor can archive them safely by renaming each file to *.deleted.<timestamp>.",
-          `  Examples: ${orphanPreview}`,
-        ].join("\n"),
-      );
-      const archiveOrphans = await prompter.confirmRuntimeRepair({
-        message: `Archive ${orphanCount} in ${displaySessionsDir}? This only renames them to *.deleted.<timestamp>.`,
-        initialValue: false,
-        requiresInteractiveConfirmation: true,
-      });
-      if (archiveOrphans) {
-        let archived = 0;
-        const archivedAt = formatSessionArchiveTimestamp();
-        for (const orphanPath of orphanTranscriptPaths) {
-          const archivedPath = `${orphanPath}.deleted.${archivedAt}`;
-          try {
-            fs.renameSync(orphanPath, archivedPath);
-            archived += 1;
-          } catch (err) {
-            warnings.push(
-              `- Failed to archive orphan transcript ${shortenHomePath(orphanPath)}: ${String(err)}`,
-            );
-          }
-        }
-        if (archived > 0) {
-          changes.push(
-            `- Archived ${countLabel(archived, "orphan transcript file")} in ${displaySessionsDir} as .deleted timestamped backups.`,
+            `- Main session transcript has only ${eventCount} event. Session history may not be appending.`,
           );
         }
       }

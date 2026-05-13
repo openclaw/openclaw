@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { Command } from "commander";
 import JSON5 from "json5";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
@@ -116,30 +117,136 @@ function normalizeAgentDefaultModelValueForConfigMutation(value: unknown): unkno
   return next;
 }
 
+function normalizeAgentListModelRefsForConfigMutation(value: unknown): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+
+  let mutated = false;
+  const next = value.map((agent) => {
+    if (!isPlainRecord(agent)) {
+      return agent;
+    }
+
+    let nextAgent = agent;
+    if (Object.prototype.hasOwnProperty.call(agent, "model")) {
+      const model = normalizeAgentDefaultModelValueForConfigMutation(agent.model);
+      if (model !== agent.model) {
+        nextAgent = { ...nextAgent, model };
+        mutated = true;
+      }
+    }
+    if (isPlainRecord(agent.models)) {
+      const models = normalizeAgentModelMapForConfig(agent.models);
+      if (models !== agent.models) {
+        nextAgent = { ...nextAgent, models };
+        mutated = true;
+      }
+    }
+    return nextAgent;
+  });
+
+  return mutated ? next : value;
+}
+
+function normalizeProviderCatalogModelsForConfigMutation(
+  provider: string,
+  models: unknown,
+): unknown {
+  if (!Array.isArray(models)) {
+    return models;
+  }
+
+  let mutated = false;
+  const next = models.map((model) => {
+    if (!isPlainRecord(model) || typeof model.id !== "string") {
+      return model;
+    }
+    const trimmed = model.id.trim();
+    if (!trimmed) {
+      return model;
+    }
+    const id = normalizeConfiguredProviderCatalogModelId(provider, trimmed);
+    if (id === model.id) {
+      return model;
+    }
+    mutated = true;
+    return { ...model, id };
+  });
+
+  return mutated ? next : models;
+}
+
+function normalizeModelProviderRefsForConfigMutation(
+  providers: NonNullable<OpenClawConfig["models"]>["providers"] | undefined,
+): unknown {
+  if (!isPlainRecord(providers)) {
+    return providers;
+  }
+
+  let mutated = false;
+  const nextProviders: Record<string, unknown> = { ...providers };
+  for (const [provider, providerConfig] of Object.entries(providers)) {
+    if (!isPlainRecord(providerConfig)) {
+      continue;
+    }
+    const models = normalizeProviderCatalogModelsForConfigMutation(provider, providerConfig.models);
+    if (models === providerConfig.models) {
+      continue;
+    }
+    nextProviders[provider] = { ...providerConfig, models };
+    mutated = true;
+  }
+
+  return mutated ? nextProviders : providers;
+}
+
 function normalizeConfigMutationModelRefs(cfg: OpenClawConfig): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
-  if (!defaults) {
-    return cfg;
-  }
+  const agentList = cfg.agents?.list;
+  const providers = cfg.models?.providers;
+  const normalizedAgentList = normalizeAgentListModelRefsForConfigMutation(agentList);
+  const normalizedProviders = normalizeModelProviderRefsForConfigMutation(providers) as
+    | typeof providers
+    | undefined;
 
   return {
     ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        ...(defaults.model !== undefined
-          ? {
-              model: normalizeAgentDefaultModelValueForConfigMutation(
-                defaults.model,
-              ) as typeof defaults.model,
-            }
-          : undefined),
-        ...(defaults.models !== undefined
-          ? { models: normalizeAgentModelMapForConfig(defaults.models) }
-          : undefined),
-      },
-    },
+    ...(defaults || normalizedAgentList !== agentList
+      ? {
+          agents: {
+            ...cfg.agents,
+            ...(defaults
+              ? {
+                  defaults: {
+                    ...defaults,
+                    ...(defaults.model !== undefined
+                      ? {
+                          model: normalizeAgentDefaultModelValueForConfigMutation(
+                            defaults.model,
+                          ) as typeof defaults.model,
+                        }
+                      : undefined),
+                    ...(defaults.models !== undefined
+                      ? { models: normalizeAgentModelMapForConfig(defaults.models) }
+                      : undefined),
+                  },
+                }
+              : undefined),
+            ...(normalizedAgentList !== agentList
+              ? { list: normalizedAgentList as typeof agentList }
+              : undefined),
+          },
+        }
+      : undefined),
+    ...(normalizedProviders !== providers
+      ? {
+          models: {
+            ...cfg.models,
+            providers: normalizedProviders,
+          },
+        }
+      : undefined),
   };
 }
 

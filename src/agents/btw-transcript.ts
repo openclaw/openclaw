@@ -1,37 +1,10 @@
-import { readFile } from "node:fs/promises";
+import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
+import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import {
   buildSessionContext,
-  migrateSessionEntries,
-  parseSessionEntries,
   type SessionEntry as PiSessionEntry,
-} from "@earendil-works/pi-coding-agent";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  type SessionEntry as StoredSessionEntry,
-} from "../config/sessions.js";
-import { diagnosticLogger as diag } from "../logging/diagnostic.js";
-
-export function resolveBtwSessionTranscriptPath(params: {
-  sessionId: string;
-  sessionEntry?: StoredSessionEntry;
-  sessionKey?: string;
-  storePath?: string;
-}): string | undefined {
-  try {
-    const agentId = params.sessionKey?.split(":")[1];
-    const pathOpts = resolveSessionFilePathOptions({
-      agentId,
-      storePath: params.storePath,
-    });
-    return resolveSessionFilePath(params.sessionId, params.sessionEntry, pathOpts);
-  } catch (error) {
-    diag.debug(
-      `resolveSessionTranscriptPath failed: sessionId=${params.sessionId} err=${String(error)}`,
-    );
-    return undefined;
-  }
-}
+  type TranscriptEntry,
+} from "./transcript/session-transcript-contract.js";
 
 function readSessionEntryId(entry: PiSessionEntry): string | undefined {
   const id = (entry as { id?: unknown }).id;
@@ -100,13 +73,20 @@ function isTrailingUserMessage(entry: PiSessionEntry | undefined): boolean {
 }
 
 export async function readBtwTranscriptMessages(params: {
-  sessionFile: string;
+  agentId: string;
   sessionId: string;
   snapshotLeafId?: string | null;
 }): Promise<unknown[]> {
   try {
-    const entries = parseSessionEntries(await readFile(params.sessionFile, "utf-8"));
-    migrateSessionEntries(entries);
+    if (!params.agentId.trim() || !params.sessionId.trim()) {
+      return [];
+    }
+    const entries = loadSqliteSessionTranscriptEvents({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+    })
+      .map((entry) => entry.event)
+      .filter((entry): entry is TranscriptEntry => Boolean(entry && typeof entry === "object"));
     const sessionEntries = entries.filter(
       (entry): entry is PiSessionEntry => entry.type !== "session",
     );

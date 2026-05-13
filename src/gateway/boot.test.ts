@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionScope } from "../config/sessions/types.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const agentCommand = vi.fn();
 
@@ -14,8 +15,8 @@ vi.mock("../commands/agent.js", () => ({
 const { runBootOnce } = await import("./boot.js");
 const { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey, resolveMainSessionKey } =
   await import("../config/sessions/main-session.js");
-const { resolveStorePath } = await import("../config/sessions/paths.js");
-const { loadSessionStore, saveSessionStore } = await import("../config/sessions/store.js");
+const { deleteSessionEntry, getSessionEntry, upsertSessionEntry } =
+  await import("../config/sessions.js");
 
 describe("runBootOnce", () => {
   type BootWorkspaceOptions = {
@@ -31,14 +32,22 @@ describe("runBootOnce", () => {
   ) => {
     const sessionKey = resolveMainSessionKey(cfg);
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    return { sessionKey, storePath };
+    return { agentId, sessionKey };
   };
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    const { storePath } = resolveMainStore();
-    await fs.rm(storePath, { force: true });
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-boot-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  });
+
+  afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
+    if (stateDir) {
+      await fs.rm(stateDir, { recursive: true, force: true });
+      stateDir = "";
+    }
   });
 
   const makeDeps = () => ({
@@ -68,14 +77,16 @@ describe("runBootOnce", () => {
     }
   };
 
-  const mockAgentUpdatesMainSession = (storePath: string, sessionKey: string) => {
+  const mockAgentUpdatesMainSession = (agentId: string, sessionKey: string) => {
     agentCommand.mockImplementation(async (opts: { sessionId?: string }) => {
-      const current = loadSessionStore(storePath, { skipCache: true });
-      current[sessionKey] = {
-        sessionId: String(opts.sessionId),
-        updatedAt: Date.now(),
-      };
-      await saveSessionStore(storePath, current);
+      upsertSessionEntry({
+        agentId,
+        sessionKey,
+        entry: {
+          sessionId: String(opts.sessionId),
+          updatedAt: Date.now(),
+        },
+      });
     });
   };
 
@@ -88,16 +99,19 @@ describe("runBootOnce", () => {
   };
 
   const expectMainSessionRestored = (params: {
-    storePath: string;
+    agentId: string;
     sessionKey: string;
     expectedSessionId?: string;
   }) => {
-    const restored = loadSessionStore(params.storePath, { skipCache: true });
+    const restored = getSessionEntry({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    });
     if (params.expectedSessionId === undefined) {
-      expect(restored[params.sessionKey]).toBeUndefined();
+      expect(restored).toBeUndefined();
       return;
     }
-    expect(restored[params.sessionKey]?.sessionId).toBe(params.expectedSessionId);
+    expect(restored?.sessionId).toBe(params.expectedSessionId);
   };
 
   it("skips when BOOT.md is missing", async () => {
@@ -200,11 +214,13 @@ describe("runBootOnce", () => {
     const content = "Say hello when you wake up.";
     await withBootWorkspace({ bootContent: content }, async (workspaceDir) => {
       const cfg = {};
-      const { sessionKey, storePath } = resolveMainStore(cfg);
+      const { agentId, sessionKey } = resolveMainStore(cfg);
       const existingSessionId = "main-session-abc123";
 
-      await saveSessionStore(storePath, {
-        [sessionKey]: {
+      upsertSessionEntry({
+        agentId,
+        sessionKey,
+        entry: {
           sessionId: existingSessionId,
           updatedAt: Date.now(),
         },
@@ -230,37 +246,41 @@ describe("runBootOnce", () => {
     const content = "Check if the system is healthy.";
     await withBootWorkspace({ bootContent: content }, async (workspaceDir) => {
       const cfg = {};
-      const { sessionKey, storePath } = resolveMainStore(cfg);
+      const { agentId, sessionKey } = resolveMainStore(cfg);
       const existingSessionId = "main-session-xyz789";
 
-      await saveSessionStore(storePath, {
-        [sessionKey]: {
+      upsertSessionEntry({
+        agentId,
+        sessionKey,
+        entry: {
           sessionId: existingSessionId,
           updatedAt: Date.now() - 60_000, // 1 minute ago
         },
       });
 
-      mockAgentUpdatesMainSession(storePath, sessionKey);
+      mockAgentUpdatesMainSession(agentId, sessionKey);
       await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir })).resolves.toEqual({
         status: "ran",
       });
 
-      expectMainSessionRestored({ storePath, sessionKey, expectedSessionId: existingSessionId });
+      expectMainSessionRestored({ agentId, sessionKey, expectedSessionId: existingSessionId });
     });
   });
 
   it("removes a boot-created main-session mapping when none existed before", async () => {
     await withBootWorkspace({ bootContent: "health check" }, async (workspaceDir) => {
       const cfg = {};
-      const { sessionKey, storePath } = resolveMainStore(cfg);
+      const { agentId, sessionKey } = resolveMainStore(cfg);
 
-      mockAgentUpdatesMainSession(storePath, sessionKey);
+      deleteSessionEntry({ agentId, sessionKey });
+      mockAgentUpdatesMainSession(agentId, sessionKey);
 
       await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir })).resolves.toEqual({
         status: "ran",
       });
 
-      expectMainSessionRestored({ storePath, sessionKey });
+      expectMainSessionRestored({ agentId, sessionKey });
     });
   });
 });
+let stateDir = "";

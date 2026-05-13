@@ -39,7 +39,7 @@ type AgentStatusLike = {
     bootstrapPending?: boolean | null;
     sessionsCount: number;
     lastActiveAgeMs?: number | null;
-    sessionsPath: string;
+    sessionsDatabasePath: string;
   }>;
 };
 

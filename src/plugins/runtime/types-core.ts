@@ -202,12 +202,10 @@ export type PluginRuntimeCore = {
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
-      resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
-      loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
-      saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
-      updateSessionStore: typeof import("../../config/sessions/store.js").updateSessionStore;
-      updateSessionStoreEntry: typeof import("../../config/sessions/store.js").updateSessionStoreEntry;
-      resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
+      getSessionEntry: typeof import("../../config/sessions/store.js").getSessionEntry;
+      listSessionEntries: typeof import("../../config/sessions/store.js").listSessionEntries;
+      patchSessionEntry: typeof import("../../config/sessions/store.js").patchSessionEntry;
+      upsertSessionEntry: typeof import("../../config/sessions/store.js").upsertSessionEntry;
     };
   };
   system: {
@@ -317,13 +315,17 @@ export type PluginRuntimeCore = {
   modelAuth: {
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
-      model: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
+      model: import("../../agents/pi-ai-contract.js").Model<
+        import("../../agents/pi-ai-contract.js").Api
+      >;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
     /** Resolve request-ready auth for a model, including provider runtime exchanges. */
     getRuntimeAuthForModel: (params: {
-      model: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
+      model: import("../../agents/pi-ai-contract.js").Model<
+        import("../../agents/pi-ai-contract.js").Api
+      >;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;

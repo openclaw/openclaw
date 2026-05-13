@@ -1,5 +1,3 @@
-import os from "node:os";
-import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
   BACKEND_GATEWAY_CLIENT,
@@ -188,16 +186,13 @@ describe("gateway auth compatibility baseline", () => {
     });
 
     test("keeps local backend device-token reconnects out of pairing", async () => {
-      const identityPath = path.join(
-        os.tmpdir(),
-        `openclaw-backend-device-${process.pid}-${port}.json`,
-      );
+      const identityKey = `test:backend-device:${process.pid}:${port}`;
       const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
         await import("../infra/device-identity.js");
       const { approveDevicePairing, requestDevicePairing, rotateDeviceToken } =
         await import("../infra/device-pairing.js");
 
-      const identity = loadOrCreateDeviceIdentity(identityPath);
+      const identity = loadOrCreateDeviceIdentity({ key: identityKey });
       const pending = await requestDevicePairing({
         deviceId: identity.deviceId,
         publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
@@ -225,7 +220,7 @@ describe("gateway auth compatibility baseline", () => {
         const res = await connectReq(ws, {
           skipDefaultAuth: true,
           client: { ...BACKEND_GATEWAY_CLIENT },
-          deviceIdentityPath: identityPath,
+          deviceIdentityKey: identityKey,
           deviceToken: rotatedToken,
           scopes: ["operator.admin"],
         });
@@ -382,15 +377,12 @@ describe("gateway auth compatibility baseline", () => {
     test("keeps auth-none control ui first-connect token absence unchanged", async () => {
       const ws = await openWs(port, { origin: originForPort(port) });
       try {
-        const deviceIdentityPath = path.join(
-          os.tmpdir(),
-          `openclaw-auth-none-control-ui-first-${process.pid}-${port}.json`,
-        );
+        const deviceIdentityKey = `test:auth-none-control-ui-first:${process.pid}:${port}`;
         const res = await connectReq(ws, {
           skipDefaultAuth: true,
           client: { ...CONTROL_UI_CLIENT },
           scopes: ["operator.read"],
-          deviceIdentityPath,
+          deviceIdentityKey,
         });
         expect(res.ok).toBe(true);
         const helloOk = res.payload as
@@ -414,23 +406,17 @@ describe("gateway auth compatibility baseline", () => {
         const { approveDevicePairing, requestDevicePairing } =
           await import("../infra/device-pairing.js");
         const nonce = await readConnectChallengeNonce(ws);
-        const identityPath = path.join(
-          os.tmpdir(),
-          `openclaw-auth-none-control-ui-${process.pid}-${port}.json`,
-        );
-        const staleIdentityPath = path.join(
-          os.tmpdir(),
-          `openclaw-auth-none-control-ui-stale-${process.pid}-${port}.json`,
-        );
+        const identityKey = `test:auth-none-control-ui:${process.pid}:${port}`;
+        const staleIdentityKey = `test:auth-none-control-ui-stale:${process.pid}:${port}`;
         const { identity, device } = await createSignedDevice({
           token: null,
           scopes: ["operator.read"],
           clientId: CONTROL_UI_CLIENT.id,
           clientMode: CONTROL_UI_CLIENT.mode,
-          identityPath,
+          identityKey,
           nonce,
         });
-        const staleIdentity = loadOrCreateDeviceIdentity(staleIdentityPath);
+        const staleIdentity = loadOrCreateDeviceIdentity({ key: staleIdentityKey });
         const pending = await requestDevicePairing({
           deviceId: identity.deviceId,
           publicKey: publicKeyRawBase64UrlFromPem(staleIdentity.publicKeyPem),

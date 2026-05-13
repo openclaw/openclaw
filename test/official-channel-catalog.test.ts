@@ -85,9 +85,10 @@ describe("buildOfficialChannelCatalog", () => {
           blurb: "works with your own number; recommend a separate phone + eSIM.",
         },
         install: {
+          clawhubSpec: "clawhub:@openclaw/whatsapp",
           npmSpec: "@openclaw/whatsapp",
           localPath: bundledPluginRoot("whatsapp"),
-          defaultChoice: "npm",
+          defaultChoice: "clawhub",
         },
         release: {
           publishToNpm: true,
@@ -195,8 +196,9 @@ describe("buildOfficialChannelCatalog", () => {
         systemImage: "message",
       },
       install: {
+        clawhubSpec: "clawhub:@openclaw/whatsapp",
         npmSpec: "@openclaw/whatsapp",
-        defaultChoice: "npm",
+        defaultChoice: "clawhub",
         minHostVersion: ">=2026.4.25",
       },
     });
@@ -325,8 +327,9 @@ describe("buildOfficialChannelCatalog", () => {
         systemImage: "message",
       },
       install: {
+        clawhubSpec: "clawhub:@openclaw/whatsapp",
         npmSpec: "@openclaw/whatsapp",
-        defaultChoice: "npm",
+        defaultChoice: "clawhub",
         minHostVersion: ">=2026.4.25",
       },
     });

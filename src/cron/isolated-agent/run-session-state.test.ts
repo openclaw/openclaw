@@ -1,10 +1,27 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createPersistCronSessionEntry, type MutableCronSession } from "./run-session-state.js";
+
+let testStateDir = "";
+
+beforeEach(async () => {
+  testStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-session-state-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", testStateDir);
+});
+
+afterEach(async () => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
+  await fs.rm(testStateDir, { recursive: true, force: true });
+  testStateDir = "";
+});
 
 function makeSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
   return {
@@ -17,7 +34,6 @@ function makeSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
 
 function makeCronSession(entry = makeSessionEntry()): MutableCronSession {
   return {
-    storePath: "/tmp/sessions.json",
     store: {},
     sessionEntry: entry,
     systemSent: true,
@@ -30,7 +46,6 @@ describe("createPersistCronSessionEntry", () => {
   it("persists isolated cron state only under the stable cron session key", async () => {
     const cronSession = makeCronSession(
       makeSessionEntry({
-        sessionFile: await createTranscriptFile(),
         status: "running",
         startedAt: 900,
         skillsSnapshot: {
@@ -39,99 +54,90 @@ describe("createPersistCronSessionEntry", () => {
         },
       }),
     );
-    const updateSessionStore = vi.fn(
-      async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
-        const store: Record<string, SessionEntry> = {};
-        update(store);
-        expect(store["agent:main:cron:job"]).toBe(cronSession.sessionEntry);
-        expect(store["agent:main:cron:job:run:run-session-id"]).toBeUndefined();
-      },
-    );
+    const persistSessionRow = vi.fn(async (sessionKey: string, entry: SessionEntry) => {
+      expect(sessionKey).toBe("agent:main:cron:job");
+      expect(entry).toEqual({
+        status: "running",
+        startedAt: 900,
+        updatedAt: 1000,
+        systemSent: true,
+        skillsSnapshot: {
+          prompt: "old prompt",
+          skills: [{ name: "memory" }],
+        },
+      });
+    });
 
     const persist = createPersistCronSessionEntry({
       isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:cron:job",
-      updateSessionStore,
+      persistSessionRow,
     });
 
     await persist();
 
-    expect(cronSession.store["agent:main:cron:job"]).toBe(cronSession.sessionEntry);
+    expect(cronSession.store["agent:main:cron:job"]?.sessionId).toBeUndefined();
     expect(cronSession.store["agent:main:cron:job:run:run-session-id"]).toBeUndefined();
   });
 
   it("does not register cron sessions as resumable until the transcript exists", async () => {
-    const missingTranscriptPath = path.join(
-      os.tmpdir(),
-      `openclaw-missing-cron-${crypto.randomUUID()}.jsonl`,
-    );
     const cronSession = makeCronSession(
       makeSessionEntry({
-        sessionFile: missingTranscriptPath,
         label: "Cron: shell-only",
         status: "running",
       }),
     );
-    const updateSessionStore = vi.fn(
-      async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
-        const store: Record<string, SessionEntry> = {};
-        update(store);
-        expect(store["agent:main:cron:shell-only"]).toEqual({
-          label: "Cron: shell-only",
-          status: "running",
-          updatedAt: 1000,
-          systemSent: true,
-        });
-      },
-    );
+    const persistSessionRow = vi.fn(async (sessionKey: string, entry: SessionEntry) => {
+      expect(sessionKey).toBe("agent:main:cron:shell-only");
+      expect(entry).toEqual({
+        label: "Cron: shell-only",
+        status: "running",
+        updatedAt: 1000,
+        systemSent: true,
+      });
+    });
 
     const persist = createPersistCronSessionEntry({
       isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:cron:shell-only",
-      updateSessionStore,
+      persistSessionRow,
     });
 
     await persist();
 
     expect(cronSession.store["agent:main:cron:shell-only"]?.sessionId).toBeUndefined();
-    expect(cronSession.store["agent:main:cron:shell-only"]?.sessionFile).toBeUndefined();
   });
 
   it("restores resumable cron fields once the transcript exists", async () => {
-    const transcriptPath = await createTranscriptFile();
+    seedCronTranscript();
     const cronSession = makeCronSession(
       makeSessionEntry({
-        sessionFile: transcriptPath,
         label: "Cron: completed",
       }),
     );
+    const persistSessionRow = vi.fn(async (sessionKey: string, entry: SessionEntry) => {
+      expect(sessionKey).toBe("agent:main:cron:completed");
+      expect(entry).toEqual({
+        sessionId: "run-session-id",
+        label: "Cron: completed",
+        updatedAt: 1000,
+        systemSent: true,
+      });
+    });
 
     const persist = createPersistCronSessionEntry({
       isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:cron:completed",
-      updateSessionStore: vi.fn(
-        async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
-          const store: Record<string, SessionEntry> = {};
-          update(store);
-          expect(store["agent:main:cron:completed"]).toEqual({
-            sessionId: "run-session-id",
-            sessionFile: transcriptPath,
-            label: "Cron: completed",
-            updatedAt: 1000,
-            systemSent: true,
-          });
-        },
-      ),
+      persistSessionRow,
     });
 
     await persist();
 
     expect(cronSession.store["agent:main:cron:completed"]).toEqual({
       sessionId: "run-session-id",
-      sessionFile: transcriptPath,
       label: "Cron: completed",
       updatedAt: 1000,
       systemSent: true,
@@ -140,19 +146,16 @@ describe("createPersistCronSessionEntry", () => {
 
   it("persists explicit session-bound cron state under the requested session key", async () => {
     const cronSession = makeCronSession();
-    const updateSessionStore = vi.fn(
-      async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
-        const store: Record<string, SessionEntry> = {};
-        update(store);
-        expect(store["agent:main:session"]).toBe(cronSession.sessionEntry);
-      },
-    );
+    const persistSessionRow = vi.fn(async (sessionKey: string, entry: SessionEntry) => {
+      expect(sessionKey).toBe("agent:main:session");
+      expect(entry).toBe(cronSession.sessionEntry);
+    });
 
     const persist = createPersistCronSessionEntry({
       isFastTestEnv: false,
       cronSession,
       agentSessionKey: "agent:main:session",
-      updateSessionStore,
+      persistSessionRow,
     });
 
     await persist();
@@ -161,9 +164,17 @@ describe("createPersistCronSessionEntry", () => {
   });
 });
 
-async function createTranscriptFile(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-session-"));
-  const file = path.join(dir, "session.jsonl");
-  await fs.writeFile(file, `${JSON.stringify({ type: "session", sessionId: "run-session-id" })}\n`);
-  return file;
+function seedCronTranscript(): void {
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "run-session-id",
+    events: [
+      {
+        type: "session",
+        id: "run-session-id",
+        timestamp: new Date(0).toISOString(),
+        cwd: testStateDir,
+      },
+    ],
+  });
 }

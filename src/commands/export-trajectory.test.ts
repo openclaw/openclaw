@@ -3,21 +3,12 @@ import type { RuntimeEnv } from "../runtime.js";
 import { exportTrajectoryCommand } from "./export-trajectory.js";
 
 const mocks = vi.hoisted(() => ({
-  loadSessionStore: vi.fn(),
-  resolveDefaultSessionStorePath: vi.fn(),
+  getSessionEntry: vi.fn(),
 }));
 
 vi.mock("../config/sessions/store.js", () => ({
-  loadSessionStore: mocks.loadSessionStore,
+  getSessionEntry: mocks.getSessionEntry,
 }));
-
-vi.mock("../config/sessions/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions/paths.js")>();
-  return {
-    ...actual,
-    resolveDefaultSessionStorePath: mocks.resolveDefaultSessionStorePath,
-  };
-});
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -30,8 +21,7 @@ function createRuntime(): RuntimeEnv {
 describe("exportTrajectoryCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveDefaultSessionStorePath.mockReturnValue("/tmp/openclaw/sessions.json");
-    mocks.loadSessionStore.mockReturnValue({});
+    mocks.getSessionEntry.mockReturnValue(undefined);
   });
 
   it("points missing session key users at the sessions command", async () => {

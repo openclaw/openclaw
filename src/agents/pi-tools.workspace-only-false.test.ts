@@ -1,20 +1,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createReadTool } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createReadTool } from "./pi-coding-agent-contract.js";
 
-vi.mock("@earendil-works/pi-ai", async () => {
+vi.mock("./pi-ai-contract.js", async () => {
   const original =
-    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+    await vi.importActual<typeof import("./pi-ai-contract.js")>("./pi-ai-contract.js");
   return {
     ...original,
   };
 });
 
-vi.mock("@earendil-works/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
-    "@earendil-works/pi-ai/oauth",
+vi.mock("./pi-ai-oauth-contract.js", async () => {
+  const actual = await vi.importActual<typeof import("./pi-ai-oauth-contract.js")>(
+    "./pi-ai-oauth-contract.js",
   );
   return {
     ...actual,

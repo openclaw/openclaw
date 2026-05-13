@@ -419,7 +419,6 @@ candidate contains redacted secret placeholders such as `***`.
       cron: {
         enabled: true,
         maxConcurrentRuns: 2, // cron dispatch + isolated cron agent-turn execution
-        sessionRetention: "24h",
         runLog: {
           maxBytes: "2mb",
           keepLines: 2000,
@@ -428,8 +427,7 @@ candidate contains redacted secret placeholders such as `***`.
     }
     ```
 
-    - `sessionRetention`: prune completed isolated run sessions from `sessions.json` (default `24h`; set `false` to disable).
-    - `runLog`: prune `cron/runs/<jobId>.jsonl` by size and retained lines.
+    - `runLog`: prune SQLite cron run history by approximate serialized size and retained rows.
     - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 
   </Accordion>

@@ -1,7 +1,6 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it } from "vitest";
 import { createAcpxProcessLeaseStore, type AcpxProcessLease } from "./process-lease.js";
 
 function makeLease(index: number): AcpxProcessLease {
@@ -19,18 +18,19 @@ function makeLease(index: number): AcpxProcessLease {
 }
 
 describe("createAcpxProcessLeaseStore", () => {
+  afterEach(() => {
+    resetPluginStateStoreForTests();
+  });
+
   it("serializes concurrent lease saves without dropping records", async () => {
-    const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-acpx-leases-"));
-    try {
-      const store = createAcpxProcessLeaseStore({ stateDir });
+    await withOpenClawTestState({ label: "acpx-leases" }, async () => {
+      const store = createAcpxProcessLeaseStore();
       await Promise.all(Array.from({ length: 25 }, (_, index) => store.save(makeLease(index))));
 
       const leases = await store.listOpen("gateway-test");
       expect(leases.map((lease) => lease.leaseId).toSorted()).toEqual(
         Array.from({ length: 25 }, (_, index) => `lease-${index}`).toSorted(),
       );
-    } finally {
-      await rm(stateDir, { recursive: true, force: true });
-    }
+    });
   });
 });

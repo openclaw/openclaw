@@ -31,8 +31,6 @@ type SetupCommandDeps = {
     runtime: RuntimeEnv,
     opts: { path?: string; suffix?: string },
   ) => void | Promise<void>;
-  mkdir?: (dir: string, options: { recursive: true }) => Promise<unknown>;
-  resolveSessionTranscriptsDir?: () => string | Promise<string>;
   replaceConfigFile?: (params: {
     nextConfig: OpenClawConfig;
     afterWrite: { mode: "auto" };
@@ -108,11 +106,6 @@ async function logDefaultConfigUpdated(
 ): Promise<void> {
   const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime, opts);
-}
-
-async function resolveDefaultSessionTranscriptsDir(): Promise<string> {
-  const { resolveSessionTranscriptsDir } = await import("../config/sessions.js");
-  return resolveSessionTranscriptsDir();
 }
 
 async function readConfigFileRaw(configPath: string): Promise<{
@@ -202,13 +195,8 @@ export async function setupCommand(
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
 
-  const sessionsDir = await (
-    deps.resolveSessionTranscriptsDir ?? resolveDefaultSessionTranscriptsDir
-  )();
-  await (deps.mkdir ?? fs.mkdir)(sessionsDir, { recursive: true });
-  runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   runtime.log("");
-  runtime.log("Setup complete: config, workspace, and session directories are ready.");
+  runtime.log("Setup complete: config and workspace are ready.");
   runtime.log(`Next guided path: ${formatCliCommand("openclaw onboard")}.`);
   runtime.log(
     `Next targeted changes: ${formatCliCommand("openclaw configure")} for models, channels, Gateway, plugins, skills, and health checks.`,

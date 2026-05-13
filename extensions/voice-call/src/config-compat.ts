@@ -1,6 +1,4 @@
 import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { VoiceCallConfig } from "./config.js";
-import { VoiceCallConfigSchema } from "./config.js";
 
 export const VOICE_CALL_LEGACY_CONFIG_REMOVAL_VERSION = "2026.6.0";
 
@@ -93,6 +91,13 @@ export function collectVoiceCallLegacyConfigIssues(value: unknown): VoiceCallLeg
       message: "Move streaming.vadThreshold to streaming.providers.openai.vadThreshold.",
     });
   }
+  if (typeof raw.store === "string") {
+    issues.push({
+      path: "store",
+      replacement: "SQLite plugin state",
+      message: "Remove store; call records are stored in SQLite plugin state.",
+    });
+  }
 
   return issues;
 }
@@ -174,13 +179,14 @@ export function migrateVoiceCallLegacyConfigInput(params: {
     delete normalizedTwilio.from;
   }
 
-  const config = {
+  const config: Record<string, unknown> = {
     ...raw,
     provider: raw.provider === "log" ? "mock" : raw.provider,
     fromNumber: raw.fromNumber ?? (typeof twilio?.from === "string" ? twilio.from : undefined),
     twilio: normalizedTwilio,
     streaming: normalizedStreaming,
   };
+  delete config.store;
 
   const changes: string[] = [];
   if (raw.provider === "log") {
@@ -214,14 +220,9 @@ export function migrateVoiceCallLegacyConfigInput(params: {
       `Moved ${configPathPrefix}.streaming.vadThreshold → ${configPathPrefix}.streaming.providers.openai.vadThreshold.`,
     );
   }
+  if (typeof raw.store === "string") {
+    changes.push(`Removed ${configPathPrefix}.store; call records use SQLite plugin state.`);
+  }
 
   return { config, changes, issues };
-}
-
-export function normalizeVoiceCallLegacyConfigInput(value: unknown): Record<string, unknown> {
-  return migrateVoiceCallLegacyConfigInput({ value }).config;
-}
-
-export function parseVoiceCallPluginConfig(value: unknown): VoiceCallConfig {
-  return VoiceCallConfigSchema.parse(normalizeVoiceCallLegacyConfigInput(value));
 }

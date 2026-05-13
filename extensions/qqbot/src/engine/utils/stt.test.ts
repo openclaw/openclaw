@@ -18,22 +18,6 @@ afterAll(() => {
 
 import { resolveSTTConfig, transcribeAudio } from "./stt.js";
 
-function requireFirstSsrfRequest(): {
-  url?: unknown;
-  auditContext?: unknown;
-  init?: RequestInit;
-} {
-  const [call] = ssrfRuntimeMocks.fetchWithSsrFGuard.mock.calls;
-  if (!call) {
-    throw new Error("expected QQBot STT fetch call");
-  }
-  return call[0] as {
-    url?: unknown;
-    auditContext?: unknown;
-    init?: RequestInit;
-  };
-}
-
 describe("engine/utils/stt", () => {
   beforeEach(() => {
     ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
@@ -135,7 +119,11 @@ describe("engine/utils/stt", () => {
 
     expect(transcript).toBe("hello from audio");
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
-    const request = requireFirstSsrfRequest();
+    const request = ssrfRuntimeMocks.fetchWithSsrFGuard.mock.calls[0]?.[0] as {
+      url?: unknown;
+      auditContext?: unknown;
+      init?: RequestInit;
+    };
     expect(request.url).toBe("https://api.example.test/v1/audio/transcriptions");
     expect(request.auditContext).toBe("qqbot-stt");
     expect(request.init?.method).toBe("POST");

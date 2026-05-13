@@ -2,11 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 
 const streamSimpleMock = vi.fn();
-const readFileMock = vi.fn();
-const parseSessionEntriesMock = vi.fn();
-const migrateSessionEntriesMock = vi.fn();
+const transcriptEventsMock = vi.fn();
 const buildSessionContextMock = vi.fn();
-const ensureOpenClawModelsJsonMock = vi.fn();
+const ensureOpenClawModelCatalogMock = vi.fn();
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
 const resolveModelWithRegistryMock = vi.fn();
@@ -22,31 +20,32 @@ const prepareProviderRuntimeAuthMock = vi.fn();
 const registerProviderStreamForModelMock = vi.fn();
 const diagDebugMock = vi.fn();
 
-vi.mock("@earendil-works/pi-ai", async () => {
+vi.mock("./pi-ai-contract.js", async () => {
   const original =
-    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+    await vi.importActual<typeof import("./pi-ai-contract.js")>("./pi-ai-contract.js");
   return {
     ...original,
     streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
   };
 });
 
-vi.mock("node:fs/promises", () => ({
-  default: {
-    readFile: (...args: unknown[]) => readFileMock(...args),
-  },
-  readFile: (...args: unknown[]) => readFileMock(...args),
+vi.mock("../config/sessions/transcript-store.sqlite.js", () => ({
+  resolveSqliteSessionTranscriptScope: () => ({ agentId: "main", sessionId: "session-1" }),
+  loadSqliteSessionTranscriptEvents: () =>
+    (transcriptEventsMock() as unknown[]).map((event, seq) => ({
+      seq,
+      event,
+      createdAt: seq + 1,
+    })),
 }));
 
-vi.mock("@earendil-works/pi-coding-agent", () => ({
+vi.mock("./transcript/session-transcript-contract.js", () => ({
   buildSessionContext: (...args: unknown[]) => buildSessionContextMock(...args),
-  generateSummary: vi.fn(async () => "summary"),
-  migrateSessionEntries: (...args: unknown[]) => migrateSessionEntriesMock(...args),
-  parseSessionEntries: (...args: unknown[]) => parseSessionEntriesMock(...args),
+  CURRENT_SESSION_VERSION: 3,
 }));
 
 vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: (...args: unknown[]) => ensureOpenClawModelsJsonMock(...args),
+  ensureOpenClawModelCatalog: (...args: unknown[]) => ensureOpenClawModelCatalogMock(...args),
 }));
 
 vi.mock("./pi-model-discovery.js", () => ({
@@ -103,7 +102,6 @@ const DEFAULT_MODEL = "claude-sonnet-4-6";
 const DEFAULT_PROVIDER = "anthropic";
 const DEFAULT_REASONING_LEVEL = "off";
 const DEFAULT_SESSION_KEY = "agent:main:main";
-const DEFAULT_STORE_PATH = "/tmp/sessions.json";
 const DEFAULT_QUESTION = "What changed?";
 const MATH_QUESTION = "What is 17 * 19?";
 const MATH_ANSWER = "323";
@@ -130,7 +128,6 @@ function makeAsyncEvents(events: unknown[]) {
 function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
     sessionId: "session-1",
-    sessionFile: "session-1.jsonl",
     updatedAt: Date.now(),
     ...overrides,
   };
@@ -233,7 +230,7 @@ function createTranscriptEntry(params: { id: string; parentId?: string | null; m
 }
 
 function mockTranscriptEntries(entries: unknown[]) {
-  parseSessionEntriesMock.mockReturnValue(entries);
+  transcriptEventsMock.mockReturnValue(entries);
 }
 
 function mockActiveTranscript(messages: unknown[]) {
@@ -352,11 +349,9 @@ function expectSeedOnlyUserContext(context: unknown) {
 describe("runBtwSideQuestion", () => {
   beforeEach(() => {
     streamSimpleMock.mockReset();
-    readFileMock.mockReset();
-    parseSessionEntriesMock.mockReset();
-    migrateSessionEntriesMock.mockReset();
+    transcriptEventsMock.mockReset();
     buildSessionContextMock.mockReset();
-    ensureOpenClawModelsJsonMock.mockReset();
+    ensureOpenClawModelCatalogMock.mockReset();
     discoverAuthStorageMock.mockReset();
     discoverModelsMock.mockReset();
     resolveModelWithRegistryMock.mockReset();
@@ -373,8 +368,7 @@ describe("runBtwSideQuestion", () => {
     diagDebugMock.mockReset();
     clearAgentHarnesses();
 
-    readFileMock.mockResolvedValue("mock transcript");
-    parseSessionEntriesMock.mockReturnValue([
+    transcriptEventsMock.mockReturnValue([
       createTranscriptEntry({
         id: "user-1",
         message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
@@ -467,7 +461,6 @@ describe("runBtwSideQuestion", () => {
       sessionEntry: createSessionEntry(),
       sessionStore: {},
       sessionKey: DEFAULT_SESSION_KEY,
-      storePath: DEFAULT_STORE_PATH,
       resolvedThinkLevel: "low",
       resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
       blockReplyChunking: {
@@ -493,9 +486,13 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Final answer." });
-    const ensureArgs = mockCall(ensureOpenClawModelsJsonMock);
-    expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
-    expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
+    expect(ensureOpenClawModelCatalogMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      DEFAULT_AGENT_DIR,
+      {
+        workspaceDir: "/tmp/workspace",
+      },
+    );
   });
 
   it("routes Codex-selected BTW questions through the harness side-question hook", async () => {
@@ -529,6 +526,7 @@ describe("runBtwSideQuestion", () => {
           model?: string;
           question?: string;
           sessionId?: string;
+          sessionKey?: string;
           agentId?: string;
           workspaceDir?: string;
           authProfileId?: string;
@@ -539,12 +537,10 @@ describe("runBtwSideQuestion", () => {
     expect(sideQuestionParams.model).toBe("gpt-5.5");
     expect(sideQuestionParams.question).toBe(DEFAULT_QUESTION);
     expect(sideQuestionParams.sessionId).toBe("session-1");
+    expect(sideQuestionParams.sessionKey).toBe(DEFAULT_SESSION_KEY);
     expect(sideQuestionParams.agentId).toBe("main");
     expect(sideQuestionParams.workspaceDir).toBe("/tmp/workspace");
     expect(sideQuestionParams.authProfileId).toBe("openai-codex:work");
-    expect(
-      (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
-    ).toContain("session-1.jsonl");
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
@@ -566,21 +562,6 @@ describe("runBtwSideQuestion", () => {
     ).rejects.toThrow('Selected agent harness "codex" does not support /btw side questions.');
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps the direct provider fallback for non-Codex harnesses without side-question hooks", async () => {
-    registerAgentHarness({
-      id: "custom",
-      label: "Custom test harness",
-      supports: () => ({ supported: true, priority: 100 }),
-      runAttempt: vi.fn(),
-    });
-    mockDoneAnswer("Direct fallback answer.");
-
-    const result = await runSideQuestion();
-
-    expect(result).toEqual({ text: "Direct fallback answer." });
-    expect(streamSimpleMock).toHaveBeenCalledTimes(1);
   });
 
   it("applies provider runtime auth before streaming github-copilot BTW questions", async () => {

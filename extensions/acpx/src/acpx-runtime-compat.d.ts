@@ -56,7 +56,6 @@ declare module "acpx/runtime" {
 
   export function createAcpRuntime(...args: unknown[]): AcpxRuntime;
   export function createAgentRegistry(params: { overrides?: unknown }): AcpAgentRegistry;
-  export function createFileSessionStore(params: { stateDir: string }): AcpSessionStore;
   export function decodeAcpxRuntimeHandleState(...args: unknown[]): unknown;
   export function encodeAcpxRuntimeHandleState(...args: unknown[]): unknown;
 }

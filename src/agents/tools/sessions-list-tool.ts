@@ -1,11 +1,5 @@
-import path from "node:path";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  resolveStorePath,
-} from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
@@ -118,7 +112,7 @@ export function createSessionsListTool(opts?: {
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
 
-      const list = await gatewayCall<{ sessions: Array<SessionListRow>; path: string }>({
+      const list = await gatewayCall<{ sessions: Array<SessionListRow>; databasePath?: string }>({
         method: "sessions.list",
         params: {
           limit,
@@ -135,7 +129,6 @@ export function createSessionsListTool(opts?: {
       });
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-      const storePath = typeof list?.path === "string" ? list.path : undefined;
       const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
         requesterSessionKey: effectiveRequesterKey,
@@ -148,7 +141,6 @@ export function createSessionsListTool(opts?: {
         row: SessionListRow;
         titleEntry: SessionEntry;
         sessionId: string;
-        sessionFile?: string;
         agentId: string;
       }> = [];
 
@@ -195,12 +187,6 @@ export function createSessionsListTool(opts?: {
         });
 
         const entryChannel = typeof entry.channel === "string" ? entry.channel : undefined;
-        const entryOrigin =
-          entry.origin && typeof entry.origin === "object"
-            ? (entry.origin as Record<string, unknown>)
-            : undefined;
-        const originChannel =
-          typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
         const deliveryContext =
           entry.deliveryContext && typeof entry.deliveryContext === "object"
             ? (entry.deliveryContext as Record<string, unknown>)
@@ -214,60 +200,21 @@ export function createSessionsListTool(opts?: {
             Number.isFinite(deliveryContext.threadId))
             ? deliveryContext.threadId
             : undefined;
-        const lastChannel = deliveryChannel ?? readStringValue(entry.lastChannel);
-        const lastAccountId = deliveryAccountId ?? readStringValue(entry.lastAccountId);
         const derivedChannel = deriveChannel({
           key,
           kind,
-          channel: entryChannel ?? originChannel,
-          lastChannel,
+          channel: entryChannel,
+          deliveryChannel,
         });
 
         const sessionId = readStringValue(entry.sessionId);
-        const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
-        const sessionFile = readStringValue(sessionFileRaw);
         const resolvedAgentId = resolveAgentIdFromSessionKey(key);
-        let transcriptPath: string | undefined;
-        if (sessionId) {
-          try {
-            const trimmedStorePath = storePath?.trim();
-            let effectiveStorePath: string | undefined;
-            if (trimmedStorePath && trimmedStorePath !== "(multiple)") {
-              if (trimmedStorePath.includes("{agentId}") || trimmedStorePath.startsWith("~")) {
-                effectiveStorePath = resolveStorePath(trimmedStorePath, {
-                  agentId: resolvedAgentId,
-                });
-              } else if (path.isAbsolute(trimmedStorePath)) {
-                effectiveStorePath = trimmedStorePath;
-              }
-            }
-            const filePathOpts = resolveSessionFilePathOptions({
-              agentId: resolvedAgentId,
-              storePath: effectiveStorePath,
-            });
-            transcriptPath = resolveSessionFilePath(
-              sessionId,
-              sessionFile ? { sessionFile } : undefined,
-              filePathOpts,
-            );
-          } catch {
-            transcriptPath = undefined;
-          }
-        }
 
         const row: SessionListRow = {
           key: displayKey,
           agentId: resolvedAgentId,
           kind,
           channel: derivedChannel,
-          origin:
-            originChannel ||
-            (typeof entryOrigin?.accountId === "string" ? entryOrigin.accountId : undefined)
-              ? {
-                  provider: originChannel,
-                  accountId: readStringValue(entryOrigin?.accountId),
-                }
-              : undefined,
           spawnedBy:
             typeof entry.spawnedBy === "string"
               ? resolveDisplaySessionKey({
@@ -329,10 +276,6 @@ export function createSessionsListTool(opts?: {
           abortedLastRun:
             typeof entry.abortedLastRun === "boolean" ? entry.abortedLastRun : undefined,
           sendPolicy: readStringValue(entry.sendPolicy),
-          lastChannel,
-          lastTo: deliveryTo ?? readStringValue(entry.lastTo),
-          lastAccountId,
-          transcriptPath,
         };
         if (
           sessionId &&
@@ -349,7 +292,6 @@ export function createSessionsListTool(opts?: {
               updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
             },
             sessionId,
-            ...(sessionFile ? { sessionFile } : {}),
             agentId: resolvedAgentId,
           });
         }
@@ -375,12 +317,10 @@ export function createSessionsListTool(opts?: {
               return;
             }
             const target = titleTargets[next];
-            const fields = await readSessionTitleFieldsFromTranscriptAsync(
-              target.sessionId,
-              storePath,
-              target.sessionFile,
-              target.agentId,
-            );
+            const fields = await readSessionTitleFieldsFromTranscriptAsync({
+              agentId: target.agentId,
+              sessionId: target.sessionId,
+            });
             if (includeDerivedTitles && !target.row.derivedTitle) {
               target.row.derivedTitle = deriveSessionTitle(
                 target.titleEntry,

@@ -75,13 +75,13 @@ describe("memory manager status state", () => {
         }),
       },
       sources: ["memory", "sessions"],
-      sourceFilterSql: " AND source IN (?, ?)",
+      sourceFilterSql: " AND source_kind IN (?, ?)",
       sourceFilterParams: ["memory", "sessions"],
     });
 
     expect(calls).toEqual([
       {
-        sql: MEMORY_STATUS_AGGREGATE_SQL.replaceAll("__FILTER__", " AND source IN (?, ?)"),
+        sql: MEMORY_STATUS_AGGREGATE_SQL.replaceAll("__FILTER__", " AND source_kind IN (?, ?)"),
         params: ["memory", "sessions", "memory", "sessions"],
       },
     ]);

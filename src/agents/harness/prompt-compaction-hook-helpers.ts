@@ -1,4 +1,3 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
@@ -6,6 +5,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
+import type { AgentMessage } from "../agent-core-contract.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -85,7 +85,6 @@ function resolvePromptBuildSystemPrompt(params: {
 }
 
 export async function runAgentHarnessBeforeCompactionHook(params: {
-  sessionFile: string;
   messages: AgentMessage[];
   ctx: AgentHarnessHookContext;
 }): Promise<void> {
@@ -98,7 +97,6 @@ export async function runAgentHarnessBeforeCompactionHook(params: {
       {
         messageCount: params.messages.length,
         messages: params.messages,
-        sessionFile: params.sessionFile,
       },
       buildAgentHookContext(params.ctx),
     );
@@ -108,7 +106,6 @@ export async function runAgentHarnessBeforeCompactionHook(params: {
 }
 
 export async function runAgentHarnessAfterCompactionHook(params: {
-  sessionFile: string;
   messages: AgentMessage[];
   ctx: AgentHarnessHookContext;
   compactedCount: number;
@@ -122,7 +119,6 @@ export async function runAgentHarnessAfterCompactionHook(params: {
       {
         messageCount: params.messages.length,
         compactedCount: params.compactedCount,
-        sessionFile: params.sessionFile,
       },
       buildAgentHookContext(params.ctx),
     );

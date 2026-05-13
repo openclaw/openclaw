@@ -1,0 +1,1 @@
+export const MATRIX_IDB_PERSIST_INTERVAL_MS = 60_000;

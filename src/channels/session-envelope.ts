@@ -1,5 +1,5 @@
 import { resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
-import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
+import { readSessionUpdatedAt } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export function resolveInboundSessionEnvelopeContext(params: {
@@ -7,14 +7,11 @@ export function resolveInboundSessionEnvelopeContext(params: {
   agentId: string;
   sessionKey: string;
 }) {
-  const storePath = resolveStorePath(params.cfg.session?.store, {
-    agentId: params.agentId,
-  });
   return {
-    storePath,
+    agentId: params.agentId,
     envelopeOptions: resolveEnvelopeFormatOptions(params.cfg),
     previousTimestamp: readSessionUpdatedAt({
-      storePath,
+      agentId: params.agentId,
       sessionKey: params.sessionKey,
     }),
   };

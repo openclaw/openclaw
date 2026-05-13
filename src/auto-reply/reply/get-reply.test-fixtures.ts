@@ -67,7 +67,6 @@ export function createGetReplySessionState(overrides: Record<string, unknown> = 
     resetTriggered: false,
     systemSent: false,
     abortedLastRun: false,
-    storePath: "/tmp/sessions.json",
     sessionScope: "per-chat",
     groupResolution: undefined,
     isGroup: false,

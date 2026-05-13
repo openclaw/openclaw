@@ -1,21 +1,23 @@
 // Append-only audit log for file-transfer operations.
 //
-// Records every decision (allow/deny/error) at the gateway-side tool
-// layer. Lands at ~/.openclaw/audit/file-transfer.jsonl. Rotation is
-// caller's responsibility — the file grows unbounded.
+// Records every decision (allow/deny/error) at the gateway-side tool layer in
+// SQLite plugin state. Legacy ~/.openclaw/audit/file-transfer.jsonl files are
+// doctor/migrate inputs only.
 //
 // Log records do NOT include file contents or hashes of secrets. They do
 // include canonical paths and sha256 of the payload, so treat the audit
-// file as sensitive.
+// rows as sensitive.
 
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { randomUUID } from "node:crypto";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 export type FileTransferAuditOp = "file.fetch" | "dir.list" | "dir.fetch" | "file.write";
 
-type FileTransferAuditDecision =
+export const FILE_TRANSFER_AUDIT_PLUGIN_ID = "file-transfer";
+export const FILE_TRANSFER_AUDIT_NAMESPACE = "audit";
+export const FILE_TRANSFER_AUDIT_MAX_ENTRIES = 50_000;
+
+export type FileTransferAuditDecision =
   | "allowed"
   | "allowed:once"
   | "allowed:always"
@@ -26,7 +28,7 @@ type FileTransferAuditDecision =
   | "denied:symlink_escape"
   | "error";
 
-type FileTransferAuditRecord = {
+export type FileTransferAuditRecord = {
   timestamp: string;
   op: FileTransferAuditOp;
   nodeId: string;
@@ -46,31 +48,16 @@ type FileTransferAuditRecord = {
   reason?: string;
 };
 
-let auditDirPromise: Promise<string> | null = null;
+const AUDIT_STORE = createPluginStateKeyedStore<FileTransferAuditRecord>(
+  FILE_TRANSFER_AUDIT_PLUGIN_ID,
+  {
+    namespace: FILE_TRANSFER_AUDIT_NAMESPACE,
+    maxEntries: FILE_TRANSFER_AUDIT_MAX_ENTRIES,
+  },
+);
 
-async function ensureAuditDir(): Promise<string> {
-  if (auditDirPromise) {
-    return auditDirPromise;
-  }
-  const promise = (async () => {
-    const dir = path.join(os.homedir(), ".openclaw", "audit");
-    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-    return dir;
-  })();
-  // If the mkdir rejects (transient permission error etc.), clear the
-  // cached singleton so the NEXT call retries instead of permanently
-  // silencing the audit log.
-  promise.catch(() => {
-    if (auditDirPromise === promise) {
-      auditDirPromise = null;
-    }
-  });
-  auditDirPromise = promise;
-  return promise;
-}
-
-function auditFilePath(dir: string): string {
-  return path.join(dir, "file-transfer.jsonl");
+function auditKey(timestamp: string): string {
+  return `${timestamp}:${randomUUID()}`;
 }
 
 /**
@@ -82,17 +69,16 @@ export async function appendFileTransferAudit(
   record: Omit<FileTransferAuditRecord, "timestamp">,
 ): Promise<void> {
   try {
-    const dir = await ensureAuditDir();
-    const line = `${JSON.stringify({
-      timestamp: new Date().toISOString(),
+    const timestamp = new Date().toISOString();
+    await AUDIT_STORE.register(auditKey(timestamp), {
+      timestamp,
       ...record,
-    })}\n`;
-    await appendRegularFile({
-      filePath: auditFilePath(dir),
-      content: line,
-      rejectSymlinkParents: true,
     });
   } catch (e) {
     process.stderr.write(`[file-transfer:audit] append failed: ${String(e)}\n`);
   }
+}
+
+export async function listFileTransferAuditRecordsForTests(): Promise<FileTransferAuditRecord[]> {
+  return (await AUDIT_STORE.entries()).map((entry) => entry.value);
 }

@@ -1,8 +1,4 @@
-import { resolveLoadedSessionThreadInfo } from "../../channels/plugins/session-thread-info-loaded.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 export {
@@ -18,14 +14,14 @@ export {
 } from "./reset-policy.js";
 import type { SessionResetType } from "./reset-policy.js";
 
-const GROUP_SESSION_MARKERS = [":group:", ":channel:"];
-
-export function isThreadSessionKey(sessionKey?: string | null): boolean {
-  return Boolean(resolveLoadedSessionThreadInfo(sessionKey).threadId);
+export function isThreadSessionKey(_sessionKey?: string | null): boolean {
+  return false;
 }
 
 export function resolveSessionResetType(params: {
   sessionKey?: string | null;
+  sessionScope?: string | null;
+  chatType?: string | null;
   isGroup?: boolean;
   isThread?: boolean;
 }): SessionResetType {
@@ -35,9 +31,14 @@ export function resolveSessionResetType(params: {
   if (params.isGroup) {
     return "group";
   }
-  const normalized = normalizeLowercaseStringOrEmpty(params.sessionKey);
-  if (GROUP_SESSION_MARKERS.some((marker) => normalized.includes(marker))) {
+  if (params.chatType === "group" || params.chatType === "channel") {
     return "group";
+  }
+  if (params.sessionScope === "group" || params.sessionScope === "channel") {
+    return "group";
+  }
+  if (params.chatType === "direct" || params.sessionScope === "shared-main") {
+    return "direct";
   }
   return "direct";
 }

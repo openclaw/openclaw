@@ -4,15 +4,12 @@ import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbo
 import { setMinimalOutboundSessionPluginRegistryForTests } from "./outbound-session.test-helpers.js";
 
 type InboundMetadataParams = {
+  agentId?: string;
   sessionKey?: string;
-  storePath?: string;
 };
 
 const mocks = vi.hoisted(() => ({
   recordSessionMetaFromInbound: vi.fn(async (_params: InboundMetadataParams) => ({ ok: true })),
-  resolveStorePath: vi.fn(
-    (_store: unknown, params?: { agentId?: string }) => `/stores/${params?.agentId ?? "main"}.json`,
-  ),
 }));
 
 function firstMockArg(
@@ -32,13 +29,11 @@ function firstMockArg(
 
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
   recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
-  resolveStorePath: mocks.resolveStorePath,
 }));
 
 describe("resolveOutboundSessionRoute", () => {
   beforeEach(() => {
     mocks.recordSessionMetaFromInbound.mockClear();
-    mocks.resolveStorePath.mockClear();
     setMinimalOutboundSessionPluginRegistryForTests();
   });
 
@@ -434,16 +429,11 @@ describe("resolveOutboundSessionRoute", () => {
 describe("ensureOutboundSessionEntry", () => {
   beforeEach(() => {
     mocks.recordSessionMetaFromInbound.mockClear();
-    mocks.resolveStorePath.mockClear();
   });
 
-  it("persists metadata in the owning session store for the route session key", async () => {
+  it("persists metadata for the owning agent and route session key", async () => {
     await ensureOutboundSessionEntry({
-      cfg: {
-        session: {
-          store: "/stores/{agentId}.json",
-        },
-      } as OpenClawConfig,
+      cfg: {} as OpenClawConfig,
       channel: "workspace",
       route: {
         sessionKey: "agent:main:workspace:channel:c1",
@@ -455,15 +445,12 @@ describe("ensureOutboundSessionEntry", () => {
       },
     });
 
-    expect(mocks.resolveStorePath).toHaveBeenCalledWith("/stores/{agentId}.json", {
-      agentId: "main",
-    });
     expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalledOnce();
     const metadata = firstMockArg(
       mocks.recordSessionMetaFromInbound,
       "recordSessionMetaFromInbound",
     );
-    expect(metadata.storePath).toBe("/stores/main.json");
+    expect(metadata.agentId).toBe("main");
     expect(metadata.sessionKey).toBe("agent:main:workspace:channel:c1");
   });
 });

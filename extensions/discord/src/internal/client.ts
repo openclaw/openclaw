@@ -44,7 +44,6 @@ export interface ClientOptions {
   disableDeployRoute?: boolean;
   disableInteractionsRoute?: boolean;
   disableEventsRoute?: boolean;
-  commandDeployHashStorePath?: string;
   devGuilds?: string[];
   eventQueue?: DiscordEventQueueOptions;
   restCacheTtlMs?: number;
@@ -206,7 +205,6 @@ export class Client {
       clientId: this.options.clientId,
       commands: this.commands,
       devGuilds: this.options.devGuilds,
-      hashStorePath: this.options.commandDeployHashStorePath,
       rest: () => this.rest,
     });
     for (const component of handlers.components ?? []) {

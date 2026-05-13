@@ -19,6 +19,7 @@ vi.mock("../../media/read-capability.js", () => ({
   resolveAgentScopedOutboundMediaAccess,
 }));
 
+import { getMediaMaterializationDir } from "../../media/store.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 
 type NormalizedReply = {
@@ -298,21 +299,29 @@ describe("createReplyMediaPathNormalizer", () => {
   });
 
   it("keeps managed generated media under the shared media root", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
+    const mediaPath = path.join(
+      getMediaMaterializationDir(),
+      "tool-image-generation",
+      "generated.png",
+    );
+    await fs.mkdir(path.dirname(mediaPath), { recursive: true });
+    await fs.writeFile(mediaPath, "image", "utf8");
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},
       sessionKey: "session-key",
       workspaceDir: "/tmp/agent-workspace",
     });
 
-    const result = await normalize({
-      mediaUrls: ["/Users/peter/.openclaw/media/tool-image-generation/generated.png"],
-    });
+    try {
+      const result = await normalize({
+        mediaUrls: [mediaPath],
+      });
 
-    expectMedia(result, "/Users/peter/.openclaw/media/tool-image-generation/generated.png", [
-      "/Users/peter/.openclaw/media/tool-image-generation/generated.png",
-    ]);
-    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+      expectMedia(result, mediaPath, [mediaPath]);
+      expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(mediaPath, { force: true });
+    }
   });
 
   it("keeps managed outbound media under the shared media root with sandbox mapping", async () => {
@@ -320,36 +329,41 @@ describe("createReplyMediaPathNormalizer", () => {
       workspaceDir: "/tmp/sandboxes/session-1",
       containerWorkdir: "/workspace",
     });
-    vi.stubEnv("OPENCLAW_STATE_DIR", "/Users/peter/.openclaw");
+    const mediaPath = path.join(getMediaMaterializationDir(), "outbound", "generated.png");
+    await fs.mkdir(path.dirname(mediaPath), { recursive: true });
+    await fs.writeFile(mediaPath, "image", "utf8");
     const normalize = createReplyMediaPathNormalizer({
       cfg: {},
       sessionKey: "session-key",
       workspaceDir: "/tmp/agent-workspace",
     });
 
-    const result = await normalize({
-      mediaUrls: ["/Users/peter/.openclaw/media/outbound/generated.png"],
-    });
+    try {
+      const result = await normalize({
+        mediaUrls: [mediaPath],
+      });
 
-    expectMedia(result, "/Users/peter/.openclaw/media/outbound/generated.png", [
-      "/Users/peter/.openclaw/media/outbound/generated.png",
-    ]);
-    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+      expectMedia(result, mediaPath, [mediaPath]);
+      expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(mediaPath, { force: true });
+    }
   });
 
   it("drops managed outbound media symlinks escaping the shared media root without sandbox mapping", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reply-media-state-"));
+    const mediaRoot = getMediaMaterializationDir();
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reply-media-outside-"));
     const outsideFile = path.join(outsideDir, "secret.png");
-    const symlinkPath = path.join(stateDir, "media", "outbound", "linked-secret.png");
+    const outboundRoot = path.join(mediaRoot, "outbound");
+    await fs.mkdir(outboundRoot, { recursive: true });
+    const symlinkDir = await fs.mkdtemp(path.join(outboundRoot, "reply-media-"));
+    const symlinkPath = path.join(symlinkDir, "linked-secret.png");
     try {
-      await fs.mkdir(path.dirname(symlinkPath), { recursive: true });
       await fs.writeFile(outsideFile, "secret", "utf8");
       await fs.symlink(outsideFile, symlinkPath);
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       const normalize = createReplyMediaPathNormalizer({
         cfg: {},
         sessionKey: "session-key",
@@ -364,8 +378,8 @@ describe("createReplyMediaPathNormalizer", () => {
       expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
     } finally {
       await fs.rm(symlinkPath, { force: true });
+      await fs.rm(symlinkDir, { recursive: true, force: true });
       await fs.rm(outsideDir, { recursive: true, force: true });
-      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 

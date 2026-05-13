@@ -3,7 +3,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { getAgentRunContext, registerAgentRunContext } from "../infra/agent-events.js";
 import { toAgentRequestSessionKey } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
-import { loadCombinedSessionStoreForGateway } from "./session-utils.js";
+import { loadCombinedSessionEntriesForGateway } from "./session-utils.js";
 
 const RUN_LOOKUP_CACHE_LIMIT = 256;
 const RUN_LOOKUP_MISS_TTL_MS = 1_000;
@@ -50,7 +50,7 @@ export function resolveSessionKeyForRun(runId: string) {
     resolvedSessionKeyByRunId.delete(runId);
   }
   const cfg = getRuntimeConfig();
-  const { store } = loadCombinedSessionStoreForGateway(cfg);
+  const { entries: store } = loadCombinedSessionEntriesForGateway(cfg);
   const matches = Object.entries(store).filter(
     (entry): entry is [string, SessionEntry] => entry[1]?.sessionId === runId,
   );

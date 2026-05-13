@@ -1,15 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureMatrixStartupVerification } from "./startup-verification.js";
 
 function createTempStateDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "matrix-startup-verify-"));
-}
-
-function createStateFilePath(rootDir: string): string {
-  return path.join(rootDir, "startup-verification.json");
 }
 
 function createAuth(accountId = "default") {
@@ -80,6 +77,10 @@ function createHarness(params?: {
 }
 
 describe("ensureMatrixStartupVerification", () => {
+  afterEach(() => {
+    resetPluginStateStoreForTests();
+  });
+
   it("skips automatic requests when the device is already verified", async () => {
     const tempHome = createTempStateDir();
     const harness = createHarness({ verified: true });
@@ -88,7 +89,7 @@ describe("ensureMatrixStartupVerification", () => {
       client: harness.client as never,
       auth: createAuth(),
       accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      stateRootDir: tempHome,
     });
 
     expect(result.kind).toBe("verified");
@@ -108,7 +109,7 @@ describe("ensureMatrixStartupVerification", () => {
       client: harness.client as never,
       auth: createAuth(),
       accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      stateRootDir: tempHome,
     });
 
     expect(result.kind).toBe("requested");
@@ -133,7 +134,7 @@ describe("ensureMatrixStartupVerification", () => {
       client: harness.client as never,
       auth: createAuth(),
       accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      stateRootDir: tempHome,
     });
 
     expect(result.kind).toBe("pending");
@@ -148,7 +149,7 @@ describe("ensureMatrixStartupVerification", () => {
       client: harness.client as never,
       auth: createAuth(),
       accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      stateRootDir: tempHome,
       nowMs: initialNowMs,
     });
     expect(harness.client.crypto.requestVerification).toHaveBeenCalledTimes(1);
@@ -157,7 +158,7 @@ describe("ensureMatrixStartupVerification", () => {
       client: harness.client as never,
       auth: createAuth(),
       accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      stateRootDir: tempHome,
       nowMs: initialNowMs + 60_000,
     });
 
@@ -168,8 +169,15 @@ describe("ensureMatrixStartupVerification", () => {
   it("supports disabling startup verification requests", async () => {
     const tempHome = createTempStateDir();
     const harness = createHarness();
-    const stateFilePath = createStateFilePath(tempHome);
-    fs.writeFileSync(stateFilePath, JSON.stringify({ attemptedAt: "2026-03-08T12:00:00.000Z" }));
+    const stateRootDir = tempHome;
+    await ensureMatrixStartupVerification({
+      client: harness.client as never,
+      auth: createAuth(),
+      accountConfig: {},
+      stateRootDir,
+      nowMs: Date.parse("2026-03-08T12:00:00.000Z"),
+    });
+    expect(harness.client.crypto.requestVerification).toHaveBeenCalledTimes(1);
 
     const result = await ensureMatrixStartupVerification({
       client: harness.client as never,
@@ -177,12 +185,11 @@ describe("ensureMatrixStartupVerification", () => {
       accountConfig: {
         startupVerification: "off",
       },
-      stateFilePath,
+      stateRootDir,
     });
 
     expect(result.kind).toBe("disabled");
-    expect(harness.client.crypto.requestVerification).not.toHaveBeenCalled();
-    expect(fs.existsSync(stateFilePath)).toBe(false);
+    expect(harness.client.crypto.requestVerification).toHaveBeenCalledTimes(1);
   });
 
   it("persists a successful startup verification request", async () => {
@@ -193,14 +200,12 @@ describe("ensureMatrixStartupVerification", () => {
       client: harness.client as never,
       auth: createAuth(),
       accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      stateRootDir: tempHome,
       nowMs: Date.parse("2026-03-08T12:00:00.000Z"),
     });
 
     expect(result.kind).toBe("requested");
     expect(harness.client.crypto.requestVerification).toHaveBeenCalledWith({ ownUser: true });
-
-    expect(fs.existsSync(createStateFilePath(tempHome))).toBe(true);
   });
 
   it("keeps startup verification failures non-fatal", async () => {
@@ -215,7 +220,7 @@ describe("ensureMatrixStartupVerification", () => {
       client: harness.client as never,
       auth: createAuth(),
       accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      stateRootDir: tempHome,
     });
 
     expect(result.kind).toBe("request-failed");
@@ -228,7 +233,7 @@ describe("ensureMatrixStartupVerification", () => {
       client: harness.client as never,
       auth: createAuth(),
       accountConfig: {},
-      stateFilePath: createStateFilePath(tempHome),
+      stateRootDir: tempHome,
       nowMs: Date.now() + 60_000,
     });
 
@@ -237,7 +242,7 @@ describe("ensureMatrixStartupVerification", () => {
 
   it("retries failed startup verification requests sooner than successful ones", async () => {
     const tempHome = createTempStateDir();
-    const stateFilePath = createStateFilePath(tempHome);
+    const stateRootDir = tempHome;
     const failingHarness = createHarness({
       requestVerification: async () => {
         throw new Error("no other verified session");
@@ -248,7 +253,7 @@ describe("ensureMatrixStartupVerification", () => {
       client: failingHarness.client as never,
       auth: createAuth(),
       accountConfig: {},
-      stateFilePath,
+      stateRootDir,
       nowMs: Date.parse("2026-03-08T12:00:00.000Z"),
     });
 
@@ -257,7 +262,7 @@ describe("ensureMatrixStartupVerification", () => {
       client: retryingHarness.client as never,
       auth: createAuth(),
       accountConfig: {},
-      stateFilePath,
+      stateRootDir,
       nowMs: Date.parse("2026-03-08T13:30:00.000Z"),
     });
 
@@ -267,28 +272,25 @@ describe("ensureMatrixStartupVerification", () => {
 
   it("clears the persisted startup state after verification succeeds", async () => {
     const tempHome = createTempStateDir();
-    const stateFilePath = createStateFilePath(tempHome);
+    const stateRootDir = tempHome;
     const unverified = createHarness();
 
     await ensureMatrixStartupVerification({
       client: unverified.client as never,
       auth: createAuth(),
       accountConfig: {},
-      stateFilePath,
+      stateRootDir,
       nowMs: Date.parse("2026-03-08T12:00:00.000Z"),
     });
-
-    expect(fs.existsSync(stateFilePath)).toBe(true);
 
     const verified = createHarness({ verified: true });
     const result = await ensureMatrixStartupVerification({
       client: verified.client as never,
       auth: createAuth(),
       accountConfig: {},
-      stateFilePath,
+      stateRootDir,
     });
 
     expect(result.kind).toBe("verified");
-    expect(fs.existsSync(stateFilePath)).toBe(false);
   });
 });

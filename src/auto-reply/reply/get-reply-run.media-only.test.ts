@@ -24,18 +24,13 @@ vi.mock("../../config/sessions/group.js", () => ({
   resolveGroupSessionKey: vi.fn().mockReturnValue(undefined),
 }));
 
-vi.mock("../../config/sessions/paths.js", () => ({
-  resolveSessionFilePath: vi.fn().mockReturnValue("/tmp/session.jsonl"),
-  resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
-}));
-
 const storeRuntimeLoads = vi.hoisted(() => vi.fn());
-const updateSessionStore = vi.hoisted(() => vi.fn());
+const upsertSessionEntry = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/sessions/store.runtime.js", () => {
   storeRuntimeLoads();
   return {
-    updateSessionStore,
+    upsertSessionEntry,
   };
 });
 
@@ -285,12 +280,12 @@ describe("runPreparedReply media-only handling", () => {
 
   beforeEach(async () => {
     storeRuntimeLoads.mockClear();
-    updateSessionStore.mockReset();
+    upsertSessionEntry.mockReset();
     vi.clearAllMocks();
     replyRunTesting.resetReplyRunRegistry();
   });
 
-  it("does not load session store runtime on module import", async () => {
+  it("does not load session row runtime on module import", async () => {
     await loadFreshGetReplyRunModuleForTest();
 
     expect(storeRuntimeLoads).not.toHaveBeenCalled();
@@ -1017,7 +1012,6 @@ describe("runPreparedReply media-only handling", () => {
     const sessionStore: Record<string, SessionEntry> = {
       "session-key": {
         sessionId: "session-auth-profile",
-        sessionFile: "/tmp/session-auth-profile.jsonl",
         authProfileOverride: "profile-before-wait",
         authProfileOverrideSource: "auto",
         updatedAt: 1,
@@ -1069,7 +1063,6 @@ describe("runPreparedReply media-only handling", () => {
     const sessionStore: Record<string, SessionEntry> = {
       "session-key": {
         sessionId: "session-before-rotation",
-        sessionFile: "/tmp/session-before-rotation.jsonl",
         updatedAt: 1,
       },
     };
@@ -1098,7 +1091,6 @@ describe("runPreparedReply media-only handling", () => {
     sessionStore["session-key"] = {
       ...sessionStore["session-key"],
       sessionId: "session-after-rotation",
-      sessionFile: "/tmp/session-after-rotation.jsonl",
       updatedAt: 2,
     };
     rotatedRun.updateSessionId("session-after-rotation");

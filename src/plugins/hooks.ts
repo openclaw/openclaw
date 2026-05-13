@@ -1236,8 +1236,8 @@ export function createHookRunner(
    * session transcripts are appended synchronously.
    *
    * Handlers are executed sequentially in priority order (higher first).
-   * If any handler returns { block: true }, the message is NOT written
-   * to the session JSONL and we return immediately.
+   * If any handler returns { block: true }, the message is NOT persisted
+   * to the SQLite transcript and we return immediately.
    * If a handler returns { message }, the modified message replaces the
    * original for subsequent handlers and the final write.
    */

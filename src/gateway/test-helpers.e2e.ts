@@ -1,9 +1,6 @@
 import { writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { WebSocket } from "ws";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import {
   type DeviceIdentity,
   loadOrCreateDeviceIdentity,
@@ -52,20 +49,16 @@ export async function connectGatewayClient(params: {
   const role = params.role ?? "operator";
   const scopes = params.scopes ?? (role === "node" ? [] : undefined);
   const platform = params.platform ?? process.platform;
-  const identityRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
   const deviceIdentity =
     params.deviceIdentity ??
-    loadOrCreateDeviceIdentity(
-      (() => {
-        const safe = normalizeLowercaseStringOrEmpty(
-          `${params.clientName ?? GATEWAY_CLIENT_NAMES.TEST}-${params.mode ?? GATEWAY_CLIENT_MODES.TEST}-${platform}-${params.deviceFamily ?? "none"}-${role}`.replace(
-            /[^a-zA-Z0-9._-]+/g,
-            "_",
-          ),
-        );
-        return path.join(identityRoot, "test-device-identities", `${safe}.json`);
-      })(),
-    );
+    loadOrCreateDeviceIdentity({
+      key: `test:${normalizeLowercaseStringOrEmpty(
+        `${params.clientName ?? GATEWAY_CLIENT_NAMES.TEST}-${params.mode ?? GATEWAY_CLIENT_MODES.TEST}-${platform}-${params.deviceFamily ?? "none"}-${role}`.replace(
+          /[^a-zA-Z0-9._-]+/g,
+          "_",
+        ),
+      )}`,
+    });
   return await new Promise<InstanceType<typeof GatewayClient>>((resolve, reject) => {
     let settled = false;
     const stop = (err?: Error, client?: InstanceType<typeof GatewayClient>) => {
@@ -243,7 +236,6 @@ export async function startGatewayWithClient(params: {
   process.env.OPENCLAW_CONFIG_PATH = params.configPath;
   clearRuntimeConfigSnapshot();
   clearConfigCache();
-  clearSessionStoreCacheForTest();
 
   const port = await getFreeGatewayPort();
   const server = await startGatewayServer(port, {

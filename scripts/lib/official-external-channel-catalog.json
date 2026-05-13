@@ -475,8 +475,9 @@
           "systemImage": "message"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/whatsapp",
           "npmSpec": "@openclaw/whatsapp",
-          "defaultChoice": "npm",
+          "defaultChoice": "clawhub",
           "minHostVersion": ">=2026.4.25"
         }
       }

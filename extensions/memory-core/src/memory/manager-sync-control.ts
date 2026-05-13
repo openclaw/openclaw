@@ -4,7 +4,10 @@ import {
   createSubsystemLogger,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type { MemorySyncProgressUpdate } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type {
+  MemorySessionTranscriptScope,
+  MemorySyncProgressUpdate,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 const log = createSubsystemLogger("memory");
 
@@ -21,7 +24,7 @@ export type MemoryReadonlyRecoveryState = {
   runSync: (params?: {
     reason?: string;
     force?: boolean;
-    sessionFiles?: string[];
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) => Promise<void>;
   openDatabase: () => DatabaseSync;
@@ -85,7 +88,7 @@ export async function runMemorySyncWithReadonlyRecovery(
   params?: {
     reason?: string;
     force?: boolean;
-    sessionFiles?: string[];
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   },
 ): Promise<void> {
@@ -123,26 +126,27 @@ export function enqueueMemoryTargetedSessionSync(
   state: {
     isClosed: () => boolean;
     getSyncing: () => Promise<void> | null;
-    getQueuedSessionFiles: () => Set<string>;
+    getQueuedSessionTranscriptScopes: () => Map<string, MemorySessionTranscriptScope>;
     getQueuedSessionSync: () => Promise<void> | null;
     setQueuedSessionSync: (value: Promise<void> | null) => void;
     sync: (params?: {
       reason?: string;
       force?: boolean;
-      sessionFiles?: string[];
+      sessionTranscriptScopes?: MemorySessionTranscriptScope[];
       progress?: (update: MemorySyncProgressUpdate) => void;
     }) => Promise<void>;
   },
-  sessionFiles?: string[],
+  sessionTranscriptScopes?: MemorySessionTranscriptScope[],
 ): Promise<void> {
-  const queuedSessionFiles = state.getQueuedSessionFiles();
-  for (const sessionFile of sessionFiles ?? []) {
-    const trimmed = sessionFile.trim();
-    if (trimmed) {
-      queuedSessionFiles.add(trimmed);
+  const queuedSessionTranscriptScopes = state.getQueuedSessionTranscriptScopes();
+  for (const scope of sessionTranscriptScopes ?? []) {
+    const agentId = scope.agentId.trim();
+    const sessionId = scope.sessionId.trim();
+    if (agentId && sessionId) {
+      queuedSessionTranscriptScopes.set(`${agentId}:${sessionId}`, { agentId, sessionId });
     }
   }
-  if (queuedSessionFiles.size === 0) {
+  if (queuedSessionTranscriptScopes.size === 0) {
     return state.getSyncing() ?? Promise.resolve();
   }
   if (!state.getQueuedSessionSync()) {
@@ -150,12 +154,14 @@ export function enqueueMemoryTargetedSessionSync(
       (async () => {
         try {
           await state.getSyncing()?.catch(() => undefined);
-          while (!state.isClosed() && state.getQueuedSessionFiles().size > 0) {
-            const pendingSessionFiles = Array.from(state.getQueuedSessionFiles());
-            state.getQueuedSessionFiles().clear();
+          while (!state.isClosed() && state.getQueuedSessionTranscriptScopes().size > 0) {
+            const pendingSessionTranscriptScopes = Array.from(
+              state.getQueuedSessionTranscriptScopes().values(),
+            );
+            state.getQueuedSessionTranscriptScopes().clear();
             await state.sync({
-              reason: "queued-session-files",
-              sessionFiles: pendingSessionFiles,
+              reason: "queued-session-scopes",
+              sessionTranscriptScopes: pendingSessionTranscriptScopes,
             });
           }
         } finally {

@@ -26,17 +26,12 @@ import {
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { WhatsAppChannelConfigSchema } from "./config-schema.js";
 import { whatsappDoctor } from "./doctor.js";
-import { resolveLegacyGroupSessionKey } from "./group-session-contract.js";
+import { resolveGroupSessionKey } from "./group-session-contract.js";
 import {
   collectUnsupportedSecretRefConfigCandidates,
   unsupportedSecretRefSurfacePatterns,
 } from "./security-contract.js";
 import { applyWhatsAppSecurityConfigFixes } from "./security-fix.js";
-import {
-  canonicalizeLegacySessionKey,
-  deriveLegacySessionChatType,
-  isLegacyGroupSessionKey,
-} from "./session-contract.js";
 
 const WHATSAPP_CHANNEL = "whatsapp" as const;
 
@@ -204,7 +199,6 @@ export function createWhatsAppPluginBase(params: {
       showConfigured: false,
       quickstartAllowFrom: true,
       forceAccountBinding: true,
-      preferSessionLookupForAnnounceTarget: true,
     },
     setupWizard: params.setupWizard,
     capabilities: {
@@ -259,11 +253,7 @@ export function createWhatsAppPluginBase(params: {
     config: base.config!,
     messaging: {
       defaultMarkdownTableMode: "bullets",
-      deriveLegacySessionChatType,
-      resolveLegacyGroupSessionKey,
-      isLegacyGroupSessionKey,
-      canonicalizeLegacySessionKey: (params) =>
-        canonicalizeLegacySessionKey({ key: params.key, agentId: params.agentId }),
+      resolveLegacyGroupSessionKey: resolveGroupSessionKey,
     },
     secrets: {
       unsupportedSecretRefSurfacePatterns,

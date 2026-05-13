@@ -3,6 +3,7 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
@@ -30,6 +31,13 @@ vi.mock("./node-exec.js", () => ({
 }));
 
 const cleanups: Array<() => Promise<void>> = [];
+
+function readQaAuthProfiles(stateDir: string, agentId: string) {
+  return loadAuthProfileStoreWithoutExternalProfiles(
+    path.join(stateDir, "agents", agentId, "agent"),
+    { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+  );
+}
 
 afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
@@ -64,20 +72,12 @@ type AuthProfileRecord = {
   token?: string;
 };
 
-type AuthProfileStore = {
-  profiles: Record<string, AuthProfileRecord>;
-};
-
 type SsrFetchCall = {
   url: string;
   init?: RequestInit;
   policy?: unknown;
   auditContext?: string;
 };
-
-function parseAuthProfileStore(raw: string): AuthProfileStore {
-  return JSON.parse(raw) as AuthProfileStore;
-}
 
 function requireAuthProfile(
   profiles: Record<string, AuthProfileRecord> | undefined,
@@ -444,12 +444,8 @@ describe("buildQaRuntimeEnv", () => {
     const configProfile = requireAuthProfile(cfg.auth?.profiles, "anthropic:qa-setup-token");
     expect(configProfile.provider).toBe("anthropic");
     expect(configProfile.mode).toBe("token");
-    const storeRaw = await readFile(
-      path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
-      "utf8",
-    );
     const storeProfile = requireAuthProfile(
-      parseAuthProfileStore(storeRaw).profiles,
+      readQaAuthProfiles(stateDir, "main").profiles,
       "anthropic:qa-setup-token",
     );
     expect(storeProfile.type).toBe("token");
@@ -478,12 +474,8 @@ describe("buildQaRuntimeEnv", () => {
     expect(configProfile.displayName).toBe("QA live openai env credential");
 
     for (const agentId of ["main", "qa"]) {
-      const storeRaw = await readFile(
-        path.join(stateDir, "agents", agentId, "agent", "auth-profiles.json"),
-        "utf8",
-      );
       const storeProfile = requireAuthProfile(
-        parseAuthProfileStore(storeRaw).profiles,
+        readQaAuthProfiles(stateDir, agentId).profiles,
         "qa-live-openai-env",
       );
       expect(storeProfile.type).toBe("api_key");
@@ -515,16 +507,11 @@ describe("buildQaRuntimeEnv", () => {
     expect(anthropicConfigProfile.mode).toBe("api_key");
     expect(anthropicConfigProfile.displayName).toBe("QA mock anthropic credential");
 
-    // Store side: each agent dir should have its own auth-profiles.json
-    // containing the placeholder credential for each staged provider. This
-    // is what the scenario runner actually reads when it resolves auth
-    // before calling the mock.
+    // Store side: each agent should have a SQLite auth profile entry for each
+    // staged provider. This is what the scenario runner actually reads when it
+    // resolves auth before calling the mock.
     for (const agentId of ["main", "qa"]) {
-      const storeRaw = await readFile(
-        path.join(stateDir, "agents", agentId, "agent", "auth-profiles.json"),
-        "utf8",
-      );
-      const parsed = parseAuthProfileStore(storeRaw);
+      const parsed = readQaAuthProfiles(stateDir, agentId);
       const openaiStoreProfile = requireAuthProfile(parsed.profiles, "qa-mock-openai");
       expect(openaiStoreProfile.type).toBe("api_key");
       expect(openaiStoreProfile.provider).toBe("openai");
@@ -555,18 +542,14 @@ describe("buildQaRuntimeEnv", () => {
     // Anthropic should NOT be staged when the caller restricts providers.
     expect(cfg.auth?.profiles?.["qa-mock-anthropic"]).toBeUndefined();
 
-    const qaStore = JSON.parse(
-      await readFile(path.join(stateDir, "agents", "qa", "agent", "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
+    const qaStore = readQaAuthProfiles(stateDir, "qa");
     const openaiStoreProfile = requireAuthProfile(qaStore.profiles, "qa-mock-openai");
     expect(openaiStoreProfile.provider).toBe("openai");
     expect(openaiStoreProfile.type).toBe("api_key");
     expect(qaStore.profiles["qa-mock-anthropic"]).toBeUndefined();
 
     // main/agent should not exist because it wasn't in the agentIds list.
-    await expect(
-      readFile(path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
-    ).rejects.toThrow(/ENOENT/);
+    expect(readQaAuthProfiles(stateDir, "main").profiles).toEqual({});
   });
 
   it("allows loopback gateway health probes through the SSRF guard", async () => {

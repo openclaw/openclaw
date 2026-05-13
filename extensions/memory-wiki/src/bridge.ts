@@ -30,6 +30,9 @@ type BridgeArtifact = {
   workspaceDir: string;
   relativePath: string;
   absolutePath: string;
+  content?: string;
+  updatedAtMs?: number;
+  sizeBytes?: number;
 };
 
 export type BridgeMemoryWikiResult = {
@@ -76,6 +79,9 @@ async function collectBridgeArtifacts(
       workspaceDir: artifact.workspaceDir,
       relativePath: artifact.relativePath,
       absolutePath: artifact.absolutePath,
+      content: artifact.content,
+      updatedAtMs: artifact.updatedAtMs,
+      sizeBytes: artifact.sizeBytes,
     });
   }
   const deduped = new Map<string, BridgeArtifact>();
@@ -145,6 +151,10 @@ async function writeBridgeSourcePage(params: {
         workspaceDir: params.artifact.workspaceDir,
         relativePath: params.artifact.relativePath,
         agentIds: params.agentIds,
+        contentHash:
+          params.artifact.content === undefined
+            ? undefined
+            : createHash("sha1").update(params.artifact.content).digest("hex"),
       }),
     )
     .digest("hex");
@@ -154,6 +164,7 @@ async function writeBridgeSourcePage(params: {
     sourcePath: params.artifact.absolutePath,
     sourceUpdatedAtMs: params.sourceUpdatedAtMs,
     sourceSize: params.sourceSize,
+    sourceContent: params.artifact.content,
     renderFingerprint,
     pagePath,
     group: "bridge",
@@ -234,7 +245,13 @@ export async function syncMemoryWikiBridgeSources(params: {
   }
   artifactCount = artifacts.length;
   for (const artifact of artifacts) {
-    const stats = await fs.stat(artifact.absolutePath);
+    const stats =
+      artifact.content === undefined
+        ? await fs.stat(artifact.absolutePath)
+        : {
+            mtimeMs: artifact.updatedAtMs ?? Date.now(),
+            size: artifact.sizeBytes ?? Buffer.byteLength(artifact.content),
+          };
     activeKeys.add(artifact.syncKey);
     results.push(
       await writeBridgeSourcePage({

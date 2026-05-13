@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
 
-vi.mock("../channels/plugins/legacy-config.js", () => ({
+vi.mock("../commands/doctor/shared/channel-legacy-config-rules.js", () => ({
   collectChannelLegacyConfigRules: () => [],
 }));
 

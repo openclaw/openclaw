@@ -28,7 +28,7 @@ function configureFastJsonStatus() {
   });
   mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
   mocks.resolveMemorySearchConfig.mockReturnValue({
-    store: { path: "/tmp/main.sqlite" },
+    store: { databasePath: "/tmp/main.sqlite" },
   });
 }
 

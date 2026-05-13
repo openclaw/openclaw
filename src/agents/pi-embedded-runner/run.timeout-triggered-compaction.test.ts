@@ -55,7 +55,6 @@ type CompactRuntimeContext = {
 
 type CompactParams = {
   sessionId?: string;
-  sessionFile?: string;
   tokenBudget?: number;
   force?: boolean;
   compactionTarget?: string;
@@ -64,7 +63,6 @@ type CompactParams = {
 
 type AttemptParams = {
   sessionId?: string;
-  sessionFile?: string;
   authProfileId?: string;
 };
 
@@ -72,7 +70,6 @@ type HookEvent = {
   messageCount?: number;
   compactedCount?: number;
   tokenCount?: number;
-  sessionFile?: string;
 };
 
 type HookContext = {
@@ -155,7 +152,6 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     const compactParams = compactCallAt(0);
     expect(compactParams.sessionId).toBe("test-session");
-    expect(compactParams.sessionFile).toBe("/tmp/session.json");
     expect(compactParams.tokenBudget).toBe(200000);
     expect(compactParams.force).toBe(true);
     expect(compactParams.compactionTarget).toBe("budget");
@@ -190,7 +186,6 @@ describe("timeout-triggered compaction", () => {
         tokensBefore: 160000,
         tokensAfter: 60000,
         sessionId: "timeout-rotated-session",
-        sessionFile: "/tmp/timeout-rotated-session.json",
       }),
     );
     // Second attempt succeeds
@@ -198,7 +193,6 @@ describe("timeout-triggered compaction", () => {
       makeAttemptResult({
         promptError: null,
         sessionIdUsed: "timeout-rotated-session",
-        sessionFileUsed: "/tmp/timeout-rotated-session.json",
       }),
     );
 
@@ -208,7 +202,6 @@ describe("timeout-triggered compaction", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     const retryParams = attemptCallAt(1);
     expect(retryParams.sessionId).toBe("timeout-rotated-session");
-    expect(retryParams.sessionFile).toBe("/tmp/timeout-rotated-session.json");
     expect(mockedRunPostCompactionSideEffects).not.toHaveBeenCalled();
     expect(result.meta.error).toBeUndefined();
   });
@@ -511,14 +504,13 @@ describe("timeout-triggered compaction", () => {
     await runEmbeddedPiAgent(overflowBaseRunParams);
 
     const [beforeEvent, beforeContext] = hookCallAt(0, "before");
-    expect(beforeEvent).toEqual({ messageCount: -1, sessionFile: "/tmp/session.json" });
+    expect(beforeEvent).toEqual({ messageCount: -1 });
     expect(beforeContext.sessionKey).toBe("test-key");
     const [afterEvent, afterContext] = hookCallAt(0, "after");
     expect(afterEvent).toEqual({
       messageCount: -1,
       compactedCount: -1,
       tokenCount: 70,
-      sessionFile: "/tmp/session.json",
     });
     expect(afterContext.sessionKey).toBe("test-key");
     expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledTimes(1);

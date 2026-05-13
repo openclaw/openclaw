@@ -95,7 +95,7 @@ export function resolveModelAuthLabel(params: {
     provider: providerKey,
   });
   if (customKey) {
-    return `api-key (models.json)`;
+    return `api-key (stored model catalog)`;
   }
 
   return "unknown";

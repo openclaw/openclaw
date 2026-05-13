@@ -19,12 +19,14 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
-import {
-  loadExecApprovals,
-  resolveExecApprovalsPath,
-  saveExecApprovals,
-} from "../infra/exec-approvals.js";
+import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
 import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
@@ -38,20 +40,25 @@ type MockedRunViaMacAppExecHost = Mock<HandleSystemRunInvokeOptions["runViaMacAp
 type MockedSendInvokeResult = Mock<HandleSystemRunInvokeOptions["sendInvokeResult"]>;
 type MockedSendExecFinishedEvent = Mock<HandleSystemRunInvokeOptions["sendExecFinishedEvent"]>;
 type MockedSendNodeEvent = Mock<HandleSystemRunInvokeOptions["sendNodeEvent"]>;
+type ExecApprovalsTestDatabase = Pick<OpenClawStateKyselyDatabase, "exec_approvals_config">;
 
 describe("handleSystemRunInvoke mac app exec host routing", () => {
   let sharedFixtureRoot = "";
   let sharedOpenClawHome = "";
+  let sharedStateDir = "";
   let sharedRuntimeBinDir = "";
   let sharedFixtureId = 0;
   let previousOpenClawHome: string | undefined;
+  let previousStateDir: string | undefined;
   const sharedRuntimeBins = new Set<string>();
 
   beforeAll(() => {
     sharedFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-host-fixtures-"));
     sharedOpenClawHome = path.join(sharedFixtureRoot, "openclaw-home");
+    sharedStateDir = path.join(sharedFixtureRoot, "openclaw-state");
     sharedRuntimeBinDir = path.join(sharedFixtureRoot, "bin");
     fs.mkdirSync(sharedOpenClawHome, { recursive: true });
+    fs.mkdirSync(sharedStateDir, { recursive: true });
     fs.mkdirSync(sharedRuntimeBinDir, { recursive: true });
   });
 
@@ -69,19 +76,37 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   beforeEach(() => {
     previousOpenClawHome = process.env.OPENCLAW_HOME;
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_HOME = sharedOpenClawHome;
-    fs.rmSync(resolveExecApprovalsPath(), { force: true });
+    process.env.OPENCLAW_STATE_DIR = sharedStateDir;
+    clearExecApprovalsConfig();
     clearRuntimeConfigSnapshot();
   });
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
+    clearExecApprovalsConfig();
+    closeOpenClawStateDatabaseForTest();
     if (previousOpenClawHome === undefined) {
       delete process.env.OPENCLAW_HOME;
     } else {
       process.env.OPENCLAW_HOME = previousOpenClawHome;
     }
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
   });
+
+  function clearExecApprovalsConfig(): void {
+    const database = openOpenClawStateDatabase();
+    const db = getNodeSqliteKysely<ExecApprovalsTestDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("exec_approvals_config").where("config_key", "=", "current"),
+    );
+  }
 
   function createLocalRunResult(stdout = "local-ok") {
     return {

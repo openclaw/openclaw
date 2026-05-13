@@ -79,6 +79,19 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   });
 
   it("passes threadId through to gateway send for Telegram forum topics", async () => {
+    sessionListRows = [
+      {
+        key: "agent:main:telegram:group:-100123:topic:554",
+        kind: "group",
+        channel: "telegram",
+        deliveryContext: {
+          channel: "telegram",
+          to: "-100123",
+          threadId: "554",
+        },
+      },
+    ];
+
     await runSessionsSendA2AFlow({
       targetSessionKey: "agent:main:telegram:group:-100123:topic:554",
       displayKey: "agent:main:telegram:group:-100123:topic:554",
@@ -96,6 +109,18 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   });
 
   it("omits threadId for non-topic sessions", async () => {
+    sessionListRows = [
+      {
+        key: "agent:main:discord:group:dev",
+        kind: "group",
+        channel: "discord",
+        deliveryContext: {
+          channel: "discord",
+          to: "group:dev",
+        },
+      },
+    ];
+
     await runSessionsSendA2AFlow({
       targetSessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
@@ -111,34 +136,17 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(sendParams.threadId).toBeUndefined();
   });
 
-  it.each([
-    {
-      source: "deliveryContext.accountId",
-      accountId: "thinker",
-      session: {
-        key: "agent:main:discord:channel:target-room",
-        kind: "group",
+  it("uses Discord session deliveryContext.accountId for announce accountId", async () => {
+    const session = {
+      key: "agent:main:discord:channel:target-room",
+      kind: "group",
+      channel: "discord",
+      deliveryContext: {
         channel: "discord",
-        deliveryContext: {
-          channel: "discord",
-          to: "channel:target-room",
-          accountId: "thinker",
-        },
-      } satisfies SessionListRow,
-    },
-    {
-      source: "lastAccountId",
-      accountId: "scout",
-      session: {
-        key: "agent:main:discord:channel:target-room",
-        kind: "group",
-        channel: "discord",
-        lastChannel: "discord",
-        lastTo: "channel:target-room",
-        lastAccountId: "scout",
-      } satisfies SessionListRow,
-    },
-  ])("uses Discord session $source for announce accountId", async ({ accountId, session }) => {
+        to: "channel:target-room",
+        accountId: "thinker",
+      },
+    } satisfies SessionListRow;
     sessionListRows = [session];
 
     await runSessionsSendA2AFlow({
@@ -155,7 +163,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     const sendParams = sendCall.params as Record<string, unknown>;
     expect(sendParams.channel).toBe("discord");
     expect(sendParams.to).toBe("channel:target-room");
-    expect(sendParams.accountId).toBe(accountId);
+    expect(sendParams.accountId).toBe("thinker");
   });
 
   it.each(["NO_REPLY", "HEARTBEAT_OK", "ANNOUNCE_SKIP", "REPLY_SKIP"])(

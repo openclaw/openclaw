@@ -5,7 +5,6 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
@@ -21,19 +20,24 @@ type TranscriptEntry = {
     content?: unknown;
   };
 };
+type SqliteTranscriptStoreModule = {
+  appendSqliteSessionTranscriptEvent: (params: {
+    agentId: string;
+    sessionId: string;
+    event: unknown;
+    now?: () => number;
+    parentMode?: "database-tail";
+  }) => void;
+  loadSqliteSessionTranscriptEvents: (params: {
+    agentId: string;
+    sessionId: string;
+  }) => Array<{ event: unknown }>;
+};
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
-}
-
-async function readJsonl(filePath: string): Promise<TranscriptEntry[]> {
-  const raw = await fs.readFile(filePath, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as TranscriptEntry);
 }
 
 function messageText(content: unknown): string {
@@ -53,9 +57,19 @@ function messageText(content: unknown): string {
 }
 
 async function verifyRuntimeContextTranscriptShape(root: string) {
-  const sessionFile = path.join(root, ".openclaw", "agents", "main", "sessions", "runtime.jsonl");
-  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-  const sessionManager = SessionManager.open(sessionFile);
+  const { appendSqliteSessionTranscriptEvent, loadSqliteSessionTranscriptEvents } =
+    (await import("../../dist/config/sessions/transcript-store.sqlite.js")) as SqliteTranscriptStoreModule;
+  const agentId = "main";
+  const sessionId = "runtime";
+  let now = Date.now();
+  const appendEvent = (event: unknown) =>
+    appendSqliteSessionTranscriptEvent({
+      agentId,
+      sessionId,
+      event,
+      now: () => now++,
+      parentMode: "database-tail",
+    });
   const effectivePrompt = [
     "visible ask",
     "",
@@ -79,27 +93,43 @@ async function verifyRuntimeContextTranscriptShape(root: string) {
     session: {
       sendCustomMessage: async (message, options) => {
         assert(options?.deliverAs === "nextTurn", "runtime context was not queued for next turn");
-        sessionManager.appendCustomMessageEntry(
-          message.customType,
-          message.content,
-          message.display,
-          message.details,
-        );
+        appendEvent({
+          type: "custom_message",
+          id: "runtime-context",
+          parentId: null,
+          timestamp: now,
+          customType: message.customType,
+          content: message.content,
+          display: message.display,
+          details: message.details,
+        });
       },
     },
   });
-  sessionManager.appendMessage({
-    role: "user",
-    content: promptSubmission.prompt,
-    timestamp: Date.now(),
+  appendEvent({
+    type: "message",
+    id: "runtime-user",
+    parentId: null,
+    timestamp: now,
+    message: {
+      role: "user",
+      content: promptSubmission.prompt,
+    },
   });
-  sessionManager.appendMessage({
-    role: "assistant",
-    content: "done",
-    timestamp: Date.now() + 1,
+  appendEvent({
+    type: "message",
+    id: "runtime-assistant",
+    parentId: null,
+    timestamp: now,
+    message: {
+      role: "assistant",
+      content: "done",
+    },
   });
 
-  const entries = await readJsonl(sessionFile);
+  const entries = loadSqliteSessionTranscriptEvents({ agentId, sessionId }).map(
+    (entry) => entry.event as TranscriptEntry,
+  );
   const customEntry = entries.find((entry) => entry.type === "custom_message");
   assert(customEntry, "hidden runtime custom message was not persisted");
   assert(customEntry.customType === "openclaw.runtime-context", "unexpected custom message type");
@@ -119,9 +149,9 @@ async function verifyRuntimeContextTranscriptShape(root: string) {
   );
 }
 
-async function seedBrokenSession(stateDir: string): Promise<string> {
+async function seedBrokenLegacySessionForDoctorMigration(stateDir: string): Promise<string> {
   const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
-  const sessionFile = path.join(sessionsDir, "broken.jsonl");
+  const legacyTranscriptPath = path.join(sessionsDir, "broken.jsonl");
   await fs.mkdir(sessionsDir, { recursive: true });
   const entries = [
     { type: "session", version: 3, id: "broken-session" },
@@ -166,12 +196,15 @@ async function seedBrokenSession(stateDir: string): Promise<string> {
     },
   ];
   await fs.writeFile(
-    sessionFile,
+    legacyTranscriptPath,
     `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
     "utf-8",
   );
+  // This is intentionally a legacy input: the scenario proves doctor imports
+  // session indexes and transcript JSONL into SQLite, then removes the sources.
+  const legacySessionIndexPath = path.join(sessionsDir, "sessions.json");
   await fs.writeFile(
-    path.join(sessionsDir, "sessions.json"),
+    legacySessionIndexPath,
     JSON.stringify(
       {
         "agent:main:qa:docker-runtime-context": {
@@ -186,13 +219,13 @@ async function seedBrokenSession(stateDir: string): Promise<string> {
     ),
     "utf-8",
   );
-  return sessionFile;
+  return legacyTranscriptPath;
 }
 
 async function verifyDoctorRepair(root: string) {
   const stateDir = path.join(root, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
-  const sessionFile = await seedBrokenSession(stateDir);
+  const legacyTranscriptPath = await seedBrokenLegacySessionForDoctorMigration(stateDir);
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify({ plugins: { enabled: false } }, null, 2));
 
@@ -223,7 +256,18 @@ async function verifyDoctorRepair(root: string) {
     result.status === 0,
     `doctor --fix failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
   );
-  const entries = await readJsonl(sessionFile);
+  await fs.access(legacyTranscriptPath).then(
+    () => {
+      throw new Error("doctor left legacy transcript JSONL after SQLite import");
+    },
+    () => undefined,
+  );
+  const { loadSqliteSessionTranscriptEvents } =
+    (await import("../../dist/config/sessions/transcript-store.sqlite.js")) as SqliteTranscriptStoreModule;
+  const entries = loadSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: "broken-session",
+  }).map((entry) => entry.event as TranscriptEntry);
   const ids = entries.map((entry) => (entry as { id?: string }).id).filter(Boolean);
   assert(
     JSON.stringify(ids) ===
@@ -236,10 +280,6 @@ async function verifyDoctorRepair(root: string) {
     ),
     "doctor repair left runtime context in active transcript",
   );
-  const backups = (await fs.readdir(path.dirname(sessionFile))).filter((name) =>
-    name.includes(".pre-doctor-branch-repair-"),
-  );
-  assert(backups.length === 1, `expected one doctor backup, got ${backups.length}`);
 }
 
 async function main() {

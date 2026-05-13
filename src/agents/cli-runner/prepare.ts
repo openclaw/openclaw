@@ -44,7 +44,6 @@ import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveSkillsPromptForRun } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
-import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
@@ -306,7 +305,6 @@ export async function prepareCliRunContext(
   const loadOpenClawHistoryMessages = async () => {
     openClawHistoryMessages ??= await loadCliSessionHistoryMessages({
       sessionId: params.sessionId,
-      sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       config: params.config,
@@ -411,31 +409,18 @@ export async function prepareCliRunContext(
     prompt: preparedPrompt,
   });
   preparedPrompt = annotateInterSessionPromptText(preparedPrompt, params.inputProvenance);
-  const allowRawTranscriptReseed =
-    backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
-  const rawTranscriptReseedReason = reusableCliSession.sessionId
-    ? "session-expired"
-    : reusableCliSession.invalidatedReason;
-  const shouldPrepareOpenClawHistoryPrompt =
-    !reusableCliSession.sessionId || allowRawTranscriptReseed;
-  const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
-    ? buildCliSessionHistoryPrompt({
+  const openClawHistoryPrompt = reusableCliSession.sessionId
+    ? undefined
+    : buildCliSessionHistoryPrompt({
         messages: await loadCliSessionReseedMessages({
           sessionId: params.sessionId,
-          sessionFile: params.sessionFile,
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           config: params.config,
-          allowRawTranscriptReseed,
-          rawTranscriptReseedReason,
         }),
         prompt: preparedPrompt,
-      })
-    : undefined;
-  systemPrompt = appendModelIdentitySystemPrompt({
-    systemPrompt: applyPluginTextReplacements(systemPrompt, backendResolved.textTransforms?.input),
-    model: modelDisplay,
-  });
+      });
+  systemPrompt = applyPluginTextReplacements(systemPrompt, backendResolved.textTransforms?.input);
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
     generatedAt: Date.now(),

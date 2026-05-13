@@ -183,16 +183,17 @@ operator auth.
 
 ## Storage (local, private)
 
-Pairing state is stored under the Gateway state directory (default `~/.openclaw`):
+Pairing state is stored in the shared Gateway state database:
 
-- `~/.openclaw/nodes/paired.json`
-- `~/.openclaw/nodes/pending.json`
+- `~/.openclaw/state/openclaw.sqlite`
 
-If you override `OPENCLAW_STATE_DIR`, the `nodes/` folder moves with it.
+If you override `OPENCLAW_STATE_DIR`, the SQLite database moves with it. Older
+`nodes/paired.json` and `nodes/pending.json` files are legacy import sources;
+`openclaw doctor --fix` imports them into SQLite and removes the JSON files.
 
 Security notes:
 
-- Tokens are secrets; treat `paired.json` as sensitive.
+- Tokens are secrets; treat `state/openclaw.sqlite` as sensitive.
 - Rotating a token requires re-approval (or deleting the node entry).
 
 ## Transport behavior

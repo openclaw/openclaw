@@ -8,7 +8,7 @@ struct SettingsViewSmokeTests {
     @Test func `cron settings builds body`() {
         let store = CronJobsStore(isPreview: true)
         store.schedulerEnabled = false
-        store.schedulerStorePath = "/tmp/openclaw-cron-store.json"
+        store.schedulerStoreKey = "default"
 
         let job1 = CronJob(
             id: "job-1",

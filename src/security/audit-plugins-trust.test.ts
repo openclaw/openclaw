@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 
 type CollectPluginsTrustFindings =
@@ -205,9 +207,7 @@ describe("security audit install metadata findings", () => {
       })),
       diagnostics: [],
     };
-    const filePath = path.join(stateDir, "plugins", "installs.json");
-    await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-    await fs.writeFile(filePath, `${JSON.stringify(index, null, 2)}\n`, { mode: 0o600 });
+    await writePersistedInstalledPluginIndex(index, { stateDir });
   };
 
   beforeAll(async () => {
@@ -215,6 +215,7 @@ describe("security audit install metadata findings", () => {
   });
 
   afterAll(async () => {
+    closeOpenClawStateDatabaseForTest();
     if (fixtureRoot) {
       await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
     }
@@ -254,8 +255,8 @@ describe("security audit install metadata findings", () => {
           );
         },
         expectedPresent: [
-          "plugins.installs_unpinned_npm_specs",
-          "plugins.installs_missing_integrity",
+          "plugins.index_unpinned_npm_specs",
+          "plugins.index_missing_integrity",
           "hooks.installs_unpinned_npm_specs",
           "hooks.installs_missing_integrity",
         ],
@@ -289,8 +290,8 @@ describe("security audit install metadata findings", () => {
           );
         },
         expectedAbsent: [
-          "plugins.installs_unpinned_npm_specs",
-          "plugins.installs_missing_integrity",
+          "plugins.index_unpinned_npm_specs",
+          "plugins.index_missing_integrity",
           "hooks.installs_unpinned_npm_specs",
           "hooks.installs_missing_integrity",
         ],
@@ -325,7 +326,7 @@ describe("security audit install metadata findings", () => {
             stateDir,
           );
         },
-        expectedPresent: ["plugins.installs_version_drift", "hooks.installs_version_drift"],
+        expectedPresent: ["plugins.index_version_drift", "hooks.installs_version_drift"],
       },
     ];
 

@@ -200,8 +200,8 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     owner: "plugin",
     introduced: "2026-04-25",
     source: "plugins.installs in authored config",
-    migration: "src/config/plugin-install-config-migration.ts",
-    replacement: "state-managed plugins/installs.json install ledger",
+    migration: "src/commands/doctor/shared/plugin-install-config-migration.ts",
+    replacement: "SQLite-managed installed plugin index",
     docsPath: "/cli/plugins#registry",
     tests: [
       "src/config/io.write-config.test.ts",

@@ -16,7 +16,7 @@ struct RuntimeLocatorTests {
     @Test func `resolve succeeds with valid node`() throws {
         let script = """
         #!/bin/sh
-        echo v22.16.0
+        echo v24.0.0
         """
         let node = try self.makeTempExecutable(contents: script)
         let result = RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
@@ -25,13 +25,13 @@ struct RuntimeLocatorTests {
             return
         }
         #expect(res.path == node.path)
-        #expect(res.version == RuntimeVersion(major: 22, minor: 16, patch: 0))
+        #expect(res.version == RuntimeVersion(major: 24, minor: 0, patch: 0))
     }
 
     @Test func `resolve fails on boundary below minimum`() throws {
         let script = """
         #!/bin/sh
-        echo v22.15.9
+        echo v23.9.9
         """
         let node = try self.makeTempExecutable(contents: script)
         let result = RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
@@ -39,8 +39,8 @@ struct RuntimeLocatorTests {
             Issue.record("Expected unsupported error, got \(result)")
             return
         }
-        #expect(found == RuntimeVersion(major: 22, minor: 15, patch: 9))
-        #expect(required == RuntimeVersion(major: 22, minor: 16, patch: 0))
+        #expect(found == RuntimeVersion(major: 23, minor: 9, patch: 9))
+        #expect(required == RuntimeVersion(major: 24, minor: 0, patch: 0))
         #expect(path == node.path)
     }
 
@@ -76,7 +76,7 @@ struct RuntimeLocatorTests {
 
     @Test func `describe failure includes paths`() {
         let msg = RuntimeLocator.describeFailure(.notFound(searchPaths: ["/tmp/a", "/tmp/b"]))
-        #expect(msg.contains("Node >=22.16.0"))
+        #expect(msg.contains("Node >=24.0.0"))
         #expect(msg.contains("PATH searched: /tmp/a:/tmp/b"))
 
         let parseMsg = RuntimeLocator.describeFailure(
@@ -85,7 +85,7 @@ struct RuntimeLocatorTests {
                 raw: "garbage",
                 path: "/usr/local/bin/node",
                 searchPaths: ["/usr/local/bin"]))
-        #expect(parseMsg.contains("Node >=22.16.0"))
+        #expect(parseMsg.contains("Node >=24.0.0"))
     }
 
     @Test func `runtime version parses with leading V and metadata`() {

@@ -1,12 +1,3 @@
-import {
-  streamSimple,
-  type Api,
-  type AssistantMessageEvent,
-  type ImageContent,
-  type Message,
-  type Model,
-  type TextContent,
-} from "@earendil-works/pi-ai";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
@@ -16,15 +7,24 @@ import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
-import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
+import { readBtwTranscriptMessages } from "./btw-transcript.js";
 import { resolveAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
 import {
   resolveImageSanitizationLimits,
   type ImageSanitizationLimits,
 } from "./image-sanitization.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import { ensureOpenClawModelCatalog } from "./models-config.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
+import {
+  streamSimple,
+  type Api,
+  type AssistantMessageEvent,
+  type ImageContent,
+  type Message,
+  type Model,
+  type TextContent,
+} from "./pi-ai-contract.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./pi-embedded-runner/runs.js";
@@ -223,7 +223,6 @@ async function resolveRuntimeModel(params: {
   sessionEntry?: StoredSessionEntry;
   sessionStore?: Record<string, StoredSessionEntry>;
   sessionKey?: string;
-  storePath?: string;
   isNewSession: boolean;
 }): Promise<{
   model: Model<Api>;
@@ -231,7 +230,7 @@ async function resolveRuntimeModel(params: {
   authProfileIdSource?: "auto" | "user";
 }> {
   const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
-  await ensureOpenClawModelsJson(params.cfg, params.agentDir, modelsOptions);
+  await ensureOpenClawModelCatalog(params.cfg, params.agentDir, modelsOptions);
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
   const model = resolveModelWithRegistry({
@@ -261,7 +260,6 @@ async function resolveRuntimeModel(params: {
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
-    storePath: params.storePath,
     isNewSession: params.isNewSession,
   });
   return {
@@ -280,7 +278,6 @@ type RunBtwSideQuestionParams = {
   sessionEntry: StoredSessionEntry;
   sessionStore?: Record<string, StoredSessionEntry>;
   sessionKey?: string;
-  storePath?: string;
   resolvedThinkLevel?: ThinkLevel;
   resolvedReasoningLevel: ReasoningLevel;
   blockReplyChunking?: BlockReplyChunking;
@@ -297,20 +294,11 @@ export async function runBtwSideQuestion(
     throw new Error("No active session context.");
   }
 
-  const sessionFile = resolveBtwSessionTranscriptPath({
-    sessionId,
-    sessionEntry: params.sessionEntry,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-  });
-  if (!sessionFile) {
-    throw new Error("No active session transcript.");
-  }
-
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
     config: params.cfg,
   });
+
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
   const harness = selectAgentHarness({
     provider: params.provider,
@@ -330,7 +318,6 @@ export async function runBtwSideQuestion(
       sessionEntry: params.sessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
-      storePath: params.storePath,
       isNewSession: params.isNewSession,
     });
     const result = await harness.runSideQuestion({
@@ -339,7 +326,6 @@ export async function runBtwSideQuestion(
       model: model.id,
       runtimeModel: model,
       sessionId,
-      sessionFile,
       agentId: sessionAgentId,
       workspaceDir,
       authProfileId,
@@ -347,7 +333,7 @@ export async function runBtwSideQuestion(
     });
     return { text: result.text };
   }
-  if (harness.id === "codex") {
+  if (harness.id !== "pi") {
     throw new Error(`Selected agent harness "${harness.id}" does not support /btw side questions.`);
   }
 
@@ -367,7 +353,7 @@ export async function runBtwSideQuestion(
   if (messages.length === 0) {
     messages = await toSimpleContextMessages({
       messages: await readBtwTranscriptMessages({
-        sessionFile,
+        agentId: sessionAgentId,
         sessionId,
         snapshotLeafId: activeRunSnapshot?.transcriptLeafId,
       }),
@@ -388,7 +374,6 @@ export async function runBtwSideQuestion(
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
-    storePath: params.storePath,
     isNewSession: params.isNewSession,
   });
   const apiKeyInfo = await getApiKeyForModel({
@@ -470,8 +455,9 @@ export async function runBtwSideQuestion(
     await blockEmitChain;
   };
 
+  const btwStream = providerStreamFn ?? streamSimple;
   const stream = await streamWithPayloadPatch(
-    providerStreamFn ?? streamSimple,
+    btwStream,
     runtimeModel,
     {
       systemPrompt: buildBtwSystemPrompt(),

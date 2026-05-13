@@ -1,7 +1,8 @@
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
+import type { SessionManager } from "../../agents/transcript/session-transcript-contract.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
@@ -44,15 +45,16 @@ function resolveInjectedAssistantContent(params: {
 }
 
 export async function appendInjectedAssistantMessageToTranscript(params: {
-  transcriptPath: string;
   message: string;
+  agentId?: string;
+  sessionId: string;
   label?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
   now?: number;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
 }): Promise<GatewayInjectedTranscriptAppendResult> {
   const now = params.now ?? Date.now();
   const usage = {
@@ -103,19 +105,24 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
-    const { messageId } = await appendSessionTranscriptMessage({
-      transcriptPath: params.transcriptPath,
+    const agentId = params.agentId ?? DEFAULT_AGENT_ID;
+    const sessionId = params.sessionId;
+    const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
+      agentId,
+      sessionId,
       message: messageBody,
       now,
-      useRawWhenLinear: true,
       config: params.config,
     });
-    emitSessionTranscriptUpdate({
-      sessionFile: params.transcriptPath,
-      message: messageBody,
-      messageId,
-    });
-    return { ok: true, messageId, message: messageBody };
+    if (sessionId) {
+      emitSessionTranscriptUpdate({
+        agentId,
+        sessionId,
+        message: appendedMessage,
+        messageId,
+      });
+    }
+    return { ok: true, messageId, message: appendedMessage as Record<string, unknown> };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }

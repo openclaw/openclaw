@@ -749,7 +749,7 @@ actor MacNodeRuntime {
     }
 
     private func handleSystemExecApprovalsGet(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        _ = ExecApprovalsStore.ensureFile()
+        _ = ExecApprovalsStore.ensureState()
         let snapshot = ExecApprovalsStore.readSnapshot()
         let redacted = ExecApprovalsSnapshot(
             path: snapshot.path,
@@ -767,7 +767,7 @@ actor MacNodeRuntime {
         }
 
         let params = try Self.decodeParams(SetParams.self, from: req.paramsJSON)
-        let current = ExecApprovalsStore.ensureFile()
+        let current = ExecApprovalsStore.ensureState()
         let snapshot = ExecApprovalsStore.readSnapshot()
         if snapshot.exists {
             if snapshot.hash.isEmpty {
@@ -803,7 +803,7 @@ actor MacNodeRuntime {
             : current.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         normalized.socket = ExecApprovalsSocketConfig(path: resolvedPath, token: resolvedToken)
 
-        ExecApprovalsStore.saveFile(normalized)
+        ExecApprovalsStore.saveState(normalized)
         let nextSnapshot = ExecApprovalsStore.readSnapshot()
         let redacted = ExecApprovalsSnapshot(
             path: nextSnapshot.path,

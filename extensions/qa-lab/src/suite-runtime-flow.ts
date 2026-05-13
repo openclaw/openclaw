@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-host-core";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -36,7 +35,7 @@ import {
   listCronJobs,
   readDoctorMemoryStatus,
   readEffectiveTools,
-  readRawQaSessionStore,
+  readRawQaSessionEntries,
   readSkillStatus,
   resolveGeneratedImagePath,
   runAgentPrompt,
@@ -162,7 +161,7 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     createSession,
     readEffectiveTools,
     readSkillStatus,
-    readRawQaSessionStore,
+    readRawQaSessionEntries,
     runQaCli,
     extractMediaPathFromText,
     resolveGeneratedImagePath,
@@ -181,7 +180,6 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     handleQaAction,
     extractQaToolPayload,
     formatMemoryDreamingDay,
-    resolveSessionTranscriptsDirForAgent,
     buildAgentSessionKey,
     normalizeLowercaseStringOrEmpty,
     formatErrorMessage: params.formatErrorMessage,

@@ -13,7 +13,7 @@ import type {
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
-  CronStoreFile,
+  CronStoreSnapshot,
 } from "../types.js";
 
 export type CronEvent = {
@@ -47,16 +47,12 @@ export type Logger = {
 export type CronServiceDeps = {
   nowMs?: () => number;
   log: Logger;
-  storePath: string;
+  storeKey?: string;
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
-  /** Resolve session store path for a given agent id. */
-  resolveSessionStorePath?: (agentId?: string) => string;
-  /** Path to the session store (sessions.json) for reaper use. */
-  sessionStorePath?: string;
   /**
    * Delay in ms between missed job executions on startup.
    * Prevents overwhelming the gateway when many jobs are overdue.
@@ -138,38 +134,34 @@ export type CronServiceDeps = {
   onEvent?: (evt: CronEvent) => void;
 };
 
-export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
+export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs" | "storeKey"> & {
+  storeKey: string;
   nowMs: () => number;
 };
 
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
-  store: CronStoreFile | null;
+  store: CronStoreSnapshot | null;
   timer: NodeJS.Timeout | null;
   running: boolean;
   op: Promise<unknown>;
   warnedDisabled: boolean;
-  /**
-   * Job ids whose missing `sessionTarget` was defaulted at load and warned
-   * about. Used to suppress duplicate warns across forceReload ticks so a
-   * single broken job does not spam the log on every scheduler cycle.
-   */
-  warnedMissingSessionTargetJobIds: Set<string>;
   storeLoadedAtMs: number | null;
-  storeFileMtimeMs: number | null;
 };
 
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
   return {
-    deps: { ...deps, nowMs: deps.nowMs ?? (() => Date.now()) },
+    deps: {
+      ...deps,
+      storeKey: deps.storeKey ?? "default",
+      nowMs: deps.nowMs ?? (() => Date.now()),
+    },
     store: null,
     timer: null,
     running: false,
     op: Promise.resolve(),
     warnedDisabled: false,
-    warnedMissingSessionTargetJobIds: new Set<string>(),
     storeLoadedAtMs: null,
-    storeFileMtimeMs: null,
   };
 }
 
@@ -178,7 +170,7 @@ export type CronWakeMode = "now" | "next-heartbeat";
 
 export type CronStatusSummary = {
   enabled: boolean;
-  storePath: string;
+  storeKey: string;
   jobs: number;
   nextWakeAtMs: number | null;
 };

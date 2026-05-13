@@ -106,23 +106,82 @@ const pluginConversationBindingMocks = vi.hoisted(() => ({
 }));
 const sessionStoreMocks = vi.hoisted(() => ({
   currentEntry: undefined as Record<string, unknown> | undefined,
-  loadSessionStore: vi.fn(() => ({})),
-  resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
-  resolveSessionStoreEntry: vi.fn(() => ({ existing: sessionStoreMocks.currentEntry })),
-  updateSessionStoreEntry: vi.fn(
-    async (params: {
-      update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
-    }) => {
-      if (!sessionStoreMocks.currentEntry) {
-        return null;
-      }
-      const patch = await params.update(sessionStoreMocks.currentEntry);
-      if (!patch) {
-        return sessionStoreMocks.currentEntry;
-      }
-      sessionStoreMocks.currentEntry = { ...sessionStoreMocks.currentEntry, ...patch };
+  entries: new Map<string, Record<string, unknown>>(),
+  getSessionEntry: vi.fn((params?: { sessionKey?: string }) => {
+    const sessionKey = params?.sessionKey;
+    if (sessionKey && sessionStoreMocks.entries.has(sessionKey)) {
+      return sessionStoreMocks.entries.get(sessionKey);
+    }
+    if (
+      sessionStoreMocks.currentEntry &&
+      (!sessionKey ||
+        typeof sessionStoreMocks.currentEntry.sessionKey !== "string" ||
+        sessionStoreMocks.currentEntry.sessionKey === sessionKey)
+    ) {
       return sessionStoreMocks.currentEntry;
+    }
+    return undefined;
+  }),
+  listSessionEntries: vi.fn(() => {
+    const entries = [...sessionStoreMocks.entries.entries()].map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry,
+    }));
+    if (
+      entries.length === 0 &&
+      sessionStoreMocks.currentEntry &&
+      typeof sessionStoreMocks.currentEntry.sessionKey === "string"
+    ) {
+      return [
+        {
+          sessionKey: sessionStoreMocks.currentEntry.sessionKey,
+          entry: sessionStoreMocks.currentEntry,
+        },
+      ];
+    }
+    return entries;
+  }),
+  mergeSessionEntry: vi.fn(
+    (
+      existing: Record<string, unknown> | undefined,
+      patch: Record<string, unknown>,
+    ): Record<string, unknown> => ({
+      ...existing,
+      ...patch,
+    }),
+  ),
+  resolveSessionRowEntry: vi.fn(
+    (params?: { store?: Record<string, Record<string, unknown>>; sessionKey?: string }) => {
+      const existing =
+        params?.sessionKey && params.store ? params.store[params.sessionKey] : undefined;
+      return { existing: existing ?? sessionStoreMocks.currentEntry };
     },
+  ),
+  upsertSessionEntry: vi.fn((params: { sessionKey?: string; entry: Record<string, unknown> }) => {
+    sessionStoreMocks.currentEntry = {
+      sessionKey: params.sessionKey,
+      ...params.entry,
+    };
+    if (params.sessionKey) {
+      sessionStoreMocks.entries.set(params.sessionKey, sessionStoreMocks.currentEntry);
+    }
+    return sessionStoreMocks.currentEntry;
+  }),
+  readSqliteSessionRoutingInfo: vi.fn(
+    () =>
+      undefined as
+        | {
+            accountId?: string;
+            channel?: string;
+            chatType?: string;
+            conversationKind?: string;
+            conversationPeerId?: string;
+            conversationThreadId?: string;
+            parentConversationId?: string;
+            primaryConversationId?: string;
+            sessionScope?: string;
+        }
+        | undefined,
   ),
 }));
 const acpManagerRuntimeMocks = vi.hoisted(() => ({
@@ -275,39 +334,6 @@ const conversationBindingMocks = vi.hoisted(() => {
     resolveConversationBindingThreadIdFromMessage: (ctx: BindingMsgContext) => resolveThreadId(ctx),
   };
 });
-const threadInfoMocks = vi.hoisted(() => ({
-  parseSessionThreadInfo: vi.fn<
-    (sessionKey: string | undefined) => {
-      baseSessionKey: string | undefined;
-      threadId: string | undefined;
-    }
-  >(),
-}));
-
-function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
-  const trimmed = sessionKey?.trim();
-  if (!trimmed) {
-    return { baseSessionKey: undefined, threadId: undefined };
-  }
-  const threadMarker = ":thread:";
-  const topicMarker = ":topic:";
-  const marker = trimmed.includes(threadMarker)
-    ? threadMarker
-    : trimmed.includes(topicMarker)
-      ? topicMarker
-      : undefined;
-  if (!marker) {
-    return { baseSessionKey: trimmed, threadId: undefined };
-  }
-  const index = trimmed.lastIndexOf(marker);
-  if (index < 0) {
-    return { baseSessionKey: trimmed, threadId: undefined };
-  }
-  const baseSessionKey = trimmed.slice(0, index).trim() || undefined;
-  const threadId = trimmed.slice(index + marker.length).trim() || undefined;
-  return { baseSessionKey, threadId };
-}
-
 vi.mock("./route-reply.runtime.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
     Boolean(
@@ -361,19 +387,17 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
 }));
-vi.mock("../../config/sessions/thread-info.js", () => ({
-  parseSessionThreadInfo: (sessionKey: string | undefined) =>
-    threadInfoMocks.parseSessionThreadInfo(sessionKey),
-  parseSessionThreadInfoFast: (sessionKey: string | undefined) =>
-    threadInfoMocks.parseSessionThreadInfo(sessionKey),
+vi.mock("../../config/sessions/session-entries.sqlite.js", () => ({
+  readSqliteSessionRoutingInfo: sessionStoreMocks.readSqliteSessionRoutingInfo,
 }));
 vi.mock("./dispatch-from-config.runtime.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
-  loadSessionStore: sessionStoreMocks.loadSessionStore,
-  resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
-  resolveStorePath: sessionStoreMocks.resolveStorePath,
+  getSessionEntry: sessionStoreMocks.getSessionEntry,
+  listSessionEntries: sessionStoreMocks.listSessionEntries,
+  mergeSessionEntry: sessionStoreMocks.mergeSessionEntry,
+  resolveSessionRowEntry: sessionStoreMocks.resolveSessionRowEntry,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
-  updateSessionStoreEntry: sessionStoreMocks.updateSessionStoreEntry,
+  upsertSessionEntry: sessionStoreMocks.upsertSessionEntry,
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -862,11 +886,14 @@ describe("dispatchReplyFromConfig", () => {
     sessionBindingMocks.resolveByConversation.mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
     sessionStoreMocks.currentEntry = undefined;
-    sessionStoreMocks.loadSessionStore.mockClear();
-    sessionStoreMocks.resolveStorePath.mockClear();
-    sessionStoreMocks.resolveSessionStoreEntry.mockClear();
-    threadInfoMocks.parseSessionThreadInfo.mockReset();
-    threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
+    sessionStoreMocks.entries.clear();
+    sessionStoreMocks.getSessionEntry.mockClear();
+    sessionStoreMocks.listSessionEntries.mockClear();
+    sessionStoreMocks.mergeSessionEntry.mockClear();
+    sessionStoreMocks.upsertSessionEntry.mockClear();
+    sessionStoreMocks.resolveSessionRowEntry.mockClear();
+    sessionStoreMocks.readSqliteSessionRoutingInfo.mockReset();
+    sessionStoreMocks.readSqliteSessionRoutingInfo.mockReturnValue(undefined);
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
@@ -1023,37 +1050,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(typeof replyDispatchCall?.[1]).toBe("object");
   });
 
-  it("routes exec-event replies using last route fields when delivery context is missing", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    sessionStoreMocks.currentEntry = {
-      lastChannel: "discord",
-      lastTo: "channel:123",
-      lastAccountId: "default",
-    };
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "exec-event",
-      Surface: "exec-event",
-      SessionKey: "agent:main:main",
-      AccountId: undefined,
-      OriginatingChannel: undefined,
-      OriginatingTo: undefined,
-    });
-
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    const routeCall = firstRouteReplyCall() as
-      | { accountId?: unknown; channel?: unknown; to?: unknown }
-      | undefined;
-    expect(routeCall?.channel).toBe("discord");
-    expect(routeCall?.to).toBe("channel:123");
-    expect(routeCall?.accountId).toBe("default");
-  });
-
   it("honors sendPolicy deny for recovered exec-event delivery channel", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
@@ -1112,9 +1108,12 @@ describe("dispatchReplyFromConfig", () => {
     expect(typeof replyDispatchCall?.[1]).toBe("object");
   });
 
-  it("falls back to thread-scoped session key when current ctx has no MessageThreadId", async () => {
+  it("uses typed SQLite thread metadata when current ctx has no MessageThreadId", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
+    sessionStoreMocks.readSqliteSessionRoutingInfo.mockReturnValueOnce({
+      conversationThreadId: "post-root",
+    });
     sessionStoreMocks.currentEntry = {
       deliveryContext: {
         channel: "discord",
@@ -2032,9 +2031,8 @@ describe("dispatchReplyFromConfig", () => {
     ]);
     let currentAcpEntry = {
       sessionKey: "agent:codex-acp:session-1",
-      storeSessionKey: "agent:codex-acp:session-1",
+      rowSessionKey: "agent:codex-acp:session-1",
       cfg: {},
-      storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
         backend: "acpx",
@@ -2111,9 +2109,8 @@ describe("dispatchReplyFromConfig", () => {
     const runtime = createAcpRuntime([{ type: "text_delta", text: "done" }, { type: "done" }]);
     acpMocks.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex-acp:session-1",
-      storeSessionKey: "agent:codex-acp:session-1",
+      rowSessionKey: "agent:codex-acp:session-1",
       cfg: {},
-      storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
         backend: "acpx",
@@ -2177,9 +2174,8 @@ describe("dispatchReplyFromConfig", () => {
     });
     acpMocks.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex-acp:session-1",
-      storeSessionKey: "agent:codex-acp:session-1",
+      rowSessionKey: "agent:codex-acp:session-1",
       cfg: {},
-      storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
         backend: "acpx",
@@ -2265,9 +2261,8 @@ describe("dispatchReplyFromConfig", () => {
       const runTurnStarted = runtime.runTurn.mock.calls.length > 0;
       return {
         sessionKey: "agent:codex-acp:session-1",
-        storeSessionKey: "agent:codex-acp:session-1",
+        rowSessionKey: "agent:codex-acp:session-1",
         cfg: {},
-        storePath: "/tmp/mock-sessions.json",
         entry: {},
         acp: runTurnStarted ? resolvedAcp : pendingAcp,
       };
@@ -2333,9 +2328,8 @@ describe("dispatchReplyFromConfig", () => {
       const runTurnStarted = runtime.runTurn.mock.calls.length > 0;
       return {
         sessionKey: "agent:codex-acp:session-1",
-        storeSessionKey: "agent:codex-acp:session-1",
+        rowSessionKey: "agent:codex-acp:session-1",
         cfg: {},
-        storePath: "/tmp/mock-sessions.json",
         entry: {},
         acp: runTurnStarted ? resolvedAcp : pendingAcp,
       };
@@ -2458,9 +2452,8 @@ describe("dispatchReplyFromConfig", () => {
         params.sessionKey === boundSessionKey
           ? {
               sessionKey: boundSessionKey,
-              storeSessionKey: boundSessionKey,
+              rowSessionKey: boundSessionKey,
               cfg: {},
-              storePath: "/tmp/mock-sessions.json",
               entry: {},
               acp: {
                 backend: "acpx",
@@ -2554,9 +2547,8 @@ describe("dispatchReplyFromConfig", () => {
     ]);
     acpMocks.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex-acp:session-1",
-      storeSessionKey: "agent:codex-acp:session-1",
+      rowSessionKey: "agent:codex-acp:session-1",
       cfg: {},
-      storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
         backend: "acpx",
@@ -2610,9 +2602,8 @@ describe("dispatchReplyFromConfig", () => {
     ]);
     acpMocks.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex-acp:session-1",
-      storeSessionKey: "agent:codex-acp:session-1",
+      rowSessionKey: "agent:codex-acp:session-1",
       cfg: {},
-      storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
         backend: "acpx",
@@ -2692,9 +2683,8 @@ describe("dispatchReplyFromConfig", () => {
     const runtime = createAcpRuntime([{ type: "done" }]);
     acpMocks.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex-acp:oneshot-1",
-      storeSessionKey: "agent:codex-acp:oneshot-1",
+      rowSessionKey: "agent:codex-acp:oneshot-1",
       cfg: {},
-      storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
         backend: "acpx",
@@ -3280,7 +3270,6 @@ describe("dispatchReplyFromConfig", () => {
         data: {
           kind: "codex-app-server-session",
           version: 1,
-          sessionFile: "/tmp/session.jsonl",
           workspaceDir: "/workspace/openclaw",
         },
       },
@@ -3310,29 +3299,25 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-1");
-    const inboundClaimCall = hookMocks.runner.runInboundClaimForPluginOutcome.mock
-      .calls[0] as unknown as
-      | [
-          unknown,
-          { accountId?: unknown; channel?: unknown; content?: unknown; conversationId?: unknown },
-          {
-            accountId?: unknown;
-            channelId?: unknown;
-            conversationId?: unknown;
-            pluginBinding?: { data?: Record<string, unknown> };
-          },
-        ]
-      | undefined;
-    expect(inboundClaimCall?.[0]).toBe("openclaw-codex-app-server");
-    expect(inboundClaimCall?.[1]?.channel).toBe("discord");
-    expect(inboundClaimCall?.[1]?.accountId).toBe("default");
-    expect(inboundClaimCall?.[1]?.conversationId).toBe("channel:1481858418548412579");
-    expect(inboundClaimCall?.[1]?.content).toBe("who are you");
-    expect(inboundClaimCall?.[2]?.channelId).toBe("discord");
-    expect(inboundClaimCall?.[2]?.accountId).toBe("default");
-    expect(inboundClaimCall?.[2]?.conversationId).toBe("channel:1481858418548412579");
-    expect(inboundClaimCall?.[2]?.pluginBinding?.data?.kind).toBe("codex-app-server-session");
-    expect(inboundClaimCall?.[2]?.pluginBinding?.data?.sessionFile).toBe("/tmp/session.jsonl");
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
+      "openclaw-codex-app-server",
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1481858418548412579",
+        content: "who are you",
+      }),
+      expect.objectContaining({
+        channelId: "discord",
+        accountId: "default",
+        conversationId: "channel:1481858418548412579",
+        pluginBinding: expect.objectContaining({
+          data: expect.objectContaining({
+            kind: "codex-app-server-session",
+          }),
+        }),
+      }),
+    );
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
   });
@@ -4140,8 +4125,6 @@ describe("before_dispatch hook", () => {
     resetInboundDedupe();
     mocks.routeReply.mockReset();
     mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
-    threadInfoMocks.parseSessionThreadInfo.mockReset();
-    threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     setNoAbort();
@@ -4287,8 +4270,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
     hookMocks.runner.runReplyDispatch.mockResolvedValue(undefined);
     hookMocks.runner.runBeforeDispatch.mockResolvedValue(undefined);
-    threadInfoMocks.parseSessionThreadInfo.mockReset();
-    threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
   });
 
   it("still calls the replyResolver when sendPolicy is deny", async () => {
@@ -4948,6 +4929,15 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("falls back to automatic group/channel delivery when group tools remove the message tool", async () => {
     setNoAbort();
+    sessionStoreMocks.readSqliteSessionRoutingInfo.mockReturnValue({
+      accountId: "default",
+      channel: "discord",
+      chatType: "channel",
+      conversationKind: "channel",
+      conversationPeerId: "C1",
+      primaryConversationId: "discord:channel:C1",
+      sessionScope: "main",
+    });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.sourceReplyDeliveryMode).toBe("automatic");

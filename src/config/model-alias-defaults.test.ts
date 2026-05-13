@@ -165,6 +165,35 @@ describe("applyModelDefaults", () => {
     });
   });
 
+  it("normalizes retired Gemini per-agent model refs", () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "ops",
+            model: {
+              primary: "google/gemini-3-pro-preview",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+            models: {
+              "google/gemini-3-pro-preview": {},
+            },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.list?.[0]?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(next.agents?.list?.[0]?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {},
+    });
+  });
+
   it("normalizes provider-prefixed Gemini ids in configured Google provider rows", () => {
     const cfg = {
       models: {

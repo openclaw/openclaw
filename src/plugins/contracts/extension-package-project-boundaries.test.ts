@@ -45,6 +45,7 @@ const MEMORY_HOST_SDK_EXPORTS = [
   "./engine-embeddings",
   "./engine-foundation",
   "./engine-qmd",
+  "./engine-session-transcripts",
   "./engine-storage",
   "./multimodal",
   "./query",

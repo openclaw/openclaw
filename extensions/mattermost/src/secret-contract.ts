@@ -10,7 +10,7 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.mattermost.accounts.*.botToken",
     targetType: "channels.mattermost.accounts.*.botToken",
-    configFile: "openclaw.json",
+    store: "openclaw.json",
     pathPattern: "channels.mattermost.accounts.*.botToken",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -21,7 +21,7 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.mattermost.botToken",
     targetType: "channels.mattermost.botToken",
-    configFile: "openclaw.json",
+    store: "openclaw.json",
     pathPattern: "channels.mattermost.botToken",
     secretShape: "secret_input",
     expectedResolvedValue: "string",

@@ -23,7 +23,7 @@ import {
   normalizeThreadId,
   rememberRecentUnboundWebhookEcho,
   removeBindingRecord,
-  saveBindingsToDisk,
+  saveBindingsToStore,
   shouldPersistBindingMutations,
 } from "./thread-bindings.state.js";
 import type { ThreadBindingRecord, ThreadBindingTargetKind } from "./thread-bindings.types.js";
@@ -218,7 +218,7 @@ export function unbindThreadBindingsBySessionKey(params: {
   }
 
   if (removed.length > 0 && shouldPersistBindingMutations()) {
-    saveBindingsToDisk({ force: true });
+    saveBindingsToStore({ force: true });
   }
   return removed;
 }
@@ -274,7 +274,7 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
       staleBindings.push(binding);
       continue;
     }
-    // Session store read failures are transient; never auto-unbind on uncertain reads.
+    // Session reads can fail transiently; never auto-unbind on uncertain reads.
     if (session.storeReadFailed) {
       continue;
     }

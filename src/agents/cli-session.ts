@@ -3,8 +3,6 @@ import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
 
-const CLAUDE_CLI_BACKEND_ID = "claude-cli";
-
 export function hashCliSessionText(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -34,17 +32,6 @@ export function getCliSessionBinding(
       mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
       mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
     };
-  }
-  const fromMap = entry.cliSessionIds?.[normalized];
-  const normalizedFromMap = normalizeOptionalString(fromMap);
-  if (normalizedFromMap) {
-    return { sessionId: normalizedFromMap };
-  }
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    const legacy = normalizeOptionalString(entry.claudeCliSessionId);
-    if (legacy) {
-      return { sessionId: legacy };
-    }
   }
   return undefined;
 }
@@ -95,10 +82,6 @@ export function setCliSessionBinding(
         : {}),
     },
   };
-  entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    entry.claudeCliSessionId = trimmed;
-  }
 }
 
 export function clearCliSession(entry: SessionEntry, provider: string): void {
@@ -108,20 +91,10 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
     delete next[normalized];
     entry.cliSessionBindings = Object.keys(next).length > 0 ? next : undefined;
   }
-  if (entry.cliSessionIds?.[normalized] !== undefined) {
-    const next = { ...entry.cliSessionIds };
-    delete next[normalized];
-    entry.cliSessionIds = Object.keys(next).length > 0 ? next : undefined;
-  }
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    entry.claudeCliSessionId = undefined;
-  }
 }
 
 export function clearAllCliSessions(entry: SessionEntry): void {
   entry.cliSessionBindings = undefined;
-  entry.cliSessionIds = undefined;
-  entry.claudeCliSessionId = undefined;
 }
 
 export function resolveCliSessionReuse(params: {

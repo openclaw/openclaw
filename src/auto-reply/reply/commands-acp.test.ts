@@ -16,8 +16,7 @@ const hoisted = vi.hoisted(() => {
   const listAcpSessionEntriesMock = vi.fn();
   const readAcpSessionEntryMock = vi.fn();
   const upsertAcpSessionMetaMock = vi.fn();
-  const resolveSessionStorePathForAcpMock = vi.fn();
-  const loadSessionStoreMock = vi.fn();
+  const sessionRowsMock = vi.fn();
   const sessionBindingCapabilitiesMock = vi.fn();
   const sessionBindingBindMock = vi.fn();
   const sessionBindingListBySessionMock = vi.fn();
@@ -39,8 +38,7 @@ const hoisted = vi.hoisted(() => {
     listAcpSessionEntriesMock,
     readAcpSessionEntryMock,
     upsertAcpSessionMetaMock,
-    resolveSessionStorePathForAcpMock,
-    loadSessionStoreMock,
+    sessionRowsMock,
     sessionBindingCapabilitiesMock,
     sessionBindingBindMock,
     sessionBindingListBySessionMock,
@@ -87,7 +85,6 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: (args: unknown) => hoisted.listAcpSessionEntriesMock(args),
   readAcpSessionEntry: (args: unknown) => hoisted.readAcpSessionEntryMock(args),
   upsertAcpSessionMeta: (args: unknown) => hoisted.upsertAcpSessionMetaMock(args),
-  resolveSessionStorePathForAcp: (args: unknown) => hoisted.resolveSessionStorePathForAcpMock(args),
 }));
 
 vi.mock("../../agents/acp-spawn.js", () => ({
@@ -103,7 +100,13 @@ vi.mock("../../config/sessions.js", async () => {
   );
   return {
     ...actual,
-    loadSessionStore: (...args: unknown[]) => hoisted.loadSessionStoreMock(...args),
+    listSessionEntries: (...args: unknown[]) => {
+      void args;
+      const store = hoisted.sessionRowsMock() as Record<string, unknown>;
+      return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    },
+    getSessionEntry: (params: { sessionKey: string }) =>
+      (hoisted.sessionRowsMock() as Record<string, unknown>)[params.sessionKey],
   };
 });
 
@@ -534,7 +537,7 @@ function createAcpSessionEntry(options?: {
   const sessionKey = options?.sessionKey ?? defaultAcpSessionKey;
   return {
     sessionKey,
-    storeSessionKey: sessionKey,
+    rowSessionKey: sessionKey,
     acp: {
       backend: "acpx",
       agent: "codex",
@@ -897,11 +900,7 @@ describe("/acp command", () => {
         lastActivityAt: Date.now(),
       },
     });
-    hoisted.resolveSessionStorePathForAcpMock.mockReset().mockReturnValue({
-      cfg: baseCfg,
-      storePath: "/tmp/sessions-acp.json",
-    });
-    hoisted.loadSessionStoreMock.mockReset().mockReturnValue({});
+    hoisted.sessionRowsMock.mockReset().mockReturnValue({});
     hoisted.sessionBindingCapabilitiesMock
       .mockReset()
       .mockReturnValue(createSessionBindingCapabilities());
@@ -1707,11 +1706,11 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Removed 1 binding");
   });
 
-  it("lists ACP sessions from the session store", async () => {
+  it("lists ACP sessions from SQLite session rows", async () => {
     hoisted.sessionBindingListBySessionMock.mockImplementation((key: string) =>
       key === defaultAcpSessionKey ? [createBoundThreadSession(key) as SessionBindingRecord] : [],
     );
-    hoisted.loadSessionStoreMock.mockReturnValue({
+    hoisted.sessionRowsMock.mockReturnValue({
       [defaultAcpSessionKey]: {
         sessionId: "sess-1",
         updatedAt: Date.now(),

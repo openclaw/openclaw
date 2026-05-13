@@ -9,7 +9,7 @@ type AgentStatusLike = {
     bootstrapPending?: boolean | null;
     sessionsCount: number;
     lastActiveAgeMs?: number | null;
-    sessionsPath: string;
+    sessionsDatabasePath: string;
   }>;
 };
 
@@ -29,7 +29,7 @@ export const statusAgentsTableColumns = [
   { key: "BootstrapFile", header: "Bootstrap file", minWidth: 14 },
   { key: "Sessions", header: "Sessions", align: "right", minWidth: 8 },
   { key: "Active", header: "Active", minWidth: 10 },
-  { key: "Store", header: "Store", flex: true, minWidth: 34 },
+  { key: "Database", header: "Database", flex: true, minWidth: 34 },
 ] as const;
 
 export function buildStatusAgentTableRows(params: {
@@ -47,7 +47,7 @@ export function buildStatusAgentTableRows(params: {
           : "unknown",
     Sessions: String(agent.sessionsCount),
     Active: agent.lastActiveAgeMs != null ? formatTimeAgo(agent.lastActiveAgeMs) : "unknown",
-    Store: agent.sessionsPath,
+    Database: agent.sessionsDatabasePath,
   }));
 }
 

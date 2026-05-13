@@ -225,10 +225,6 @@ actor VoiceWakeRuntime {
                 "voicewake runtime input preferred=\(preferred, privacy: .public) " +
                     "\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public)")
             self.logger.info("voicewake runtime started")
-            DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "started", fields: [
-                "locale": config.localeID ?? "",
-                "micID": config.micID ?? "",
-            ])
         } catch {
             self.logger.error("voicewake runtime failed to start: \(error.localizedDescription, privacy: .public)")
             self.stop()
@@ -259,7 +255,6 @@ actor VoiceWakeRuntime {
         self.activeTriggerEndTime = nil
         self.activeTriggerWord = nil
         self.logger.debug("voicewake runtime stopped")
-        DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "stopped")
 
         let token = self.overlayToken
         self.overlayToken = nil
@@ -567,7 +562,6 @@ actor VoiceWakeRuntime {
         // (mirrors the push-to-talk coordination pattern).
         if config.triggersTalkMode {
             self.logger.info("voicewake trigger -> activating Talk Mode (skipping capture)")
-            DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "triggerTalkMode")
             if config.triggerChime != .none {
                 await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime, reason: "voicewake.trigger") }
             }
@@ -577,7 +571,6 @@ actor VoiceWakeRuntime {
         }
         self.listeningState = .voiceWake
         self.isCapturing = true
-        DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "beginCapture")
         self.capturedTranscript = command
         self.committedTranscript = ""
         self.volatileTranscript = command
@@ -653,9 +646,7 @@ actor VoiceWakeRuntime {
         self.captureTask = nil
 
         let finalTranscript = self.capturedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "finalizeCapture", fields: [
-            "finalLen": "\(finalTranscript.count)",
-        ])
+        self.logger.info("voicewake capture finalized len=\(finalTranscript.count)")
         // Stop further recognition events so we don't retrigger immediately with buffered audio.
         self.haltRecognitionPipeline()
         self.capturedTranscript = ""

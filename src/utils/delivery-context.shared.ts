@@ -20,6 +20,7 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
         : undefined,
     to: context.to,
     accountId: context.accountId,
+    chatType: context.chatType,
     threadId: context.threadId,
   });
   if (!route) {
@@ -30,6 +31,10 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
     to: channelRouteTarget(route),
     accountId: normalizeAccountId(route.accountId),
   };
+  const chatType = route.target?.chatType;
+  if (chatType) {
+    normalized.chatType = chatType;
+  }
   const threadId = channelRouteThreadId(route);
   if (threadId != null) {
     normalized.threadId = threadId;
@@ -47,10 +52,6 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
   if (!source) {
     return {
       deliveryContext: undefined,
-      lastChannel: undefined,
-      lastTo: undefined,
-      lastAccountId: undefined,
-      lastThreadId: undefined,
     };
   }
 
@@ -67,10 +68,6 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
   if (!merged) {
     return {
       deliveryContext: undefined,
-      lastChannel: undefined,
-      lastTo: undefined,
-      lastAccountId: undefined,
-      lastThreadId: undefined,
     };
   }
 
@@ -86,19 +83,7 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
 export function deliveryContextFromSession(
   entry?: DeliveryContextSessionSource,
 ): DeliveryContext | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  const source: DeliveryContextSessionSource = {
-    channel: entry.channel ?? entry.origin?.provider,
-    lastChannel: entry.lastChannel,
-    lastTo: entry.lastTo,
-    lastAccountId: entry.lastAccountId ?? entry.origin?.accountId,
-    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
-    origin: entry.origin,
-    deliveryContext: entry.deliveryContext,
-  };
-  return normalizeSessionDeliveryFields(source).deliveryContext;
+  return normalizeSessionDeliveryFields(entry).deliveryContext;
 }
 
 export function mergeDeliveryContext(
@@ -124,6 +109,9 @@ export function mergeDeliveryContext(
     accountId: channelsConflict
       ? normalizedPrimary?.accountId
       : (normalizedPrimary?.accountId ?? normalizedFallback?.accountId),
+    chatType: channelsConflict
+      ? normalizedPrimary?.chatType
+      : (normalizedPrimary?.chatType ?? normalizedFallback?.chatType),
     threadId: channelsConflict
       ? normalizedPrimary?.threadId
       : (normalizedPrimary?.threadId ?? normalizedFallback?.threadId),

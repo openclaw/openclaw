@@ -76,7 +76,7 @@ If pairing is missing, approve the node device first.
 If `nodes describe` is missing a command, check the gateway node command policy and whether the node actually declared that command on connect.
 If pairing is fine but `system.run` fails, fix exec approvals/allowlist on that node.
 
-Node pairing is an identity/trust gate, not a per-command approval surface. For `system.run`, the per-node policy lives in that node's exec approvals file (`openclaw approvals get --node ...`), not in the gateway pairing record.
+Node pairing is an identity/trust gate, not a per-command approval surface. For `system.run`, the per-node policy lives in that node's SQLite exec approvals state (`openclaw approvals get --node ...`), not in the gateway pairing record.
 
 For approval-backed `host=node` runs, the gateway also binds execution to the
 prepared canonical `systemRunPlan`. If a later caller mutates command/cwd or

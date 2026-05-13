@@ -1,5 +1,9 @@
-import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStore,
+  type AuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
 
 type QaAuthProfileCredential =
   | {
@@ -20,17 +24,20 @@ export function resolveQaAgentAuthDir(params: { stateDir: string; agentId: strin
 
 export async function writeQaAuthProfiles(params: {
   agentDir: string;
+  stateDir: string;
   profiles: Record<string, QaAuthProfileCredential>;
 }): Promise<void> {
-  const authPath = path.join(params.agentDir, "auth-profiles.json");
-  const existing = await fs
-    .readFile(authPath, "utf8")
-    .then((raw) => JSON.parse(raw) as { profiles?: Record<string, QaAuthProfileCredential> })
-    .catch(() => ({ profiles: {} }));
-  await fs.mkdir(params.agentDir, { recursive: true });
-  await fs.writeFile(
-    authPath,
-    `${JSON.stringify({ version: 1, profiles: { ...existing.profiles, ...params.profiles } }, null, 2)}\n`,
-    "utf8",
+  const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
+  const existing = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, { env });
+  saveAuthProfileStore(
+    {
+      ...existing,
+      profiles: {
+        ...existing.profiles,
+        ...(params.profiles as AuthProfileStore["profiles"]),
+      },
+    },
+    params.agentDir,
+    { env },
   );
 }

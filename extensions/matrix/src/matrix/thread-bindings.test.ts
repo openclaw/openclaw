@@ -2,16 +2,17 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  createPluginStateKeyedStore,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getSessionBindingService, __testing } from "openclaw/plugin-sdk/session-binding-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
-import {
-  resolveMatrixStateFilePath,
-  resolveMatrixStoragePaths,
-  writeStorageMeta,
-} from "./client/storage.js";
+import { resolveMatrixStoragePaths, writeStorageMeta } from "./client/storage.js";
 import type { MatrixAuth, MatrixStoragePaths } from "./client/types.js";
+import type { MatrixThreadBindingRecord } from "./thread-bindings-shared.js";
 import {
   createMatrixThreadBindingManager,
   resetMatrixThreadBindingsForTests,
@@ -25,8 +26,13 @@ const sendMessageMatrixMock = vi.hoisted(() =>
     roomId: "!room:example",
   })),
 );
-const actualRename = fs.rename.bind(fs);
-const renameMock = vi.spyOn(fs, "rename");
+const persistedThreadBindingStore = createPluginStateKeyedStore<MatrixThreadBindingRecord>(
+  "matrix",
+  {
+    namespace: "thread-bindings",
+    maxEntries: 10_000,
+  },
+);
 
 vi.mock("./send.js", () => {
   return {
@@ -108,15 +114,6 @@ describe("matrix thread bindings", () => {
     });
   }
 
-  function resolveBindingsFilePath(customStateDir?: string) {
-    return resolveMatrixStateFilePath({
-      auth,
-      env: process.env,
-      ...(customStateDir ? { stateDir: customStateDir } : {}),
-      filename: "thread-bindings.json",
-    });
-  }
-
   function writeAuthStorageMeta(authForMeta: MatrixAuth, storagePaths: MatrixStoragePaths) {
     writeStorageMeta({
       storagePaths,
@@ -127,42 +124,47 @@ describe("matrix thread bindings", () => {
     });
   }
 
-  async function readPersistedLastActivityAt(bindingsPath: string) {
-    const raw = await fs.readFile(bindingsPath, "utf-8");
-    const parsed = JSON.parse(raw) as {
-      bindings?: Array<{ lastActivityAt?: number }>;
-    };
-    return parsed.bindings?.[0]?.lastActivityAt;
+  async function withStateDirEnv<T>(customStateDir: string | undefined, action: () => Promise<T>) {
+    const previous = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = customStateDir ?? stateDir;
+    try {
+      return await action();
+    } finally {
+      if (previous == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previous;
+      }
+    }
   }
 
-  async function readPersistedBindings(bindingsPath: string) {
-    const raw = await fs.readFile(bindingsPath, "utf-8");
-    return JSON.parse(raw) as {
-      version?: number;
-      bindings?: Array<{
-        conversationId?: string;
-        parentConversationId?: string;
-        targetSessionKey?: string;
-      }>;
-    };
+  async function readPersistedBindings(customStateDir?: string) {
+    return await withStateDirEnv(customStateDir, async () =>
+      (await persistedThreadBindingStore.entries())
+        .map((entry) => entry.value)
+        .filter((entry) => entry.accountId === accountId),
+    );
+  }
+
+  async function readPersistedLastActivityAt(customStateDir?: string) {
+    return (await readPersistedBindings(customStateDir))[0]?.lastActivityAt;
   }
 
   async function expectPersistedThreadBinding(
-    bindingsPath: string,
+    customStateDir: string | undefined,
     expected: {
       conversationId: string;
       targetSessionKey: string;
       parentConversationId?: string;
     },
   ) {
-    const persisted = await readPersistedBindings(bindingsPath);
-    expect(persisted.version).toBe(1);
-    expect(persisted.bindings).toHaveLength(1);
-    expect(persisted.bindings?.[0]?.conversationId).toBe(expected.conversationId);
-    expect(persisted.bindings?.[0]?.parentConversationId).toBe(
+    const persisted = await readPersistedBindings(customStateDir);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.conversationId).toBe(expected.conversationId);
+    expect(persisted[0]?.parentConversationId).toBe(
       expected.parentConversationId ?? "!room:example",
     );
-    expect(persisted.bindings?.[0]?.targetSessionKey).toBe(expected.targetSessionKey);
+    expect(persisted[0]?.targetSessionKey).toBe(expected.targetSessionKey);
   }
 
   function latestSendMessageCall() {
@@ -176,9 +178,8 @@ describe("matrix thread bindings", () => {
   beforeEach(() => {
     stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "matrix-thread-bindings-"));
     resetThreadBindingAdapters();
+    resetPluginStateStoreForTests();
     sendMessageMatrixMock.mockClear();
-    renameMock.mockReset();
-    renameMock.mockImplementation(actualRename);
     setMatrixRuntime({
       state: {
         resolveStateDir: () => stateDir,
@@ -342,9 +343,7 @@ describe("matrix thread bindings", () => {
 
       await vi.waitFor(
         async () => {
-          const persisted = await readPersistedBindings(resolveBindingsFilePath());
-          expect(persisted.version).toBe(1);
-          expect(persisted.bindings).toEqual([]);
+          await expect(readPersistedBindings()).resolves.toEqual([]);
         },
         { interval: 1, timeout: 100 },
       );
@@ -353,7 +352,7 @@ describe("matrix thread bindings", () => {
     }
   });
 
-  it("logs and survives sweeper persistence failures", async () => {
+  it("removes expired bindings from SQLite when the sweeper unbinds", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-08T12:00:00.000Z"));
     const logVerboseMessage = vi.fn();
@@ -380,7 +379,6 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
 
-      renameMock.mockRejectedValueOnce(new Error("disk full"));
       await vi.advanceTimersByTimeAsync(61_000);
 
       await vi.waitFor(
@@ -389,16 +387,9 @@ describe("matrix thread bindings", () => {
             logVerboseMessage.mock.calls.some(
               ([message]) =>
                 typeof message === "string" &&
-                message.includes("failed auto-unbinding expired bindings"),
-            ),
-          ).toBe(true);
-          expect(
-            logVerboseMessage.mock.calls.some(
-              ([message]) =>
-                typeof message === "string" &&
                 message.includes("matrix: auto-unbinding $thread due to idle-expired"),
             ),
-          );
+          ).toBe(true);
         },
         { interval: 1, timeout: 100 },
       );
@@ -411,6 +402,7 @@ describe("matrix thread bindings", () => {
           parentConversationId: "!room:example",
         }),
       ).toBeNull();
+      await expect(readPersistedBindings()).resolves.toEqual([]);
     } finally {
       vi.useRealTimers();
     }
@@ -457,7 +449,7 @@ describe("matrix thread bindings", () => {
     expect(sendOptions.threadId).toBe("$thread");
   });
 
-  it("does not reload persisted bindings after the Matrix access token changes while deviceId is unknown", async () => {
+  it("reloads persisted bindings after the Matrix access token changes while deviceId is unknown", async () => {
     const initialAuth = {
       ...auth,
       accessToken: "token-old",
@@ -488,17 +480,9 @@ describe("matrix thread bindings", () => {
         conversationId: "$thread",
         parentConversationId: "!room:example",
       }),
-    ).toBeNull();
-
-    const initialBindingsPath = path.join(initialStoragePaths.rootDir, "thread-bindings.json");
-    const rotatedBindingsPath = path.join(
-      resolveMatrixStoragePaths({
-        ...rotatedAuth,
-        env: process.env,
-      }).rootDir,
-      "thread-bindings.json",
-    );
-    expect(rotatedBindingsPath).not.toBe(initialBindingsPath);
+    ).toMatchObject({
+      targetSessionKey: "agent:ops:subagent:child",
+    });
   });
 
   it("reloads persisted bindings after the Matrix access token changes when deviceId is known", async () => {
@@ -521,8 +505,7 @@ describe("matrix thread bindings", () => {
       env: process.env,
     });
     writeAuthStorageMeta(initialAuth, initialStoragePaths);
-    const initialBindingsPath = path.join(initialStoragePaths.rootDir, "thread-bindings.json");
-    await expectPersistedThreadBinding(initialBindingsPath, {
+    await expectPersistedThreadBinding(undefined, {
       conversationId: "$thread",
       targetSessionKey: "agent:ops:subagent:child",
     });
@@ -540,15 +523,6 @@ describe("matrix thread bindings", () => {
         parentConversationId: "!room:example",
       })?.targetSessionKey,
     ).toBe("agent:ops:subagent:child");
-
-    const rotatedBindingsPath = path.join(
-      resolveMatrixStoragePaths({
-        ...rotatedAuth,
-        env: process.env,
-      }).rootDir,
-      "thread-bindings.json",
-    );
-    expect(rotatedBindingsPath).toBe(initialBindingsPath);
   });
 
   it("replaces reused account managers when the bindings stateDir changes", async () => {
@@ -583,11 +557,11 @@ describe("matrix thread bindings", () => {
       conversationId: "$thread-2",
     });
 
-    await expectPersistedThreadBinding(resolveBindingsFilePath(replacementStateDir), {
+    await expectPersistedThreadBinding(replacementStateDir, {
       conversationId: "$thread-2",
       targetSessionKey: "agent:ops:subagent:replacement",
     });
-    await expectPersistedThreadBinding(resolveBindingsFilePath(initialStateDir), {
+    await expectPersistedThreadBinding(initialStateDir, {
       conversationId: "$thread",
       targetSessionKey: "agent:ops:subagent:child",
     });
@@ -654,37 +628,26 @@ describe("matrix thread bindings", () => {
     }
   });
 
-  it("persists the latest touched activity only after the debounce window", async () => {
+  it("persists touched activity immediately in SQLite", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
     try {
       await createStaticThreadBindingManager();
       const binding = await bindCurrentThread();
 
-      const bindingsPath = resolveBindingsFilePath();
-      const originalLastActivityAt = await readPersistedLastActivityAt(bindingsPath);
       const firstTouchedAt = Date.parse("2026-03-06T10:05:00.000Z");
       const secondTouchedAt = Date.parse("2026-03-06T10:10:00.000Z");
 
       getSessionBindingService().touch(binding.bindingId, firstTouchedAt);
+      expect(await readPersistedLastActivityAt()).toBe(firstTouchedAt);
       getSessionBindingService().touch(binding.bindingId, secondTouchedAt);
-
-      await vi.advanceTimersByTimeAsync(29_000);
-      expect(await readPersistedLastActivityAt(bindingsPath)).toBe(originalLastActivityAt);
-
-      await vi.advanceTimersByTimeAsync(1_000);
-      await vi.waitFor(
-        async () => {
-          expect(await readPersistedLastActivityAt(bindingsPath)).toBe(secondTouchedAt);
-        },
-        { interval: 1, timeout: 100 },
-      );
+      expect(await readPersistedLastActivityAt()).toBe(secondTouchedAt);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("flushes pending touch persistence on stop", async () => {
+  it("keeps touched activity persisted after stop", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
     try {
@@ -696,10 +659,9 @@ describe("matrix thread bindings", () => {
       manager.stop();
       vi.useRealTimers();
 
-      const bindingsPath = resolveBindingsFilePath();
       await vi.waitFor(
         async () => {
-          expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
+          expect(await readPersistedLastActivityAt()).toBe(touchedAt);
         },
         { interval: 1, timeout: 1_000 },
       );

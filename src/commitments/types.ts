@@ -49,7 +49,7 @@ export type CommitmentRecord = CommitmentScope & {
   expiredAtMs?: number;
 };
 
-export type CommitmentStoreFile = {
+export type CommitmentStoreSnapshot = {
   version: 1;
   commitments: CommitmentRecord[];
 };

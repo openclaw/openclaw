@@ -45,7 +45,7 @@ function expectResolvedReasoningLevel(value: unknown, expected: string) {
 }
 
 function requireBuildStatusReplyParams(index = 0): unknown {
-  const call = buildStatusReply.mock.calls.at(index);
+  const call = buildStatusReply.mock.calls[index];
   if (!call) {
     throw new Error(`expected buildStatusReply call ${index}`);
   }
@@ -77,7 +77,6 @@ describe("resolveDirectStatusReplyForSession", () => {
         sessionId: "sess-main",
       },
       store: {},
-      storePath: "/tmp/sessions.json",
     });
     resolveSessionAgentId.mockReturnValue("main");
     listAgentEntries.mockReturnValue([]);
@@ -126,7 +125,6 @@ describe("resolveDirectStatusReplyForSession", () => {
         sessionId: "sess-main",
       },
       store: {},
-      storePath: "/tmp/sessions.json",
     });
     resolveCurrentDirectiveLevels.mockResolvedValueOnce({
       currentThinkLevel: "off",
@@ -163,7 +161,6 @@ describe("resolveDirectStatusReplyForSession", () => {
         sessionId: "sess-main",
       },
       store: {},
-      storePath: "/tmp/sessions.json",
     });
     resolveCurrentDirectiveLevels.mockResolvedValueOnce({
       currentThinkLevel: "off",
@@ -195,7 +192,6 @@ describe("resolveDirectStatusReplyForSession", () => {
         reasoningLevel: "stream",
       },
       store: {},
-      storePath: "/tmp/sessions.json",
     });
     resolveCurrentDirectiveLevels.mockResolvedValueOnce({
       currentThinkLevel: "off",
@@ -227,7 +223,6 @@ describe("resolveDirectStatusReplyForSession", () => {
         reasoningLevel: "stream",
       },
       store: {},
-      storePath: "/tmp/sessions.json",
     });
     resolveCurrentDirectiveLevels.mockResolvedValueOnce({
       currentThinkLevel: "off",

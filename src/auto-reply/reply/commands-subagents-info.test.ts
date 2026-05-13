@@ -1,6 +1,4 @@
-import os from "node:os";
-import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -16,17 +14,21 @@ import {
   configureInMemoryTaskRegistryStoreForTests,
 } from "./commands.test-harness.js";
 
-const TEST_SESSION_STORE_PATH = path.join(
-  os.tmpdir(),
-  `openclaw-commands-subagents-info-${process.pid}.json`,
-);
+vi.mock("../../config/sessions/store.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/store.js")>(
+    "../../config/sessions/store.js",
+  );
+  return {
+    ...actual,
+    getSessionEntry: vi.fn(() => undefined),
+  };
+});
 
 function buildCommandTestConfig(): OpenClawConfig {
   return {
     ...baseCommandTestConfig,
     session: {
       ...baseCommandTestConfig.session,
-      store: TEST_SESSION_STORE_PATH,
     },
   };
 }
@@ -199,7 +201,7 @@ describe("subagents info", () => {
     const cfg = {
       commands: { text: true },
       channels: { quietchat: { allowFrom: ["*"] } },
-      session: { mainKey: "main", scope: "per-sender", store: TEST_SESSION_STORE_PATH },
+      session: { mainKey: "main", scope: "per-sender" },
     } as OpenClawConfig;
     const result = handleSubagentsInfoAction({
       params: {

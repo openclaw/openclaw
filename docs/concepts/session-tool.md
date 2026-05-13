@@ -81,8 +81,8 @@ The returned view is intentionally bounded and safety-filtered:
 Both tools accept either a **session key** (like `"main"`) or a **session ID**
 from a previous list call.
 
-If you need the exact byte-for-byte transcript, inspect the transcript file on
-disk instead of treating `sessions_history` as a raw dump.
+If you need the exact byte-for-byte transcript for debugging, export it from
+SQLite instead of treating `sessions_history` as a raw dump.
 
 ## Sending cross-session messages
 
@@ -134,7 +134,9 @@ sub-agents. It supports:
 
 `sessions_spawn` creates an isolated session for a background task by default.
 It is always non-blocking -- it returns immediately with a `runId` and
-`childSessionKey`.
+`childSessionKey`. Native sub-agent runs receive the delegated task in the
+child session's first visible `[Subagent Task]` message, while the system
+prompt carries only sub-agent runtime rules and routing context.
 
 Key options:
 

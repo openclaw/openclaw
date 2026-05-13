@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type {
   AcpRuntime,
   OpenClawPluginService,
@@ -37,6 +39,23 @@ type AcpxRuntimeLike = AcpRuntime & {
 const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
 const SKIP_RUNTIME_PROBE_ENV = "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE";
 const ACPX_BACKEND_ID = "acpx";
+export const ACPX_GATEWAY_INSTANCE_PLUGIN_ID = "acpx";
+export const ACPX_GATEWAY_INSTANCE_NAMESPACE = "gateway-instance";
+export const ACPX_GATEWAY_INSTANCE_KEY = "current";
+
+type AcpxGatewayInstanceRecord = {
+  version: 1;
+  id: string;
+  createdAt: number;
+};
+
+const gatewayInstanceStore = createPluginStateKeyedStore<AcpxGatewayInstanceRecord>(
+  ACPX_GATEWAY_INSTANCE_PLUGIN_ID,
+  {
+    namespace: ACPX_GATEWAY_INSTANCE_NAMESPACE,
+    maxEntries: 1,
+  },
+);
 
 type AcpxRuntimeModule = typeof import("./runtime.js");
 let runtimeModulePromise: Promise<AcpxRuntimeModule> | null = null;
@@ -54,6 +73,10 @@ type CreateAcpxRuntimeServiceParams = {
   runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike | Promise<AcpxRuntimeLike>;
   processCleanupDeps?: AcpxProcessCleanupDeps;
 };
+
+export function resolveAcpxWrapperRoot(): string {
+  return path.join(resolvePreferredOpenClawTmpDir(), "acpx");
+}
 
 function loadRuntimeModule(): Promise<AcpxRuntimeModule> {
   runtimeModulePromise ??= import("./runtime.js");
@@ -74,9 +97,7 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
         openclawGatewayInstanceId: params.gatewayInstanceId,
         openclawProcessLeaseStore: params.processLeaseStore,
         openclawWrapperRoot: params.wrapperRoot,
-        sessionStore: module.createFileSessionStore({
-          stateDir: params.pluginConfig.stateDir,
-        }),
+        sessionStore: module.createSqliteSessionStore(),
         agentRegistry: module.createAgentRegistry({
           overrides: params.pluginConfig.agents,
         }),
@@ -236,21 +257,17 @@ async function withStartupProbeTimeout<T>(params: {
   }
 }
 
-async function resolveGatewayInstanceId(stateDir: string): Promise<string> {
-  const filePath = path.join(stateDir, "gateway-instance-id");
-  try {
-    const existing = (await fs.readFile(filePath, "utf8")).trim();
-    if (existing) {
-      return existing;
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
+async function resolveGatewayInstanceId(): Promise<string> {
+  const existing = await gatewayInstanceStore.lookup(ACPX_GATEWAY_INSTANCE_KEY);
+  if (existing?.version === 1 && existing.id.trim()) {
+    return existing.id;
   }
   const next = randomUUID();
-  await fs.mkdir(stateDir, { recursive: true });
-  await fs.writeFile(filePath, `${next}\n`, { mode: 0o600 });
+  await gatewayInstanceStore.register(ACPX_GATEWAY_INSTANCE_KEY, {
+    version: 1,
+    id: next,
+    createdAt: Date.now(),
+  });
   return next;
 }
 
@@ -325,16 +342,15 @@ export function createAcpxRuntimeService(
         ...basePluginConfig,
         probeAgent: basePluginConfig.probeAgent ?? resolveAllowedAgentsProbeAgent(ctx),
       };
+      const wrapperRoot = resolveAcpxWrapperRoot();
       const pluginConfig = await prepareAcpxCodexAuthConfig({
         pluginConfig: effectiveBasePluginConfig,
-        stateDir: ctx.stateDir,
+        wrapperRoot,
         logger: ctx.logger,
       });
-      const wrapperRoot = path.join(ctx.stateDir, "acpx");
-      await fs.mkdir(pluginConfig.stateDir, { recursive: true });
       await fs.mkdir(wrapperRoot, { recursive: true });
-      const gatewayInstanceId = await resolveGatewayInstanceId(ctx.stateDir);
-      const processLeaseStore = createAcpxProcessLeaseStore({ stateDir: wrapperRoot });
+      const gatewayInstanceId = await resolveGatewayInstanceId();
+      const processLeaseStore = createAcpxProcessLeaseStore();
       const startupReap = await reapOpenAcpxProcessLeases({
         gatewayInstanceId,
         leaseStore: processLeaseStore,

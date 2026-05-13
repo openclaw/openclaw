@@ -10,7 +10,6 @@ import {
 } from "./subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-
 export {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,

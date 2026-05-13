@@ -22,18 +22,9 @@ export type ConversationDescriptor = {
 type SessionRow = {
   key: string;
   channel?: string;
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
   deliveryContext?: {
     channel?: string;
     to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  origin?: {
-    provider?: string;
     accountId?: string;
     threadId?: string | number;
   };
@@ -61,10 +52,7 @@ export type SessionMessagePayload = {
   messageId?: string;
   messageSeq?: number;
   message?: { role?: string; content?: unknown; [key: string]: unknown };
-  lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
+  deliveryContext?: SessionRow["deliveryContext"];
   [key: string]: unknown;
 };
 
@@ -163,16 +151,13 @@ export function summarizeStructuredResult(
 
 function resolveConversationChannel(row: SessionRow): string | undefined {
   return normalizeOptionalLowercaseString(
-    toText(row.deliveryContext?.channel) ??
-      toText(row.lastChannel) ??
-      toText(row.channel) ??
-      toText(row.origin?.provider),
+    toText(row.deliveryContext?.channel) ?? toText(row.channel),
   );
 }
 
 export function toConversation(row: SessionRow): ConversationDescriptor | null {
   const channel = resolveConversationChannel(row);
-  const to = toText(row.deliveryContext?.to) ?? toText(row.lastTo);
+  const to = toText(row.deliveryContext?.to);
   if (!channel || !to) {
     return null;
   }
@@ -180,11 +165,8 @@ export function toConversation(row: SessionRow): ConversationDescriptor | null {
     sessionKey: row.key,
     channel,
     to,
-    accountId:
-      toText(row.deliveryContext?.accountId) ??
-      toText(row.lastAccountId) ??
-      toText(row.origin?.accountId),
-    threadId: row.deliveryContext?.threadId ?? row.lastThreadId ?? row.origin?.threadId,
+    accountId: toText(row.deliveryContext?.accountId),
+    threadId: row.deliveryContext?.threadId,
     label: toText(row.label),
     displayName: toText(row.displayName),
     derivedTitle: toText(row.derivedTitle),

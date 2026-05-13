@@ -1,13 +1,17 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
-import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type {
+  ContextEngine,
+  ContextEngineRuntimeContext,
+  ContextEngineTranscriptScope,
+} from "../../context-engine/types.js";
+import type { AgentMessage } from "../agent-core-contract.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import { runContextEngineMaintenance } from "../pi-embedded-runner/context-engine-maintenance.js";
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
 } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
-import type { SessionWriteLockAcquireTimeoutConfig } from "../session-write-lock.js";
 
 export type HarnessContextEngine = ContextEngine;
 
@@ -15,19 +19,18 @@ export type HarnessContextEngine = ContextEngine;
  * Run optional bootstrap + bootstrap maintenance for a harness-owned context engine.
  */
 export async function bootstrapHarnessContextEngine(params: {
-  hadSessionFile: boolean;
+  hadTranscript: boolean;
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
-  sessionFile: string;
-  sessionManager?: unknown;
+  transcriptScope?: ContextEngineTranscriptScope;
   runtimeContext?: ContextEngineRuntimeContext;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
   warn: (message: string) => void;
 }): Promise<void> {
   if (
-    !params.hadSessionFile ||
+    !params.hadTranscript ||
     !(params.contextEngine?.bootstrap || params.contextEngine?.maintain)
   ) {
     return;
@@ -37,16 +40,15 @@ export async function bootstrapHarnessContextEngine(params: {
       await params.contextEngine.bootstrap({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
-        sessionFile: params.sessionFile,
+        transcriptScope: params.transcriptScope,
       });
     }
     await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
+      transcriptScope: params.transcriptScope,
       reason: "bootstrap",
-      sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
       config: params.config,
     });
@@ -95,14 +97,13 @@ export async function finalizeHarnessContextEngineTurn(params: {
   yieldAborted: boolean;
   sessionIdUsed: string;
   sessionKey?: string;
-  sessionFile: string;
+  transcriptScope?: ContextEngineTranscriptScope;
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
   tokenBudget?: number;
   runtimeContext?: ContextEngineRuntimeContext;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
-  sessionManager?: unknown;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
   warn: (message: string) => void;
 }) {
   if (!params.contextEngine) {
@@ -120,7 +121,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
       await params.contextEngine.afterTurn({
         sessionId: params.sessionIdUsed,
         sessionKey: params.sessionKey,
-        sessionFile: params.sessionFile,
+        transcriptScope: params.transcriptScope,
         messages: conversationSnapshot.messages,
         prePromptMessageCount: conversationSnapshot.prePromptMessageCount,
         tokenBudget: params.tokenBudget,
@@ -173,9 +174,8 @@ export async function finalizeHarnessContextEngineTurn(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionIdUsed,
       sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
+      transcriptScope: params.transcriptScope,
       reason: "turn",
-      sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
       config: params.config,
     });
@@ -225,22 +225,18 @@ export async function runHarnessContextEngineMaintenance(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
-  sessionFile: string;
+  transcriptScope?: ContextEngineTranscriptScope;
   reason: "bootstrap" | "compaction" | "turn";
-  sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
   executionMode?: "foreground" | "background";
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
 }) {
   return await runContextEngineMaintenance({
     contextEngine: params.contextEngine,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    sessionFile: params.sessionFile,
+    transcriptScope: params.transcriptScope,
     reason: params.reason,
-    sessionManager: params.sessionManager as Parameters<
-      typeof runContextEngineMaintenance
-    >[0]["sessionManager"],
     runtimeContext: params.runtimeContext,
     executionMode: params.executionMode,
     config: params.config,

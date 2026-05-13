@@ -299,16 +299,18 @@ fly machine update <machine-id> --vm-memory 2048 -y
 
 Gateway refuses to start with "already running" errors.
 
-This happens when the container restarts but the PID lock file persists on the volume.
+This means another gateway process or stale SQLite lease still owns the configured gateway port.
 
-**Fix:** Delete the lock file:
+**Fix:** restart the machine first. On current OpenClaw builds the singleton
+lease lives in `state/openclaw.sqlite`, so there is no `gateway.*.lock` file to
+delete:
 
 ```bash
-fly ssh console --command "rm -f /data/gateway.*.lock"
 fly machine restart <machine-id>
 ```
 
-The lock file is at `/data/gateway.*.lock` (not in a subdirectory).
+If the error persists, run `openclaw doctor --fix` inside the machine or choose
+a different gateway port.
 
 ### Config not being read
 

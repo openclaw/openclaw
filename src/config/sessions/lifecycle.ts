@@ -1,14 +1,12 @@
-import fs from "node:fs";
 import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  type SessionFilePathOptions,
-} from "./paths.js";
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScope,
+} from "./transcript-store.sqlite.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionLifecycleEntry = Pick<
   SessionEntry,
-  "sessionId" | "sessionFile" | "sessionStartedAt" | "lastInteractionAt" | "updatedAt"
+  "sessionId" | "sessionStartedAt" | "lastInteractionAt" | "updatedAt"
 >;
 
 function resolveTimestamp(value: number | undefined): number | undefined {
@@ -26,65 +24,44 @@ function parseTimestampMs(value: unknown): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
-function readFirstLine(filePath: string): string | undefined {
-  try {
-    const fd = fs.openSync(filePath, "r");
-    try {
-      const buffer = Buffer.alloc(8192);
-      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
-      if (bytesRead <= 0) {
-        return undefined;
-      }
-      const chunk = buffer.subarray(0, bytesRead).toString("utf8");
-      const newline = chunk.indexOf("\n");
-      return newline >= 0 ? chunk.slice(0, newline) : chunk;
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return undefined;
-  }
-}
-
 export function readSessionHeaderStartedAtMs(params: {
   entry: SessionLifecycleEntry | undefined;
   agentId?: string;
-  storePath?: string;
-  pathOptions?: SessionFilePathOptions;
 }): number | undefined {
   const sessionId = params.entry?.sessionId?.trim();
   if (!sessionId) {
     return undefined;
   }
-  const pathOptions =
-    params.pathOptions ??
-    resolveSessionFilePathOptions({
-      agentId: params.agentId,
-      storePath: params.storePath,
-    });
-  let sessionFile: string;
-  try {
-    sessionFile = resolveSessionFilePath(sessionId, params.entry, pathOptions);
-  } catch {
-    return undefined;
-  }
-  const firstLine = readFirstLine(sessionFile);
-  if (!firstLine) {
+  const scope = resolveSqliteSessionTranscriptScope({
+    agentId: params.agentId,
+    sessionId,
+  });
+  if (!scope) {
     return undefined;
   }
   try {
-    const header = JSON.parse(firstLine) as {
+    const header = loadSqliteSessionTranscriptEvents(scope)[0]?.event as
+      | {
+          type?: unknown;
+          id?: unknown;
+          timestamp?: unknown;
+        }
+      | undefined;
+    if (!header) {
+      return undefined;
+    }
+    const parsed = header as {
       type?: unknown;
       id?: unknown;
       timestamp?: unknown;
     };
-    if (header.type !== "session") {
+    if (parsed.type !== "session") {
       return undefined;
     }
-    if (typeof header.id === "string" && header.id.trim() && header.id !== sessionId) {
+    if (typeof parsed.id === "string" && parsed.id.trim() && parsed.id !== sessionId) {
       return undefined;
     }
-    return parseTimestampMs(header.timestamp);
+    return parseTimestampMs(parsed.timestamp);
   } catch {
     return undefined;
   }
@@ -93,8 +70,6 @@ export function readSessionHeaderStartedAtMs(params: {
 export function resolveSessionLifecycleTimestamps(params: {
   entry: SessionLifecycleEntry | undefined;
   agentId?: string;
-  storePath?: string;
-  pathOptions?: SessionFilePathOptions;
 }): { sessionStartedAt?: number; lastInteractionAt?: number } {
   const entry = params.entry;
   if (!entry) {
@@ -106,8 +81,6 @@ export function resolveSessionLifecycleTimestamps(params: {
       readSessionHeaderStartedAtMs({
         entry,
         agentId: params.agentId,
-        storePath: params.storePath,
-        pathOptions: params.pathOptions,
       }),
     lastInteractionAt: resolveTimestamp(entry.lastInteractionAt),
   };

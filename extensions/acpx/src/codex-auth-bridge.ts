@@ -475,13 +475,13 @@ function buildClaudeAcpWrapperCommand(wrapperPath: string, configuredCommand?: s
 
 export async function prepareAcpxCodexAuthConfig(params: {
   pluginConfig: ResolvedAcpxPluginConfig;
-  stateDir: string;
+  wrapperRoot: string;
   logger?: unknown;
   resolveInstalledCodexAcpBinPath?: () => Promise<string | undefined>;
   resolveInstalledClaudeAcpBinPath?: () => Promise<string | undefined>;
 }): Promise<ResolvedAcpxPluginConfig> {
   void params.logger;
-  const codexBaseDir = path.join(params.stateDir, "acpx");
+  const codexBaseDir = params.wrapperRoot;
   await prepareIsolatedCodexHome({
     baseDir: codexBaseDir,
     workspaceDir: params.pluginConfig.cwd,

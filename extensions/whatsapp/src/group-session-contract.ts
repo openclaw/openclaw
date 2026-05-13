@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export function resolveLegacyGroupSessionKey(ctx: { From?: string }): {
+export function resolveGroupSessionKey(ctx: { From?: string }): {
   key: string;
   channel: string;
   id: string;

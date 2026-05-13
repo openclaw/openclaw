@@ -1,20 +1,18 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { vi } from "vitest";
+import {
+  deleteSessionEntry,
+  getSessionEntry,
+  listSessionEntries,
+  upsertSessionEntry,
+} from "../config/sessions/store.js";
 
-type SessionStore = Record<string, Record<string, unknown>>;
+type SessionRows = Record<string, Record<string, unknown>>;
 
-function resolveSubagentSessionStorePath(stateDir: string, agentId: string): string {
-  return path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
-}
-
-export async function readSubagentSessionStore(storePath: string): Promise<SessionStore> {
+export async function readSubagentSessionRows(agentId: string): Promise<SessionRows> {
   try {
-    const raw = await fs.readFile(storePath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as SessionStore;
-    }
+    return Object.fromEntries(
+      listSessionEntries({ agentId }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    ) as SessionRows;
   } catch {
     // ignore
   }
@@ -30,19 +28,26 @@ export async function writeSubagentSessionEntry(params: {
   agentId: string;
   defaultSessionId: string;
 }): Promise<string> {
-  const storePath = resolveSubagentSessionStorePath(params.stateDir, params.agentId);
-  const store = await readSubagentSessionStore(storePath);
-  store[params.sessionKey] = {
-    ...store[params.sessionKey],
-    sessionId: params.sessionId ?? params.defaultSessionId,
-    updatedAt: params.updatedAt ?? Date.now(),
-    ...(typeof params.abortedLastRun === "boolean"
-      ? { abortedLastRun: params.abortedLastRun }
-      : {}),
-  };
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
-  return storePath;
+  const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
+  const existing = getSessionEntry({
+    agentId: params.agentId,
+    env,
+    sessionKey: params.sessionKey,
+  }) as Record<string, unknown> | undefined;
+  upsertSessionEntry({
+    agentId: params.agentId,
+    env,
+    sessionKey: params.sessionKey,
+    entry: {
+      ...existing,
+      sessionId: params.sessionId ?? params.defaultSessionId,
+      updatedAt: params.updatedAt ?? Date.now(),
+      ...(typeof params.abortedLastRun === "boolean"
+        ? { abortedLastRun: params.abortedLastRun }
+        : {}),
+    },
+  });
+  return params.agentId;
 }
 
 export async function removeSubagentSessionEntry(params: {
@@ -50,12 +55,12 @@ export async function removeSubagentSessionEntry(params: {
   sessionKey: string;
   agentId: string;
 }): Promise<string> {
-  const storePath = resolveSubagentSessionStorePath(params.stateDir, params.agentId);
-  const store = await readSubagentSessionStore(storePath);
-  delete store[params.sessionKey];
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
-  return storePath;
+  deleteSessionEntry({
+    agentId: params.agentId,
+    env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+    sessionKey: params.sessionKey,
+  });
+  return params.agentId;
 }
 
 export function createSubagentRegistryTestDeps(

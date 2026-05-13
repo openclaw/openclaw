@@ -51,7 +51,6 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     blurb: "supported (Socket Mode).",
     systemImage: "number",
     markdownCapable: true,
-    preferSessionLookupForAnnounceTarget: true,
   },
   setupWizard: slackSetupWizard,
   capabilities: {

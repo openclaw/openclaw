@@ -3,9 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  loadPersistedAuthProfileStore,
+  savePersistedAuthProfileSecretsStore,
+} from "../agents/auth-profiles/persisted.js";
+import type { AuthProfileSecretsStore, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 
 vi.mock("../agents/auth-profiles.js", () => {
@@ -22,29 +28,20 @@ vi.mock("../agents/auth-profiles.js", () => {
     Object.entries(store.profiles ?? {})
       .filter(([, profile]) => normalizeProvider(profile?.provider) === normalizeProvider(provider))
       .map(([profileId]) => profileId);
-  const readStore = (agentDir?: string) => {
+  const stateEnvForAgentDir = (agentDir: string): NodeJS.ProcessEnv => ({
+    ...process.env,
+    OPENCLAW_STATE_DIR: path.dirname(path.dirname(path.dirname(agentDir))),
+  });
+  const readAuthProfileState = (agentDir?: string): AuthProfileStore => {
     if (!agentDir) {
       return { version: 1, profiles: {} };
     }
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    try {
-      const parsed = JSON.parse(nodeFs.readFileSync(authPath, "utf8")) as {
-        version?: number;
-        profiles?: Record<string, unknown>;
-        order?: Record<string, string[]>;
-        lastGood?: Record<string, string>;
-        usageStats?: Record<string, unknown>;
-      };
-      return {
-        version: parsed.version ?? 1,
-        profiles: parsed.profiles ?? {},
-        ...(parsed.order ? { order: parsed.order } : {}),
-        ...(parsed.lastGood ? { lastGood: parsed.lastGood } : {}),
-        ...(parsed.usageStats ? { usageStats: parsed.usageStats } : {}),
-      };
-    } catch {
-      return { version: 1, profiles: {} };
-    }
+    return (
+      loadPersistedAuthProfileStore(agentDir, { env: stateEnvForAgentDir(agentDir) }) ?? {
+        version: 1,
+        profiles: {},
+      }
+    );
   };
 
   const resolveAuthProfileOrder = (params: {
@@ -121,9 +118,13 @@ vi.mock("../agents/auth-profiles.js", () => {
 
   return {
     clearRuntimeAuthProfileStoreSnapshots: () => {},
-    ensureAuthProfileStore: (agentDir?: string) => readStore(agentDir),
+    ensureAuthProfileStore: (agentDir?: string) => readAuthProfileState(agentDir),
+    ensureAuthProfileStoreWithoutExternalProfiles: (agentDir?: string) =>
+      readAuthProfileState(agentDir),
     hasAnyAuthProfileStoreSource: (agentDir?: string) =>
-      Boolean(agentDir && nodeFs.existsSync(path.join(agentDir, "auth-profiles.json"))),
+      Boolean(
+        agentDir && loadPersistedAuthProfileStore(agentDir, { env: stateEnvForAgentDir(agentDir) }),
+      ),
     dedupeProfileIds,
     listProfilesForProvider,
     resolveApiKeyForProfile,
@@ -157,33 +158,13 @@ const providerRuntimeMocks = vi.hoisted(() => ({
         providerIds?: string[];
         envDirect?: Array<string | undefined>;
       }) => params.context.resolveApiKeyFromConfigAndStore(options);
-      const resolveLegacyZaiToken = (): string | null => {
-        const home = params.context.env?.HOME ?? params.context.env?.USERPROFILE;
-        if (!home) {
-          return null;
-        }
-        try {
-          const parsed = JSON.parse(
-            nodeFs.readFileSync(path.join(home, ".pi", "agent", "auth.json"), "utf8"),
-          ) as {
-            "z-ai"?: { access?: string };
-          };
-          return parsed["z-ai"]?.access ?? null;
-        } catch {
-          return null;
-        }
-      };
 
       if (params.provider === "zai") {
         const token = resolveToken({
           providerIds: ["zai", "z-ai"],
           envDirect: [params.context.env?.ZAI_API_KEY, params.context.env?.Z_AI_API_KEY],
         });
-        return token
-          ? { token }
-          : resolveLegacyZaiToken()
-            ? { token: resolveLegacyZaiToken()! }
-            : null;
+        return token ? { token } : null;
       }
 
       if (params.provider === "minimax") {
@@ -298,6 +279,7 @@ describe("resolveProviderAuths key normalization", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearRuntimeAuthProfileStoreSnapshots();
+    closeOpenClawStateDatabaseForTest();
     vi.restoreAllMocks();
   });
 
@@ -305,13 +287,7 @@ describe("resolveProviderAuths key normalization", () => {
     const base = await suiteRootTracker.make("case");
     const stateDir = path.join(base, ".openclaw");
     const agentDir = path.join(stateDir, "agents", "main", "agent");
-    nodeFs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
     nodeFs.mkdirSync(agentDir, { recursive: true });
-    nodeFs.writeFileSync(
-      path.join(agentDir, "auth-profiles.json"),
-      `${JSON.stringify({ version: 1, profiles: {} }, null, 2)}\n`,
-      "utf8",
-    );
     return await fn(base);
   }
 
@@ -341,10 +317,10 @@ describe("resolveProviderAuths key normalization", () => {
   async function writeAuthProfiles(home: string, profiles: Record<string, unknown>) {
     const agentDir = agentDirForHome(home);
     await fs.mkdir(agentDir, { recursive: true });
-    await fs.writeFile(
-      path.join(agentDir, "auth-profiles.json"),
-      `${JSON.stringify({ version: 1, profiles }, null, 2)}\n`,
-      "utf8",
+    savePersistedAuthProfileSecretsStore(
+      { version: 1, profiles } as AuthProfileSecretsStore,
+      agentDir,
+      { env: buildSuiteEnv(home) },
     );
   }
 
@@ -360,25 +336,21 @@ describe("resolveProviderAuths key normalization", () => {
 
   async function writeProfileOrder(home: string, provider: string, profileIds: string[]) {
     const agentDir = agentDirForHome(home);
-    const parsed = JSON.parse(
-      await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
-    ) as Record<string, unknown>;
-    const order = (parsed.order && typeof parsed.order === "object" ? parsed.order : {}) as Record<
-      string,
-      unknown
-    >;
+    const parsed = loadPersistedAuthProfileStore(agentDir, { env: buildSuiteEnv(home) }) ?? {
+      version: 1,
+      profiles: {},
+    };
+    const order = { ...parsed.order };
     order[provider] = profileIds;
-    parsed.order = order;
-    await fs.writeFile(
-      path.join(agentDir, "auth-profiles.json"),
-      `${JSON.stringify(parsed, null, 2)}\n`,
+    savePersistedAuthProfileSecretsStore(
+      {
+        version: parsed.version,
+        profiles: parsed.profiles,
+        order,
+      } as AuthProfileSecretsStore,
+      agentDir,
+      { env: buildSuiteEnv(home) },
     );
-  }
-
-  async function writeLegacyPiAuth(home: string, raw: string) {
-    const legacyDir = path.join(home, ".pi", "agent");
-    await fs.mkdir(legacyDir, { recursive: true });
-    await fs.writeFile(path.join(legacyDir, "auth.json"), raw, "utf8");
   }
 
   function createTestModelDefinition(): ModelDefinitionConfig {
@@ -521,21 +493,6 @@ describe("resolveProviderAuths key normalization", () => {
     expect(auths).toEqual([{ provider: "anthropic", token: "token-1", accountId: "acc-1" }]);
   });
 
-  it("falls back to legacy .pi auth file for zai keys even after os.homedir() is primed", async () => {
-    // Prime os.homedir() to simulate long-lived workers that may have touched it before HOME changes.
-    os.homedir();
-    await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai"],
-      setup: async (home) => {
-        await writeLegacyPiAuth(
-          home,
-          `${JSON.stringify({ "z-ai": { access: "legacy-zai-key" } }, null, 2)}\n`,
-        );
-      },
-      expected: [{ provider: "zai", token: "legacy-zai-key" }],
-    });
-  });
-
   it.each([
     {
       name: "extracts google oauth token from JSON payload in token profiles",
@@ -618,16 +575,6 @@ describe("resolveProviderAuths key normalization", () => {
         });
       },
       expected: [{ provider: "zai", token: "profile-zai-key" }],
-    });
-  });
-
-  it("ignores invalid legacy z-ai auth files", async () => {
-    await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai"],
-      setup: async (home) => {
-        await writeLegacyPiAuth(home, "{not-json");
-      },
-      expected: [],
     });
   });
 

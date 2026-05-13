@@ -9,12 +9,11 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
 import {
-  loadSessionStore,
-  saveSessionStore,
-  updateSessionStore,
-  updateSessionStoreEntry,
+  getSessionEntry,
+  listSessionEntries,
+  patchSessionEntry,
+  upsertSessionEntry,
 } from "../../config/sessions/store.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { defineCachedValue } from "./runtime-cache.js";
@@ -70,12 +69,10 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     createLazyRuntimeMethod(loadEmbeddedPiRuntime, (runtime) => runtime.runEmbeddedPiAgent),
   );
   defineCachedValue(agentRuntime, "session", () => ({
-    resolveStorePath,
-    loadSessionStore,
-    saveSessionStore,
-    updateSessionStore,
-    updateSessionStoreEntry,
-    resolveSessionFilePath,
+    getSessionEntry,
+    listSessionEntries,
+    patchSessionEntry,
+    upsertSessionEntry,
   }));
 
   return agentRuntime as PluginRuntime["agent"];

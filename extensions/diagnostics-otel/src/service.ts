@@ -2348,6 +2348,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             case "webhook.error":
               recordWebhookError(evt);
               return;
+            case "sqlite.wal.checkpoint.error":
+              return;
             case "message.queued":
               recordMessageQueued(evt);
               return;

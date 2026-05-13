@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../gateway/protocol/connect-error-details.js";
@@ -30,6 +28,12 @@ const TEST_OPERATOR_CLIENT = {
   platform: "test",
   mode: GATEWAY_CLIENT_MODES.TEST,
 };
+const CONTROL_UI_CLIENT = {
+  id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+  version: "1.0.0",
+  platform: "web",
+  mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+};
 const ALLOWED_BROWSER_ORIGIN = "https://control.example.com";
 const TRUSTED_PROXY_BROWSER_HEADERS = {
   "x-forwarded-for": "203.0.113.50",
@@ -51,13 +55,13 @@ async function createSignedDevice(params: {
   scopes: string[];
   clientId: string;
   clientMode: string;
-  identityPath?: string;
+  identityKey?: string;
   nonce: string;
   signedAtMs?: number;
 }) {
-  const identity = params.identityPath
-    ? loadOrCreateDeviceIdentity(params.identityPath)
-    : loadOrCreateDeviceIdentity();
+  const identity = loadOrCreateDeviceIdentity(
+    params.identityKey ? { key: params.identityKey } : undefined,
+  );
   const signedAtMs = params.signedAtMs ?? Date.now();
   const payload = buildDeviceAuthPayload({
     deviceId: identity.deviceId,
@@ -361,7 +365,7 @@ describe("gateway auth browser hardening", () => {
           scopes: ["operator.admin"],
           clientId: TEST_OPERATOR_CLIENT.id,
           clientMode: TEST_OPERATOR_CLIENT.mode,
-          identityPath: path.join(os.tmpdir(), `openclaw-browser-device-${randomUUID()}.json`),
+          identityKey: `test:browser-device:${randomUUID()}`,
           nonce: nonce ?? "",
         });
         const res = await connectReq(browserWs, {
@@ -377,6 +381,44 @@ describe("gateway auth browser hardening", () => {
         const pending = pairing.pending.find((entry) => entry.deviceId === identity.deviceId);
         if (!pending) {
           throw new Error("expected non-control browser client to create pending pairing request");
+        }
+        expect(pending.silent).toBe(false);
+      } finally {
+        browserWs.close();
+      }
+    });
+  });
+
+  test("does not silently auto-pair control-ui browser clients on loopback", async () => {
+    const { listDevicePairing } = await import("../infra/device-pairing.js");
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+
+    await withGatewayServer(async ({ port }) => {
+      const browserWs = await openWs(port, { origin: originForPort(port) });
+      try {
+        const nonce = await readConnectChallengeNonce(browserWs);
+        expect(typeof nonce).toBe("string");
+        const { identity, device } = await createSignedDevice({
+          token: "secret",
+          scopes: ["operator.admin"],
+          clientId: CONTROL_UI_CLIENT.id,
+          clientMode: CONTROL_UI_CLIENT.mode,
+          identityKey: `openclaw-control-ui-device-${randomUUID()}`,
+          nonce: nonce ?? "",
+        });
+        const res = await connectReq(browserWs, {
+          token: "secret",
+          scopes: ["operator.admin"],
+          client: CONTROL_UI_CLIENT,
+          device,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("pairing required");
+
+        const pairing = await listDevicePairing();
+        const pending = pairing.pending.find((entry) => entry.deviceId === identity.deviceId);
+        if (!pending) {
+          throw new Error("expected control ui browser client to create pending pairing request");
         }
         expect(pending.silent).toBe(false);
       } finally {

@@ -2,10 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRestartSentinel, writeRestartSentinel } from "../infra/restart-sentinel.js";
 import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
 } from "../plugins/hook-types.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const hoisted = vi.hoisted(() => {
@@ -42,7 +44,8 @@ const hoisted = vi.hoisted(() => {
     model: "gpt-5.4",
   }));
   const resolveEmbeddedAgentRuntime = vi.fn(() => "pi");
-  const ensureOpenClawModelsJson = vi.fn(async () => undefined);
+  const ensureOpenClawModelCatalog = vi.fn(async () => undefined);
+  const ensureOpenClawModelsJson = ensureOpenClawModelCatalog;
   return {
     startPluginServices,
     startGmailWatcherWithLogs,
@@ -68,17 +71,10 @@ const hoisted = vi.hoisted(() => {
     isCliProvider,
     resolveConfiguredModelRef,
     resolveEmbeddedAgentRuntime,
+    ensureOpenClawModelCatalog,
     ensureOpenClawModelsJson,
   };
 });
-
-vi.mock("../agents/session-dirs.js", () => ({
-  resolveAgentSessionDirs: vi.fn(async () => []),
-}));
-
-vi.mock("../agents/session-write-lock.js", () => ({
-  cleanStaleLockFiles: vi.fn(async () => undefined),
-}));
 
 vi.mock("../agents/subagent-registry.js", () => ({
   scheduleSubagentOrphanRecovery: hoisted.scheduleSubagentOrphanRecovery,
@@ -175,7 +171,7 @@ vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
 }));
 
 vi.mock("../agents/models-config.js", () => ({
-  ensureOpenClawModelsJson: hoisted.ensureOpenClawModelsJson,
+  ensureOpenClawModelCatalog: hoisted.ensureOpenClawModelCatalog,
 }));
 
 vi.mock("./server-tailscale.js", () => ({
@@ -241,9 +237,10 @@ function firstGatewayStartCall(
 }
 
 describe("startGatewayPostAttachRuntime", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "0");
     vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "0");
+    await clearRestartSentinel();
     hoisted.startPluginServices.mockClear();
     hoisted.startGmailWatcherWithLogs.mockClear();
     hoisted.loadInternalHooks.mockClear();
@@ -259,6 +256,7 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.scheduleSubagentOrphanRecovery.mockClear();
     hoisted.shouldWakeFromRestartSentinel.mockReturnValue(false);
     hoisted.scheduleRestartSentinelWake.mockClear();
+    hoisted.refreshLatestUpdateRestartSentinel.mockClear();
     hoisted.getAcpRuntimeBackend.mockReset();
     hoisted.getAcpRuntimeBackend.mockReturnValue(null);
     hoisted.reconcilePendingSessionIdentities.mockClear();
@@ -271,11 +269,12 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.resolveConfiguredModelRef.mockClear();
     hoisted.resolveEmbeddedAgentRuntime.mockReset();
     hoisted.resolveEmbeddedAgentRuntime.mockReturnValue("pi");
-    hoisted.ensureOpenClawModelsJson.mockReset();
-    hoisted.ensureOpenClawModelsJson.mockResolvedValue(undefined);
+    hoisted.ensureOpenClawModelCatalog.mockReset();
+    hoisted.ensureOpenClawModelCatalog.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
   });
 
@@ -332,7 +331,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(events).toEqual(["sidecars", "returned", "sentinel"]);
   });
 
-  it("skips heavy restart sentinel refresh when no sentinel file exists", async () => {
+  it("skips heavy restart sentinel refresh when no sentinel state exists", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-no-sentinel-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
@@ -343,10 +342,14 @@ describe("startGatewayPostAttachRuntime", () => {
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
-  it("refreshes the restart sentinel when the sentinel file exists", async () => {
+  it("refreshes the restart sentinel when SQLite sentinel state exists", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sentinel-"));
-    fs.writeFileSync(path.join(stateDir, "restart-sentinel.json"), "{}\n");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    await writeRestartSentinel({
+      kind: "update",
+      status: "ok",
+      ts: 1,
+    });
     const sentinel = { kind: "update", status: "ok", ts: 1 } as const;
     hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
 
@@ -355,64 +358,6 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(result).toBe(sentinel);
     expect(hoisted.refreshLatestUpdateRestartSentinel).toHaveBeenCalledOnce();
     fs.rmSync(stateDir, { recursive: true, force: true });
-  });
-
-  it("expands tilde-based restart sentinel state paths", async () => {
-    const osHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-home-"));
-    try {
-      const openclawHome = path.join(osHome, "openclaw-home");
-      const stateDirFromHome = path.join(openclawHome, ".openclaw");
-      fs.mkdirSync(stateDirFromHome, { recursive: true });
-      fs.writeFileSync(path.join(stateDirFromHome, "restart-sentinel.json"), "{}\n");
-
-      expect(
-        await __testing.hasRestartSentinelFileFast({
-          HOME: osHome,
-          OPENCLAW_HOME: "~/openclaw-home",
-        } as NodeJS.ProcessEnv),
-      ).toBe(true);
-
-      const backslashStateDir = path.resolve(`${osHome}\\openclaw-state`);
-      fs.mkdirSync(backslashStateDir, { recursive: true });
-      fs.writeFileSync(path.join(backslashStateDir, "restart-sentinel.json"), "{}\n");
-
-      expect(
-        await __testing.hasRestartSentinelFileFast({
-          HOME: osHome,
-          OPENCLAW_STATE_DIR: "~\\openclaw-state",
-        } as NodeJS.ProcessEnv),
-      ).toBe(true);
-    } finally {
-      fs.rmSync(osHome, { recursive: true, force: true });
-    }
-  });
-
-  it("avoids sync filesystem probes while checking restart sentinel presence", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-async-sentinel-"));
-    try {
-      fs.writeFileSync(path.join(stateDir, "restart-sentinel.json"), "{}\n");
-      const actualExistsSync = fs.existsSync;
-      const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
-        if (String(candidate).startsWith(stateDir)) {
-          throw new Error("sync restart sentinel probe");
-        }
-        return actualExistsSync(candidate);
-      });
-      try {
-        await expect(
-          __testing.hasRestartSentinelFileFast({
-            OPENCLAW_STATE_DIR: stateDir,
-          } as NodeJS.ProcessEnv),
-        ).resolves.toBe(true);
-        expect(
-          existsSync.mock.calls.filter((call) => String(call[0]).startsWith(stateDir)),
-        ).toHaveLength(0);
-      } finally {
-        existsSync.mockRestore();
-      }
-    } finally {
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
   });
 
   it("loads deferred startup plugins before channel sidecars", async () => {
@@ -655,7 +600,7 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("prewarms models.json in the configured default agent dir", async () => {
+  it("prewarms the model catalog in the configured default agent dir", async () => {
     const cfg = {
       agents: {
         defaults: { model: "openai/gpt-5.4" },
@@ -672,13 +617,14 @@ describe("startGatewayPostAttachRuntime", () => {
     });
 
     expect(hoisted.resolveDefaultAgentDir).toHaveBeenCalledWith(cfg);
-    expect(hoisted.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
-    const ensureCall = firstEnsureModelsJsonCall();
-    expect(ensureCall[0]).toBe(cfg);
-    expect(ensureCall[1]).toBe("/tmp/openclaw-state/agents/ops/agent");
-    const options = ensureCall[2];
-    expect(options?.workspaceDir).toBe("/tmp/openclaw-workspace");
-    expect(options?.providerDiscoveryProviderIds).toEqual(["openai"]);
+    expect(hoisted.ensureOpenClawModelCatalog).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/openclaw-state/agents/ops/agent",
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-workspace",
+        providerDiscoveryProviderIds: ["openai"],
+      }),
+    );
   });
 
   it("starts channels without waiting for primary model prewarm completion", async () => {

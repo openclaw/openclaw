@@ -11,10 +11,9 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({
-    session: { store: "/tmp/test-store", mainKey: "main" },
+    session: { mainKey: "main" },
     agents: {},
   })),
-  updateSessionStore: vi.fn(),
   callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
   onAgentEventStop: vi.fn(),
   onAgentEvent: vi.fn(),
@@ -32,18 +31,23 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: () => ({
-    "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
-    "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
-    "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
-  }),
+  getSessionEntry: ({ sessionKey }: { sessionKey: string }) =>
+    ({
+      "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
+      "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
+      "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
+    })[sessionKey],
+  listSessionEntries: () =>
+    Object.entries({
+      "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
+      "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
+      "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
+    }).map(([sessionKey, entry]) => ({ sessionKey, entry })),
   resolveAgentIdFromSessionKey: (key: string) => {
     const match = key.match(/^agent:([^:]+)/);
     return match?.[1] ?? "main";
   },
   resolveMainSessionKey: () => "agent:main:main",
-  resolveStorePath: () => "/tmp/test-store",
-  updateSessionStore: mocks.updateSessionStore,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -56,7 +60,9 @@ vi.mock("../infra/agent-events.js", () => ({
 
 vi.mock("./subagent-registry.store.js", () => ({
   loadSubagentRegistryFromDisk: mocks.loadSubagentRegistryFromDisk,
+  loadSubagentRegistryFromState: mocks.loadSubagentRegistryFromDisk,
   saveSubagentRegistryToDisk: mocks.saveSubagentRegistryToDisk,
+  saveSubagentRegistryToState: mocks.saveSubagentRegistryToDisk,
 }));
 
 vi.mock("./subagent-announce-queue.js", () => ({
@@ -103,11 +109,21 @@ describe("announce loop guard (#18264)", () => {
     mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
     mocks.scheduleOrphanRecovery.mockClear();
     mocks.saveSubagentRegistryToDisk.mockClear();
-    mocks.updateSessionStore.mockClear();
     registry.resetSubagentRegistryForTests({ persist: false });
     registry.__testing.setDepsForTest({
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
       cleanupBrowserSessionsForLifecycleEnd: async () => {},
+      getSubagentRunsSnapshotForRead: (runs) => new Map(runs),
+      persistSubagentRunsToState: (runs) => {
+        mocks.saveSubagentRegistryToDisk(new Map(runs));
+      },
+      restoreSubagentRunsFromState: ({ runs }) => {
+        const restored = mocks.loadSubagentRegistryFromDisk();
+        for (const [runId, entry] of restored) {
+          runs.set(runId, entry);
+        }
+        return restored.size;
+      },
       runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
     });
   });

@@ -1,23 +1,7 @@
-import fs from "node:fs";
-import { saveJsonFile } from "../../infra/json-file.js";
-import { AUTH_STORE_VERSION } from "./constants.js";
-import type { AuthProfileSecretsStore } from "./types.js";
 export {
-  resolveAuthStatePath,
-  resolveAuthStatePathForDisplay,
-  resolveAuthStorePath,
-  resolveAuthStorePathForDisplay,
-  resolveLegacyAuthStorePath,
-  resolveOAuthRefreshLockPath,
+  resolveAuthProfileStoreAgentDir,
+  resolveAuthProfileStoreKey,
+  resolveAuthProfileStoreLocationForDisplay,
+  resolveOAuthRefreshLockKey,
+  OAUTH_REFRESH_LOCK_SCOPE,
 } from "./path-resolve.js";
-
-export function ensureAuthStoreFile(pathname: string) {
-  if (fs.existsSync(pathname)) {
-    return;
-  }
-  const payload: AuthProfileSecretsStore = {
-    version: AUTH_STORE_VERSION,
-    profiles: {},
-  };
-  saveJsonFile(pathname, payload);
-}

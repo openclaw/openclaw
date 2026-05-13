@@ -12,15 +12,33 @@ import {
   runMatrixDoctorSequence,
 } from "./doctor.js";
 
-vi.mock("./matrix-migration.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./matrix-migration.runtime.js")>(
-    "./matrix-migration.runtime.js",
+vi.mock("./doctor-legacy-state.js", async () => {
+  const actual = await vi.importActual<typeof import("./doctor-legacy-state.js")>(
+    "./doctor-legacy-state.js",
+  );
+  return {
+    ...actual,
+    autoMigrateLegacyMatrixState: vi.fn(async () => ({ changes: [], warnings: [] })),
+  };
+});
+
+vi.mock("./doctor-legacy-crypto.js", async () => {
+  const actual = await vi.importActual<typeof import("./doctor-legacy-crypto.js")>(
+    "./doctor-legacy-crypto.js",
+  );
+  return {
+    ...actual,
+    autoPrepareLegacyMatrixCrypto: vi.fn(async () => ({ changes: [], warnings: [] })),
+  };
+});
+
+vi.mock("./doctor-migration-snapshot.js", async () => {
+  const actual = await vi.importActual<typeof import("./doctor-migration-snapshot.js")>(
+    "./doctor-migration-snapshot.js",
   );
   return {
     ...actual,
     maybeCreateMatrixMigrationSnapshot: vi.fn(),
-    autoMigrateLegacyMatrixState: vi.fn(async () => ({ changes: [], warnings: [] })),
-    autoPrepareLegacyMatrixCrypto: vi.fn(async () => ({ changes: [], warnings: [] })),
     resolveMatrixMigrationStatus: vi.fn(() => ({
       legacyState: null,
       legacyCrypto: { inspectorAvailable: true, warnings: [], plans: [] },
@@ -66,7 +84,6 @@ describe("matrix doctor", () => {
       formatMatrixLegacyStatePreview({
         accountId: "default",
         legacyStoragePath: "/tmp/legacy-sync.json",
-        targetStoragePath: "/tmp/new-sync.json",
         legacyCryptoPath: "/tmp/legacy-crypto.json",
         targetCryptoPath: "/tmp/new-crypto.json",
         selectionNote: "Picked the newest account.",
@@ -86,13 +103,14 @@ describe("matrix doctor", () => {
           accessToken: "tok-123",
           deviceId: "DEVICE123",
           legacyCryptoPath: "/tmp/legacy-crypto.json",
-          recoveryKeyPath: "/tmp/recovery-key.txt",
+          recoveryKeyRef: { storageKey: "/tmp/account-root" },
+          recoveryKeyStorageKey: "/tmp/account-root",
           statePath: "/tmp/state.json",
         },
       ],
     });
     expect(previews[0]).toBe("- matrix warning");
-    expect(previews[1]).toContain("/tmp/recovery-key.txt");
+    expect(previews[1]).toContain("SQLite plugin state (/tmp/account-root)");
   });
 
   it("warns on stale custom Matrix plugin paths and cleans them", async () => {
@@ -123,24 +141,26 @@ describe("matrix doctor", () => {
   });
 
   it("surfaces matrix sequence warnings and repair changes", async () => {
-    const runtimeApi = await import("./matrix-migration.runtime.js");
-    vi.mocked(runtimeApi.resolveMatrixMigrationStatus).mockReturnValue({
+    const legacyState = await import("./doctor-legacy-state.js");
+    const legacyCrypto = await import("./doctor-legacy-crypto.js");
+    const migrationSnapshot = await import("./doctor-migration-snapshot.js");
+    vi.mocked(migrationSnapshot.resolveMatrixMigrationStatus).mockReturnValue({
       legacyState: null,
       legacyCrypto: { inspectorAvailable: true, warnings: [], plans: [] },
       pending: true,
       actionable: true,
     });
-    vi.mocked(runtimeApi.maybeCreateMatrixMigrationSnapshot).mockResolvedValue({
+    vi.mocked(migrationSnapshot.maybeCreateMatrixMigrationSnapshot).mockResolvedValue({
       archivePath: "/tmp/matrix-backup.tgz",
       created: true,
-      markerPath: "/tmp/marker.json",
+      markerKey: "current",
     });
-    vi.mocked(runtimeApi.autoMigrateLegacyMatrixState).mockResolvedValue({
+    vi.mocked(legacyState.autoMigrateLegacyMatrixState).mockResolvedValue({
       migrated: true,
       changes: ["Migrated legacy sync state"],
       warnings: [],
     });
-    vi.mocked(runtimeApi.autoPrepareLegacyMatrixCrypto).mockResolvedValue({
+    vi.mocked(legacyCrypto.autoPrepareLegacyMatrixCrypto).mockResolvedValue({
       migrated: true,
       changes: ["Prepared recovery key export"],
       warnings: [],

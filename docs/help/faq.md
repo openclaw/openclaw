@@ -562,14 +562,15 @@ lives on the [First-run FAQ](/help/faq-first-run).
     | Path                                                            | Purpose                                                            |
     | --------------------------------------------------------------- | ------------------------------------------------------------------ |
     | `$OPENCLAW_STATE_DIR/openclaw.json`                             | Main config (JSON5)                                                |
-    | `$OPENCLAW_STATE_DIR/credentials/oauth.json`                    | Legacy OAuth import (copied into auth profiles on first use)       |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth-profiles.json` | Auth profiles (OAuth, API keys, and optional `keyRef`/`tokenRef`)  |
+    | `$OPENCLAW_STATE_DIR/credentials/oauth.json`                    | Legacy OAuth doctor-import input                                   |
+    | `$OPENCLAW_STATE_DIR/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>` | Auth profiles (OAuth, API keys, and optional `keyRef`/`tokenRef`) |
     | `$OPENCLAW_STATE_DIR/secrets.json`                              | Optional file-backed secret payload for `file` SecretRef providers |
     | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`          | Legacy compatibility file (static `api_key` entries scrubbed)      |
     | `$OPENCLAW_STATE_DIR/credentials/`                              | Provider state (e.g. `whatsapp/<accountId>/creds.json`)            |
-    | `$OPENCLAW_STATE_DIR/agents/`                                   | Per-agent state (agentDir + sessions)                              |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                | Conversation history & state (per agent)                           |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/sessions.json`   | Session metadata (per agent)                                       |
+    | `$OPENCLAW_STATE_DIR/agents/`                                   | Per-agent state (agentDir + per-agent databases)                   |
+    | `$OPENCLAW_STATE_DIR/state/openclaw.sqlite`                     | Shared gateway state and per-agent database registry                |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite` | Agent sessions, transcript events, VFS scratch state, artifacts, and agent-local caches |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                | Legacy JSON/JSONL imports or explicit debug/export artifacts only   |
 
     Legacy single-agent path: `~/.openclaw/agent/*` (migrated by `openclaw doctor`).
 
@@ -646,8 +647,8 @@ lives on the [First-run FAQ](/help/faq-first-run).
 
   </Accordion>
 
-  <Accordion title="Remote mode: where is the session store?">
-    Session state is owned by the **gateway host**. If you're in remote mode, the session store you care about is on the remote machine, not your local laptop. See [Session management](/concepts/session).
+  <Accordion title="Remote mode: where is session state?">
+    Session state is owned by the **gateway host**. If you're in remote mode, the global and per-agent databases you care about are on the remote machine, not your local laptop. See [Session management](/concepts/session).
   </Accordion>
 </AccordionGroup>
 
@@ -1159,15 +1160,18 @@ lives on the [First-run FAQ](/help/faq-first-run).
   </Accordion>
 
   <Accordion title="Do sessions reset automatically if I never send /new?">
-    Sessions can expire after `session.idleMinutes`, but this is **disabled by default** (default **0**).
-    Set it to a positive value to enable idle expiry. When enabled, the **next**
+    Sessions can expire after `session.reset.idleMinutes`, but this is **disabled by default**.
+    Set `session.reset.mode` to `idle` and `session.reset.idleMinutes` to a positive value to enable idle expiry. When enabled, the **next**
     message after the idle period starts a fresh session id for that chat key.
     This does not delete transcripts - it just starts a new session.
 
     ```json5
     {
       session: {
-        idleMinutes: 240,
+        reset: {
+          mode: "idle",
+          idleMinutes: 240,
+        },
       },
     }
     ```
@@ -1343,14 +1347,14 @@ lives on the [First-run FAQ](/help/faq-first-run).
   <Accordion title="How many workspaces and agents can I create?">
     No hard limits. Dozens (even hundreds) are fine, but watch for:
 
-    - **Disk growth:** sessions + transcripts live under `~/.openclaw/agents/<agentId>/sessions/`.
+    - **Disk growth:** sessions, transcripts, artifacts, and agent-local caches live in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
     - **Token cost:** more agents means more concurrent model usage.
     - **Ops overhead:** per-agent auth profiles, workspaces, and channel routing.
 
     Tips:
 
     - Keep one **active** workspace per agent (`agents.defaults.workspace`).
-    - Prune old sessions (delete JSONL or store entries) if disk grows.
+    - Use backup/export tools for support bundles, then remove old sessions through the session management UI or CLI when disk grows.
     - Use `openclaw doctor` to spot stray workspaces and profile mismatches.
 
   </Accordion>
@@ -1959,7 +1963,7 @@ lives on the [Models FAQ](/help/faq-models).
 
 <AccordionGroup>
   <Accordion title='What is the default model for Anthropic with an API key?'>
-    In OpenClaw, credentials and model selection are separate. Setting `ANTHROPIC_API_KEY` (or storing an Anthropic API key in auth profiles) enables authentication, but the actual default model is whatever you configure in `agents.defaults.model.primary` (for example, `anthropic/claude-sonnet-4-6` or `anthropic/claude-opus-4-6`). If you see `No credentials found for profile "anthropic:default"`, it means the Gateway couldn't find Anthropic credentials in the expected `auth-profiles.json` for the agent that's running.
+    In OpenClaw, credentials and model selection are separate. Setting `ANTHROPIC_API_KEY` (or storing an Anthropic API key in auth profiles) enables authentication, but the actual default model is whatever you configure in `agents.defaults.model.primary` (for example, `anthropic/claude-sonnet-4-6` or `anthropic/claude-opus-4-6`). If you see `No credentials found for profile "anthropic:default"`, it means the Gateway couldn't find Anthropic credentials in that agent's SQLite auth-profile row.
   </Accordion>
 </AccordionGroup>
 

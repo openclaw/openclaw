@@ -10,14 +10,16 @@ type GuidanceCase = {
   forbidden?: string[];
 };
 
+const retiredAgentSessionDir = "~/.openclaw/agents/<agentId>/sessions";
+
 const CASES: GuidanceCase[] = [
   {
     file: "skills/session-logs/SKILL.md",
-    required: ["OPENCLAW_STATE_DIR"],
+    required: ["OPENCLAW_STATE_DIR", "openclaw-agent.sqlite"],
     forbidden: [
-      "for f in ~/.openclaw/agents/<agentId>/sessions/*.jsonl",
-      'rg -l "phrase" ~/.openclaw/agents/<agentId>/sessions/*.jsonl',
-      "~/.openclaw/agents/<agentId>/sessions/<id>.jsonl",
+      `for f in ${retiredAgentSessionDir}/*.jsonl`,
+      `rg -l "phrase" ${retiredAgentSessionDir}/*.jsonl`,
+      `${retiredAgentSessionDir}/<id>.jsonl`,
     ],
   },
   {

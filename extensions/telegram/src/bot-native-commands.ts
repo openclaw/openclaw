@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import type { Bot, Context } from "grammy";
 import {
   loadModelCatalog,
@@ -37,11 +36,10 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
-  loadSessionStore,
-  resolveAndPersistSessionFile,
-  resolveSessionStoreEntry,
-  resolveSessionTranscriptPathInDir,
-  resolveStorePath,
+  getSessionEntry,
+  listSessionEntries,
+  resolveAndPersistSessionTranscriptScope,
+  resolveSessionRowEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -62,6 +60,7 @@ import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
   syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
+  type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
 import { TelegramUpdateKeyContext } from "./bot-updates.js";
 import type { TelegramBotOptions } from "./bot.types.js";
@@ -167,38 +166,30 @@ function resolveTelegramProgressPlaceholder(command: {
   return text ? text : null;
 }
 
-async function resolveTelegramCommandSessionFile(params: {
+async function resolveTelegramCommandTranscriptScope(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
   threadId?: string | number;
-}): Promise<{ sessionId?: string; sessionFile?: string }> {
+}): Promise<{ sessionId?: string }> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return {};
   }
   try {
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const store = loadSessionStore(storePath);
-    const resolved = resolveSessionStoreEntry({ store, sessionKey });
+    const existing = getSessionEntry({ agentId: params.agentId, sessionKey });
+    const resolved = resolveSessionRowEntry({
+      entries: existing ? { [sessionKey]: existing } : {},
+      sessionKey,
+    });
     const sessionId = resolved.existing?.sessionId?.trim() || randomUUID();
-    const sessionsDir = path.dirname(storePath);
-    const fallbackSessionFile = resolveSessionTranscriptPathInDir(
-      sessionId,
-      sessionsDir,
-      params.threadId,
-    );
-    const persisted = await resolveAndPersistSessionFile({
+    const scope = await resolveAndPersistSessionTranscriptScope({
       sessionId,
       sessionKey: resolved.normalizedKey,
-      sessionStore: store,
-      storePath,
       sessionEntry: resolved.existing,
       agentId: params.agentId,
-      sessionsDir,
-      fallbackSessionFile,
     });
-    return { sessionId, sessionFile: persisted.sessionFile };
+    return { sessionId: scope.sessionId };
   } catch {
     return {};
   }
@@ -213,13 +204,17 @@ function resolveTelegramCommandMenuModelContext(params: {
     return {};
   }
   try {
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
     const defaultModel = resolveDefaultModelForAgent({
       cfg: params.cfg,
       agentId: params.agentId,
     });
-    const store = loadSessionStore(storePath);
-    const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
+    const store = Object.fromEntries(
+      listSessionEntries({ agentId: params.agentId }).map(({ sessionKey, entry }) => [
+        sessionKey,
+        entry,
+      ]),
+    );
+    const entry = getSessionEntry({ agentId: params.agentId, sessionKey: params.sessionKey });
     const thinkingLevel = normalizeOptionalString(entry?.thinkingLevel);
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
       return {
@@ -759,9 +754,9 @@ export const registerTelegramNativeCommands = ({
       return telegramCfg;
     }
   };
-  const allCommandsFull: Array<{ command: string; description: string }> = [
+  const allCommandsFull: TelegramMenuCommand[] = [
     ...nativeCommands
-      .map((command) => {
+      .map((command): TelegramMenuCommand | null => {
         const normalized = normalizeTelegramCommandName(command.name);
         if (!TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
           runtime.error?.(
@@ -771,12 +766,16 @@ export const registerTelegramNativeCommands = ({
           );
           return null;
         }
-        return {
+        const menuCommand: TelegramMenuCommand = {
           command: normalized,
           description: command.description,
         };
+        if (command.descriptionLocalizations) {
+          menuCommand.descriptionLocalizations = command.descriptionLocalizations;
+        }
+        return menuCommand;
       })
-      .filter((cmd): cmd is { command: string; description: string } => cmd !== null),
+      .filter((cmd) => cmd !== null),
     ...(nativeEnabled ? pluginCatalog.commands : []),
     ...customCommands,
   ];
@@ -1342,7 +1341,7 @@ export const registerTelegramNativeCommands = ({
           }
         }
 
-        const sessionFileContext = await resolveTelegramCommandSessionFile({
+        const transcriptScopeContext = await resolveTelegramCommandTranscriptScope({
           cfg: runtimeCfg,
           agentId: route.agentId,
           sessionKey: route.sessionKey,
@@ -1358,8 +1357,7 @@ export const registerTelegramNativeCommands = ({
             isAuthorizedSender: commandAuthorized,
             senderIsOwner,
             sessionKey: route.sessionKey,
-            sessionId: sessionFileContext.sessionId,
-            sessionFile: sessionFileContext.sessionFile,
+            sessionId: transcriptScopeContext.sessionId,
             commandBody,
             config: runtimeCfg,
             from,
@@ -1407,7 +1405,7 @@ export const registerTelegramNativeCommands = ({
               linkPreview: runtimeTelegramCfg.linkPreview,
               buttons: telegramResultData?.buttons,
             });
-            recordSentMessage(chatId, progressMessageId, runtimeCfg);
+            recordSentMessage(chatId, progressMessageId, { accountId });
             emitTelegramMessageSentHooks({
               sessionKeyForInternalHooks: route.sessionKey,
               chatId: String(chatId),

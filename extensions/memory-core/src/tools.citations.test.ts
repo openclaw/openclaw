@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
@@ -16,6 +15,7 @@ import {
   setMemoryWorkspaceDir,
   type MemoryReadParams,
 } from "./memory-tool-manager-mock.js";
+import { readShortTermRecallEntries } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 import {
   asOpenClawConfig,
@@ -250,12 +250,11 @@ describe("memory tools", () => {
       const tool = createMemorySearchToolOrThrow();
       await tool.execute("call_recall_persist", { query: "glacier backup" });
 
-      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-      const storeRaw = await waitFor(async () => await fs.readFile(storePath, "utf-8"));
-      const store = JSON.parse(storeRaw) as {
-        entries?: Record<string, { path: string; recallCount: number }>;
-      };
-      const entries = Object.values(store.entries ?? {});
+      const entries = await waitFor(async () => {
+        const found = await readShortTermRecallEntries({ workspaceDir });
+        expect(found).toHaveLength(1);
+        return found;
+      });
       expect(entries).toHaveLength(1);
       const entry = entries[0];
       expect(entry?.path).toBe("memory/2026-04-03.md");
@@ -267,10 +266,7 @@ describe("memory tools", () => {
       });
       const event = events[0];
       expect(event?.type).toBe("memory.recall.recorded");
-      if (!event || event.type !== "memory.recall.recorded") {
-        throw new Error("expected memory recall recorded event");
-      }
-      expect(event.query).toBe("glacier backup");
+      expect((event as { query?: unknown } | undefined)?.query).toBe("glacier backup");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

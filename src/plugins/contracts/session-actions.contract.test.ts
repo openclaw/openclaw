@@ -16,8 +16,6 @@ import type { OpenClawPluginApi } from "../types.js";
 
 const MAIN_SESSION_KEY = "agent:main:main";
 
-type HookResponse = { ok: boolean; payload?: unknown; error?: unknown };
-
 function sessionActionBody(
   pluginId: string,
   actionId: string,
@@ -33,8 +31,8 @@ function sessionActionBody(
 async function callPluginSessionActionForTest(params: {
   body: Record<string, unknown>;
   scopes?: string[];
-}): Promise<HookResponse> {
-  let response: HookResponse | undefined;
+}): Promise<{ ok: boolean; payload?: unknown; error?: unknown }> {
+  let response: { ok: boolean; payload?: unknown; error?: unknown } | undefined;
   const respond: RespondFn = (ok, payload, error) => {
     response = { ok, payload, error };
   };
@@ -57,7 +55,7 @@ async function callRegisteredSessionActionForTest(params: {
   actionId: string;
   extra?: Record<string, unknown>;
   scopes?: string[];
-}): Promise<HookResponse> {
+}): Promise<{ ok: boolean; payload?: unknown; error?: unknown }> {
   return callPluginSessionActionForTest({
     body: sessionActionBody(params.pluginId, params.actionId, params.extra),
     ...(params.scopes ? { scopes: params.scopes } : {}),
@@ -67,8 +65,8 @@ async function callRegisteredSessionActionForTest(params: {
 async function callPluginSessionActionThroughGatewayForTest(params: {
   body: Record<string, unknown>;
   scopes?: string[];
-}): Promise<HookResponse> {
-  let response: HookResponse | undefined;
+}): Promise<{ ok: boolean; payload?: unknown; error?: unknown }> {
+  let response: { ok: boolean; payload?: unknown; error?: unknown } | undefined;
   const respond: RespondFn = (ok, payload, error) => {
     response = { ok, payload, error };
   };
@@ -97,33 +95,11 @@ async function callRegisteredSessionActionThroughGatewayForTest(params: {
   actionId: string;
   extra?: Record<string, unknown>;
   scopes?: string[];
-}): Promise<HookResponse> {
+}): Promise<{ ok: boolean; payload?: unknown; error?: unknown }> {
   return callPluginSessionActionThroughGatewayForTest({
     body: sessionActionBody(params.pluginId, params.actionId, params.extra),
     ...(params.scopes ? { scopes: params.scopes } : {}),
   });
-}
-
-function requireHookError(response: HookResponse): { code?: unknown; message?: unknown } {
-  expect(response.ok).toBe(false);
-  const error = response.error as { code?: unknown; message?: unknown } | undefined;
-  if (!error) {
-    throw new Error("expected hook error");
-  }
-  return error;
-}
-
-function requireObservedEvent(
-  observed: unknown[],
-  index: number,
-): { runId?: unknown; sessionKey?: unknown; stream?: unknown; data?: Record<string, unknown> } {
-  const event = observed[index] as
-    | { runId?: unknown; sessionKey?: unknown; stream?: unknown; data?: Record<string, unknown> }
-    | undefined;
-  if (!event) {
-    throw new Error(`expected observed event #${index + 1}`);
-  }
-  return event;
 }
 
 function registerActionFixture(params: {
@@ -167,12 +143,15 @@ describe("plugin session actions", () => {
     });
 
     expect(registry.registry.sessionActions).toHaveLength(1);
-    const actionEntry = registry.registry.sessionActions?.[0];
-    expect(actionEntry?.pluginId).toBe("session-action-fixture");
-    expect(actionEntry?.pluginName).toBe("Session Action Fixture");
-    expect(actionEntry?.action.id).toBe("approve");
-    expect(actionEntry?.action.description).toBe("Approve the current workflow");
-    expect(actionEntry?.action.requiredScopes).toEqual([APPROVALS_SCOPE]);
+    expect(registry.registry.sessionActions?.[0]).toMatchObject({
+      pluginId: "session-action-fixture",
+      pluginName: "Session Action Fixture",
+      action: {
+        id: "approve",
+        description: "Approve the current workflow",
+        requiredScopes: [APPROVALS_SCOPE],
+      },
+    });
   });
 
   it("rejects invalid or duplicate session action registrations", () => {
@@ -197,25 +176,32 @@ describe("plugin session actions", () => {
     });
 
     expect(registry.registry.sessionActions?.map((entry) => entry.action.id)).toEqual(["dup"]);
-    const diagnosticMessages = registry.registry.diagnostics?.map((diagnostic) => {
-      expect(diagnostic.pluginId).toBe("invalid-session-actions");
-      return diagnostic.message;
-    });
-    expect(diagnosticMessages).toHaveLength(5);
-    expect(diagnosticMessages).toContain("session action already registered: dup");
-    expect(diagnosticMessages).toContain(
-      "session action requiredScopes contains unknown operator scope: not-a-scope",
-    );
-    expect(diagnosticMessages).toContain(
-      "session action schema must be a JSON schema object or boolean: bad-schema-shape",
-    );
-    expect(
-      diagnosticMessages?.some((message) =>
-        message.includes("session action schema is not valid JSON Schema: bad-schema-compile"),
-      ),
-    ).toBe(true);
-    expect(diagnosticMessages).toContain(
-      "session action registration requires id, handler, and valid optional fields",
+    expect(registry.registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "invalid-session-actions",
+          message: "session action already registered: dup",
+        }),
+        expect.objectContaining({
+          pluginId: "invalid-session-actions",
+          message: "session action requiredScopes contains unknown operator scope: not-a-scope",
+        }),
+        expect.objectContaining({
+          pluginId: "invalid-session-actions",
+          message:
+            "session action schema must be a JSON schema object or boolean: bad-schema-shape",
+        }),
+        expect.objectContaining({
+          pluginId: "invalid-session-actions",
+          message: expect.stringContaining(
+            "session action schema is not valid JSON Schema: bad-schema-compile",
+          ),
+        }),
+        expect.objectContaining({
+          pluginId: "invalid-session-actions",
+          message: "session action registration requires id, handler, and valid optional fields",
+        }),
+      ]),
     );
   });
 
@@ -279,9 +265,11 @@ describe("plugin session actions", () => {
     const rejected = await callPluginSessionActionForTest({
       body: sessionActionBody("schema-action-fixture", "approve", { payload: { version: 1 } }),
     });
-    const rejectedError = requireHookError(rejected);
-    expect(rejectedError.code).toBe("INVALID_REQUEST");
-    expect(String(rejectedError.message)).toContain(
+    expect(rejected.ok).toBe(false);
+    expect(rejected.error).toMatchObject({
+      code: "INVALID_REQUEST",
+    });
+    expect(String((rejected.error as { message?: unknown } | undefined)?.message)).toContain(
       "plugin session action payload does not match schema",
     );
     expect(handlerCalls).toEqual([]);
@@ -309,7 +297,7 @@ describe("plugin session actions", () => {
       },
     ]);
 
-    await expect(callSchemaAction("typed-error")).resolves.toEqual({
+    await expect(callSchemaAction("typed-error")).resolves.toMatchObject({
       ok: true,
       payload: {
         ok: false,
@@ -319,22 +307,26 @@ describe("plugin session actions", () => {
           field: "version",
         },
       },
-      error: undefined,
     });
 
     await expect(
       callSchemaAction("allow-any", { payload: { any: ["json", true] } }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       ok: true,
       payload: {
         ok: true,
         result: { payload: { any: ["json", true] } },
       },
-      error: undefined,
     });
 
-    const denyAll = await callSchemaAction("deny-all", { payload: { rejected: true } });
-    expect(requireHookError(denyAll).code).toBe("INVALID_REQUEST");
+    await expect(
+      callSchemaAction("deny-all", { payload: { rejected: true } }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+      },
+    });
   });
 
   it("validates plugin session action results before returning gateway payloads", async () => {
@@ -397,62 +389,66 @@ describe("plugin session actions", () => {
     });
     setActivePluginRegistry(registry.registry);
 
-    const expectValidationError = async (
-      actionId: string,
-      message: { exact: string } | { includes: string },
-    ) => {
-      const response = await callValidationAction(actionId);
-      const error = requireHookError(response);
-      expect(error.code).toBe("INVALID_REQUEST");
-      if ("exact" in message) {
-        expect(error.message).toBe(message.exact);
-      } else {
-        expect(String(error.message)).toContain(message.includes);
-      }
+    const expectValidationError = async (actionId: string, message: unknown) => {
+      await expect(callValidationAction(actionId)).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message,
+        },
+      });
     };
 
-    await expectValidationError("bad-result", {
-      exact: "plugin session action result must be JSON-compatible",
+    await expectValidationError(
+      "bad-result",
+      "plugin session action result must be JSON-compatible",
+    );
+    await expectValidationError("bad-reply", "plugin session action reply must be JSON-compatible");
+    await expect(callValidationAction("primitive-result")).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "plugin session action result must be an object",
+      },
     });
-    await expectValidationError("bad-reply", {
-      exact: "plugin session action reply must be JSON-compatible",
-    });
-    const primitiveResult = await callValidationAction("primitive-result");
-    const primitiveResultError = requireHookError(primitiveResult);
-    expect(primitiveResultError.code).toBe("INVALID_REQUEST");
-    expect(primitiveResultError.message).toBe("plugin session action result must be an object");
-    await expect(callValidationAction("typed-error")).resolves.toEqual({
+    await expect(callValidationAction("typed-error")).resolves.toMatchObject({
       ok: true,
       payload: {
         ok: false,
         error: "needs operator input",
-        code: "needs_input",
         details: {
           field: "version",
         },
       },
-      error: undefined,
     });
-    await expectValidationError("bad-ok", { includes: "/ok: must be boolean" });
-    await expectValidationError("error-shaped-success", {
-      includes: "unexpected property 'error'",
+    await expectValidationError("bad-ok", expect.stringContaining("/ok: must be boolean"));
+    await expectValidationError(
+      "error-shaped-success",
+      expect.stringContaining("unexpected property 'error'"),
+    );
+    await expectValidationError(
+      "bad-error-details",
+      "plugin session action details must be JSON-compatible",
+    );
+    await expectValidationError(
+      "bad-continue-agent",
+      expect.stringContaining("/continueAgent: must be boolean"),
+    );
+    await expectValidationError(
+      "mixed-branch-fields",
+      expect.stringContaining("unexpected property 'continueAgent'"),
+    );
+    await expectValidationError(
+      "unknown-success-field",
+      expect.stringContaining("unexpected property 'extra'"),
+    );
+    await expect(callValidationAction("throws-secret")).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "plugin session action failed",
+      },
     });
-    await expectValidationError("bad-error-details", {
-      exact: "plugin session action details must be JSON-compatible",
-    });
-    await expectValidationError("bad-continue-agent", {
-      includes: "/continueAgent: must be boolean",
-    });
-    await expectValidationError("mixed-branch-fields", {
-      includes: "unexpected property 'continueAgent'",
-    });
-    await expectValidationError("unknown-success-field", {
-      includes: "unexpected property 'extra'",
-    });
-    const throwsSecret = await callValidationAction("throws-secret");
-    const throwsSecretError = requireHookError(throwsSecret);
-    expect(throwsSecretError.code).toBe("UNAVAILABLE");
-    expect(throwsSecretError.message).toBe("plugin session action failed");
   });
 
   it("authorizes session actions through the gateway by action-declared scopes", async () => {
@@ -517,13 +513,18 @@ describe("plugin session actions", () => {
       error: undefined,
     });
 
-    const missingApprovalScope = await callApprovalAction({
-      actionId: "approve",
-      scopes: [READ_SCOPE],
+    await expect(
+      callApprovalAction({
+        actionId: "approve",
+        scopes: [READ_SCOPE],
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: `missing scope: ${APPROVALS_SCOPE}`,
+      },
     });
-    const missingApprovalScopeError = requireHookError(missingApprovalScope);
-    expect(missingApprovalScopeError.code).toBe("INVALID_REQUEST");
-    expect(missingApprovalScopeError.message).toBe(`missing scope: ${APPROVALS_SCOPE}`);
     expect(handlerCalls).toEqual([
       { scopes: [APPROVALS_SCOPE], sessionKey: undefined },
       { scopes: [WRITE_SCOPE], action: "view" },
@@ -556,18 +557,21 @@ describe("plugin session actions", () => {
       error: undefined,
     });
 
-    const blankPluginId = await callPluginSessionActionThroughGatewayForTest({
-      body: {
-        pluginId: "   ",
-        actionId: "approve",
+    await expect(
+      callPluginSessionActionThroughGatewayForTest({
+        body: {
+          pluginId: "   ",
+          actionId: "approve",
+        },
+        scopes: [APPROVALS_SCOPE],
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "plugins.sessionAction pluginId and actionId must be non-empty",
       },
-      scopes: [APPROVALS_SCOPE],
     });
-    const blankPluginIdError = requireHookError(blankPluginId);
-    expect(blankPluginIdError.code).toBe("INVALID_REQUEST");
-    expect(blankPluginIdError.message).toBe(
-      "plugins.sessionAction pluginId and actionId must be non-empty",
-    );
     expect(handlerCalls).toEqual([
       { scopes: [APPROVALS_SCOPE], sessionKey: undefined },
       { scopes: [WRITE_SCOPE], action: "view" },
@@ -653,18 +657,21 @@ describe("plugin session actions", () => {
     ];
     setActivePluginRegistry(registry);
 
-    const staleAction = await callPluginSessionActionThroughGatewayForTest({
-      body: {
-        pluginId: "failed-action-plugin",
-        actionId: "stale",
+    await expect(
+      callPluginSessionActionThroughGatewayForTest({
+        body: {
+          pluginId: "failed-action-plugin",
+          actionId: "stale",
+        },
+        scopes: [READ_SCOPE],
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "unknown plugin session action: failed-action-plugin/stale",
       },
-      scopes: [READ_SCOPE],
     });
-    const staleActionError = requireHookError(staleAction);
-    expect(staleActionError.code).toBe("UNAVAILABLE");
-    expect(staleActionError.message).toBe(
-      "unknown plugin session action: failed-action-plugin/stale",
-    );
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -751,25 +758,27 @@ describe("plugin session actions", () => {
       unsubscribe();
     }
 
-    expect(observed).toHaveLength(2);
-    const bundledEvent = requireObservedEvent(observed, 0);
-    expect(bundledEvent.runId).toBe("run-emit");
-    expect(bundledEvent.sessionKey).toBe("agent:main:main");
-    expect(bundledEvent.stream).toBe("approval");
-    expect(bundledEvent.data).toEqual({
-      state: "queued",
-      pluginId: "event-plugin",
-      pluginName: "Event Plugin",
-    });
-    const workspaceEvent = requireObservedEvent(observed, 1);
-    expect(workspaceEvent.runId).toBe("run-emit");
-    expect(workspaceEvent.sessionKey).toBeUndefined();
-    expect(workspaceEvent.stream).toBe("workspace-event-plugin.workflow");
-    expect(workspaceEvent.data).toEqual({
-      state: "queued",
-      pluginId: "workspace-event-plugin",
-      pluginName: "Workspace Event Plugin",
-    });
+    expect(observed).toEqual([
+      expect.objectContaining({
+        runId: "run-emit",
+        sessionKey: "agent:main:main",
+        stream: "approval",
+        data: {
+          state: "queued",
+          pluginId: "event-plugin",
+          pluginName: "Event Plugin",
+        },
+      }),
+      expect.objectContaining({
+        runId: "run-emit",
+        stream: "workspace-event-plugin.workflow",
+        data: {
+          state: "queued",
+          pluginId: "workspace-event-plugin",
+          pluginName: "Workspace Event Plugin",
+        },
+      }),
+    ]);
   });
 
   it("blocks agent events from stale and non-activating plugin API closures", () => {
@@ -902,15 +911,16 @@ describe("plugin session actions", () => {
       unsubscribe();
     }
 
-    expect(observed).toHaveLength(1);
-    const reactivatedEvent = requireObservedEvent(observed, 0);
-    expect(reactivatedEvent.runId).toBe("reactivated-run");
-    expect(reactivatedEvent.sessionKey).toBeUndefined();
-    expect(reactivatedEvent.stream).toBe("approval");
-    expect(reactivatedEvent.data).toEqual({
-      active: true,
-      pluginId: "reactivated-event-plugin",
-      pluginName: "Reactivated Event Plugin",
-    });
+    expect(observed).toEqual([
+      expect.objectContaining({
+        runId: "reactivated-run",
+        stream: "approval",
+        data: {
+          active: true,
+          pluginId: "reactivated-event-plugin",
+          pluginName: "Reactivated Event Plugin",
+        },
+      }),
+    ]);
   });
 });

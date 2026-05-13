@@ -50,7 +50,6 @@ export type SecretsApplyPlan = {
   options?: {
     scrubEnv?: boolean;
     scrubAuthProfilesForProviderTargets?: boolean;
-    scrubLegacyAuthJson?: boolean;
   };
 };
 
@@ -138,7 +137,7 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
     ) {
       return false;
     }
-    if (resolved.entry.configFile === "auth-profiles.json") {
+    if (resolved.entry.store === "auth-profile-store") {
       if (typeof candidate.agentId !== "string" || candidate.agentId.trim().length === 0) {
         return false;
       }
@@ -184,6 +183,5 @@ export function normalizeSecretsPlanOptions(
   return {
     scrubEnv: options?.scrubEnv ?? true,
     scrubAuthProfilesForProviderTargets: options?.scrubAuthProfilesForProviderTargets ?? true,
-    scrubLegacyAuthJson: options?.scrubLegacyAuthJson ?? true,
   };
 }

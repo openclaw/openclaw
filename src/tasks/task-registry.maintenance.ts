@@ -8,14 +8,15 @@ import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
 } from "../agents/subagent-recovery-state.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { normalizeChatType } from "../channels/chat-type.js";
+import { getSessionEntry } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
-import { readCronRunLogEntriesSync, resolveCronRunLogPath } from "../cron/run-log.js";
+import { readCronRunLogEntriesFromSqliteSync } from "../cron/run-log.js";
 import type { CronRunLogEntry } from "../cron/run-log.js";
-import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
-import type { CronJob, CronStoreFile } from "../cron/types.js";
+import { loadCronStoreSync, resolveCronStoreKey } from "../cron/store.js";
+import type { CronJob, CronStoreSnapshot } from "../cron/types.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -23,15 +24,8 @@ import {
   isPluginStateDatabaseOpen,
   sweepExpiredPluginStateEntries,
 } from "../plugin-state/plugin-state-store.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
-import {
-  deriveSessionChatTypeFromKey,
-  type SessionKeyChatType,
-} from "../sessions/session-chat-type-shared.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   getDetachedTaskLifecycleRuntime,
   tryRecoverTaskBeforeMarkLost,
@@ -71,7 +65,7 @@ const SWEEP_YIELD_BATCH_SIZE = 25;
 let sweeper: NodeJS.Timeout | null = null;
 let deferredSweep: NodeJS.Timeout | null = null;
 let sweepInProgress = false;
-let configuredCronStorePath: string | undefined;
+let configuredCronStoreKey: string | undefined;
 let configuredCronRuntimeAuthoritative = false;
 
 type TaskRegistryMaintenanceRuntime = {
@@ -84,9 +78,7 @@ type TaskRegistryMaintenanceRuntime = {
   }) => Promise<void>;
   listSessionBindingsBySession?: ReturnType<typeof getSessionBindingService>["listBySession"];
   unbindSessionBindings?: ReturnType<typeof getSessionBindingService>["unbind"];
-  loadSessionStore: typeof loadSessionStore;
-  resolveStorePath: typeof resolveStorePath;
-  deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
+  getSessionEntry: typeof getSessionEntry;
   isCronJobActive: typeof isCronJobActive;
   getAgentRunContext: typeof getAgentRunContext;
   parseAgentSessionKey: typeof parseAgentSessionKey;
@@ -101,10 +93,9 @@ type TaskRegistryMaintenanceRuntime = {
   resolveTaskForLookupToken: typeof resolveTaskForLookupToken;
   setTaskCleanupAfterById: typeof setTaskCleanupAfterById;
   isCronRuntimeAuthoritative: () => boolean;
-  resolveCronStorePath: typeof resolveCronStorePath;
+  resolveCronStoreKey: typeof resolveCronStoreKey;
   loadCronStoreSync: typeof loadCronStoreSync;
-  resolveCronRunLogPath: typeof resolveCronRunLogPath;
-  readCronRunLogEntriesSync: typeof readCronRunLogEntriesSync;
+  readCronRunLogEntriesSync: typeof readCronRunLogEntriesFromSqliteSync;
 };
 
 const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
@@ -124,9 +115,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   listSessionBindingsBySession: (sessionKey) =>
     getSessionBindingService().listBySession(sessionKey),
   unbindSessionBindings: (input) => getSessionBindingService().unbind(input),
-  loadSessionStore,
-  resolveStorePath,
-  deriveSessionChatTypeFromKey,
+  getSessionEntry,
   isCronJobActive,
   getAgentRunContext,
   parseAgentSessionKey,
@@ -141,10 +130,9 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
   isCronRuntimeAuthoritative: () => configuredCronRuntimeAuthoritative,
-  resolveCronStorePath: () => configuredCronStorePath ?? resolveCronStorePath(),
+  resolveCronStoreKey: () => configuredCronStoreKey ?? resolveCronStoreKey(),
   loadCronStoreSync,
-  resolveCronRunLogPath,
-  readCronRunLogEntriesSync,
+  readCronRunLogEntriesSync: readCronRunLogEntriesFromSqliteSync,
 };
 
 let taskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime =
@@ -171,100 +159,36 @@ type CronTerminalRecovery = {
 };
 
 type CronRecoveryContext = {
-  storePath: string;
-  store?: CronStoreFile | null;
+  storeKey: string;
+  store?: CronStoreSnapshot | null;
   runLogsByJobId: Map<string, CronRunLogEntry[]>;
 };
 
-type SessionStoreLookup = {
-  store: Record<string, SessionEntry>;
-  normalizedEntries?: Map<string, SessionEntry>;
-};
-
 type BackingSessionLookupContext = {
-  sessionStoresByPath: Map<string, SessionStoreLookup>;
-  sessionChatTypesByKey: Map<string, SessionKeyChatType>;
+  sessionEntriesByKey: Map<string, SessionEntry | undefined>;
 };
 
 function createCronRecoveryContext(): CronRecoveryContext {
   return {
-    storePath: taskRegistryMaintenanceRuntime.resolveCronStorePath(),
+    storeKey: taskRegistryMaintenanceRuntime.resolveCronStoreKey(),
     runLogsByJobId: new Map<string, CronRunLogEntry[]>(),
   };
 }
 
 function createBackingSessionLookupContext(): BackingSessionLookupContext {
   return {
-    sessionStoresByPath: new Map<string, SessionStoreLookup>(),
-    sessionChatTypesByKey: new Map<string, SessionKeyChatType>(),
+    sessionEntriesByKey: new Map<string, SessionEntry | undefined>(),
   };
 }
 
-function getSessionStoreLookup(
-  storePath: string,
-  context?: BackingSessionLookupContext,
-): SessionStoreLookup {
-  if (!context) {
-    return {
-      store: taskRegistryMaintenanceRuntime.loadSessionStore(storePath, { clone: false }),
-    };
+function resolveTypedSessionChatType(
+  entry?: SessionEntry,
+): "direct" | "group" | "channel" | undefined {
+  const storedChatType = normalizeChatType(entry?.chatType);
+  if (storedChatType) {
+    return storedChatType;
   }
-  const cached = context.sessionStoresByPath.get(storePath);
-  if (cached) {
-    return cached;
-  }
-  const lookup = {
-    store: taskRegistryMaintenanceRuntime.loadSessionStore(storePath, { clone: false }),
-  };
-  context.sessionStoresByPath.set(storePath, lookup);
-  return lookup;
-}
-
-function getNormalizedSessionEntries(lookup: SessionStoreLookup): Map<string, SessionEntry> {
-  if (lookup.normalizedEntries) {
-    return lookup.normalizedEntries;
-  }
-  const entries = new Map<string, SessionEntry>();
-  for (const [key, entry] of Object.entries(lookup.store)) {
-    if (entry) {
-      entries.set(normalizeLowercaseStringOrEmpty(key), entry);
-    }
-  }
-  lookup.normalizedEntries = entries;
-  return entries;
-}
-
-function findSessionEntryByKey(
-  lookup: SessionStoreLookup,
-  sessionKey: string,
-): SessionEntry | undefined {
-  const direct = lookup.store[sessionKey];
-  if (direct) {
-    return direct;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (!normalized) {
-    return undefined;
-  }
-  return getNormalizedSessionEntries(lookup).get(normalized);
-}
-
-function resolveSessionChatType(
-  sessionKey: string,
-  context?: BackingSessionLookupContext,
-): SessionKeyChatType {
-  const derive =
-    taskRegistryMaintenanceRuntime.deriveSessionChatTypeFromKey ?? deriveSessionChatTypeFromKey;
-  if (!context) {
-    return derive(sessionKey);
-  }
-  const cached = context.sessionChatTypesByKey.get(sessionKey);
-  if (cached) {
-    return cached;
-  }
-  const chatType = derive(sessionKey);
-  context.sessionChatTypesByKey.set(sessionKey, chatType);
-  return chatType;
+  return undefined;
 }
 
 function findTaskSessionEntry(
@@ -275,9 +199,19 @@ function findTaskSessionEntry(
   if (!childSessionKey) {
     return undefined;
   }
-  const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
-  const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
-  return findSessionEntryByKey(getSessionStoreLookup(storePath, context), childSessionKey);
+  const agentId =
+    taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId ??
+    resolveAgentIdFromSessionKey(childSessionKey);
+  const cacheKey = `${agentId}\0${childSessionKey}`;
+  if (context?.sessionEntriesByKey.has(cacheKey)) {
+    return context.sessionEntriesByKey.get(cacheKey);
+  }
+  const entry = taskRegistryMaintenanceRuntime.getSessionEntry({
+    agentId,
+    sessionKey: childSessionKey,
+  });
+  context?.sessionEntriesByKey.set(cacheKey, entry);
+  return entry;
 }
 
 function isActiveTask(task: TaskRecord): boolean {
@@ -331,11 +265,7 @@ function getCronRunLogEntries(context: CronRecoveryContext, jobId: string): Cron
   }
   let entries: CronRunLogEntry[] = [];
   try {
-    const logPath = taskRegistryMaintenanceRuntime.resolveCronRunLogPath({
-      storePath: context.storePath,
-      jobId,
-    });
-    entries = taskRegistryMaintenanceRuntime.readCronRunLogEntriesSync(logPath, {
+    entries = taskRegistryMaintenanceRuntime.readCronRunLogEntriesSync(context.storeKey, {
       jobId,
       limit: 5000,
     });
@@ -346,12 +276,12 @@ function getCronRunLogEntries(context: CronRecoveryContext, jobId: string): Cron
   return entries;
 }
 
-function getCronStore(context: CronRecoveryContext): CronStoreFile | null {
+function getCronStore(context: CronRecoveryContext): CronStoreSnapshot | null {
   if (context.store !== undefined) {
     return context.store;
   }
   try {
-    context.store = taskRegistryMaintenanceRuntime.loadCronStoreSync(context.storePath);
+    context.store = taskRegistryMaintenanceRuntime.loadCronStoreSync(context.storeKey);
   } catch {
     context.store = null;
   }
@@ -474,13 +404,13 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
     return Boolean(acpEntry.entry);
   }
   if (task.runtime === "subagent" || task.runtime === "cli") {
+    const entry = findTaskSessionEntry(task, context);
     if (task.runtime === "cli") {
-      const chatType = resolveSessionChatType(childSessionKey, context);
+      const chatType = resolveTypedSessionChatType(entry);
       if (chatType === "channel" || chatType === "group" || chatType === "direct") {
         return false;
       }
     }
-    const entry = findTaskSessionEntry(task, context);
     if (task.runtime === "subagent" && isSubagentRecoveryWedgedEntry(entry)) {
       return false;
     }
@@ -1113,15 +1043,15 @@ export function setTaskRegistryMaintenanceRuntimeForTests(
 
 export function resetTaskRegistryMaintenanceRuntimeForTests(): void {
   taskRegistryMaintenanceRuntime = defaultTaskRegistryMaintenanceRuntime;
-  configuredCronStorePath = undefined;
+  configuredCronStoreKey = undefined;
   configuredCronRuntimeAuthoritative = false;
 }
 
 export function configureTaskRegistryMaintenance(options: {
-  cronStorePath?: string;
+  cronStoreKey?: string;
   cronRuntimeAuthoritative?: boolean;
 }): void {
-  configuredCronStorePath = options.cronStorePath?.trim() || undefined;
+  configuredCronStoreKey = options.cronStoreKey?.trim() || undefined;
   if (options.cronRuntimeAuthoritative !== undefined) {
     configuredCronRuntimeAuthoritative = options.cronRuntimeAuthoritative;
   }

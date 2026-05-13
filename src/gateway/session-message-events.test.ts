@@ -2,24 +2,31 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import {
+  loadSqliteSessionTranscriptEvents,
+  replaceSqliteSessionTranscriptEvents,
+} from "../config/sessions/transcript-store.sqlite.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { testState } from "./test-helpers.runtime-state.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
-  writeSessionStore,
+  seedGatewaySessionEntries,
 } from "./test-helpers.server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 const cleanupDirs: string[] = [];
 const SETUP_RPC_TIMEOUT_MS = 30_000;
+let previousStateDir: string | undefined;
+let previousStateDirCaptured = false;
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let subscribedOperatorWs:
   | Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>
@@ -43,17 +50,36 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
+  if (previousStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousStateDir;
+  }
+  previousStateDir = undefined;
+  previousStateDirCaptured = false;
   await Promise.all(
     cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
   );
 });
 
-async function createSessionStoreFile(): Promise<string> {
+async function setupTranscriptFixtureState(): Promise<void> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-message-"));
   cleanupDirs.push(dir);
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
-  return storePath;
+  if (!previousStateDirCaptured) {
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    previousStateDirCaptured = true;
+  }
+  process.env.OPENCLAW_STATE_DIR = dir;
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+}
+
+function replaceTranscriptEvents(params: { sessionId: string; events: unknown[] }) {
+  replaceSqliteSessionTranscriptEvents({
+    agentId: "main",
+    sessionId: params.sessionId,
+    events: params.events,
+  });
 }
 
 async function withOperatorSessionSubscriber<T>(
@@ -96,7 +122,7 @@ function waitForSessionsChangedMessagePhase(
 async function emitTranscriptUpdateAndCollectEvents(params: {
   ws: Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>;
   sessionKey: string;
-  sessionFile: string;
+  sessionId: string;
   message: Record<string, unknown>;
   messageId: string;
 }) {
@@ -104,7 +130,8 @@ async function emitTranscriptUpdateAndCollectEvents(params: {
   const changedEventPromise = waitForSessionsChangedMessagePhase(params.ws, params.sessionKey);
 
   emitSessionTranscriptUpdate({
-    sessionFile: params.sessionFile,
+    agentId: "main",
+    sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     message: params.message,
     messageId: params.messageId,
@@ -147,8 +174,8 @@ function expectRecordFields(value: unknown, expected: Record<string, unknown>): 
 
 describe("session.message websocket events", () => {
   test("includes spawned session ownership metadata on lifecycle sessions.changed events", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
+    await setupTranscriptFixtureState();
+    await seedGatewaySessionEntries({
       entries: {
         child: {
           sessionId: "sess-child",
@@ -162,7 +189,6 @@ describe("session.message websocket events", () => {
           displayName: "Ops Child",
         },
       },
-      storePath,
     });
 
     await withOperatorSessionSubscriber(async (ws) => {
@@ -196,15 +222,14 @@ describe("session.message websocket events", () => {
   });
 
   test("only sends transcript events to subscribed operator clients", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
+    await setupTranscriptFixtureState();
+    await seedGatewaySessionEntries({
       entries: {
         main: {
           sessionId: "sess-main",
           updatedAt: Date.now(),
         },
       },
-      storePath,
     });
 
     const subscribedWs = await harness.openWs();
@@ -227,7 +252,6 @@ describe("session.message websocket events", () => {
       const appended = await appendAssistantMessageToSessionTranscript({
         sessionKey: "agent:main:main",
         text: "subscribed only",
-        storePath,
       });
       expect(appended.ok).toBe(true);
       const event = await subscribedEvent;
@@ -259,15 +283,14 @@ describe("session.message websocket events", () => {
   });
 
   test("broadcasts appended transcript messages with the session key", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
+    await setupTranscriptFixtureState();
+    await seedGatewaySessionEntries({
       entries: {
         main: {
           sessionId: "sess-main",
           updatedAt: Date.now(),
         },
       },
-      storePath,
     });
 
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
@@ -275,50 +298,57 @@ describe("session.message websocket events", () => {
       const appended = await appendAssistantMessageToSessionTranscript({
         sessionKey: "agent:main:main",
         text: "live websocket message",
-        storePath,
       });
       expect(appended.ok).toBe(true);
       if (!appended.ok) {
         throw new Error(`append failed: ${appended.reason}`);
       }
-      const emitParams = requireRecord(emitSpy.mock.calls.at(0)?.[0], "transcript update params");
-      expect(emitParams.sessionFile).toBe(appended.sessionFile);
-      expect(emitParams.sessionKey).toBe("agent:main:main");
-      expect(emitParams.messageId).toBe(appended.messageId);
-      expectRecordFields(emitParams.message, {
-        role: "assistant",
-        content: [{ type: "text", text: "live websocket message" }],
-      });
-      const transcript = await fs.readFile(appended.sessionFile, "utf-8");
-      expect(transcript).toContain('"live websocket message"');
+      expect(emitSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          messageId: appended.messageId,
+          message: expect.objectContaining({
+            role: "assistant",
+            content: [{ type: "text", text: "live websocket message" }],
+          }),
+        }),
+      );
+      const transcript = loadSqliteSessionTranscriptEvents({
+        agentId: "main",
+        sessionId: "sess-main",
+      }).map((entry) => entry.event);
+      expect(transcript).toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            content: [{ type: "text", text: "live websocket message" }],
+          }),
+        }),
+      );
     } finally {
       emitSpy.mockRestore();
     }
   });
 
   test("strips blocked original content from live session.message events", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
+    await setupTranscriptFixtureState();
+    await seedGatewaySessionEntries({
       entries: {
         main: {
           sessionId: "sess-main",
           updatedAt: Date.now(),
         },
       },
-      storePath,
     });
-    const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
-    await fs.writeFile(
-      transcriptPath,
-      JSON.stringify({ type: "session", version: 1, id: "sess-main" }) + "\n",
-      "utf-8",
-    );
+    replaceTranscriptEvents({
+      sessionId: "sess-main",
+      events: [{ type: "session", version: 1, id: "sess-main" }],
+    });
 
     await withOperatorSessionSubscriber(async (ws) => {
       const { messageEvent } = await emitTranscriptUpdateAndCollectEvents({
         ws,
         sessionKey: "agent:main:main",
-        sessionFile: transcriptPath,
+        sessionId: "sess-main",
         messageId: "blocked-1",
         message: {
           role: "user",
@@ -341,21 +371,21 @@ describe("session.message websocket events", () => {
   });
 
   test("broadcasts redacted blocked user appends to live session listeners", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
+    await setupTranscriptFixtureState();
+    await seedGatewaySessionEntries({
       entries: {
         main: {
           sessionId: "sess-main",
           updatedAt: Date.now(),
         },
       },
-      storePath,
     });
 
     await withOperatorSessionSubscriber(async (ws) => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
       emitSessionTranscriptUpdate({
-        sessionFile: path.join(path.dirname(storePath), "sess-main.jsonl"),
+        agentId: "main",
+        sessionId: "sess-main",
         sessionKey: "agent:main:main",
         messageId: "blocked-message",
         message: {
@@ -388,8 +418,8 @@ describe("session.message websocket events", () => {
   });
 
   test("includes live usage metadata on session.message and sessions.changed transcript events", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
+    await setupTranscriptFixtureState();
+    await seedGatewaySessionEntries({
       entries: {
         main: {
           sessionId: "sess-main",
@@ -401,9 +431,7 @@ describe("session.message websocket events", () => {
           totalTokensFresh: false,
         },
       },
-      storePath,
     });
-    const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
     const transcriptMessage = {
       role: "assistant",
       content: [{ type: "text", text: "usage snapshot" }],
@@ -418,20 +446,19 @@ describe("session.message websocket events", () => {
       },
       timestamp: Date.now(),
     };
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-        JSON.stringify({ id: "msg-usage", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
-    );
+    replaceTranscriptEvents({
+      sessionId: "sess-main",
+      events: [
+        { type: "session", version: 1, id: "sess-main" },
+        { id: "msg-usage", message: transcriptMessage },
+      ],
+    });
 
     await withOperatorSessionSubscriber(async (ws) => {
       const { messageEvent, changedEvent } = await emitTranscriptUpdateAndCollectEvents({
         ws,
         sessionKey: "agent:main:main",
-        sessionFile: transcriptPath,
+        sessionId: "sess-main",
         message: transcriptMessage,
         messageId: "msg-usage",
       });
@@ -462,13 +489,11 @@ describe("session.message websocket events", () => {
   });
 
   test("includes spawnedBy metadata on session.message and sessions.changed transcript events", async () => {
-    const storePath = await createSessionStoreFile();
-    const transcriptPath = path.join(path.dirname(storePath), "sess-child.jsonl");
-    await writeSessionStore({
+    await setupTranscriptFixtureState();
+    await seedGatewaySessionEntries({
       entries: {
         child: {
           sessionId: "sess-child",
-          sessionFile: transcriptPath,
           updatedAt: Date.now(),
           spawnedBy: "agent:main:main",
           spawnedWorkspaceDir: "/tmp/subagent-workspace",
@@ -479,21 +504,19 @@ describe("session.message websocket events", () => {
           parentSessionKey: "agent:main:main",
         },
       },
-      storePath,
     });
     const transcriptMessage = {
       role: "assistant",
       content: [{ type: "text", text: "spawn metadata snapshot" }],
       timestamp: Date.now(),
     };
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-child" }),
-        JSON.stringify({ id: "msg-spawn", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
-    );
+    replaceTranscriptEvents({
+      sessionId: "sess-child",
+      events: [
+        { type: "session", version: 1, id: "sess-child" },
+        { id: "msg-spawn", message: transcriptMessage },
+      ],
+    });
 
     const ws = await harness.openWs();
     try {
@@ -520,7 +543,8 @@ describe("session.message websocket events", () => {
       );
 
       emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
+        agentId: "main",
+        sessionId: "sess-child",
         sessionKey: "agent:main:child",
         message: transcriptMessage,
         messageId: "msg-spawn",
@@ -557,65 +581,68 @@ describe("session.message websocket events", () => {
   });
 
   test("includes route thread metadata on session.message and sessions.changed transcript events", async () => {
-    const storePath = await createSessionStoreFile();
-    const transcriptPath = path.join(path.dirname(storePath), "sess-thread.jsonl");
-    await writeSessionStore({
+    await setupTranscriptFixtureState();
+    await seedGatewaySessionEntries({
       entries: {
         main: {
           sessionId: "sess-thread",
-          sessionFile: transcriptPath,
           updatedAt: Date.now(),
-          lastChannel: "telegram",
-          lastTo: "-100123",
-          lastAccountId: "acct-1",
-          lastThreadId: 42,
+          channel: "telegram",
+          deliveryContext: {
+            channel: "telegram",
+            to: "-100123",
+            accountId: "acct-1",
+            threadId: 42,
+          },
         },
       },
-      storePath,
     });
     const transcriptMessage = {
       role: "assistant",
       content: [{ type: "text", text: "thread route snapshot" }],
       timestamp: Date.now(),
     };
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-thread" }),
-        JSON.stringify({ id: "msg-thread", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
-    );
+    replaceTranscriptEvents({
+      sessionId: "sess-thread",
+      events: [
+        { type: "session", version: 1, id: "sess-thread" },
+        { id: "msg-thread", message: transcriptMessage },
+      ],
+    });
 
     await withOperatorSessionSubscriber(async (ws) => {
       const { messageEvent, changedEvent } = await emitTranscriptUpdateAndCollectEvents({
         ws,
         sessionKey: "agent:main:main",
-        sessionFile: transcriptPath,
+        sessionId: "sess-thread",
         message: transcriptMessage,
         messageId: "msg-thread",
       });
       expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:main",
-        lastChannel: "telegram",
-        lastTo: "-100123",
-        lastAccountId: "acct-1",
-        lastThreadId: 42,
+        deliveryContext: {
+          channel: "telegram",
+          to: "-100123",
+          accountId: "acct-1",
+          threadId: "42",
+        },
       });
       expectRecordFields(changedEvent.payload, {
         sessionKey: "agent:main:main",
         phase: "message",
-        lastChannel: "telegram",
-        lastTo: "-100123",
-        lastAccountId: "acct-1",
-        lastThreadId: 42,
+        deliveryContext: {
+          channel: "telegram",
+          to: "-100123",
+          accountId: "acct-1",
+          threadId: "42",
+        },
       });
     });
   });
 
   test("sessions.messages.subscribe only delivers transcript events for the requested session", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
+    await setupTranscriptFixtureState();
+    await seedGatewaySessionEntries({
       entries: {
         main: {
           sessionId: "sess-main",
@@ -626,7 +653,6 @@ describe("session.message websocket events", () => {
           updatedAt: Date.now(),
         },
       },
-      storePath,
     });
 
     const ws = await harness.openWs();
@@ -644,7 +670,6 @@ describe("session.message websocket events", () => {
         appendAssistantMessageToSessionTranscript({
           sessionKey: "agent:main:main",
           text: "main only",
-          storePath,
         }),
         mainEvent,
       ]);
@@ -665,7 +690,6 @@ describe("session.message websocket events", () => {
           const workerAppend = await appendAssistantMessageToSessionTranscript({
             sessionKey: "agent:main:worker",
             text: "worker hidden",
-            storePath,
           });
           expect(workerAppend.ok).toBe(true);
         },
@@ -692,7 +716,6 @@ describe("session.message websocket events", () => {
           const hiddenAppend = await appendAssistantMessageToSessionTranscript({
             sessionKey: "agent:main:main",
             text: "hidden after unsubscribe",
-            storePath,
           });
           expect(hiddenAppend.ok).toBe(true);
         },
@@ -700,61 +723,5 @@ describe("session.message websocket events", () => {
     } finally {
       ws.close();
     }
-  });
-
-  test("routes transcript-only updates to the freshest session owner when different sessionIds share a transcript path", async () => {
-    const storePath = await createSessionStoreFile();
-    const transcriptPath = path.join(path.dirname(storePath), "shared.jsonl");
-    await writeSessionStore({
-      entries: {
-        older: {
-          sessionId: "sess-old",
-          sessionFile: transcriptPath,
-          updatedAt: Date.now(),
-        },
-        newer: {
-          sessionId: "sess-new",
-          sessionFile: transcriptPath,
-          updatedAt: Date.now() + 10,
-        },
-      },
-      storePath,
-    });
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-new" }),
-        JSON.stringify({
-          id: "msg-shared",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "shared transcript update" }],
-            timestamp: Date.now(),
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
-    );
-
-    await withOperatorSessionSubscriber(async (ws) => {
-      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:newer");
-
-      emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "shared transcript update" }],
-          timestamp: Date.now(),
-        },
-        messageId: "msg-shared",
-      });
-
-      const messageEvent = await messageEventPromise;
-      expectRecordFields(messageEvent.payload, {
-        sessionKey: "agent:main:newer",
-        messageId: "msg-shared",
-        messageSeq: 1,
-      });
-    });
   });
 });

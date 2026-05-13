@@ -22,6 +22,7 @@ import {
   type WikiPageContradictionCluster,
 } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import { writeMemoryWikiCompiledDigests } from "./digest-state.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
   formatWikiLink,
@@ -45,8 +46,6 @@ const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: str
   { kind: "synthesis", dir: "syntheses", heading: "Syntheses" },
   { kind: "report", dir: "reports", heading: "Reports" },
 ];
-const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
-const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
 const MAX_RELATED_PAGES_PER_SECTION = 12;
 const MAX_SHARED_SOURCE_FANOUT = 24;
 
@@ -1254,10 +1253,7 @@ async function writeAgentDigestArtifacts(params: {
   rootDir: string;
   pages: WikiPageSummary[];
   pageCounts: Record<WikiPageKind, number>;
-}): Promise<string[]> {
-  const updatedFiles: string[] = [];
-  const agentDigestPath = path.join(params.rootDir, AGENT_DIGEST_PATH);
-  const claimsDigestPath = path.join(params.rootDir, CLAIMS_DIGEST_PATH);
+}): Promise<void> {
   const agentDigest = `${JSON.stringify(
     buildAgentDigest({
       pages: params.pages,
@@ -1270,20 +1266,11 @@ async function writeAgentDigestArtifacts(params: {
     buildClaimsDigestLines({ pages: params.pages }).join("\n"),
   );
 
-  for (const [filePath, content] of [
-    [agentDigestPath, agentDigest],
-    [claimsDigestPath, claimsDigest],
-  ] as const) {
-    const relativePath = path.relative(params.rootDir, filePath);
-    const root = await fsRoot(params.rootDir);
-    const existing = await root.readText(relativePath).catch(() => "");
-    if (existing === content) {
-      continue;
-    }
-    await root.write(relativePath, content);
-    updatedFiles.push(filePath);
-  }
-  return updatedFiles;
+  await writeMemoryWikiCompiledDigests({
+    vaultRoot: params.rootDir,
+    agentDigest,
+    claimsDigest,
+  });
 }
 
 export async function compileMemoryWikiVault(
@@ -1302,12 +1289,11 @@ export async function compileMemoryWikiVault(
     pages = await readPageSummaries(rootDir);
   }
   const counts = buildPageCounts(pages);
-  const digestUpdatedFiles = await writeAgentDigestArtifacts({
+  await writeAgentDigestArtifacts({
     rootDir,
     pages,
     pageCounts: counts,
   });
-  updatedFiles.push(...digestUpdatedFiles);
 
   const rootIndexPath = path.join(rootDir, "index.md");
   if (

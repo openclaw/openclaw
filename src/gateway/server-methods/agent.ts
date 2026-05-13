@@ -13,9 +13,7 @@ import {
   resolveAgentAvatar,
   resolvePublicAgentAvatarSource,
 } from "../../agents/identity-avatar.js";
-import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
-import { resolveTrustedGroupId } from "../../agents/pi-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import {
   normalizeSpawnedRunMetadata,
@@ -42,8 +40,9 @@ import {
   resolveSessionResetPolicy,
   resolveSessionResetType,
   type SessionEntry,
-  updateSessionStore,
+  upsertSessionEntry,
 } from "../../config/sessions.js";
+import { readSqliteSessionRoutingInfo } from "../../config/sessions/session-entries.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatUncaughtError } from "../../infra/errors.js";
@@ -72,10 +71,6 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import {
-  parseRawSessionConversationRef,
-  parseThreadSessionSuffix,
-} from "../../sessions/session-key-utils.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -122,7 +117,7 @@ import {
   canonicalizeSpawnedByForAgent,
   loadGatewaySessionRow,
   loadSessionEntry,
-  migrateAndPruneGatewaySessionStoreKey,
+  parseGroupKey,
   resolveGatewayModelSupportsImages,
   resolveSessionModelRef,
 } from "../session-utils.js";
@@ -155,6 +150,17 @@ function formatAttachmentFailureForLog(err: unknown): string {
     return primary;
   }
   return `${primary}\nCaused by: ${causeText}`;
+}
+
+function shouldSuppressPromptPersistenceForAgentRun(params: {
+  inputProvenance?: InputProvenance;
+  internalEvents?: AgentInternalEvent[];
+}): boolean {
+  return (
+    params.inputProvenance?.kind === "inter_session" &&
+    params.inputProvenance.sourceTool === "subagent_announce" &&
+    params.internalEvents?.some((event) => event.type === "task_completion") === true
+  );
 }
 
 function logAttachmentFailure(
@@ -275,29 +281,37 @@ function normalizeTrustedGroupMetadata(value?: {
   };
 }
 
-function resolveSessionKeyGroupId(sessionKey: string): string | undefined {
-  const { baseSessionKey } = parseThreadSessionSuffix(sessionKey);
-  const conversation = parseRawSessionConversationRef(baseSessionKey ?? sessionKey);
-  if (!conversation || (conversation.kind !== "group" && conversation.kind !== "channel")) {
-    return undefined;
-  }
-  return conversation.rawId;
+function groupIdsEqual(left?: string, right?: string): boolean {
+  return Boolean(left && right && left.toLowerCase() === right.toLowerCase());
 }
 
 function resolveTrustedGroupMetadata(params: {
-  sessionKey: string;
-  spawnedBy?: string;
+  typedGroupId?: string;
   stored: TrustedGroupMetadata;
   inherited?: TrustedGroupMetadata;
 }): TrustedGroupMetadata {
+  const inheritedMatchesTyped =
+    params.inherited?.groupId &&
+    (!params.typedGroupId || groupIdsEqual(params.inherited.groupId, params.typedGroupId));
+  const trustedGroupId = params.typedGroupId ?? params.inherited?.groupId;
+  const storedMatchesTrusted =
+    params.stored.groupId && trustedGroupId && groupIdsEqual(params.stored.groupId, trustedGroupId);
+  const groupId = storedMatchesTrusted
+    ? params.stored.groupId
+    : inheritedMatchesTyped
+      ? params.inherited?.groupId
+      : trustedGroupId;
+  if (!groupId) {
+    return {};
+  }
   return {
-    groupId:
-      params.stored.groupId ??
-      params.inherited?.groupId ??
-      resolveSessionKeyGroupId(params.sessionKey) ??
-      (params.spawnedBy ? resolveSessionKeyGroupId(params.spawnedBy) : undefined),
-    groupChannel: params.stored.groupChannel ?? params.inherited?.groupChannel,
-    groupSpace: params.stored.groupSpace ?? params.inherited?.groupSpace,
+    groupId,
+    groupChannel:
+      (storedMatchesTrusted ? params.stored.groupChannel : undefined) ??
+      (inheritedMatchesTyped ? params.inherited?.groupChannel : undefined),
+    groupSpace:
+      (storedMatchesTrusted ? params.stored.groupSpace : undefined) ??
+      (inheritedMatchesTyped ? params.inherited?.groupSpace : undefined),
   };
 }
 
@@ -309,7 +323,7 @@ function requestGroupMatchesTrusted(params: {
   if (!requestGroupId) {
     return true;
   }
-  return Boolean(params.trustedGroupId && requestGroupId === params.trustedGroupId);
+  return groupIdsEqual(requestGroupId, params.trustedGroupId);
 }
 
 function emitSessionsChanged(
@@ -339,7 +353,6 @@ function emitSessionsChanged(
             groupChannel: sessionRow.groupChannel,
             space: sessionRow.space,
             chatType: sessionRow.chatType,
-            origin: sessionRow.origin,
             spawnedBy: sessionRow.spawnedBy,
             spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
             forkedFromParent: sessionRow.forkedFromParent,
@@ -351,6 +364,10 @@ function emitSessionsChanged(
             deliveryContext: sessionRow.deliveryContext,
             parentSessionKey: sessionRow.parentSessionKey,
             childSessions: sessionRow.childSessions,
+            lastChannel: sessionRow.lastChannel,
+            lastTo: sessionRow.lastTo,
+            lastAccountId: sessionRow.lastAccountId,
+            lastThreadId: sessionRow.lastThreadId,
             thinkingLevel: sessionRow.thinkingLevel,
             fastMode: sessionRow.fastMode,
             verboseLevel: sessionRow.verboseLevel,
@@ -362,10 +379,6 @@ function emitSessionsChanged(
             abortedLastRun: sessionRow.abortedLastRun,
             inputTokens: sessionRow.inputTokens,
             outputTokens: sessionRow.outputTokens,
-            lastChannel: sessionRow.lastChannel,
-            lastTo: sessionRow.lastTo,
-            lastAccountId: sessionRow.lastAccountId,
-            lastThreadId: sessionRow.lastThreadId,
             totalTokens: sessionRow.totalTokens,
             totalTokensFresh: sessionRow.totalTokensFresh,
             contextTokens: sessionRow.contextTokens,
@@ -526,24 +539,6 @@ function dispatchAgentRunFromGateway(params: {
     });
 }
 
-function shouldSuppressAgentPromptPersistence(params: {
-  inputProvenance?: InputProvenance;
-  internalEvents?: AgentInternalEvent[];
-}): boolean {
-  if (
-    params.inputProvenance?.kind !== "inter_session" ||
-    params.inputProvenance.sourceTool !== "subagent_announce"
-  ) {
-    return false;
-  }
-  return (
-    params.internalEvents?.some(
-      (event) =>
-        event.type === AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION && event.source === "subagent",
-    ) === true
-  );
-}
-
 function yieldAfterAgentAcceptedAck(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 10);
@@ -604,6 +599,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       cleanupBundleMcpOnRunEnd?: boolean;
       label?: string;
       inputProvenance?: InputProvenance;
+      initialVfsEntries?: Array<{
+        path: string;
+        contentBase64: string;
+        metadata?: Record<string, unknown>;
+      }>;
       workspaceDir?: string;
       voiceWakeTrigger?: string;
     };
@@ -657,6 +657,14 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+    const activeRun = context.chatAbortControllers.get(idem);
+    if (activeRun) {
+      respond(true, { runId: idem, status: "in_flight" }, undefined, {
+        cached: true,
+        runId: idem,
+      });
+      return;
+    }
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(request.attachments);
     const requestedBestEffortDeliver =
       typeof request.bestEffortDeliver === "boolean" ? request.bestEffortDeliver : undefined;
@@ -676,8 +684,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       let baseProvider: string | undefined;
       let baseModel: string | undefined;
       if (requestedSessionKeyRaw) {
-        const { cfg: sessCfg, entry: sessEntry } = loadSessionEntry(requestedSessionKeyRaw);
-        const sessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
+        const {
+          cfg: sessCfg,
+          entry: sessEntry,
+          agentId: sessionAgentId,
+        } = loadSessionEntry(requestedSessionKeyRaw);
         const modelRef = resolveSessionModelRef(sessCfg, sessEntry, sessionAgentId);
         baseProvider = modelRef.provider;
         baseModel = modelRef.model;
@@ -960,15 +971,28 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     if (requestedSessionKey) {
-      const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
+      const {
+        cfg,
+        entry,
+        canonicalKey,
+        agentId: sessionAgentId,
+      } = loadSessionEntry(requestedSessionKey);
       cfgForAgent = cfg;
       const now = Date.now();
+      const routingInfo = readSqliteSessionRoutingInfo({
+        agentId: sessionAgentId,
+        sessionKey: canonicalKey,
+      });
       const resetPolicy = resolveSessionResetPolicy({
         sessionCfg: cfg.session,
-        resetType: resolveSessionResetType({ sessionKey: canonicalKey }),
+        resetType: resolveSessionResetType({
+          sessionKey: canonicalKey,
+          sessionScope: routingInfo?.sessionScope,
+          chatType: routingInfo?.chatType,
+        }),
         resetOverride: resolveChannelResetConfig({
           sessionCfg: cfg.session,
-          channel: entry?.lastChannel ?? entry?.channel ?? request.channel,
+          channel: routingInfo?.channel ?? entry?.channel ?? request.channel,
         }),
       });
       const freshness = entry
@@ -976,7 +1000,6 @@ export const agentHandlers: GatewayRequestHandlers = {
             updatedAt: entry.updatedAt,
             ...resolveSessionLifecycleTimestamps({
               entry,
-              storePath,
               agentId: resolveAgentIdFromSessionKey(canonicalKey),
             }),
             now,
@@ -1014,40 +1037,45 @@ export const agentHandlers: GatewayRequestHandlers = {
       ) {
         try {
           const parentEntry = loadSessionEntry(spawnedByValue)?.entry;
+          const parentGroupKey = parseGroupKey(spawnedByValue);
           inheritedGroup = normalizeTrustedGroupMetadata({
             groupId: parentEntry?.groupId,
             groupChannel: parentEntry?.groupChannel,
             groupSpace: parentEntry?.space,
+          });
+          inheritedGroup = normalizeTrustedGroupMetadata({
+            groupId: inheritedGroup.groupId ?? parentGroupKey?.id,
+            groupChannel: inheritedGroup.groupChannel,
+            groupSpace: inheritedGroup.groupSpace,
           });
         } catch {
           inheritedGroup = undefined;
         }
       }
       const trustedGroup = resolveTrustedGroupMetadata({
-        sessionKey: canonicalKey,
-        spawnedBy: spawnedByValue,
         stored: storedGroup,
         inherited: inheritedGroup,
+        typedGroupId:
+          routingInfo?.chatType === "group" || routingInfo?.chatType === "channel"
+            ? routingInfo.conversationPeerId
+            : parseGroupKey(canonicalKey)?.id,
       });
-      const validatedGroup = trustedGroup.groupId
-        ? resolveTrustedGroupId({
-            groupId: trustedGroup.groupId,
-            sessionKey: canonicalKey,
-            spawnedBy: spawnedByValue,
-          })
-        : undefined;
-      if (validatedGroup?.dropped) {
+      const trustRequestSelectors =
+        Boolean(trustedGroup.groupId) &&
+        requestGroupMatchesTrusted({
+          requestGroupId: normalizedSpawned.groupId,
+          trustedGroupId: trustedGroup.groupId,
+        });
+      if (!trustedGroup.groupId || !trustRequestSelectors) {
         resolvedGroupId = undefined;
         resolvedGroupChannel = undefined;
         resolvedGroupSpace = undefined;
       } else {
-        const trustRequestSelectors =
-          Boolean(trustedGroup.groupId) &&
-          requestGroupMatchesTrusted({
-            requestGroupId: normalizedSpawned.groupId,
-            trustedGroupId: trustedGroup.groupId,
-          });
-        resolvedGroupId = trustedGroup.groupId;
+        resolvedGroupId =
+          storedGroup.groupId ??
+          inheritedGroup?.groupId ??
+          normalizedSpawned.groupId ??
+          trustedGroup.groupId;
         resolvedGroupChannel =
           trustedGroup.groupChannel ??
           (trustRequestSelectors ? normalizedSpawned.groupChannel : undefined);
@@ -1055,12 +1083,14 @@ export const agentHandlers: GatewayRequestHandlers = {
           trustedGroup.groupSpace ??
           (trustRequestSelectors ? normalizedSpawned.groupSpace : undefined);
       }
-      const deliveryFields = normalizeSessionDeliveryFields(entry);
+      const deliveryFields = normalizeSessionDeliveryFields({
+        deliveryContext: entry?.deliveryContext,
+      });
       // When the session has no delivery context yet (e.g. a freshly-spawned subagent
       // with deliver: false), seed it from the request's channel/to/threadId params.
       // Without this, subagent sessions end up with a channel-only deliveryContext
       // and no `to`/`threadId`, which causes announce delivery to either target the
-      // wrong channel (when the parent's lastTo drifts) or fail entirely.
+      // wrong inherited route or fail entirely.
       const requestDeliveryHint = normalizeDeliveryContext({
         channel: request.channel?.trim(),
         to: request.to?.trim(),
@@ -1084,7 +1114,6 @@ export const agentHandlers: GatewayRequestHandlers = {
           : (entry?.sessionStartedAt ??
             resolveSessionLifecycleTimestamps({
               entry,
-              storePath,
               agentId: resolveAgentIdFromSessionKey(canonicalKey),
             }).sessionStartedAt),
         lastInteractionAt: touchInteraction ? now : entry?.lastInteractionAt,
@@ -1097,26 +1126,21 @@ export const agentHandlers: GatewayRequestHandlers = {
         sendPolicy: entry?.sendPolicy,
         skillsSnapshot: entry?.skillsSnapshot,
         deliveryContext: effectiveDeliveryFields.deliveryContext,
-        lastChannel: effectiveDeliveryFields.lastChannel ?? entry?.lastChannel,
-        lastTo: effectiveDeliveryFields.lastTo ?? entry?.lastTo,
-        lastAccountId: effectiveDeliveryFields.lastAccountId ?? entry?.lastAccountId,
-        lastThreadId: effectiveDeliveryFields.lastThreadId ?? entry?.lastThreadId,
         modelOverride: entry?.modelOverride,
         providerOverride: entry?.providerOverride,
         label: labelValue,
         spawnedBy: spawnedByValue,
         spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
         spawnDepth: entry?.spawnDepth,
-        channel: entry?.channel ?? request.channel?.trim(),
+        channel:
+          effectiveDeliveryFields.deliveryContext?.channel ??
+          entry?.channel ??
+          request.channel?.trim(),
         groupId: resolvedGroupId,
         groupChannel: resolvedGroupChannel,
         space: resolvedGroupSpace,
         ...(pluginOwnerId ? { pluginOwnerId } : {}),
-        sessionFile:
-          entry?.sessionId && entry.sessionId !== sessionId ? undefined : entry?.sessionFile,
-        cliSessionIds: entry?.cliSessionIds,
         cliSessionBindings: entry?.cliSessionBindings,
-        claudeCliSessionId: entry?.claudeCliSessionId,
       };
       sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
       if (request.deliver === true) {
@@ -1141,19 +1165,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       resolvedSessionKey = canonicalSessionKey;
       const agentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-      if (storePath) {
-        const persisted = await updateSessionStore(storePath, (store) => {
-          const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-            cfg,
-            key: requestedSessionKey,
-            store,
-          });
-          const merged = mergeSessionEntry(store[primaryKey], nextEntryPatch);
-          store[primaryKey] = merged;
-          return merged;
-        });
-        sessionEntry = persisted;
-      }
+      const persisted = mergeSessionEntry(entry, nextEntryPatch);
+      upsertSessionEntry({
+        agentId: sessionAgentId,
+        sessionKey: canonicalSessionKey,
+        entry: persisted,
+      });
+      sessionEntry = persisted;
       if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {
         context.addChatRun(idem, {
           sessionKey: canonicalSessionKey,
@@ -1332,13 +1350,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         typeof client?.connect?.device?.id === "string" ? client.connect.device.id : undefined,
       kind: "agent",
     });
-    if (!activeRunAbort.registered && context.chatAbortControllers.has(runId)) {
-      respond(true, { runId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId,
-      });
-      return;
-    }
 
     const accepted = {
       runId,
@@ -1490,10 +1501,11 @@ export const agentHandlers: GatewayRequestHandlers = {
             acpTurnSource: request.acpTurnSource,
             internalEvents: request.internalEvents,
             inputProvenance,
-            suppressPromptPersistence: shouldSuppressAgentPromptPersistence({
+            suppressPromptPersistence: shouldSuppressPromptPersistenceForAgentRun({
               inputProvenance,
               internalEvents: request.internalEvents,
             }),
+            initialVfsEntries: request.initialVfsEntries,
             cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
             abortSignal: activeRunAbort.controller.signal,
             // Internal-only: allow workspace override for spawned subagent runs.

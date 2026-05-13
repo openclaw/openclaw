@@ -12,6 +12,7 @@ import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-regi
 import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { hasPendingPluginInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -234,10 +235,7 @@ export async function channelsRemoveCommand(
     });
   }
 
-  const shouldMovePluginInstalls = Boolean(
-    next.plugins?.installs && Object.keys(next.plugins.installs).length > 0,
-  );
-  if (shouldMovePluginInstalls) {
+  if (hasPendingPluginInstallRecords(next)) {
     const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig: next,
       ...(baseHash !== undefined ? { baseHash } : {}),

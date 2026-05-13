@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  cleanupWrittenSessionState,
   mockSessionsConfig,
   resetMockSessionsConfig,
   runSessionsJson,
+  seedSessionRows,
   setMockSessionsConfig,
-  writeStore,
 } from "./sessions.test-helpers.js";
 
 mockSessionsConfig();
@@ -24,7 +25,7 @@ async function resolveSubagentModel(
   runtimeFields: Record<string, unknown>,
   sessionId: string,
 ): Promise<string | null | undefined> {
-  const store = writeStore(
+  seedSessionRows(
     {
       "agent:research:subagent:demo": {
         sessionId,
@@ -35,7 +36,7 @@ async function resolveSubagentModel(
     "sessions-model",
   );
 
-  const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+  const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand);
   return payload.sessions?.find((row) => row.key === "agent:research:subagent:demo")?.model;
 }
 
@@ -47,6 +48,7 @@ describe("sessionsCommand model resolution", () => {
 
   afterEach(() => {
     resetMockSessionsConfig();
+    cleanupWrittenSessionState();
     vi.useRealTimers();
   });
 
@@ -82,7 +84,7 @@ describe("sessionsCommand model resolution", () => {
         },
       },
     }));
-    const store = writeStore(
+    seedSessionRows(
       {
         "agent:main:main": {
           sessionId: "main-session",
@@ -94,7 +96,7 @@ describe("sessionsCommand model resolution", () => {
       "sessions-claude-runtime",
     );
 
-    const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+    const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand);
     const session = payload.sessions?.find((row) => row.key === "agent:main:main");
 
     expect(session?.modelProvider).toBe("anthropic");
@@ -117,7 +119,7 @@ describe("sessionsCommand model resolution", () => {
         },
       },
     }));
-    const store = writeStore(
+    seedSessionRows(
       {
         "agent:main:main": {
           sessionId: "main-session",
@@ -129,7 +131,7 @@ describe("sessionsCommand model resolution", () => {
       "sessions-claude-runtime-openai-default",
     );
 
-    const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+    const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand);
     const session = payload.sessions?.find((row) => row.key === "agent:main:main");
 
     expect(session?.modelProvider).toBe("anthropic");

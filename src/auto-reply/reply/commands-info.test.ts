@@ -16,6 +16,7 @@ const listSkillCommandsForAgentsMock = vi.hoisted(() => vi.fn(() => []));
 const buildCommandsMessagePaginatedMock = vi.hoisted(() =>
   vi.fn(() => ({ text: "/commands", currentPage: 1, totalPages: 1 })),
 );
+const legacyStorePathProperty = ["store", "Path"].join("");
 
 vi.mock("./commands-context-report.js", () => ({
   buildContextReply: buildContextReplyMock,
@@ -53,7 +54,7 @@ vi.mock("../status.js", async () => {
 
 function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
   expect(mock.mock.calls).toHaveLength(1);
-  const [arg] = mock.mock.calls.at(0) ?? [];
+  const [arg] = mock.mock.calls[0] ?? [];
   if (!arg) {
     throw new Error(`expected ${label} to receive arguments`);
   }
@@ -230,12 +231,15 @@ describe("info command handlers", () => {
     expect(statusReplyParams.parentSessionKey).toBe("discord:group:parent-room");
   });
 
-  it("preserves the shared session store path when routing /status", async () => {
+  it("passes session metadata through /status", async () => {
     const params = buildInfoParams("/status", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
-    params.storePath = "/tmp/target-session-store.json";
+    params.sessionEntry = {
+      sessionId: "status-session",
+      updatedAt: Date.now(),
+    } as HandleCommandsParams["sessionEntry"];
 
     const statusResult = await handleStatusCommand(params, true);
 
@@ -244,7 +248,7 @@ describe("info command handlers", () => {
       vi.mocked(buildStatusReply),
       "buildStatusReply",
     ) as Parameters<typeof buildStatusReply>[0];
-    expect(statusReplyParams.storePath).toBe("/tmp/target-session-store.json");
+    expect(statusReplyParams).not.toHaveProperty(legacyStorePathProperty);
   });
 
   it("prefers the target session entry when routing /status", async () => {

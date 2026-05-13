@@ -122,7 +122,7 @@ export type MatrixQaScenarioArtifacts = {
   currentDeviceId?: string | null;
   accountRoot?: string;
   corruptedPath?: string;
-  deletedSyncStorePath?: string;
+  deletedSyncStoreRoot?: string;
   deletedDeviceIds?: string[];
   deletedDeviceId?: string;
   deletedBackupVersion?: string | null;
