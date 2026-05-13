@@ -3215,6 +3215,25 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("rejects queued steering when the run aborts before debounce flush", async () => {
+    const controller = new AbortController();
+    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const queue = __testing.createCodexSteeringQueue({
+      client: { request } as never,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      answerPendingUserInput: () => false,
+      signal: controller.signal,
+    });
+
+    const queued = queue.queue("aborted", { debounceMs: 0 });
+    const rejected = expect(queued).rejects.toThrow("codex app-server steering queue aborted");
+    controller.abort();
+
+    await rejected;
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("flushes pending default queued steering during normal turn cleanup", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
 

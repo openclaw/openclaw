@@ -530,6 +530,51 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledOnce();
     },
   );
+
+  it("does not report delivery when active requester steering is rejected", async () => {
+    const queueEmbeddedPiMessageWithOutcome = vi.fn(async (sessionId: string) => ({
+      queued: false as const,
+      sessionId,
+      reason: "runtime_rejected" as const,
+      gatewayHealth: "live" as const,
+      errorMessage: "cannot steer a compact turn",
+    }));
+    const callGateway = createGatewayMock();
+    __testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "paperclip-session",
+        isActive: true,
+      }),
+      queueEmbeddedPiMessageWithOutcome,
+      getRuntimeConfig: () =>
+        ({
+          messages: {
+            queue: {
+              mode: "steer",
+              debounceMs: 0,
+            },
+          },
+        }) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:eng:paperclip:issue:123",
+      targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-rejected-steer",
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "none",
+      phases: [{ phase: "steer-primary", delivered: false, path: "none", error: undefined }],
+    });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
 });
 
 describe("deliverSubagentAnnouncement completion delivery", () => {

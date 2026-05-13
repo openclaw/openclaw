@@ -328,8 +328,11 @@ function createCodexSteeringQueue(params: {
   };
 
   const sendTexts = async (texts: string[]) => {
-    if (texts.length === 0 || params.signal.aborted) {
+    if (texts.length === 0) {
       return;
+    }
+    if (params.signal.aborted) {
+      throw new Error("codex app-server steering queue aborted");
     }
     await params.client.request("turn/steer", {
       threadId: params.threadId,

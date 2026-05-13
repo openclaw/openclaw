@@ -27,6 +27,7 @@ import {
   hasVisibleAgentPayload,
 } from "./pi-embedded-runner/delivery-evidence.js";
 import type { EmbeddedPiQueueMessageOptions } from "./pi-embedded-runner/run-state.js";
+import type { EmbeddedPiQueueMessageOutcome } from "./pi-embedded-runner/runs.js";
 import {
   callGateway,
   createBoundDeliveryRouter,
@@ -35,7 +36,7 @@ import {
   getRuntimeConfig,
   formatEmbeddedPiQueueFailureSummary,
   loadSessionStore,
-  queueEmbeddedPiMessageWithOutcome,
+  queueEmbeddedPiMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
   resolveAgentIdFromSessionKey,
   resolveConversationIdFromTargets,
@@ -63,7 +64,11 @@ type SubagentAnnounceDeliveryDeps = {
     sessionId?: string;
     isActive: boolean;
   };
-  queueEmbeddedPiMessageWithOutcome: typeof queueEmbeddedPiMessageWithOutcome;
+  queueEmbeddedPiMessageWithOutcome: (
+    sessionId: string,
+    text: string,
+    options?: EmbeddedPiQueueMessageOptions,
+  ) => EmbeddedPiQueueMessageOutcome | Promise<EmbeddedPiQueueMessageOutcome>;
 };
 
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
@@ -78,23 +83,27 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
       isActive: Boolean(sessionId && isEmbeddedPiRunActive(sessionId)),
     };
   },
-  queueEmbeddedPiMessageWithOutcome,
+  queueEmbeddedPiMessageWithOutcome: queueEmbeddedPiMessageWithOutcomeAsync,
 };
 
 let subagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps =
   defaultSubagentAnnounceDeliveryDeps;
 
-function resolveQueueEmbeddedPiMessageOutcome(
+async function resolveQueueEmbeddedPiMessageOutcome(
   sessionId: string,
   text: string,
   options?: EmbeddedPiQueueMessageOptions,
-): ReturnType<typeof queueEmbeddedPiMessageWithOutcome> {
-  return subagentAnnounceDeliveryDeps.queueEmbeddedPiMessageWithOutcome(sessionId, text, options);
+): Promise<EmbeddedPiQueueMessageOutcome> {
+  return await subagentAnnounceDeliveryDeps.queueEmbeddedPiMessageWithOutcome(
+    sessionId,
+    text,
+    options,
+  );
 }
 
 function formatQueueWakeFailureError(
   fallback: string,
-  outcome: ReturnType<typeof queueEmbeddedPiMessageWithOutcome>,
+  outcome: EmbeddedPiQueueMessageOutcome,
 ): string {
   const summary = formatEmbeddedPiQueueFailureSummary(outcome);
   return summary ? `${fallback}: ${summary}` : fallback;
@@ -437,7 +446,7 @@ async function maybeSteerSubagentAnnounce(params: {
     sessionEntry: entry,
   });
 
-  const queueOutcome = resolveQueueEmbeddedPiMessageOutcome(sessionId, params.steerMessage, {
+  const queueOutcome = await resolveQueueEmbeddedPiMessageOutcome(sessionId, params.steerMessage, {
     steeringMode: "all",
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
   });
@@ -591,7 +600,7 @@ async function sendSubagentAnnounceDirectly(params: {
       sessionEntry: requesterEntry,
     });
     if (params.expectsCompletionMessage && requesterActivity.sessionId) {
-      const wakeOutcome = resolveQueueEmbeddedPiMessageOutcome(
+      const wakeOutcome = await resolveQueueEmbeddedPiMessageOutcome(
         requesterActivity.sessionId,
         params.triggerMessage,
         {
