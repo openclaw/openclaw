@@ -5,11 +5,16 @@ export type SessionTranscriptUpdate = {
   sessionKey?: string;
   message?: unknown;
   messageId?: string;
+  messageSeq?: number;
 };
 
 type SessionTranscriptListener = (update: SessionTranscriptUpdate) => void;
 
 const SESSION_TRANSCRIPT_LISTENERS = new Set<SessionTranscriptListener>();
+
+function normalizeMessageSeq(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
 
 export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): () => void {
   SESSION_TRANSCRIPT_LISTENERS.add(listener);
@@ -27,11 +32,13 @@ export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUp
           sessionKey: update.sessionKey,
           message: update.message,
           messageId: update.messageId,
+          messageSeq: update.messageSeq,
         };
   const trimmed = normalizeOptionalString(normalized.sessionFile);
   if (!trimmed) {
     return;
   }
+  const messageSeq = normalizeMessageSeq(normalized.messageSeq);
   const nextUpdate: SessionTranscriptUpdate = {
     sessionFile: trimmed,
     ...(normalizeOptionalString(normalized.sessionKey)
@@ -41,6 +48,7 @@ export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUp
     ...(normalizeOptionalString(normalized.messageId)
       ? { messageId: normalizeOptionalString(normalized.messageId) }
       : {}),
+    ...(messageSeq !== undefined ? { messageSeq } : {}),
   };
   for (const listener of SESSION_TRANSCRIPT_LISTENERS) {
     try {

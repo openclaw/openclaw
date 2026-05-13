@@ -28,6 +28,12 @@ type SessionHistorySnapshot = {
   rawTranscriptSeq: number;
 };
 
+type InlineSessionHistoryAppend = {
+  message?: unknown;
+  messageSeq?: number;
+  shouldRefresh?: boolean;
+};
+
 type SessionHistoryTranscriptTarget = {
   sessionId: string;
   storePath?: string;
@@ -61,6 +67,10 @@ function resolveCursorSeq(cursor: string | undefined): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function resolvePositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
 function toSessionHistoryMessages(messages: unknown[]): SessionHistoryMessage[] {
   return messages.filter(
     (message): message is SessionHistoryMessage =>
@@ -82,8 +92,7 @@ function buildPaginatedSessionHistory(params: {
 }
 
 function resolveMessageSeq(message: SessionHistoryMessage | undefined): number | undefined {
-  const seq = message?.__openclaw?.seq;
-  return typeof seq === "number" && Number.isFinite(seq) && seq > 0 ? seq : undefined;
+  return resolvePositiveInteger(message?.__openclaw?.seq);
 }
 
 function paginateSessionMessages(
@@ -224,11 +233,20 @@ export class SessionHistorySseState {
   appendInlineMessage(update: {
     message: unknown;
     messageId?: string;
-  }): { message: unknown; messageSeq?: number } | null {
+    messageSeq?: number;
+  }): InlineSessionHistoryAppend | null {
     if (this.limit !== undefined || this.cursor !== undefined) {
       return null;
     }
-    this.rawTranscriptSeq += 1;
+    const carriedSeq = resolvePositiveInteger(update.messageSeq);
+    if (carriedSeq !== undefined) {
+      if (carriedSeq <= this.rawTranscriptSeq) {
+        return { shouldRefresh: true };
+      }
+      this.rawTranscriptSeq = carriedSeq;
+    } else {
+      this.rawTranscriptSeq += 1;
+    }
     const nextMessage = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       seq: this.rawTranscriptSeq,

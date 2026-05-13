@@ -18,6 +18,10 @@ import {
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
 
+function normalizeMessageSeq(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
 function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
   includeSession?: boolean;
@@ -118,17 +122,22 @@ async function handleTranscriptUpdateBroadcast(
   if (connIds.size === 0) {
     return;
   }
-  const { entry, storePath } = loadSessionEntry(sessionKey);
-  const messageSeq = entry?.sessionId
-    ? await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile)
-    : undefined;
+  let messageSeq = normalizeMessageSeq(update.messageSeq);
+  if (messageSeq === undefined) {
+    const { entry, storePath } = loadSessionEntry(sessionKey);
+    messageSeq = entry?.sessionId
+      ? normalizeMessageSeq(
+          await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile),
+        )
+      : undefined;
+  }
   const sessionSnapshot = buildGatewaySessionSnapshot({
     sessionRow: loadGatewaySessionRow(sessionKey, { transcriptUsageMaxBytes: 64 * 1024 }),
     includeSession: true,
   });
   const rawMessage = attachOpenClawTranscriptMeta(update.message, {
     ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
-    ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),
+    ...(messageSeq !== undefined ? { seq: messageSeq } : {}),
   });
   const message = projectChatDisplayMessage(rawMessage);
   if (message) {
@@ -138,7 +147,7 @@ async function handleTranscriptUpdateBroadcast(
         sessionKey,
         message,
         ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-        ...(typeof messageSeq === "number" ? { messageSeq } : {}),
+        ...(messageSeq !== undefined ? { messageSeq } : {}),
         ...sessionSnapshot,
       },
       connIds,
@@ -157,7 +166,7 @@ async function handleTranscriptUpdateBroadcast(
       phase: "message",
       ts: Date.now(),
       ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-      ...(typeof messageSeq === "number" ? { messageSeq } : {}),
+      ...(messageSeq !== undefined ? { messageSeq } : {}),
       ...sessionSnapshot,
     },
     sessionEventConnIds,
