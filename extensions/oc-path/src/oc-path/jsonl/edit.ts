@@ -145,6 +145,9 @@ function replaceAt(
 }
 
 function pickLineIndex(ast: JsonlAst, addr: string): number {
+  if (addr === "$first") {
+    return ast.lines.findIndex((line) => line.kind === "value");
+  }
   if (addr === "$last") {
     for (let i = ast.lines.length - 1; i >= 0; i--) {
       if (ast.lines[i]?.kind === "value") {return i;}

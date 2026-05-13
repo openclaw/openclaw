@@ -167,11 +167,23 @@ describe("findOcPaths — JSONL kind", () => {
 });
 
 
-describe("positional primitives — $last", () => {
+describe("positional primitives — $first / $last", () => {
+  it("$first picks first array element", () => {
+    const jsonc = parseJsonc('{"items":[10,20,30]}').ast;
+    const m = resolveOcPath(jsonc, parseOcPath("oc://config/items/$first"));
+    expect(m?.kind === "leaf" && m.valueText).toBe("10");
+  });
+
   it("$last picks last array element", () => {
     const jsonc = parseJsonc('{"items":[10,20,30]}').ast;
     const m = resolveOcPath(jsonc, parseOcPath("oc://config/items/$last"));
     expect(m?.kind === "leaf" && m.valueText).toBe("30");
+  });
+
+  it("$first picks first value line on jsonl", () => {
+    const jsonl = parseJsonl('{"event":"start"}\n{"event":"step"}\n{"event":"end"}\n').ast;
+    const m = resolveOcPath(jsonl, parseOcPath("oc://session/$first/event"));
+    expect(m?.kind === "leaf" && m.valueText).toBe("start");
   });
 
   it("$last picks last value line on jsonl", () => {
@@ -180,7 +192,8 @@ describe("positional primitives — $last", () => {
     expect(m?.kind === "leaf" && m.valueText).toBe("end");
   });
 
-  it("hasWildcard returns false for $last", () => {
+  it("hasWildcard returns false for positional tokens", () => {
+    expect(hasWildcard(parseOcPath("oc://X/$first/id"))).toBe(false);
     expect(hasWildcard(parseOcPath("oc://X/$last/id"))).toBe(false);
   });
 });
