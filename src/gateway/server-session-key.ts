@@ -1,7 +1,12 @@
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { getAgentRunContext, registerAgentRunContext } from "../infra/agent-events.js";
-import { toAgentRequestSessionKey } from "../routing/session-key.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  toAgentRequestSessionKey,
+} from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { loadCombinedSessionStoreForGateway } from "./session-utils.js";
 
@@ -15,12 +20,21 @@ type RunLookupCacheEntry = {
 
 const resolvedSessionKeyByRunId = new Map<string, RunLookupCacheEntry>();
 
-function setResolvedSessionKeyCache(runId: string, sessionKey: string | null): void {
+function runLookupCacheKey(runId: string, agentId: string): string {
+  return `${agentId}\0${runId}`;
+}
+
+function setResolvedSessionKeyCache(
+  runId: string,
+  agentId: string,
+  sessionKey: string | null,
+): void {
   if (!runId) {
     return;
   }
+  const cacheKey = runLookupCacheKey(runId, agentId);
   if (
-    !resolvedSessionKeyByRunId.has(runId) &&
+    !resolvedSessionKeyByRunId.has(cacheKey) &&
     resolvedSessionKeyByRunId.size >= RUN_LOOKUP_CACHE_LIMIT
   ) {
     const oldest = resolvedSessionKeyByRunId.keys().next().value;
@@ -28,18 +42,22 @@ function setResolvedSessionKeyCache(runId: string, sessionKey: string | null): v
       resolvedSessionKeyByRunId.delete(oldest);
     }
   }
-  resolvedSessionKeyByRunId.set(runId, {
+  resolvedSessionKeyByRunId.set(cacheKey, {
     sessionKey,
     expiresAt: sessionKey === null ? Date.now() + RUN_LOOKUP_MISS_TTL_MS : null,
   });
 }
 
-export function resolveSessionKeyForRun(runId: string) {
-  const cached = getAgentRunContext(runId)?.sessionKey;
-  if (cached) {
-    return cached;
-  }
-  const cachedLookup = resolvedSessionKeyByRunId.get(runId);
+function sessionKeyMatchesAgent(sessionKey: string, agentId: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  return Boolean(parsed && parsed.agentId === agentId);
+}
+
+export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string } = {}) {
+  const cfg = getRuntimeConfig();
+  const agentId = normalizeAgentId(opts.agentId ?? resolveDefaultAgentId(cfg));
+  const cacheKey = runLookupCacheKey(runId, agentId);
+  const cachedLookup = resolvedSessionKeyByRunId.get(cacheKey);
   if (cachedLookup !== undefined) {
     if (cachedLookup.sessionKey !== null) {
       return cachedLookup.sessionKey;
@@ -47,21 +65,25 @@ export function resolveSessionKeyForRun(runId: string) {
     if ((cachedLookup.expiresAt ?? 0) > Date.now()) {
       return undefined;
     }
-    resolvedSessionKeyByRunId.delete(runId);
+    resolvedSessionKeyByRunId.delete(cacheKey);
   }
-  const cfg = getRuntimeConfig();
-  const { store } = loadCombinedSessionStoreForGateway(cfg);
+  const cached = getAgentRunContext(runId)?.sessionKey;
+  if (cached && sessionKeyMatchesAgent(cached, agentId)) {
+    setResolvedSessionKeyCache(runId, agentId, cached);
+    return cached;
+  }
+  const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId });
   const matches = Object.entries(store).filter(
     (entry): entry is [string, SessionEntry] => entry[1]?.sessionId === runId,
   );
   const storeKey = resolvePreferredSessionKeyForSessionIdMatches(matches, runId);
   if (storeKey) {
     const sessionKey = toAgentRequestSessionKey(storeKey) ?? storeKey;
-    registerAgentRunContext(runId, { sessionKey });
-    setResolvedSessionKeyCache(runId, sessionKey);
+    registerAgentRunContext(runId, { sessionKey: storeKey });
+    setResolvedSessionKeyCache(runId, agentId, sessionKey);
     return sessionKey;
   }
-  setResolvedSessionKeyCache(runId, null);
+  setResolvedSessionKeyCache(runId, agentId, null);
   return undefined;
 }
 

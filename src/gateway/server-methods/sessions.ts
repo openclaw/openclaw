@@ -1562,7 +1562,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const keyCandidate =
       p.key ??
       (requestedRunId ? context.chatAbortControllers.get(requestedRunId)?.sessionKey : undefined) ??
-      (requestedRunId ? resolveSessionKeyForRun(requestedRunId) : undefined);
+      (requestedRunId
+        ? resolveSessionKeyForRun(requestedRunId, p.agentId ? { agentId: p.agentId } : {})
+        : undefined);
     if (!keyCandidate && requestedRunId) {
       respond(true, { ok: true, abortedRunId: null, status: "no-active-run" });
       return;

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -23,7 +24,7 @@ import {
   type DiscoveredSession,
   type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -349,10 +350,14 @@ function buildStoreBySessionId(
 
 async function discoverAllSessionsForUsage(params: {
   config: OpenClawConfig;
+  agentId: string;
   startMs: number;
   endMs: number;
 }): Promise<DiscoveredSessionWithAgent[]> {
-  const agents = listAgentsForGateway(params.config).agents;
+  const scopedAgentId = normalizeAgentId(params.agentId);
+  const agents = listAgentsForGateway(params.config).agents.filter(
+    (agent) => normalizeAgentId(agent.id) === scopedAgentId,
+  );
   const results = await Promise.all(
     agents.map(async (agent) => {
       const sessions = await discoverAllSessions({
@@ -827,11 +832,30 @@ export const usageHandlers: GatewayRequestHandlers = {
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
     const specificKey = normalizeOptionalString(p.key) ?? null;
+    const requestedAgentId = normalizeOptionalString(p.agentId);
+    const specificKeyAgentId = specificKey ? parseAgentSessionKey(specificKey)?.agentId : undefined;
+    if (
+      requestedAgentId &&
+      specificKeyAgentId &&
+      normalizeAgentId(requestedAgentId) !== specificKeyAgentId
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+      );
+      return;
+    }
+    const effectiveAgentId = normalizeAgentId(
+      requestedAgentId ?? specificKeyAgentId ?? resolveDefaultAgentId(config),
+    );
     const groupingMode: UsageGroupingMode =
       p.groupBy === "family" || p.includeHistorical === true ? "family" : "instance";
 
     // Load session store for named sessions
-    const { storePath, store } = loadCombinedSessionStoreForGateway(config);
+    const { storePath, store } = loadCombinedSessionStoreForGateway(config, {
+      agentId: effectiveAgentId,
+    });
     const now = Date.now();
 
     const mergedEntries: MergedEntry[] = [];
@@ -901,6 +925,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       // Full discovery for list view
       const discoveredSessions = await discoverAllSessionsForUsage({
         config,
+        agentId: effectiveAgentId,
         startMs,
         endMs,
       });

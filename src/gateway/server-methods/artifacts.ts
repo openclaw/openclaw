@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import {
   ErrorCodes,
@@ -25,6 +26,7 @@ type ArtifactQuery = {
   sessionKey?: string;
   runId?: string;
   taskId?: string;
+  agentId?: string;
 };
 
 function artifactError(type: string, message: string, details?: Record<string, unknown>) {
@@ -286,16 +288,24 @@ function resolveQuerySessionKey(query: ArtifactQuery): string | undefined {
     return query.sessionKey;
   }
   if (query.runId) {
-    return resolveSessionKeyForRun(query.runId);
+    return resolveSessionKeyForRun(query.runId, query.agentId ? { agentId: query.agentId } : {});
   }
   if (query.taskId) {
     const task = getTaskSessionLookupByIdForStatus(query.taskId);
+    if (
+      query.agentId &&
+      task?.agentId &&
+      normalizeAgentId(query.agentId) !== normalizeAgentId(task.agentId)
+    ) {
+      return undefined;
+    }
     const requesterSessionKey = asNonEmptyString(task?.requesterSessionKey);
     if (requesterSessionKey) {
       return requesterSessionKey;
     }
     const runId = asNonEmptyString(task?.runId);
-    return runId ? resolveSessionKeyForRun(runId) : undefined;
+    const agentId = query.agentId ?? task?.agentId;
+    return runId ? resolveSessionKeyForRun(runId, agentId ? { agentId } : {}) : undefined;
   }
   return undefined;
 }

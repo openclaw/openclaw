@@ -162,25 +162,40 @@ describe("sessions.usage", () => {
     vi.clearAllMocks();
   });
 
-  it("discovers sessions across configured agents and keeps agentId in key", async () => {
+  it("defaults list-style usage queries to the default agent", async () => {
     const respond = await runSessionsUsage(BASE_USAGE_RANGE);
 
-    expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(
+      TEST_RUNTIME_CONFIG,
+      { agentId: "main" },
+    );
+    expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(1);
     expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
       "main",
     );
-    expect((mockArg(vi.mocked(discoverAllSessions), 1, 0) as { agentId?: string }).agentId).toBe(
+
+    const sessions = expectSuccessfulSessionsUsage(respond);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].key).toBe("agent:main:s-main");
+    expect(sessions[0].agentId).toBe("main");
+  });
+
+  it("uses the requested agent for list-style usage queries", async () => {
+    const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "opus" });
+
+    expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(
+      TEST_RUNTIME_CONFIG,
+      { agentId: "opus" },
+    );
+    expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(1);
+    expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
       "opus",
     );
 
     const sessions = expectSuccessfulSessionsUsage(respond);
-    expect(sessions).toHaveLength(2);
-
-    // Sorted by most recent first (mtime=200 -> opus first).
+    expect(sessions).toHaveLength(1);
     expect(sessions[0].key).toBe("agent:opus:s-opus");
     expect(sessions[0].agentId).toBe("opus");
-    expect(sessions[1].key).toBe("agent:main:s-main");
-    expect(sessions[1].agentId).toBe("main");
   });
 
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {

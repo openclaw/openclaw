@@ -200,9 +200,34 @@ describe("artifacts RPC handlers", () => {
     });
 
     expect(calls[0]?.ok).toBe(true);
-    expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-1");
+    expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-1", {});
     const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
     expectFields(payload.artifacts?.[0], { runId: "run-1" });
+  });
+
+  it("passes agentId to runId artifact queries", async () => {
+    hoisted.resolveSessionKeyForRun.mockReturnValue("agent:work:main");
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [{ type: "image", data: "aGVsbG8=", alt: "run-result.png" }],
+        __openclaw: { seq: 2, runId: "run-1" },
+      },
+    ]);
+    const { respond } = createResponder();
+
+    await artifactsHandlers["artifacts.list"]?.({
+      req: { type: "req", id: "agent-run-scope", method: "artifacts.list", params: {} },
+      params: { runId: "run-1", agentId: "work" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-1", {
+      agentId: "work",
+    });
   });
 
   it("resolves taskId queries through task status access and filters artifacts by messageTaskId", async () => {

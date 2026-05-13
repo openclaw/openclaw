@@ -963,10 +963,15 @@ function buildLookupCandidates(lookup: string): string[] {
 }
 
 function shouldEnforceSessionVisibility(params: {
+  agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
 }): boolean {
-  return params.sandboxed === true || Boolean(params.agentSessionKey?.trim());
+  return (
+    params.sandboxed === true ||
+    Boolean(params.agentSessionKey?.trim()) ||
+    Boolean(params.agentId?.trim())
+  );
 }
 
 function shouldSearchSharedMemoryCorpus(config: ResolvedMemoryWikiConfig): boolean {
@@ -980,6 +985,7 @@ function shouldUseSharedMemory(config: ResolvedMemoryWikiConfig): boolean {
 function assertSessionVisibilityAppConfig(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
+  agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
   operation: string;
@@ -1205,6 +1211,7 @@ function toMemoryWikiSearchResult(
 
 async function filterMemoryWikiSearchHitsBySessionVisibility(params: {
   cfg: OpenClawConfig;
+  agentId: string | undefined;
   requesterSessionKey: string | undefined;
   sandboxed: boolean;
   hits: MemorySearchResult[];
@@ -1215,6 +1222,7 @@ async function filterMemoryWikiSearchHitsBySessionVisibility(params: {
 
   const canReadSessionPath = await createSessionMemoryPathVisibilityChecker({
     cfg: params.cfg,
+    agentId: params.agentId,
     requesterSessionKey: params.requesterSessionKey,
     sandboxed: params.sandboxed,
   });
@@ -1228,6 +1236,7 @@ type SessionMemoryPathVisibilityChecker = (relPath: string) => boolean;
 
 async function createSessionMemoryPathVisibilityChecker(params: {
   cfg: OpenClawConfig;
+  agentId: string | undefined;
   requesterSessionKey: string | undefined;
   sandboxed: boolean;
 }): Promise<SessionMemoryPathVisibilityChecker> {
@@ -1236,6 +1245,13 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     sandboxed: params.sandboxed,
   });
   const a2aPolicy = createAgentToAgentPolicy(params.cfg);
+  const requesterAgentId = params.requesterSessionKey
+    ? resolveSessionAgentId({
+        sessionKey: params.requesterSessionKey,
+        config: params.cfg,
+      })
+    : undefined;
+  const scopedAgentId = params.agentId?.trim() || requesterAgentId;
   const guard = params.requesterSessionKey
     ? await createSessionVisibilityGuard({
         action: "history",
@@ -1244,11 +1260,11 @@ async function createSessionMemoryPathVisibilityChecker(params: {
         a2aPolicy,
       })
     : null;
-  if (!guard) {
-    return () => false;
-  }
 
-  const { store: combinedSessionStore } = loadCombinedSessionStoreForGateway(params.cfg);
+  const { store: combinedSessionStore } = loadCombinedSessionStoreForGateway(
+    params.cfg,
+    scopedAgentId ? { agentId: scopedAgentId } : {},
+  );
   return (relPath) => {
     const stem = extractTranscriptStemFromSessionsMemoryHit(relPath);
     if (!stem) {
@@ -1258,6 +1274,9 @@ async function createSessionMemoryPathVisibilityChecker(params: {
       store: combinedSessionStore,
       stem,
     });
+    if (!guard) {
+      return Boolean(scopedAgentId && keys.length > 0);
+    }
     return keys.some((key) => guard.check(key).allowed);
   };
 }
@@ -1383,6 +1402,7 @@ export async function searchMemoryWiki(params: {
   assertSessionVisibilityAppConfig({
     config: effectiveConfig,
     appConfig: params.appConfig,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed,
     operation: "wiki_search",
@@ -1417,6 +1437,7 @@ export async function searchMemoryWiki(params: {
   ) {
     rawMemoryResults = await filterMemoryWikiSearchHitsBySessionVisibility({
       cfg: params.appConfig,
+      agentId: params.agentId,
       requesterSessionKey: params.agentSessionKey,
       sandboxed: params.sandboxed === true,
       hits: rawMemoryResults,
@@ -1448,6 +1469,7 @@ export async function getMemoryWikiPage(params: {
   assertSessionVisibilityAppConfig({
     config: effectiveConfig,
     appConfig: params.appConfig,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed,
     operation: "wiki_get",
@@ -1510,6 +1532,7 @@ export async function getMemoryWikiPage(params: {
     lookupCandidates.some((relPath) => isSessionMemoryPath(relPath))
       ? await createSessionMemoryPathVisibilityChecker({
           cfg: params.appConfig,
+          agentId: params.agentId,
           requesterSessionKey: params.agentSessionKey,
           sandboxed: params.sandboxed === true,
         })

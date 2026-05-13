@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   loadCombinedSessionStoreForGateway,
@@ -13,6 +14,7 @@ import {
 
 export async function filterMemorySearchHitsBySessionVisibility(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   requesterSessionKey: string | undefined;
   sandboxed: boolean;
   hits: MemorySearchResult[];
@@ -22,6 +24,13 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     sandboxed: params.sandboxed,
   });
   const a2aPolicy = createAgentToAgentPolicy(params.cfg);
+  const requesterAgentId = params.requesterSessionKey
+    ? resolveSessionAgentId({
+        sessionKey: params.requesterSessionKey,
+        config: params.cfg,
+      })
+    : undefined;
+  const scopedAgentId = params.agentId?.trim() || requesterAgentId;
   const guard = params.requesterSessionKey
     ? await createSessionVisibilityGuard({
         action: "history",
@@ -31,7 +40,10 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       })
     : null;
 
-  const { store: combinedSessionStore } = loadCombinedSessionStoreForGateway(params.cfg);
+  const { store: combinedSessionStore } = loadCombinedSessionStoreForGateway(
+    params.cfg,
+    scopedAgentId ? { agentId: scopedAgentId } : {},
+  );
 
   const next: MemorySearchResult[] = [];
   for (const hit of params.hits) {
