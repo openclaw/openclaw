@@ -722,6 +722,17 @@ export async function runCli(argv: string[] = process.argv) {
         hasBuiltinPrimary,
       });
       if (!shouldSkipPluginRegistration) {
+        // For --json mode, route all console output to stderr *before* plugin
+        // registration so that [plugins] loader chatter does not pollute stdout.
+        // Without this, the lazy plugin-command-registration phase loads the
+        // primary command's plugin before commander's preAction hook calls
+        // routeLogsToStderr(), leaking [plugins] lines onto stdout and breaking
+        // downstream `jq` / `JSON.parse` consumers.
+        // See: https://github.com/openclaw/openclaw/issues/81535
+        if (hasJsonOutputFlag(parseArgv)) {
+          const { routeLogsToStderr } = await import("../logging/console.js");
+          routeLogsToStderr();
+        }
         const config = await startupTrace.measure("register-plugin-commands", async () => {
           const { registerPluginCliCommandsFromValidatedConfig } =
             await import("../plugins/cli.js");
