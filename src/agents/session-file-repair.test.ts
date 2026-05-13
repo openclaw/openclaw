@@ -482,6 +482,182 @@ describe("repairSessionFileIfNeeded", () => {
     expect(after).toBe(original);
   });
 
+  it("moves displaced persisted tool results next to their owning assistant tool call", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const toolCallAssistant = {
+      type: "message",
+      id: "msg-asst-tc",
+      parentId: "msg-1",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", input: { path: "a.txt" } }],
+        stopReason: "toolUse",
+      },
+    };
+    const customSummary = {
+      type: "summary",
+      id: "summary-1",
+      timestamp: new Date().toISOString(),
+      summary: "opaque summary blob",
+    };
+    const userFollowUp = {
+      type: "message",
+      id: "msg-user-2",
+      parentId: "msg-asst-tc",
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "follow up" },
+    };
+    const displacedToolResult = {
+      type: "message",
+      id: "msg-tool-result",
+      parentId: "custom-parent-to-preserve",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "file contents" }],
+        isError: false,
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(customSummary)}\n${JSON.stringify(userFollowUp)}\n${JSON.stringify(displacedToolResult)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const debug = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
+
+    expect(result.repaired).toBe(true);
+    expect(result.movedToolResults).toBe(1);
+    await expect(fs.readFile(requireBackupPath(result), "utf-8")).resolves.toBe(original);
+    expect(requireFirstLogMessage(debug)).toContain("moved 1 tool result(s)");
+
+    const repairedLines = (await fs.readFile(file, "utf-8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(repairedLines).toEqual([
+      header,
+      message,
+      toolCallAssistant,
+      displacedToolResult,
+      customSummary,
+      userFollowUp,
+    ]);
+  });
+
+  it("drops duplicate persisted tool results after preserving the first matching result", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const toolCallAssistant = {
+      type: "message",
+      id: "msg-asst-tc",
+      parentId: "msg-1",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+        stopReason: "toolUse",
+      },
+    };
+    const firstToolResult = {
+      type: "message",
+      id: "msg-tool-result-1",
+      parentId: "msg-asst-tc",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "first" }],
+        isError: false,
+      },
+    };
+    const duplicateToolResult = {
+      type: "message",
+      id: "msg-tool-result-2",
+      parentId: "msg-asst-tc",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "duplicate" }],
+        isError: false,
+      },
+    };
+    const userFollowUp = {
+      type: "message",
+      id: "msg-user-2",
+      parentId: "msg-tool-result-1",
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "next" },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(firstToolResult)}\n${JSON.stringify(userFollowUp)}\n${JSON.stringify(duplicateToolResult)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.droppedDuplicateToolResults).toBe(1);
+    expect(result.movedToolResults ?? 0).toBe(0);
+
+    const repairedLines = (await fs.readFile(file, "utf-8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(repairedLines).toEqual([
+      header,
+      message,
+      toolCallAssistant,
+      firstToolResult,
+      userFollowUp,
+    ]);
+  });
+
+  it("drops orphan persisted tool results that have no matching assistant tool call", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const orphanToolResult = {
+      type: "message",
+      id: "msg-tool-result-orphan",
+      parentId: "missing-assistant",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "toolResult",
+        toolCallId: "call_missing",
+        toolName: "read",
+        content: [{ type: "text", text: "orphan" }],
+        isError: false,
+      },
+    };
+    const plainAssistant = {
+      type: "message",
+      id: "msg-asst-plain",
+      parentId: "msg-1",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+        stopReason: "stop",
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(orphanToolResult)}\n${JSON.stringify(plainAssistant)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.droppedOrphanToolResults).toBe(1);
+
+    const repairedLines = (await fs.readFile(file, "utf-8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(repairedLines).toEqual([header, message, plainAssistant]);
+  });
+
   it("inserts missing code-mode tool results before replay repair has to synthesize them", async () => {
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();
