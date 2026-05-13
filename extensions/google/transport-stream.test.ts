@@ -2,6 +2,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -955,6 +956,64 @@ describe("google transport stream", () => {
     expect(result.provider).toBe("google-vertex");
     expect(result.stopReason).toBe("stop");
     expect(result.content).toEqual([{ type: "text", text: "ok" }]);
+  });
+
+  it("refreshes authorized_user ADC from a compressed token response", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-gzip-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "gzip-refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "global");
+    const tokenFetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        gzipSync(JSON.stringify({ access_token: "ya29.gzip-token", expires_in: 3600 })),
+        {
+          status: 200,
+          headers: {
+            "content-encoding": "gzip",
+            "content-type": "application/json",
+          },
+        },
+      ),
+    );
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleVertexTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGoogleVertexModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gcp-vertex-credentials",
+          fetch: tokenFetchMock,
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    await stream.result();
+
+    expect(tokenFetchMock).toHaveBeenCalledTimes(1);
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expectHeaders(requireRequestInit(guardedCall, "guarded fetch"), {
+      Authorization: "Bearer ya29.gzip-token",
+    });
   });
 
   it("does not reuse authorized_user ADC tokens with unsafe expiry lifetimes", async () => {
