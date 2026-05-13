@@ -403,7 +403,7 @@ describe("gateway auth browser hardening", () => {
           scopes: ["operator.admin"],
           clientId: CONTROL_UI_CLIENT.id,
           clientMode: CONTROL_UI_CLIENT.mode,
-          identityPath: path.join(os.tmpdir(), `openclaw-control-ui-device-${randomUUID()}.json`),
+          identityKey: `openclaw-control-ui-device-${randomUUID()}`,
           nonce: nonce ?? "",
         });
         const res = await connectReq(browserWs, {

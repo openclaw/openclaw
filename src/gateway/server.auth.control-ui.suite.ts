@@ -496,7 +496,7 @@ export function registerControlUiAndPairingSuite(): void {
           scopes: ["operator.admin", "operator.read"],
           clientId: CONTROL_UI_CLIENT.id,
           clientMode: CONTROL_UI_CLIENT.mode,
-          identityPath: seeded.identityPath,
+          identityKey: seeded.identityKey,
           nonce: challengeNonce,
         });
         const res = await connectReq(ws, {
