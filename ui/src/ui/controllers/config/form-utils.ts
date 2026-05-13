@@ -1,9 +1,66 @@
+import JSON5 from "json5";
+
 export function cloneConfigObject<T>(value: T): T {
   return structuredClone(value);
 }
 
 export function serializeConfigForm(form: Record<string, unknown>): string {
   return `${JSON.stringify(form, null, 2).trimEnd()}\n`;
+}
+
+const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
+const OMIT_VALUE = Symbol("omit-redacted-sentinel");
+
+function stripUnrestorableValue(value: unknown, original: unknown): unknown | typeof OMIT_VALUE {
+  if (value === REDACTED_SENTINEL) {
+    return original === REDACTED_SENTINEL ? value : OMIT_VALUE;
+  }
+
+  if (Array.isArray(value)) {
+    const originalItems = Array.isArray(original) ? original : [];
+    return value
+      .map((item, index) => stripUnrestorableValue(item, originalItems[index]))
+      .filter((item) => item !== OMIT_VALUE);
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const originalRecord =
+    original && typeof original === "object" && !Array.isArray(original)
+      ? (original as Record<string, unknown>)
+      : null;
+  const next: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    const stripped = stripUnrestorableValue(item, originalRecord?.[key]);
+    if (stripped !== OMIT_VALUE) {
+      next[key] = stripped;
+    }
+  }
+
+  if (Object.keys(next).length === 0 && !originalRecord) {
+    return OMIT_VALUE;
+  }
+  return next;
+}
+
+export function stripUnrestorableRedactedValues(
+  form: Record<string, unknown>,
+  originalRaw: string,
+): Record<string, unknown> {
+  let original: unknown;
+  try {
+    original = JSON5.parse(originalRaw);
+  } catch {
+    return form;
+  }
+
+  const stripped = stripUnrestorableValue(form, original);
+  if (!stripped || typeof stripped !== "object" || Array.isArray(stripped)) {
+    return form;
+  }
+  return stripped as Record<string, unknown>;
 }
 
 const FORBIDDEN_KEYS = new Set(["__proto__", "prototype", "constructor"]);

@@ -8,6 +8,7 @@ import {
   removePathValue,
   serializeConfigForm,
   setPathValue,
+  stripUnrestorableRedactedValues,
 } from "./config/form-utils.ts";
 
 export type ConfigState = {
@@ -152,7 +153,10 @@ function serializeFormForSubmit(state: ConfigState): string {
   const form = schema
     ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
     : state.configForm;
-  return serializeConfigForm(form);
+  const sanitized = state.configRawOriginal
+    ? stripUnrestorableRedactedValues(form, state.configRawOriginal)
+    : form;
+  return serializeConfigForm(sanitized);
 }
 
 type ConfigSubmitMethod = "config.set" | "config.apply";
