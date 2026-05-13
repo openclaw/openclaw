@@ -51,6 +51,9 @@ function formatCleanupActionCell(
   if (action === "retire-dm-scope") {
     return theme.warn(label);
   }
+  if (action === "mark-timeout") {
+    return theme.warn(label);
+  }
   if (action === "cap-overflow") {
     return theme.accentBright(label);
   }
@@ -64,6 +67,7 @@ function buildActionRows(params: {
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
   dmScopeRetiredKeys: Set<string>;
+  staleRunningTimedOutKeys: Set<string>;
 }): SessionCleanupActionRow[] {
   return toSessionDisplayRows(params.beforeStore).map((row) =>
     Object.assign({}, row, {
@@ -74,6 +78,7 @@ function buildActionRows(params: {
         cappedKeys: params.cappedKeys,
         budgetEvictedKeys: params.budgetEvictedKeys,
         dmScopeRetiredKeys: params.dmScopeRetiredKeys,
+        staleRunningTimedOutKeys: params.staleRunningTimedOutKeys,
       }),
     }),
   );
@@ -97,6 +102,9 @@ function renderStoreDryRunPlan(params: {
   );
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
   params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
+  params.runtime.log(
+    `Would mark stale running sessions timeout: ${params.summary.staleRunningTimedOut}`,
+  );
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
   if (params.summary.unreferencedArtifacts?.scannedFiles) {
@@ -176,6 +184,7 @@ async function maybeRunGatewayCleanup(
         activeKey: opts.activeKey,
         fixMissing: opts.fixMissing,
         fixDmScope: opts.fixDmScope,
+        fixStaleRunning: opts.fixStaleRunning,
       },
       mode: GATEWAY_CLIENT_MODES.CLI,
       clientName: GATEWAY_CLIENT_NAMES.CLI,

@@ -46,6 +46,7 @@ import {
   buildFallbackNotice,
   resolveFallbackTransition,
 } from "../fallback-state.js";
+import { isHeartbeatOkResponse } from "../heartbeat-filter.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import {
   markReplyPayloadForSourceSuppressionDelivery,
@@ -1540,7 +1541,7 @@ export async function runReplyAgent(params: {
       attempts: fallbackAttempts,
       state: fallbackStateEntry,
     });
-    if (fallbackTransition.stateChanged) {
+    if (fallbackTransition.stateChanged && !isHeartbeat) {
       if (fallbackStateEntry) {
         fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
         fallbackStateEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;
@@ -1602,6 +1603,7 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
       cliSessionBinding,
+      preserveRuntimeModel: isHeartbeat,
     });
 
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
@@ -2104,7 +2106,11 @@ export async function runReplyAgent(params: {
             return stripped.shouldSkip ? "" : stripped.text || pendingText;
           })()
         : pendingText;
-      if (resolvedPendingText) {
+      const isHeartbeatAck =
+        opts?.isHeartbeat === true &&
+        finalPayloads.length === 1 &&
+        isHeartbeatOkResponse({ role: "assistant", content: resolvedPendingText });
+      if (resolvedPendingText && !isHeartbeatAck) {
         await updateSessionStoreEntry({
           storePath,
           sessionKey,

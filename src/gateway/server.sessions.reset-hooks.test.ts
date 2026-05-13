@@ -208,6 +208,46 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(startContext.agentId).toBe("main");
 });
 
+test("sessions.reset clears compacted transcript checkpoints", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello before reset");
+
+  await writeSessionStore({
+    entries: {
+      main: {
+        ...sessionStoreEntry("sess-main"),
+        compactionCount: 1,
+        compactionCheckpoints: [
+          {
+            checkpointId: "checkpoint-1",
+            sessionKey: "agent:main:main",
+            sessionId: "sess-main",
+            createdAt: Date.now(),
+            reason: "auto-threshold",
+            tokensBefore: 100,
+            tokensAfter: 10,
+            summary: "stale compacted instructions",
+          },
+        ],
+      },
+    },
+  });
+
+  const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
+    key: "main",
+    reason: "reset",
+  });
+  expect(reset.ok).toBe(true);
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { compactionCount?: number; compactionCheckpoints?: unknown[]; sessionId?: string }
+  >;
+  expect(store["agent:main:main"]?.sessionId).not.toBe("sess-main");
+  expect(store["agent:main:main"]?.compactionCount).toBeUndefined();
+  expect(store["agent:main:main"]?.compactionCheckpoints).toBeUndefined();
+});
+
 test("sessions.reset returns unavailable when active run does not stop", async () => {
   const { dir, storePath } = await seedActiveMainSession();
   const waitCallCountAtSnapshotClear: number[] = [];

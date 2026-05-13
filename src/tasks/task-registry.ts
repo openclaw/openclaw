@@ -412,9 +412,18 @@ function normalizeTaskTerminalOutcome(
 
 function shouldApplyRunScopedStatusUpdate(params: {
   currentStatus: TaskStatus;
+  currentTerminalSummary?: string | null;
   nextStatus: TaskStatus;
+  terminalSummary?: string | null;
 }): boolean {
   if (params.currentStatus === params.nextStatus) {
+    return true;
+  }
+  if (
+    params.currentStatus === "timed_out" &&
+    params.nextStatus === "succeeded" &&
+    normalizeTaskSummary(params.terminalSummary) === "yielded"
+  ) {
     return true;
   }
   if (!isTerminalTaskStatus(params.currentStatus)) {
@@ -423,7 +432,22 @@ function shouldApplyRunScopedStatusUpdate(params: {
   if (!isTerminalTaskStatus(params.nextStatus)) {
     return false;
   }
+  if (
+    params.currentStatus === "succeeded" &&
+    normalizeTaskSummary(params.currentTerminalSummary) === "yielded" &&
+    params.nextStatus === "timed_out"
+  ) {
+    return false;
+  }
   return params.currentStatus === "succeeded" && params.nextStatus !== "lost";
+}
+
+function isYieldedAgentLifecycleEnd(data: Record<string, unknown> | undefined): boolean {
+  return (
+    data?.yielded === true ||
+    data?.livenessState === "paused" ||
+    (data?.aborted === true && data?.stopReason === "end_turn")
+  );
 }
 
 function resolveTaskTerminalOutcome(params: {
@@ -1448,7 +1472,10 @@ function ensureListener() {
         if (phase === "start") {
           patch.status = "running";
         } else if (phase === "end") {
-          patch.status = evt.data?.aborted === true ? "timed_out" : "succeeded";
+          patch.status =
+            evt.data?.aborted === true && !isYieldedAgentLifecycleEnd(evt.data)
+              ? "timed_out"
+              : "succeeded";
           patch.endedAt = endedAt ?? now;
         } else if (phase === "error") {
           patch.status = "failed";
@@ -1648,7 +1675,9 @@ function updateTaskStateByRunId(params: {
       params.status &&
       !shouldApplyRunScopedStatusUpdate({
         currentStatus: current.status,
+        currentTerminalSummary: current.terminalSummary,
         nextStatus,
+        terminalSummary: params.terminalSummary,
       })
     ) {
       continue;

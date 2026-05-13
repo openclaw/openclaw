@@ -187,6 +187,11 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       "Retire stale direct-DM session rows that no longer match session.dmScope=main",
       false,
     )
+    .option(
+      "--fix-stale-running",
+      "Mark stale running session rows timeout when no active task owns them",
+      false,
+    )
     .option("--active-key <key>", "Protect this session key from budget-eviction")
     .option("--json", "Output JSON", false)
     .addHelpText(
@@ -201,6 +206,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           [
             "openclaw sessions cleanup --dry-run --fix-dm-scope",
             "Preview stale direct-DM rows after returning dmScope to main.",
+          ],
+          [
+            "openclaw sessions cleanup --dry-run --fix-stale-running",
+            "Preview stale running session lifecycle repair.",
           ],
           ["openclaw sessions cleanup --enforce", "Apply maintenance now."],
           ["openclaw sessions cleanup --agent work --dry-run", "Preview one agent store."],
@@ -230,6 +239,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             enforce: Boolean(opts.enforce),
             fixMissing: Boolean(opts.fixMissing),
             fixDmScope: Boolean(opts.fixDmScope),
+            fixStaleRunning: Boolean(opts.fixStaleRunning),
             activeKey: opts.activeKey as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
           },

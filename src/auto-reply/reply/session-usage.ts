@@ -88,6 +88,7 @@ export async function persistSessionUsageUpdate(params: {
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
   cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
+  preserveRuntimeModel?: boolean;
   logLabel?: string;
 }): Promise<void> {
   const { storePath, sessionKey } = params;
@@ -104,6 +105,7 @@ export async function persistSessionUsageUpdate(params: {
     params.promptTokens > 0;
   const hasFreshContextSnapshot =
     Boolean(params.lastCallUsage) || hasPromptTokens || params.usageIsContextSnapshot === true;
+  const preserveRuntimeModel = params.preserveRuntimeModel === true;
 
   if (hasUsage || hasFreshContextSnapshot) {
     try {
@@ -111,7 +113,9 @@ export async function persistSessionUsageUpdate(params: {
         storePath,
         sessionKey,
         update: async (entry) => {
-          const resolvedContextTokens = params.contextTokensUsed ?? entry.contextTokens;
+          const resolvedContextTokens = preserveRuntimeModel
+            ? entry.contextTokens
+            : (params.contextTokensUsed ?? entry.contextTokens);
           // Use last-call usage for totalTokens when available. The accumulated
           // `usage.input` sums input tokens from every API call in the run
           // (tool-use loops, compaction retries), overstating actual context.
@@ -132,13 +136,15 @@ export async function persistSessionUsageUpdate(params: {
             providerUsed: params.providerUsed ?? entry.modelProvider,
             modelUsed: params.modelUsed ?? entry.model,
           });
-          const patch: Partial<SessionEntry> = {
-            modelProvider: params.providerUsed ?? entry.modelProvider,
-            model: params.modelUsed ?? entry.model,
-            contextTokens: resolvedContextTokens,
-            systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
-            updatedAt: Date.now(),
-          };
+          const patch: Partial<SessionEntry> = preserveRuntimeModel
+            ? { updatedAt: Date.now() }
+            : {
+                modelProvider: params.providerUsed ?? entry.modelProvider,
+                model: params.modelUsed ?? entry.model,
+                contextTokens: resolvedContextTokens,
+                systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+                updatedAt: Date.now(),
+              };
           if (hasUsage) {
             patch.inputTokens = params.usage?.input ?? 0;
             patch.outputTokens = params.usage?.output ?? 0;
@@ -158,7 +164,9 @@ export async function persistSessionUsageUpdate(params: {
           // context utilization is stale/unknown.
           patch.totalTokens = totalTokens;
           patch.totalTokensFresh = typeof totalTokens === "number";
-          return applyCliSessionIdToSessionPatch(params, entry, patch);
+          return preserveRuntimeModel
+            ? patch
+            : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
     } catch (err) {
@@ -167,7 +175,7 @@ export async function persistSessionUsageUpdate(params: {
     return;
   }
 
-  if (params.modelUsed || params.contextTokensUsed) {
+  if ((params.modelUsed || params.contextTokensUsed) && !preserveRuntimeModel) {
     try {
       await updateSessionStoreEntry({
         storePath,

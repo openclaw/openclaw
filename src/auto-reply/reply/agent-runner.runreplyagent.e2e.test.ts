@@ -374,6 +374,33 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.pendingFinalDeliveryText).toBeUndefined();
   });
 
+  it("does not persist heartbeat acknowledgements for durable replay", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "HEARTBEAT_OK" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.pendingFinalDelivery).toBeUndefined();
+    expect(stored.pendingFinalDeliveryText).toBeUndefined();
+  });
+
   it("persists only visible non-reasoning final reply text", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",

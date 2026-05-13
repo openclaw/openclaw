@@ -580,6 +580,162 @@ describe("task-registry", () => {
     });
   });
 
+  it("lets yielded success correct a speculative aborted lifecycle timeout", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-timeout-then-yielded",
+        task: "Wait for subagent",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-timeout-then-yielded",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 200,
+          aborted: true,
+        },
+      });
+      markTaskTerminalByRunId({
+        runId: "run-timeout-then-yielded",
+        runtime: "cli",
+        status: "succeeded",
+        endedAt: 300,
+        terminalSummary: "yielded",
+      });
+
+      expect(findTaskByRunId("run-timeout-then-yielded")).toMatchObject({
+        status: "succeeded",
+        endedAt: 300,
+        terminalSummary: "yielded",
+      });
+    });
+  });
+
+  it("does not let a late timeout overwrite yielded success", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:cgo:subagent:child",
+        runId: "run-yielded-then-timeout",
+        task: "Wait for cgo",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 100,
+      });
+
+      markTaskTerminalByRunId({
+        runId: "run-yielded-then-timeout",
+        runtime: "subagent",
+        sessionKey: "agent:cgo:subagent:child",
+        status: "succeeded",
+        endedAt: 200,
+        terminalSummary: "yielded",
+      });
+      markTaskTerminalByRunId({
+        runId: "run-yielded-then-timeout",
+        runtime: "subagent",
+        sessionKey: "agent:cgo:subagent:child",
+        status: "timed_out",
+        endedAt: 300,
+      });
+
+      expect(findTaskByRunId("run-yielded-then-timeout")).toMatchObject({
+        status: "succeeded",
+        endedAt: 200,
+        terminalSummary: "yielded",
+      });
+    });
+  });
+
+  it("treats yielded aborted lifecycle ends as paused success", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-yielded-aborted",
+        task: "Wait for subagent",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-yielded-aborted",
+        sessionKey: "agent:main:main",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 200,
+          aborted: true,
+          yielded: true,
+          livenessState: "paused",
+        },
+      });
+
+      expect(findTaskByRunId("run-yielded-aborted")).toMatchObject({
+        status: "succeeded",
+        endedAt: 200,
+      });
+    });
+  });
+
+  it("treats aborted end_turn lifecycle ends as cooperative yield success", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-aborted-end-turn",
+        task: "Wait for subagent",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-aborted-end-turn",
+        sessionKey: "agent:main:main",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 200,
+          aborted: true,
+          stopReason: "end_turn",
+        },
+      });
+
+      expect(findTaskByRunId("run-aborted-end-turn")).toMatchObject({
+        status: "succeeded",
+        endedAt: 200,
+      });
+    });
+  });
+
   it("does not downgrade failed run-scoped tasks when a late success arrives", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

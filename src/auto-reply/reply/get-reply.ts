@@ -20,6 +20,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
+import { isHeartbeatOkResponse } from "../heartbeat-filter.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -398,7 +399,11 @@ export async function getReplyFromConfig(
         text,
         resolveHeartbeatAckMaxChars(cfg, agentId),
       );
-      if (heartbeatPending.shouldClear) {
+      if (
+        heartbeatPending.shouldClear ||
+        isHeartbeatOkResponse({ role: "assistant", content: text })
+      ) {
+        const updatedAt = Date.now();
         sessionEntry.pendingFinalDelivery = undefined;
         sessionEntry.pendingFinalDeliveryText = undefined;
         sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
@@ -406,6 +411,7 @@ export async function getReplyFromConfig(
         sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
         sessionEntry.pendingFinalDeliveryLastError = undefined;
         sessionEntry.pendingFinalDeliveryContext = undefined;
+        sessionEntry.updatedAt = updatedAt;
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
         }
@@ -422,6 +428,7 @@ export async function getReplyFromConfig(
               pendingFinalDeliveryAttemptCount: undefined,
               pendingFinalDeliveryLastError: undefined,
               pendingFinalDeliveryContext: undefined,
+              updatedAt,
             }),
           });
         }

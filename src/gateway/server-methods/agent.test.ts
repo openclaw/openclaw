@@ -1889,6 +1889,51 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("preserves yielded async gateway agent runs as paused success", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-yielded-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+      mocks.agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "waiting for subagent" }],
+        meta: {
+          durationMs: 100,
+          aborted: true,
+          yielded: true,
+          stopReason: "end_turn",
+          livenessState: "paused",
+        },
+      });
+      const context = makeContext();
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run-yielded",
+        },
+        { context, reqId: "task-registry-agent-run-yielded" },
+      );
+
+      await waitForAssertion(() => {
+        expect(findTaskByRunId("task-registry-agent-run-yielded")).toMatchObject({
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "succeeded",
+          terminalSummary: "yielded",
+        });
+        expect(context.dedupe.get("agent:task-registry-agent-run-yielded")?.payload).toMatchObject({
+          runId: "task-registry-agent-run-yielded",
+          status: "ok",
+          summary: "yielded",
+          stopReason: "end_turn",
+          livenessState: "paused",
+          yielded: true,
+        });
+      });
+    });
+  });
+
   it("classifies aborted async gateway agent rejections as timed out", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-abort-error-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

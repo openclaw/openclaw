@@ -163,7 +163,7 @@ type CronExecutionId = {
 };
 
 type CronTerminalRecovery = {
-  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out">;
+  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
   endedAt: number;
   lastEventAt: number;
   error?: string;
@@ -429,6 +429,55 @@ function resolveDurableCronTaskRecovery(
   );
 }
 
+function resolveSubagentChildCliTerminalRecovery(
+  task: TaskRecord,
+): CronTerminalRecovery | undefined {
+  if (task.runtime !== "subagent" || !isActiveTask(task)) {
+    return undefined;
+  }
+  const childSessionKey = normalizeOptionalString(task.childSessionKey);
+  const runId = normalizeOptionalString(task.runId);
+  const sourceId = normalizeOptionalString(task.sourceId);
+  if (!childSessionKey || (!runId && !sourceId)) {
+    return undefined;
+  }
+  const childTask = taskRegistryMaintenanceRuntime.listTaskRecords().find((candidate) => {
+    if (candidate.runtime !== "cli" || isActiveTask(candidate)) {
+      return false;
+    }
+    if (normalizeOptionalString(candidate.childSessionKey) !== childSessionKey) {
+      return false;
+    }
+    const candidateRunId = normalizeOptionalString(candidate.runId);
+    const candidateSourceId = normalizeOptionalString(candidate.sourceId);
+    return Boolean(
+      (runId && (candidateRunId === runId || candidateSourceId === runId)) ||
+      (sourceId && (candidateRunId === sourceId || candidateSourceId === sourceId)),
+    );
+  });
+  if (!childTask) {
+    return undefined;
+  }
+  if (
+    childTask.status !== "succeeded" &&
+    childTask.status !== "failed" &&
+    childTask.status !== "timed_out" &&
+    childTask.status !== "cancelled"
+  ) {
+    return undefined;
+  }
+  const endedAt = childTask.endedAt ?? childTask.lastEventAt ?? Date.now();
+  return {
+    status: childTask.status,
+    endedAt,
+    lastEventAt: childTask.lastEventAt ?? endedAt,
+    ...(childTask.error !== undefined ? { error: childTask.error } : {}),
+    terminalSummary:
+      childTask.terminalSummary ??
+      (childTask.status === "cancelled" ? "child cli task cancelled" : undefined),
+  };
+}
+
 function hasActiveCliRun(task: TaskRecord): boolean {
   const candidateRunIds = [task.sourceId, task.runId];
   for (const candidate of candidateRunIds) {
@@ -444,6 +493,25 @@ function hasCliRunIdentity(task: TaskRecord): boolean {
   return [task.sourceId, task.runId].some((candidate) => Boolean(candidate?.trim()));
 }
 
+function hasActiveManagedTaskForChildSession(task: TaskRecord): boolean {
+  const childSessionKey = normalizeOptionalString(task.childSessionKey);
+  if (!childSessionKey) {
+    return false;
+  }
+  for (const candidate of taskRegistryMaintenanceRuntime.listTaskRecords()) {
+    if (candidate.taskId === task.taskId || candidate.runtime === "cli") {
+      continue;
+    }
+    if (!isActiveTask(candidate)) {
+      continue;
+    }
+    if (normalizeOptionalString(candidate.childSessionKey) === childSessionKey) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupContext): boolean {
   if (task.runtime === "cron") {
     if (!taskRegistryMaintenanceRuntime.isCronRuntimeAuthoritative()) {
@@ -454,6 +522,9 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
   }
 
   if (task.runtime === "cli" && hasActiveCliRun(task)) {
+    return true;
+  }
+  if (task.runtime === "cli" && hasActiveManagedTaskForChildSession(task)) {
     return true;
   }
   if (task.runtime === "cli" && hasCliRunIdentity(task)) {
@@ -922,6 +993,10 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
   for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
+    if (resolveSubagentChildCliTerminalRecovery(task)) {
+      recovered += 1;
+      continue;
+    }
     if (resolveDurableCronTaskRecovery(task, cronRecoveryContext)) {
       recovered += 1;
       continue;
@@ -976,6 +1051,18 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   for (const task of tasks) {
     const current = taskRegistryMaintenanceRuntime.getTaskById(task.taskId);
     if (!current) {
+      continue;
+    }
+    const subagentRecovery = resolveSubagentChildCliTerminalRecovery(current);
+    if (subagentRecovery) {
+      const next = markTaskRecovered(current, subagentRecovery);
+      if (next.status !== current.status) {
+        recovered += 1;
+      }
+      processed += 1;
+      if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+        await yieldToEventLoop();
+      }
       continue;
     }
     const cronRecovery = resolveDurableCronTaskRecovery(current, cronRecoveryContext);

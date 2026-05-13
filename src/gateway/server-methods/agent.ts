@@ -31,6 +31,7 @@ import {
   shouldApplyStartupContext,
 } from "../../auto-reply/reply/startup-context.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
+import { resolveSubagentQueueAwareTimeoutMs } from "../../config/agent-limits.js";
 import {
   evaluateSessionFreshness,
   mergeSessionEntry,
@@ -59,6 +60,7 @@ import {
   resolveVoiceWakeRouteByTrigger,
 } from "../../infra/voicewake-routing.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import { CommandLane } from "../../process/lanes.js";
 import {
   classifySessionKeyShape,
   isAcpSessionKey,
@@ -143,6 +145,20 @@ import type {
 } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+
+function resolveSubagentAcceptedQueueTimeoutMs(params: {
+  cfg: OpenClawConfig;
+  lane?: string;
+  timeoutMs: number;
+}): number {
+  if (params.lane?.trim() !== CommandLane.Subagent) {
+    return params.timeoutMs;
+  }
+  return resolveSubagentQueueAwareTimeoutMs({
+    cfg: params.cfg,
+    timeoutMs: params.timeoutMs,
+  });
+}
 
 function formatAttachmentFailureForLog(err: unknown): string {
   const primary = formatUncaughtError(err);
@@ -457,19 +473,24 @@ function dispatchAgentRunFromGateway(params: {
   }
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
-      const aborted = result?.meta?.aborted === true;
+      const yielded = result?.meta?.yielded === true || result?.meta?.livenessState === "paused";
+      const aborted = result?.meta?.aborted === true && !yielded;
       if (shouldTrackTask) {
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
           status: aborted ? "timed_out" : "succeeded",
-          terminalSummary: aborted ? "aborted" : "completed",
+          terminalSummary: aborted ? "aborted" : yielded ? "yielded" : "completed",
         });
       }
       const payload = {
         runId: params.runId,
         status: aborted ? ("timeout" as const) : ("ok" as const),
-        summary: aborted ? "aborted" : "completed",
-        ...(aborted ? { stopReason: result?.meta?.stopReason ?? "rpc" } : {}),
+        summary: aborted ? "aborted" : yielded ? "yielded" : "completed",
+        ...(aborted || yielded ? { stopReason: result?.meta?.stopReason ?? "rpc" } : {}),
+        ...(typeof result?.meta?.livenessState === "string"
+          ? { livenessState: result.meta.livenessState }
+          : {}),
+        ...(yielded ? { yielded: true } : {}),
         result,
       };
       setGatewayDedupeEntry({
@@ -1319,6 +1340,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       cfg: cfgForAgent ?? cfg,
       overrideSeconds: typeof request.timeout === "number" ? request.timeout : undefined,
     });
+    const acceptedQueueTimeoutMs = resolveSubagentAcceptedQueueTimeoutMs({
+      cfg: cfgForAgent ?? cfg,
+      lane: request.lane,
+      timeoutMs,
+    });
     const activeRunAbort = registerChatAbortController({
       chatAbortControllers: context.chatAbortControllers,
       runId,
@@ -1326,7 +1352,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       sessionKey: resolvedSessionKey,
       timeoutMs,
       now,
-      expiresAtMs: resolveAgentRunExpiresAtMs({ now, timeoutMs }),
+      expiresAtMs: resolveAgentRunExpiresAtMs({ now, timeoutMs: acceptedQueueTimeoutMs }),
       ownerConnId: typeof client?.connId === "string" ? client.connId : undefined,
       ownerDeviceId:
         typeof client?.connect?.device?.id === "string" ? client.connect.device.id : undefined,
@@ -1339,6 +1365,15 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+    const resetAbortTimeoutFromExecutionStart = () => {
+      const entry = context.chatAbortControllers.get(runId);
+      if (entry?.controller !== activeRunAbort.controller) {
+        return;
+      }
+      const startedAt = Date.now();
+      entry.startedAtMs = startedAt;
+      entry.expiresAtMs = resolveAgentRunExpiresAtMs({ now: startedAt, timeoutMs });
+    };
 
     const accepted = {
       runId,
@@ -1501,6 +1536,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               spawnedBy: spawnedByValue,
               workspaceDir: sessionEntry?.spawnedWorkspaceDir,
             }),
+            onExecutionStarted: resetAbortTimeoutFromExecutionStart,
             senderIsOwner,
             allowModelOverride,
           },

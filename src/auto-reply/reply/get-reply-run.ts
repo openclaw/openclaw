@@ -887,6 +887,7 @@ export async function runPreparedReply(
           sessionKey,
           storePath,
           isNewSession,
+          persistAuthProfileOverride: opts?.isHeartbeat !== true,
         }),
       );
   const { runReplyAgent } = await traceRunPhase("reply.load_agent_runner_runtime", () =>
@@ -946,6 +947,7 @@ export async function runPreparedReply(
               sessionKey,
               storePath,
               isNewSession,
+              persistAuthProfileOverride: opts?.isHeartbeat !== true,
             });
         preparedSessionState = resolvePreparedSessionState();
         ({ prefixedCommandBody, queuedBody, transcriptCommandBody, currentTurnContext } =

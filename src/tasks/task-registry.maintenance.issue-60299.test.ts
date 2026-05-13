@@ -348,6 +348,47 @@ describe("task-registry maintenance issue #60299", () => {
     );
   });
 
+  it("recovers running subagent parent tasks when the matching cli child is already terminal", async () => {
+    const childSessionKey = "agent:cgo:subagent:cancelled-child";
+    const parent = makeStaleTask({
+      taskId: "task-subagent-parent-running",
+      runtime: "subagent",
+      runId: "run-cancelled-child",
+      sourceId: "run-cancelled-child",
+      childSessionKey,
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    const child = makeStaleTask({
+      taskId: "task-cli-child-cancelled",
+      runtime: "cli",
+      runId: "run-cancelled-child",
+      sourceId: "run-cancelled-child",
+      childSessionKey,
+      status: "cancelled",
+      endedAt: Date.now() - 1_000,
+      lastEventAt: Date.now() - 1_000,
+      terminalSummary: "cancelled by operator",
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [parent, child],
+      sessionStore: {
+        [childSessionKey]: {
+          sessionId: "session-cancelled-child",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ recovered: 1 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ recovered: 1 });
+    expect(currentTasks.get(parent.taskId)).toMatchObject({
+      status: "cancelled",
+      terminalSummary: "cancelled by operator",
+    });
+  });
+
   it("does not mark cron tasks lost when the current process is not the cron runtime authority", async () => {
     const task = makeStaleTask({
       runtime: "cron",
@@ -493,6 +534,46 @@ describe("task-registry maintenance issue #60299", () => {
     expect(getInspectableActiveTaskRestartBlockers()).toStrictEqual([]);
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
     expectTaskStatus(currentTasks, task.taskId, "lost");
+  });
+
+  it("keeps stale CLI run-context tasks live while their managed subagent task is active", async () => {
+    const childSessionKey = "agent:main:subagent:queued-child";
+    const cliTask = makeStaleTask({
+      taskId: "task-cli-managed-child",
+      runtime: "cli",
+      sourceId: "run-cli-managed-child",
+      runId: "run-cli-managed-child",
+      childSessionKey,
+    });
+    const subagentTask = makeStaleTask({
+      taskId: "task-subagent-managed-child",
+      runtime: "subagent",
+      sourceId: "run-cli-managed-child",
+      runId: "run-cli-managed-child",
+      childSessionKey,
+      status: "queued",
+      startedAt: undefined,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [cliTask, subagentTask],
+      sessionStore: { [childSessionKey]: { sessionId: childSessionKey, updatedAt: Date.now() } },
+    });
+
+    expect(reconcileInspectableTasks()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          taskId: subagentTask.taskId,
+          status: "queued",
+        }),
+        expect.objectContaining({
+          taskId: cliTask.taskId,
+          status: "running",
+        }),
+      ]),
+    );
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(currentTasks.get(cliTask.taskId)).toMatchObject({ status: "running" });
   });
 
   it("keeps chat-backed cli tasks live while the owning run context is still active", async () => {

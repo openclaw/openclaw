@@ -43,6 +43,7 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
   json?: boolean;
   fixMissing?: boolean;
   fixDmScope?: boolean;
+  fixStaleRunning?: boolean;
 };
 
 export type SessionCleanupAction =
@@ -51,7 +52,8 @@ export type SessionCleanupAction =
   | "prune-stale"
   | "cap-overflow"
   | "evict-budget"
-  | "retire-dm-scope";
+  | "retire-dm-scope"
+  | "mark-timeout";
 
 export type SessionCleanupSummary = {
   agentId: string;
@@ -62,6 +64,7 @@ export type SessionCleanupSummary = {
   afterCount: number;
   missing: number;
   dmScopeRetired: number;
+  staleRunningTimedOut: number;
   pruned: number;
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
@@ -90,6 +93,7 @@ export type SessionsCleanupRunResult = {
     cappedKeys: Set<string>;
     budgetEvictedKeys: Set<string>;
     dmScopeRetiredKeys: Set<string>;
+    staleRunningTimedOutKeys: Set<string>;
   }>;
   appliedSummaries: SessionCleanupSummary[];
 };
@@ -101,9 +105,13 @@ export function resolveSessionCleanupAction(params: {
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
   dmScopeRetiredKeys: Set<string>;
+  staleRunningTimedOutKeys: Set<string>;
 }): SessionCleanupAction {
   if (params.dmScopeRetiredKeys.has(params.key)) {
     return "retire-dm-scope";
+  }
+  if (params.staleRunningTimedOutKeys.has(params.key)) {
+    return "mark-timeout";
   }
   if (params.missingKeys.has(params.key)) {
     return "prune-missing";
@@ -118,6 +126,44 @@ export function resolveSessionCleanupAction(params: {
     return "evict-budget";
   }
   return "keep";
+}
+
+async function hasActiveTaskForSessionKey(sessionKey: string): Promise<boolean> {
+  try {
+    const { hasActiveTaskForChildSessionKey } = await import("../../tasks/task-registry.js");
+    return hasActiveTaskForChildSessionKey({ sessionKey });
+  } catch {
+    return false;
+  }
+}
+
+async function timeoutStaleRunningSessionEntries(params: {
+  store: Record<string, SessionEntry>;
+  activeKey?: string;
+  now?: number;
+  onTimedOut?: (key: string) => void;
+}): Promise<number> {
+  const now = params.now ?? Date.now();
+  let timedOut = 0;
+  for (const [key, entry] of Object.entries(params.store)) {
+    if (!entry || key === params.activeKey || entry.status !== "running") {
+      continue;
+    }
+    if (await hasActiveTaskForSessionKey(key)) {
+      continue;
+    }
+    const endedAt = now;
+    entry.status = "timeout";
+    entry.endedAt = endedAt;
+    entry.runtimeMs =
+      typeof entry.startedAt === "number" && Number.isFinite(entry.startedAt)
+        ? Math.max(0, endedAt - entry.startedAt)
+        : entry.runtimeMs;
+    entry.abortedLastRun = false;
+    timedOut += 1;
+    params.onTimedOut?.(key);
+  }
+  return timedOut;
 }
 
 function isMainScopeStaleDirectSessionKey(params: {
@@ -247,6 +293,7 @@ async function previewStoreCleanup(params: {
   activeKey?: string;
   fixMissing?: boolean;
   fixDmScope?: boolean;
+  fixStaleRunning?: boolean;
 }) {
   const beforeStore = loadSessionStore(params.target.storePath, { skipCache: true });
   const previewStore = cloneSessionStoreRecord(beforeStore);
@@ -254,6 +301,7 @@ async function previewStoreCleanup(params: {
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
   const dmScopeRetiredKeys = new Set<string>();
+  const staleRunningTimedOutKeys = new Set<string>();
   const missing =
     params.fixMissing === true
       ? pruneMissingTranscriptEntries({
@@ -273,6 +321,16 @@ async function previewStoreCleanup(params: {
           activeKey: params.activeKey,
           onRetired: (key) => {
             dmScopeRetiredKeys.add(key);
+          },
+        })
+      : 0;
+  const staleRunningTimedOut =
+    params.fixStaleRunning === true
+      ? await timeoutStaleRunningSessionEntries({
+          store: previewStore,
+          activeKey: params.activeKey,
+          onTimedOut: (key) => {
+            staleRunningTimedOutKeys.add(key);
           },
         })
       : 0;
@@ -338,6 +396,7 @@ async function previewStoreCleanup(params: {
   const wouldMutate =
     missing > 0 ||
     dmScopeRetired > 0 ||
+    staleRunningTimedOut > 0 ||
     pruned > 0 ||
     capped > 0 ||
     unreferencedArtifacts.removedFiles > 0 ||
@@ -353,6 +412,7 @@ async function previewStoreCleanup(params: {
     afterCount: afterPreviewCount,
     missing,
     dmScopeRetired,
+    staleRunningTimedOut,
     pruned,
     capped,
     unreferencedArtifacts,
@@ -368,6 +428,7 @@ async function previewStoreCleanup(params: {
     cappedKeys,
     budgetEvictedKeys,
     dmScopeRetiredKeys,
+    staleRunningTimedOutKeys,
   };
 }
 
@@ -398,6 +459,7 @@ export async function runSessionsCleanup(params: {
       activeKey: opts.activeKey,
       fixMissing: Boolean(opts.fixMissing),
       fixDmScope: Boolean(opts.fixDmScope),
+      fixStaleRunning: Boolean(opts.fixStaleRunning),
     });
     previewResults.push(result);
   }
@@ -415,6 +477,7 @@ export async function runSessionsCleanup(params: {
         target.storePath,
         async (store) => {
           let removed = 0;
+          let changed = 0;
           if (opts.fixMissing) {
             missingApplied = pruneMissingTranscriptEntries({
               store,
@@ -434,7 +497,13 @@ export async function runSessionsCleanup(params: {
             });
             removed += dmScopeRetiredApplied;
           }
-          return removed;
+          if (opts.fixStaleRunning) {
+            changed += await timeoutStaleRunningSessionEntries({
+              store,
+              activeKey: opts.activeKey,
+            });
+          }
+          return removed + changed;
         },
         {
           activeSessionKey: opts.activeKey,
@@ -491,6 +560,7 @@ export async function runSessionsCleanup(params: {
                 afterCount: 0,
                 missing: 0,
                 dmScopeRetired: 0,
+                staleRunningTimedOut: 0,
                 pruned: 0,
                 capped: 0,
                 unreferencedArtifacts,
@@ -513,6 +583,7 @@ export async function runSessionsCleanup(params: {
               afterCount: appliedReport.afterCount,
               missing: missingApplied,
               dmScopeRetired: dmScopeRetiredApplied,
+              staleRunningTimedOut: preview?.summary.staleRunningTimedOut ?? 0,
               pruned: appliedReport.pruned,
               capped: appliedReport.capped,
               unreferencedArtifacts,
@@ -520,6 +591,7 @@ export async function runSessionsCleanup(params: {
               wouldMutate:
                 missingApplied > 0 ||
                 dmScopeRetiredApplied > 0 ||
+                (preview?.summary.staleRunningTimedOut ?? 0) > 0 ||
                 appliedReport.pruned > 0 ||
                 appliedReport.capped > 0 ||
                 unreferencedArtifacts.removedFiles > 0 ||

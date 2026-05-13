@@ -140,15 +140,19 @@ function createSnapshotFromLifecycleEvent(params: {
   const error = typeof data?.error === "string" ? data.error : undefined;
   const stopReason = typeof data?.stopReason === "string" ? data.stopReason : undefined;
   const livenessState = typeof data?.livenessState === "string" ? data.livenessState : undefined;
+  const yielded =
+    data?.yielded === true ||
+    livenessState === "paused" ||
+    (data?.aborted === true && stopReason === "end_turn");
   return {
     runId,
-    status: phase === "error" ? "error" : data?.aborted ? "timeout" : "ok",
+    status: phase === "error" ? "error" : data?.aborted && !yielded ? "timeout" : "ok",
     startedAt,
     endedAt,
     error,
     stopReason,
     livenessState,
-    ...(data?.yielded === true ? { yielded: true } : {}),
+    ...(yielded ? { yielded: true } : {}),
     ts: Date.now(),
   };
 }

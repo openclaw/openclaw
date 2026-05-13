@@ -12,6 +12,8 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts"> & {
     endedAt?: unknown;
     aborted?: unknown;
     stopReason?: unknown;
+    livenessState?: unknown;
+    yielded?: unknown;
   };
 };
 
@@ -45,6 +47,14 @@ function resolveTerminalStatus(event: LifecycleEventLike): SessionRunStatus {
   const stopReason = typeof event.data?.stopReason === "string" ? event.data.stopReason : "";
   if (stopReason === "aborted") {
     return "killed";
+  }
+
+  const yielded =
+    event.data?.yielded === true ||
+    event.data?.livenessState === "paused" ||
+    (event.data?.aborted === true && stopReason === "end_turn");
+  if (yielded) {
+    return "done";
   }
 
   return event.data?.aborted === true ? "timeout" : "done";

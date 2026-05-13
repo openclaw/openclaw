@@ -7,7 +7,7 @@ import {
 type SessionActivity = {
   sessionId?: string;
   sessionKey?: string;
-  activeEmbeddedRuns: Set<string>;
+  activeEmbeddedRuns: Map<string, number | undefined>;
   activeTools: Map<string, ActiveTool>;
   activeModelCalls: Set<string>;
   lastProgressAt: number;
@@ -31,6 +31,7 @@ export type DiagnosticSessionActivitySnapshot = {
   activeToolName?: string;
   activeToolCallId?: string;
   activeToolAgeMs?: number;
+  activeEmbeddedRunTimeoutMs?: number;
   lastProgressAgeMs?: number;
   lastProgressReason?: string;
 };
@@ -81,8 +82,8 @@ function replaceSessionActivityReferences(source: SessionActivity, target: Sessi
 function mergeSessionActivity(target: SessionActivity, source: SessionActivity): void {
   target.sessionId ??= source.sessionId;
   target.sessionKey ??= source.sessionKey;
-  for (const key of source.activeEmbeddedRuns) {
-    target.activeEmbeddedRuns.add(key);
+  for (const [key, timeoutMs] of source.activeEmbeddedRuns) {
+    target.activeEmbeddedRuns.set(key, timeoutMs);
   }
   for (const [key, tool] of source.activeTools) {
     target.activeTools.set(key, tool);
@@ -135,7 +136,7 @@ function resolveSessionActivity(params: {
   const created: SessionActivity = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    activeEmbeddedRuns: new Set(),
+    activeEmbeddedRuns: new Map(),
     activeTools: new Map(),
     activeModelCalls: new Set(),
     lastProgressAt: Date.now(),
@@ -242,12 +243,19 @@ export function markDiagnosticEmbeddedRunStarted(params: {
   sessionId: string;
   sessionKey?: string;
   workKey?: string;
+  timeoutMs?: number;
 }): void {
   const activity = resolveSessionActivity({ ...params, create: true });
   if (!activity) {
     return;
   }
-  activity.activeEmbeddedRuns.add(resolveEmbeddedRunWorkKey(params));
+  const timeoutMs =
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs) &&
+    params.timeoutMs > 0
+      ? Math.floor(params.timeoutMs)
+      : undefined;
+  activity.activeEmbeddedRuns.set(resolveEmbeddedRunWorkKey(params), timeoutMs);
   touchSessionActivity(activity, "embedded_run:started");
 }
 
@@ -291,6 +299,15 @@ export function getDiagnosticSessionActivitySnapshot(
     activeWorkKind = "embedded_run";
   }
 
+  const activeEmbeddedRunTimeoutMs =
+    activity.activeEmbeddedRuns.size > 0
+      ? Math.max(
+          ...Array.from(activity.activeEmbeddedRuns.values()).filter(
+            (value): value is number => typeof value === "number",
+          ),
+        )
+      : undefined;
+
   let activeTool: ActiveTool | undefined;
   for (const tool of activity.activeTools.values()) {
     if (!activeTool || tool.startedAt < activeTool.startedAt) {
@@ -303,6 +320,10 @@ export function getDiagnosticSessionActivitySnapshot(
     activeToolName: activeTool?.toolName,
     activeToolCallId: activeTool?.toolCallId,
     activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
+    activeEmbeddedRunTimeoutMs:
+      activeWorkKind === "embedded_run" && Number.isFinite(activeEmbeddedRunTimeoutMs)
+        ? activeEmbeddedRunTimeoutMs
+        : undefined,
     lastProgressAgeMs: Math.max(0, now - activity.lastProgressAt),
     lastProgressReason: activity.lastProgressReason,
   };

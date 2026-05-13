@@ -1250,6 +1250,7 @@ export async function runAgentTurnWithFallback(params: {
     model: string,
   ): Promise<(() => Promise<void>) | undefined> => {
     if (
+      params.isHeartbeat ||
       !params.sessionKey ||
       !params.activeSessionStore ||
       (provider === params.followupRun.run.provider && model === params.followupRun.run.model)

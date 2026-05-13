@@ -718,8 +718,8 @@ export async function performGatewaySessionReset(params: {
       model: resolvedModel.model,
       modelProvider: resolvedModel.provider,
       contextTokens: resetEntry?.contextTokens,
-      compactionCount: currentEntry?.compactionCount,
-      compactionCheckpoints: currentEntry?.compactionCheckpoints,
+      // A reset is a fresh conversation. Do not carry compacted transcript
+      // summaries forward, because they can reintroduce stale instructions.
       sendPolicy: currentEntry?.sendPolicy,
       queueMode: currentEntry?.queueMode,
       queueDebounceMs: currentEntry?.queueDebounceMs,

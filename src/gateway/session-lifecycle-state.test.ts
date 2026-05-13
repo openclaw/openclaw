@@ -112,4 +112,33 @@ describe("session lifecycle state", () => {
       abortedLastRun: false,
     });
   });
+
+  it("maps yielded aborted lifecycle end events to done", () => {
+    expect(
+      derivePersistedSessionLifecyclePatch({
+        entry: {
+          updatedAt: 1_000,
+          startedAt: 1_050,
+        },
+        event: {
+          ts: 2_000,
+          data: {
+            phase: "end",
+            endedAt: 1_550,
+            aborted: true,
+            stopReason: "end_turn",
+            livenessState: "paused",
+            yielded: true,
+          },
+        },
+      }),
+    ).toEqual({
+      updatedAt: 1_550,
+      status: "done",
+      startedAt: 1_050,
+      endedAt: 1_550,
+      runtimeMs: 500,
+      abortedLastRun: false,
+    });
+  });
 });
