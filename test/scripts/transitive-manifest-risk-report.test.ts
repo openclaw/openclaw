@@ -99,6 +99,20 @@ describe("transitive-manifest-risk-report", () => {
         workspaceExclusion: "exact-package@2.0.0",
       },
     ]);
+
+    const markdown = renderTransitiveManifestRiskMarkdownReport(report);
+    expect(markdown).toContain(
+      "## Recently Published Versions Not Covered By Workspace Exclusions",
+    );
+    expect(markdown).toContain("## Recently Published Versions Covered By Workspace Exclusions");
+    expect(markdown).toContain("Workspace minimum release age: 2880 minutes.");
+    expect(markdown).toContain("`regular@1.0.0`: published 2026-05-11T23:00:00Z");
+    expect(markdown).toContain(
+      "`exact-package@2.0.0`: published 2026-05-11T23:00:00Z; workspace exclusion `exact-package@2.0.0`",
+    );
+    expect(markdown).not.toContain(
+      "`regular@1.0.0`: published 2026-05-11T23:00:00Z; minimum release age 2880 minutes",
+    );
   });
 
   it("documents JSON completeness and renders grouped Markdown summaries", async () => {

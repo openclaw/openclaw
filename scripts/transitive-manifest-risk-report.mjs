@@ -453,6 +453,12 @@ function renderRecentlyPublishedVersions(lines, findings, heading) {
   }
 
   lines.push(`## ${heading}`, "");
+  const minimumReleaseAgeMinutes = findings.find(
+    (finding) => typeof finding.minimumReleaseAgeMinutes === "number",
+  )?.minimumReleaseAgeMinutes;
+  if (typeof minimumReleaseAgeMinutes === "number") {
+    lines.push(`Workspace minimum release age: ${minimumReleaseAgeMinutes} minutes.`, "");
+  }
   for (const finding of findings.toSorted((left, right) => {
     const dateDelta = Date.parse(right.publishedAt ?? "") - Date.parse(left.publishedAt ?? "");
     if (Number.isFinite(dateDelta) && dateDelta !== 0) {
@@ -464,8 +470,7 @@ function renderRecentlyPublishedVersions(lines, findings, heading) {
       ? `; workspace exclusion ${markdownCode(finding.workspaceExclusion)}`
       : "";
     lines.push(
-      `- ${markdownCode(findingPackageKey(finding))}: published ${finding.publishedAt}; ` +
-        `minimum release age ${finding.minimumReleaseAgeMinutes} minutes${suffix}`,
+      `- ${markdownCode(findingPackageKey(finding))}: published ${finding.publishedAt}${suffix}`,
     );
   }
   lines.push("");
