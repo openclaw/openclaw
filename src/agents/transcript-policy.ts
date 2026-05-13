@@ -25,6 +25,13 @@ export type TranscriptPolicy = {
   };
   sanitizeThinkingSignatures: boolean;
   dropThinkingBlocks: boolean;
+  /**
+   * Strip thinking blocks from every assistant turn (including the latest)
+   * before each outbound request. Set by providers whose transports reject
+   * persisted thinking blocks regardless of position (e.g. GitHub Copilot's
+   * Claude proxy — see issue #81520).
+   */
+  dropAllThinkingBlocks: boolean;
   dropReasoningFromHistory?: boolean;
   applyGoogleTurnOrdering: boolean;
   validateGeminiTurns: boolean;
@@ -36,14 +43,15 @@ export function shouldAllowProviderOwnedThinkingReplay(params: {
   modelApi?: string | null;
   policy: Pick<
     TranscriptPolicy,
-    "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
+    "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks" | "dropAllThinkingBlocks"
   >;
 }): boolean {
   return (
     isAnthropicApi(params.modelApi) &&
     params.policy.validateAnthropicTurns &&
     params.policy.preserveSignatures &&
-    !params.policy.dropThinkingBlocks
+    !params.policy.dropThinkingBlocks &&
+    !params.policy.dropAllThinkingBlocks
   );
 }
 
@@ -57,6 +65,7 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   sanitizeThoughtSignatures: undefined,
   sanitizeThinkingSignatures: false,
   dropThinkingBlocks: false,
+  dropAllThinkingBlocks: false,
   dropReasoningFromHistory: false,
   applyGoogleTurnOrdering: false,
   validateGeminiTurns: false,
@@ -214,6 +223,9 @@ function mergeTranscriptPolicy(
       : {}),
     ...(typeof policy.dropThinkingBlocks === "boolean"
       ? { dropThinkingBlocks: policy.dropThinkingBlocks }
+      : {}),
+    ...(typeof policy.dropAllThinkingBlocks === "boolean"
+      ? { dropAllThinkingBlocks: policy.dropAllThinkingBlocks }
       : {}),
     ...(typeof policy.dropReasoningFromHistory === "boolean"
       ? { dropReasoningFromHistory: policy.dropReasoningFromHistory }

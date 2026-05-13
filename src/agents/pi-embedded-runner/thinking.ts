@@ -235,6 +235,22 @@ function shouldPreserveCurrentToolTurnReasoning(
   return false;
 }
 
+/**
+ * Strip every `thinking` / `redacted_thinking` content block from every
+ * assistant turn, including the latest assistant turn.
+ *
+ * Use this for transports that reject persisted thinking blocks on follow-up
+ * requests regardless of position (e.g. GitHub Copilot's Claude proxy, which
+ * exposes no signed-thinking replay protocol — see issue #81520). For
+ * Anthropic-direct/Bedrock paths that require signed thinking on the latest
+ * turn, prefer `dropThinkingBlocks` instead.
+ *
+ * Returns the original array reference when nothing was changed.
+ */
+export function dropAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
+  return stripAllThinkingBlocks(messages);
+}
+
 function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];

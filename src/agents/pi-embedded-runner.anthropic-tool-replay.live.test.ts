@@ -181,6 +181,7 @@ describeLive("pi embedded anthropic replay sanitization (live)", () => {
         validateAnthropicTurns: true,
         preserveSignatures: false,
         dropThinkingBlocks: false,
+        dropAllThinkingBlocks: false,
       });
 
       await Promise.resolve(wrapped(model as never, { messages } as never, {} as never));

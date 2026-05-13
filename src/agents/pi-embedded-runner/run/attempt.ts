@@ -254,7 +254,7 @@ import {
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
 import { applySystemPromptOverrideToSession } from "../system-prompt.js";
-import { dropReasoningFromHistory, dropThinkingBlocks } from "../thinking.js";
+import { dropAllThinkingBlocks, dropReasoningFromHistory, dropThinkingBlocks } from "../thinking.js";
 import {
   collectAllowedToolNames,
   collectCoreBuiltinToolNames,
@@ -2743,7 +2743,11 @@ export async function runEmbeddedAttempt(
       // (e.g. thinkingSignature:"reasoning_text") on any follow-up provider
       // call, including tool continuations. Wrap the stream function so every
       // outbound request sees sanitized messages.
-      if (transcriptPolicy.dropThinkingBlocks || transcriptPolicy.dropReasoningFromHistory) {
+      if (
+        transcriptPolicy.dropThinkingBlocks ||
+        transcriptPolicy.dropAllThinkingBlocks ||
+        transcriptPolicy.dropReasoningFromHistory
+      ) {
         const inner = activeSession.agent.streamFn;
         activeSession.agent.streamFn = (model, context, options) => {
           const ctx = context as unknown as { messages?: unknown };
@@ -2754,9 +2758,11 @@ export async function runEmbeddedAttempt(
           const reasoningSanitized = transcriptPolicy.dropReasoningFromHistory
             ? dropReasoningFromHistory(messages as unknown as AgentMessage[])
             : (messages as unknown as AgentMessage[]);
-          const sanitized = transcriptPolicy.dropThinkingBlocks
-            ? (dropThinkingBlocks(reasoningSanitized) as unknown)
-            : (reasoningSanitized as unknown);
+          const sanitized = transcriptPolicy.dropAllThinkingBlocks
+            ? (dropAllThinkingBlocks(reasoningSanitized) as unknown)
+            : transcriptPolicy.dropThinkingBlocks
+              ? (dropThinkingBlocks(reasoningSanitized) as unknown)
+              : (reasoningSanitized as unknown);
           if (sanitized === messages) {
             return inner(model, context, options);
           }

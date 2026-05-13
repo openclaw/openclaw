@@ -903,7 +903,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
   allowedToolNames?: Set<string>,
   transcriptPolicy?: Pick<
     TranscriptPolicy,
-    "validateGeminiTurns" | "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
+    "validateGeminiTurns" | "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks" | "dropAllThinkingBlocks"
   >,
 ): StreamFn {
   return (model, context, options) => {
@@ -918,6 +918,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
         validateAnthropicTurns: transcriptPolicy?.validateAnthropicTurns === true,
         preserveSignatures: transcriptPolicy?.preserveSignatures === true,
         dropThinkingBlocks: transcriptPolicy?.dropThinkingBlocks === true,
+        dropAllThinkingBlocks: transcriptPolicy?.dropAllThinkingBlocks === true,
       },
     });
     const sanitized = sanitizeReplayToolCallInputs(

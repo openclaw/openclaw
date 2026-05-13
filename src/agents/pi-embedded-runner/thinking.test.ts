@@ -5,6 +5,7 @@ import { castAgentMessage, castAgentMessages } from "../test-helpers/agent-messa
 import {
   OMITTED_ASSISTANT_REASONING_TEXT,
   assessLastAssistantMessage,
+  dropAllThinkingBlocks,
   dropReasoningFromHistory,
   dropThinkingBlocks,
   isAssistantMessageWithContent,
@@ -34,6 +35,7 @@ function dropSingleAssistantContent(content: Array<Record<string, unknown>>) {
 const noThinkingReferenceCases = [
   { name: "dropThinkingBlocks", drop: dropThinkingBlocks },
   { name: "dropReasoningFromHistory", drop: dropReasoningFromHistory },
+  { name: "dropAllThinkingBlocks", drop: dropAllThinkingBlocks },
 ];
 
 function createNoThinkingMessages(): AgentMessage[] {
@@ -258,6 +260,76 @@ describe("dropReasoningFromHistory", () => {
     expect(assistant.content).toEqual([
       { type: "toolCall", id: "call123456", name: "lookup", arguments: {} },
     ]);
+  });
+});
+
+describe("dropAllThinkingBlocks", () => {
+  it("strips thinking blocks from the latest assistant turn (issue #81520)", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "hello" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private reasoning", thinkingSignature: "sig" },
+          { type: "text", text: "hi" },
+        ],
+      }),
+      castAgentMessage({ role: "user", content: "follow up" }),
+    ];
+
+    const result = dropAllThinkingBlocks(messages);
+    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
+  });
+
+  it("replaces thinking-only assistant turn with a placeholder text block", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "hi" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "only thoughts", thinkingSignature: "sig" },
+        ],
+      }),
+    ];
+
+    const result = dropAllThinkingBlocks(messages);
+    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(assistant.content).toEqual([
+      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+    ]);
+  });
+
+  it("strips redacted_thinking blocks across every assistant turn", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "a" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", data: "opaque" },
+          { type: "text", text: "first" },
+        ],
+      }),
+      castAgentMessage({ role: "user", content: "b" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "more", thinkingSignature: "sig" },
+          { type: "text", text: "second" },
+        ],
+      }),
+    ];
+
+    const result = dropAllThinkingBlocks(messages);
+    const first = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+    const second = result[3] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(first.content).toEqual([{ type: "text", text: "first" }]);
+    expect(second.content).toEqual([{ type: "text", text: "second" }]);
+  });
+
+  it("returns the original reference when no thinking blocks are present", () => {
+    const messages = createNoThinkingMessages();
+    expect(dropAllThinkingBlocks(messages)).toBe(messages);
   });
 });
 

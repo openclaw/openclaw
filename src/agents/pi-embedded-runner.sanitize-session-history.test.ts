@@ -55,7 +55,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => ({
             }
             if (provider === "github-copilot" && modelId.includes("claude")) {
               return {
-                dropThinkingBlocks: true,
+                dropAllThinkingBlocks: true,
               };
             }
             return undefined;
@@ -1298,24 +1298,20 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
-  it("preserves latest assistant thinking blocks for github-copilot models", async () => {
+  it("strips thinking blocks from latest assistant turn for github-copilot Claude (#81520)", async () => {
     setNonGoogleModelApi();
 
     const messages = makeThinkingAndTextAssistantMessages("reasoning_text");
 
     const result = await sanitizeGithubCopilotHistory({ messages });
     const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([
-      {
-        type: "thinking",
-        thinking: "internal",
-        thinkingSignature: "reasoning_text",
-      },
-      { type: "text", text: "hi" },
-    ]);
+    // Copilot's Claude proxy rejects persisted thinking blocks on follow-up
+    // turns (HTTP 400) regardless of position, and exposes no signed-thinking
+    // replay protocol — so the latest assistant turn must be sanitized too.
+    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
   });
 
-  it("preserves latest assistant turn when all content is thinking blocks (github-copilot)", async () => {
+  it("replaces thinking-only latest assistant turn with a placeholder (github-copilot)", async () => {
     setNonGoogleModelApi();
 
     const messages: AgentMessage[] = [
@@ -1334,16 +1330,18 @@ describe("sanitizeSessionHistory", () => {
 
     expect(result).toHaveLength(3);
     const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([
-      {
-        type: "thinking",
-        thinking: "some reasoning",
-        thinkingSignature: "reasoning_text",
-      },
-    ]);
+    // Thinking-only turns become a neutral text placeholder so the assistant
+    // turn survives provider-side filters that drop empty content arrays.
+    expect(
+      assistant.content.every(
+        (block: { type: string }) =>
+          block.type !== "thinking" && block.type !== "redacted_thinking",
+      ),
+    ).toBe(true);
+    expect(assistant.content.length).toBeGreaterThan(0);
   });
 
-  it("preserves thinking blocks alongside tool_use blocks in latest assistant message (github-copilot)", async () => {
+  it("drops thinking blocks alongside tool_use blocks in latest assistant message (github-copilot)", async () => {
     setNonGoogleModelApi();
 
     const messages: AgentMessage[] = [
@@ -1361,7 +1359,7 @@ describe("sanitizeSessionHistory", () => {
 
     const result = await sanitizeGithubCopilotHistory({ messages });
     const types = getAssistantContentTypes(result);
-    expect(types).toContain("thinking");
+    expect(types).not.toContain("thinking");
     expect(types).toContain("toolCall");
     expect(types).toContain("text");
   });
@@ -1569,6 +1567,7 @@ describe("sanitizeSessionHistory", () => {
         sanitizeThoughtSignatures: undefined,
         sanitizeThinkingSignatures: false,
         dropThinkingBlocks: false,
+        dropAllThinkingBlocks: false,
         applyGoogleTurnOrdering: false,
         validateGeminiTurns: false,
         validateAnthropicTurns: true,
@@ -1724,7 +1723,7 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
-  it("keeps mutable thinking turns outside exact anthropic replay", async () => {
+  it("strips thinking blocks but normalizes tool name on github-copilot Claude replay", async () => {
     setNonGoogleModelApi();
 
     const messages = castAgentMessages([
@@ -1741,12 +1740,9 @@ describe("sanitizeSessionHistory", () => {
 
     const result = await sanitizeGithubCopilotHistory({ messages });
     const assistant = getAssistantMessage(result);
+    // Copilot Claude replay strips thinking from every assistant turn
+    // (issue #81520) while still normalizing tool names.
     expect(assistant.content).toEqual([
-      {
-        type: "thinking",
-        thinking: "I should use the read tool",
-        thinkingSignature: "reasoning_text",
-      },
       { type: "toolCall", id: "tool_123", name: "read", arguments: { path: "/tmp/test" } },
     ]);
   });
@@ -1851,6 +1847,7 @@ describe("sanitizeSessionHistory", () => {
       sanitizeThoughtSignatures: undefined,
       sanitizeThinkingSignatures: false,
       dropThinkingBlocks: true,
+      dropAllThinkingBlocks: false,
       applyGoogleTurnOrdering: false,
       validateGeminiTurns: false,
       validateAnthropicTurns: true,

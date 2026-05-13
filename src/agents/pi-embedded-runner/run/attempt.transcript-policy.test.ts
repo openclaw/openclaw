@@ -25,6 +25,7 @@ describe("resolveAttemptTranscriptPolicy", () => {
       preserveSignatures: true,
       sanitizeThinkingSignatures: false,
       dropThinkingBlocks: true,
+      dropAllThinkingBlocks: false,
       applyGoogleTurnOrdering: false,
       validateGeminiTurns: false,
       validateAnthropicTurns: true,

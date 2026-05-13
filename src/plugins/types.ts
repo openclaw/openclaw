@@ -779,6 +779,14 @@ export type ProviderReplayPolicy = {
     includeCamelCase?: boolean;
   };
   dropThinkingBlocks?: boolean;
+  /**
+   * Strip `thinking` and `redacted_thinking` content blocks from every
+   * assistant turn, including the latest one. Required for transports that
+   * reject persisted thinking blocks on follow-up turns regardless of position
+   * (for example GitHub Copilot's Claude proxy, which has no signed-thinking
+   * replay protocol). Implies `dropThinkingBlocks` semantics for prior turns.
+   */
+  dropAllThinkingBlocks?: boolean;
   dropReasoningFromHistory?: boolean;
   repairToolUseResultPairing?: boolean;
   applyAssistantFirstOrderingFix?: boolean;

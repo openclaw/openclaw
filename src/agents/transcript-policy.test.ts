@@ -124,6 +124,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
               return modelId.includes("claude")
                 ? {
                     dropThinkingBlocks: true,
+                    dropAllThinkingBlocks: false,
                   }
                 : {};
             case "mistral":

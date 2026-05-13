@@ -102,6 +102,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
             preserveSignatures: false,
             sanitizeThinkingSignatures: true,
             dropThinkingBlocks: false,
+            dropAllThinkingBlocks: false,
             applyGoogleTurnOrdering: false,
             validateGeminiTurns: false,
             validateAnthropicTurns: false,

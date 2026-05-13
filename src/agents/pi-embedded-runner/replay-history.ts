@@ -46,6 +46,7 @@ import {
 } from "../usage.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
 import {
+  dropAllThinkingBlocks,
   dropReasoningFromHistory,
   dropThinkingBlocks,
   stripInvalidThinkingSignatures,
@@ -728,9 +729,11 @@ export async function sanitizeSessionHistory(params: {
   const droppedReasoning = policy.dropReasoningFromHistory
     ? dropReasoningFromHistory(validatedThinkingSignatures)
     : validatedThinkingSignatures;
-  const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(droppedReasoning)
-    : droppedReasoning;
+  const droppedThinking = policy.dropAllThinkingBlocks
+    ? dropAllThinkingBlocks(droppedReasoning)
+    : policy.dropThinkingBlocks
+      ? dropThinkingBlocks(droppedReasoning)
+      : droppedReasoning;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
     allowProviderOwnedThinkingReplay,
