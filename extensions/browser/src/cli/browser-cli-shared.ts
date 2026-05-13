@@ -13,6 +13,8 @@ type BrowserRequestParams = {
   body?: unknown;
 };
 
+const BROWSER_REQUEST_GATEWAY_SCOPES = ["operator.admin"] as const;
+
 function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, string> | undefined {
   if (!query) {
     return undefined;
@@ -53,7 +55,7 @@ export async function callBrowserRequest<T>(
       body: params.body,
       timeoutMs: resolvedTimeout,
     },
-    { progress: extra?.progress },
+    { progress: extra?.progress, scopes: [...BROWSER_REQUEST_GATEWAY_SCOPES] },
   );
   if (payload === undefined) {
     throw new Error("Unexpected browser.request response");
