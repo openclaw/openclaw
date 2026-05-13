@@ -10,12 +10,14 @@ import {
 } from "yaml";
 import type { OcPath } from "../oc-path.js";
 import {
+  formatOcPath,
   isPositionalSeg,
   isQuotedSeg,
   resolvePositionalSeg,
   splitRespectingBrackets,
   unquoteSeg,
 } from "../oc-path.js";
+import { guardSentinel } from "../sentinel.js";
 import type { YamlAst } from "./ast.js";
 
 export type YamlEditResult =
@@ -29,6 +31,7 @@ export function setYamlOcPath(ast: YamlAst, path: OcPath, newValue: unknown): Ya
   if (ast.doc.contents === null) {
     return { ok: false, reason: "no-root" };
   }
+  guardYamlSentinel(newValue, formatOcPath(path));
 
   const rawSegments = pathSegments(path);
   if (rawSegments.length === 0) {
@@ -58,6 +61,7 @@ export function insertYamlOcPath(
   if (ast.doc.contents === null) {
     return { ok: false, reason: "no-root" };
   }
+  guardYamlSentinel(newValue, `${formatOcPath(parentPath)}/${formatInsertionMarker(marker)}`);
 
   const rawParentSegments = pathSegments(parentPath);
   const segments =
@@ -74,40 +78,26 @@ export function insertYamlOcPath(
     return { ok: false, reason: "unresolved" };
   }
 
-  if (
-    typeof parent === "object" &&
-    "items" in parent &&
-    Array.isArray((parent as { items: unknown[] }).items)
-  ) {
-    const items = (parent as { items: { key?: unknown }[] }).items;
-    const isMapLike = items.every((p) => "key" in p);
-
-    if (isMapLike) {
-      if (typeof marker !== "object" || marker.kind !== "keyed") {
-        return { ok: false, reason: "unresolved" };
-      }
-      if (cloned.hasIn([...segments, marker.key])) {
-        return { ok: false, reason: "unresolved" };
-      }
-      cloned.setIn([...segments, marker.key], newValue);
-      return { ok: true, ast: { kind: "yaml", raw: cloned.toString(), doc: cloned, lineCounter } };
+  if (isMap(parent)) {
+    if (typeof marker !== "object" || marker.kind !== "keyed") {
+      return { ok: false, reason: "unresolved" };
     }
+    if (cloned.hasIn([...segments, marker.key])) {
+      return { ok: false, reason: "unresolved" };
+    }
+    cloned.setIn([...segments, marker.key], newValue);
+    return { ok: true, ast: { kind: "yaml", raw: cloned.toString(), doc: cloned, lineCounter } };
+  }
 
+  if (isSeq(parent)) {
     if (typeof marker === "object" && marker.kind === "keyed") {
       return { ok: false, reason: "unresolved" };
     }
-    const seqItems = items as unknown[];
     if (marker === "+") {
       cloned.addIn(segments, newValue);
     } else if (typeof marker === "object" && marker.kind === "indexed") {
-      const idx = Math.min(marker.index, seqItems.length);
-      const current = cloned.getIn(segments) as unknown[] | undefined;
-      if (!Array.isArray(current)) {
-        return { ok: false, reason: "unresolved" };
-      }
-      const newArr = [...current];
-      newArr.splice(idx, 0, newValue);
-      cloned.setIn(segments, newArr);
+      const idx = Math.min(marker.index, parent.items.length);
+      parent.items.splice(idx, 0, cloned.createNode(newValue) as Node);
     }
     return { ok: true, ast: { kind: "yaml", raw: cloned.toString(), doc: cloned, lineCounter } };
   }
@@ -180,6 +170,28 @@ function pathSegments(path: OcPath): string[] {
   collect(path.item);
   collect(path.field);
   return segs;
+}
+
+function formatInsertionMarker(
+  marker: "+" | { kind: "keyed"; key: string } | { kind: "indexed"; index: number },
+): string {
+  if (marker === "+") {
+    return "+";
+  }
+  return marker.kind === "keyed" ? `+${marker.key}` : `+${marker.index}`;
+}
+
+function guardYamlSentinel(value: unknown, ocPath: string): void {
+  guardSentinel(value, ocPath);
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => guardYamlSentinel(item, `${ocPath}/${index}`));
+    return;
+  }
+  if (value !== null && typeof value === "object") {
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      guardYamlSentinel(child, `${ocPath}/${key}`);
+    }
+  }
 }
 
 function cloneDoc(doc: Document.Parsed): { doc: Document.Parsed; lineCounter: LineCounter } {

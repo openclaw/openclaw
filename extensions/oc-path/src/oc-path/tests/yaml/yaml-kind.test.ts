@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { inferKind } from "../../dispatch.js";
 import { parseOcPath } from "../../oc-path.js";
+import { OcEmitSentinelError, REDACTED_SENTINEL } from "../../sentinel.js";
 import { resolveOcPath, setOcPath } from "../../universal.js";
 import { setYamlOcPath } from "../../yaml/edit.js";
 import { emitYaml } from "../../yaml/emit.js";
@@ -222,6 +223,15 @@ describe("universal verbs — yaml insertion", () => {
     }
   });
 
+  it("appends to an empty yaml seq with `+`", () => {
+    const { ast } = parseYaml("items: []\n");
+    const r = setOcPath(ast, parseOcPath("oc://x.yaml/items/+"), '"a"');
+    expect(r.ok).toBe(true);
+    if (r.ok && r.ast.kind === "yaml") {
+      expect(r.ast.raw).toContain("items: [ a ]");
+    }
+  });
+
   it("adds key to yaml map with `+key`", () => {
     const { ast } = parseYaml("config:\n  a: 1\n");
     const r = setOcPath(ast, parseOcPath("oc://x.yaml/config/+b"), "2");
@@ -235,5 +245,19 @@ describe("universal verbs — yaml insertion", () => {
     const { ast } = parseYaml("config:\n  a: 1\n");
     const r = setOcPath(ast, parseOcPath("oc://x.yaml/config/+a"), "99");
     expect(r.ok).toBe(false);
+  });
+
+  it("rejects sentinel-bearing yaml replacements before raw emit", () => {
+    const { ast } = parseYaml("token: safe\n");
+    expect(() => setOcPath(ast, parseOcPath("oc://x.yaml/token"), REDACTED_SENTINEL)).toThrow(
+      OcEmitSentinelError,
+    );
+  });
+
+  it("rejects sentinel-bearing yaml insertions before raw emit", () => {
+    const { ast } = parseYaml("items: []\n");
+    expect(() =>
+      setOcPath(ast, parseOcPath("oc://x.yaml/items/+"), `{"token":"${REDACTED_SENTINEL}"}`),
+    ).toThrow(OcEmitSentinelError);
   });
 });
