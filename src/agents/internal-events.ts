@@ -65,7 +65,7 @@ function sanitizeMultilineField(value: string, fallback: string): string {
   return sanitized || fallback;
 }
 
-function sanitizeTaskResultField(value: string, fallback: string): string {
+export function sanitizeTaskCompletionResult(value: string, fallback: string): string {
   return truncateTaskCompletionResult(sanitizeMultilineField(value, fallback));
 }
 
@@ -75,7 +75,7 @@ function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): str
   const announceType = sanitizeSingleLineField(event.announceType, "unknown");
   const taskLabel = sanitizeSingleLineField(event.taskLabel, "unnamed task");
   const statusLabel = sanitizeSingleLineField(event.statusLabel, event.status);
-  const result = sanitizeTaskResultField(event.result, "(no output)");
+  const result = sanitizeTaskCompletionResult(event.result, "(no output)");
   const lines = [
     "[Internal task completion event]",
     `source: ${event.source}`,
@@ -103,7 +103,7 @@ function formatTaskCompletionEventForPlainPrompt(event: AgentTaskCompletionInter
   const announceType = sanitizeSingleLineField(event.announceType, "unknown");
   const taskLabel = sanitizeSingleLineField(event.taskLabel, "unnamed task");
   const statusLabel = sanitizeSingleLineField(event.statusLabel, event.status);
-  const result = sanitizeTaskResultField(event.result, "(no output)");
+  const result = sanitizeTaskCompletionResult(event.result, "(no output)");
   const lines = [
     "A background task completed. Use this result to reply to the user in your normal assistant voice.",
     "",

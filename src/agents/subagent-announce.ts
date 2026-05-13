@@ -14,7 +14,11 @@ import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
-import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
+import {
+  formatAgentInternalEventsForPrompt,
+  sanitizeTaskCompletionResult,
+  type AgentInternalEvent,
+} from "./internal-events.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
@@ -514,7 +518,7 @@ export async function runSubagentAnnounceFlow(params: {
         taskLabel,
         status: outcome.status,
         statusLabel,
-        result: findings,
+        result: sanitizeTaskCompletionResult(findings, "(no output)"),
         statsLine,
         replyInstruction,
       },

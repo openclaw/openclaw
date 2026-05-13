@@ -15,6 +15,7 @@ export const expectedAugmentedOpenaiCodexCatalogEntries = [
   { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
   { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
   { provider: "openai-codex", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
+  { provider: "openai-codex", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
 ];
 
 export const expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55 = [
@@ -66,7 +67,7 @@ export async function expectAugmentedCodexCatalog(
       entries: openaiCodexCatalogEntries,
     },
   })) as Array<Record<string, unknown>>;
-  expect(result.length).toBeGreaterThanOrEqual(expectedEntries.length);
+  expect(result).toHaveLength(expectedEntries.length);
   for (const entry of expectedEntries) {
     expect(result).toContainEqual(expect.objectContaining(entry));
   }

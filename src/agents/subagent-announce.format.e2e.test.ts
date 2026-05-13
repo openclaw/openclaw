@@ -20,6 +20,7 @@ import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
+import { MAX_TASK_COMPLETION_RESULT_CHARS } from "./internal-events.js";
 import * as piEmbedded from "./pi-embedded-runner/runs.js";
 import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
@@ -533,6 +534,51 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.internalEvents?.[0]?.status).toBe("ok");
     expect(call?.params?.internalEvents?.[0]?.statusLabel).toBe("completed successfully");
     expect(call?.params?.internalEvents?.[0]?.result).toContain("Worker executed successfully");
+  });
+
+  it("bounds task completion result before handing it to the requester agent", async () => {
+    const largeResult = `START-${"x".repeat(MAX_TASK_COMPLETION_RESULT_CHARS + 5000)}-END`;
+    callGatewaySpy.mockImplementation(async (req: unknown) => {
+      const typed = req as { method?: string; params?: { sessionKey?: string } };
+      if (typed.method === "agent") {
+        return await agentSpy(typed);
+      }
+      if (typed.method === "agent.wait") {
+        return { status: "ok", startedAt: 10, endedAt: 20 };
+      }
+      if (typed.method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: largeResult }] }],
+        };
+      }
+      if (typed.method === "sessions.patch" || typed.method === "sessions.delete") {
+        return {};
+      }
+      return {};
+    });
+    readLatestAssistantReplyMock.mockResolvedValue(largeResult);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-large-result",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: true,
+      startedAt: 10,
+      endedAt: 20,
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: { internalEvents?: Array<{ result?: string }> };
+    };
+    const result = call?.params?.internalEvents?.[0]?.result ?? "";
+    expect(result).toContain("START-");
+    expect(result).toContain("-END");
+    expect(result).toContain("OpenClaw truncated oversized child result");
+    expect(result.length).toBeLessThan(MAX_TASK_COMPLETION_RESULT_CHARS + 1000);
   });
 
   it("uses child-run announce identity for direct idempotency", async () => {

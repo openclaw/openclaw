@@ -2076,10 +2076,7 @@ describe("provider-runtime", () => {
           ],
         },
       }),
-    ).resolves.toEqual([
-      ...expectedAugmentedOpenaiCodexCatalogEntries,
-      { provider: "openai-codex", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
-    ]);
+    ).resolves.toEqual(expectedAugmentedOpenaiCodexCatalogEntries);
 
     expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
       expect.objectContaining({

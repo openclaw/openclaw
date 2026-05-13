@@ -1623,6 +1623,7 @@ export function listSessionsFromStore(params: {
       const fields = [
         resolveSessionListSearchDisplayName(key, entry),
         entry?.label,
+        entry?.origin?.label,
         entry?.subject,
         entry?.sessionId,
         key,

@@ -189,6 +189,24 @@ describe("listSessionsFromStore search", () => {
     }
   });
 
+  test("filters sessions by origin label", () => {
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:webchat:daniel": {
+          sessionId: "sess-webchat-1",
+          updatedAt: Date.now(),
+          origin: { label: "Daniel WebChat" },
+        } as SessionEntry,
+      },
+      opts: { search: "webchat" },
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].key).toBe("agent:main:webchat:daniel");
+  });
+
   test("hides cron run alias session keys from sessions list", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
