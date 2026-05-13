@@ -353,6 +353,42 @@ describe("buildInlineKeyboard", () => {
         },
       },
       {
+        name: "passes web_app buttons through",
+        input: [
+          [
+            {
+              text: "Launch",
+              web_app: { url: "https://example.com/app" },
+            },
+          ],
+        ],
+        expected: {
+          inline_keyboard: [
+            [
+              {
+                text: "Launch",
+                web_app: { url: "https://example.com/app" },
+              },
+            ],
+          ],
+        },
+      },
+      {
+        name: "prefers callback_data over web_app when both are present",
+        input: [
+          [
+            {
+              text: "Both",
+              callback_data: "cmd:both",
+              web_app: { url: "https://example.com/app" },
+            },
+          ],
+        ],
+        expected: {
+          inline_keyboard: [[{ text: "Both", callback_data: "cmd:both" }]],
+        },
+      },
+      {
         name: "filters invalid buttons and empty rows",
         input: [
           [
