@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/sessions: create configured agent main sessions before first `sessions_send` or gateway send, so agent-to-agent messages no longer fail when the target agent has not started yet.
 - gateway: pass Talk session scope to resolver [AI]. (#81379) Thanks @pgondhi987.
 - Gateway protocol: require v4 clients and stream explicit chat `deltaText`/`replace` frames so SDK clients can consume assistant updates without local diffing. (#80725) Thanks @samzong.
 - OpenAI plugin: clarify remote Codex OAuth login copy so tunneled users know sign-in may finish automatically before they paste the redirect URL. (#81301) Thanks @rubencu.
