@@ -91,13 +91,14 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   }
 
   const requestedByConnId = normalizeApprovalIdentity(params.record.requestedByConnId);
-  if (requestedByConnId) {
-    return requestedByConnId === normalizeApprovalIdentity(params.client?.connId);
-  }
-
   const requestedByClientId = normalizeApprovalIdentity(params.record.requestedByClientId);
-  if (requestedByClientId) {
-    return requestedByClientId === normalizeApprovalIdentity(params.client?.connect?.client?.id);
+  if (requestedByConnId || requestedByClientId) {
+    return (
+      (requestedByConnId !== null &&
+        requestedByConnId === normalizeApprovalIdentity(params.client?.connId)) ||
+      (requestedByClientId !== null &&
+        requestedByClientId === normalizeApprovalIdentity(params.client?.connect?.client?.id))
+    );
   }
 
   return true;

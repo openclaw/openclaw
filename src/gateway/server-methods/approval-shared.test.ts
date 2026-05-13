@@ -1,13 +1,45 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { handlePendingApprovalRequest } from "./approval-shared.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("../../infra/approval-turn-source.js", () => ({
   hasApprovalTurnSourceRoute: hasApprovalTurnSourceRouteMock,
 }));
+
+type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
+
+function createApprovalClient(params: {
+  connId: string;
+  clientId: string;
+  deviceId?: string;
+}): GatewayClient {
+  return {
+    connId: params.connId,
+    connect: {
+      client: { id: params.clientId },
+      device: params.deviceId ? { id: params.deviceId } : undefined,
+      scopes: ["operator.approvals"],
+    },
+  } as GatewayClient;
+}
+
+function createApprovalClientLookup(clients: GatewayClient[]): ApprovalClientLookup {
+  return (opts = {}) =>
+    new Set(
+      clients
+        .filter((client) => {
+          if (opts.excludeConnId && client.connId === opts.excludeConnId) {
+            return false;
+          }
+          return opts.filter?.(client, opts.record) ?? true;
+        })
+        .map((client) => client.connId)
+        .filter((connId): connId is string => typeof connId === "string" && connId.length > 0),
+    );
+}
 
 describe("handlePendingApprovalRequest", () => {
   afterEach(() => {
@@ -77,29 +109,20 @@ describe("handlePendingApprovalRequest", () => {
       context: {
         broadcast,
         broadcastToConnIds,
-        getApprovalClientConnIds: vi.fn(({ filter }) => {
-          const ownerClient = {
-            connId: "conn-owner-approval",
-            connect: {
-              client: { id: "client-owner" },
-              device: { id: "device-owner" },
-              scopes: ["operator.approvals"],
-            },
-          };
-          const otherClient = {
-            connId: "conn-other-approval",
-            connect: {
-              client: { id: "client-other" },
-              device: { id: "device-other" },
-              scopes: ["operator.approvals"],
-            },
-          };
-          return new Set(
-            [ownerClient, otherClient]
-              .filter((client) => filter?.(client as never) ?? true)
-              .map((client) => client.connId),
-          );
-        }),
+        getApprovalClientConnIds: vi.fn(
+          createApprovalClientLookup([
+            createApprovalClient({
+              connId: "conn-owner-approval",
+              clientId: "client-owner",
+              deviceId: "device-owner",
+            }),
+            createApprovalClient({
+              connId: "conn-other-approval",
+              clientId: "client-other",
+              deviceId: "device-other",
+            }),
+          ]),
+        ),
         hasExecApprovalClients: vi.fn(() => {
           throw new Error("expected targeted approval client lookup");
         }),
@@ -121,6 +144,75 @@ describe("handlePendingApprovalRequest", () => {
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "exec.approval.requested",
       expect.objectContaining({ id: "approval-visible" }),
+      visibleConnIds,
+      { dropIfSlow: true },
+    );
+
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    await requestPromise;
+  });
+
+  it("targets no-device approvals by client id after excluding the requester conn", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-no-device",
+    );
+    record.requestedByConnId = "conn-requester";
+    record.requestedByClientId = "client-owner";
+    const decisionPromise = manager.register(record, 60_000);
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const visibleConnIds = new Set(["conn-owner-approval"]);
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      decisionPromise,
+      respond,
+      context: {
+        broadcast,
+        broadcastToConnIds,
+        getApprovalClientConnIds: vi.fn(
+          createApprovalClientLookup([
+            createApprovalClient({
+              connId: "conn-requester",
+              clientId: "client-owner",
+            }),
+            createApprovalClient({
+              connId: "conn-owner-approval",
+              clientId: "client-owner",
+            }),
+            createApprovalClient({
+              connId: "conn-other-approval",
+              clientId: "client-other",
+            }),
+          ]),
+        ),
+        hasExecApprovalClients: vi.fn(() => {
+          throw new Error("expected targeted approval client lookup");
+        }),
+      } as unknown as GatewayRequestContext,
+      clientConnId: "conn-requester",
+      requestEventName: "exec.approval.requested",
+      requestEvent: {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      },
+      twoPhase: true,
+      deliverRequest: () => false,
+    });
+
+    await Promise.resolve();
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "exec.approval.requested",
+      expect.objectContaining({ id: "approval-no-device" }),
       visibleConnIds,
       { dropIfSlow: true },
     );
