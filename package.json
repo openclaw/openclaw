@@ -307,6 +307,10 @@
       "types": "./dist/plugin-sdk/outbound-runtime.d.ts",
       "default": "./dist/plugin-sdk/outbound-runtime.js"
     },
+    "./plugin-sdk/pair-loop-guard-runtime": {
+      "types": "./dist/plugin-sdk/pair-loop-guard-runtime.d.ts",
+      "default": "./dist/plugin-sdk/pair-loop-guard-runtime.js"
+    },
     "./plugin-sdk/poll-runtime": {
       "types": "./dist/plugin-sdk/poll-runtime.d.ts",
       "default": "./dist/plugin-sdk/poll-runtime.js"

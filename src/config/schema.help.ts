@@ -1001,8 +1001,8 @@ export const FIELD_HELP: Record<string, string> = {
   "models.providers.*.models[].agentRuntime.id":
     'Model agent runtime id: "pi", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli".',
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
-  "channels.matrix.allowBots":
-    'Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set "mentions" to only accept bot messages that visibly mention this bot.',
+  "channels.googlechat.botLoopProtection":
+    "Sliding-window guard for accepted Google Chat bot-to-bot loops. Defaults to the shared bot loop protection budget when allowBots lets bot-authored messages reach dispatch.",
   "channels.mattermost.botToken":
     "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
   "channels.mattermost.baseUrl":
@@ -1814,6 +1814,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Shows degraded/error heartbeat alerts when true so operator channels surface problems promptly. Keep enabled in production so broken channel states are visible.",
   "channels.defaults.heartbeat.useIndicator":
     "Enables concise indicator-style heartbeat rendering instead of verbose status text where supported. Use indicator mode for dense dashboards with many active channels.",
+  "channels.defaults.botLoopProtection":
+    "Default pair loop protection settings for channel providers that support bot-to-bot loop guards. Use provider-specific overrides only when one channel needs a different budget.",
+  "channels.defaults.botLoopProtection.enabled":
+    "Enables pair loop protection by default for supporting channels when bot-authored messages can reach dispatch. Providers may still disable the guard when bots are ignored.",
+  "channels.defaults.botLoopProtection.maxEventsPerWindow":
+    "Maximum events a sender/receiver pair may exchange within the configured window before suppression starts. Default for supporting channels is 20.",
+  "channels.defaults.botLoopProtection.windowSeconds":
+    "Sliding window length in seconds for pair loop budgets. Default for supporting channels is 60.",
+  "channels.defaults.botLoopProtection.cooldownSeconds":
+    "Cooldown seconds applied to a pair after it exceeds the loop budget. Default for supporting channels is 60.",
   "agents.defaults.heartbeat.includeSystemPromptSection":
     "Includes the default agent's ## Heartbeats system prompt section when true. Turn this off to keep heartbeat runtime behavior while omitting the heartbeat prompt instructions from the agent system prompt.",
   "agents.list.*.heartbeat.includeSystemPromptSection":
