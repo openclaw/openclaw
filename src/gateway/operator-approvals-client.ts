@@ -49,7 +49,7 @@ export async function createOperatorApprovalsGatewayClient(
     url: bootstrap.url,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
-    approvalRuntimeToken: getOperatorApprovalRuntimeToken(),
+    ...(params.gatewayUrl ? {} : { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }),
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: params.clientDisplayName,

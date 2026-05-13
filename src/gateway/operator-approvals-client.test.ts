@@ -117,6 +117,19 @@ describe("withOperatorApprovalsGatewayClient", () => {
     expect(clientState.options?.deviceIdentity).toBeUndefined();
   });
 
+  it("omits approval runtime token for explicit gateway URL overrides", async () => {
+    await withOperatorApprovalsGatewayClient(
+      {
+        config: {} as never,
+        gatewayUrl: "ws://127.0.0.1:18789",
+        clientDisplayName: "Matrix approval (@owner:example.org)",
+      },
+      async () => undefined,
+    );
+
+    expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
+  });
+
   it("keeps device identity for loopback approval clients without shared auth", async () => {
     bootstrapState.auth = { token: undefined, password: undefined };
 

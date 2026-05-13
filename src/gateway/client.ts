@@ -223,6 +223,8 @@ export class GatewayClient {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  private approvalRuntimeTokenCompatibilityDisabled = false;
+  private approvalRuntimeTokenRetryBudgetUsed = false;
   private pendingStartupReconnectDelayMs: number | null = null;
   private pendingConnectErrorDetailCode: string | null = null;
   private pendingConnectErrorDetails: unknown = null;
@@ -654,6 +656,19 @@ export class GatewayClient {
           this.ws?.close(1013, "gateway starting");
           return;
         }
+        if (
+          this.shouldRetryWithoutApprovalRuntimeToken({
+            error: err,
+            authApprovalRuntimeToken,
+          })
+        ) {
+          this.approvalRuntimeTokenCompatibilityDisabled = true;
+          this.approvalRuntimeTokenRetryBudgetUsed = true;
+          this.backoffMs = Math.min(this.backoffMs, 250);
+          logDebug("gateway rejected approval runtime auth field; retrying without it");
+          this.ws?.close(1008, "connect retry");
+          return;
+        }
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
         const msg = `gateway connect failed: ${String(err)}`;
         if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE || isGatewayClientStoppedError(err)) {
@@ -779,6 +794,26 @@ export class GatewayClient {
     );
   }
 
+  private shouldRetryWithoutApprovalRuntimeToken(params: {
+    error: unknown;
+    authApprovalRuntimeToken?: string;
+  }): boolean {
+    if (this.approvalRuntimeTokenRetryBudgetUsed) {
+      return false;
+    }
+    if (!params.authApprovalRuntimeToken) {
+      return false;
+    }
+    if (!(params.error instanceof GatewayClientRequestError)) {
+      return false;
+    }
+    if (params.error.gatewayCode !== "INVALID_REQUEST") {
+      return false;
+    }
+    const message = normalizeLowercaseStringOrEmpty(params.error.message);
+    return message.includes("invalid connect params") && message.includes("approvalruntimetoken");
+  }
+
   private isTrustedDeviceRetryEndpoint(): boolean {
     const rawUrl = this.opts.url ?? "ws://127.0.0.1:18789";
     try {
@@ -803,7 +838,9 @@ export class GatewayClient {
     const explicitBootstrapToken = normalizeOptionalString(this.opts.bootstrapToken);
     const explicitDeviceToken = normalizeOptionalString(this.opts.deviceToken);
     const authPassword = normalizeOptionalString(this.opts.password);
-    const authApprovalRuntimeToken = normalizeOptionalString(this.opts.approvalRuntimeToken);
+    const authApprovalRuntimeToken = this.approvalRuntimeTokenCompatibilityDisabled
+      ? undefined
+      : normalizeOptionalString(this.opts.approvalRuntimeToken);
     const storedAuth = this.loadStoredDeviceAuth(role);
     const storedToken = storedAuth?.token ?? null;
     const storedScopes = storedAuth?.scopes;
