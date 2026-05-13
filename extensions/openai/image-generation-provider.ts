@@ -882,6 +882,11 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
         const images = (
           await parseOpenAiCompatibleImageResponseAsync(data, {
             defaultMimeType: output.mimeType,
+            timeoutMs,
+            ssrfPolicy: req.ssrfPolicy,
+            allowPrivateNetwork,
+            dispatcherPolicy,
+            auditContext: "openai.image-url-download",
           })
         ).map((image, index) =>
           Object.assign(image, {

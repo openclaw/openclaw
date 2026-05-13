@@ -262,7 +262,14 @@ export function createOpenAiCompatibleImageGenerationProvider(
         );
         const images = await parseOpenAiCompatibleImageResponseAsync(
           (await response.json()) as OpenAiCompatibleImageResponsePayload,
-          options.response,
+          {
+            ...options.response,
+            timeoutMs,
+            ssrfPolicy: req.ssrfPolicy,
+            allowPrivateNetwork: resolvedAllowPrivateNetwork,
+            dispatcherPolicy,
+            auditContext: `${options.id}.image-url-download`,
+          },
         );
         if (options.emptyResponseError && images.length === 0) {
           throw new Error(options.emptyResponseError);

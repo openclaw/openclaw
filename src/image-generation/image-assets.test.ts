@@ -1,4 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const fetchWithTimeoutGuardedMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../media-understanding/shared.js", async () => {
+  const actual = await vi.importActual<typeof import("../media-understanding/shared.js")>(
+    "../media-understanding/shared.js",
+  );
+  return {
+    ...actual,
+    fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
+  };
+});
 import {
   generatedImageAssetFromDataUrl,
   imageFileExtensionForMimeType,
@@ -11,6 +23,9 @@ import {
 } from "./image-assets.js";
 
 describe("image asset helpers", () => {
+  beforeEach(() => {
+    fetchWithTimeoutGuardedMock.mockReset();
+  });
   it("converts buffers to image data URLs and parses them back", () => {
     const buffer = Buffer.from("png-bytes");
     const dataUrl = toImageDataUrl({ buffer, mimeType: "image/png" });
@@ -81,6 +96,13 @@ describe("image asset helpers", () => {
         }),
     );
 
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: new Response(pngBytes, {
+        headers: { "content-type": "image/png" },
+      }),
+      release: vi.fn(),
+    });
+
     const images = await parseOpenAiCompatibleImageResponseAsync(
       {
         data: [
@@ -90,10 +112,27 @@ describe("image asset helpers", () => {
           },
         ],
       },
-      { fetchFn: fetchMock, sniffMimeType: true },
+      {
+        fetchFn: fetchMock,
+        sniffMimeType: true,
+        timeoutMs: 12_345,
+        ssrfPolicy: { allowedHostnames: ["example.test"] },
+        dispatcherPolicy: { mode: "direct" },
+      },
     );
 
-    expect(fetchMock).toHaveBeenCalledWith("https://example.test/generated.png");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledWith(
+      "https://example.test/generated.png",
+      {},
+      12_345,
+      fetchMock,
+      {
+        ssrfPolicy: { allowedHostnames: ["example.test"] },
+        dispatcherPolicy: { mode: "direct" },
+        auditContext: "image-generation.openai-compatible.url-download",
+      },
+    );
     expect(images).toEqual([
       {
         buffer: pngBytes,

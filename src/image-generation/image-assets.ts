@@ -1,3 +1,5 @@
+import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { fetchWithTimeoutGuarded } from "../media-understanding/shared.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -176,34 +178,54 @@ async function generatedImageAssetFromOpenAiCompatibleUrlEntry(
     defaultMimeType?: string;
     fileNamePrefix?: string;
     fetchFn?: typeof fetch;
+    timeoutMs?: number;
+    ssrfPolicy?: SsrFPolicy;
+    allowPrivateNetwork?: boolean;
+    dispatcherPolicy?: PinnedDispatcherPolicy;
+    auditContext?: string;
   } = {},
 ): Promise<GeneratedImageAsset | undefined> {
   const url = normalizeOptionalString(entry.url);
   if (!url) {
     return undefined;
   }
-  const fetchFn = options.fetchFn ?? fetch;
-  const response = await fetchFn(url);
-  if (!response.ok) {
-    throw new Error(`OpenAI-compatible image URL download failed (${response.status})`);
+  const { response, release } = await fetchWithTimeoutGuarded(
+    url,
+    {},
+    options.timeoutMs,
+    options.fetchFn ?? fetch,
+    {
+      ssrfPolicy: options.allowPrivateNetwork
+        ? { ...options.ssrfPolicy, allowPrivateNetwork: true }
+        : options.ssrfPolicy,
+      dispatcherPolicy: options.dispatcherPolicy,
+      auditContext: options.auditContext ?? "image-generation.openai-compatible.url-download",
+    },
+  );
+  try {
+    if (!response.ok) {
+      throw new Error(`OpenAI-compatible image URL download failed (${response.status})`);
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const headerMimeType = normalizeOptionalString(response.headers.get("content-type"));
+    const defaultMimeType =
+      normalizeOptionalString(options.defaultMimeType) ?? DEFAULT_IMAGE_MIME_TYPE;
+    const detected = sniffImageMimeType(buffer, headerMimeType ?? defaultMimeType);
+    const mimeType = headerMimeType ?? detected.mimeType;
+    const prefix = normalizeOptionalString(options.fileNamePrefix) ?? DEFAULT_IMAGE_FILE_PREFIX;
+    const image: GeneratedImageAsset = {
+      buffer,
+      mimeType,
+      fileName: `${prefix}-${index + 1}.${detected.extension ?? imageFileExtensionForMimeType(mimeType)}`,
+    };
+    const revisedPrompt = normalizeOptionalString(entry.revised_prompt);
+    if (revisedPrompt) {
+      image.revisedPrompt = revisedPrompt;
+    }
+    return image;
+  } finally {
+    await release();
   }
-  const buffer = Buffer.from(await response.arrayBuffer());
-  const headerMimeType = normalizeOptionalString(response.headers.get("content-type"));
-  const defaultMimeType =
-    normalizeOptionalString(options.defaultMimeType) ?? DEFAULT_IMAGE_MIME_TYPE;
-  const detected = sniffImageMimeType(buffer, headerMimeType ?? defaultMimeType);
-  const mimeType = headerMimeType ?? detected.mimeType;
-  const prefix = normalizeOptionalString(options.fileNamePrefix) ?? DEFAULT_IMAGE_FILE_PREFIX;
-  const image: GeneratedImageAsset = {
-    buffer,
-    mimeType,
-    fileName: `${prefix}-${index + 1}.${detected.extension ?? imageFileExtensionForMimeType(mimeType)}`,
-  };
-  const revisedPrompt = normalizeOptionalString(entry.revised_prompt);
-  if (revisedPrompt) {
-    image.revisedPrompt = revisedPrompt;
-  }
-  return image;
 }
 
 async function generatedImageAssetFromOpenAiCompatibleEntryAsync(
@@ -214,6 +236,11 @@ async function generatedImageAssetFromOpenAiCompatibleEntryAsync(
     fileNamePrefix?: string;
     sniffMimeType?: boolean;
     fetchFn?: typeof fetch;
+    timeoutMs?: number;
+    ssrfPolicy?: SsrFPolicy;
+    allowPrivateNetwork?: boolean;
+    dispatcherPolicy?: PinnedDispatcherPolicy;
+    auditContext?: string;
   } = {},
 ): Promise<GeneratedImageAsset | undefined> {
   return (
@@ -242,6 +269,11 @@ export async function parseOpenAiCompatibleImageResponseAsync(
     fileNamePrefix?: string;
     sniffMimeType?: boolean;
     fetchFn?: typeof fetch;
+    timeoutMs?: number;
+    ssrfPolicy?: SsrFPolicy;
+    allowPrivateNetwork?: boolean;
+    dispatcherPolicy?: PinnedDispatcherPolicy;
+    auditContext?: string;
   } = {},
 ): Promise<GeneratedImageAsset[]> {
   const images = await Promise.all(
