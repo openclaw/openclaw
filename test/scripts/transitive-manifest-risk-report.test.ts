@@ -181,9 +181,14 @@ describe("transitive-manifest-risk-report", () => {
       packageVersions: [
         { packageName: "@earendil-works/pi-ai", version: "0.74.0" },
         { packageName: "aaa-package", version: "1.0.0" },
+        { packageName: "recent-package", version: "1.0.0" },
       ],
+      now: new Date("2026-05-12T00:00:00Z"),
+      minimumReleaseAgeMinutes: 2_880,
+      minimumReleaseAgeExclude: ["recent-package@1.0.0"],
       manifestLoader: async ({ packageName }) => ({
-        publishedAt: "2026-04-01T00:00:00Z",
+        publishedAt:
+          packageName === "recent-package" ? "2026-05-11T23:00:00Z" : "2026-04-01T00:00:00Z",
         manifest:
           packageName === "@earendil-works/pi-ai"
             ? {
@@ -191,11 +196,17 @@ describe("transitive-manifest-risk-report", () => {
                   "@mistralai/mistralai": "^2.2.0",
                 },
               }
-            : {
-                dependencies: {
-                  "aaa-dependency": "^1.0.0",
+            : packageName === "recent-package"
+              ? {
+                  dependencies: {
+                    "recent-dependency": "^1.0.0",
+                  },
+                }
+              : {
+                  dependencies: {
+                    "aaa-dependency": "^1.0.0",
+                  },
                 },
-              },
       }),
     });
 
@@ -206,7 +217,11 @@ describe("transitive-manifest-risk-report", () => {
     expect(markdown).toContain("published package manifests for resolved packages");
     expect(markdown).toContain("It is report-only.");
     expect(markdown).toContain("Resolved package versions inspected");
-    expect(markdown).toContain("Findings covered by workspace policy exclusions");
+    expect(markdown).toContain("Actionable findings");
+    expect(markdown).toContain("Signals covered by workspace policy exclusions");
+    expect(markdown).toContain("## Actionable Findings By Type");
+    expect(markdown).toContain("## Signals Covered By Workspace Policy Exclusions");
+    expect(markdown).toContain("not included in the actionable finding totals");
     expect(markdown).toContain("## Complete Evidence");
     expect(markdown).toContain(
       "The complete actionable finding list is available in the JSON report",

@@ -621,13 +621,13 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
     "## Summary",
     "",
     `- Resolved package versions inspected: ${report.packageVersions}`,
-    `- Findings: ${report.findingCount}`,
+    `- Actionable findings: ${report.findingCount}`,
     `- Known findings: ${report.knownFindingCount}`,
-    `- Findings covered by workspace policy exclusions: ${report.workspaceExcludedFindingCount ?? 0}`,
+    `- Signals covered by workspace policy exclusions: ${report.workspaceExcludedFindingCount ?? 0}`,
     `- Metadata failures: ${report.metadataFailures.length}`,
     `- Unused known-risk entries: ${report.unusedExceptions.length}`,
     "",
-    "## Findings By Type",
+    "## Actionable Findings By Type",
     "",
   ];
   for (const [type, count] of Object.entries(report.byType).toSorted(([left], [right]) =>
@@ -638,7 +638,11 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
   lines.push("");
 
   if (Object.keys(report.workspaceExcludedByType ?? {}).length > 0) {
-    lines.push("## Findings Covered By Workspace Policy Exclusions", "");
+    lines.push("## Signals Covered By Workspace Policy Exclusions", "");
+    lines.push(
+      "These are not included in the actionable finding totals above. They are tracked separately because the workspace package-manager policy already excludes them.",
+    );
+    lines.push("");
     for (const [type, count] of Object.entries(report.workspaceExcludedByType ?? {}).toSorted(
       ([left], [right]) => left.localeCompare(right),
     )) {
