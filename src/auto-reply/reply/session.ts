@@ -105,6 +105,14 @@ function resolveExplicitSessionEndReason(matchedResetTriggerLower?: string): Rep
   return matchedResetTriggerLower === "/reset" ? "reset" : "new";
 }
 
+function shouldPreserveCommandLineBreaks(commandSource: string): boolean {
+  const trimmed = commandSource.trimStart();
+  return (
+    /^\/skill(?:@|[\s:]|$)/i.test(trimmed) ||
+    /^\/[a-z0-9]+_[a-z0-9_]*(?:@[^\s]+)?(?:[\s:]|$)/i.test(trimmed)
+  );
+}
+
 function resolveSessionDefaultAccountId(params: {
   cfg: OpenClawConfig;
   channelRaw?: string;
@@ -335,7 +343,9 @@ export async function initSessionState(params: {
   // IMPORTANT: do NOT lowercase the entire command body.
   // Users often pass case-sensitive arguments (e.g. filesystem paths on Linux).
   // Command parsing downstream lowercases only the command token for matching.
-  const triggerBodyNormalized = stripStructuralPrefixes(commandSource).trim();
+  const triggerBodyNormalized = stripStructuralPrefixes(commandSource, {
+    preserveLineBreaks: shouldPreserveCommandLineBreaks(commandSource),
+  }).trim();
 
   // Use CommandBody/RawBody for reset trigger matching (clean message without structural context).
   const rawBody = commandSource;

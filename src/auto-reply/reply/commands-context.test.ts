@@ -51,6 +51,30 @@ describe("buildCommandContext", () => {
     expect(result.commandBodyNormalized).toBe("/reset soft re-read persona files");
   });
 
+  it("preserves multiline slash skill args through command context", () => {
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      From: "user",
+      To: "bot",
+      BotUsername: "openclaw",
+      Body: "/skill@openclaw demo-skill\nfirst line\nsecond line",
+      RawBody: "/skill@openclaw demo-skill\nfirst line\nsecond line",
+      CommandBody: "/skill@openclaw demo-skill\nfirst line\nsecond line",
+      BodyForCommands: "/skill@openclaw demo-skill\nfirst line\nsecond line",
+    });
+
+    const result = buildCommandContext({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      isGroup: false,
+      triggerBodyNormalized: "/skill@openclaw demo-skill\nfirst line\nsecond line",
+      commandAuthorized: true,
+    });
+
+    expect(result.commandBodyNormalized).toBe("/skill demo-skill\nfirst line\nsecond line");
+  });
+
   it("maps explicit gateway origin into command context", () => {
     const ctx = buildTestCtx({
       Provider: "internal",

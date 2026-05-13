@@ -752,6 +752,29 @@ describe("initSessionState RawBody", () => {
     expect(result.triggerBodyNormalized).toBe("/NEW KeepThisCase");
   });
 
+  it("preserves multiline skill command args through session command setup", async () => {
+    const root = await makeCaseDir("openclaw-rawbody-skill-multiline-");
+    const storePath = path.join(root, "sessions.json");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Provider: "telegram",
+        Surface: "telegram",
+        BotUsername: "openclaw",
+        BodyForCommands: "/skill@openclaw demo-skill\nfirst line\nsecond line",
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:dm:s1",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.triggerBodyNormalized).toBe(
+      "/skill@openclaw demo-skill\nfirst line\nsecond line",
+    );
+  });
+
   it("drops cached skills snapshot when /new rotates an existing session", async () => {
     const root = await makeCaseDir("openclaw-rawbody-reset-skills-");
     const storePath = path.join(root, "sessions.json");
