@@ -241,7 +241,7 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toContain("- anthropic");
   });
 
-  it("hides legacy runtime providers from /models provider lists", async () => {
+  it("hides bare backwards-compat aliases but surfaces CLI runtime providers in /models lists", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValueOnce([
       { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
       { provider: "codex-cli", id: "gpt-5.5", name: "GPT-5.5" },
@@ -251,6 +251,14 @@ describe("handleModelsCommand", () => {
       { provider: "google", id: "gemini-3.1-pro-preview", name: "Gemini Pro" },
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
     ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set([
+      "anthropic",
+      "google",
+      "openai",
+      "claude-cli",
+      "codex-cli",
+      "google-gemini-cli",
+    ]);
 
     const result = await handleModelsCommand(
       buildParams("/models", {
@@ -259,13 +267,16 @@ describe("handleModelsCommand", () => {
       true,
     );
 
+    // Embedded harness providers stay visible
     expect(result?.reply?.text).toContain("- anthropic (1)");
     expect(result?.reply?.text).toContain("- google (1)");
     expect(result?.reply?.text).toContain("- openai (1)");
-    expect(result?.reply?.text).not.toContain("- codex");
-    expect(result?.reply?.text).not.toContain("- codex-cli");
-    expect(result?.reply?.text).not.toContain("- claude-cli");
-    expect(result?.reply?.text).not.toContain("- google-gemini-cli");
+    // CLI runtime providers are first-class and remain user-addressable in the picker
+    expect(result?.reply?.text).toContain("- claude-cli (1)");
+    expect(result?.reply?.text).toContain("- codex-cli (1)");
+    expect(result?.reply?.text).toContain("- google-gemini-cli (1)");
+    // The bare `codex` alias is the only true legacy entry (no `-cli` suffix) and stays hidden
+    expect(result?.reply?.text).not.toMatch(/^- codex \(/m);
   });
 
   it("labels the default runtime choice as OpenClaw Pi", async () => {

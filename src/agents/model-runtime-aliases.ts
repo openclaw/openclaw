@@ -88,8 +88,19 @@ export function migrateLegacyRuntimeModelRef(raw: string): {
   };
 }
 
+/**
+ * True for aliases whose only purpose is backwards compatibility with the
+ * pre-runtime-split addressing scheme (e.g. the bare `codex` provider that
+ * encoded the codex runtime in the model ref).
+ *
+ * CLI runtime aliases (`claude-cli`, `codex-cli`, `google-gemini-cli`) are
+ * NOT legacy — they remain the canonical user-addressable handle for picking
+ * a CLI runtime, and surface in `/models` pickers as first-class providers
+ * alongside the embedded harness providers (`anthropic`, `openai`, ...).
+ */
 export function isLegacyRuntimeModelProvider(provider: string): boolean {
-  return Boolean(resolveLegacyRuntimeModelProviderAlias(provider));
+  const alias = resolveLegacyRuntimeModelProviderAlias(provider);
+  return alias !== undefined && !alias.cli;
 }
 
 export function isCliRuntimeAlias(runtime: string | undefined): boolean {
