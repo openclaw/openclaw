@@ -117,6 +117,7 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/policy-hash-mismatch",
       "policy/attestation-hash-mismatch",
       "policy/channels-denied-provider",
+      "policy/channels-denied-provider-running",
       "policy/mcp-denied-server",
       "policy/mcp-unapproved-server",
       "policy/models-denied-provider",
@@ -546,6 +547,64 @@ describe("registerPolicyDoctorChecks", () => {
     await expect(runPolicyChecks(ctx(configPath, cfg))).resolves.toMatchObject({
       findings: [],
     });
+  });
+
+  it("reports denied channels that are still running in gateway runtime evidence", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      channels: { telegram: { enabled: false } },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify(
+        {
+          channels: {
+            denyRules: [
+              {
+                id: "no-telegram",
+                when: { provider: "telegram" },
+                reason: "Telegram is not approved for this workspace.",
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks({
+      ...ctx(configPath, cfg),
+      runtimeEvidence: {
+        channels: {
+          channelAccounts: {
+            telegram: {
+              default: {
+                accountId: "default",
+                enabled: true,
+                configured: true,
+                running: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/channels-denied-provider-running",
+        severity: "error",
+        path: "gateway runtime",
+        target: "runtime:channels/telegram/accounts/default",
+        requirement: "oc://policy.jsonc/channels/denyRules/#0",
+        fixHint: "Telegram is not approved for this workspace.",
+      }),
+    ]);
   });
 
   it("does not run policy checks for empty category namespaces", async () => {

@@ -56,6 +56,7 @@ describe("policy commands", () => {
     const policyHash = policyDocumentHash(policy);
     const evidence = {
       channels: [],
+      channelRuntime: [],
       mcpServers: [],
       modelProviders: [],
       modelRefs: [],
