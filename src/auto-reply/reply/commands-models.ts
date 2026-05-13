@@ -6,15 +6,14 @@ import {
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
-import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
+import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
 import {
   isCliRuntimeProvider,
   listLegacyRuntimeModelProviderAliases,
 } from "../../agents/model-runtime-aliases.js";
 import {
   buildModelAliasIndex,
-  // Preserve Plugin SDK API baseline source lines after unused import cleanup.
   normalizeProviderId,
   resolveBareModelDefaultProvider,
   resolveDefaultModelForAgent,
@@ -71,6 +70,15 @@ type ParsedModelsCommand =
       modelId?: string;
     };
 
+function isModelsBrowseVisibleProvider(provider: string): boolean {
+  const normalized = normalizeProviderId(provider);
+  return isCliRuntimeProvider(normalized) || isModelPickerVisibleProvider(normalized);
+}
+
+function usesUnfilteredCatalogModels(provider: string): boolean {
+  return isCliRuntimeProvider(provider);
+}
+
 export async function buildModelsProviderData(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -112,18 +120,12 @@ export async function buildModelsProviderData(
   const byProvider = new Map<string, Set<string>>();
   const add = (p: string, m: string) => {
     const key = normalizeProviderId(p);
-    if (!isModelPickerVisibleProvider(key)) {
+    if (!isModelsBrowseVisibleProvider(key)) {
       return;
     }
-    // CLI runtime providers (`claude-cli`, `codex-cli`, `google-gemini-cli`) are
-    // externally maintained — the CLI binary owns what it supports — so user
-    // `agents.defaults.models` narrowing must NOT gate which entries surface.
-    // We still apply `isModelPickerVisibleProvider` (which already keeps CLI
-    // runtimes visible) and rely on the unfiltered `catalog` loop below to
-    // contribute the full per-provider model set.
     if (
       restrictToProviderWildcards &&
-      !isCliRuntimeProvider(key) &&
+      !usesUnfilteredCatalogModels(key) &&
       !visibilityPolicy.allows({ provider: key, model: m })
     ) {
       return;
@@ -183,14 +185,6 @@ export async function buildModelsProviderData(
     add(entry.provider, entry.id);
   }
 
-  // The two CLI-runtime population passes below must respect the existing
-  // unauthenticated-provider hiding contract. `resolveVisibleModelCatalog`
-  // already auth-gates the default view via `createProviderAuthChecker`; the
-  // CLI passes are *additive* on top of that visible catalog (they widen the
-  // per-provider model set for CLI runtimes), so they must apply the same
-  // auth check or they'd surface CLI provider buttons for users with no CLI
-  // auth/config. `view === "all"` matches `resolveVisibleModelCatalog`'s
-  // short-circuit and skips the auth gate.
   const hasAuth =
     options.view === "all"
       ? () => true
@@ -203,18 +197,8 @@ export async function buildModelsProviderData(
           agentDir: agentId ? resolveAgentDir(cfg, agentId) : undefined,
         });
 
-  // For CLI runtime providers, surface every model in the unfiltered catalog —
-  // user `agents.defaults.models` only declares per-ref metadata (alias,
-  // runtime params, etc.) and must not gate picker discovery for runtimes
-  // whose model set is owned by an external CLI binary. The catalog itself
-  // is populated by each provider plugin's ProviderPluginCatalog seam (e.g.
-  // `extensions/anthropic/provider-discovery.ts` contributes the full
-  // `claude-cli` allowlist via its catalog hook), so iterating the
-  // unfiltered catalog here picks up the CLI-supported set without core
-  // needing to know provider-specific allowlist details. Auth gate still
-  // applies so unauthenticated CLI providers stay hidden.
   for (const entry of catalog) {
-    if (isCliRuntimeProvider(entry.provider) && hasAuth(entry.provider)) {
+    if (usesUnfilteredCatalogModels(entry.provider) && hasAuth(entry.provider)) {
       add(entry.provider, entry.id);
     }
   }

@@ -56,15 +56,7 @@ export function listLegacyRuntimeModelProviderAliases(): readonly LegacyRuntimeM
   return LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES;
 }
 
-/**
- * True for CLI runtime provider ids (`claude-cli`, `codex-cli`, `google-gemini-cli`).
- *
- * These providers are externally maintained — the CLI binary defines which
- * models it supports — so callers building model lists for them should source
- * entries from the unfiltered model catalog rather than from user
- * `agents.defaults.models` config, which would otherwise gate discovery to
- * whatever the user happened to declare.
- */
+/** True for CLI runtime provider ids such as `claude-cli` and `codex-cli`. */
 export function isCliRuntimeProvider(provider: string): boolean {
   return CLI_RUNTIME_PROVIDER_IDS.has(normalizeProviderId(provider));
 }
@@ -107,19 +99,9 @@ export function migrateLegacyRuntimeModelRef(raw: string): {
   };
 }
 
-/**
- * True for aliases whose only purpose is backwards compatibility with the
- * pre-runtime-split addressing scheme (e.g. the bare `codex` provider that
- * encoded the codex runtime in the model ref).
- *
- * CLI runtime aliases (`claude-cli`, `codex-cli`, `google-gemini-cli`) are
- * NOT legacy — they remain the canonical user-addressable handle for picking
- * a CLI runtime, and surface in `/models` pickers as first-class providers
- * alongside the embedded harness providers (`anthropic`, `openai`, ...).
- */
+/** Shared setup/default pickers hide all legacy runtime provider ids. */
 export function isLegacyRuntimeModelProvider(provider: string): boolean {
-  const alias = resolveLegacyRuntimeModelProviderAlias(provider);
-  return alias !== undefined && !alias.cli;
+  return resolveLegacyRuntimeModelProviderAlias(provider) !== undefined;
 }
 
 export function isCliRuntimeAlias(runtime: string | undefined): boolean {

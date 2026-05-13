@@ -580,12 +580,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
       normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
         ? resolveClaudeCliSyntheticAuth()
         : undefined,
-    // Contribute the Claude CLI binary's supported model set into the
-    // model catalog so the `/models` picker surfaces the full allowlist
-    // without core needing to import provider-specific constants. The
-    // hookAliases above (CLAUDE_CLI_BACKEND_ID) route this plugin's
-    // augmentModelCatalog hook for both `anthropic` and `claude-cli`
-    // provider lookups.
+    // Publish Claude CLI rows through the provider catalog hook.
     augmentModelCatalog: () => buildClaudeCliCatalogEntries(),
     buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),

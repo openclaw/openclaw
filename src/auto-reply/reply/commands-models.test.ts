@@ -267,29 +267,16 @@ describe("handleModelsCommand", () => {
       true,
     );
 
-    // Embedded harness providers stay visible
     expect(result?.reply?.text).toContain("- anthropic (1)");
     expect(result?.reply?.text).toContain("- google (1)");
     expect(result?.reply?.text).toContain("- openai (1)");
-    // CLI runtime providers are first-class and remain user-addressable in the picker.
-    // Their model set comes from the catalog — each provider plugin contributes its
-    // own CLI-supported models via the ProviderPluginCatalog seam (Anthropic's
-    // `provider-discovery.ts` contributes the full Claude CLI allowlist). The
-    // catalog mock here simulates each plugin's contribution at the test
-    // boundary; in production the catalog is populated by the same plugins.
     expect(result?.reply?.text).toContain("- claude-cli (1)");
     expect(result?.reply?.text).toContain("- codex-cli (1)");
     expect(result?.reply?.text).toContain("- google-gemini-cli (1)");
-    // The bare `codex` alias is the only true legacy entry (no `-cli` suffix) and stays hidden
     expect(result?.reply?.text).not.toMatch(/^- codex \(/m);
   });
 
   it("sources CLI runtime provider model lists from the catalog, not user agents.defaults.models", async () => {
-    // claude-cli's full set of CLI-supported models lives in the catalog
-    // (in production, contributed by the Anthropic plugin's
-    // ProviderPluginCatalog hook in `extensions/anthropic/provider-discovery.ts`
-    // from `CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS`). The CLI binary — not the
-    // user's config — owns which models it supports.
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
       { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
@@ -302,11 +289,7 @@ describe("handleModelsCommand", () => {
       { provider: "minimax", id: "abab-7", name: "Abab 7" },
       { provider: "minimax", id: "abab-6.5", name: "Abab 6.5" },
     ]);
-    modelProviderAuthMocks.authenticatedProviders = new Set([
-      "anthropic",
-      "claude-cli",
-      "minimax",
-    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "claude-cli", "minimax"]);
 
     const result = await handleModelsCommand(
       buildParams("/models claude-cli", {
@@ -327,9 +310,6 @@ describe("handleModelsCommand", () => {
       true,
     );
 
-    // All catalog-contributed claude-cli entries surface despite the narrow
-    // user config. The catalog mock here represents the 6 entries the
-    // Anthropic plugin contributes via its catalog seam in production.
     expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-7");
     expect(result?.reply?.text).toContain("- claude-cli/claude-sonnet-4-6");
     expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-6");
@@ -359,14 +339,7 @@ describe("handleModelsCommand", () => {
   });
 
   it("does not synthesize claude-cli models when the catalog has no claude-cli entries", async () => {
-    // Plugin-boundary contract: core `/models` consumes catalog entries via
-    // the public ProviderPluginCatalog seam — it does not import provider-
-    // specific allowlists. If the Anthropic plugin's catalog hook doesn't
-    // contribute claude-cli entries (e.g. the plugin is disabled or its
-    // catalog hook errors), core MUST NOT synthesize them from a hard-coded
-    // constant. The catalog is the source of truth.
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
-      // No claude-cli entries in the catalog at all.
       { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
     ]);
     modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "claude-cli"]);
@@ -382,19 +355,10 @@ describe("handleModelsCommand", () => {
       true,
     );
 
-    // Picker shows no claude-cli rows when the catalog has none — no
-    // hard-coded fallback. (In production the Anthropic plugin's catalog
-    // hook always contributes the full allowlist when the plugin is
-    // enabled; this test asserts core does not duplicate that behavior.)
     expect(result?.reply?.text).not.toMatch(/^- claude-cli\//m);
   });
 
   it("hides CLI runtime providers from the picker when the user has no CLI auth", async () => {
-    // Regression: the catalog-iteration and allowlist-seeding passes must
-    // honour the existing unauthenticated-provider hiding contract. A user
-    // without claude-cli / codex-cli / google-gemini-cli auth should not see
-    // those providers in /models — tapping them would lead to a runtime they
-    // can't actually use.
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
       { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus 4.7 (CLI)" },
@@ -411,9 +375,7 @@ describe("handleModelsCommand", () => {
       true,
     );
 
-    // anthropic is authenticated and surfaces.
     expect(result?.reply?.text).toContain("- anthropic (");
-    // CLI runtime providers are gated by the existing auth contract — should not appear.
     expect(result?.reply?.text).not.toMatch(/^- claude-cli \(/m);
     expect(result?.reply?.text).not.toMatch(/^- codex-cli \(/m);
     expect(result?.reply?.text).not.toMatch(/^- google-gemini-cli \(/m);
