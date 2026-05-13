@@ -173,6 +173,7 @@ The resulting HTML is self-contained:
 3. Viewer initializes state:
    - `mode`: `block` or `doc`
    - `query`: sidebar search text
+   - `paneQuery`: mapped source and diff pane search text
    - `selectedId`: active audit unit
    - `selectedViewId`: active page selector view
    - `wrapText`: text wrapping toggle
@@ -187,6 +188,9 @@ Block mode:
 - Search matches unit IDs, labels, summaries, reasons, notes, and destinations.
 - Rows are `div role="button"` so their text remains selectable while still
   supporting click, Enter, and Space activation.
+- Arrow Up and Arrow Down are captured at the sidebar level in block mode, so
+  navigation works even when focus is in the sidebar search input or a row text
+  node.
 
 Doc mode:
 
@@ -209,6 +213,10 @@ The right detail pane is `Diff view`.
 - Changed destination files render as diff sections.
 - Unchanged destination files render as reference sections.
 - External-only or removed destinations render notes instead of repo lines.
+
+The toolbar search above the detail panes filters only rendered mapped source
+and diff/reference text. It does not filter the sidebar list or search the full
+page.
 
 ## Diff vs Reference Rules
 

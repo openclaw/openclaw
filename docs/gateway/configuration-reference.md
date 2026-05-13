@@ -218,6 +218,38 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `plugins.entries.<id>.config`: plugin-defined config object (validated by native OpenClaw plugin schema when available).
 - Channel plugin account/runtime settings live under `channels.<id>` and should be described by the owning plugin's manifest `channelConfigs` metadata, not by a central OpenClaw option registry.
 
+### Plugin scan order
+
+OpenClaw scans plugin roots in this order before duplicate plugin ids are
+resolved:
+
+<Steps>
+  <Step title="Config paths">
+    `plugins.load.paths` - explicit file or directory paths. Paths that point
+    back at OpenClaw's own packaged bundled plugin directories are ignored; run
+    `openclaw doctor --fix` to remove those stale aliases.
+  </Step>
+
+  <Step title="Workspace plugins">
+    `\<workspace\>/.openclaw/<plugin-root>/*.ts` and
+    `\<workspace\>/.openclaw/<plugin-root>/*/index.ts`.
+  </Step>
+
+  <Step title="Global plugins">
+    `~/.openclaw/<plugin-root>/*.ts` and
+    `~/.openclaw/<plugin-root>/*/index.ts`.
+  </Step>
+
+  <Step title="Bundled plugins">
+    Shipped with OpenClaw. Many are enabled by default (model providers,
+    speech). Others require explicit enablement.
+  </Step>
+</Steps>
+
+If two scanned plugins share an id, [plugin manifest
+precedence](/plugins/manifest#discovery-precedence-duplicate-plugin-ids)
+decides which manifest loads.
+
 ### Codex harness plugin config
 
 The bundled `codex` plugin owns native Codex app-server harness settings under

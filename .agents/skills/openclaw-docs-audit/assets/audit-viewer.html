@@ -415,6 +415,42 @@
         gap: 7px;
         min-width: 260px;
       }
+      .toolbar-side {
+        min-width: 260px;
+        display: grid;
+        justify-items: end;
+        gap: 9px;
+      }
+      .pane-search-wrap {
+        width: min(340px, 100%);
+        display: grid;
+        grid-template-columns: minmax(160px, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+      }
+      .pane-search {
+        width: 100%;
+        border: 1px solid var(--border-strong);
+        border-radius: 999px;
+        background: #0b1019;
+        color: var(--text);
+        padding: 7px 11px;
+        outline: none;
+        font-size: 12px;
+        line-height: 1.2;
+      }
+      .pane-search:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+      }
+      .pane-search-count {
+        min-width: 58px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.2;
+        text-align: right;
+        white-space: nowrap;
+      }
       .preview {
         min-height: 0;
         display: grid;
@@ -467,11 +503,27 @@
       .snippet-meta {
         display: flex;
         justify-content: space-between;
+        align-items: flex-start;
         gap: 10px;
         padding: 11px 14px;
         color: var(--muted);
         background: rgba(0, 0, 0, 0.16);
         font-size: 12px;
+      }
+      .snippet-title {
+        min-width: 0;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 7px;
+      }
+      .snippet-ref {
+        flex: 0 0 auto;
+        text-align: right;
+      }
+      .chip.action {
+        color: var(--blue);
+        border-color: rgba(116, 183, 255, 0.36);
       }
       pre {
         min-width: max-content;
@@ -574,6 +626,12 @@
         overflow: visible;
         white-space: pre;
       }
+      .search-hit {
+        border-radius: 3px;
+        background: rgba(230, 184, 47, 0.28);
+        color: #fff3b0;
+        padding: 0 1px;
+      }
       .diff-empty {
         padding: 13px 14px 15px;
         color: var(--muted);
@@ -650,6 +708,13 @@
         .toolbar {
           grid-template-columns: 1fr;
         }
+        .toolbar-side {
+          justify-items: start;
+          min-width: 0;
+        }
+        .pane-search-wrap {
+          width: 100%;
+        }
         .toolbar-tags {
           justify-content: flex-start;
           min-width: 0;
@@ -676,7 +741,7 @@
               </button>
               <button class="mode-button" id="docModeButton" type="button">Doc mode</button>
             </div>
-            <button class="wrap-button" id="wrapTextButton" type="button">Wrap off</button>
+            <button class="wrap-button active" id="wrapTextButton" type="button">Wrap on</button>
           </div>
           <div class="meta" id="datasetMeta"></div>
         </header>
@@ -698,7 +763,19 @@
             <h2 id="selectedTitle"></h2>
             <div class="summary" id="selectedSummary"></div>
           </div>
-          <div class="toolbar-tags" id="selectedTags"></div>
+          <div class="toolbar-side">
+            <div class="pane-search-wrap">
+              <input
+                id="paneSearch"
+                class="pane-search"
+                type="search"
+                placeholder="Search source and diff"
+                aria-label="Search mapped source and diff panes"
+              />
+              <span class="pane-search-count" id="paneSearchCount"></span>
+            </div>
+            <div class="toolbar-tags" id="selectedTags"></div>
+          </div>
         </header>
         <section class="preview" aria-label="Source and destination preview">
           <article class="pane">
@@ -741,10 +818,11 @@
               });
         const state = {
           mode: "block",
+          paneQuery: "",
           query: "",
           selectedId: units[0] ? units[0].id : null,
           selectedViewId: pageViews[0] ? pageViews[0].id : "",
-          wrapText: false,
+          wrapText: true,
         };
         const els = {
           blockModeButton: document.getElementById("blockModeButton"),
@@ -754,6 +832,8 @@
           docModeButton: document.getElementById("docModeButton"),
           legend: document.getElementById("legend"),
           pageSelect: document.getElementById("pageSelect"),
+          paneSearch: document.getElementById("paneSearch"),
+          paneSearchCount: document.getElementById("paneSearchCount"),
           search: document.getElementById("search"),
           selectedId: document.getElementById("selectedId"),
           selectedSummary: document.getElementById("selectedSummary"),
@@ -773,6 +853,39 @@
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;")
             .replace(/'/g, "&#39;");
+        }
+
+        function highlightText(value) {
+          const text = String(value || "");
+          const query = state.paneQuery.trim();
+          if (!query) return escapeHtml(text);
+          const lowerText = text.toLowerCase();
+          const lowerQuery = query.toLowerCase();
+          let html = "";
+          let cursor = 0;
+          while (cursor < text.length) {
+            const index = lowerText.indexOf(lowerQuery, cursor);
+            if (index === -1) break;
+            html += escapeHtml(text.slice(cursor, index));
+            html +=
+              '<mark class="search-hit">' +
+              escapeHtml(text.slice(index, index + query.length)) +
+              "</mark>";
+            cursor = index + query.length;
+          }
+          return html + escapeHtml(text.slice(cursor));
+        }
+
+        function updatePaneSearchCount() {
+          const query = state.paneQuery.trim();
+          if (!query) {
+            els.paneSearchCount.textContent = "";
+            return;
+          }
+          const count =
+            els.sourcePane.querySelectorAll(".search-hit").length +
+            els.destinationPane.querySelectorAll(".search-hit").length;
+          els.paneSearchCount.textContent = count + " match" + (count === 1 ? "" : "es");
         }
 
         function refLabel(ref) {
@@ -899,7 +1012,7 @@
                   '<span class="code-line"><span class="line-no">' +
                   line.number +
                   '</span><span class="line-text">' +
-                  escapeHtml(line.text) +
+                  highlightText(line.text) +
                   "</span></span>"
                 );
               })
@@ -1018,9 +1131,11 @@
           return sourceUnits
             .map(function (sourceUnit) {
               return (
-                '<section class="snippet"><div class="snippet-meta"><span>' +
+                '<section class="snippet"><div class="snippet-meta"><span class="snippet-title"><span>' +
                 escapeHtml(sourceUnit.id + " " + sourceUnit.label) +
-                "</span><span>" +
+                "</span>" +
+                chip(sourceUnit.action, "action") +
+                '</span><span class="snippet-ref">' +
                 escapeHtml(refLabel(sourceUnit.source?.ref)) +
                 "</span></div>" +
                 renderCode(sourceUnit.source?.lines || []) +
@@ -1133,7 +1248,7 @@
                   '</span><span class="diff-sign">' +
                   sign +
                   '</span><span class="diff-text">' +
-                  escapeHtml(text) +
+                  highlightText(text) +
                   "</span></div>"
                 );
               })
@@ -1379,6 +1494,41 @@
           });
         }
 
+        function visibleBlockUnits() {
+          if (state.mode !== "block") return [];
+          const query = state.query.trim().toLowerCase();
+          return unitsForView(currentView()).filter(function (unit) {
+            return !query || searchable(unit).includes(query);
+          });
+        }
+
+        function focusSelectedBlock() {
+          const row = els.unitList.querySelector(".row.active");
+          if (!row) return;
+          row.focus({ preventScroll: true });
+          row.scrollIntoView({ block: "nearest", inline: "nearest" });
+        }
+
+        function navigateBlock(delta) {
+          const pageUnits = visibleBlockUnits();
+          if (!pageUnits.length) return false;
+          const currentIndex = pageUnits.findIndex(function (unit) {
+            return unit.id === state.selectedId;
+          });
+          const startIndex = delta > 0 ? -1 : pageUnits.length;
+          const nextIndex = Math.max(
+            0,
+            Math.min(
+              pageUnits.length - 1,
+              (currentIndex === -1 ? startIndex : currentIndex) + delta,
+            ),
+          );
+          state.selectedId = pageUnits[nextIndex].id;
+          render();
+          requestAnimationFrame(focusSelectedBlock);
+          return true;
+        }
+
         function renderDetails() {
           const viewUnits = unitsForView(currentView());
           const unit =
@@ -1426,6 +1576,7 @@
             state.renderedUnitId = unit.id;
             state.renderedViewId = state.selectedViewId;
           }
+          updatePaneSearchCount();
         }
 
         function renderLegend() {
@@ -1480,7 +1631,9 @@
           return true;
         }
 
-        document.querySelector(".sidebar").addEventListener(
+        const sidebar = document.querySelector(".sidebar");
+
+        sidebar.addEventListener(
           "wheel",
           function (event) {
             if (scrollUnitList(event.deltaY)) event.preventDefault();
@@ -1488,7 +1641,21 @@
           { passive: false },
         );
 
+        sidebar.addEventListener(
+          "keydown",
+          function (event) {
+            if (state.mode !== "block") return;
+            if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+            if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+            event.preventDefault();
+            event.stopPropagation();
+            navigateBlock(event.key === "ArrowDown" ? 1 : -1);
+          },
+          true,
+        );
+
         els.unitList.addEventListener("keydown", function (event) {
+          if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
           const keyScroll = {
             ArrowDown: 48,
             ArrowUp: -48,
@@ -1501,6 +1668,11 @@
         els.search.addEventListener("input", function () {
           state.query = els.search.value;
           renderList();
+        });
+
+        els.paneSearch.addEventListener("input", function () {
+          state.paneQuery = els.paneSearch.value;
+          renderDetails();
         });
 
         els.blockModeButton.addEventListener("click", function () {
