@@ -112,6 +112,22 @@ function resolvePendingSystemRunEvent(params: {
   };
 }
 
+function withSystemRunEventRunId(params: { command: string; params?: unknown }): unknown {
+  if (
+    params.command !== "system.run" ||
+    !params.params ||
+    typeof params.params !== "object" ||
+    Array.isArray(params.params)
+  ) {
+    return params.params;
+  }
+  const obj = params.params as Record<string, unknown>;
+  if (normalizeString(obj.runId)) {
+    return params.params;
+  }
+  return { ...obj, runId: randomUUID() };
+}
+
 export class NodeRegistry {
   private nodesById = new Map<string, NodeSession>();
   private nodesByConn = new Map<string, string>();
@@ -207,12 +223,16 @@ export class NodeRegistry {
       };
     }
     const requestId = randomUUID();
+    const invokeParams = withSystemRunEventRunId({
+      command: params.command,
+      params: params.params,
+    });
     const payload = {
       id: requestId,
       nodeId: params.nodeId,
       command: params.command,
       paramsJSON:
-        "params" in params && params.params !== undefined ? JSON.stringify(params.params) : null,
+        "params" in params && invokeParams !== undefined ? JSON.stringify(invokeParams) : null,
       timeoutMs: params.timeoutMs,
       idempotencyKey: params.idempotencyKey,
     };
@@ -225,7 +245,7 @@ export class NodeRegistry {
     }
     const systemRunEvent = resolvePendingSystemRunEvent({
       command: params.command,
-      params: params.params,
+      params: invokeParams,
     });
     if (systemRunEvent) {
       this.rememberAuthorizedSystemRunEvent({

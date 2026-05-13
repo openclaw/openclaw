@@ -200,6 +200,35 @@ describe("gateway/node-registry", () => {
     void invoke.catch(() => {});
   });
 
+  it("generates and forwards a runId when system.run params omit it", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { command: ["/bin/sh", "-lc", "printf ok"], sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as {
+      payload?: { paramsJSON?: string | null };
+    };
+    const forwarded = JSON.parse(request.payload?.paramsJSON ?? "{}") as { runId?: unknown };
+
+    expect(typeof forwarded.runId).toBe("string");
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: forwarded.runId as string,
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(true);
+    registry.unregister("conn-1");
+    void invoke.catch(() => {});
+  });
+
   it("matches legacy macOS exec events with runtime-generated runId when single pending run matches", () => {
     const registry = new NodeRegistry();
     const frames: string[] = [];
