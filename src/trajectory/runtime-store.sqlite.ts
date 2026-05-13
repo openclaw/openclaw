@@ -12,7 +12,10 @@ export type RecordTrajectoryRuntimeEventOptions = OpenClawAgentDatabaseOptions &
   createdAt?: number;
 };
 
-type TrajectoryRuntimeDatabase = Pick<OpenClawAgentKyselyDatabase, "trajectory_runtime_events">;
+type TrajectoryRuntimeDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "sessions" | "trajectory_runtime_events"
+>;
 
 function normalizeRunId(value: string | undefined): string | null {
   const trimmed = value?.trim();
@@ -23,6 +26,23 @@ export function recordTrajectoryRuntimeEvent(options: RecordTrajectoryRuntimeEve
   const createdAt = options.createdAt ?? Date.now();
   runOpenClawAgentWriteTransaction((database) => {
     const db = getNodeSqliteKysely<TrajectoryRuntimeDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("sessions")
+        .values({
+          session_id: options.event.sessionId,
+          session_key: options.event.sessionKey ?? options.event.sessionId,
+          session_scope: "conversation",
+          created_at: createdAt,
+          updated_at: createdAt,
+        })
+        .onConflict((oc) =>
+          oc.column("session_id").doUpdateSet({
+            updated_at: createdAt,
+          }),
+        ),
+    );
     executeSqliteQuerySync(
       database.db,
       db.insertInto("trajectory_runtime_events").values({

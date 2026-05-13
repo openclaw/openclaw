@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import * as capabilityProviderRuntime from "../plugins/capability-provider-runtime.js";
 import type { ImageGenerationProviderPlugin } from "../plugins/types.js";
 
-const resolvePluginCapabilityProvidersMock = vi.spyOn(
-  capabilityProviderRuntime,
-  "resolvePluginCapabilityProviders",
-);
+const resolvePluginCapabilityProvidersMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../plugins/capability-provider-runtime.js", () => ({
+  resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
+}));
 
 function createProvider(
   params: Pick<ImageGenerationProviderPlugin, "id"> & Partial<ImageGenerationProviderPlugin>,

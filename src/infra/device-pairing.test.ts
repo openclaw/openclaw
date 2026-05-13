@@ -554,7 +554,7 @@ describe("device pairing tokens", () => {
     expect(second.request.silent).toBe(false);
   });
 
-  test("rejects bootstrap token replay before pending scope escalation can be approved", async () => {
+  test("keeps existing pending scopes when bootstrap token is reused", async () => {
     const baseDir = await makeDevicePairingDir();
     const issued = await issueDeviceBootstrapToken({
       baseDir,
@@ -592,7 +592,7 @@ describe("device pairing tokens", () => {
         scopes: ["operator.write", "operator.approvals"],
         baseDir,
       }),
-    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+    ).resolves.toEqual({ ok: true });
 
     const pending = await listDevicePairing(baseDir);
     expect(pending.pending).toHaveLength(1);

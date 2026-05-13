@@ -1,8 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
-import * as providerInstallCatalog from "../plugins/provider-install-catalog.js";
-import * as providerWizard from "../plugins/provider-wizard.js";
-import * as providersRuntime from "../plugins/providers.runtime.js";
 
 type ResolveProviderInstallCatalogEntries =
   typeof import("../plugins/provider-install-catalog.js").resolveProviderInstallCatalogEntries;
@@ -19,26 +15,34 @@ type ResolveProviderSetupFlowContributions =
 type ResolveProviderModelPickerFlowContributions =
   typeof import("./provider-flow.runtime.js").resolveProviderModelPickerFlowContributions;
 
-const resolveProviderInstallCatalogEntries = vi.spyOn(
-  providerInstallCatalog,
-  "resolveProviderInstallCatalogEntries",
-) as unknown as ReturnType<typeof vi.fn<ResolveProviderInstallCatalogEntries>>;
-const resolveManifestProviderAuthChoices = vi.spyOn(
-  providerAuthChoices,
-  "resolveManifestProviderAuthChoices",
-) as unknown as ReturnType<typeof vi.fn<ResolveManifestProviderAuthChoices>>;
-const resolveProviderWizardOptions = vi.spyOn(
-  providerWizard,
-  "resolveProviderWizardOptions",
-) as unknown as ReturnType<typeof vi.fn<ResolveProviderWizardOptions>>;
-const resolveProviderModelPickerEntries = vi.spyOn(
-  providerWizard,
-  "resolveProviderModelPickerEntries",
-) as unknown as ReturnType<typeof vi.fn<ResolveProviderModelPickerEntries>>;
-const resolvePluginProviders = vi.spyOn(
-  providersRuntime,
-  "resolvePluginProviders",
-) as unknown as ReturnType<typeof vi.fn<ResolvePluginProviders>>;
+const resolveProviderInstallCatalogEntries = vi.hoisted(() =>
+  vi.fn<ResolveProviderInstallCatalogEntries>(),
+);
+const resolveManifestProviderAuthChoices = vi.hoisted(() =>
+  vi.fn<ResolveManifestProviderAuthChoices>(),
+);
+const resolveProviderWizardOptions = vi.hoisted(() => vi.fn<ResolveProviderWizardOptions>());
+const resolveProviderModelPickerEntries = vi.hoisted(() =>
+  vi.fn<ResolveProviderModelPickerEntries>(),
+);
+const resolvePluginProviders = vi.hoisted(() => vi.fn<ResolvePluginProviders>());
+
+vi.mock("../plugins/provider-install-catalog.js", () => ({
+  resolveProviderInstallCatalogEntries,
+}));
+
+vi.mock("../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderAuthChoices,
+}));
+
+vi.mock("../plugins/provider-wizard.js", () => ({
+  resolveProviderWizardOptions,
+  resolveProviderModelPickerEntries,
+}));
+
+vi.mock("../plugins/providers.runtime.js", () => ({
+  resolvePluginProviders,
+}));
 
 let resolveProviderSetupFlowContributions: ResolveProviderSetupFlowContributions;
 let resolveProviderModelPickerFlowContributions: ResolveProviderModelPickerFlowContributions;

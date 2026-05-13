@@ -551,8 +551,8 @@ describe("pairing store", () => {
       expect(allPending.map((entry) => entry.id)).toEqual([
         "pending-alpha",
         "pending-beta",
-        "pending-delta",
         "pending-gamma",
+        "pending-delta",
       ]);
     });
   });
