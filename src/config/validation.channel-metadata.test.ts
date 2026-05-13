@@ -79,7 +79,7 @@ function createExternalFeishuSchemaRegistry(): PluginManifestRegistry {
     plugins: [
       createPluginManifestRecord({
         id: "openclaw-lark",
-        origin: "external",
+        origin: "global",
         channels: ["feishu"],
         channelConfigs: {
           feishu: {

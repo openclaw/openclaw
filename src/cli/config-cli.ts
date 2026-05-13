@@ -24,7 +24,6 @@ import {
 } from "../config/types.secrets.js";
 import {
   collectUnsupportedSecretRefPolicyIssues,
-  validateConfigObjectRaw,
   validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
